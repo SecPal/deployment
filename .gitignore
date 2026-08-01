@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+# Environment and sensitive material
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.age
+*.gpg
+*.asc
+secrets/
+private/
+credentials/
+
+# Temporary and generated output
+tmp/
+.cache/
+coverage/
+test-results/
+*.log
+*.tmp
+*.temp
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local agent and workspace state
+.context/
+.polyscope*
