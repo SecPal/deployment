@@ -116,5 +116,6 @@ B.
   read-only into long-running services.
 - **Runtime state:** the temporary PostgreSQL volume and per-container tmpfs
   mounts.
-- **Generated artifacts:** locally built images and the disposable internal CA,
-  all outside Git history and removed from the running stack after the test.
+- **Generated artifacts:** project-scoped locally built images and the
+  disposable internal CA, all outside Git history and removed by the explicit
+  integration test.

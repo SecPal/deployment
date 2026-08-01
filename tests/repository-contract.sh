@@ -43,9 +43,14 @@ required_files=(
   docs/architecture/scope.md
   docs/roadmap.md
   scripts/preflight.sh
+  scripts/reject-sensitive-paths.sh
   tests/repository-contract.sh
   tests/phase-b-contract.sh
   tests/runtime-secret-contract.sh
+  tests/local-integration-lifecycle.sh
+  tests/sensitive-path-contract.sh
+  tests/fixtures/fake-docker.sh
+  tests/fixtures/fake-curl.sh
   .github/workflows/quality.yml
   LICENSES/AGPL-3.0-or-later.txt
   LICENSES/CC0-1.0.txt
@@ -112,12 +117,9 @@ for path in terraform ansible kubernetes helm certificates secrets; do
   fi
 done
 
-blocked_file="$(find . \( -path ./.git -o -path ./.context \) -prune -o -type f \( \
-  -name '*.key' -o -name '*.pem' -o -name '*.p12' -o -name '*.pfx' -o \
-  -name '*.jks' -o -name '*.keystore' \
-\) -print -quit)"
-if [ -n "$blocked_file" ]; then
-  fail "forbidden sensitive file exists: $blocked_file"
+if ! find . \( -path ./.git -o -path ./.context \) -prune -o -type f -print0 |
+  scripts/reject-sensitive-paths.sh; then
+  fail "forbidden sensitive path exists"
 fi
 
 while IFS= read -r -d '' candidate; do

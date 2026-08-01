@@ -33,25 +33,11 @@ if [ "${#missing_tools[@]}" -ne 0 ]; then
   exit 1
 fi
 
-sensitive_untracked=0
-while IFS= read -r -d '' path; do
-  case "$path" in
-    .env.example)
-      ;;
-    .env|.env.*|*.key|*.pem|*.crt|*.p12|*.pfx|*.jks|*.keystore|*.age|*.gpg|*.asc|secrets/*|private/*|credentials/*)
-      printf 'ERROR: sensitive untracked or ignored path present: %s\n' "$path" >&2
-      sensitive_untracked=1
-      ;;
-  esac
-done < <(
-  {
-    git ls-files --others --exclude-standard -z
-    git ls-files --others --ignored --exclude-standard -z
-  }
-)
-if [ "$sensitive_untracked" -ne 0 ]; then
-  exit 1
-fi
+{
+  git ls-files -z
+  git ls-files --others --exclude-standard -z
+  git ls-files --others --ignored --exclude-standard -z
+} | scripts/reject-sensitive-paths.sh
 
 git diff --check
 git diff --cached --check
@@ -67,6 +53,8 @@ shellcheck "${shell_files[@]}"
 bash tests/repository-contract.sh
 bash tests/phase-b-contract.sh
 bash tests/runtime-secret-contract.sh
+bash tests/local-integration-lifecycle.sh
+bash tests/sensitive-path-contract.sh
 
 mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"

@@ -59,20 +59,30 @@ digest. The stack exposes only `127.0.0.1:8443` and uses the reserved origin
 data services have no published ports.
 
 Run the explicit integration test with Docker Engine, Docker Compose v2,
-`curl`, GitHub access for the pinned source contexts, and registry access for
-the pinned build inputs:
+Python 3, `curl`, GitHub access for the pinned source contexts, and registry
+access for the pinned build inputs:
 
 ```bash
 ./scripts/local-integration.sh
 ```
 
-The script builds the pinned images, generates random test-only secrets inside
-a private runtime volume without printing them, starts private PostgreSQL and
-Valkey services, runs migrations exactly once, starts the explicit service
-roles, and verifies API/frontend routing through local TLS. Successful
-completion means its containers, networks, database data, certificates, and
-secrets were removed. Failure paths and handled signals trigger best-effort
-cleanup before returning.
+The script assigns a random Compose project, project-scoped image tags, and an
+available loopback port. It builds the pinned images, generates random test-only
+secrets inside a private runtime volume without printing them, starts private
+PostgreSQL and Valkey services, runs migrations exactly once, starts the
+explicit service roles, and verifies API/frontend routing through local TLS.
+Successful completion means its containers, networks, images, database data,
+certificates, and secrets were removed. Failure paths trigger best-effort
+cleanup; handled signals stop the run with a non-success status after cleanup.
+
+For a deterministic caller-assigned port, including parallel test scheduling,
+set a distinct loopback port for each run:
+
+```bash
+SECPAL_PHASE_B_PORT=18443 ./scripts/local-integration.sh
+```
+
+The public Compose template retains `8443` as its direct-use default.
 
 This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use

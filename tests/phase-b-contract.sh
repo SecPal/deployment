@@ -41,7 +41,10 @@ done
 
 require_text compose.yaml "https://github.com/SecPal/api.git#6fead9cef910314304048056a7ebed4f10bf5381"
 require_text compose.yaml "https://github.com/SecPal/frontend.git#fcd427d9b55d7945c439c670077e12928e47ddd6"
-require_text compose.yaml '127.0.0.1:8443:8443'
+require_text compose.yaml "127.0.0.1:\${SECPAL_PHASE_B_PORT:-8443}:8443"
+require_text compose.yaml "\${SECPAL_PHASE_B_API_IMAGE:-secpal-api:phase-b-6fead9cef910}"
+require_text compose.yaml "\${SECPAL_PHASE_B_FRONTEND_IMAGE:-secpal-frontend:phase-b-fcd427d9b55d}"
+require_text compose.yaml "\${SECPAL_PHASE_B_GATEWAY_IMAGE:-secpal-test-gateway:phase-b-2.10.2}"
 require_text compose.yaml 'source: local-secrets'
 require_text compose.yaml 'condition: service_completed_successfully'
 require_text compose.yaml 'condition: service_healthy'
@@ -61,6 +64,8 @@ require_text containers/phase-b-gateway/Dockerfile 'caddy:2.10.2-alpine@sha256:'
 require_text containers/phase-b-gateway/Dockerfile 'RUN setcap -r /usr/bin/caddy'
 require_text scripts/local-integration.sh '--resolve'
 require_text scripts/local-integration.sh 'down --volumes --remove-orphans'
+require_text scripts/local-integration.sh 'handle_signal 143'
+require_text scripts/local-integration.sh 'docker image rm'
 
 if [ -f compose.yaml ]; then
   if grep -Eq '(^|[[:space:]])privileged:[[:space:]]*true|network_mode:[[:space:]]*host|/var/run/docker\.sock|image:[[:space:]]*[^#[:space:]]*:latest([@[:space:]]|$)' compose.yaml; then
@@ -82,7 +87,7 @@ if [ -f compose.yaml ]; then
     /^  [a-zA-Z0-9][a-zA-Z0-9_-]*:$/ { service = $1 }
     /^    ports:$/ && service != "gateway:" { print service }
   ' compose.yaml)"
-  loopback_port_count="$(grep -Fxc '      - "127.0.0.1:8443:8443"' compose.yaml || true)"
+  loopback_port_count="$(grep -Fxc "      - \"127.0.0.1:\${SECPAL_PHASE_B_PORT:-8443}:8443\"" compose.yaml || true)"
   if grep -Eq '^  ports:$' compose.yaml ||
     [ "$port_section_count" -ne 1 ] || [ "$published_port_count" -ne 1 ] ||
     [ "$loopback_port_count" -ne 1 ] || [ -n "$non_gateway_ports" ]; then

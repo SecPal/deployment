@@ -15,6 +15,10 @@ SPDX-License-Identifier: CC0-1.0
 - Private PostgreSQL and Valkey services pinned by version and digest.
 - A loopback-only TLS gateway with a disposable internal CA.
 - Runtime-only secret initialization and deterministic Phase B contracts.
+- Isolated local test projects, image tags, and loopback ports with fail-closed
+  signal cleanup.
+- A shared sensitive-path contract covering tracked, untracked, and ignored
+  repository paths.
 
 ### Not included
 

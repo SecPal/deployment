@@ -3,13 +3,13 @@
 ---
 name: secpal-phase-b
 
-x-api-image: &api-image secpal-api:phase-b-6fead9cef910
+x-api-image: &api-image ${SECPAL_PHASE_B_API_IMAGE:-secpal-api:phase-b-6fead9cef910}
 x-api-build: &api-build
   context: https://github.com/SecPal/api.git#6fead9cef910314304048056a7ebed4f10bf5381
 x-api-environment: &api-environment
   APP_DEBUG: "false"
   APP_ENV: local
-  APP_URL: https://secpal.example.invalid:8443
+  APP_URL: ${SECPAL_PHASE_B_ORIGIN:-https://secpal.example.invalid:8443}
   CACHE_STORE: redis
   DB_CONNECTION: pgsql
   DB_DATABASE: secpal_local
@@ -226,7 +226,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: secpal-frontend:phase-b-fcd427d9b55d
+    image: ${SECPAL_PHASE_B_FRONTEND_IMAGE:-secpal-frontend:phase-b-fcd427d9b55d}
     build:
       context: https://github.com/SecPal/frontend.git#fcd427d9b55d7945c439c670077e12928e47ddd6
       args:
@@ -234,7 +234,7 @@ services:
         SECPAL_IMAGE_VERSION: 0.0.1-phase-b
     user: "101:101"
     environment:
-      SECPAL_API_URL: https://secpal.example.invalid:8443
+      SECPAL_API_URL: ${SECPAL_PHASE_B_ORIGIN:-https://secpal.example.invalid:8443}
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=0700,size=32m
@@ -253,7 +253,7 @@ services:
     restart: unless-stopped
 
   gateway:
-    image: secpal-test-gateway:phase-b-2.10.2
+    image: ${SECPAL_PHASE_B_GATEWAY_IMAGE:-secpal-test-gateway:phase-b-2.10.2}
     build:
       context: ./containers/phase-b-gateway
       args:
@@ -264,7 +264,7 @@ services:
       XDG_CONFIG_HOME: /config
       XDG_DATA_HOME: /data
     ports:
-      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:${SECPAL_PHASE_B_PORT:-8443}:8443"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,uid=10003,gid=10003,mode=0700,size=16m
