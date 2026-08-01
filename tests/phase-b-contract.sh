@@ -42,9 +42,26 @@ done
 require_text compose.yaml "https://github.com/SecPal/api.git#6fead9cef910314304048056a7ebed4f10bf5381"
 require_text compose.yaml "https://github.com/SecPal/frontend.git#fcd427d9b55d7945c439c670077e12928e47ddd6"
 require_text compose.yaml "127.0.0.1:\${SECPAL_PHASE_B_PORT:-8443}:8443"
+# The Compose interpolation must remain literal.
+# shellcheck disable=SC2016
+require_text compose.yaml 'APP_URL: https://secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}'
+# The Compose interpolation must remain literal.
+# shellcheck disable=SC2016
+require_text compose.yaml 'SECPAL_API_URL: https://secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}'
 require_text compose.yaml "\${SECPAL_PHASE_B_API_IMAGE:-secpal-api:phase-b-6fead9cef910}"
 require_text compose.yaml "\${SECPAL_PHASE_B_FRONTEND_IMAGE:-secpal-frontend:phase-b-fcd427d9b55d}"
 require_text compose.yaml "\${SECPAL_PHASE_B_GATEWAY_IMAGE:-secpal-test-gateway:phase-b-2.10.2}"
+# The Compose interpolation must remain literal.
+# shellcheck disable=SC2016
+require_text compose.yaml 'SANCTUM_STATEFUL_DOMAINS: secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}'
+require_text compose.yaml 'SESSION_SECURE_COOKIE: "true"'
+require_text compose.yaml 'TRUSTED_PROXIES: REMOTE_ADDR'
+# The Compose interpolation must remain literal.
+# shellcheck disable=SC2016
+require_text compose.yaml 'container_name: ${SECPAL_PHASE_B_FORENSICS_CONTAINER_NAME:-secpal-phase-b-worker-forensics}'
+# The Compose interpolation must remain literal.
+# shellcheck disable=SC2016
+require_text compose.yaml 'container_name: ${SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME:-secpal-phase-b-scheduler}'
 require_text compose.yaml 'source: local-secrets'
 require_text compose.yaml 'condition: service_completed_successfully'
 require_text compose.yaml 'condition: service_healthy'
@@ -66,6 +83,10 @@ require_text scripts/local-integration.sh '--resolve'
 require_text scripts/local-integration.sh 'down --volumes --remove-orphans'
 require_text scripts/local-integration.sh 'handle_signal 143'
 require_text scripts/local-integration.sh 'docker image rm'
+# The script expression must remain literal.
+# shellcheck disable=SC2016
+require_text scripts/local-integration.sh 'ps --status running --quiet "$singleton"'
+require_text scripts/init-local-secrets.sh 'handle_signal 143'
 
 if [ -f compose.yaml ]; then
   if grep -Eq '(^|[[:space:]])privileged:[[:space:]]*true|network_mode:[[:space:]]*host|/var/run/docker\.sock|image:[[:space:]]*[^#[:space:]]*:latest([@[:space:]]|$)' compose.yaml; then
@@ -106,9 +127,24 @@ if [ -f compose.yaml ]; then
 
   activity_consumer_count="$(grep -Fc -- '--queue=activity-hash-chain' compose.yaml || true)"
   scheduler_consumer_count="$(grep -Fc 'schedule:work' compose.yaml || true)"
+  singleton_container_name_count="$(grep -Ec '^    container_name: \$\{SECPAL_PHASE_B_(FORENSICS|SCHEDULER)_CONTAINER_NAME:-' compose.yaml || true)"
   if [ "$activity_consumer_count" -ne 1 ] || [ "$scheduler_consumer_count" -ne 1 ] ||
+    [ "$singleton_container_name_count" -ne 2 ] ||
     grep -Eq '^[[:space:]]+(scale|replicas):' compose.yaml; then
-    fail "singleton roles must each have one consumer and no multi-replica declaration"
+    fail "singleton roles must each have one consumer, a scaling guard, and no multi-replica declaration"
+  fi
+
+  if grep -Fq 'TRUSTED_PROXIES: gateway' compose.yaml; then
+    fail "the API must trust the numeric immediate proxy address, not an unresolved service name"
+  fi
+
+  if grep -Fq 'SECPAL_PHASE_B_ORIGIN' compose.yaml ||
+    grep -Fq 'SECPAL_PHASE_B_ORIGIN' scripts/local-integration.sh; then
+    fail "the local origin must derive from the single validated port setting"
+  fi
+
+  if grep -Fq 'ps --status running --services' scripts/local-integration.sh; then
+    fail "singleton validation must count container instances rather than deduplicated service names"
   fi
 
   host_access_count="$(grep -Fc 'host-access' compose.yaml || true)"

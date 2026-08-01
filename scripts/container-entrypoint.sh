@@ -11,6 +11,11 @@ fail() {
   exit 1
 }
 
+case "$SECRET_DIR" in
+  /*) ;;
+  *) fail ;;
+esac
+
 require_secret_file() {
   local path="$1"
   local mode

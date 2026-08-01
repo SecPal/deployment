@@ -11,6 +11,7 @@ PROJECT_NAME="secpal-phase-b-${project_token,,}"
 COMPOSE=()
 LOCAL_IMAGES=()
 cleanup_completed=0
+automatic_port=0
 
 cleanup() {
   if [ "${#COMPOSE[@]}" -ne 0 ] && [ "$cleanup_completed" -ne 1 ]; then
@@ -40,38 +41,48 @@ fail() {
 }
 
 command -v docker >/dev/null 2>&1 || fail "Docker is required."
+
+allocate_port() {
+  python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()'
+}
+
+validate_port() {
+  case "$SECPAL_PHASE_B_PORT" in
+    '' | *[!0-9]*) fail "SECPAL_PHASE_B_PORT must be an integer from 1024 through 65535." ;;
+  esac
+  if [ "$SECPAL_PHASE_B_PORT" -lt 1024 ] || [ "$SECPAL_PHASE_B_PORT" -gt 65535 ]; then
+    fail "SECPAL_PHASE_B_PORT must be an integer from 1024 through 65535."
+  fi
+}
+
 if [ -z "${SECPAL_PHASE_B_PORT:-}" ]; then
   command -v python3 >/dev/null 2>&1 || fail "Python 3 is required to allocate an isolated loopback port."
-  SECPAL_PHASE_B_PORT="$(python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
+  automatic_port=1
+  SECPAL_PHASE_B_PORT="$(allocate_port)"
 fi
-case "$SECPAL_PHASE_B_PORT" in
-  '' | *[!0-9]*) fail "SECPAL_PHASE_B_PORT must be an integer from 1024 through 65535." ;;
-esac
-if [ "$SECPAL_PHASE_B_PORT" -lt 1024 ] || [ "$SECPAL_PHASE_B_PORT" -gt 65535 ]; then
-  fail "SECPAL_PHASE_B_PORT must be an integer from 1024 through 65535."
-fi
+validate_port
 
-SECPAL_PHASE_B_ORIGIN="https://secpal.example.invalid:$SECPAL_PHASE_B_PORT"
 SECPAL_PHASE_B_API_IMAGE="$PROJECT_NAME-api:phase-b-6fead9cef910"
 SECPAL_PHASE_B_FRONTEND_IMAGE="$PROJECT_NAME-frontend:phase-b-fcd427d9b55d"
 SECPAL_PHASE_B_GATEWAY_IMAGE="$PROJECT_NAME-gateway:phase-b-2.10.2"
+SECPAL_PHASE_B_FORENSICS_CONTAINER_NAME="$PROJECT_NAME-worker-forensics"
+SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME="$PROJECT_NAME-scheduler"
 export \
   SECPAL_PHASE_B_API_IMAGE \
   SECPAL_PHASE_B_FRONTEND_IMAGE \
+  SECPAL_PHASE_B_FORENSICS_CONTAINER_NAME \
   SECPAL_PHASE_B_GATEWAY_IMAGE \
-  SECPAL_PHASE_B_ORIGIN \
-  SECPAL_PHASE_B_PORT
+  SECPAL_PHASE_B_PORT \
+  SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME
 LOCAL_IMAGES=(
   "$SECPAL_PHASE_B_API_IMAGE"
   "$SECPAL_PHASE_B_FRONTEND_IMAGE"
   "$SECPAL_PHASE_B_GATEWAY_IMAGE"
 )
-ORIGIN="$SECPAL_PHASE_B_ORIGIN"
+ORIGIN="https://secpal.example.invalid:$SECPAL_PHASE_B_PORT"
 
 if docker compose version >/dev/null 2>&1; then
   COMPOSE=(docker compose --project-name "$PROJECT_NAME" --file "$ROOT_DIR/compose.yaml")
-elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE=(docker-compose --project-name "$PROJECT_NAME" --file "$ROOT_DIR/compose.yaml")
 else
   fail "Docker Compose v2 is required."
 fi
@@ -82,7 +93,45 @@ cd "$ROOT_DIR"
 "${COMPOSE[@]}" build secrets-init frontend gateway
 "${COMPOSE[@]}" up --detach postgres valkey
 "${COMPOSE[@]}" --profile tools run --rm migrate
-"${COMPOSE[@]}" up --detach api worker-default worker-forensics scheduler frontend gateway
+
+services_started=0
+for _attempt in $(seq 1 3); do
+  if "${COMPOSE[@]}" up --detach \
+    api worker-default worker-forensics scheduler frontend gateway \
+    >"$TEMP_DIR/service-start.log" 2>&1; then
+    services_started=1
+    break
+  fi
+
+  if [ "$automatic_port" -ne 1 ] ||
+    ! grep -Eiq 'address already in use|port is already allocated|failed to bind host port|Bind for .* failed' \
+      "$TEMP_DIR/service-start.log"; then
+    sed -n '1,160p' "$TEMP_DIR/service-start.log" >&2
+    fail "the local integration services could not be started."
+  fi
+
+  if [ "$_attempt" -eq 3 ]; then
+    sed -n '1,160p' "$TEMP_DIR/service-start.log" >&2
+    fail "an isolated loopback port could not be allocated after three attempts."
+  fi
+
+  previous_port="$SECPAL_PHASE_B_PORT"
+  SECPAL_PHASE_B_PORT=""
+  for _allocation_attempt in $(seq 1 10); do
+    candidate_port="$(allocate_port)"
+    if [ "$candidate_port" != "$previous_port" ]; then
+      SECPAL_PHASE_B_PORT="$candidate_port"
+      break
+    fi
+  done
+  [ -n "$SECPAL_PHASE_B_PORT" ] ||
+    fail "a new isolated loopback port could not be selected."
+  validate_port
+  export SECPAL_PHASE_B_PORT
+  ORIGIN="https://secpal.example.invalid:$SECPAL_PHASE_B_PORT"
+done
+
+[ "$services_started" -eq 1 ] || fail "the local integration services could not be started."
 
 gateway_ready=0
 for _attempt in $(seq 1 90); do
@@ -118,10 +167,10 @@ curl --fail --silent --show-error --insecure \
 grep -Fq "apiBaseUrl: \"$ORIGIN\"," "$TEMP_DIR/runtime-config.js" ||
   fail "the frontend runtime API origin did not match the local gateway."
 
-"${COMPOSE[@]}" ps --status running --services >"$TEMP_DIR/services"
 for singleton in worker-forensics scheduler; do
-  count="$(grep -Fxc "$singleton" "$TEMP_DIR/services" || true)"
-  [ "$count" -eq 1 ] || fail "singleton role $singleton did not have exactly one running service."
+  "${COMPOSE[@]}" ps --status running --quiet "$singleton" >"$TEMP_DIR/$singleton.ids"
+  count="$(awk 'NF { count++ } END { print count + 0 }' "$TEMP_DIR/$singleton.ids")"
+  [ "$count" -eq 1 ] || fail "singleton role $singleton did not have exactly one running container."
 done
 
 if ! "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null; then

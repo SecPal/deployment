@@ -11,8 +11,14 @@ CURRENT_UID="$(id -u)"
 CURRENT_GID="$(id -g)"
 failures=0
 test_number=0
+children=()
 
 cleanup() {
+  local child
+  for child in "${children[@]}"; do
+    kill "$child" >/dev/null 2>&1 || true
+    wait "$child" >/dev/null 2>&1 || true
+  done
   rm -rf -- "$TEMP_DIR"
 }
 trap cleanup EXIT HUP INT TERM
@@ -20,6 +26,19 @@ trap cleanup EXIT HUP INT TERM
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
   failures=$((failures + 1))
+}
+
+wait_for_file() {
+  local path="$1"
+  local _attempt
+
+  for _attempt in $(seq 1 200); do
+    if [ -e "$path" ]; then
+      return 0
+    fi
+    /usr/bin/sleep 0.01
+  done
+  return 1
 }
 
 expect_failure() {
@@ -70,10 +89,106 @@ expect_failure "a missing secret set" \
   env SECPAL_SECRET_DIR="$TEMP_DIR/missing" \
   bash "$ROOT_DIR/scripts/container-entrypoint.sh" true
 
+relative_root="$TEMP_DIR/relative-root"
+make_secret_set "$relative_root/secrets"
+printf '%s\n' '#!/bin/sh' 'exec /usr/bin/true' >"$FAKE_BIN/install"
+chmod 0700 "$FAKE_BIN/install"
+if (
+  cd "$relative_root"
+  env PATH="$FAKE_BIN:$PATH" SECPAL_SECRET_DIR=secrets \
+    bash "$ROOT_DIR/scripts/container-entrypoint.sh" true
+) >/dev/null 2>&1; then
+  fail "the container entrypoint accepted a relative secret directory"
+fi
+rm "$FAKE_BIN/install"
+
+signal_directory="$TEMP_DIR/signal-publication"
+signal_pause="$TEMP_DIR/signal-pause"
+signal_release="$TEMP_DIR/signal-release"
+# Generate a fixture that expands in its own process.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/bin/sh' \
+  'set -eu' \
+  '/usr/bin/mv "$@"' \
+  'if [ ! -e "$SECPAL_TEST_SIGNAL_PAUSE" ]; then' \
+  '  : >"$SECPAL_TEST_SIGNAL_PAUSE"' \
+  '  while [ ! -e "$SECPAL_TEST_SIGNAL_RELEASE" ]; do /usr/bin/sleep 0.01; done' \
+  'fi' \
+  >"$FAKE_BIN/mv"
+chmod 0700 "$FAKE_BIN/mv"
+env \
+  PATH="$FAKE_BIN:$PATH" \
+  SECPAL_API_GID="$CURRENT_GID" \
+  SECPAL_API_UID="$CURRENT_UID" \
+  SECPAL_POSTGRES_DATA_DIR="$TEMP_DIR/postgres-data" \
+  SECPAL_POSTGRES_UID="$CURRENT_UID" \
+  SECPAL_SECRET_DIR="$signal_directory" \
+  SECPAL_TEST_SIGNAL_PAUSE="$signal_pause" \
+  SECPAL_TEST_SIGNAL_RELEASE="$signal_release" \
+  SECPAL_VALKEY_UID="$CURRENT_UID" \
+  bash "$ROOT_DIR/scripts/init-local-secrets.sh" >"$TEMP_DIR/signal.log" 2>&1 &
+signal_pid=$!
+children+=("$signal_pid")
+if ! wait_for_file "$signal_pause"; then
+  fail "the secret initializer did not reach the controlled publication pause"
+  kill "$signal_pid" >/dev/null 2>&1 || true
+else
+  kill -TERM "$signal_pid"
+fi
+: >"$signal_release"
+if wait "$signal_pid"; then
+  fail "the secret initializer returned success after SIGTERM"
+fi
+children=()
+published_after_signal="$(find "$signal_directory" -maxdepth 1 -type f -print -quit 2>/dev/null || true)"
+if [ -n "$published_after_signal" ]; then
+  fail "a signaled secret publication left a partial secret set"
+fi
+rm "$FAKE_BIN/mv"
+
+publish_failure="$TEMP_DIR/publish-failure"
+mv_count_file="$TEMP_DIR/mv-count"
+# Generate a fixture that expands in its own process.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/bin/sh' \
+  'set -eu' \
+  'count=0' \
+  'if [ -f "$SECPAL_TEST_MV_COUNT_FILE" ]; then count="$(cat "$SECPAL_TEST_MV_COUNT_FILE")"; fi' \
+  'count=$((count + 1))' \
+  'printf "%s\n" "$count" >"$SECPAL_TEST_MV_COUNT_FILE"' \
+  'if [ "$count" -eq 2 ]; then exit 73; fi' \
+  'exec /usr/bin/mv "$@"' \
+  >"$FAKE_BIN/mv"
+chmod 0700 "$FAKE_BIN/mv"
+if SECPAL_TEST_MV_COUNT_FILE="$mv_count_file" \
+  run_initializer "$publish_failure" >/dev/null 2>&1; then
+  fail "an interrupted secret publication unexpectedly succeeded"
+fi
+published_after_failure="$(find "$publish_failure" -maxdepth 1 -type f -print -quit 2>/dev/null || true)"
+if [ -n "$published_after_failure" ]; then
+  fail "an interrupted secret publication left a partial secret set"
+fi
+rm "$FAKE_BIN/mv"
+if ! run_initializer "$publish_failure" >/dev/null 2>&1; then
+  fail "secret initialization did not recover after a publication failure"
+fi
+
 partial="$TEMP_DIR/partial"
 install -d -m 0700 "$partial"
 printf 'partial\n' >"$partial/app-key"
-expect_failure "a partial secret set" run_initializer "$partial"
+if ! run_initializer "$partial" >/dev/null 2>&1; then
+  fail "a partial secret set was not recovered"
+else
+  recovered_output="$TEMP_DIR/recovered.log"
+  if env SECPAL_SECRET_DIR="$partial" \
+    bash "$ROOT_DIR/scripts/container-entrypoint.sh" >"$recovered_output" 2>&1; then
+    fail "the recovered secret set accepted a missing role command"
+  elif ! grep -Fq 'ERROR: no container role command was provided.' "$recovered_output"; then
+    fail "the recovered secret set did not satisfy the runtime contract"
+  fi
+fi
 
 symlinked="$TEMP_DIR/symlinked"
 make_secret_set "$symlinked"

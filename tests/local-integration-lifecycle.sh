@@ -67,6 +67,56 @@ chmod 0700 "$FAKE_BIN/docker" "$FAKE_BIN/curl"
 : >"$COMMAND_LOG"
 : >"$CURL_LOG"
 
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "docker-compose version 1.29.2"' \
+  >"$FAKE_BIN/docker-compose"
+chmod 0700 "$FAKE_BIN/docker-compose"
+legacy_output="$TEMP_DIR/legacy-compose.out"
+if env \
+  PATH="$FAKE_BIN:$PATH" \
+  SECPAL_PHASE_B_PORT=18442 \
+  SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+  SECPAL_TEST_CURL_LOG="$CURL_LOG" \
+  SECPAL_TEST_DOCKER_COMPOSE_V2=0 \
+  SECPAL_TEST_RUN_ID=legacy-compose \
+  bash "$ROOT_DIR/scripts/local-integration.sh" >"$legacy_output" 2>&1; then
+  fail "legacy Docker Compose v1 was accepted"
+elif ! grep -Fq 'Docker Compose v2 is required.' "$legacy_output"; then
+  fail "legacy Docker Compose v1 did not fail at the version gate"
+fi
+rm "$FAKE_BIN/docker-compose"
+
+python_count="$TEMP_DIR/python-count"
+port_attempts="$TEMP_DIR/port-attempts"
+gateway_failure_marker="$TEMP_DIR/gateway-failed"
+# Generate a fixture that expands in its own process.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/bin/sh' \
+  'set -eu' \
+  'count=0' \
+  'if [ -f "$SECPAL_TEST_PYTHON_COUNT" ]; then count="$(cat "$SECPAL_TEST_PYTHON_COUNT")"; fi' \
+  'count=$((count + 1))' \
+  'printf "%s\n" "$count" >"$SECPAL_TEST_PYTHON_COUNT"' \
+  'if [ "$count" -eq 1 ]; then printf "18445\n"; else printf "18446\n"; fi' \
+  >"$FAKE_BIN/python3"
+chmod 0700 "$FAKE_BIN/python3"
+if ! env \
+  PATH="$FAKE_BIN:$PATH" \
+  SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+  SECPAL_TEST_CURL_LOG="$CURL_LOG" \
+  SECPAL_TEST_FAIL_GATEWAY_ONCE_MARKER="$gateway_failure_marker" \
+  SECPAL_TEST_PORT_ATTEMPT_LOG="$port_attempts" \
+  SECPAL_TEST_PYTHON_COUNT="$python_count" \
+  SECPAL_TEST_RUN_ID=port-retry \
+  bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/port-retry.out" 2>&1; then
+  fail "an automatic loopback-port collision was not retried"
+elif [ "$(sort -u "$port_attempts" 2>/dev/null | wc -l)" -ne 2 ]; then
+  fail "the loopback-port retry did not select a new port"
+fi
+rm "$FAKE_BIN/python3"
+: >"$COMMAND_LOG"
+: >"$CURL_LOG"
+
 for invalid_port in invalid 80 65536; do
   if env \
     PATH="$FAKE_BIN:$PATH" \
@@ -151,10 +201,28 @@ if [ -z "$one_images" ] || [ -z "$two_images" ] || [ "$one_images" = "$two_image
   fail "parallel runs did not use distinct project-scoped image tags"
 fi
 
-one_project="$(awk -F '\t' '$1 == "one" { count = split($5, part, " "); for (position = 1; position <= count; position++) if (part[position] == "--project-name") { print part[position + 1]; exit } }' "$COMMAND_LOG")"
-two_project="$(awk -F '\t' '$1 == "two" { count = split($5, part, " "); for (position = 1; position <= count; position++) if (part[position] == "--project-name") { print part[position + 1]; exit } }' "$COMMAND_LOG")"
+one_project="$(awk -F '\t' '$1 == "one" { count = split($7, part, " "); for (position = 1; position <= count; position++) if (part[position] == "--project-name") { print part[position + 1]; exit } }' "$COMMAND_LOG")"
+two_project="$(awk -F '\t' '$1 == "two" { count = split($7, part, " "); for (position = 1; position <= count; position++) if (part[position] == "--project-name") { print part[position + 1]; exit } }' "$COMMAND_LOG")"
 if [ -z "$one_project" ] || [ -z "$two_project" ] || [ "$one_project" = "$two_project" ]; then
   fail "parallel runs did not use distinct random Compose projects"
+fi
+
+for specification in one:18443 two:18444; do
+  run_id="${specification%%:*}"
+  forensics_name="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id { print $5; exit }' "$COMMAND_LOG")"
+  scheduler_name="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id { print $6; exit }' "$COMMAND_LOG")"
+  if [ -z "$forensics_name" ] || [ -z "$scheduler_name" ] ||
+    [ "$forensics_name" = "$scheduler_name" ]; then
+    fail "parallel run $run_id did not configure distinct singleton container names"
+  fi
+done
+
+one_forensics="$(awk -F '\t' '$1 == "one" { print $5; exit }' "$COMMAND_LOG")"
+two_forensics="$(awk -F '\t' '$1 == "two" { print $5; exit }' "$COMMAND_LOG")"
+one_scheduler="$(awk -F '\t' '$1 == "one" { print $6; exit }' "$COMMAND_LOG")"
+two_scheduler="$(awk -F '\t' '$1 == "two" { print $6; exit }' "$COMMAND_LOG")"
+if [ "$one_forensics" = "$two_forensics" ] || [ "$one_scheduler" = "$two_scheduler" ]; then
+  fail "parallel runs did not isolate singleton container names"
 fi
 
 if [ "$failures" -ne 0 ]; then

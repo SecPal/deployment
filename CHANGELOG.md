@@ -17,6 +17,13 @@ SPDX-License-Identifier: CC0-1.0
 - Runtime-only secret initialization and deterministic Phase B contracts.
 - Isolated local test projects, image tags, and loopback ports with fail-closed
   signal cleanup.
+- Port-aware SPA session configuration and immediate-peer proxy trust for the
+  local TLS gateway.
+- Compose scaling guards and instance-level validation for the singleton worker
+  and scheduler.
+- Rollback and automatic recovery for interrupted runtime-secret publication.
+- Bounded automatic loopback-port reselection after bind collisions, strict
+  Compose v2 validation, and absolute runtime-secret path enforcement.
 - A shared sensitive-path contract covering tracked, untracked, and ignored
   repository paths.
 

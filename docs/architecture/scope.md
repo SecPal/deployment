@@ -45,7 +45,10 @@ The architecture separates the following trust zones:
 - **Local test client:** reaches only the loopback-bound test TLS gateway at
   `127.0.0.1:8443` using `secpal.example.invalid`.
 - **Test gateway:** terminates disposable local TLS and routes over the internal
-  edge network. It is not the selected production edge.
+  edge network. The API uses Laravel's immediate-peer trust token so gateway
+  HTTPS and client metadata survive dynamic bridge addressing. All Phase B
+  network peers are stack-owned services. The gateway is not the selected
+  production edge.
 - **Frontend container:** serves the frontend image and has no direct database
   or secret-store authority.
 - **API HTTP container:** handles authenticated application requests and is
@@ -77,10 +80,13 @@ activity-hash-chain worker: exactly one
 scheduler: exactly one
 ```
 
-The default worker may be scaled deliberately. The single forensics worker is
-the only consumer of `activity-hash-chain`, `merkle`, and `opentimestamp` in
-Phase B. Migrations are an explicit `tools` profile operation and run exactly
-once in the integration script, never from an entrypoint or health check.
+The default worker may be scaled deliberately. Explicit container names make
+Compose reject attempts to scale either singleton role; the integration script
+derives project-scoped names so parallel canonical runs remain isolated. The
+single forensics worker is the only consumer of `activity-hash-chain`, `merkle`,
+and `opentimestamp` in Phase B. Migrations are an explicit `tools` profile
+operation and run exactly once in the integration script, never from an
+entrypoint or health check.
 
 ## Step A bootstrap contract
 
@@ -112,8 +118,9 @@ B.
   scripts.
 - **Local user configuration:** none is required by the canonical test; no
   `.env` file is read.
-- **Secrets:** generated at runtime in the `local-secrets` volume and mounted
-  read-only into long-running services.
+- **Secrets:** generated at runtime in the `local-secrets` volume, rolled back
+  as a set if publication is interrupted, and mounted read-only into
+  long-running services.
 - **Runtime state:** the temporary PostgreSQL volume and per-container tmpfs
   mounts.
 - **Generated artifacts:** project-scoped locally built images and the

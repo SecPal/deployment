@@ -11,6 +11,8 @@ API_GID="${SECPAL_API_GID:-10001}"
 POSTGRES_UID="${SECPAL_POSTGRES_UID:-999}"
 VALKEY_UID="${SECPAL_VALKEY_UID:-10002}"
 TEMP_DIR=""
+INITIALIZATION_ACTIVE=0
+secret_names=(app-key postgres-password valkey-password tenant-kek)
 
 fail() {
   printf 'ERROR: unable to initialize the local ephemeral secret contract.\n' >&2
@@ -32,11 +34,31 @@ require_metadata() {
 }
 
 cleanup() {
+  local name
+
+  if [ "$INITIALIZATION_ACTIVE" -eq 1 ]; then
+    for name in "${secret_names[@]}"; do
+      if [ -f "$SECRET_DIR/$name" ] || [ -L "$SECRET_DIR/$name" ]; then
+        rm -f -- "$SECRET_DIR/$name" || true
+      fi
+    done
+  fi
   if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
-    rm -rf -- "$TEMP_DIR"
+    rm -rf -- "$TEMP_DIR" || true
   fi
 }
-trap cleanup EXIT HUP INT TERM
+
+handle_signal() {
+  local status="$1"
+  trap - EXIT HUP INT TERM
+  cleanup
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 
 if [ "$(id -u)" -ne 0 ]; then
   fail
@@ -50,7 +72,6 @@ esac
 install -d -m 0711 "$SECRET_DIR"
 install -d -m 0700 -o "$POSTGRES_UID" -g "$POSTGRES_UID" "$POSTGRES_DATA_DIR"
 
-secret_names=(app-key postgres-password valkey-password tenant-kek)
 present=0
 for name in "${secret_names[@]}"; do
   if [ -e "$SECRET_DIR/$name" ] || [ -L "$SECRET_DIR/$name" ]; then
@@ -59,7 +80,14 @@ for name in "${secret_names[@]}"; do
 done
 
 if [ "$present" -ne 0 ] && [ "$present" -ne "${#secret_names[@]}" ]; then
-  fail
+  for name in "${secret_names[@]}"; do
+    if [ -f "$SECRET_DIR/$name" ] || [ -L "$SECRET_DIR/$name" ]; then
+      rm -f -- "$SECRET_DIR/$name"
+    elif [ -e "$SECRET_DIR/$name" ]; then
+      fail
+    fi
+  done
+  present=0
 fi
 
 if [ "$present" -eq "${#secret_names[@]}" ]; then
@@ -77,6 +105,7 @@ if [ "$present" -eq "${#secret_names[@]}" ]; then
   exit 0
 fi
 
+INITIALIZATION_ACTIVE=1
 TEMP_DIR="$(mktemp -d "$SECRET_DIR/.init.XXXXXX")"
 chmod 0700 "$TEMP_DIR"
 
@@ -98,5 +127,6 @@ done
 
 rmdir "$TEMP_DIR"
 TEMP_DIR=""
+INITIALIZATION_ACTIVE=0
 
 printf 'Local ephemeral runtime secrets initialized without revealing values.\n'

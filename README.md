@@ -67,13 +67,19 @@ access for the pinned build inputs:
 ```
 
 The script assigns a random Compose project, project-scoped image tags, and an
-available loopback port. It builds the pinned images, generates random test-only
-secrets inside a private runtime volume without printing them, starts private
-PostgreSQL and Valkey services, runs migrations exactly once, starts the
-explicit service roles, and verifies API/frontend routing through local TLS.
-Successful completion means its containers, networks, images, database data,
-certificates, and secrets were removed. Failure paths trigger best-effort
-cleanup; handled signals stop the run with a non-success status after cleanup.
+available loopback port. An automatically selected port is replaced on a
+detected bind collision, with at most three service-start attempts. The script
+also assigns project-scoped names to the two singleton containers, configures
+the exact local authority for Sanctum's SPA session flow, and trusts only the
+API request's immediate proxy address. It builds the pinned images, generates
+random test-only secrets inside a private runtime volume without printing them,
+starts private PostgreSQL and Valkey services, runs migrations exactly once,
+starts the explicit service roles, and verifies API/frontend routing through
+local TLS. Successful completion means its containers, networks, images,
+database data, certificates, and secrets were removed. Failure paths trigger
+best-effort cleanup; handled signals stop the run with a non-success status
+after cleanup. Interrupted secret publication rolls back partial files, and a
+later run replaces any legacy partial set.
 
 For a deterministic caller-assigned port, including parallel test scheduling,
 set a distinct loopback port for each run:
@@ -82,7 +88,12 @@ set a distinct loopback port for each run:
 SECPAL_PHASE_B_PORT=18443 ./scripts/local-integration.sh
 ```
 
-The public Compose template retains `8443` as its direct-use default.
+The public Compose template retains `8443` and reserved singleton container
+names as its single-project direct-use defaults. One validated port setting
+drives gateway publication, API URL generation, Sanctum's stateful authority,
+and the frontend runtime origin. The integration script derives unique values
+for parallel runs. The runner requires the `docker compose` v2 plugin and does
+not fall back to the legacy standalone Compose v1 command.
 
 This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use

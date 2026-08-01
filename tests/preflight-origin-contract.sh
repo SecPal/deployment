@@ -33,10 +33,15 @@ if [ ! -x "$VALIDATOR" ]; then
   fail "the origin validator is missing or not executable"
 else
   expect_accepted 'git@github.com:SecPal/deployment.git'
+  expect_accepted 'git@github.com:SecPal/deployment'
+  expect_accepted 'ssh://git@github.com/SecPal/deployment'
+  expect_accepted 'ssh://git@github.com/SecPal/deployment.git/'
   expect_accepted 'https://github.com/SecPal/deployment'
   expect_accepted 'https://github.com/SecPal/deployment.git'
+  expect_accepted 'https://github.com/SecPal/deployment/'
 
   expect_rejected 'https://github.com/SecPal/deployment-fork'
+  expect_rejected 'https://github.com/SecPal/deployment.git.example.invalid'
   expect_rejected 'https://example.invalid/SecPal/deployment.git'
   expect_rejected 'git@github.com:Other/deployment.git'
 fi

@@ -9,7 +9,7 @@ x-api-build: &api-build
 x-api-environment: &api-environment
   APP_DEBUG: "false"
   APP_ENV: local
-  APP_URL: ${SECPAL_PHASE_B_ORIGIN:-https://secpal.example.invalid:8443}
+  APP_URL: https://secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
   CACHE_STORE: redis
   DB_CONNECTION: pgsql
   DB_DATABASE: secpal_local
@@ -22,8 +22,10 @@ x-api-environment: &api-environment
   REDIS_CLIENT: phpredis
   REDIS_HOST: valkey
   REDIS_PORT: "6379"
+  SANCTUM_STATEFUL_DOMAINS: secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
   SESSION_DRIVER: database
-  TRUSTED_PROXIES: gateway
+  SESSION_SECURE_COOKIE: "true"
+  TRUSTED_PROXIES: REMOTE_ADDR
 x-api-service: &api-service
   image: *api-image
   build: *api-build
@@ -204,6 +206,7 @@ services:
 
   worker-forensics:
     <<: *api-service
+    container_name: ${SECPAL_PHASE_B_FORENSICS_CONTAINER_NAME:-secpal-phase-b-worker-forensics}
     command:
       - php
       - artisan
@@ -219,6 +222,7 @@ services:
 
   scheduler:
     <<: *api-service
+    container_name: ${SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME:-secpal-phase-b-scheduler}
     command: ["php", "artisan", "schedule:work"]
     labels:
       org.secpal.role: scheduler
@@ -234,7 +238,7 @@ services:
         SECPAL_IMAGE_VERSION: 0.0.1-phase-b
     user: "101:101"
     environment:
-      SECPAL_API_URL: ${SECPAL_PHASE_B_ORIGIN:-https://secpal.example.invalid:8443}
+      SECPAL_API_URL: https://secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=0700,size=32m
