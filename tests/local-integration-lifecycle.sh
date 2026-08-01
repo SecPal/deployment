@@ -157,13 +157,18 @@ if ! wait_for_file "$pause_marker"; then
   fail "the signal fixture did not reach its controlled pause"
 else
   kill -TERM "$signal_pid"
-  : >"$release_marker"
   if ! wait_for_exit "$signal_pid"; then
-    kill -KILL "$signal_pid" >/dev/null 2>&1 || true
+    : >"$release_marker"
+    if ! wait_for_exit "$signal_pid"; then
+      kill -KILL "$signal_pid" >/dev/null 2>&1 || true
+    fi
     wait "$signal_pid" >/dev/null 2>&1 || true
-    fail "the integration script did not terminate after SIGTERM"
+    fail "the integration script did not interrupt a blocked child after SIGTERM"
   elif wait "$signal_pid"; then
     fail "the integration script returned success after SIGTERM"
+  fi
+  if ! grep -Fq -- 'down --volumes --remove-orphans' "$COMMAND_LOG"; then
+    fail "the integration script did not clean up after SIGTERM"
   fi
   if grep -Fq -- '--profile tools run --rm migrate' "$COMMAND_LOG"; then
     fail "the integration script executed work after handling SIGTERM"

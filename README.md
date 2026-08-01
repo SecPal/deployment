@@ -63,9 +63,9 @@ HTTPS origins on that port:
 API, frontend, workers, scheduler, and data services have no published ports.
 
 Run the explicit integration test with Docker Engine, Docker Compose v2,
-Python 3, `curl`, Node.js 22.22.2, npm dependencies installed with `npm ci`,
-Playwright Chromium installed, GitHub access for the pinned source contexts,
-and registry access for the pinned build inputs:
+Python 3, `curl`, util-linux `setsid`, Node.js 22.22.2, npm dependencies
+installed with `npm ci`, Playwright Chromium installed, GitHub access for the
+pinned source contexts, and registry access for the pinned build inputs:
 
 ```bash
 ./scripts/local-integration.sh
@@ -87,9 +87,10 @@ including the Sanctum CSRF handshake, an intentionally unsuccessful login,
 secure cookie attributes, CSP, service-worker registration, and runtime API
 routing. Successful completion means its containers, networks, volumes,
 images, database data, private files, certificates, and secrets were removed.
-Failure paths trigger best-effort cleanup; handled signals stop the run with a
-non-success status after cleanup. Interrupted secret publication rolls back
-partial files, and a later run replaces any legacy partial set.
+Failure paths trigger best-effort cleanup; handled signals are forwarded to the
+active integration process group and stop the run with a non-success status
+after cleanup. Interrupted secret publication rolls back partial files, and a
+later run replaces any legacy partial set.
 
 For a deterministic caller-assigned port, including parallel test scheduling,
 set a distinct loopback port for each run:

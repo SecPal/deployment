@@ -4,6 +4,50 @@
 
 set -euo pipefail
 
+supervise_integration() {
+  local child_pid
+  local status
+
+  if ! command -v setsid >/dev/null 2>&1; then
+    printf 'ERROR: setsid is required for reliable signal handling.\n' >&2
+    return 1
+  fi
+
+  SECPAL_PHASE_B_SUPERVISED=1 setsid --wait bash "$0" "$@" &
+  child_pid=$!
+
+  # Invoked indirectly by the signal traps below.
+  # shellcheck disable=SC2329
+  forward_supervisor_signal() {
+    local exit_status="$1"
+
+    trap - HUP INT TERM
+    if kill -0 "$child_pid" >/dev/null 2>&1; then
+      kill -TERM -- "-$child_pid" >/dev/null 2>&1 ||
+        kill -TERM "$child_pid" >/dev/null 2>&1 || true
+    fi
+    wait "$child_pid" >/dev/null 2>&1 || true
+    exit "$exit_status"
+  }
+
+  trap 'forward_supervisor_signal 129' HUP
+  trap 'forward_supervisor_signal 130' INT
+  trap 'forward_supervisor_signal 143' TERM
+
+  set +e
+  wait "$child_pid"
+  status=$?
+  set -e
+  trap - HUP INT TERM
+  return "$status"
+}
+
+if [ "${SECPAL_PHASE_B_SUPERVISED:-0}" -ne 1 ]; then
+  supervise_integration "$@"
+  exit $?
+fi
+unset SECPAL_PHASE_B_SUPERVISED
+
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 TEMP_DIR="$(mktemp -d -t secpal-phase-b.XXXXXXXXXX)"
 project_token="${TEMP_DIR##*.}"

@@ -17,7 +17,7 @@ SPDX-License-Identifier: CC0-1.0
   internal CA.
 - Runtime-only secret initialization and deterministic Phase B contracts.
 - Isolated local test projects, image tags, and loopback ports with fail-closed
-  signal cleanup.
+  process-group signal forwarding and cleanup.
 - Port-aware SPA session configuration and immediate-peer proxy trust for the
   local TLS gateway.
 - Compose scaling guards and instance-level validation for the singleton worker
