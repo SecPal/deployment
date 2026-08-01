@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+{
+	admin off
+	skip_install_trust
+}
+
+https://secpal.example.invalid:8443 {
+	tls internal
+
+	@api path /v1 /v1/* /sanctum /sanctum/* /health /health/*
+	reverse_proxy @api api:8080
+	reverse_proxy frontend:8080
+}

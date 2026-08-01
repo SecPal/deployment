@@ -7,7 +7,7 @@ SPDX-License-Identifier: CC0-1.0
 
 The phases below are acceptance-driven. They do not imply dates or releases.
 
-## Phase A — Governance bootstrap (current milestone)
+## Phase A — Governance bootstrap (complete)
 
 **Goal:** Establish a trustworthy public repository without deployment code.
 
@@ -26,7 +26,7 @@ deployment implementation exists.
 **Deferred:** Every runnable stack, image, edge, secret, data-service, backup,
 update, rollback, and production concern.
 
-## Phase B — Local container integration stack
+## Phase B — Local container integration stack (complete)
 
 **Goal:** Prove local API/frontend integration from pinned source revisions.
 
@@ -40,10 +40,16 @@ deliberately updated through a regular pull request.
 singleton roles, private data services, and a test-only TLS gateway without
 public exposure or production secrets.
 
-**Deferred:** GHCR, immutable public images, a production edge, public exposure,
-and production operations. This phase is not complete.
+**Completion evidence:** `compose.yaml` pins the API and frontend Git revisions;
+third-party runtime inputs use version-and-digest references; the offline Phase
+B contract validates isolation and singleton cardinality; and
+`scripts/local-integration.sh` exercises builds, health checks, explicit
+migration, local TLS routing, and cleanup. Phase B is complete.
 
-## Phase C — Immutable image publishing
+**Deferred:** GHCR, immutable public product images, a production edge, public
+exposure, tenant provisioning, durable storage, and production operations.
+
+## Phase C — Immutable image publishing (next; not implemented)
 
 **Goal:** Define reproducible publication and consumption of product images.
 

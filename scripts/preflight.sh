@@ -65,17 +65,19 @@ fi
 bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
 bash tests/repository-contract.sh
+bash tests/phase-b-contract.sh
+bash tests/runtime-secret-contract.sh
 
-mapfile -d '' markdown_files < <(find . -path ./.git -prune -o -type f -name '*.md' -print0 | sort -z)
+mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"
 
-mapfile -d '' yaml_files < <(find . -path ./.git -prune -o -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
+mapfile -d '' yaml_files < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
 yamllint -c .yamllint.yml "${yaml_files[@]}"
 
 mapfile -d '' workflow_files < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
 actionlint "${workflow_files[@]}"
 
-mapfile -d '' formatted_files < <(find . -path ./.git -prune -o -type f \( \
+mapfile -d '' formatted_files < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f \( \
   -name '*.md' -o -name '*.yml' -o -name '*.yaml' -o -name '*.json' \
 \) -print0 | sort -z)
 prettier --check "${formatted_files[@]}"

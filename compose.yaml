@@ -1,0 +1,313 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+---
+name: secpal-phase-b
+
+x-api-image: &api-image secpal-api:phase-b-6fead9cef910
+x-api-build: &api-build
+  context: https://github.com/SecPal/api.git#6fead9cef910314304048056a7ebed4f10bf5381
+x-api-environment: &api-environment
+  APP_DEBUG: "false"
+  APP_ENV: local
+  APP_URL: https://secpal.example.invalid:8443
+  CACHE_STORE: redis
+  DB_CONNECTION: pgsql
+  DB_DATABASE: secpal_local
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USERNAME: secpal_local
+  FILESYSTEM_DISK: local
+  LOG_CHANNEL: stderr
+  QUEUE_CONNECTION: database
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: valkey
+  REDIS_PORT: "6379"
+  SESSION_DRIVER: database
+  TRUSTED_PROXIES: gateway
+x-api-service: &api-service
+  image: *api-image
+  build: *api-build
+  user: "10001:10001"
+  entrypoint: ["/bin/bash", "/run/secpal/container-entrypoint.sh"]
+  environment: *api-environment
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700,size=32m
+    - /config:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700,size=16m
+    - /data:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700,size=16m
+    - /app/storage:rw,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=128m
+    - /app/bootstrap/cache:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=16m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  configs:
+    - source: container-entrypoint
+      target: /run/secpal/container-entrypoint.sh
+  volumes:
+    - type: volume
+      source: local-secrets
+      target: /run/secpal-secrets
+      read_only: true
+  networks:
+    - application
+  depends_on:
+    secrets-init:
+      condition: service_completed_successfully
+    postgres:
+      condition: service_healthy
+    valkey:
+      condition: service_healthy
+  init: true
+  stop_grace_period: 30s
+
+services:
+  secrets-init:
+    image: *api-image
+    build: *api-build
+    user: "0:0"
+    entrypoint: ["/bin/bash", "/run/secpal/init-local-secrets.sh"]
+    environment:
+      SECPAL_API_GID: "10001"
+      SECPAL_API_UID: "10001"
+      SECPAL_POSTGRES_DATA_DIR: /var/lib/postgresql/data
+      SECPAL_POSTGRES_UID: "999"
+      SECPAL_SECRET_DIR: /run/secpal-secrets
+      SECPAL_VALKEY_UID: "10002"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    configs:
+      - source: init-local-secrets
+        target: /run/secpal/init-local-secrets.sh
+    volumes:
+      - type: volume
+        source: local-secrets
+        target: /run/secpal-secrets
+      - type: volume
+        source: postgres-data
+        target: /var/lib/postgresql/data
+    network_mode: none
+    restart: "no"
+
+  postgres:
+    image: postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+    user: "999:999"
+    environment:
+      POSTGRES_DB: secpal_local
+      POSTGRES_PASSWORD_FILE: /run/secpal-secrets/postgres-password
+      POSTGRES_USER: secpal_local
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=999,gid=999,mode=0700,size=32m
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,uid=999,gid=999,mode=0750,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: volume
+        source: local-secrets
+        target: /run/secpal-secrets
+        read_only: true
+      - type: volume
+        source: postgres-data
+        target: /var/lib/postgresql/data
+    networks:
+      - application
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secpal_local -d secpal_local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  valkey:
+    image: valkey/valkey:9.1.1-trixie@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd
+    user: "10002:10002"
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >-
+        umask 077;
+        printf 'requirepass %s\n' "$$(cat /run/secpal-secrets/valkey-password)" > /tmp/valkey.conf;
+        exec valkey-server /tmp/valkey.conf --save "" --appendonly no
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=10002,gid=10002,mode=0700,size=16m
+      - /data:rw,noexec,nosuid,nodev,uid=10002,gid=10002,mode=0700,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: volume
+        source: local-secrets
+        target: /run/secpal-secrets
+        read_only: true
+    networks:
+      - application
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - VALKEYCLI_AUTH="$$(cat /run/secpal-secrets/valkey-password)" valkey-cli ping | grep -qx PONG
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  migrate:
+    <<: *api-service
+    command: ["php", "artisan", "migrate", "--force"]
+    profiles: [tools]
+    restart: "no"
+
+  api:
+    <<: *api-service
+    command: ["frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"]
+    networks:
+      - application
+      - edge
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/secpal-http-live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  worker-default:
+    <<: *api-service
+    command:
+      [
+        "php",
+        "artisan",
+        "queue:work",
+        "--queue=default",
+        "--sleep=1",
+        "--tries=3",
+        "--timeout=90",
+      ]
+    restart: unless-stopped
+
+  worker-forensics:
+    <<: *api-service
+    command:
+      - php
+      - artisan
+      - queue:work
+      - --queue=activity-hash-chain,merkle,opentimestamp
+      - --sleep=1
+      - --tries=3
+      - --timeout=90
+    labels:
+      org.secpal.role: activity-hash-chain
+      org.secpal.singleton: "true"
+    restart: unless-stopped
+
+  scheduler:
+    <<: *api-service
+    command: ["php", "artisan", "schedule:work"]
+    labels:
+      org.secpal.role: scheduler
+      org.secpal.singleton: "true"
+    restart: unless-stopped
+
+  frontend:
+    image: secpal-frontend:phase-b-fcd427d9b55d
+    build:
+      context: https://github.com/SecPal/frontend.git#fcd427d9b55d7945c439c670077e12928e47ddd6
+      args:
+        SECPAL_IMAGE_REVISION: fcd427d9b55d7945c439c670077e12928e47ddd6
+        SECPAL_IMAGE_VERSION: 0.0.1-phase-b
+    user: "101:101"
+    environment:
+      SECPAL_API_URL: https://secpal.example.invalid:8443
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=0700,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  gateway:
+    image: secpal-test-gateway:phase-b-2.10.2
+    build:
+      context: ./containers/phase-b-gateway
+      args:
+        CADDY_IMAGE: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    user: "10003:10003"
+    environment:
+      HOME: /config
+      XDG_CONFIG_HOME: /config
+      XDG_DATA_HOME: /data
+    ports:
+      - "127.0.0.1:8443:8443"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=10003,gid=10003,mode=0700,size=16m
+      - /config:rw,noexec,nosuid,nodev,uid=10003,gid=10003,mode=0700,size=16m
+      - /data:rw,noexec,nosuid,nodev,uid=10003,gid=10003,mode=0700,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    configs:
+      - source: test-gateway
+        target: /etc/caddy/Caddyfile
+    networks:
+      - edge
+      - host-access
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+configs:
+  container-entrypoint:
+    file: ./scripts/container-entrypoint.sh
+  init-local-secrets:
+    file: ./scripts/init-local-secrets.sh
+  test-gateway:
+    file: ./config/phase-b/Caddyfile
+
+networks:
+  application:
+    internal: true
+  edge:
+    internal: true
+  host-access:
+
+volumes:
+  local-secrets:
+  postgres-data:
