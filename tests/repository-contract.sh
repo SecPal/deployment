@@ -44,10 +44,12 @@ required_files=(
   docs/roadmap.md
   scripts/preflight.sh
   scripts/reject-sensitive-paths.sh
+  scripts/validate-origin.sh
   tests/repository-contract.sh
   tests/phase-b-contract.sh
   tests/runtime-secret-contract.sh
   tests/local-integration-lifecycle.sh
+  tests/preflight-origin-contract.sh
   tests/sensitive-path-contract.sh
   tests/fixtures/fake-docker.sh
   tests/fixtures/fake-curl.sh

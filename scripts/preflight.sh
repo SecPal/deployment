@@ -5,7 +5,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
-EXPECTED_REMOTE="git@github.com:SecPal/deployment.git"
 RESOLVED_ROOT="$(realpath "$ROOT_DIR")"
 
 cd "$ROOT_DIR"
@@ -15,10 +14,7 @@ if [ "$(pwd -P)" != "$RESOLVED_ROOT" ]; then
   exit 1
 fi
 
-if [ "$(git remote get-url origin)" != "$EXPECTED_REMOTE" ]; then
-  printf 'ERROR: origin must be %s.\n' "$EXPECTED_REMOTE" >&2
-  exit 1
-fi
+scripts/validate-origin.sh "$(git remote get-url origin)"
 
 required_tools=(actionlint markdownlint prettier reuse shellcheck yamllint)
 missing_tools=()
@@ -54,6 +50,7 @@ bash tests/repository-contract.sh
 bash tests/phase-b-contract.sh
 bash tests/runtime-secret-contract.sh
 bash tests/local-integration-lifecycle.sh
+bash tests/preflight-origin-contract.sh
 bash tests/sensitive-path-contract.sh
 
 mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f -name '*.md' -print0 | sort -z)
