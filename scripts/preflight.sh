@@ -16,7 +16,7 @@ fi
 
 scripts/validate-origin.sh "$(git remote get-url origin)"
 
-required_tools=(actionlint markdownlint prettier reuse shellcheck yamllint)
+required_tools=(actionlint markdownlint php prettier reuse shellcheck yamllint)
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -31,8 +31,8 @@ fi
 
 {
   git ls-files -z
-  git ls-files --others --exclude-standard -z
-  git ls-files --others --ignored --exclude-standard -z
+  git ls-files --others --exclude-standard -z -- . ':!node_modules' ':!playwright-report' ':!test-results'
+  git ls-files --others --ignored --exclude-standard -z -- . ':!.context' ':!node_modules' ':!playwright-report' ':!test-results'
 } | scripts/reject-sensitive-paths.sh
 
 git diff --check
@@ -46,6 +46,7 @@ fi
 
 bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
+php -l scripts/phase-b-runtime-probe.php
 bash tests/repository-contract.sh
 bash tests/phase-b-contract.sh
 bash tests/runtime-secret-contract.sh
@@ -53,16 +54,16 @@ bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh
 bash tests/sensitive-path-contract.sh
 
-mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f -name '*.md' -print0 | sort -z)
+mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"
 
-mapfile -d '' yaml_files < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
+mapfile -d '' yaml_files < <(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
 yamllint -c .yamllint.yml "${yaml_files[@]}"
 
 mapfile -d '' workflow_files < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
 actionlint "${workflow_files[@]}"
 
-mapfile -d '' formatted_files < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f \( \
+mapfile -d '' formatted_files < <(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f \( \
   -name '*.md' -o -name '*.yml' -o -name '*.yaml' -o -name '*.json' \
 \) -print0 | sort -z)
 prettier --check "${formatted_files[@]}"

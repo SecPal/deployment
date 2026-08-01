@@ -6,6 +6,7 @@ set -euo pipefail
 
 SECRET_DIR="${SECPAL_SECRET_DIR:-/run/secpal-secrets}"
 POSTGRES_DATA_DIR="${SECPAL_POSTGRES_DATA_DIR:-/var/lib/postgresql/data}"
+PRIVATE_STORAGE_DIR="${SECPAL_PRIVATE_STORAGE_DIR:-/app/storage/app/private}"
 API_UID="${SECPAL_API_UID:-10001}"
 API_GID="${SECPAL_API_GID:-10001}"
 POSTGRES_UID="${SECPAL_POSTGRES_UID:-999}"
@@ -69,8 +70,26 @@ case "$SECRET_DIR" in
   *) fail ;;
 esac
 
+case "$PRIVATE_STORAGE_DIR" in
+  /*) ;;
+  *) fail ;;
+esac
+
+if [ -L "$PRIVATE_STORAGE_DIR" ] ||
+  { [ -e "$PRIVATE_STORAGE_DIR" ] && [ ! -d "$PRIVATE_STORAGE_DIR" ]; }; then
+  fail
+fi
+
 install -d -m 0711 "$SECRET_DIR"
 install -d -m 0700 -o "$POSTGRES_UID" -g "$POSTGRES_UID" "$POSTGRES_DATA_DIR"
+install -d -m 0750 -o "$API_UID" -g "$API_GID" "$PRIVATE_STORAGE_DIR"
+
+if [ -L "$PRIVATE_STORAGE_DIR" ] || [ ! -d "$PRIVATE_STORAGE_DIR" ] ||
+  [ "$(stat -c '%u' "$PRIVATE_STORAGE_DIR")" != "$API_UID" ] ||
+  [ "$(stat -c '%g' "$PRIVATE_STORAGE_DIR")" != "$API_GID" ] ||
+  [ "$(stat -c '%a' "$PRIVATE_STORAGE_DIR")" != 750 ]; then
+  fail
+fi
 
 present=0
 for name in "${secret_names[@]}"; do

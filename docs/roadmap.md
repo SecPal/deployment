@@ -26,25 +26,33 @@ deployment implementation exists.
 **Deferred:** Every runnable stack, image, edge, secret, data-service, backup,
 update, rollback, and production concern.
 
-## Phase B — Local container integration stack (complete)
+## Phase B — Local container integration stack (in progress)
 
 **Goal:** Prove local API/frontend integration from pinned source revisions.
 
 **Expected artifacts:** A test-only local orchestration contract, pinned build
-inputs, health checks, explicit service roles, and local integration tests.
+inputs, health checks, distinct app/API HTTPS origins, explicit worker roles,
+shared disposable private storage, browser tests, and a hosted real-Compose
+integration check.
 
 **Entry criteria:** Phase A is complete and the Step A absence contract is
 deliberately updated through a regular pull request.
 
-**Completion criteria:** The local stack validates API/frontend integration,
-singleton roles, private data services, and a test-only TLS gateway without
-public exposure or production secrets.
+**Completion criteria:** Static contracts and the real Compose lifecycle prove
+Valkey queue/cache use, correct worker ownership, singleton cardinality, shared
+private storage, separate frontend/API HTTPS origins, exact credentialed CORS,
+Sanctum CSRF and secure-cookie behavior in Chromium, one migration, and full
+project cleanup without public exposure or production secrets. The hosted
+`Local Integration / Compose Contract` check must pass on the current pull
+request head.
 
 **Completion evidence:** `compose.yaml` pins the API and frontend Git revisions;
 third-party runtime inputs use version-and-digest references; the offline Phase
 B contract validates isolation and singleton cardinality; and
 `scripts/local-integration.sh` exercises builds, health checks, explicit
-migration, local TLS routing, and cleanup. Phase B is complete.
+migration, local TLS routing, runtime probes, Chromium, and cleanup. The hosted
+workflow is present; Phase B stays in progress until its check succeeds on the
+current pull-request head.
 
 **Deferred:** GHCR, immutable public product images, a production edge, public
 exposure, tenant provisioning, durable storage, and production operations.

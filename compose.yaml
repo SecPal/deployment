@@ -9,7 +9,8 @@ x-api-build: &api-build
 x-api-environment: &api-environment
   APP_DEBUG: "false"
   APP_ENV: local
-  APP_URL: https://secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
+  APP_NAME: SecPal
+  APP_URL: https://api.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
   CACHE_STORE: redis
   DB_CONNECTION: pgsql
   DB_DATABASE: secpal_local
@@ -17,13 +18,25 @@ x-api-environment: &api-environment
   DB_PORT: "5432"
   DB_USERNAME: secpal_local
   FILESYSTEM_DISK: local
+  FRONTEND_URL: https://app.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
   LOG_CHANNEL: stderr
-  QUEUE_CONNECTION: database
+  QUEUE_CONNECTION: redis
   REDIS_CLIENT: phpredis
+  REDIS_CACHE_DB: "1"
+  REDIS_DB: "0"
   REDIS_HOST: valkey
   REDIS_PORT: "6379"
-  SANCTUM_STATEFUL_DOMAINS: secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
+  REDIS_QUEUE: default
+  REDIS_QUEUE_CONNECTION: default
+  SANCTUM_STATEFUL_DOMAINS: app.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
+  CORS_ALLOWED_HEADERS: Content-Type,Authorization,X-Requested-With,X-XSRF-TOKEN
+  CORS_ALLOWED_METHODS: GET,POST,PUT,PATCH,DELETE,OPTIONS
+  CORS_ALLOWED_ORIGINS: https://app.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
+  CORS_SUPPORTS_CREDENTIALS: "true"
+  SESSION_DOMAIN: .secpal.example.invalid
   SESSION_DRIVER: database
+  SESSION_HTTP_ONLY: "true"
+  SESSION_SAME_SITE: lax
   SESSION_SECURE_COOKIE: "true"
   TRUSTED_PROXIES: REMOTE_ADDR
 x-api-service: &api-service
@@ -37,7 +50,11 @@ x-api-service: &api-service
     - /tmp:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700,size=32m
     - /config:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700,size=16m
     - /data:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700,size=16m
-    - /app/storage:rw,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=128m
+    - /app/storage/app/public:rw,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=32m
+    - /app/storage/framework/cache/data:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=32m
+    - /app/storage/framework/sessions:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=32m
+    - /app/storage/framework/views:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=32m
+    - /app/storage/logs:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=32m
     - /app/bootstrap/cache:rw,noexec,nosuid,nodev,uid=10001,gid=10001,mode=0750,size=16m
   cap_drop:
     - ALL
@@ -46,11 +63,16 @@ x-api-service: &api-service
   configs:
     - source: container-entrypoint
       target: /run/secpal/container-entrypoint.sh
+    - source: phase-b-runtime-probe
+      target: /run/secpal/phase-b-runtime-probe.php
   volumes:
     - type: volume
       source: local-secrets
       target: /run/secpal-secrets
       read_only: true
+    - type: volume
+      source: private-storage
+      target: /app/storage/app/private
   networks:
     - application
   depends_on:
@@ -74,6 +96,7 @@ services:
       SECPAL_API_UID: "10001"
       SECPAL_POSTGRES_DATA_DIR: /var/lib/postgresql/data
       SECPAL_POSTGRES_UID: "999"
+      SECPAL_PRIVATE_STORAGE_DIR: /mnt/secpal-private-storage
       SECPAL_SECRET_DIR: /run/secpal-secrets
       SECPAL_VALKEY_UID: "10002"
     read_only: true
@@ -94,6 +117,9 @@ services:
       - type: volume
         source: postgres-data
         target: /var/lib/postgresql/data
+      - type: volume
+        source: private-storage
+        target: /mnt/secpal-private-storage
     network_mode: none
     restart: "no"
 
@@ -190,34 +216,38 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  worker-default:
+  worker-hash-chain:
+    <<: *api-service
+    container_name: ${SECPAL_PHASE_B_HASH_CHAIN_CONTAINER_NAME:-secpal-phase-b-worker-hash-chain}
+    command:
+      [
+        "php",
+        "artisan",
+        "queue:work",
+        "--queue=activity-hash-chain",
+        "--sleep=1",
+        "--tries=3",
+        "--timeout=90",
+      ]
+    labels:
+      org.secpal.role: activity-hash-chain
+      org.secpal.singleton: "true"
+    restart: unless-stopped
+
+  worker-general:
     <<: *api-service
     command:
       [
         "php",
         "artisan",
         "queue:work",
-        "--queue=default",
+        "--queue=merkle,opentimestamp,default",
         "--sleep=1",
         "--tries=3",
         "--timeout=90",
       ]
-    restart: unless-stopped
-
-  worker-forensics:
-    <<: *api-service
-    container_name: ${SECPAL_PHASE_B_FORENSICS_CONTAINER_NAME:-secpal-phase-b-worker-forensics}
-    command:
-      - php
-      - artisan
-      - queue:work
-      - --queue=activity-hash-chain,merkle,opentimestamp
-      - --sleep=1
-      - --tries=3
-      - --timeout=90
     labels:
-      org.secpal.role: activity-hash-chain
-      org.secpal.singleton: "true"
+      org.secpal.role: general-queue
     restart: unless-stopped
 
   scheduler:
@@ -238,7 +268,7 @@ services:
         SECPAL_IMAGE_VERSION: 0.0.1-phase-b
     user: "101:101"
     environment:
-      SECPAL_API_URL: https://secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
+      SECPAL_API_URL: https://api.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=0700,size=32m
@@ -302,6 +332,8 @@ configs:
     file: ./scripts/container-entrypoint.sh
   init-local-secrets:
     file: ./scripts/init-local-secrets.sh
+  phase-b-runtime-probe:
+    file: ./scripts/phase-b-runtime-probe.php
   test-gateway:
     file: ./config/phase-b/Caddyfile
 
@@ -314,4 +346,5 @@ networks:
 
 volumes:
   local-secrets:
+  private-storage:
   postgres-data:

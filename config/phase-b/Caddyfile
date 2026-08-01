@@ -5,10 +5,12 @@
 	skip_install_trust
 }
 
-https://secpal.example.invalid:8443 {
+https://app.secpal.example.invalid:8443 {
 	tls internal
-
-	@api path /v1 /v1/* /sanctum /sanctum/* /health /health/*
-	reverse_proxy @api api:8080
 	reverse_proxy frontend:8080
+}
+
+https://api.secpal.example.invalid:8443 {
+	tls internal
+	reverse_proxy api:8080
 }

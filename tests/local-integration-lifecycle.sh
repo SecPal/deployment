@@ -67,6 +67,17 @@ chmod 0700 "$FAKE_BIN/docker" "$FAKE_BIN/curl"
 : >"$COMMAND_LOG"
 : >"$CURL_LOG"
 
+printf '%s\n' '#!/bin/sh' 'printf "v22.22.2\n"' >"$FAKE_BIN/node"
+# The fixture expands only when the generated npm script runs.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "%s\t\t\t\t\t\t%s\n" "${SECPAL_TEST_RUN_ID:-unknown}" "npm $*" >>"${SECPAL_TEST_COMMAND_LOG:?}"' \
+  'if [ "${SECPAL_TEST_FAIL_BROWSER:-0}" -eq 1 ]; then exit 74; fi' \
+  'exit 0' \
+  >"$FAKE_BIN/npm"
+chmod 0700 "$FAKE_BIN/node" "$FAKE_BIN/npm"
+
 printf '%s\n' '#!/bin/sh' 'printf "%s\n" "docker-compose version 1.29.2"' \
   >"$FAKE_BIN/docker-compose"
 chmod 0700 "$FAKE_BIN/docker-compose"
@@ -190,8 +201,9 @@ for specification in one:18443 two:18444; do
   run_curl_log="$TEMP_DIR/$run_id.curl"
   grep -F "$run_id"$'\t' "$CURL_LOG" >"$run_curl_log" || true
   if ! grep -Fq "$run_id"$'\t' "$COMMAND_LOG" ||
-    ! grep -Fq "secpal.example.invalid:$port:127.0.0.1" "$run_curl_log"; then
-    fail "parallel run $run_id did not use its isolated loopback port"
+    ! grep -Fq "app.secpal.example.invalid:$port:127.0.0.1" "$run_curl_log" ||
+    ! grep -Fq "api.secpal.example.invalid:$port:127.0.0.1" "$run_curl_log"; then
+    fail "parallel run $run_id did not use both isolated loopback origins"
   fi
 done
 
@@ -209,20 +221,74 @@ fi
 
 for specification in one:18443 two:18444; do
   run_id="${specification%%:*}"
-  forensics_name="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id { print $5; exit }' "$COMMAND_LOG")"
+  hash_chain_name="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id { print $5; exit }' "$COMMAND_LOG")"
   scheduler_name="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id { print $6; exit }' "$COMMAND_LOG")"
-  if [ -z "$forensics_name" ] || [ -z "$scheduler_name" ] ||
-    [ "$forensics_name" = "$scheduler_name" ]; then
+  if [ -z "$hash_chain_name" ] || [ -z "$scheduler_name" ] ||
+    [ "$hash_chain_name" = "$scheduler_name" ]; then
     fail "parallel run $run_id did not configure distinct singleton container names"
   fi
 done
 
-one_forensics="$(awk -F '\t' '$1 == "one" { print $5; exit }' "$COMMAND_LOG")"
-two_forensics="$(awk -F '\t' '$1 == "two" { print $5; exit }' "$COMMAND_LOG")"
+one_hash_chain="$(awk -F '\t' '$1 == "one" { print $5; exit }' "$COMMAND_LOG")"
+two_hash_chain="$(awk -F '\t' '$1 == "two" { print $5; exit }' "$COMMAND_LOG")"
 one_scheduler="$(awk -F '\t' '$1 == "one" { print $6; exit }' "$COMMAND_LOG")"
 two_scheduler="$(awk -F '\t' '$1 == "two" { print $6; exit }' "$COMMAND_LOG")"
-if [ "$one_forensics" = "$two_forensics" ] || [ "$one_scheduler" = "$two_scheduler" ]; then
+if [ "$one_hash_chain" = "$two_hash_chain" ] || [ "$one_scheduler" = "$two_scheduler" ]; then
   fail "parallel runs did not isolate singleton container names"
+fi
+
+for run_id in one two; do
+  run_commands="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id { print $7 }' "$COMMAND_LOG")"
+  general_key="$(printf '%s\n' "$run_commands" | grep -Eo 'phase-b-queue-general-[a-z0-9-]+' | head -n 1 || true)"
+  hash_key="$(printf '%s\n' "$run_commands" | grep -Eo 'phase-b-queue-hash-chain-[a-z0-9-]+' | head -n 1 || true)"
+  storage_probe="$(printf '%s\n' "$run_commands" | grep -Eo 'phase-b-storage-probe-[a-z0-9-]+' | head -n 1 || true)"
+  if [ -z "$general_key" ] || [ -z "$hash_key" ] || [ -z "$storage_probe" ]; then
+    fail "parallel run $run_id did not use isolated queue and storage probes"
+  fi
+
+  general_line="$(grep -n -E "^${run_id}"$'\t'".*phase-b-queue-general-" "$COMMAND_LOG" | head -n 1 | cut -d: -f1 || true)"
+  hash_line="$(grep -n -E "^${run_id}"$'\t'".*phase-b-queue-hash-chain-" "$COMMAND_LOG" | head -n 1 | cut -d: -f1 || true)"
+  storage_line="$(grep -n -E "^${run_id}"$'\t'".*phase-b-storage-probe-" "$COMMAND_LOG" | head -n 1 | cut -d: -f1 || true)"
+  browser_line="$(grep -n -E "^${run_id}"$'\t'".*npm run test:integration:browser" "$COMMAND_LOG" | head -n 1 | cut -d: -f1 || true)"
+  if [ -z "$browser_line" ] || [ -z "$general_line" ] || [ -z "$hash_line" ] ||
+    [ -z "$storage_line" ] || [ "$browser_line" -le "$general_line" ] ||
+    [ "$browser_line" -le "$hash_line" ] || [ "$browser_line" -le "$storage_line" ]; then
+    fail "parallel run $run_id did not execute the browser after all runtime probes"
+  fi
+done
+
+one_commands="$(awk -F '\t' '$1 == "one" { print $7 }' "$COMMAND_LOG")"
+two_commands="$(awk -F '\t' '$1 == "two" { print $7 }' "$COMMAND_LOG")"
+if [ "$(printf '%s\n' "$one_commands" | grep -Eo 'phase-b-queue-general-[a-z0-9-]+' | head -n 1 || true)" = \
+  "$(printf '%s\n' "$two_commands" | grep -Eo 'phase-b-queue-general-[a-z0-9-]+' | head -n 1 || true)" ]; then
+  fail "parallel runs reused a queue probe key"
+fi
+if [ "$(printf '%s\n' "$one_commands" | grep -Eo 'phase-b-queue-hash-chain-[a-z0-9-]+' | head -n 1 || true)" = \
+  "$(printf '%s\n' "$two_commands" | grep -Eo 'phase-b-queue-hash-chain-[a-z0-9-]+' | head -n 1 || true)" ] ||
+  [ "$(printf '%s\n' "$one_commands" | grep -Eo 'phase-b-storage-probe-[a-z0-9-]+' | head -n 1 || true)" = \
+    "$(printf '%s\n' "$two_commands" | grep -Eo 'phase-b-storage-probe-[a-z0-9-]+' | head -n 1 || true)" ]; then
+  fail "parallel runs reused a hash-queue or storage probe name"
+fi
+
+for failure_case in queue storage browser; do
+  : >"$COMMAND_LOG"
+  failure_variable="SECPAL_TEST_FAIL_${failure_case^^}"
+  if env \
+    PATH="$FAKE_BIN:$PATH" \
+    SECPAL_PHASE_B_PORT=18447 \
+    SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+    SECPAL_TEST_CURL_LOG="$CURL_LOG" \
+    SECPAL_TEST_RUN_ID="fail-$failure_case" \
+    "$failure_variable"=1 \
+    bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/fail-$failure_case.out" 2>&1; then
+    fail "$failure_case probe failure returned success"
+  elif ! grep -Fq 'down --volumes --remove-orphans' "$COMMAND_LOG"; then
+    fail "$failure_case probe failure did not trigger project cleanup"
+  fi
+done
+
+if grep -Eiq 'docker-compose|system prune|image prune|volume prune|docker login|docker push' "$COMMAND_LOG"; then
+  fail "the lifecycle used a forbidden Compose fallback, prune, login, or push operation"
 fi
 
 if [ "$failures" -ne 0 ]; then

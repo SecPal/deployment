@@ -34,7 +34,7 @@ local integration subset; later phases remain targets:
 ## Roadmap status
 
 1. Governance bootstrap: complete.
-2. Local API/frontend integration: complete.
+2. Local API/frontend integration: in progress pending the hosted Compose check.
 3. Immutable image publishing: not implemented.
 4. Public Compose reference deployment: not implemented.
 5. Public edge, TLS, and CrowdSec: not implemented.
@@ -54,13 +54,18 @@ from these immutable Git revisions:
 - frontend: `fcd427d9b55d7945c439c670077e12928e47ddd6`.
 
 PostgreSQL, Valkey, and the test-only Caddy base are pinned by version and
-digest. The stack exposes only `127.0.0.1:8443` and uses the reserved origin
-`https://secpal.example.invalid:8443`. API, frontend, workers, scheduler, and
-data services have no published ports.
+digest. The stack exposes one dynamic port on `127.0.0.1` and uses two reserved
+HTTPS origins on that port:
+
+- `https://app.secpal.example.invalid:<port>` for the frontend;
+- `https://api.secpal.example.invalid:<port>` for the API.
+
+API, frontend, workers, scheduler, and data services have no published ports.
 
 Run the explicit integration test with Docker Engine, Docker Compose v2,
-Python 3, `curl`, GitHub access for the pinned source contexts, and registry
-access for the pinned build inputs:
+Python 3, `curl`, Node.js 22.22.2, npm dependencies installed with `npm ci`,
+Playwright Chromium installed, GitHub access for the pinned source contexts,
+and registry access for the pinned build inputs:
 
 ```bash
 ./scripts/local-integration.sh
@@ -74,12 +79,17 @@ the exact local authority for Sanctum's SPA session flow, and trusts only the
 API request's immediate proxy address. It builds the pinned images, generates
 random test-only secrets inside a private runtime volume without printing them,
 starts private PostgreSQL and Valkey services, runs migrations exactly once,
-starts the explicit service roles, and verifies API/frontend routing through
-local TLS. Successful completion means its containers, networks, images,
-database data, certificates, and secrets were removed. Failure paths trigger
-best-effort cleanup; handled signals stop the run with a non-success status
-after cleanup. Interrupted secret publication rolls back partial files, and a
-later run replaces any legacy partial set.
+and starts the explicit service roles. It then proves Valkey cache and queue
+round trips, worker-to-queue ownership, shared visibility of the disposable
+private-storage volume, exact credentialed CORS, and the separate app/API
+origins. Playwright Chromium exercises the actual Compose frontend and API,
+including the Sanctum CSRF handshake, an intentionally unsuccessful login,
+secure cookie attributes, CSP, service-worker registration, and runtime API
+routing. Successful completion means its containers, networks, volumes,
+images, database data, private files, certificates, and secrets were removed.
+Failure paths trigger best-effort cleanup; handled signals stop the run with a
+non-success status after cleanup. Interrupted secret publication rolls back
+partial files, and a later run replaces any legacy partial set.
 
 For a deterministic caller-assigned port, including parallel test scheduling,
 set a distinct loopback port for each run:
@@ -90,10 +100,21 @@ SECPAL_PHASE_B_PORT=18443 ./scripts/local-integration.sh
 
 The public Compose template retains `8443` and reserved singleton container
 names as its single-project direct-use defaults. One validated port setting
-drives gateway publication, API URL generation, Sanctum's stateful authority,
-and the frontend runtime origin. The integration script derives unique values
-for parallel runs. The runner requires the `docker compose` v2 plugin and does
-not fall back to the legacy standalone Compose v1 command.
+drives gateway publication and both HTTPS origins. The integration script
+derives unique values for parallel runs. The runner requires the
+`docker compose` v2 plugin and does not fall back to the legacy standalone
+Compose v1 command.
+
+Valkey is the queue and cache backend. `worker-hash-chain` is the guarded
+singleton consumer of only `activity-hash-chain`; `worker-general` consumes
+`merkle`, `opentimestamp`, and `default` without a fixed container name. The
+scheduler remains a guarded singleton. All API-based roles mount the same
+`private-storage` volume at `/app/storage/app/private`; this volume is
+disposable test state, not a production persistence contract.
+
+Pull requests also run the real lifecycle in the required check context
+`Local Integration / Compose Contract`. Phase B remains in progress until that
+hosted check has passed on the current pull-request head.
 
 This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use

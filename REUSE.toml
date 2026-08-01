@@ -8,3 +8,8 @@ SPDX-FileCopyrightText = "SecPal Contributors"
 path = ".markdownlint.json"
 SPDX-FileCopyrightText = "2026 SecPal Contributors"
 SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = ["package.json", "package-lock.json"]
+SPDX-FileCopyrightText = "2026 SecPal Contributors"
+SPDX-License-Identifier = "MIT"

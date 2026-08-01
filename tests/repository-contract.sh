@@ -70,7 +70,7 @@ require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one
 require_text docs/architecture/scope.md "scheduler: exactly one"
 require_text docs/architecture/scope.md "Step A bootstrap contract"
 require_text docs/roadmap.md "Local container integration stack"
-require_text docs/roadmap.md "Phase B is complete."
+require_text docs/roadmap.md "Phase B stays in progress"
 require_text AGENTS.md "Docker socket"
 require_text AGENTS.md "activity-hash-chain worker: exactly one"
 require_text AGENTS.md "scheduler: exactly one"
@@ -96,7 +96,7 @@ if [ -d LICENSES ]; then
   done < <(find LICENSES -type f -print0)
 fi
 
-unexpected_symlink="$(find . \( -path ./.git -o -path ./.context \) -prune -o -type l -print -quit)"
+unexpected_symlink="$(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type l -print -quit)"
 if [ -n "$unexpected_symlink" ]; then
   fail "unexpected symlink found: $unexpected_symlink"
 fi
@@ -119,7 +119,7 @@ for path in terraform ansible kubernetes helm certificates secrets; do
   fi
 done
 
-if ! find . \( -path ./.git -o -path ./.context \) -prune -o -type f -print0 |
+if ! find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -print0 |
   scripts/reject-sensitive-paths.sh; then
   fail "forbidden sensitive path exists"
 fi
@@ -132,7 +132,7 @@ while IFS= read -r -d '' candidate; do
       fail "possible embedded credential found: $candidate"
     fi
   fi
-done < <(find . \( -path ./.git -o -path ./.context \) -prune -o -type f -print0)
+done < <(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -print0)
 
 if [ "$failures" -ne 0 ]; then
   printf 'Repository contract failed with %d issue(s).\n' "$failures" >&2

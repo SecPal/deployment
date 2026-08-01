@@ -42,8 +42,9 @@ This repository does not own:
 
 The architecture separates the following trust zones:
 
-- **Local test client:** reaches only the loopback-bound test TLS gateway at
-  `127.0.0.1:8443` using `secpal.example.invalid`.
+- **Local test client:** reaches only the loopback-bound test TLS gateway using
+  the separate `app.secpal.example.invalid` and
+  `api.secpal.example.invalid` origins on one dynamic port.
 - **Test gateway:** terminates disposable local TLS and routes over the internal
   edge network. The API uses Laravel's immediate-peer trust token so gateway
   HTTPS and client metadata survive dynamic bridge addressing. All Phase B
@@ -61,8 +62,9 @@ The architecture separates the following trust zones:
   replacement for PostgreSQL data.
 - **Ephemeral secret volume:** runtime-generated, least-authority inputs that
   never enter images, command lines, logs, or repository history.
-- **Ephemeral application storage:** per-container test state that is destroyed
-  after integration testing. Persistent private storage is deferred.
+- **Ephemeral private application storage:** a shared named volume mounted by
+  the API, both worker roles, scheduler, and migration role. It is destroyed
+  after integration testing; durable production storage is deferred.
 - **External services:** separately authenticated dependencies outside the
   deployment trust domain.
 
@@ -80,13 +82,14 @@ activity-hash-chain worker: exactly one
 scheduler: exactly one
 ```
 
-The default worker may be scaled deliberately. Explicit container names make
+The general worker may be scaled deliberately. Explicit container names make
 Compose reject attempts to scale either singleton role; the integration script
 derives project-scoped names so parallel canonical runs remain isolated. The
-single forensics worker is the only consumer of `activity-hash-chain`, `merkle`,
-and `opentimestamp` in Phase B. Migrations are an explicit `tools` profile
-operation and run exactly once in the integration script, never from an
-entrypoint or health check.
+`worker-hash-chain` singleton consumes only `activity-hash-chain`.
+`worker-general` consumes `merkle`, `opentimestamp`, and `default` and has no
+fixed container name or singleton label. Migrations are an explicit `tools`
+profile operation and run exactly once in the integration script, never from
+an entrypoint or health check.
 
 ## Step A bootstrap contract
 
@@ -102,15 +105,21 @@ Phase B:
 - builds the API and frontend locally from pinned Git commits;
 - avoids a GHCR dependency;
 - uses a local test-only TLS gateway and disposable internal CA;
+- exposes separate local frontend and API HTTPS origins;
 - avoids a final edge-technology decision;
 - exposes only a loopback host port; and
-- generates disposable runtime secrets inside an isolated volume.
+- generates disposable runtime secrets inside an isolated volume;
+- uses Valkey for both queues and cache; and
+- shares disposable private files between API-based roles.
 
-The API liveness endpoint, frontend document, runtime API origin, private data
-services, explicit migration, and singleton cardinalities are exercised by
-`scripts/local-integration.sh`. Tenant provisioning, API readiness, public TLS,
-CrowdSec, durable storage, backups, updates, and rollback remain outside Phase
-B.
+The real integration runner exercises liveness, the frontend document, runtime
+API origin, CORS, Sanctum CSRF and cookie behavior, Valkey cache and queue
+round trips, worker ownership, shared private storage, explicit migration,
+browser CSP and service-worker behavior, singleton cardinalities, and cleanup.
+The same runner executes on GitHub-hosted Ubuntu in
+`Local Integration / Compose Contract`. Tenant provisioning, API readiness,
+public TLS, CrowdSec, durable storage, backups, updates, and rollback remain
+outside Phase B.
 
 ## Configuration classes
 
@@ -121,8 +130,8 @@ B.
 - **Secrets:** generated at runtime in the `local-secrets` volume, rolled back
   as a set if publication is interrupted, and mounted read-only into
   long-running services.
-- **Runtime state:** the temporary PostgreSQL volume and per-container tmpfs
-  mounts.
+- **Runtime state:** the temporary PostgreSQL and shared private-storage
+  volumes plus per-container tmpfs mounts.
 - **Generated artifacts:** project-scoped locally built images and the
   disposable internal CA, all outside Git history and removed by the explicit
   integration test.

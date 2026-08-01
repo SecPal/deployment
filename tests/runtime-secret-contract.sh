@@ -67,6 +67,7 @@ make_secret_set() {
 run_initializer() {
   local secret_directory="$1"
   local api_uid="${2:-$CURRENT_UID}"
+  local private_storage_directory="${3:-$TEMP_DIR/private-storage}"
 
   env \
     PATH="$FAKE_BIN:$PATH" \
@@ -74,6 +75,7 @@ run_initializer() {
     SECPAL_API_UID="$api_uid" \
     SECPAL_POSTGRES_DATA_DIR="$TEMP_DIR/postgres-data" \
     SECPAL_POSTGRES_UID="$CURRENT_UID" \
+    SECPAL_PRIVATE_STORAGE_DIR="$private_storage_directory" \
     SECPAL_SECRET_DIR="$secret_directory" \
     SECPAL_VALKEY_UID="$CURRENT_UID" \
     bash "$ROOT_DIR/scripts/init-local-secrets.sh"
@@ -84,6 +86,29 @@ printf '%s\n' '#!/bin/sh' \
   "if [ \"\${1:-}\" = \"-u\" ]; then printf '0\\n'; else exec /usr/bin/id \"\$@\"; fi" \
   >"$FAKE_BIN/id"
 chmod 0700 "$FAKE_BIN/id"
+
+expect_failure "a relative private-storage directory" \
+  run_initializer "$TEMP_DIR/relative-private-secrets" "$CURRENT_UID" "relative-private-root"
+
+private_storage_target="$TEMP_DIR/private-storage-target"
+install -d -m 0700 "$private_storage_target"
+private_storage_symlink="$TEMP_DIR/private-storage-symlink"
+ln -s "$private_storage_target" "$private_storage_symlink"
+expect_failure "a symlinked private-storage directory" \
+  run_initializer "$TEMP_DIR/symlink-private-secrets" "$CURRENT_UID" "$private_storage_symlink"
+
+private_storage_file="$TEMP_DIR/private-storage-file"
+: >"$private_storage_file"
+expect_failure "a non-directory private-storage path" \
+  run_initializer "$TEMP_DIR/file-private-secrets" "$CURRENT_UID" "$private_storage_file"
+
+prepared_private_storage="$TEMP_DIR/prepared-private-storage"
+if ! run_initializer "$TEMP_DIR/private-storage-secrets" "$CURRENT_UID" "$prepared_private_storage" >/dev/null 2>&1; then
+  fail "the private-storage root could not be prepared"
+elif [ -L "$prepared_private_storage" ] || [ ! -d "$prepared_private_storage" ] ||
+  [ "$(stat -c '%u:%g:%a' "$prepared_private_storage")" != "$CURRENT_UID:$CURRENT_GID:750" ]; then
+  fail "the private-storage root did not receive the required owner and mode"
+fi
 
 expect_failure "a missing secret set" \
   env SECPAL_SECRET_DIR="$TEMP_DIR/missing" \
@@ -123,6 +148,7 @@ env \
   SECPAL_API_UID="$CURRENT_UID" \
   SECPAL_POSTGRES_DATA_DIR="$TEMP_DIR/postgres-data" \
   SECPAL_POSTGRES_UID="$CURRENT_UID" \
+  SECPAL_PRIVATE_STORAGE_DIR="$TEMP_DIR/signal-private-storage" \
   SECPAL_SECRET_DIR="$signal_directory" \
   SECPAL_TEST_SIGNAL_PAUSE="$signal_pause" \
   SECPAL_TEST_SIGNAL_RELEASE="$signal_release" \
