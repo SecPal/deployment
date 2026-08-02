@@ -26,7 +26,7 @@ deployment implementation exists.
 **Deferred:** Every runnable stack, image, edge, secret, data-service, backup,
 update, rollback, and production concern.
 
-## Phase B — Local container integration stack (in progress)
+## Phase B — Local container integration stack (complete)
 
 **Goal:** Prove local API/frontend integration from pinned source revisions.
 
@@ -46,13 +46,15 @@ project cleanup without public exposure or production secrets. The hosted
 `Local Integration / Compose Contract` check must pass on the current pull
 request head.
 
-**Completion evidence:** `compose.yaml` pins the API and frontend Git revisions;
-third-party runtime inputs use version-and-digest references; the offline Phase
-B contract validates isolation and singleton cardinality; and
-`scripts/local-integration.sh` exercises builds, health checks, explicit
-migration, local TLS routing, runtime probes, Chromium, and cleanup. The hosted
-workflow is present; Phase B stays in progress until its check succeeds on the
-current pull-request head.
+**Completion evidence:** Static repository and Phase B contracts passed. The
+real Compose lifecycle passed with Valkey queue and cache probes, correct
+general and hash-chain worker ownership, singleton cardinality, shared private
+storage, separate app/API HTTPS origins, exact credentialed CORS, Sanctum CSRF
+and secure-cookie behavior, Chromium CSP and service-worker checks, one
+explicit migration, and complete project-scoped cleanup. The technical
+implementation head passed `Local Integration / Compose Contract`, and that
+check is enforced for `main`; every subsequent pull-request head must pass it
+again.
 
 **Deferred:** GHCR, immutable public product images, a production edge, public
 exposure, tenant provisioning, durable storage, and production operations.

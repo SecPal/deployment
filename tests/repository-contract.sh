@@ -66,11 +66,17 @@ done
 
 require_text README.md "It is not a production-ready deployment."
 require_text README.md "./scripts/preflight.sh"
+require_text README.md "Local API/frontend integration: complete."
+require_text README.md "Phase B is complete:"
 require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one"
 require_text docs/architecture/scope.md "scheduler: exactly one"
 require_text docs/architecture/scope.md "Step A bootstrap contract"
 require_text docs/roadmap.md "Local container integration stack"
-require_text docs/roadmap.md "Phase B stays in progress"
+require_text docs/roadmap.md "Phase B — Local container integration stack (complete)"
+# The Markdown backticks must remain literal.
+# shellcheck disable=SC2016
+require_text docs/roadmap.md 'is enforced for `main`'
+require_text .github/workflows/local-integration.yml "runs-on: ubuntu-latest"
 require_text AGENTS.md "Docker socket"
 require_text AGENTS.md "activity-hash-chain worker: exactly one"
 require_text AGENTS.md "scheduler: exactly one"
@@ -112,6 +118,11 @@ for path in \
 done
 
 require_file compose.yaml
+
+if grep -Eiq 'Phase B (remains|stays|is) in progress|Phase B.*pending|Local API/frontend integration: in progress' \
+  README.md docs/roadmap.md; then
+  fail "README.md and docs/roadmap.md must consistently mark Phase B complete"
+fi
 
 for path in terraform ansible kubernetes helm certificates secrets; do
   if [ -e "$path" ] || [ -L "$path" ]; then

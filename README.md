@@ -34,7 +34,7 @@ local integration subset; later phases remain targets:
 ## Roadmap status
 
 1. Governance bootstrap: complete.
-2. Local API/frontend integration: in progress pending the hosted Compose check.
+2. Local API/frontend integration: complete.
 3. Immutable image publishing: not implemented.
 4. Public Compose reference deployment: not implemented.
 5. Public edge, TLS, and CrowdSec: not implemented.
@@ -114,8 +114,9 @@ scheduler remains a guarded singleton. All API-based roles mount the same
 disposable test state, not a production persistence contract.
 
 Pull requests also run the real lifecycle in the required check context
-`Local Integration / Compose Contract`. Phase B remains in progress until that
-hosted check has passed on the current pull-request head.
+`Local Integration / Compose Contract`. Phase B is complete: the technical
+implementation head passed that hosted check, and the check is enforced for
+`main`. Every subsequent pull-request head must pass it again.
 
 This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use
