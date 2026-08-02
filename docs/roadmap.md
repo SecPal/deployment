@@ -7,7 +7,7 @@ SPDX-License-Identifier: CC0-1.0
 
 The phases below are acceptance-driven. They do not imply dates or releases.
 
-## Phase A — Governance bootstrap (current milestone)
+## Phase A — Governance bootstrap (complete)
 
 **Goal:** Establish a trustworthy public repository without deployment code.
 
@@ -26,24 +26,40 @@ deployment implementation exists.
 **Deferred:** Every runnable stack, image, edge, secret, data-service, backup,
 update, rollback, and production concern.
 
-## Phase B — Local container integration stack
+## Phase B — Local container integration stack (complete)
 
 **Goal:** Prove local API/frontend integration from pinned source revisions.
 
 **Expected artifacts:** A test-only local orchestration contract, pinned build
-inputs, health checks, explicit service roles, and local integration tests.
+inputs, health checks, distinct app/API HTTPS origins, explicit worker roles,
+shared disposable private storage, browser tests, and a hosted real-Compose
+integration check.
 
 **Entry criteria:** Phase A is complete and the Step A absence contract is
 deliberately updated through a regular pull request.
 
-**Completion criteria:** The local stack validates API/frontend integration,
-singleton roles, private data services, and a test-only TLS gateway without
-public exposure or production secrets.
+**Completion criteria:** Static contracts and the real Compose lifecycle prove
+Valkey queue/cache use, correct worker ownership, singleton cardinality, shared
+private storage, separate frontend/API HTTPS origins, exact credentialed CORS,
+Sanctum CSRF and secure-cookie behavior in Chromium, one migration, and full
+project cleanup without public exposure or production secrets. The hosted
+`Local Integration / Compose Contract` check must pass on the current pull
+request head.
 
-**Deferred:** GHCR, immutable public images, a production edge, public exposure,
-and production operations. This phase is not complete.
+**Completion evidence:** Static repository and Phase B contracts passed. The
+real Compose lifecycle passed with Valkey queue and cache probes, correct
+general and hash-chain worker ownership, singleton cardinality, shared private
+storage, separate app/API HTTPS origins, exact credentialed CORS, Sanctum CSRF
+and secure-cookie behavior, Chromium CSP and service-worker checks, one
+explicit migration, and complete project-scoped cleanup. The technical
+implementation head passed `Local Integration / Compose Contract`, and that
+check is enforced for `main`; every subsequent pull-request head must pass it
+again.
 
-## Phase C — Immutable image publishing
+**Deferred:** GHCR, immutable public product images, a production edge, public
+exposure, tenant provisioning, durable storage, and production operations.
+
+## Phase C — Immutable image publishing (next; not implemented)
 
 **Goal:** Define reproducible publication and consumption of product images.
 

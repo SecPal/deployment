@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+{
+	admin off
+	skip_install_trust
+}
+
+https://app.secpal.example.invalid:8443 {
+	tls internal
+	reverse_proxy frontend:8080
+}
+
+https://api.secpal.example.invalid:8443 {
+	tls internal
+	reverse_proxy api:8080
+}

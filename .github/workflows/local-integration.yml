@@ -1,0 +1,54 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+name: Local Integration
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-contract:
+    name: Compose Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22.22.2"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13.14"
+
+      - name: Install browser and validation dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm install --global markdownlint-cli@0.49.0 prettier@3.5.3
+          python -m pip install --disable-pip-version-check \
+            reuse==6.1.2 shellcheck-py==0.11.0.1 yamllint==1.37.1
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run static preflight
+        run: ./scripts/preflight.sh
+
+      - name: Run real Compose integration
+        run: ./scripts/local-integration.sh
