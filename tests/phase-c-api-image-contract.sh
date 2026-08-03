@@ -120,14 +120,14 @@ fi
 # shellcheck disable=SC2016
 if [ -f scripts/local-integration.sh ]; then
   require_text scripts/local-integration.sh 'require_command gh "GitHub CLI is required for API artifact attestation verification."'
-  require_text scripts/local-integration.sh "readonly EXPECTED_GH_VERSION='2.97.0'"
   require_text scripts/local-integration.sh 'readonly ANONYMOUS_GH_CONFIG="$TEMP_DIR/anonymous-gh-config"'
   require_text scripts/local-integration.sh 'run_isolated_gh() {'
   require_text scripts/local-integration.sh 'GH_CONFIG_DIR="$ANONYMOUS_GH_CONFIG"'
   require_text scripts/local-integration.sh 'env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST'
   require_text scripts/local-integration.sh 'gh_version_output="$(run_isolated_gh version)"'
-  require_text scripts/local-integration.sh 'GitHub CLI $EXPECTED_GH_VERSION is required; found $gh_version.'
   require_text scripts/local-integration.sh 'run_isolated_gh attestation verify --help'
+  forbid_text scripts/local-integration.sh 'EXPECTED_GH_VERSION|GitHub CLI .* is required; found' \
+    "the integration must gate on attestation capability rather than an exact runner CLI patch version"
   require_text scripts/local-integration.sh 'ANON_DOCKER_CONFIG="$(mktemp -d -t secpal-api-anon-docker.XXXXXXXXXX)"'
   require_text scripts/local-integration.sh 'chmod 0700 "$ANON_DOCKER_CONFIG"'
   require_text scripts/local-integration.sh 'DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"'
@@ -216,9 +216,6 @@ require_text docs/api-image-consumption.md 'not a deployment reference, rollback
 require_text docs/api-image-consumption.md 'requires a new reviewed deployment pull request'
 require_text docs/api-image-consumption.md 'Rollback also requires a new reviewed pull request'
 require_text docs/api-image-consumption.md 'Phase C is in progress.'
-# Backticks are literal Markdown, not shell substitutions.
-# shellcheck disable=SC2016
-require_text docs/api-image-consumption.md 'GitHub CLI version `2.97.0`'
 require_text docs/api-image-consumption.md 'Frontend publication remains outstanding.'
 require_text docs/api-image-consumption.md 'Phase D and production host automation remain outside this change.'
 require_text README.md "$API_IMAGE"
@@ -248,7 +245,7 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
 
   for mutation in \
     wrong-digest tag registry repository api-build environment-override \
-    gh-version github-config-override github-host-override github-host-flag \
+    github-config-override github-host-override github-host-flag \
     bundle-fetch-bypass fetcher-wrong-digest; do
     fixture="$negative_temp/$mutation"
     install -d -m 0700 \
@@ -283,10 +280,6 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
       environment-override)
         sed -i "s|x-api-image: &api-image $API_IMAGE|x-api-image: \&api-image \${SECPAL_API_IMAGE:-$API_IMAGE}|" \
           "$fixture/compose.yaml"
-        ;;
-      gh-version)
-        sed -i "s/EXPECTED_GH_VERSION='2.97.0'/EXPECTED_GH_VERSION='2.96.0'/" \
-          "$fixture/scripts/local-integration.sh"
         ;;
       github-config-override)
         # The shell expression is intentional literal contract text.

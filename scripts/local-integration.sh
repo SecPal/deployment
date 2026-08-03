@@ -63,7 +63,6 @@ readonly EXPECTED_API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac05
 readonly API_SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
 readonly ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"
 readonly ANONYMOUS_GH_CONFIG="$TEMP_DIR/anonymous-gh-config"
-readonly EXPECTED_GH_VERSION='2.97.0'
 
 cleanup() {
   if [ "${#COMPOSE[@]}" -ne 0 ] && [ "$cleanup_completed" -ne 1 ]; then
@@ -157,15 +156,6 @@ if ! gh_version_output="$(run_isolated_gh version)"; then
   fail "the installed GitHub CLI version could not be determined."
 fi
 gh_version_line="${gh_version_output%%$'\n'*}"
-case "$gh_version_line" in
-  'gh version '*)
-    gh_version="${gh_version_line#gh version }"
-    gh_version="${gh_version%% *}"
-    ;;
-  *) gh_version=unknown ;;
-esac
-[ "$gh_version" = "$EXPECTED_GH_VERSION" ] ||
-  fail "GitHub CLI $EXPECTED_GH_VERSION is required; found $gh_version."
 
 run_isolated_gh attestation verify --help >/dev/null 2>&1 ||
   fail "the installed GitHub CLI does not support artifact attestation verification."

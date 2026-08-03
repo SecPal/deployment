@@ -36,12 +36,10 @@ The deployment integration runner repeats the anonymous digest pull and
 requires the fixed-identity attestation verification before it permits any
 API-based role to execute.
 
-The hosted runner requires the reviewed GitHub CLI version `2.97.0`. The
-integration script rejects every other version, checks for
-`gh attestation verify`, logs the effective version, and fails closed if the
-exact version or capability is missing. Updating the CLI version is therefore
-an explicit reviewed contract change. The runner does not install an unpinned
-CLI or introduce a GitHub token.
+The integration uses the GitHub CLI already provided by the GitHub-hosted
+runner. The integration script logs the effective version, checks for
+`gh attestation verify`, and fails closed if the required capability is
+missing. It does not install an unpinned CLI or introduce a GitHub token.
 
 ## Token-free OCI bundle verification
 

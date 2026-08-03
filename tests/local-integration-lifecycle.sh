@@ -174,7 +174,7 @@ for invalid_port in invalid 80 65536; do
 done
 
 : >"$COMMAND_LOG"
-if env \
+if ! env \
   PATH="$FAKE_BIN:$PATH" \
   "${INHERITED_GH_ENVIRONMENT[@]}" \
   SECPAL_PHASE_B_PORT=18441 \
@@ -183,12 +183,32 @@ if env \
   SECPAL_TEST_GH_VERSION=2.96.0 \
   SECPAL_TEST_RUN_ID=gh-version \
   bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/gh-version.out" 2>&1; then
-  fail "an unreviewed GitHub CLI version was accepted"
-elif ! grep -Fq 'GitHub CLI 2.97.0 is required; found 2.96.0.' "$TEMP_DIR/gh-version.out"; then
-  fail "the unreviewed GitHub CLI version did not fail at the exact-version gate"
+  fail "a capable hosted-runner GitHub CLI version was rejected"
 fi
-if awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
-  fail "the unreviewed GitHub CLI version reached the API pull"
+if ! grep -Fq 'GitHub CLI: gh version 2.96.0 (fixture)' "$TEMP_DIR/gh-version.out"; then
+  fail "the effective hosted-runner GitHub CLI version was not logged"
+fi
+if ! awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
+  fail "the capable hosted-runner GitHub CLI did not reach the API pull"
+fi
+
+: >"$COMMAND_LOG"
+if env \
+  PATH="$FAKE_BIN:$PATH" \
+  "${INHERITED_GH_ENVIRONMENT[@]}" \
+  SECPAL_PHASE_B_PORT=18441 \
+  SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+  SECPAL_TEST_CURL_LOG="$CURL_LOG" \
+  SECPAL_TEST_GH_ATTESTATION_UNAVAILABLE=1 \
+  SECPAL_TEST_RUN_ID=gh-capability \
+  bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/gh-capability.out" 2>&1; then
+  fail "a GitHub CLI without attestation verification support was accepted"
+elif ! grep -Fq 'the installed GitHub CLI does not support artifact attestation verification.' \
+  "$TEMP_DIR/gh-capability.out"; then
+  fail "the missing GitHub CLI capability did not fail at the capability gate"
+fi
+if awk -F '\t' '$1 == "gh-capability" && $7 ~ /^pull / { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
+  fail "a GitHub CLI without attestation verification support reached the API pull"
 fi
 
 for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wrong-subject-digest self-hosted; do

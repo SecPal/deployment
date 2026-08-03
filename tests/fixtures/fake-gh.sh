@@ -8,6 +8,9 @@ readonly API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e
 readonly SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
 
 if [ "${1:-}" = attestation ] && [ "${2:-}" = verify ] && [ "${3:-}" = --help ]; then
+  if [ "${SECPAL_TEST_GH_ATTESTATION_UNAVAILABLE:-0}" -eq 1 ]; then
+    exit 1
+  fi
   exit 0
 fi
 
