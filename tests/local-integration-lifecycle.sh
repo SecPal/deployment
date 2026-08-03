@@ -9,6 +9,7 @@ TEMP_DIR="$(mktemp -d)"
 FAKE_BIN="$TEMP_DIR/bin"
 COMMAND_LOG="$TEMP_DIR/docker.log"
 CURL_LOG="$TEMP_DIR/curl.log"
+PERSISTENT_GH_CONFIG="$TEMP_DIR/persistent-gh-config"
 children=()
 failures=0
 
@@ -63,11 +64,23 @@ wait_for_exit() {
 install -d -m 0700 "$FAKE_BIN"
 cp "$ROOT_DIR/tests/fixtures/fake-docker.sh" "$FAKE_BIN/docker"
 cp "$ROOT_DIR/tests/fixtures/fake-curl.sh" "$FAKE_BIN/curl"
-chmod 0700 "$FAKE_BIN/docker" "$FAKE_BIN/curl"
+cp "$ROOT_DIR/tests/fixtures/fake-gh.sh" "$FAKE_BIN/gh"
+chmod 0700 "$FAKE_BIN/docker" "$FAKE_BIN/curl" "$FAKE_BIN/gh"
 : >"$COMMAND_LOG"
 : >"$CURL_LOG"
+install -d -m 0700 "$PERSISTENT_GH_CONFIG"
+printf 'credentialed configuration must remain isolated\n' >"$PERSISTENT_GH_CONFIG/hosts.yml"
 
-printf '%s\n' '#!/bin/sh' 'printf "v22.22.2\n"' >"$FAKE_BIN/node"
+# The resolved Compose fixture emits the reviewed image for the API roles.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/bin/sh' \
+  'if [ "${1:-}" = - ]; then' \
+  '  while IFS= read -r _line; do :; done' \
+  '  printf "%s" "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"' \
+  'fi' \
+  'exit 0' \
+  >"$FAKE_BIN/node"
 # The fixture expands only when the generated npm script runs.
 # shellcheck disable=SC2016
 printf '%s\n' \
@@ -131,6 +144,9 @@ rm "$FAKE_BIN/python3"
 for invalid_port in invalid 80 65536; do
   if env \
     PATH="$FAKE_BIN:$PATH" \
+    GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG" \
+    GH_TOKEN=must-be-unset \
+    GITHUB_TOKEN=must-be-unset \
     SECPAL_PHASE_B_PORT="$invalid_port" \
     SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
     SECPAL_TEST_CURL_LOG="$CURL_LOG" \
@@ -140,10 +156,75 @@ for invalid_port in invalid 80 65536; do
   fi
 done
 
+for gate_case in pull attestation wrong-source-commit wrong-workflow wrong-subject-digest self-hosted; do
+  : >"$COMMAND_LOG"
+  run_id="gate-$gate_case"
+  gate_environment=(SECPAL_TEST_ATTESTATION_RESULT=success)
+  if [ "$gate_case" = pull ]; then
+    gate_environment=(SECPAL_TEST_FAIL_PULL=1)
+  elif [ "$gate_case" != attestation ]; then
+    gate_environment=("SECPAL_TEST_ATTESTATION_RESULT=$gate_case")
+  else
+    gate_environment=(SECPAL_TEST_ATTESTATION_RESULT=failure)
+  fi
+
+  if env \
+    PATH="$FAKE_BIN:$PATH" \
+    GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG" \
+    GH_TOKEN=must-be-unset \
+    GITHUB_TOKEN=must-be-unset \
+    SECPAL_PHASE_B_PORT=18441 \
+    SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+    SECPAL_TEST_CURL_LOG="$CURL_LOG" \
+    SECPAL_TEST_RUN_ID="$run_id" \
+    "${gate_environment[@]}" \
+    bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/$run_id.out" 2>&1; then
+    fail "$gate_case gate failure returned success"
+  fi
+
+  expected_attestation_error=
+  case "$gate_case" in
+    attestation) expected_attestation_error='fixture rejected the attestation verification request' ;;
+    wrong-source-commit) expected_attestation_error='fixture rejected source digest mismatch' ;;
+    wrong-workflow) expected_attestation_error='fixture rejected signer workflow mismatch' ;;
+    wrong-subject-digest) expected_attestation_error='fixture rejected subject digest mismatch' ;;
+    self-hosted) expected_attestation_error='fixture rejected self-hosted runner' ;;
+  esac
+  if [ -n "$expected_attestation_error" ] &&
+    ! grep -Fq "$expected_attestation_error" "$TEMP_DIR/$run_id.out"; then
+    fail "$gate_case did not exercise its distinct attestation identity failure"
+  fi
+
+  if awk -F '\t' -v run_id="$run_id" '$1 == run_id &&
+    ($7 ~ /up --detach postgres valkey|--profile tools run --rm migrate|up --detach api|exec -T (api|worker)/) { found = 1 }
+    END { exit !found }' "$COMMAND_LOG"; then
+    fail "$gate_case gate failure allowed an API-based container operation"
+  fi
+
+  anon_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print $8; exit }' "$COMMAND_LOG")"
+  if [ -z "$anon_config" ] || [ -e "$anon_config" ]; then
+    fail "$gate_case gate failure did not remove its anonymous Docker configuration"
+  fi
+  if [ "$gate_case" != pull ]; then
+    anonymous_gh_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $9; exit }' "$COMMAND_LOG")"
+    if [ -z "$anonymous_gh_config" ] ||
+      [ "$anonymous_gh_config" = "$PERSISTENT_GH_CONFIG" ] ||
+      [ -e "$anonymous_gh_config" ]; then
+      fail "$gate_case did not isolate and remove its anonymous GitHub CLI configuration"
+    fi
+  fi
+done
+
+: >"$COMMAND_LOG"
+: >"$CURL_LOG"
+
 pause_marker="$TEMP_DIR/paused"
 release_marker="$TEMP_DIR/release"
 env \
   PATH="$FAKE_BIN:$PATH" \
+  GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG" \
+  GH_TOKEN=must-be-unset \
+  GITHUB_TOKEN=must-be-unset \
   SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
   SECPAL_TEST_CURL_LOG="$CURL_LOG" \
   SECPAL_TEST_PAUSE_MARKER="$pause_marker" \
@@ -173,6 +254,15 @@ else
   if grep -Fq -- '--profile tools run --rm migrate' "$COMMAND_LOG"; then
     fail "the integration script executed work after handling SIGTERM"
   fi
+  signal_anon_config="$(awk -F '\t' '$1 == "signal" && $7 ~ /^pull / { print $8; exit }' "$COMMAND_LOG")"
+  if [ -z "$signal_anon_config" ] || [ -e "$signal_anon_config" ]; then
+    fail "the integration script did not remove its anonymous Docker configuration after SIGTERM"
+  fi
+  signal_gh_config="$(awk -F '\t' '$1 == "signal" && $7 ~ /^gh attestation verify / { print $9; exit }' "$COMMAND_LOG")"
+  if [ -z "$signal_gh_config" ] || [ "$signal_gh_config" = "$PERSISTENT_GH_CONFIG" ] ||
+    [ -e "$signal_gh_config" ]; then
+    fail "the integration script did not isolate and remove its GitHub CLI configuration after SIGTERM"
+  fi
 fi
 children=()
 
@@ -184,6 +274,9 @@ for specification in one:18443 two:18444; do
   port="${specification##*:}"
   env \
     PATH="$FAKE_BIN:$PATH" \
+    GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG" \
+    GH_TOKEN=must-be-unset \
+    GITHUB_TOKEN=must-be-unset \
     SECPAL_PHASE_B_PORT="$port" \
     SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
     SECPAL_TEST_CURL_LOG="$CURL_LOG" \
@@ -212,8 +305,8 @@ for specification in one:18443 two:18444; do
   fi
 done
 
-one_images="$(awk -F '\t' '$1 == "one" { print $2 FS $3 FS $4; exit }' "$COMMAND_LOG")"
-two_images="$(awk -F '\t' '$1 == "two" { print $2 FS $3 FS $4; exit }' "$COMMAND_LOG")"
+one_images="$(awk -F '\t' '$1 == "one" { print $3 FS $4; exit }' "$COMMAND_LOG")"
+two_images="$(awk -F '\t' '$1 == "two" { print $3 FS $4; exit }' "$COMMAND_LOG")"
 if [ -z "$one_images" ] || [ -z "$two_images" ] || [ "$one_images" = "$two_images" ]; then
   fail "parallel runs did not use distinct project-scoped image tags"
 fi
@@ -260,6 +353,28 @@ for run_id in one two; do
     [ "$browser_line" -le "$hash_line" ] || [ "$browser_line" -le "$storage_line" ]; then
     fail "parallel run $run_id did not execute the browser after all runtime probes"
   fi
+
+  pull_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print NR; exit }' "$COMMAND_LOG")"
+  verify_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print NR; exit }' "$COMMAND_LOG")"
+  build_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ / build frontend gateway$/ { print NR; exit }' "$COMMAND_LOG")"
+  secrets_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ / up --detach postgres valkey$/ { print NR; exit }' "$COMMAND_LOG")"
+  if [ -z "$pull_line" ] || [ -z "$verify_line" ] || [ -z "$build_line" ] ||
+    [ -z "$secrets_line" ] || [ "$pull_line" -ge "$verify_line" ] ||
+    [ "$verify_line" -ge "$build_line" ] || [ "$build_line" -ge "$secrets_line" ]; then
+    fail "parallel run $run_id did not gate API execution on pull and attestation verification"
+  fi
+
+  anon_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print $8; exit }' "$COMMAND_LOG")"
+  verify_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $8; exit }' "$COMMAND_LOG")"
+  if [ -z "$anon_config" ] || [ "$anon_config" != "$verify_config" ] || [ -e "$anon_config" ]; then
+    fail "parallel run $run_id did not isolate and remove its anonymous Docker configuration"
+  fi
+  anonymous_gh_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $9; exit }' "$COMMAND_LOG")"
+  if [ -z "$anonymous_gh_config" ] ||
+    [ "$anonymous_gh_config" = "$PERSISTENT_GH_CONFIG" ] ||
+    [ -e "$anonymous_gh_config" ]; then
+    fail "parallel run $run_id did not isolate and remove its anonymous GitHub CLI configuration"
+  fi
 done
 
 one_commands="$(awk -F '\t' '$1 == "one" { print $7 }' "$COMMAND_LOG")"
@@ -294,6 +409,14 @@ done
 
 if grep -Eiq 'docker-compose|system prune|image prune|volume prune|docker login|docker push' "$COMMAND_LOG"; then
   fail "the lifecycle used a forbidden Compose fallback, prune, login, or push operation"
+fi
+
+if awk -F '\t' '$7 ~ /^image rm / && $7 ~ /ghcr\.io\/secpal\/api/ { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
+  fail "the published API digest was treated as a local cleanup image"
+fi
+
+if [ ! -f "$PERSISTENT_GH_CONFIG/hosts.yml" ]; then
+  fail "the lifecycle modified the caller's persistent GitHub CLI configuration"
 fi
 
 if [ "$failures" -ne 0 ]; then

@@ -49,6 +49,7 @@ shellcheck "${shell_files[@]}"
 php -l scripts/phase-b-runtime-probe.php
 bash tests/repository-contract.sh
 bash tests/phase-b-contract.sh
+bash tests/phase-c-api-image-contract.sh
 bash tests/runtime-secret-contract.sh
 bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh

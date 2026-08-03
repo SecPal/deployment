@@ -5,6 +5,31 @@ SPDX-License-Identifier: CC0-1.0
 
 # Changelog
 
+## 2026-08-03 - Consume Verified API Image Digest
+
+### Added
+
+- A canonical SecPal API OCI index digest shared by all API-based roles.
+- An anonymous digest pull and GitHub Artifact Attestation gate before any API
+  execution.
+- Static and lifecycle contracts for digest identity, signer identity,
+  fail-closed ordering, credential absence, and temporary configuration
+  cleanup.
+- Reviewed digest update and rollback documentation.
+
+### Changed
+
+- The local integration runner builds only the pinned frontend and test
+  gateway inputs; the API source-build and project-local API tag are removed.
+
+### Not included
+
+- Frontend publication, Phase D, production host automation, real
+  infrastructure changes, and production readiness remain outside this work.
+- GitHub CLI `2.97.0` still requires authentication for the otherwise public
+  attestation verification; the real integration therefore stops fail-closed
+  before any API-based role executes.
+
 ## 2026-08-01 - Local Container Integration Stack
 
 ### Added

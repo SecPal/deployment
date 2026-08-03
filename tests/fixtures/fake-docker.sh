@@ -12,14 +12,33 @@ if [ "${1:-}" = compose ] && [ "${2:-}" = version ]; then
   exit 0
 fi
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+if [ "${1:-}" = version ] && [ "${2:-}" = --format ]; then
+  printf '26.1.0\n'
+  exit 0
+fi
+
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "${SECPAL_TEST_RUN_ID:-unknown}" \
-  "${SECPAL_PHASE_B_API_IMAGE:-}" \
+  '' \
   "${SECPAL_PHASE_B_FRONTEND_IMAGE:-}" \
   "${SECPAL_PHASE_B_GATEWAY_IMAGE:-}" \
   "${SECPAL_PHASE_B_HASH_CHAIN_CONTAINER_NAME:-}" \
   "${SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME:-}" \
-  "$*" >>"${SECPAL_TEST_COMMAND_LOG:?}"
+  "$*" \
+  "${DOCKER_CONFIG:-}" >>"${SECPAL_TEST_COMMAND_LOG:?}"
+
+if [ "${1:-}" = pull ]; then
+  if [ "$*" != 'pull ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e' ] ||
+    [ -z "${DOCKER_CONFIG:-}" ] || [ ! -d "$DOCKER_CONFIG" ] ||
+    [ "$(stat -c '%a' "$DOCKER_CONFIG")" != 700 ] ||
+    find "$DOCKER_CONFIG" -mindepth 1 -print -quit | grep -q .; then
+    exit 75
+  fi
+  if [ "${SECPAL_TEST_FAIL_PULL:-0}" -eq 1 ]; then
+    exit 76
+  fi
+  exit 0
+fi
 
 if [[ " $* " == *" up --detach api worker-hash-chain worker-general scheduler frontend gateway "* ]] &&
   [ -n "${SECPAL_TEST_PORT_ATTEMPT_LOG:-}" ]; then

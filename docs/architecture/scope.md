@@ -6,7 +6,8 @@ SPDX-License-Identifier: CC0-1.0
 # Deployment architecture scope
 
 This document defines ownership and trust boundaries for the SecPal deployment
-reference. Phase B implements only the test-only local integration subset.
+reference. Phase B implements the test-only local integration subset, and
+Phase C now supplies its reviewed API digest while remaining in progress.
 
 ## Repository responsibilities
 
@@ -102,8 +103,8 @@ certificates, infrastructure-as-code, and deployment automation forbidden.
 
 Phase B:
 
-- builds the API and frontend locally from pinned Git commits;
-- avoids a GHCR dependency;
+- consumes the API from one reviewed GHCR OCI index digest;
+- builds the frontend locally from its pinned Git commit;
 - uses a local test-only TLS gateway and disposable internal CA;
 - exposes separate local frontend and API HTTPS origins;
 - avoids a final edge-technology decision;
@@ -112,11 +113,15 @@ Phase B:
 - uses Valkey for both queues and cache; and
 - shares disposable private files between API-based roles.
 
-The real integration runner exercises liveness, the frontend document, runtime
-API origin, CORS, Sanctum CSRF and cookie behavior, Valkey cache and queue
-round trips, worker ownership, shared private storage, explicit migration,
-browser CSP and service-worker behavior, singleton cardinalities, and cleanup.
-The same runner executes on GitHub-hosted Ubuntu in
+Before any API-based role runs, the real integration runner validates the
+resolved Compose image, anonymously pulls the exact digest with an empty
+Docker configuration, and verifies its Artifact Attestation against the fixed
+repository, workflow, source ref, and source commit. It then exercises
+liveness, the frontend document, runtime API origin, CORS, Sanctum CSRF and
+cookie behavior, Valkey cache and queue round trips, worker ownership, shared
+private storage, explicit migration, browser CSP and service-worker behavior,
+singleton cardinalities, and cleanup. The same runner executes on
+GitHub-hosted Ubuntu in
 `Local Integration / Compose Contract`. Tenant provisioning, API readiness,
 public TLS, CrowdSec, durable storage, backups, updates, and rollback remain
 outside Phase B.
@@ -132,6 +137,7 @@ outside Phase B.
   long-running services.
 - **Runtime state:** the temporary PostgreSQL and shared private-storage
   volumes plus per-container tmpfs mounts.
-- **Generated artifacts:** project-scoped locally built images and the
-  disposable internal CA, all outside Git history and removed by the explicit
-  integration test.
+- **Generated artifacts:** project-scoped locally built frontend and gateway
+  images and the disposable internal CA, all outside Git history and removed
+  by the explicit integration test. The published API digest is never treated
+  as a local cleanup artifact.

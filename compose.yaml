@@ -3,9 +3,7 @@
 ---
 name: secpal-phase-b
 
-x-api-image: &api-image ${SECPAL_PHASE_B_API_IMAGE:-secpal-api:phase-b-6fead9cef910}
-x-api-build: &api-build
-  context: https://github.com/SecPal/api.git#6fead9cef910314304048056a7ebed4f10bf5381
+x-api-image: &api-image ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e
 x-api-environment: &api-environment
   APP_DEBUG: "false"
   APP_ENV: local
@@ -41,7 +39,6 @@ x-api-environment: &api-environment
   TRUSTED_PROXIES: REMOTE_ADDR
 x-api-service: &api-service
   image: *api-image
-  build: *api-build
   user: "10001:10001"
   entrypoint: ["/bin/bash", "/run/secpal/container-entrypoint.sh"]
   environment: *api-environment
@@ -88,7 +85,6 @@ x-api-service: &api-service
 services:
   secrets-init:
     image: *api-image
-    build: *api-build
     user: "0:0"
     entrypoint: ["/bin/bash", "/run/secpal/init-local-secrets.sh"]
     environment:
