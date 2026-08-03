@@ -36,10 +36,12 @@ The deployment integration runner repeats the anonymous digest pull and
 requires the fixed-identity attestation verification before it permits any
 API-based role to execute.
 
-The hosted runner uses the GitHub CLI already provided by GitHub's hosted
-Ubuntu image. The integration script checks for `gh attestation verify`, logs
-the effective `gh` version, and fails closed if the capability is missing. It
-does not install an unpinned CLI or introduce a GitHub token.
+The hosted runner requires the reviewed GitHub CLI version `2.97.0`. The
+integration script rejects every other version, checks for
+`gh attestation verify`, logs the effective version, and fails closed if the
+exact version or capability is missing. Updating the CLI version is therefore
+an explicit reviewed contract change. The runner does not install an unpinned
+CLI or introduce a GitHub token.
 
 ## Token-free OCI bundle verification
 
@@ -51,19 +53,25 @@ variables unset and uses the OCI Distribution contract directly instead. It:
    token service;
 2. reads the OCI Referrers endpoint or its digest-derived standard fallback;
 3. requires exactly one SLSA v1 Sigstore bundle descriptor;
-4. verifies the descriptor, manifest, subject, layer digests, sizes, and media
+4. accepts only default-port HTTPS blob redirects to GitHub's exact
+   `pkg-containers.githubusercontent.com/ghcr<number>/blobs/sha256:<digest>`
+   path shape, without forwarding registry authorization;
+5. verifies the descriptor, manifest, subject, layer digests, sizes, and media
    types against the canonical API digest;
-5. writes the bundle to a mode-`0600` file in the private integration temporary
+6. writes the bundle to a mode-`0600` file in the private integration temporary
    directory; and
-6. invokes `gh attestation verify --bundle` with the fixed repository,
-   workflow, ref, commit, digest, and GitHub-hosted-runner policy.
+7. invokes `gh attestation verify --bundle` with the fixed GitHub.com hostname,
+   repository, workflow, ref, commit, digest, and GitHub-hosted-runner policy.
 
 The anonymous registry bearer and signed blob redirect exist only in process
 memory. They are neither account credentials nor persisted configuration and
 are never logged. Cross-host redirects are restricted to GitHub's container
-blob host, and the registry Authorization header is removed before following
-the redirect. The temporary bundle and empty Docker/GitHub configurations are
-removed on success, failure, and signals.
+blob host, default HTTPS port, and canonical GHCR blob path shape, and the
+registry Authorization header is removed before following the redirect.
+Verification removes GitHub.com and GitHub Enterprise token variables and any
+inherited `GH_HOST`, passes `--hostname github.com`, and disables prompting,
+update notifications, and telemetry. The temporary bundle and empty
+Docker/GitHub configurations are removed on success, failure, and signals.
 
 The digest-derived OCI Referrers fallback is metadata transport only. It is
 never an API image, deployment, discovery, or rollback reference.

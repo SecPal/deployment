@@ -242,6 +242,8 @@ class OciAttestationBundleContractTest(unittest.TestCase):
             self.assertEqual(output.read_text(), "existing")
 
     def test_blob_redirect_is_host_bound_and_drops_registry_authorization(self) -> None:
+        redirected_blob_digest = f"sha256:{'2' * 64}"
+        registry_blob_digest = f"sha256:{'3' * 64}"
         request = urllib.request.Request(
             self.fetcher.blob_url(f"sha256:{'1' * 64}"),
             headers={"Accept": self.fetcher.BUNDLE_MEDIA_TYPE, "Authorization": "Bearer fixture"},
@@ -253,20 +255,35 @@ class OciAttestationBundleContractTest(unittest.TestCase):
             307,
             "temporary redirect",
             {},
-            "https://pkg-containers.githubusercontent.com/ghcrblobs1/blobs/sha256:fixture?sig=fixture",
+            f"https://pkg-containers.githubusercontent.com/ghcr1/blobs/{redirected_blob_digest}?sig=fixture",
         )
         self.assertNotIn("Authorization", redirected.headers)
         self.assertEqual(redirected.get_method(), "GET")
 
-        with self.assertRaisesRegex(ValueError, "unapproved redirect"):
-            self.fetcher.SafeBlobRedirects().redirect_request(
-                request,
-                None,
-                307,
-                "temporary redirect",
-                {},
-                "https://attacker.example/ghcrblobs1/blobs/sha256:fixture?sig=fixture",
+        rejected_urls = (
+            f"https://attacker.example/ghcr1/blobs/{redirected_blob_digest}?sig=fixture",
+            f"https://pkg-containers.githubusercontent.com/ghcrblobs1/blobs/{redirected_blob_digest}?sig=fixture",
+            f"https://pkg-containers.githubusercontent.com:444/ghcr1/blobs/{redirected_blob_digest}?sig=fixture",
+            f"https://pkg-containers.githubusercontent.com/ghcr1/blobs/{redirected_blob_digest}/extra?sig=fixture",
+            f"http://pkg-containers.githubusercontent.com/ghcr1/blobs/{redirected_blob_digest}?sig=fixture",
+        )
+        for rejected_url in rejected_urls:
+            with self.subTest(url=rejected_url):
+                with self.assertRaisesRegex(ValueError, "unapproved redirect"):
+                    self.fetcher.SafeBlobRedirects().redirect_request(
+                        request,
+                        None,
+                        307,
+                        "temporary redirect",
+                        {},
+                        rejected_url,
+                    )
+
+        self.assertFalse(
+            self.fetcher._is_registry_blob_url(
+                f"{self.fetcher.blob_url(registry_blob_digest)}/extra"
             )
+        )
 
 
 if __name__ == "__main__":

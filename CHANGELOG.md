@@ -24,6 +24,9 @@ SPDX-License-Identifier: CC0-1.0
 - The public OCI Sigstore bundle is retrieved through GHCR's anonymous
   Distribution flow and verified offline, avoiding GitHub CLI's authentication
   gate without introducing credentials or weakening attestation policy.
+- GHCR blob redirects use their real, tightly validated CDN path shape, and the
+  verifier fixes `github.com`, removes inherited GitHub host and token inputs,
+  and requires the reviewed GitHub CLI version 2.97.0 exactly.
 - The one-shot migration uses Compose's explicit non-interactive mode so the
   same lifecycle runs without a TTY on hosted CI.
 

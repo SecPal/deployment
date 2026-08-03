@@ -71,6 +71,14 @@ chmod 0700 "$FAKE_BIN/docker" "$FAKE_BIN/curl" "$FAKE_BIN/gh" "$FAKE_BIN/python3
 : >"$CURL_LOG"
 install -d -m 0700 "$PERSISTENT_GH_CONFIG"
 printf 'credentialed configuration must remain isolated\n' >"$PERSISTENT_GH_CONFIG/hosts.yml"
+INHERITED_GH_ENVIRONMENT=(
+  GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG"
+  GH_TOKEN=must-be-unset
+  GITHUB_TOKEN=must-be-unset
+  GH_ENTERPRISE_TOKEN=must-be-unset
+  GITHUB_ENTERPRISE_TOKEN=must-be-unset
+  GH_HOST=ghe.example.invalid
+)
 
 # The resolved Compose fixture emits the reviewed image for the API roles.
 # shellcheck disable=SC2016
@@ -98,6 +106,7 @@ chmod 0700 "$FAKE_BIN/docker-compose"
 legacy_output="$TEMP_DIR/legacy-compose.out"
 if env \
   PATH="$FAKE_BIN:$PATH" \
+  "${INHERITED_GH_ENVIRONMENT[@]}" \
   SECPAL_PHASE_B_PORT=18442 \
   SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
   SECPAL_TEST_CURL_LOG="$CURL_LOG" \
@@ -134,6 +143,7 @@ printf '%s\n' \
 chmod 0700 "$FAKE_BIN/python3"
 if ! env \
   PATH="$FAKE_BIN:$PATH" \
+  "${INHERITED_GH_ENVIRONMENT[@]}" \
   SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
   SECPAL_TEST_CURL_LOG="$CURL_LOG" \
   SECPAL_TEST_FAIL_GATEWAY_ONCE_MARKER="$gateway_failure_marker" \
@@ -153,9 +163,7 @@ chmod 0700 "$FAKE_BIN/python3"
 for invalid_port in invalid 80 65536; do
   if env \
     PATH="$FAKE_BIN:$PATH" \
-    GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG" \
-    GH_TOKEN=must-be-unset \
-    GITHUB_TOKEN=must-be-unset \
+    "${INHERITED_GH_ENVIRONMENT[@]}" \
     SECPAL_PHASE_B_PORT="$invalid_port" \
     SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
     SECPAL_TEST_CURL_LOG="$CURL_LOG" \
@@ -164,6 +172,24 @@ for invalid_port in invalid 80 65536; do
     fail "invalid loopback port was accepted: $invalid_port"
   fi
 done
+
+: >"$COMMAND_LOG"
+if env \
+  PATH="$FAKE_BIN:$PATH" \
+  "${INHERITED_GH_ENVIRONMENT[@]}" \
+  SECPAL_PHASE_B_PORT=18441 \
+  SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+  SECPAL_TEST_CURL_LOG="$CURL_LOG" \
+  SECPAL_TEST_GH_VERSION=2.96.0 \
+  SECPAL_TEST_RUN_ID=gh-version \
+  bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/gh-version.out" 2>&1; then
+  fail "an unreviewed GitHub CLI version was accepted"
+elif ! grep -Fq 'GitHub CLI 2.97.0 is required; found 2.96.0.' "$TEMP_DIR/gh-version.out"; then
+  fail "the unreviewed GitHub CLI version did not fail at the exact-version gate"
+fi
+if awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
+  fail "the unreviewed GitHub CLI version reached the API pull"
+fi
 
 for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wrong-subject-digest self-hosted; do
   : >"$COMMAND_LOG"
@@ -181,9 +207,7 @@ for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wron
 
   if env \
     PATH="$FAKE_BIN:$PATH" \
-    GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG" \
-    GH_TOKEN=must-be-unset \
-    GITHUB_TOKEN=must-be-unset \
+    "${INHERITED_GH_ENVIRONMENT[@]}" \
     SECPAL_PHASE_B_PORT=18441 \
     SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
     SECPAL_TEST_CURL_LOG="$CURL_LOG" \
@@ -237,9 +261,7 @@ pause_marker="$TEMP_DIR/paused"
 release_marker="$TEMP_DIR/release"
 env \
   PATH="$FAKE_BIN:$PATH" \
-  GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG" \
-  GH_TOKEN=must-be-unset \
-  GITHUB_TOKEN=must-be-unset \
+  "${INHERITED_GH_ENVIRONMENT[@]}" \
   SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
   SECPAL_TEST_CURL_LOG="$CURL_LOG" \
   SECPAL_TEST_PAUSE_MARKER="$pause_marker" \
@@ -293,9 +315,7 @@ for specification in one:18443 two:18444; do
   port="${specification##*:}"
   env \
     PATH="$FAKE_BIN:$PATH" \
-    GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG" \
-    GH_TOKEN=must-be-unset \
-    GITHUB_TOKEN=must-be-unset \
+    "${INHERITED_GH_ENVIRONMENT[@]}" \
     SECPAL_PHASE_B_PORT="$port" \
     SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
     SECPAL_TEST_CURL_LOG="$CURL_LOG" \
@@ -420,6 +440,7 @@ for failure_case in queue storage browser; do
   failure_variable="SECPAL_TEST_FAIL_${failure_case^^}"
   if env \
     PATH="$FAKE_BIN:$PATH" \
+    "${INHERITED_GH_ENVIRONMENT[@]}" \
     SECPAL_PHASE_B_PORT=18447 \
     SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
     SECPAL_TEST_CURL_LOG="$CURL_LOG" \

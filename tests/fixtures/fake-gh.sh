@@ -12,7 +12,7 @@ if [ "${1:-}" = attestation ] && [ "${2:-}" = verify ] && [ "${3:-}" = --help ];
 fi
 
 if [ "${1:-}" = version ] || [ "${1:-}" = --version ]; then
-  printf 'gh version 2.97.0 (fixture)\n'
+  printf 'gh version %s (fixture)\n' "${SECPAL_TEST_GH_VERSION:-2.97.0}"
   exit 0
 fi
 
@@ -43,13 +43,27 @@ expected_args=(
   --source-digest
   "$SOURCE_COMMIT"
   --deny-self-hosted-runners
+  --hostname
+  github.com
 )
 if [ "${actual_args[*]}" != "${expected_args[*]}" ]; then
   exit 71
 fi
 
-if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
-  printf 'fixture rejected inherited GitHub token\n' >&2
+if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ] ||
+  [ -n "${GH_ENTERPRISE_TOKEN:-}" ] || [ -n "${GITHUB_ENTERPRISE_TOKEN:-}" ]; then
+  printf 'fixture rejected inherited GitHub token variables\n' >&2
+  exit 72
+fi
+
+if [ -n "${GH_HOST:-}" ]; then
+  printf 'fixture rejected inherited GitHub host selection\n' >&2
+  exit 72
+fi
+
+if [ "${GH_PROMPT_DISABLED:-}" != 1 ] || [ "${GH_NO_UPDATE_NOTIFIER:-}" != 1 ] ||
+  [ "${GH_NO_EXTENSION_UPDATE_NOTIFIER:-}" != 1 ] || [ "${GH_TELEMETRY:-}" != false ]; then
+  printf 'fixture rejected non-deterministic GitHub CLI environment\n' >&2
   exit 72
 fi
 

@@ -48,30 +48,45 @@ BUNDLE_RESPONSE_LIMIT = 16 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 BEARER_PATTERN = re.compile(r"[A-Za-z0-9._~-]{1,32768}")
+REGISTRY_BLOB_PATH_PATTERN = re.compile(
+    rf"/v2/{re.escape(REPOSITORY)}/blobs/sha256:[0-9a-f]{{64}}"
+)
+GITHUB_BLOB_PATH_PATTERN = re.compile(r"/ghcr[0-9]+/blobs/sha256:[0-9a-f]{64}")
 
 RequestBytes = Callable[
     [str, dict[str, str], int, frozenset[int]], tuple[int, str, bytes]
 ]
 
 
+def _is_default_https_url(parsed: urllib.parse.SplitResult) -> bool:
+    try:
+        return (
+            parsed.scheme == "https"
+            and parsed.port in {None, 443}
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.fragment == ""
+        )
+    except ValueError:
+        return False
+
+
 def _is_registry_blob_url(url: str) -> bool:
     parsed = urllib.parse.urlsplit(url)
     return (
-        parsed.scheme == "https"
+        _is_default_https_url(parsed)
         and parsed.hostname == REGISTRY
-        and parsed.path.startswith(f"/v2/{REPOSITORY}/blobs/sha256:")
+        and REGISTRY_BLOB_PATH_PATTERN.fullmatch(parsed.path) is not None
         and parsed.query == ""
-        and parsed.fragment == ""
     )
 
 
 def _is_github_blob_url(url: str) -> bool:
     parsed = urllib.parse.urlsplit(url)
     return (
-        parsed.scheme == "https"
+        _is_default_https_url(parsed)
         and parsed.hostname == "pkg-containers.githubusercontent.com"
-        and parsed.path.startswith("/ghcrblobs")
-        and parsed.fragment == ""
+        and GITHUB_BLOB_PATH_PATTERN.fullmatch(parsed.path) is not None
     )
 
 

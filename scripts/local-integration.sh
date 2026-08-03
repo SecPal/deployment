@@ -62,6 +62,8 @@ PROBE_SCRIPT=/run/secpal/phase-b-runtime-probe.php
 readonly EXPECTED_API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
 readonly API_SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
 readonly ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"
+readonly ANONYMOUS_GH_CONFIG="$TEMP_DIR/anonymous-gh-config"
+readonly EXPECTED_GH_VERSION='2.97.0'
 
 cleanup() {
   if [ "${#COMPOSE[@]}" -ne 0 ] && [ "$cleanup_completed" -ne 1 ]; then
@@ -95,6 +97,16 @@ fail() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$2"
+}
+
+run_isolated_gh() {
+  GH_CONFIG_DIR="$ANONYMOUS_GH_CONFIG" \
+    GH_PROMPT_DISABLED=1 \
+    GH_NO_UPDATE_NOTIFIER=1 \
+    GH_NO_EXTENSION_UPDATE_NOTIFIER=1 \
+    GH_TELEMETRY=false \
+    env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST \
+    gh "$@"
 }
 
 allocate_port() {
@@ -140,7 +152,22 @@ require_command gh "GitHub CLI is required for API artifact attestation verifica
 require_command node "Node.js is required."
 require_command npm "npm is required."
 
-gh attestation verify --help >/dev/null 2>&1 ||
+install -d -m 0700 "$ANONYMOUS_GH_CONFIG"
+if ! gh_version_output="$(run_isolated_gh version)"; then
+  fail "the installed GitHub CLI version could not be determined."
+fi
+gh_version_line="${gh_version_output%%$'\n'*}"
+case "$gh_version_line" in
+  'gh version '*)
+    gh_version="${gh_version_line#gh version }"
+    gh_version="${gh_version%% *}"
+    ;;
+  *) gh_version=unknown ;;
+esac
+[ "$gh_version" = "$EXPECTED_GH_VERSION" ] ||
+  fail "GitHub CLI $EXPECTED_GH_VERSION is required; found $gh_version."
+
+run_isolated_gh attestation verify --help >/dev/null 2>&1 ||
   fail "the installed GitHub CLI does not support artifact attestation verification."
 
 compose_version="$(docker compose version 2>/dev/null || true)"
@@ -225,22 +252,19 @@ NODE
 ANON_DOCKER_CONFIG="$(mktemp -d -t secpal-api-anon-docker.XXXXXXXXXX)"
 chmod 0700 "$ANON_DOCKER_CONFIG"
 
-printf 'GitHub CLI: %s\n' "$(gh version | head -n 1)"
+printf 'GitHub CLI: %s\n' "$gh_version_line"
 printf 'Docker Engine: %s\n' "$(docker version --format '{{.Server.Version}}')"
 printf 'Docker Compose: %s\n' "$compose_version"
 printf 'Host platform: %s/%s\n' "$(uname -s)" "$(uname -m)"
 
 DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"
 
-if ! env -u GH_TOKEN -u GITHUB_TOKEN \
+if ! env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST \
   python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"; then
   fail "anonymous OCI attestation bundle retrieval failed."
 fi
 
-install -d -m 0700 "$TEMP_DIR/anonymous-gh-config"
-if ! DOCKER_CONFIG="$ANON_DOCKER_CONFIG" \
-  GH_CONFIG_DIR="$TEMP_DIR/anonymous-gh-config" \
-  env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify \
+if ! DOCKER_CONFIG="$ANON_DOCKER_CONFIG" run_isolated_gh attestation verify \
   "oci://$API_IMAGE" \
   --bundle "$ATTESTATION_BUNDLE" \
   --repo SecPal/api \
@@ -248,7 +272,8 @@ if ! DOCKER_CONFIG="$ANON_DOCKER_CONFIG" \
   --signer-digest 87d1432389adac3a02574b399322928a77c5e67f \
   --source-ref refs/heads/main \
   --source-digest 87d1432389adac3a02574b399322928a77c5e67f \
-  --deny-self-hosted-runners; then
+  --deny-self-hosted-runners \
+  --hostname github.com; then
   fail "public token-free API artifact attestation verification failed."
 fi
 
