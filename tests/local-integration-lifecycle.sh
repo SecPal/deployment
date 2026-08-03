@@ -65,7 +65,8 @@ install -d -m 0700 "$FAKE_BIN"
 cp "$ROOT_DIR/tests/fixtures/fake-docker.sh" "$FAKE_BIN/docker"
 cp "$ROOT_DIR/tests/fixtures/fake-curl.sh" "$FAKE_BIN/curl"
 cp "$ROOT_DIR/tests/fixtures/fake-gh.sh" "$FAKE_BIN/gh"
-chmod 0700 "$FAKE_BIN/docker" "$FAKE_BIN/curl" "$FAKE_BIN/gh"
+cp "$ROOT_DIR/tests/fixtures/fake-python3.sh" "$FAKE_BIN/python3"
+chmod 0700 "$FAKE_BIN/docker" "$FAKE_BIN/curl" "$FAKE_BIN/gh" "$FAKE_BIN/python3"
 : >"$COMMAND_LOG"
 : >"$CURL_LOG"
 install -d -m 0700 "$PERSISTENT_GH_CONFIG"
@@ -117,6 +118,13 @@ gateway_failure_marker="$TEMP_DIR/gateway-failed"
 printf '%s\n' \
   '#!/bin/sh' \
   'set -eu' \
+  'if [ "${1##*/}" = fetch-oci-attestation.py ]; then' \
+  '  output_path="${2:?}"' \
+  '  printf "%s\t\t\t\t\t\tpython3 fetch-oci-attestation %s\t%s\t%s\n" "${SECPAL_TEST_RUN_ID:-unknown}" "$output_path" "${DOCKER_CONFIG:-}" "${GH_CONFIG_DIR:-}" >>"${SECPAL_TEST_COMMAND_LOG:?}"' \
+  '  (umask 077 && printf "{\"fixture\":\"offline-attestation\"}\n" >"$output_path")' \
+  '  chmod 0600 "$output_path"' \
+  '  exit 0' \
+  'fi' \
   'count=0' \
   'if [ -f "$SECPAL_TEST_PYTHON_COUNT" ]; then count="$(cat "$SECPAL_TEST_PYTHON_COUNT")"; fi' \
   'count=$((count + 1))' \
@@ -137,7 +145,8 @@ if ! env \
 elif [ "$(sort -u "$port_attempts" 2>/dev/null | wc -l)" -ne 2 ]; then
   fail "the loopback-port retry did not select a new port"
 fi
-rm "$FAKE_BIN/python3"
+cp "$ROOT_DIR/tests/fixtures/fake-python3.sh" "$FAKE_BIN/python3"
+chmod 0700 "$FAKE_BIN/python3"
 : >"$COMMAND_LOG"
 : >"$CURL_LOG"
 
@@ -156,12 +165,14 @@ for invalid_port in invalid 80 65536; do
   fi
 done
 
-for gate_case in pull attestation wrong-source-commit wrong-workflow wrong-subject-digest self-hosted; do
+for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wrong-subject-digest self-hosted; do
   : >"$COMMAND_LOG"
   run_id="gate-$gate_case"
   gate_environment=(SECPAL_TEST_ATTESTATION_RESULT=success)
   if [ "$gate_case" = pull ]; then
     gate_environment=(SECPAL_TEST_FAIL_PULL=1)
+  elif [ "$gate_case" = bundle ]; then
+    gate_environment=(SECPAL_TEST_FAIL_ATTESTATION_FETCH=1)
   elif [ "$gate_case" != attestation ]; then
     gate_environment=("SECPAL_TEST_ATTESTATION_RESULT=$gate_case")
   else
@@ -196,7 +207,7 @@ for gate_case in pull attestation wrong-source-commit wrong-workflow wrong-subje
   fi
 
   if awk -F '\t' -v run_id="$run_id" '$1 == run_id &&
-    ($7 ~ /up --detach postgres valkey|--profile tools run --rm migrate|up --detach api|exec -T (api|worker)/) { found = 1 }
+    ($7 ~ /up --detach postgres valkey|--profile tools run --rm --no-TTY migrate|up --detach api|exec -T (api|worker)/) { found = 1 }
     END { exit !found }' "$COMMAND_LOG"; then
     fail "$gate_case gate failure allowed an API-based container operation"
   fi
@@ -205,7 +216,11 @@ for gate_case in pull attestation wrong-source-commit wrong-workflow wrong-subje
   if [ -z "$anon_config" ] || [ -e "$anon_config" ]; then
     fail "$gate_case gate failure did not remove its anonymous Docker configuration"
   fi
-  if [ "$gate_case" != pull ]; then
+  bundle_path="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
+  if [ "$gate_case" != pull ] && { [ -z "$bundle_path" ] || [ -e "$bundle_path" ]; }; then
+    fail "$gate_case did not remove its offline attestation bundle"
+  fi
+  if [ "$gate_case" != pull ] && [ "$gate_case" != bundle ]; then
     anonymous_gh_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $9; exit }' "$COMMAND_LOG")"
     if [ -z "$anonymous_gh_config" ] ||
       [ "$anonymous_gh_config" = "$PERSISTENT_GH_CONFIG" ] ||
@@ -251,7 +266,7 @@ else
   if ! grep -Fq -- 'down --volumes --remove-orphans' "$COMMAND_LOG"; then
     fail "the integration script did not clean up after SIGTERM"
   fi
-  if grep -Fq -- '--profile tools run --rm migrate' "$COMMAND_LOG"; then
+  if grep -Fq -- '--profile tools run --rm --no-TTY migrate' "$COMMAND_LOG"; then
     fail "the integration script executed work after handling SIGTERM"
   fi
   signal_anon_config="$(awk -F '\t' '$1 == "signal" && $7 ~ /^pull / { print $8; exit }' "$COMMAND_LOG")"
@@ -262,6 +277,10 @@ else
   if [ -z "$signal_gh_config" ] || [ "$signal_gh_config" = "$PERSISTENT_GH_CONFIG" ] ||
     [ -e "$signal_gh_config" ]; then
     fail "the integration script did not isolate and remove its GitHub CLI configuration after SIGTERM"
+  fi
+  signal_bundle="$(awk -F '\t' '$1 == "signal" && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
+  if [ -z "$signal_bundle" ] || [ -e "$signal_bundle" ]; then
+    fail "the integration script did not remove its offline attestation bundle after SIGTERM"
   fi
 fi
 children=()
@@ -355,11 +374,13 @@ for run_id in one two; do
   fi
 
   pull_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print NR; exit }' "$COMMAND_LOG")"
+  bundle_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print NR; exit }' "$COMMAND_LOG")"
   verify_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print NR; exit }' "$COMMAND_LOG")"
   build_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ / build frontend gateway$/ { print NR; exit }' "$COMMAND_LOG")"
   secrets_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ / up --detach postgres valkey$/ { print NR; exit }' "$COMMAND_LOG")"
-  if [ -z "$pull_line" ] || [ -z "$verify_line" ] || [ -z "$build_line" ] ||
+  if [ -z "$pull_line" ] || [ -z "$bundle_line" ] || [ -z "$verify_line" ] || [ -z "$build_line" ] ||
     [ -z "$secrets_line" ] || [ "$pull_line" -ge "$verify_line" ] ||
+    [ "$pull_line" -ge "$bundle_line" ] || [ "$bundle_line" -ge "$verify_line" ] ||
     [ "$verify_line" -ge "$build_line" ] || [ "$build_line" -ge "$secrets_line" ]; then
     fail "parallel run $run_id did not gate API execution on pull and attestation verification"
   fi
@@ -374,6 +395,10 @@ for run_id in one two; do
     [ "$anonymous_gh_config" = "$PERSISTENT_GH_CONFIG" ] ||
     [ -e "$anonymous_gh_config" ]; then
     fail "parallel run $run_id did not isolate and remove its anonymous GitHub CLI configuration"
+  fi
+  offline_bundle="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
+  if [ -z "$offline_bundle" ] || [ -e "$offline_bundle" ]; then
+    fail "parallel run $run_id did not remove its offline attestation bundle"
   fi
 done
 
@@ -409,6 +434,10 @@ done
 
 if grep -Eiq 'docker-compose|system prune|image prune|volume prune|docker login|docker push' "$COMMAND_LOG"; then
   fail "the lifecycle used a forbidden Compose fallback, prune, login, or push operation"
+fi
+
+if grep -Fq -- '--profile tools run --rm migrate' "$COMMAND_LOG"; then
+  fail "the lifecycle requested an interactive TTY for migration"
 fi
 
 if awk -F '\t' '$7 ~ /^image rm / && $7 ~ /ghcr\.io\/secpal\/api/ { found = 1 } END { exit !found }' "$COMMAND_LOG"; then

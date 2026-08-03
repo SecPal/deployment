@@ -61,6 +61,7 @@ automatic_port=0
 PROBE_SCRIPT=/run/secpal/phase-b-runtime-probe.php
 readonly EXPECTED_API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
 readonly API_SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
+readonly ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"
 
 cleanup() {
   if [ "${#COMPOSE[@]}" -ne 0 ] && [ "$cleanup_completed" -ne 1 ]; then
@@ -231,12 +232,17 @@ printf 'Host platform: %s/%s\n' "$(uname -s)" "$(uname -m)"
 
 DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"
 
+if ! env -u GH_TOKEN -u GITHUB_TOKEN \
+  python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"; then
+  fail "anonymous OCI attestation bundle retrieval failed."
+fi
+
 install -d -m 0700 "$TEMP_DIR/anonymous-gh-config"
 if ! DOCKER_CONFIG="$ANON_DOCKER_CONFIG" \
   GH_CONFIG_DIR="$TEMP_DIR/anonymous-gh-config" \
   env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify \
   "oci://$API_IMAGE" \
-  --bundle-from-oci \
+  --bundle "$ATTESTATION_BUNDLE" \
   --repo SecPal/api \
   --signer-workflow SecPal/api/.github/workflows/publish-container.yml \
   --signer-digest 87d1432389adac3a02574b399322928a77c5e67f \
@@ -251,7 +257,7 @@ printf 'Verified API source commit: %s\n' "$API_SOURCE_COMMIT"
 
 "${COMPOSE[@]}" build frontend gateway
 "${COMPOSE[@]}" up --detach postgres valkey
-"${COMPOSE[@]}" --profile tools run --rm migrate
+"${COMPOSE[@]}" --profile tools run --rm --no-TTY migrate
 
 services_started=0
 for _attempt in $(seq 1 3); do

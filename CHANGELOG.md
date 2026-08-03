@@ -21,14 +21,16 @@ SPDX-License-Identifier: CC0-1.0
 
 - The local integration runner builds only the pinned frontend and test
   gateway inputs; the API source-build and project-local API tag are removed.
+- The public OCI Sigstore bundle is retrieved through GHCR's anonymous
+  Distribution flow and verified offline, avoiding GitHub CLI's authentication
+  gate without introducing credentials or weakening attestation policy.
+- The one-shot migration uses Compose's explicit non-interactive mode so the
+  same lifecycle runs without a TTY on hosted CI.
 
 ### Not included
 
 - Frontend publication, Phase D, production host automation, real
   infrastructure changes, and production readiness remain outside this work.
-- GitHub CLI `2.97.0` still requires authentication for the otherwise public
-  attestation verification; the real integration therefore stops fail-closed
-  before any API-based role executes.
 
 ## 2026-08-01 - Local Container Integration Stack
 

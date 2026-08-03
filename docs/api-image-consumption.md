@@ -34,27 +34,39 @@ smokes for both platforms. It created and verified a GitHub Artifact
 Attestation. An anonymous public pull by digest was also confirmed externally.
 The deployment integration runner repeats the anonymous digest pull and
 requires the fixed-identity attestation verification before it permits any
-API-based role to execute. The present CLI limitation described below prevents
-that gate from succeeding; it does not permit the runner to skip the gate.
+API-based role to execute.
 
 The hosted runner uses the GitHub CLI already provided by GitHub's hosted
 Ubuntu image. The integration script checks for `gh attestation verify`, logs
 the effective `gh` version, and fails closed if the capability is missing. It
-does not install an unpinned CLI or introduce a token.
+does not install an unpinned CLI or introduce a GitHub token.
 
-## Known token-free verification blocker
+## Token-free OCI bundle verification
 
-The real local check with GitHub CLI `2.97.0`, which is the current official
-release for this review, confirmed that
-`gh attestation verify --bundle-from-oci` still stops at the GitHub CLI
-authentication gate when no token is available. This is tracked upstream in
-[`cli/cli#11803`](https://github.com/cli/cli/issues/11803). The anonymous image
-pull succeeds, but the integration runner then exits before `secrets-init`,
-migration, API, workers, or scheduler can run. No token or registry credential
-is introduced, and the verification policy is not weakened. The repository
-therefore implements a blocked fail-closed target contract, not a successfully
-completed real integration. It cannot satisfy the real Compose acceptance gate
-until GitHub CLI supports the required public token-free verification.
+GitHub CLI applies its GitHub authentication gate before direct
+`--bundle-from-oci` verification. The integration runner keeps GitHub token
+variables unset and uses the OCI Distribution contract directly instead. It:
+
+1. requests only the fixed public `secpal/api` pull scope from GHCR's anonymous
+   token service;
+2. reads the OCI Referrers endpoint or its digest-derived standard fallback;
+3. requires exactly one SLSA v1 Sigstore bundle descriptor;
+4. verifies the descriptor, manifest, subject, layer digests, sizes, and media
+   types against the canonical API digest;
+5. writes the bundle to a mode-`0600` file in the private integration temporary
+   directory; and
+6. invokes `gh attestation verify --bundle` with the fixed repository,
+   workflow, ref, commit, digest, and GitHub-hosted-runner policy.
+
+The anonymous registry bearer and signed blob redirect exist only in process
+memory. They are neither account credentials nor persisted configuration and
+are never logged. Cross-host redirects are restricted to GitHub's container
+blob host, and the registry Authorization header is removed before following
+the redirect. The temporary bundle and empty Docker/GitHub configurations are
+removed on success, failure, and signals.
+
+The digest-derived OCI Referrers fallback is metadata transport only. It is
+never an API image, deployment, discovery, or rollback reference.
 
 ## Discovery tag
 
@@ -79,9 +91,8 @@ environment variables, and manual tag changes are never rollback inputs.
 
 ## Scope status
 
-Phase C is in progress. API publication and the fail-closed API digest
-consumption target contract are implemented. The real integration remains
-blocked at token-free attestation verification.
+Phase C is in progress. API publication and token-free, fail-closed API digest
+consumption are implemented.
 
 Frontend publication remains outstanding.
 

@@ -77,22 +77,24 @@ anonymous registry access for the pinned inputs:
 ./scripts/local-integration.sh
 ```
 
-The current GitHub CLI `2.97.0` blocks this command without authentication.
-Consequently, the real runner currently succeeds only through the anonymous
-digest pull and then exits fail-closed before any API-based role runs. It does
-not use a stored GitHub login, introduce a token, or weaken the verification
-policy. The upstream limitation is tracked in
-[`cli/cli#11803`](https://github.com/cli/cli/issues/11803).
+GitHub CLI currently applies its GitHub authentication gate to the direct
+`--bundle-from-oci` mode. The runner does not provide a GitHub token to bypass
+that gate. Instead, it retrieves the public Sigstore bundle through GHCR's
+anonymous OCI Distribution flow, validates the referrer, manifest, subject,
+layer digests, sizes, and media types, and supplies the private temporary
+bundle to `gh attestation verify --bundle`. Verification runs with an empty
+GitHub CLI configuration and both GitHub token variables unset. The temporary
+bundle is removed on success, failure, and signals.
 
-The implemented target sequence validates every API role against the canonical
-digest, pulls it with a new empty Docker configuration, and requires successful
-GitHub Artifact Attestation verification with an empty GitHub CLI configuration
-before any API-based role may run. Only after that gate succeeds does the
-script build the project-scoped frontend and gateway images, generate random
-test-only secrets inside a private runtime volume without printing them, start
-private PostgreSQL and Valkey services, run migrations exactly once, and start
-the explicit service roles. The published API image is not a local cleanup
-artifact. A completed runner then proves Valkey cache and queue
+The sequence validates every API role against the canonical digest, pulls it
+with a new empty Docker configuration, retrieves and validates its public OCI
+attestation bundle, and requires successful GitHub Artifact Attestation
+verification before any API-based role may run. Only after that gate succeeds
+does the script build the project-scoped frontend and gateway images, generate
+random test-only secrets inside a private runtime volume without printing them,
+start private PostgreSQL and Valkey services, run migrations exactly once, and
+start the explicit service roles. The published API image is not a local
+cleanup artifact. The runner then proves Valkey cache and queue
 round trips, worker-to-queue ownership, shared visibility of the disposable
 private-storage volume, exact credentialed CORS, and the separate app/API
 origins. Playwright Chromium exercises the actual Compose frontend and API,
@@ -135,10 +137,9 @@ This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use
 production credentials, or select the future production edge.
 
-Phase C is in progress. API publication and the fail-closed API digest
-consumption contract are implemented. Its real token-free attestation gate is
-blocked before API execution, as described above. Frontend publication remains
-outstanding. Digest provenance, reviewed updates, and rollback are detailed in
+Phase C is in progress. API publication and token-free, fail-closed API digest
+consumption are implemented. Frontend publication remains outstanding. Digest
+provenance, reviewed updates, and rollback are detailed in
 [`docs/api-image-consumption.md`](docs/api-image-consumption.md).
 
 ## Security

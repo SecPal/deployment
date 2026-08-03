@@ -66,6 +66,7 @@ service_section() {
 for path in \
   compose.yaml \
   scripts/local-integration.sh \
+  scripts/fetch-oci-attestation.py \
   docs/api-image-consumption.md \
   README.md \
   CHANGELOG.md \
@@ -125,9 +126,11 @@ if [ -f scripts/local-integration.sh ]; then
   require_text scripts/local-integration.sh 'DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"'
   require_text scripts/local-integration.sh 'install -d -m 0700 "$TEMP_DIR/anonymous-gh-config"'
   require_text scripts/local-integration.sh 'GH_CONFIG_DIR="$TEMP_DIR/anonymous-gh-config"'
+  require_text scripts/local-integration.sh 'ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"'
+  require_text scripts/local-integration.sh 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"'
   require_text scripts/local-integration.sh 'env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify'
   require_text scripts/local-integration.sh '"oci://$API_IMAGE"'
-  require_text scripts/local-integration.sh '--bundle-from-oci'
+  require_text scripts/local-integration.sh '--bundle "$ATTESTATION_BUNDLE"'
   require_text scripts/local-integration.sh '--repo SecPal/api'
   require_text scripts/local-integration.sh "--signer-workflow $API_WORKFLOW"
   require_text scripts/local-integration.sh "--signer-digest $API_SOURCE_COMMIT"
@@ -136,25 +139,43 @@ if [ -f scripts/local-integration.sh ]; then
   require_text scripts/local-integration.sh '--deny-self-hosted-runners'
   require_text scripts/local-integration.sh '"${COMPOSE[@]}" --profile tools config --format json'
   require_text scripts/local-integration.sh '"${COMPOSE[@]}" build frontend gateway'
+  require_text scripts/local-integration.sh '"${COMPOSE[@]}" --profile tools run --rm --no-TTY migrate'
 
   forbid_text scripts/local-integration.sh 'SECPAL_(PHASE_B_)?API_IMAGE|docker[[:space:]]+login|docker[[:space:]]+logout|GHCR_TOKEN' \
     "the integration runner must not expose an API override or registry credential path"
+  forbid_text scripts/local-integration.sh '--bundle-from-oci' \
+    "the integration runner must use the anonymously retrieved offline bundle"
   forbid_text scripts/local-integration.sh 'build.*(secrets-init|migrate|api|worker-hash-chain|worker-general|scheduler)' \
     "the integration runner must not build an API-based service"
 
   pull_line="$(grep -nF 'DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
+  bundle_line="$(grep -nF 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   verify_line="$(grep -nF 'env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   build_line="$(grep -nF '"${COMPOSE[@]}" build frontend gateway' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   data_line="$(grep -nF '"${COMPOSE[@]}" up --detach postgres valkey' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
-  migrate_line="$(grep -nF '"${COMPOSE[@]}" --profile tools run --rm migrate' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
+  migrate_line="$(grep -nF '"${COMPOSE[@]}" --profile tools run --rm --no-TTY migrate' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   services_line="$(grep -nF 'if "${COMPOSE[@]}" up --detach' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
-  if [ -z "$pull_line" ] || [ -z "$verify_line" ] || [ -z "$build_line" ] ||
+  if [ -z "$pull_line" ] || [ -z "$bundle_line" ] || [ -z "$verify_line" ] || [ -z "$build_line" ] ||
     [ -z "$data_line" ] || [ -z "$migrate_line" ] || [ -z "$services_line" ] ||
-    [ "$pull_line" -ge "$verify_line" ] || [ "$verify_line" -ge "$build_line" ] ||
+    [ "$pull_line" -ge "$bundle_line" ] || [ "$bundle_line" -ge "$verify_line" ] ||
+    [ "$verify_line" -ge "$build_line" ] ||
     [ "$build_line" -ge "$data_line" ] || [ "$data_line" -ge "$migrate_line" ] ||
     [ "$migrate_line" -ge "$services_line" ]; then
     fail "pull and attestation verification must precede every API execution in the lifecycle"
   fi
+fi
+
+if [ -f scripts/fetch-oci-attestation.py ]; then
+  require_text scripts/fetch-oci-attestation.py 'REGISTRY = "ghcr.io"'
+  require_text scripts/fetch-oci-attestation.py 'REPOSITORY = "secpal/api"'
+  require_text scripts/fetch-oci-attestation.py "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
+  require_text scripts/fetch-oci-attestation.py 'https://ghcr.io/token?service=ghcr.io&scope=repository%3Asecpal%2Fapi%3Apull'
+  require_text scripts/fetch-oci-attestation.py 'expected exactly one SLSA Sigstore bundle referrer'
+  require_text scripts/fetch-oci-attestation.py 'OCI attestation subject digest was not the reviewed API digest'
+  require_text scripts/fetch-oci-attestation.py 'os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600'
+  require_text scripts/fetch-oci-attestation.py 'if key.lower() != "authorization"'
+  forbid_text scripts/fetch-oci-attestation.py 'os\.environ|os\.getenv|GH_TOKEN|GITHUB_TOKEN|GHCR_TOKEN|docker[[:space:]]+login' \
+    "the OCI bundle fetcher must not expose configuration or credential inputs"
 fi
 
 if [ -f .github/workflows/local-integration.yml ]; then
@@ -187,9 +208,12 @@ require_text docs/api-image-consumption.md 'Frontend publication remains outstan
 require_text docs/api-image-consumption.md 'Phase D and production host automation remain outside this change.'
 require_text README.md "$API_IMAGE"
 require_text README.md 'Phase C is in progress.'
+require_text README.md 'The runner does not provide a GitHub token to bypass'
 # Backticks are literal Markdown, not shell substitutions.
 # shellcheck disable=SC2016
-require_text README.md 'The current GitHub CLI `2.97.0` blocks this command without authentication.'
+require_text docs/api-image-consumption.md 'invokes `gh attestation verify --bundle` with the fixed repository,'
+forbid_text README.md 'real runner currently succeeds only|blocked before API execution'
+forbid_text docs/api-image-consumption.md 'blocked at token-free attestation|blocked fail-closed target contract'
 require_text docs/roadmap.md 'Phase C — Immutable image publishing (in progress)'
 require_text docs/roadmap.md 'Frontend publication remains outstanding.'
 require_text CHANGELOG.md 'Consume Verified API Image Digest'
@@ -209,14 +233,14 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
 
   for mutation in \
     wrong-digest tag registry repository api-build environment-override \
-    github-config-override; do
+    github-config-override bundle-fetch-bypass fetcher-wrong-digest; do
     fixture="$negative_temp/$mutation"
     install -d -m 0700 \
       "$fixture/.github/workflows" "$fixture/docs" "$fixture/scripts" "$fixture/tests"
     cp compose.yaml README.md CHANGELOG.md "$fixture/"
     cp .github/workflows/local-integration.yml "$fixture/.github/workflows/"
     cp docs/api-image-consumption.md docs/roadmap.md "$fixture/docs/"
-    cp scripts/local-integration.sh "$fixture/scripts/"
+    cp scripts/local-integration.sh scripts/fetch-oci-attestation.py "$fixture/scripts/"
     cp tests/phase-c-api-image-contract.sh "$fixture/tests/"
 
     case "$mutation" in
@@ -249,6 +273,16 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
         # shellcheck disable=SC2016
         sed -i '/GH_CONFIG_DIR="\$TEMP_DIR\/anonymous-gh-config"/d' \
           "$fixture/scripts/local-integration.sh"
+        ;;
+      bundle-fetch-bypass)
+        # The shell expressions are intentional literal contract text.
+        # shellcheck disable=SC2016
+        sed -i 's|python3 "\$ROOT_DIR/scripts/fetch-oci-attestation.py" "\$ATTESTATION_BUNDLE"|true|' \
+          "$fixture/scripts/local-integration.sh"
+        ;;
+      fetcher-wrong-digest)
+        sed -i 's/5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e/6a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e/' \
+          "$fixture/scripts/fetch-oci-attestation.py"
         ;;
     esac
 

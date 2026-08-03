@@ -44,6 +44,7 @@ required_files=(
   docs/api-image-consumption.md
   docs/roadmap.md
   scripts/preflight.sh
+  scripts/fetch-oci-attestation.py
   scripts/reject-sensitive-paths.sh
   scripts/validate-origin.sh
   tests/repository-contract.sh
@@ -55,7 +56,9 @@ required_files=(
   tests/sensitive-path-contract.sh
   tests/fixtures/fake-docker.sh
   tests/fixtures/fake-gh.sh
+  tests/fixtures/fake-python3.sh
   tests/fixtures/fake-curl.sh
+  tests/oci-attestation-bundle-contract.py
   .github/workflows/quality.yml
   LICENSES/AGPL-3.0-or-later.txt
   LICENSES/CC0-1.0.txt

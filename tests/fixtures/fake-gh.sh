@@ -26,9 +26,12 @@ if [ "${1:-}" != attestation ] || [ "${2:-}" != verify ]; then
   exit 70
 fi
 
+actual_args=("${@:3}")
+bundle_path="${actual_args[2]:-}"
 expected_args=(
   "oci://$API_IMAGE"
-  --bundle-from-oci
+  --bundle
+  "$bundle_path"
   --repo
   SecPal/api
   --signer-workflow
@@ -41,7 +44,6 @@ expected_args=(
   "$SOURCE_COMMIT"
   --deny-self-hosted-runners
 )
-actual_args=("${@:3}")
 if [ "${actual_args[*]}" != "${expected_args[*]}" ]; then
   exit 71
 fi
@@ -58,6 +60,14 @@ if [ -z "${GH_CONFIG_DIR:-}" ] || [ ! -d "$GH_CONFIG_DIR" ] ||
   exit 73
 fi
 
+if [ "${bundle_path##*/}" != api-attestation.json ] ||
+  [ ! -f "$bundle_path" ] ||
+  [ "$(stat -c '%a' "$bundle_path")" != 600 ] ||
+  [ ! -s "$bundle_path" ]; then
+  printf 'fixture rejected a missing or insecure offline attestation bundle\n' >&2
+  exit 74
+fi
+
 observed_subject="$API_IMAGE"
 observed_source_commit="$SOURCE_COMMIT"
 observed_workflow='SecPal/api/.github/workflows/publish-container.yml'
@@ -67,7 +77,7 @@ case "${SECPAL_TEST_ATTESTATION_RESULT:-success}" in
   success) ;;
   failure)
     printf 'fixture rejected the attestation verification request\n' >&2
-    exit 74
+    exit 75
     ;;
   wrong-source-commit)
     observed_source_commit='97d1432389adac3a02574b399322928a77c5e67f'
@@ -81,22 +91,22 @@ case "${SECPAL_TEST_ATTESTATION_RESULT:-success}" in
   self-hosted)
     observed_runner='self-hosted'
     ;;
-  *) exit 75 ;;
+  *) exit 76 ;;
 esac
 
 if [ "${actual_args[0]}" != "oci://$observed_subject" ]; then
   printf 'fixture rejected subject digest mismatch\n' >&2
   exit 76
 fi
-if [ "${actual_args[5]}" != "$observed_workflow" ]; then
+if [ "${actual_args[6]}" != "$observed_workflow" ]; then
   printf 'fixture rejected signer workflow mismatch\n' >&2
   exit 77
 fi
-if [ "${actual_args[11]}" != "$observed_source_commit" ]; then
+if [ "${actual_args[12]}" != "$observed_source_commit" ]; then
   printf 'fixture rejected source digest mismatch\n' >&2
   exit 78
 fi
-if [ "$observed_runner" = self-hosted ] && [ "${actual_args[12]}" = --deny-self-hosted-runners ]; then
+if [ "$observed_runner" = self-hosted ] && [ "${actual_args[13]}" = --deny-self-hosted-runners ]; then
   printf 'fixture rejected self-hosted runner\n' >&2
   exit 79
 fi
