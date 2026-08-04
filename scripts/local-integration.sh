@@ -17,7 +17,7 @@ supervise_integration() {
   child_pid=$!
 
   # Invoked indirectly by the signal traps below.
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2317,SC2329
   forward_supervisor_signal() {
     local exit_status="$1"
 
@@ -50,6 +50,7 @@ unset SECPAL_PHASE_B_SUPERVISED
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 TEMP_DIR="$(mktemp -d -t secpal-phase-b.XXXXXXXXXX)"
+ANON_DOCKER_CONFIG=""
 project_token="${TEMP_DIR##*.}"
 project_token="${project_token,,}"
 PROJECT_NAME="secpal-phase-b-$project_token"
@@ -58,6 +59,12 @@ LOCAL_IMAGES=()
 cleanup_completed=0
 automatic_port=0
 PROBE_SCRIPT=/run/secpal/phase-b-runtime-probe.php
+readonly EXPECTED_API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
+readonly API_SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
+readonly EXPECTED_GH_VERSION='2.97.0'
+readonly ATTESTATION_SUBJECT="$TEMP_DIR/api-image-index.json"
+readonly ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"
+readonly ANONYMOUS_GH_CONFIG="$TEMP_DIR/anonymous-gh-config"
 
 cleanup() {
   if [ "${#COMPOSE[@]}" -ne 0 ] && [ "$cleanup_completed" -ne 1 ]; then
@@ -65,6 +72,9 @@ cleanup() {
   fi
   if [ "${#LOCAL_IMAGES[@]}" -ne 0 ] && [ "$cleanup_completed" -ne 1 ]; then
     docker image rm "${LOCAL_IMAGES[@]}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$ANON_DOCKER_CONFIG" ]; then
+    rm -rf -- "$ANON_DOCKER_CONFIG"
   fi
   rm -rf -- "$TEMP_DIR"
 }
@@ -88,6 +98,16 @@ fail() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$2"
+}
+
+run_isolated_gh() {
+  GH_CONFIG_DIR="$ANONYMOUS_GH_CONFIG" \
+    GH_PROMPT_DISABLED=1 \
+    GH_NO_UPDATE_NOTIFIER=1 \
+    GH_NO_EXTENSION_UPDATE_NOTIFIER=1 \
+    GH_TELEMETRY=false \
+    env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST -u DOCKER_CONFIG -u DOCKER_AUTH_CONFIG \
+    gh "$@"
 }
 
 allocate_port() {
@@ -129,8 +149,22 @@ wait_for_cache_value() {
 require_command docker "Docker is required."
 require_command python3 "Python 3 is required."
 require_command curl "curl is required."
+require_command gh "GitHub CLI is required for API artifact attestation verification."
 require_command node "Node.js is required."
 require_command npm "npm is required."
+
+install -d -m 0700 "$ANONYMOUS_GH_CONFIG"
+if ! gh_version_output="$(run_isolated_gh version)"; then
+  fail "the installed GitHub CLI version could not be determined."
+fi
+gh_version_line="${gh_version_output%%$'\n'*}"
+case "$gh_version_line" in
+  "gh version $EXPECTED_GH_VERSION" | "gh version $EXPECTED_GH_VERSION "*) ;;
+  *) fail "GitHub CLI $EXPECTED_GH_VERSION is required; found $gh_version_line." ;;
+esac
+
+run_isolated_gh attestation verify --help >/dev/null 2>&1 ||
+  fail "the installed GitHub CLI does not support artifact attestation verification."
 
 compose_version="$(docker compose version 2>/dev/null || true)"
 case "$compose_version" in
@@ -150,19 +184,16 @@ fi
 validate_port
 set_origins
 
-SECPAL_PHASE_B_API_IMAGE="$PROJECT_NAME-api:phase-b-6fead9cef910"
 SECPAL_PHASE_B_FRONTEND_IMAGE="$PROJECT_NAME-frontend:phase-b-fcd427d9b55d"
 SECPAL_PHASE_B_GATEWAY_IMAGE="$PROJECT_NAME-gateway:phase-b-2.10.2"
 SECPAL_PHASE_B_HASH_CHAIN_CONTAINER_NAME="$PROJECT_NAME-worker-hash-chain"
 SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME="$PROJECT_NAME-scheduler"
 export \
-  SECPAL_PHASE_B_API_IMAGE \
   SECPAL_PHASE_B_FRONTEND_IMAGE \
   SECPAL_PHASE_B_GATEWAY_IMAGE \
   SECPAL_PHASE_B_HASH_CHAIN_CONTAINER_NAME \
   SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME
 LOCAL_IMAGES=(
-  "$SECPAL_PHASE_B_API_IMAGE"
   "$SECPAL_PHASE_B_FRONTEND_IMAGE"
   "$SECPAL_PHASE_B_GATEWAY_IMAGE"
 )
@@ -177,9 +208,79 @@ STORAGE_PROBE_PATH="/app/storage/app/private/$STORAGE_PROBE_NAME"
 cd "$ROOT_DIR"
 
 "${COMPOSE[@]}" config --quiet
-"${COMPOSE[@]}" build secrets-init frontend gateway
+"${COMPOSE[@]}" --profile tools config --format json >"$TEMP_DIR/compose-config.json"
+API_IMAGE="$(node - "$TEMP_DIR/compose-config.json" "$EXPECTED_API_IMAGE" <<'NODE'
+const fs = require('node:fs');
+
+const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const expected = process.argv[3];
+const apiServices = [
+  'secrets-init',
+  'migrate',
+  'api',
+  'worker-hash-chain',
+  'worker-general',
+  'scheduler',
+];
+const images = new Set();
+
+for (const serviceName of apiServices) {
+  const service = config.services?.[serviceName];
+  if (!service || service.image !== expected || service.build !== undefined) {
+    process.stderr.write(
+      `ERROR: ${serviceName} must use only the canonical API digest.\n`,
+    );
+    process.exit(1);
+  }
+  images.add(service.image);
+}
+
+if (images.size !== 1 || [...images][0] !== expected) {
+  process.stderr.write('ERROR: API roles resolved to more than one image.\n');
+  process.exit(1);
+}
+
+process.stdout.write(expected);
+NODE
+)" || fail "the resolved Compose API image contract is invalid."
+[ "$API_IMAGE" = "$EXPECTED_API_IMAGE" ] || fail "the resolved API digest is not approved."
+
+ANON_DOCKER_CONFIG="$(mktemp -d -t secpal-api-anon-docker.XXXXXXXXXX)"
+chmod 0700 "$ANON_DOCKER_CONFIG"
+
+printf 'GitHub CLI: %s\n' "$gh_version_line"
+printf 'Docker Engine: %s\n' "$(docker version --format '{{.Server.Version}}')"
+printf 'Docker Compose: %s\n' "$compose_version"
+printf 'Host platform: %s/%s\n' "$(uname -s)" "$(uname -m)"
+
+env -u DOCKER_AUTH_CONFIG \
+  DOCKER_CONFIG="$ANON_DOCKER_CONFIG" \
+  docker pull "$API_IMAGE"
+
+if ! env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST \
+  python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_SUBJECT" "$ATTESTATION_BUNDLE"; then
+  fail "anonymous OCI attestation bundle retrieval failed."
+fi
+
+if ! run_isolated_gh attestation verify \
+  "$ATTESTATION_SUBJECT" \
+  --bundle "$ATTESTATION_BUNDLE" \
+  --repo SecPal/api \
+  --signer-workflow SecPal/api/.github/workflows/publish-container.yml \
+  --signer-digest "$API_SOURCE_COMMIT" \
+  --source-ref refs/heads/main \
+  --source-digest "$API_SOURCE_COMMIT" \
+  --deny-self-hosted-runners \
+  --hostname github.com; then
+  fail "public token-free API artifact attestation verification failed."
+fi
+
+printf 'Verified API image: %s\n' "$API_IMAGE"
+printf 'Verified API source commit: %s\n' "$API_SOURCE_COMMIT"
+
+"${COMPOSE[@]}" build frontend gateway
 "${COMPOSE[@]}" up --detach postgres valkey
-"${COMPOSE[@]}" --profile tools run --rm migrate
+"${COMPOSE[@]}" --profile tools run --rm --no-TTY migrate
 
 services_started=0
 for _attempt in $(seq 1 3); do

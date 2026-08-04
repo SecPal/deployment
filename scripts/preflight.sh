@@ -16,7 +16,7 @@ fi
 
 scripts/validate-origin.sh "$(git remote get-url origin)"
 
-required_tools=(actionlint markdownlint php prettier reuse shellcheck yamllint)
+required_tools=(actionlint markdownlint php prettier python3 reuse shellcheck yamllint)
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -47,8 +47,10 @@ fi
 bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
 php -l scripts/phase-b-runtime-probe.php
+python3 tests/oci-attestation-bundle-contract.py
 bash tests/repository-contract.sh
 bash tests/phase-b-contract.sh
+bash tests/phase-c-api-image-contract.sh
 bash tests/runtime-secret-contract.sh
 bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh

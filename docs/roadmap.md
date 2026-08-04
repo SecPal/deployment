@@ -56,22 +56,34 @@ implementation head passed `Local Integration / Compose Contract`, and that
 check is enforced for `main`; every subsequent pull-request head must pass it
 again.
 
-**Deferred:** GHCR, immutable public product images, a production edge, public
-exposure, tenant provisioning, durable storage, and production operations.
+**Deferred:** Frontend publication, a production edge, public exposure, tenant
+provisioning, durable storage, and production operations.
 
-## Phase C — Immutable image publishing (next; not implemented)
+## Phase C — Immutable image publishing (in progress)
 
 **Goal:** Define reproducible publication and consumption of product images.
 
-**Expected artifacts:** Version and digest contracts, provenance policy, image
-signing policy, and publication verification.
+**Implemented:** API publication and the fail-closed API digest consumption
+target contract are implemented. The public local integration contract pins
+the verified SecPal API image by canonical OCI index digest, anonymously pulls
+that digest, anonymously retrieves and validates its raw OCI index and Sigstore
+bundle, and verifies the private digest-matching index with the pinned GitHub
+CLI before API execution. No GitHub or registry account credentials are used,
+and the verifier does not reopen the registry. The phase remains incomplete
+because frontend publication is still outstanding.
+
+**Expected artifacts:** Completed API and frontend version and digest
+contracts, provenance policy, image signing policy, and publication
+verification. Frontend publication remains outstanding.
 
 **Entry criteria:** Phase B proves the product integration contract.
 
-**Completion criteria:** Published artifacts are immutable, verifiable, and
-bound by digest with no `latest` dependency.
+**Completion criteria:** Published API and frontend artifacts are immutable,
+verifiable, and bound by digest with no `latest` dependency. The API half does
+not complete the whole phase.
 
-**Deferred:** Public reference deployment and managed-hosting automation.
+**Deferred:** Frontend publication, Phase D, public reference deployment,
+production host automation, and managed-hosting automation.
 
 ## Phase D — Public Compose reference deployment
 

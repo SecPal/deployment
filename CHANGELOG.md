@@ -5,6 +5,40 @@ SPDX-License-Identifier: CC0-1.0
 
 # Changelog
 
+## 2026-08-03 - Consume Verified API Image Digest
+
+### Added
+
+- A canonical SecPal API OCI index digest shared by all API-based roles.
+- An anonymous digest pull and GitHub Artifact Attestation gate before any API
+  execution.
+- Static and lifecycle contracts for digest identity, signer identity,
+  fail-closed ordering, credential absence, and temporary configuration
+  cleanup.
+- Reviewed digest update and rollback documentation.
+
+### Changed
+
+- The local integration runner builds only the pinned frontend and test
+  gateway inputs; the API source-build and project-local API tag are removed.
+- The public OCI Sigstore bundle and raw digest-matching index are retrieved
+  through GHCR's anonymous Distribution flow. GitHub CLI verifies the private
+  local index without reopening the registry.
+- GHCR blob redirects use their real, tightly validated CDN path shape, and the
+  verifier fixes `github.com`, removes inherited GitHub host and token inputs,
+  logs the effective GitHub CLI version, and requires the attestation command.
+- The anonymous API pull uses an empty private Docker configuration and removes
+  inherited `DOCKER_AUTH_CONFIG` from the exact pull process.
+- The hosted verifier uses the official GitHub CLI 2.97.0 release archive,
+  pinned by its published SHA-256 checksum and enforced again at runtime.
+- The one-shot migration uses Compose's explicit non-interactive mode so the
+  same lifecycle runs without a TTY on hosted CI.
+
+### Not included
+
+- Frontend publication, Phase D, production host automation, real
+  infrastructure changes, and production readiness remain outside this work.
+
 ## 2026-08-01 - Local Container Integration Stack
 
 ### Added

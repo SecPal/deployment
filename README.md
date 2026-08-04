@@ -10,7 +10,8 @@ integration, self-hosting, deployment contracts, container orchestration,
 edge and security integration, and operational procedures for backup,
 restore, and updates.
 
-> Phase B provides a runnable, test-only local integration stack.
+> Phase B and the API image-consumption part of Phase C provide a runnable,
+> test-only local integration stack.
 > It is not a production-ready deployment.
 
 ## Architecture principles
@@ -27,7 +28,7 @@ local integration subset; later phases remain targets:
 - The public edge remains separate from product containers.
 - CrowdSec will be integrated at the public edge.
 - Production secrets are never stored in this repository or in images.
-- Published images will be referenced by immutable digest.
+- Published images are introduced only through reviewed immutable digests.
 - The public self-hosting contract forms the technical basis for private
   managed-hosting automation.
 
@@ -35,7 +36,8 @@ local integration subset; later phases remain targets:
 
 1. Governance bootstrap: complete.
 2. Local API/frontend integration: complete.
-3. Immutable image publishing: not implemented.
+3. Immutable image publishing: in progress. API publication and API digest
+   consumption are implemented; frontend publication remains outstanding.
 4. Public Compose reference deployment: not implemented.
 5. Public edge, TLS, and CrowdSec: not implemented.
 6. Backup, restore, update, and rollback: not implemented.
@@ -45,45 +47,63 @@ local integration subset; later phases remain targets:
 See [the roadmap](docs/roadmap.md) for acceptance criteria and explicit
 non-goals.
 
-## Phase B local integration
+## Phase B local integration and Phase C API image consumption
 
-The public [`compose.yaml`](compose.yaml) builds the API and frontend directly
-from these immutable Git revisions:
+The public [`compose.yaml`](compose.yaml) consumes the verified API OCI index
+by this canonical digest reference:
 
-- API: `6fead9cef910314304048056a7ebed4f10bf5381`;
-- frontend: `fcd427d9b55d7945c439c670077e12928e47ddd6`.
+- `ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
 
-PostgreSQL, Valkey, and the test-only Caddy base are pinned by version and
-digest. The stack exposes one dynamic port on `127.0.0.1` and uses two reserved
-HTTPS origins on that port:
+The frontend remains a source build pinned to Git revision
+`fcd427d9b55d7945c439c670077e12928e47ddd6`. Frontend publication remains
+outstanding. PostgreSQL, Valkey, and the test-only Caddy base remain pinned by
+version and digest.
+
+The stack exposes one dynamic port on `127.0.0.1` and uses two reserved HTTPS
+origins on that port:
 
 - `https://app.secpal.example.invalid:<port>` for the frontend;
 - `https://api.secpal.example.invalid:<port>` for the API.
 
 API, frontend, workers, scheduler, and data services have no published ports.
 
-Run the explicit integration test with Docker Engine, Docker Compose v2,
-Python 3, `curl`, util-linux `setsid`, Node.js 22.22.2, npm dependencies
-installed with `npm ci`, Playwright Chromium installed, GitHub access for the
-pinned source contexts, and registry access for the pinned build inputs:
+The intended explicit integration test requires Docker Engine, Docker Compose
+v2, GitHub CLI 2.97.0 with `gh attestation verify`, Python 3, `curl`, util-linux
+`setsid`, Node.js 22.22.2, npm dependencies installed with `npm ci`, Playwright
+Chromium installed, GitHub access for the pinned frontend source context, and
+anonymous registry access for the pinned inputs:
 
 ```bash
 ./scripts/local-integration.sh
 ```
 
-The script assigns a random Compose project, project-scoped image tags, and an
-available loopback port. An automatically selected port is replaced on a
-detected bind collision, with at most three service-start attempts. The script
-also assigns project-scoped names to the two singleton containers, configures
-the exact local authority for Sanctum's SPA session flow, and trusts only the
-API request's immediate proxy address. It builds the pinned images, generates
-random test-only secrets inside a private runtime volume without printing them,
-starts private PostgreSQL and Valkey services, runs migrations exactly once,
-and starts the explicit service roles. It then proves Valkey cache and queue
-round trips, worker-to-queue ownership, shared visibility of the disposable
-private-storage volume, exact credentialed CORS, and the separate app/API
-origins. Playwright Chromium exercises the actual Compose frontend and API,
-including the Sanctum CSRF handshake, an intentionally unsuccessful login,
+GitHub CLI currently applies its GitHub authentication gate to the direct
+`--bundle-from-oci` mode. The runner does not provide a GitHub token to bypass
+that gate. Instead, it retrieves both the public Sigstore bundle and the exact
+raw OCI index through GHCR's anonymous OCI Distribution flow. The runner
+validates the referrer, manifests, subject, layer digests, sizes, and media
+types, then gives the private, digest-matching local index and bundle to
+`gh attestation verify --bundle`. GitHub CLI therefore hashes the reviewed
+local index instead of reopening the registry. Verification uses the exact
+reviewed GitHub CLI 2.97.0, runs against an empty GitHub configuration, fixes
+the host to `github.com`, disables prompting, updates, and telemetry, and
+removes all GitHub, Docker, and registry configuration variables. The temporary
+index and bundle are removed on success, failure, and signals.
+
+The sequence validates every API role against the canonical digest and pulls it
+with a new empty Docker configuration while removing any inherited
+`DOCKER_AUTH_CONFIG` from that exact pull process. It then retrieves and
+validates the public OCI attestation bundle and requires successful GitHub
+Artifact Attestation verification before any API-based role may run. Only after
+that gate succeeds does the script build the project-scoped frontend and
+gateway images, generate random test-only secrets inside a private runtime
+volume without printing them, start private PostgreSQL and Valkey services, run
+migrations exactly once, and start the explicit service roles. The published
+API image is not a local cleanup artifact. The runner then proves Valkey cache
+and queue round trips, worker-to-queue ownership, shared visibility of the
+disposable private-storage volume, exact credentialed CORS, and the separate
+app/API origins. Playwright Chromium exercises the actual Compose frontend and
+API, including the Sanctum CSRF handshake, an intentionally unsuccessful login,
 secure cookie attributes, CSP, service-worker registration, and runtime API
 routing. Successful completion means its containers, networks, volumes,
 images, database data, private files, certificates, and secrets were removed.
@@ -122,6 +142,11 @@ This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use
 production credentials, or select the future production edge.
 
+Phase C is in progress. API publication and token-free, fail-closed API digest
+consumption are implemented. Frontend publication remains outstanding. Digest
+provenance, reviewed updates, and rollback are detailed in
+[`docs/api-image-consumption.md`](docs/api-image-consumption.md).
+
 ## Security
 
 Never commit secrets, `.env` files, private keys,
@@ -146,9 +171,9 @@ Docker-backed integration test is a separate, explicit command.
 
 Product code remains in [`SecPal/api`](https://github.com/SecPal/api) and
 [`SecPal/frontend`](https://github.com/SecPal/frontend). Their Dockerfiles and
-build logic are not copied here. Phase B builds their existing Dockerfiles from
-exactly pinned source revisions. Future published images and their provenance
-contract belong to Phase C. This repository does not fork product build logic.
+build logic are not copied here. The API follows the reviewed Phase C digest
+contract; the frontend still builds its existing Dockerfile from an exactly
+pinned source revision. This repository does not fork product build logic.
 
 The detailed ownership and trust boundaries are documented in
 [`docs/architecture/scope.md`](docs/architecture/scope.md).

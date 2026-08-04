@@ -48,7 +48,7 @@ for path in \
   require_file "$path"
 done
 
-require_text compose.yaml "https://github.com/SecPal/api.git#6fead9cef910314304048056a7ebed4f10bf5381"
+require_text compose.yaml "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
 require_text compose.yaml "https://github.com/SecPal/frontend.git#fcd427d9b55d7945c439c670077e12928e47ddd6"
 require_text compose.yaml "127.0.0.1:\${SECPAL_PHASE_B_PORT:-8443}:8443"
 # The Compose interpolation must remain literal.
@@ -61,7 +61,6 @@ require_text compose.yaml 'FRONTEND_URL: https://app.secpal.example.invalid:${SE
 # The Compose interpolation must remain literal.
 # shellcheck disable=SC2016
 require_text compose.yaml 'SECPAL_API_URL: https://api.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}'
-require_text compose.yaml "\${SECPAL_PHASE_B_API_IMAGE:-secpal-api:phase-b-6fead9cef910}"
 require_text compose.yaml "\${SECPAL_PHASE_B_FRONTEND_IMAGE:-secpal-frontend:phase-b-fcd427d9b55d}"
 require_text compose.yaml "\${SECPAL_PHASE_B_GATEWAY_IMAGE:-secpal-test-gateway:phase-b-2.10.2}"
 # The Compose interpolation must remain literal.
