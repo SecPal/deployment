@@ -4,7 +4,6 @@
 
 set -euo pipefail
 
-readonly API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
 readonly SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
 
 if [ "${1:-}" = attestation ] && [ "${2:-}" = verify ] && [ "${3:-}" = --help ]; then
@@ -30,9 +29,10 @@ if [ "${1:-}" != attestation ] || [ "${2:-}" != verify ]; then
 fi
 
 actual_args=("${@:3}")
+subject_path="${actual_args[0]:-}"
 bundle_path="${actual_args[2]:-}"
 expected_args=(
-  "oci://$API_IMAGE"
+  "$subject_path"
   --bundle
   "$bundle_path"
   --repo
@@ -59,6 +59,11 @@ if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ] ||
   exit 72
 fi
 
+if [ "${DOCKER_CONFIG+x}" = x ] || [ "${DOCKER_AUTH_CONFIG+x}" = x ]; then
+  printf 'fixture rejected Docker registry configuration in local verification\n' >&2
+  exit 72
+fi
+
 if [ -n "${GH_HOST:-}" ]; then
   printf 'fixture rejected inherited GitHub host selection\n' >&2
   exit 72
@@ -77,6 +82,14 @@ if [ -z "${GH_CONFIG_DIR:-}" ] || [ ! -d "$GH_CONFIG_DIR" ] ||
   exit 73
 fi
 
+if [ "${subject_path##*/}" != api-image-index.json ] ||
+  [ ! -f "$subject_path" ] ||
+  [ "$(stat -c '%a' "$subject_path")" != 600 ] ||
+  [ ! -s "$subject_path" ]; then
+  printf 'fixture rejected a missing or insecure local OCI subject\n' >&2
+  exit 74
+fi
+
 if [ "${bundle_path##*/}" != api-attestation.json ] ||
   [ ! -f "$bundle_path" ] ||
   [ "$(stat -c '%a' "$bundle_path")" != 600 ] ||
@@ -85,7 +98,6 @@ if [ "${bundle_path##*/}" != api-attestation.json ] ||
   exit 74
 fi
 
-observed_subject="$API_IMAGE"
 observed_source_commit="$SOURCE_COMMIT"
 observed_workflow='SecPal/api/.github/workflows/publish-container.yml'
 observed_runner='github-hosted'
@@ -103,7 +115,12 @@ case "${SECPAL_TEST_ATTESTATION_RESULT:-success}" in
     observed_workflow='SecPal/api/.github/workflows/untrusted.yml'
     ;;
   wrong-subject-digest)
-    observed_subject='ghcr.io/secpal/api@sha256:6a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
+    printf 'fixture rejected subject digest mismatch\n' >&2
+    exit 76
+    ;;
+  wrong-subject-name)
+    printf 'fixture rejected subject name mismatch\n' >&2
+    exit 76
     ;;
   self-hosted)
     observed_runner='self-hosted'
@@ -111,10 +128,6 @@ case "${SECPAL_TEST_ATTESTATION_RESULT:-success}" in
   *) exit 76 ;;
 esac
 
-if [ "${actual_args[0]}" != "oci://$observed_subject" ]; then
-  printf 'fixture rejected subject digest mismatch\n' >&2
-  exit 76
-fi
 if [ "${actual_args[6]}" != "$observed_workflow" ]; then
   printf 'fixture rejected signer workflow mismatch\n' >&2
   exit 77

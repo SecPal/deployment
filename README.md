@@ -68,7 +68,7 @@ origins on that port:
 API, frontend, workers, scheduler, and data services have no published ports.
 
 The intended explicit integration test requires Docker Engine, Docker Compose
-v2, GitHub CLI with `gh attestation verify`, Python 3, `curl`, util-linux
+v2, GitHub CLI 2.97.0 with `gh attestation verify`, Python 3, `curl`, util-linux
 `setsid`, Node.js 22.22.2, npm dependencies installed with `npm ci`, Playwright
 Chromium installed, GitHub access for the pinned frontend source context, and
 anonymous registry access for the pinned inputs:
@@ -79,15 +79,16 @@ anonymous registry access for the pinned inputs:
 
 GitHub CLI currently applies its GitHub authentication gate to the direct
 `--bundle-from-oci` mode. The runner does not provide a GitHub token to bypass
-that gate. Instead, it retrieves the public Sigstore bundle through GHCR's
-anonymous OCI Distribution flow, validates the referrer, manifest, subject,
-layer digests, sizes, and media types, and supplies the private temporary
-bundle to `gh attestation verify --bundle`. Verification runs against an empty
-GitHub CLI configuration, logs the effective CLI version, checks the required
-attestation capability, fixes the CLI host to `github.com`, disables prompting,
-update notifications, and telemetry, and removes all GitHub token and
-host-selection variables. The temporary bundle is removed on success, failure,
-and signals.
+that gate. Instead, it retrieves both the public Sigstore bundle and the exact
+raw OCI index through GHCR's anonymous OCI Distribution flow. The runner
+validates the referrer, manifests, subject, layer digests, sizes, and media
+types, then gives the private, digest-matching local index and bundle to
+`gh attestation verify --bundle`. GitHub CLI therefore hashes the reviewed
+local index instead of reopening the registry. Verification uses the exact
+reviewed GitHub CLI 2.97.0, runs against an empty GitHub configuration, fixes
+the host to `github.com`, disables prompting, updates, and telemetry, and
+removes all GitHub, Docker, and registry configuration variables. The temporary
+index and bundle are removed on success, failure, and signals.
 
 The sequence validates every API role against the canonical digest and pulls it
 with a new empty Docker configuration while removing any inherited

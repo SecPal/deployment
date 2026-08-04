@@ -116,8 +116,9 @@ Phase B:
 Before any API-based role runs, the real integration runner validates the
 resolved Compose image, anonymously pulls the exact digest with an empty
 Docker configuration, retrieves and validates the digest-bound OCI Sigstore
-bundle anonymously, and verifies its Artifact Attestation offline against the
-fixed repository, workflow, source ref, and source commit. It then exercises
+bundle and raw index anonymously, and verifies the local digest-matching index
+against that bundle and the fixed repository, workflow, source ref, and source
+commit without reopening the registry. It then exercises
 liveness, the frontend document, runtime API origin, CORS, Sanctum CSRF and
 cookie behavior, Valkey cache and queue round trips, worker ownership, shared
 private storage, explicit migration, browser CSP and service-worker behavior,

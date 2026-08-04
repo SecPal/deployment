@@ -61,6 +61,8 @@ automatic_port=0
 PROBE_SCRIPT=/run/secpal/phase-b-runtime-probe.php
 readonly EXPECTED_API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
 readonly API_SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
+readonly EXPECTED_GH_VERSION='2.97.0'
+readonly ATTESTATION_SUBJECT="$TEMP_DIR/api-image-index.json"
 readonly ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"
 readonly ANONYMOUS_GH_CONFIG="$TEMP_DIR/anonymous-gh-config"
 
@@ -104,7 +106,7 @@ run_isolated_gh() {
     GH_NO_UPDATE_NOTIFIER=1 \
     GH_NO_EXTENSION_UPDATE_NOTIFIER=1 \
     GH_TELEMETRY=false \
-    env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST \
+    env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST -u DOCKER_CONFIG -u DOCKER_AUTH_CONFIG \
     gh "$@"
 }
 
@@ -156,6 +158,10 @@ if ! gh_version_output="$(run_isolated_gh version)"; then
   fail "the installed GitHub CLI version could not be determined."
 fi
 gh_version_line="${gh_version_output%%$'\n'*}"
+case "$gh_version_line" in
+  "gh version $EXPECTED_GH_VERSION" | "gh version $EXPECTED_GH_VERSION "*) ;;
+  *) fail "GitHub CLI $EXPECTED_GH_VERSION is required; found $gh_version_line." ;;
+esac
 
 run_isolated_gh attestation verify --help >/dev/null 2>&1 ||
   fail "the installed GitHub CLI does not support artifact attestation verification."
@@ -252,12 +258,12 @@ env -u DOCKER_AUTH_CONFIG \
   docker pull "$API_IMAGE"
 
 if ! env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST \
-  python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"; then
+  python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_SUBJECT" "$ATTESTATION_BUNDLE"; then
   fail "anonymous OCI attestation bundle retrieval failed."
 fi
 
-if ! DOCKER_CONFIG="$ANON_DOCKER_CONFIG" run_isolated_gh attestation verify \
-  "oci://$API_IMAGE" \
+if ! run_isolated_gh attestation verify \
+  "$ATTESTATION_SUBJECT" \
   --bundle "$ATTESTATION_BUNDLE" \
   --repo SecPal/api \
   --signer-workflow SecPal/api/.github/workflows/publish-container.yml \

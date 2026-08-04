@@ -137,10 +137,12 @@ printf '%s\n' \
   '#!/bin/sh' \
   'set -eu' \
   'if [ "${1##*/}" = fetch-oci-attestation.py ]; then' \
-  '  output_path="${2:?}"' \
-  '  printf "%s\t\t\t\t\t\tpython3 fetch-oci-attestation %s\t%s\t%s\n" "${SECPAL_TEST_RUN_ID:-unknown}" "$output_path" "${DOCKER_CONFIG:-}" "${GH_CONFIG_DIR:-}" >>"${SECPAL_TEST_COMMAND_LOG:?}"' \
-  '  (umask 077 && printf "{\"fixture\":\"offline-attestation\"}\n" >"$output_path")' \
-  '  chmod 0600 "$output_path"' \
+  '  subject_path="${2:?}"' \
+  '  bundle_path="${3:?}"' \
+  '  printf "%s\t\t\t\t\t\tpython3 fetch-oci-attestation %s %s\t%s\t%s\n" "${SECPAL_TEST_RUN_ID:-unknown}" "$subject_path" "$bundle_path" "${DOCKER_CONFIG:-}" "${GH_CONFIG_DIR:-}" >>"${SECPAL_TEST_COMMAND_LOG:?}"' \
+  '  (umask 077 && printf "{\"fixture\":\"oci-index\"}\n" >"$subject_path")' \
+  '  (umask 077 && printf "{\"fixture\":\"offline-attestation\"}\n" >"$bundle_path")' \
+  '  chmod 0600 "$subject_path" "$bundle_path"' \
   '  exit 0' \
   'fi' \
   'count=0' \
@@ -183,7 +185,7 @@ for invalid_port in invalid 80 65536; do
 done
 
 : >"$COMMAND_LOG"
-if ! env \
+if env \
   PATH="$FAKE_BIN:$PATH" \
   "${INHERITED_GH_ENVIRONMENT[@]}" \
   "${INHERITED_DOCKER_ENVIRONMENT[@]}" \
@@ -191,12 +193,33 @@ if ! env \
   SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
   SECPAL_TEST_CURL_LOG="$CURL_LOG" \
   SECPAL_TEST_GH_VERSION=2.96.0 \
+  SECPAL_TEST_RUN_ID=gh-version-mismatch \
+  bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/gh-version-mismatch.out" 2>&1; then
+  fail "an unreviewed GitHub CLI version was accepted"
+elif ! grep -Fq 'GitHub CLI 2.97.0 is required; found gh version 2.96.0 (fixture).' \
+  "$TEMP_DIR/gh-version-mismatch.out"; then
+  fail "the GitHub CLI version mismatch did not fail at the exact version gate"
+fi
+if awk -F '\t' '$1 == "gh-version-mismatch" && $7 ~ /^pull / { found = 1 } END { exit !found }' \
+  "$COMMAND_LOG"; then
+  fail "an unreviewed GitHub CLI version reached the API pull"
+fi
+
+: >"$COMMAND_LOG"
+if ! env \
+  PATH="$FAKE_BIN:$PATH" \
+  "${INHERITED_GH_ENVIRONMENT[@]}" \
+  "${INHERITED_DOCKER_ENVIRONMENT[@]}" \
+  SECPAL_PHASE_B_PORT=18441 \
+  SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+  SECPAL_TEST_CURL_LOG="$CURL_LOG" \
+  SECPAL_TEST_GH_VERSION=2.97.0 \
   SECPAL_TEST_RUN_ID=gh-version \
   bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/gh-version.out" 2>&1; then
-  fail "a capable hosted-runner GitHub CLI version was rejected"
+  fail "the reviewed GitHub CLI version was rejected"
 fi
-if ! grep -Fq 'GitHub CLI: gh version 2.96.0 (fixture)' "$TEMP_DIR/gh-version.out"; then
-  fail "the effective hosted-runner GitHub CLI version was not logged"
+if ! grep -Fq 'GitHub CLI: gh version 2.97.0 (fixture)' "$TEMP_DIR/gh-version.out"; then
+  fail "the exact reviewed GitHub CLI version was not logged"
 fi
 if ! awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
   fail "the capable hosted-runner GitHub CLI did not reach the API pull"
@@ -242,7 +265,7 @@ if awk -F '\t' '$1 == "gh-capability" && $7 ~ /^pull / { found = 1 } END { exit 
   fail "a GitHub CLI without attestation verification support reached the API pull"
 fi
 
-for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wrong-subject-digest self-hosted; do
+for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wrong-subject-digest wrong-subject-name self-hosted; do
   : >"$COMMAND_LOG"
   run_id="gate-$gate_case"
   gate_environment=(SECPAL_TEST_ATTESTATION_RESULT=success)
@@ -275,6 +298,7 @@ for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wron
     wrong-source-commit) expected_attestation_error='fixture rejected source digest mismatch' ;;
     wrong-workflow) expected_attestation_error='fixture rejected signer workflow mismatch' ;;
     wrong-subject-digest) expected_attestation_error='fixture rejected subject digest mismatch' ;;
+    wrong-subject-name) expected_attestation_error='fixture rejected subject name mismatch' ;;
     self-hosted) expected_attestation_error='fixture rejected self-hosted runner' ;;
   esac
   if [ -n "$expected_attestation_error" ] &&
@@ -292,9 +316,11 @@ for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wron
   if [ -z "$anon_config" ] || [ -e "$anon_config" ]; then
     fail "$gate_case gate failure did not remove its anonymous Docker configuration"
   fi
-  bundle_path="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
-  if [ "$gate_case" != pull ] && { [ -z "$bundle_path" ] || [ -e "$bundle_path" ]; }; then
-    fail "$gate_case did not remove its offline attestation bundle"
+  subject_path="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
+  bundle_path="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $4 }')"
+  if [ "$gate_case" != pull ] && { [ -z "$subject_path" ] || [ -e "$subject_path" ] ||
+    [ -z "$bundle_path" ] || [ -e "$bundle_path" ]; }; then
+    fail "$gate_case did not remove its local OCI subject and offline attestation bundle"
   fi
   if [ "$gate_case" != pull ] && [ "$gate_case" != bundle ]; then
     anonymous_gh_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $9; exit }' "$COMMAND_LOG")"
@@ -353,9 +379,11 @@ else
     [ -e "$signal_gh_config" ]; then
     fail "the integration script did not isolate and remove its GitHub CLI configuration after SIGTERM"
   fi
-  signal_bundle="$(awk -F '\t' '$1 == "signal" && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
-  if [ -z "$signal_bundle" ] || [ -e "$signal_bundle" ]; then
-    fail "the integration script did not remove its offline attestation bundle after SIGTERM"
+  signal_subject="$(awk -F '\t' '$1 == "signal" && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
+  signal_bundle="$(awk -F '\t' '$1 == "signal" && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $4 }')"
+  if [ -z "$signal_subject" ] || [ -e "$signal_subject" ] ||
+    [ -z "$signal_bundle" ] || [ -e "$signal_bundle" ]; then
+    fail "the integration script did not remove its local OCI subject and offline bundle after SIGTERM"
   fi
 fi
 children=()
@@ -460,8 +488,8 @@ for run_id in one two; do
 
   anon_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print $8; exit }' "$COMMAND_LOG")"
   verify_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $8; exit }' "$COMMAND_LOG")"
-  if [ -z "$anon_config" ] || [ "$anon_config" != "$verify_config" ] || [ -e "$anon_config" ]; then
-    fail "parallel run $run_id did not isolate and remove its anonymous Docker configuration"
+  if [ -z "$anon_config" ] || [ -n "$verify_config" ] || [ -e "$anon_config" ]; then
+    fail "parallel run $run_id did not isolate the pull and remove Docker configuration from local verification"
   fi
   anonymous_gh_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $9; exit }' "$COMMAND_LOG")"
   if [ -z "$anonymous_gh_config" ] ||
@@ -469,9 +497,11 @@ for run_id in one two; do
     [ -e "$anonymous_gh_config" ]; then
     fail "parallel run $run_id did not isolate and remove its anonymous GitHub CLI configuration"
   fi
-  offline_bundle="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
-  if [ -z "$offline_bundle" ] || [ -e "$offline_bundle" ]; then
-    fail "parallel run $run_id did not remove its offline attestation bundle"
+  local_subject="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
+  offline_bundle="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $4 }')"
+  if [ -z "$local_subject" ] || [ -e "$local_subject" ] ||
+    [ -z "$offline_bundle" ] || [ -e "$offline_bundle" ]; then
+    fail "parallel run $run_id did not remove its local OCI subject and offline bundle"
   fi
 done
 

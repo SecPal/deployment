@@ -2,10 +2,12 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Fetch the reviewed SecPal API Sigstore bundle from public GHCR metadata."""
+"""Fetch the reviewed API index and Sigstore bundle from public GHCR metadata."""
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -21,6 +23,7 @@ from typing import Any, Callable
 
 REGISTRY = "ghcr.io"
 REPOSITORY = "secpal/api"
+SUBJECT_NAME = "ghcr.io/secpal/api"
 SUBJECT_DIGEST = (
     "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
 )
@@ -274,12 +277,53 @@ def _select_bundle_layer(manifest: dict[str, Any]) -> tuple[str, int]:
 
 def _validate_bundle_shape(body: bytes) -> None:
     bundle = _parse_object(body, "Sigstore bundle")
+    envelope = bundle.get("dsseEnvelope")
     if (
         bundle.get("mediaType") != BUNDLE_MEDIA_TYPE
-        or not isinstance(bundle.get("dsseEnvelope"), dict)
+        or not isinstance(envelope, dict)
         or not isinstance(bundle.get("verificationMaterial"), dict)
     ):
         raise ValueError("Sigstore bundle shape was invalid")
+    payload = envelope.get("payload")
+    if (
+        envelope.get("payloadType") != "application/vnd.in-toto+json"
+        or not isinstance(payload, str)
+    ):
+        raise ValueError("Sigstore DSSE envelope shape was invalid")
+    try:
+        statement_body = base64.b64decode(payload, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("Sigstore statement payload was not valid base64") from error
+    statement = _parse_object(statement_body, "Sigstore statement")
+    subjects = statement.get("subject")
+    expected_digest = SUBJECT_DIGEST.removeprefix("sha256:")
+    if (
+        statement.get("_type") != "https://in-toto.io/Statement/v1"
+        or statement.get("predicateType") != SLSA_PREDICATE
+        or not isinstance(subjects, list)
+        or len(subjects) != 1
+        or not isinstance(subjects[0], dict)
+        or subjects[0].get("name") != SUBJECT_NAME
+        or not isinstance(subjects[0].get("digest"), dict)
+        or subjects[0]["digest"].get("sha256") != expected_digest
+    ):
+        raise ValueError(
+            "Sigstore statement subject identity was not the reviewed API image"
+        )
+
+
+def _validate_subject_index(body: bytes) -> None:
+    observed_digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
+    if observed_digest != SUBJECT_DIGEST:
+        raise ValueError("subject index digest was not the reviewed API digest")
+    index = _parse_object(body, "OCI subject index")
+    if (
+        index.get("schemaVersion") != 2
+        or index.get("mediaType") != OCI_INDEX_MEDIA_TYPE
+        or not isinstance(index.get("manifests"), list)
+        or not index["manifests"]
+    ):
+        raise ValueError("OCI subject index shape was invalid")
 
 
 def _write_private_file(path: Path, body: bytes) -> None:
@@ -300,11 +344,24 @@ def _write_private_file(path: Path, body: bytes) -> None:
         raise
 
 
-def fetch_bundle(output_path: Path, request_bytes: RequestBytes = _request_bytes) -> None:
+def fetch_bundle(
+    output_path: Path,
+    request_bytes: RequestBytes = _request_bytes,
+    subject_output_path: Path | None = None,
+) -> None:
     if output_path.exists() or output_path.is_symlink():
         raise FileExistsError(f"refusing to overwrite existing path: {output_path}")
     if not output_path.parent.is_dir():
         raise FileNotFoundError(f"bundle output directory does not exist: {output_path.parent}")
+    if subject_output_path is not None:
+        if subject_output_path.exists() or subject_output_path.is_symlink():
+            raise FileExistsError(
+                f"refusing to overwrite existing path: {subject_output_path}"
+            )
+        if not subject_output_path.parent.is_dir():
+            raise FileNotFoundError(
+                f"subject output directory does not exist: {subject_output_path.parent}"
+            )
 
     _status, content_type, token_body = request_bytes(
         TOKEN_URL,
@@ -321,6 +378,19 @@ def fetch_bundle(output_path: Path, request_bytes: RequestBytes = _request_bytes
         "Accept": OCI_INDEX_MEDIA_TYPE,
         "Authorization": f"Bearer {token}",
     }
+    subject_body = b""
+    if subject_output_path is not None:
+        status, content_type, subject_body = request_bytes(
+            manifest_url(SUBJECT_DIGEST),
+            registry_headers,
+            MANIFEST_RESPONSE_LIMIT,
+            frozenset({200}),
+        )
+        if status != 200:
+            raise RuntimeError("OCI subject index was unavailable")
+        _require_media_type(content_type, OCI_INDEX_MEDIA_TYPE, "OCI subject index")
+        _validate_subject_index(subject_body)
+
     status, content_type, index_body = request_bytes(
         REFERRERS_URL,
         registry_headers,
@@ -373,15 +443,27 @@ def fetch_bundle(output_path: Path, request_bytes: RequestBytes = _request_bytes
         raise ValueError("OCI attestation bundle media type was invalid")
     _validate_bytes(bundle_body, bundle_digest, bundle_size, "bundle")
     _validate_bundle_shape(bundle_body)
-    _write_private_file(output_path, bundle_body)
+    if subject_output_path is None:
+        _write_private_file(output_path, bundle_body)
+        return
+
+    _write_private_file(subject_output_path, subject_body)
+    try:
+        _write_private_file(output_path, bundle_body)
+    except BaseException:
+        subject_output_path.unlink(missing_ok=True)
+        raise
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(f"Usage: {Path(argv[0]).name} OUTPUT_PATH", file=sys.stderr)
+    if len(argv) != 3:
+        print(
+            f"Usage: {Path(argv[0]).name} SUBJECT_OUTPUT_PATH BUNDLE_OUTPUT_PATH",
+            file=sys.stderr,
+        )
         return 2
     try:
-        fetch_bundle(Path(argv[1]))
+        fetch_bundle(Path(argv[2]), subject_output_path=Path(argv[1]))
     except (OSError, RuntimeError, ValueError) as error:
         print(f"ERROR: anonymous OCI attestation bundle retrieval failed: {error}", file=sys.stderr)
         return 1

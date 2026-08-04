@@ -66,10 +66,11 @@ provisioning, durable storage, and production operations.
 **Implemented:** API publication and the fail-closed API digest consumption
 target contract are implemented. The public local integration contract pins
 the verified SecPal API image by canonical OCI index digest, anonymously pulls
-that digest, anonymously retrieves and validates its OCI Sigstore bundle, and
-requires its GitHub Artifact Attestation before API execution. No GitHub or
-registry account credentials are used. The phase remains incomplete because
-frontend publication is still outstanding.
+that digest, anonymously retrieves and validates its raw OCI index and Sigstore
+bundle, and verifies the private digest-matching index with the pinned GitHub
+CLI before API execution. No GitHub or registry account credentials are used,
+and the verifier does not reopen the registry. The phase remains incomplete
+because frontend publication is still outstanding.
 
 **Expected artifacts:** Completed API and frontend version and digest
 contracts, provenance policy, image signing policy, and publication

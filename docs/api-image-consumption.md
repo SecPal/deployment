@@ -41,10 +41,12 @@ removes inherited `DOCKER_AUTH_CONFIG` only from the exact `docker pull`
 process. The runner therefore cannot reuse either file-backed or environment-
 provided Docker registry credentials for the reviewed API digest.
 
-The integration uses the GitHub CLI already provided by the GitHub-hosted
-runner. The integration script logs the effective version, checks for
-`gh attestation verify`, and fails closed if the required capability is
-missing. It does not install an unpinned CLI or introduce a GitHub token.
+The hosted workflow installs the official GitHub CLI `2.97.0` Linux AMD64
+release archive and verifies its published SHA-256 checksum
+`a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112`
+before use. The integration runner requires that exact version, checks for
+`gh attestation verify`, and fails closed before the API pull if either contract
+does not match. It does not introduce a GitHub token.
 
 ## Token-free OCI bundle verification
 
@@ -59,22 +61,28 @@ variables unset and uses the OCI Distribution contract directly instead. It:
 4. accepts only default-port HTTPS blob redirects to GitHub's exact
    `pkg-containers.githubusercontent.com/ghcrblobs<number>/blobs/sha256:<digest>`
    path shape, without forwarding registry authorization;
-5. verifies the descriptor, manifest, subject, layer digests, sizes, and media
-   types against the canonical API digest;
-6. writes the bundle to a mode-`0600` file in the private integration temporary
-   directory; and
-7. invokes `gh attestation verify --bundle` with the fixed GitHub.com hostname,
-   repository, workflow, ref, commit, digest, and GitHub-hosted-runner policy.
+5. fetches the raw canonical OCI index and verifies that its SHA-256 is exactly
+   the reviewed subject digest;
+6. verifies the descriptor, manifest, subject, layer digests, sizes, and media
+   types against that canonical API digest;
+7. writes the raw index and bundle to separate mode-`0600` files in the private
+   integration temporary directory; and
+8. invokes `gh attestation verify --bundle` on the private local index with the
+   fixed GitHub.com hostname, repository, workflow, ref, commit, digest, and
+   GitHub-hosted-runner policy.
 
 The anonymous registry bearer and signed blob redirect exist only in process
 memory. They are neither account credentials nor persisted configuration and
 are never logged. Cross-host redirects are restricted to GitHub's container
 blob host, default HTTPS port, and canonical GHCR blob path shape, and the
 registry Authorization header is removed before following the redirect.
-Verification removes GitHub.com and GitHub Enterprise token variables and any
-inherited `GH_HOST`, passes `--hostname github.com`, and disables prompting,
-update notifications, and telemetry. The temporary bundle and empty
-Docker/GitHub configurations are removed on success, failure, and signals.
+Verification removes GitHub.com and GitHub Enterprise token variables, Docker
+configuration variables, and any inherited `GH_HOST`; it passes
+`--hostname github.com` and disables prompting, update notifications, and
+telemetry. Because the artifact argument is the digest-validated local OCI
+index rather than an `oci://` reference, GitHub CLI does not reopen the
+registry. The temporary index, bundle, and empty Docker/GitHub configurations
+are removed on success, failure, and signals.
 
 The digest-derived OCI Referrers fallback is metadata transport only. It is
 never an API image, deployment, discovery, or rollback reference.

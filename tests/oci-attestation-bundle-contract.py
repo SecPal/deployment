@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import io
@@ -46,10 +47,43 @@ class RegistryFixture:
         self.fetcher = fetcher
         self.calls: list[tuple[str, dict[str, str]]] = []
         self.referrers_status = 404
+        self.subject = json_bytes(
+            {
+                "manifests": [
+                    {
+                        "digest": f"sha256:{'1' * 64}",
+                        "mediaType": fetcher.OCI_MANIFEST_MEDIA_TYPE,
+                        "platform": {"architecture": "amd64", "os": "linux"},
+                        "size": 1024,
+                    },
+                    {
+                        "digest": f"sha256:{'2' * 64}",
+                        "mediaType": fetcher.OCI_MANIFEST_MEDIA_TYPE,
+                        "platform": {"architecture": "arm64", "os": "linux"},
+                        "size": 1024,
+                    },
+                ],
+                "mediaType": fetcher.OCI_INDEX_MEDIA_TYPE,
+                "schemaVersion": 2,
+            }
+        )
+        self.subject_digest = digest(self.subject)
+        fetcher.SUBJECT_DIGEST = self.subject_digest
+        self.statement = {
+            "_type": "https://in-toto.io/Statement/v1",
+            "predicate": {},
+            "predicateType": fetcher.SLSA_PREDICATE,
+            "subject": [
+                {
+                    "digest": {"sha256": self.subject_digest.removeprefix("sha256:")},
+                    "name": fetcher.SUBJECT_NAME,
+                }
+            ],
+        }
         self.bundle = json_bytes(
             {
                 "dsseEnvelope": {
-                    "payload": "fixture",
+                    "payload": base64.b64encode(json_bytes(self.statement)).decode(),
                     "payloadType": "application/vnd.in-toto+json",
                     "signatures": [],
                 },
@@ -82,7 +116,7 @@ class RegistryFixture:
                 "subject": {
                     "digest": fetcher.SUBJECT_DIGEST,
                     "mediaType": fetcher.OCI_INDEX_MEDIA_TYPE,
-                    "size": 1609,
+                    "size": len(self.subject),
                 },
             }
         )
@@ -106,6 +140,28 @@ class RegistryFixture:
             }
         )
 
+    def replace_bundle_subject(self, name: str, subject_digest: str) -> None:
+        statement = json.loads(json.dumps(self.statement))
+        statement["subject"][0] = {
+            "digest": {"sha256": subject_digest.removeprefix("sha256:")},
+            "name": name,
+        }
+        bundle = json.loads(self.bundle)
+        bundle["dsseEnvelope"]["payload"] = base64.b64encode(
+            json_bytes(statement)
+        ).decode()
+        self.bundle = json_bytes(bundle)
+        self.bundle_digest = digest(self.bundle)
+        manifest = json.loads(self.manifest)
+        manifest["layers"][0]["digest"] = self.bundle_digest
+        manifest["layers"][0]["size"] = len(self.bundle)
+        self.manifest = json_bytes(manifest)
+        self.manifest_digest = digest(self.manifest)
+        index = json.loads(self.index)
+        index["manifests"][0]["digest"] = self.manifest_digest
+        index["manifests"][0]["size"] = len(self.manifest)
+        self.index = json_bytes(index)
+
     def request(
         self,
         url: str,
@@ -120,6 +176,8 @@ class RegistryFixture:
             return 200, "application/json", json_bytes({"token": "anonymous-fixture"})
 
         self.assert_anonymous_bearer(headers)
+        if url == self.fetcher.manifest_url(self.fetcher.SUBJECT_DIGEST):
+            return 200, self.fetcher.OCI_INDEX_MEDIA_TYPE, self.subject
         if url == self.fetcher.REFERRERS_URL:
             if self.referrers_status not in allowed_statuses:
                 raise AssertionError("fixture referrer status was not allowed")
@@ -176,21 +234,60 @@ class OciAttestationBundleContractTest(unittest.TestCase):
     def test_fetches_fallback_referrer_and_writes_verified_private_bundle(self) -> None:
         fixture = RegistryFixture(self.fetcher)
         with tempfile.TemporaryDirectory() as temp_dir:
+            subject = Path(temp_dir) / "api-image-index.json"
             output = Path(temp_dir) / "attestation.json"
-            self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
+            self.fetcher.fetch_bundle(
+                output,
+                request_bytes=fixture.request,
+                subject_output_path=subject,
+            )
 
+            self.assertEqual(subject.read_bytes(), fixture.subject)
+            self.assertEqual(stat.S_IMODE(subject.stat().st_mode), 0o600)
             self.assertEqual(output.read_bytes(), fixture.bundle)
             self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
             self.assertEqual(
                 [url for url, _headers in fixture.calls],
                 [
                     self.fetcher.TOKEN_URL,
+                    self.fetcher.manifest_url(fixture.subject_digest),
                     self.fetcher.REFERRERS_URL,
                     self.fetcher.FALLBACK_INDEX_URL,
                     self.fetcher.manifest_url(fixture.manifest_digest),
                     self.fetcher.blob_url(fixture.bundle_digest),
                 ],
             )
+
+    def test_rejects_subject_index_digest_mismatch_without_writing_outputs(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+        fixture.subject += b"\n"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subject = Path(temp_dir) / "api-image-index.json"
+            output = Path(temp_dir) / "attestation.json"
+            with self.assertRaisesRegex(ValueError, "subject index digest"):
+                self.fetcher.fetch_bundle(
+                    output,
+                    request_bytes=fixture.request,
+                    subject_output_path=subject,
+                )
+            self.assertFalse(subject.exists())
+            self.assertFalse(output.exists())
+
+    def test_refuses_to_overwrite_an_existing_subject_path(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subject = Path(temp_dir) / "api-image-index.json"
+            output = Path(temp_dir) / "attestation.json"
+            subject.write_text("existing")
+            with self.assertRaises(FileExistsError):
+                self.fetcher.fetch_bundle(
+                    output,
+                    request_bytes=fixture.request,
+                    subject_output_path=subject,
+                )
+            self.assertEqual(subject.read_text(), "existing")
+            self.assertFalse(output.exists())
 
     def test_rejects_wrong_subject_before_writing_bundle(self) -> None:
         fixture = RegistryFixture(self.fetcher)
@@ -208,6 +305,29 @@ class OciAttestationBundleContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "attestation.json"
             with self.assertRaisesRegex(ValueError, "subject digest"):
+                self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
+            self.assertFalse(output.exists())
+
+    def test_rejects_wrong_signed_statement_subject_name(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+        fixture.replace_bundle_subject("ghcr.io/secpal/not-api", fixture.subject_digest)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            with self.assertRaisesRegex(ValueError, "statement subject identity"):
+                self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
+            self.assertFalse(output.exists())
+
+    def test_rejects_wrong_signed_statement_subject_digest(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+        fixture.replace_bundle_subject(
+            self.fetcher.SUBJECT_NAME,
+            f"sha256:{'9' * 64}",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            with self.assertRaisesRegex(ValueError, "statement subject identity"):
                 self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
             self.assertFalse(output.exists())
 
