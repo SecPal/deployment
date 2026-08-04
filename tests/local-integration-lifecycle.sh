@@ -10,6 +10,7 @@ FAKE_BIN="$TEMP_DIR/bin"
 COMMAND_LOG="$TEMP_DIR/docker.log"
 CURL_LOG="$TEMP_DIR/curl.log"
 PERSISTENT_GH_CONFIG="$TEMP_DIR/persistent-gh-config"
+PERSISTENT_DOCKER_CONFIG="$TEMP_DIR/persistent-docker-config"
 children=()
 failures=0
 
@@ -71,6 +72,9 @@ chmod 0700 "$FAKE_BIN/docker" "$FAKE_BIN/curl" "$FAKE_BIN/gh" "$FAKE_BIN/python3
 : >"$CURL_LOG"
 install -d -m 0700 "$PERSISTENT_GH_CONFIG"
 printf 'credentialed configuration must remain isolated\n' >"$PERSISTENT_GH_CONFIG/hosts.yml"
+install -d -m 0700 "$PERSISTENT_DOCKER_CONFIG"
+printf '{"auths":{"ghcr.io":{"auth":"forbidden-file-fixture"}}}\n' \
+  >"$PERSISTENT_DOCKER_CONFIG/config.json"
 INHERITED_GH_ENVIRONMENT=(
   GH_CONFIG_DIR="$PERSISTENT_GH_CONFIG"
   GH_TOKEN=must-be-unset
@@ -78,6 +82,11 @@ INHERITED_GH_ENVIRONMENT=(
   GH_ENTERPRISE_TOKEN=must-be-unset
   GITHUB_ENTERPRISE_TOKEN=must-be-unset
   GH_HOST=ghe.example.invalid
+)
+INHERITED_DOCKER_ENVIRONMENT=(
+  DOCKER_CONFIG="$PERSISTENT_DOCKER_CONFIG"
+  DOCKER_AUTH_CONFIG='{"auths":{"ghcr.io":{"auth":"forbidden-fixture"}}}'
+  SECPAL_TEST_PERSISTENT_DOCKER_CONFIG="$PERSISTENT_DOCKER_CONFIG"
 )
 
 # The resolved Compose fixture emits the reviewed image for the API roles.
@@ -177,6 +186,7 @@ done
 if ! env \
   PATH="$FAKE_BIN:$PATH" \
   "${INHERITED_GH_ENVIRONMENT[@]}" \
+  "${INHERITED_DOCKER_ENVIRONMENT[@]}" \
   SECPAL_PHASE_B_PORT=18441 \
   SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
   SECPAL_TEST_CURL_LOG="$CURL_LOG" \
@@ -191,6 +201,27 @@ fi
 if ! awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
   fail "the capable hosted-runner GitHub CLI did not reach the API pull"
 fi
+if [ "$(awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { print $9; exit }' "$COMMAND_LOG")" != unset ]; then
+  fail "caller-provided DOCKER_AUTH_CONFIG reached the API pull"
+fi
+successful_anon_config="$(awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { print $8; exit }' "$COMMAND_LOG")"
+if [ -z "$successful_anon_config" ] || [ -e "$successful_anon_config" ]; then
+  fail "the successful credential-free pull did not remove its anonymous Docker configuration"
+fi
+
+direct_anon_config="$TEMP_DIR/direct-anonymous-docker-config"
+install -d -m 0700 "$direct_anon_config"
+if env \
+  DOCKER_CONFIG="$direct_anon_config" \
+  DOCKER_AUTH_CONFIG='{"auths":{"ghcr.io":{"auth":"forbidden-direct-fixture"}}}' \
+  SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+  SECPAL_TEST_PERSISTENT_DOCKER_CONFIG="$PERSISTENT_DOCKER_CONFIG" \
+  SECPAL_TEST_RUN_ID=docker-auth-contract-violation \
+  "$FAKE_BIN/docker" pull \
+  ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e; then
+  fail "fake Docker accepted an API pull with DOCKER_AUTH_CONFIG"
+fi
+rm -rf -- "$direct_anon_config"
 
 : >"$COMMAND_LOG"
 if env \
@@ -228,6 +259,7 @@ for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wron
   if env \
     PATH="$FAKE_BIN:$PATH" \
     "${INHERITED_GH_ENVIRONMENT[@]}" \
+    "${INHERITED_DOCKER_ENVIRONMENT[@]}" \
     SECPAL_PHASE_B_PORT=18441 \
     SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
     SECPAL_TEST_CURL_LOG="$CURL_LOG" \
@@ -282,6 +314,7 @@ release_marker="$TEMP_DIR/release"
 env \
   PATH="$FAKE_BIN:$PATH" \
   "${INHERITED_GH_ENVIRONMENT[@]}" \
+  "${INHERITED_DOCKER_ENVIRONMENT[@]}" \
   SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
   SECPAL_TEST_CURL_LOG="$CURL_LOG" \
   SECPAL_TEST_PAUSE_MARKER="$pause_marker" \
@@ -487,6 +520,9 @@ fi
 
 if [ ! -f "$PERSISTENT_GH_CONFIG/hosts.yml" ]; then
   fail "the lifecycle modified the caller's persistent GitHub CLI configuration"
+fi
+if [ ! -f "$PERSISTENT_DOCKER_CONFIG/config.json" ]; then
+  fail "the lifecycle modified the caller's persistent Docker configuration"
 fi
 
 if [ "$failures" -ne 0 ]; then

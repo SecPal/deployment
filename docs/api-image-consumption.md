@@ -36,6 +36,11 @@ The deployment integration runner repeats the anonymous digest pull and
 requires the fixed-identity attestation verification before it permits any
 API-based role to execute.
 
+The image pull uses a new mode-`0700`, empty `DOCKER_CONFIG` directory and
+removes inherited `DOCKER_AUTH_CONFIG` only from the exact `docker pull`
+process. The runner therefore cannot reuse either file-backed or environment-
+provided Docker registry credentials for the reviewed API digest.
+
 The integration uses the GitHub CLI already provided by the GitHub-hosted
 runner. The integration script logs the effective version, checks for
 `gh attestation verify`, and fails closed if the required capability is

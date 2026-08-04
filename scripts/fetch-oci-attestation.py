@@ -148,8 +148,8 @@ def _request_bytes(
         raise RuntimeError("public registry request failed") from error
 
     with response:
-        status = response.status
-        if status not in allowed_statuses:
+        status = response.getcode()
+        if not isinstance(status, int) or status not in allowed_statuses:
             raise RuntimeError(f"public registry request returned HTTP {status}")
         final_url = response.geturl()
         if final_url != url and not (
@@ -284,13 +284,18 @@ def _validate_bundle_shape(body: bytes) -> None:
 
 def _write_private_file(path: Path, body: bytes) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    wrapped = False
     try:
         os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "wb") as output:
+        output = os.fdopen(descriptor, "wb")
+        wrapped = True
+        with output:
             output.write(body)
             output.flush()
             os.fsync(output.fileno())
     except BaseException:
+        if not wrapped:
+            os.close(descriptor)
         path.unlink(missing_ok=True)
         raise
 

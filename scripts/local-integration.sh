@@ -17,7 +17,7 @@ supervise_integration() {
   child_pid=$!
 
   # Invoked indirectly by the signal traps below.
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2317,SC2329
   forward_supervisor_signal() {
     local exit_status="$1"
 
@@ -247,7 +247,9 @@ printf 'Docker Engine: %s\n' "$(docker version --format '{{.Server.Version}}')"
 printf 'Docker Compose: %s\n' "$compose_version"
 printf 'Host platform: %s/%s\n' "$(uname -s)" "$(uname -m)"
 
-DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"
+env -u DOCKER_AUTH_CONFIG \
+  DOCKER_CONFIG="$ANON_DOCKER_CONFIG" \
+  docker pull "$API_IMAGE"
 
 if ! env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST \
   python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"; then

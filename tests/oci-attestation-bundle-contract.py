@@ -5,14 +5,18 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
+import os
 import stat
 import sys
 import tempfile
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -144,6 +148,31 @@ class OciAttestationBundleContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.fetcher = load_fetcher()
 
+    def assert_descriptor_closed(self, descriptor: int) -> None:
+        try:
+            os.fstat(descriptor)
+        except OSError:
+            return
+        os.close(descriptor)
+        self.fail("file descriptor remained open")
+
+    def http_error_opener(self, status: int, body: bytes = b"{}") -> Any:
+        class ErrorOpener:
+            def open(_self, request: urllib.request.Request, timeout: int) -> Any:
+                del timeout
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    status,
+                    "fixture response",
+                    {
+                        "Content-Length": str(len(body)),
+                        "Content-Type": "application/json",
+                    },
+                    io.BytesIO(body),
+                )
+
+        return ErrorOpener()
+
     def test_fetches_fallback_referrer_and_writes_verified_private_bundle(self) -> None:
         fixture = RegistryFixture(self.fetcher)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -191,6 +220,45 @@ class OciAttestationBundleContractTest(unittest.TestCase):
             requested_urls = [url for url, _headers in fixture.calls]
             self.assertNotIn(self.fetcher.FALLBACK_INDEX_URL, requested_urls)
             self.assertEqual(output.read_bytes(), fixture.bundle)
+
+    def test_allowed_http_error_404_reaches_referrer_fallback(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+
+        def request(
+            url: str,
+            headers: dict[str, str],
+            max_bytes: int,
+            allowed_statuses: frozenset[int],
+        ) -> tuple[int, str, bytes]:
+            if url == self.fetcher.REFERRERS_URL:
+                with mock.patch.object(
+                    self.fetcher, "HTTPS_OPENER", self.http_error_opener(404)
+                ):
+                    return self.fetcher._request_bytes(
+                        url, headers, max_bytes, allowed_statuses
+                    )
+            return fixture.request(url, headers, max_bytes, allowed_statuses)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            self.fetcher.fetch_bundle(output, request_bytes=request)
+            self.assertEqual(output.read_bytes(), fixture.bundle)
+            self.assertIn(
+                self.fetcher.FALLBACK_INDEX_URL,
+                [url for url, _headers in fixture.calls],
+            )
+
+    def test_unexpected_http_error_status_remains_fail_closed(self) -> None:
+        with mock.patch.object(
+            self.fetcher, "HTTPS_OPENER", self.http_error_opener(401)
+        ):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 401"):
+                self.fetcher._request_bytes(
+                    self.fetcher.REFERRERS_URL,
+                    {"Accept": self.fetcher.OCI_INDEX_MEDIA_TYPE},
+                    self.fetcher.MANIFEST_RESPONSE_LIMIT,
+                    frozenset({200, 404}),
+                )
 
     def test_rejects_multiple_matching_slsa_bundles(self) -> None:
         fixture = RegistryFixture(self.fetcher)
@@ -240,6 +308,93 @@ class OciAttestationBundleContractTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
             self.assertEqual(output.read_text(), "existing")
+
+    def test_closes_descriptor_and_removes_file_when_fchmod_fails(self) -> None:
+        real_open = os.open
+        opened: list[int] = []
+
+        def tracking_open(*args: Any, **kwargs: Any) -> int:
+            descriptor = real_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            with (
+                mock.patch.object(self.fetcher.os, "open", side_effect=tracking_open),
+                mock.patch.object(
+                    self.fetcher.os, "fchmod", side_effect=OSError("fixture fchmod")
+                ),
+            ):
+                with self.assertRaisesRegex(OSError, "fixture fchmod"):
+                    self.fetcher._write_private_file(output, b"fixture")
+            self.assertEqual(len(opened), 1)
+            self.assert_descriptor_closed(opened[0])
+            self.assertFalse(output.exists())
+
+    def test_closes_descriptor_and_removes_file_when_fdopen_fails(self) -> None:
+        real_open = os.open
+        opened: list[int] = []
+
+        def tracking_open(*args: Any, **kwargs: Any) -> int:
+            descriptor = real_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            with (
+                mock.patch.object(self.fetcher.os, "open", side_effect=tracking_open),
+                mock.patch.object(
+                    self.fetcher.os, "fdopen", side_effect=OSError("fixture fdopen")
+                ),
+            ):
+                with self.assertRaisesRegex(OSError, "fixture fdopen"):
+                    self.fetcher._write_private_file(output, b"fixture")
+            self.assertEqual(len(opened), 1)
+            self.assert_descriptor_closed(opened[0])
+            self.assertFalse(output.exists())
+
+    def test_wrapper_closes_descriptor_and_removes_file_when_write_fails(self) -> None:
+        real_open = os.open
+        real_fdopen = os.fdopen
+        opened: list[int] = []
+
+        def tracking_open(*args: Any, **kwargs: Any) -> int:
+            descriptor = real_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+
+        class FailingWriter:
+            def __init__(self, descriptor: int, mode: str) -> None:
+                self.output = real_fdopen(descriptor, mode)
+
+            def __enter__(self) -> "FailingWriter":
+                return self
+
+            def __exit__(self, *_error: Any) -> None:
+                self.output.close()
+
+            def write(self, _body: bytes) -> None:
+                raise OSError("fixture write")
+
+            def flush(self) -> None:
+                self.output.flush()
+
+            def fileno(self) -> int:
+                return self.output.fileno()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            with (
+                mock.patch.object(self.fetcher.os, "open", side_effect=tracking_open),
+                mock.patch.object(self.fetcher.os, "fdopen", side_effect=FailingWriter),
+            ):
+                with self.assertRaisesRegex(OSError, "fixture write"):
+                    self.fetcher._write_private_file(output, b"fixture")
+            self.assertEqual(len(opened), 1)
+            self.assert_descriptor_closed(opened[0])
+            self.assertFalse(output.exists())
 
     def test_blob_redirect_is_host_bound_and_drops_registry_authorization(self) -> None:
         redirected_blob_digest = f"sha256:{'2' * 64}"

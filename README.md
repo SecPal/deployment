@@ -89,19 +89,20 @@ update notifications, and telemetry, and removes all GitHub token and
 host-selection variables. The temporary bundle is removed on success, failure,
 and signals.
 
-The sequence validates every API role against the canonical digest, pulls it
-with a new empty Docker configuration, retrieves and validates its public OCI
-attestation bundle, and requires successful GitHub Artifact Attestation
-verification before any API-based role may run. Only after that gate succeeds
-does the script build the project-scoped frontend and gateway images, generate
-random test-only secrets inside a private runtime volume without printing them,
-start private PostgreSQL and Valkey services, run migrations exactly once, and
-start the explicit service roles. The published API image is not a local
-cleanup artifact. The runner then proves Valkey cache and queue
-round trips, worker-to-queue ownership, shared visibility of the disposable
-private-storage volume, exact credentialed CORS, and the separate app/API
-origins. Playwright Chromium exercises the actual Compose frontend and API,
-including the Sanctum CSRF handshake, an intentionally unsuccessful login,
+The sequence validates every API role against the canonical digest and pulls it
+with a new empty Docker configuration while removing any inherited
+`DOCKER_AUTH_CONFIG` from that exact pull process. It then retrieves and
+validates the public OCI attestation bundle and requires successful GitHub
+Artifact Attestation verification before any API-based role may run. Only after
+that gate succeeds does the script build the project-scoped frontend and
+gateway images, generate random test-only secrets inside a private runtime
+volume without printing them, start private PostgreSQL and Valkey services, run
+migrations exactly once, and start the explicit service roles. The published
+API image is not a local cleanup artifact. The runner then proves Valkey cache
+and queue round trips, worker-to-queue ownership, shared visibility of the
+disposable private-storage volume, exact credentialed CORS, and the separate
+app/API origins. Playwright Chromium exercises the actual Compose frontend and
+API, including the Sanctum CSRF handshake, an intentionally unsuccessful login,
 secure cookie attributes, CSP, service-worker registration, and runtime API
 routing. Successful completion means its containers, networks, volumes,
 images, database data, private files, certificates, and secrets were removed.

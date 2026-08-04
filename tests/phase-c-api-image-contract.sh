@@ -130,7 +130,10 @@ if [ -f scripts/local-integration.sh ]; then
     "the integration must gate on attestation capability rather than an exact runner CLI patch version"
   require_text scripts/local-integration.sh 'ANON_DOCKER_CONFIG="$(mktemp -d -t secpal-api-anon-docker.XXXXXXXXXX)"'
   require_text scripts/local-integration.sh 'chmod 0700 "$ANON_DOCKER_CONFIG"'
-  require_text scripts/local-integration.sh 'DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"'
+  pull_contract="$(grep -B2 -F '  docker pull "$API_IMAGE"' scripts/local-integration.sh || true)"
+  expected_pull_contract=$'env -u DOCKER_AUTH_CONFIG \\\n  DOCKER_CONFIG="$ANON_DOCKER_CONFIG" \\\n  docker pull "$API_IMAGE"'
+  [ "$pull_contract" = "$expected_pull_contract" ] ||
+    fail "the API pull must unset DOCKER_AUTH_CONFIG at the concrete anonymous Docker invocation"
   require_text scripts/local-integration.sh 'install -d -m 0700 "$ANONYMOUS_GH_CONFIG"'
   require_text scripts/local-integration.sh 'ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"'
   require_text scripts/local-integration.sh 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"'
@@ -159,7 +162,7 @@ if [ -f scripts/local-integration.sh ]; then
   [ "$source_commit_literal_count" -eq 1 ] ||
     fail "the reviewed API source commit must be defined exactly once in the integration runner"
 
-  pull_line="$(grep -nF 'DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
+  pull_line="$(grep -nF '  docker pull "$API_IMAGE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   bundle_line="$(grep -nF 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   verify_line="$(grep -nF 'run_isolated_gh attestation verify' scripts/local-integration.sh | tail -n 1 | cut -d: -f1 || true)"
   build_line="$(grep -nF '"${COMPOSE[@]}" build frontend gateway' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
@@ -186,6 +189,10 @@ if [ -f scripts/fetch-oci-attestation.py ]; then
   require_text scripts/fetch-oci-attestation.py 'REGISTRY_BLOB_PATH_PATTERN = re.compile('
   require_text scripts/fetch-oci-attestation.py 'GITHUB_BLOB_PATH_PATTERN = re.compile(r"/ghcrblobs[0-9]+/blobs/sha256:[0-9a-f]{64}")'
   require_text scripts/fetch-oci-attestation.py 'parsed.port in {None, 443}'
+  require_text scripts/fetch-oci-attestation.py 'status = response.getcode()'
+  require_text scripts/fetch-oci-attestation.py 'if not isinstance(status, int) or status not in allowed_statuses:'
+  forbid_text scripts/fetch-oci-attestation.py 'status[[:space:]]*=[[:space:]]*response\.status' \
+    "the OCI fetcher must use getcode() for normal responses and HTTPError objects"
   require_text scripts/fetch-oci-attestation.py 'os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600'
   require_text scripts/fetch-oci-attestation.py 'if key.lower() != "authorization"'
   forbid_text scripts/fetch-oci-attestation.py 'os\.environ|os\.getenv|GH_TOKEN|GITHUB_TOKEN|GHCR_TOKEN|docker[[:space:]]+login' \
@@ -248,7 +255,7 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
   for mutation in \
     wrong-digest tag registry repository api-build environment-override \
     github-config-override github-host-override github-host-flag \
-    source-commit-duplication bundle-fetch-bypass fetcher-wrong-digest; do
+    docker-auth-isolation source-commit-duplication bundle-fetch-bypass fetcher-wrong-digest; do
     fixture="$negative_temp/$mutation"
     install -d -m 0700 \
       "$fixture/.github/workflows" "$fixture/docs" "$fixture/scripts" "$fixture/tests"
@@ -294,6 +301,9 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
         ;;
       github-host-flag)
         sed -i '/--hostname github.com/d' "$fixture/scripts/local-integration.sh"
+        ;;
+      docker-auth-isolation)
+        sed -i '/env -u DOCKER_AUTH_CONFIG \\/d' "$fixture/scripts/local-integration.sh"
         ;;
       source-commit-duplication)
         # API_SOURCE_COMMIT is intentionally literal mutation input.

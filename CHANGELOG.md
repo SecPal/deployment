@@ -27,6 +27,8 @@ SPDX-License-Identifier: CC0-1.0
 - GHCR blob redirects use their real, tightly validated CDN path shape, and the
   verifier fixes `github.com`, removes inherited GitHub host and token inputs,
   logs the effective GitHub CLI version, and requires the attestation command.
+- The anonymous API pull uses an empty private Docker configuration and removes
+  inherited `DOCKER_AUTH_CONFIG` from the exact pull process.
 - The one-shot migration uses Compose's explicit non-interactive mode so the
   same lifecycle runs without a TTY on hosted CI.
 
