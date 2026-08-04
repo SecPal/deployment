@@ -140,9 +140,9 @@ if [ -f scripts/local-integration.sh ]; then
   require_text scripts/local-integration.sh '--repo SecPal/api'
   require_text scripts/local-integration.sh '--hostname github.com'
   require_text scripts/local-integration.sh "--signer-workflow $API_WORKFLOW"
-  require_text scripts/local-integration.sh "--signer-digest $API_SOURCE_COMMIT"
+  require_text scripts/local-integration.sh '--signer-digest "$API_SOURCE_COMMIT"'
   require_text scripts/local-integration.sh '--source-ref refs/heads/main'
-  require_text scripts/local-integration.sh "--source-digest $API_SOURCE_COMMIT"
+  require_text scripts/local-integration.sh '--source-digest "$API_SOURCE_COMMIT"'
   require_text scripts/local-integration.sh '--deny-self-hosted-runners'
   require_text scripts/local-integration.sh '"${COMPOSE[@]}" --profile tools config --format json'
   require_text scripts/local-integration.sh '"${COMPOSE[@]}" build frontend gateway'
@@ -154,6 +154,10 @@ if [ -f scripts/local-integration.sh ]; then
     "the integration runner must use the anonymously retrieved offline bundle"
   forbid_text scripts/local-integration.sh 'build.*(secrets-init|migrate|api|worker-hash-chain|worker-general|scheduler)' \
     "the integration runner must not build an API-based service"
+
+  source_commit_literal_count="$(grep -Foc -- "$API_SOURCE_COMMIT" scripts/local-integration.sh || true)"
+  [ "$source_commit_literal_count" -eq 1 ] ||
+    fail "the reviewed API source commit must be defined exactly once in the integration runner"
 
   pull_line="$(grep -nF 'DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "$API_IMAGE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   bundle_line="$(grep -nF 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_BUNDLE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
@@ -244,7 +248,7 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
   for mutation in \
     wrong-digest tag registry repository api-build environment-override \
     github-config-override github-host-override github-host-flag \
-    bundle-fetch-bypass fetcher-wrong-digest; do
+    source-commit-duplication bundle-fetch-bypass fetcher-wrong-digest; do
     fixture="$negative_temp/$mutation"
     install -d -m 0700 \
       "$fixture/.github/workflows" "$fixture/docs" "$fixture/scripts" "$fixture/tests"
@@ -290,6 +294,12 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
         ;;
       github-host-flag)
         sed -i '/--hostname github.com/d' "$fixture/scripts/local-integration.sh"
+        ;;
+      source-commit-duplication)
+        # API_SOURCE_COMMIT is intentionally literal mutation input.
+        # shellcheck disable=SC2016
+        sed -i 's/--signer-digest "$API_SOURCE_COMMIT"/--signer-digest 87d1432389adac3a02574b399322928a77c5e67f/' \
+          "$fixture/scripts/local-integration.sh"
         ;;
       bundle-fetch-bypass)
         # The shell expressions are intentional literal contract text.

@@ -259,9 +259,9 @@ if ! DOCKER_CONFIG="$ANON_DOCKER_CONFIG" run_isolated_gh attestation verify \
   --bundle "$ATTESTATION_BUNDLE" \
   --repo SecPal/api \
   --signer-workflow SecPal/api/.github/workflows/publish-container.yml \
-  --signer-digest 87d1432389adac3a02574b399322928a77c5e67f \
+  --signer-digest "$API_SOURCE_COMMIT" \
   --source-ref refs/heads/main \
-  --source-digest 87d1432389adac3a02574b399322928a77c5e67f \
+  --source-digest "$API_SOURCE_COMMIT" \
   --deny-self-hosted-runners \
   --hostname github.com; then
   fail "public token-free API artifact attestation verification failed."
