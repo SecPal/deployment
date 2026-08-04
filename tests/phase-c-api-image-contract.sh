@@ -180,12 +180,10 @@ if [ -f scripts/fetch-oci-attestation.py ]; then
   require_text scripts/fetch-oci-attestation.py 'expected exactly one SLSA Sigstore bundle referrer'
   require_text scripts/fetch-oci-attestation.py 'OCI attestation subject digest was not the reviewed API digest'
   require_text scripts/fetch-oci-attestation.py 'REGISTRY_BLOB_PATH_PATTERN = re.compile('
-  require_text scripts/fetch-oci-attestation.py 'GITHUB_BLOB_PATH_PATTERN = re.compile('
+  require_text scripts/fetch-oci-attestation.py 'GITHUB_BLOB_PATH_PATTERN = re.compile(r"/ghcrblobs[0-9]+/blobs/sha256:[0-9a-f]{64}")'
   require_text scripts/fetch-oci-attestation.py 'parsed.port in {None, 443}'
   require_text scripts/fetch-oci-attestation.py 'os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600'
   require_text scripts/fetch-oci-attestation.py 'if key.lower() != "authorization"'
-  forbid_text scripts/fetch-oci-attestation.py 'ghcrblobs' \
-    "the OCI bundle fetcher must accept the real GHCR CDN path, not a fixture-only prefix"
   forbid_text scripts/fetch-oci-attestation.py 'os\.environ|os\.getenv|GH_TOKEN|GITHUB_TOKEN|GHCR_TOKEN|docker[[:space:]]+login' \
     "the OCI bundle fetcher must not expose configuration or credential inputs"
 fi

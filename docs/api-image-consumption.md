@@ -52,7 +52,7 @@ variables unset and uses the OCI Distribution contract directly instead. It:
 2. reads the OCI Referrers endpoint or its digest-derived standard fallback;
 3. requires exactly one SLSA v1 Sigstore bundle descriptor;
 4. accepts only default-port HTTPS blob redirects to GitHub's exact
-   `pkg-containers.githubusercontent.com/ghcr<number>/blobs/sha256:<digest>`
+   `pkg-containers.githubusercontent.com/ghcrblobs<number>/blobs/sha256:<digest>`
    path shape, without forwarding registry authorization;
 5. verifies the descriptor, manifest, subject, layer digests, sizes, and media
    types against the canonical API digest;

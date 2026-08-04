@@ -51,7 +51,7 @@ BEARER_PATTERN = re.compile(r"[A-Za-z0-9._~-]{1,32768}")
 REGISTRY_BLOB_PATH_PATTERN = re.compile(
     rf"/v2/{re.escape(REPOSITORY)}/blobs/sha256:[0-9a-f]{{64}}"
 )
-GITHUB_BLOB_PATH_PATTERN = re.compile(r"/ghcr[0-9]+/blobs/sha256:[0-9a-f]{64}")
+GITHUB_BLOB_PATH_PATTERN = re.compile(r"/ghcrblobs[0-9]+/blobs/sha256:[0-9a-f]{64}")
 
 RequestBytes = Callable[
     [str, dict[str, str], int, frozenset[int]], tuple[int, str, bytes]

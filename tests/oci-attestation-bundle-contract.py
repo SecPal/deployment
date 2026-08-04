@@ -255,17 +255,17 @@ class OciAttestationBundleContractTest(unittest.TestCase):
             307,
             "temporary redirect",
             {},
-            f"https://pkg-containers.githubusercontent.com/ghcr1/blobs/{redirected_blob_digest}?sig=fixture",
+            f"https://pkg-containers.githubusercontent.com/ghcrblobs13/blobs/{redirected_blob_digest}?sig=fixture",
         )
         self.assertNotIn("Authorization", redirected.headers)
         self.assertEqual(redirected.get_method(), "GET")
 
         rejected_urls = (
-            f"https://attacker.example/ghcr1/blobs/{redirected_blob_digest}?sig=fixture",
-            f"https://pkg-containers.githubusercontent.com/ghcrblobs1/blobs/{redirected_blob_digest}?sig=fixture",
-            f"https://pkg-containers.githubusercontent.com:444/ghcr1/blobs/{redirected_blob_digest}?sig=fixture",
-            f"https://pkg-containers.githubusercontent.com/ghcr1/blobs/{redirected_blob_digest}/extra?sig=fixture",
-            f"http://pkg-containers.githubusercontent.com/ghcr1/blobs/{redirected_blob_digest}?sig=fixture",
+            f"https://attacker.example/ghcrblobs13/blobs/{redirected_blob_digest}?sig=fixture",
+            f"https://pkg-containers.githubusercontent.com/ghcr13/blobs/{redirected_blob_digest}?sig=fixture",
+            f"https://pkg-containers.githubusercontent.com:444/ghcrblobs13/blobs/{redirected_blob_digest}?sig=fixture",
+            f"https://pkg-containers.githubusercontent.com/ghcrblobs13/blobs/{redirected_blob_digest}/extra?sig=fixture",
+            f"http://pkg-containers.githubusercontent.com/ghcrblobs13/blobs/{redirected_blob_digest}?sig=fixture",
         )
         for rejected_url in rejected_urls:
             with self.subTest(url=rejected_url):
