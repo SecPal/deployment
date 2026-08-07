@@ -10,7 +10,10 @@ if [ "$#" -eq 0 ]; then
 fi
 
 failures=0
+utf8_bom=$'\uFEFF'
+document_start_pattern='^---[[:space:]]+(.*)$'
 noncanonical_key_pattern="^[[:space:]]*(-[[:space:]]+)?([\"'].*[\"'][[:space:]]*:|[!&*?].*:)"
+spaced_uses_key_pattern="^[[:space:]]*(-[[:space:]]+)?uses[[:space:]]+:"
 explicit_key_pattern="^[[:space:]]*(-[[:space:]]+)?\\?([[:space:]]|$)"
 multiline_quoted_scalar_pattern="^[[:space:]]*(-[[:space:]]+)?(\"[^\"]*|'[^']*)$"
 flow_sequence_pattern="^[[:space:]]*-[[:space:]]*([!&][^[:space:]]+[[:space:]]+)*[\\[{]"
@@ -47,9 +50,14 @@ for workflow in "$@"; do
   block_scalar_indent=-1
   while IFS= read -r -u 3 line || [ -n "$line" ]; do
     line_number=$((line_number + 1))
-    leading_whitespace="${line%%[![:space:]]*}"
+    syntax_line="$line"
+    if [ "$line_number" -eq 1 ] && [[ "$syntax_line" == "$utf8_bom"* ]]; then
+      syntax_line="${syntax_line#"$utf8_bom"}"
+    fi
+
+    leading_whitespace="${syntax_line%%[![:space:]]*}"
     line_indent=${#leading_whitespace}
-    trimmed_line="$(trim_whitespace "$line")"
+    trimmed_line="$(trim_whitespace "$syntax_line")"
 
     if [ "$block_scalar_indent" -ge 0 ]; then
       if [ -z "$trimmed_line" ] || [ "$line_indent" -gt "$block_scalar_indent" ]; then
@@ -58,30 +66,39 @@ for workflow in "$@"; do
       block_scalar_indent=-1
     fi
 
-    if [[ "$line" =~ $block_scalar_pattern ]]; then
+    if [[ "$syntax_line" =~ $document_start_pattern ]]; then
+      syntax_line="${BASH_REMATCH[1]}"
+      leading_whitespace="${syntax_line%%[![:space:]]*}"
+      line_indent=${#leading_whitespace}
+      trimmed_line="$(trim_whitespace "$syntax_line")"
+    fi
+
+    if [[ "$syntax_line" =~ $block_scalar_pattern ]]; then
       block_scalar_indent=$line_indent
       continue
     fi
 
-    if [[ "$line" =~ $noncanonical_key_pattern ]] ||
-      [[ "$line" =~ $explicit_key_pattern ]] ||
-      [[ "$line" =~ $multiline_quoted_scalar_pattern ]]; then
+    if [[ "$syntax_line" =~ $noncanonical_key_pattern ]] ||
+      [[ "$syntax_line" =~ $spaced_uses_key_pattern ]] ||
+      [[ "$syntax_line" =~ $explicit_key_pattern ]] ||
+      [[ "$syntax_line" =~ $multiline_quoted_scalar_pattern ]]; then
       fail "$line_number" \
         "mapping keys must use the canonical plain syntax"
       continue
     fi
 
-    if { [[ "$line" =~ $flow_sequence_pattern ]] ||
-      [[ "$line" =~ $flow_mapping_pattern ]] ||
-      [[ "$line" =~ $flow_bare_pattern ]]; } && {
-      [[ "$line" =~ $flow_uses_key_pattern ]] || [[ "$line" =~ $flow_noncanonical_key_pattern ]]
+    if { [[ "$syntax_line" =~ $flow_sequence_pattern ]] ||
+      [[ "$syntax_line" =~ $flow_mapping_pattern ]] ||
+      [[ "$syntax_line" =~ $flow_bare_pattern ]]; } && {
+      [[ "$syntax_line" =~ $flow_uses_key_pattern ]] ||
+        [[ "$syntax_line" =~ $flow_noncanonical_key_pattern ]]
     }; then
       fail "$line_number" \
         "uses declarations must use the canonical block mapping syntax"
       continue
     fi
 
-    if [[ ! "$line" =~ ^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*(.*)$ ]]; then
+    if [[ ! "$syntax_line" =~ ^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*(.*)$ ]]; then
       continue
     fi
 

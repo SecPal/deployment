@@ -80,6 +80,9 @@ else
 
   expect_document_rejected implicit-flow-sequence $'jobs:\n  contract:\n    steps: [uses: actions/checkout@v7]'
   expect_document_rejected multiline-implicit-flow-sequence $'jobs:\n  contract:\n    steps:\n      [uses: actions/checkout@v7]'
+  expect_document_rejected document-marker-flow $'--- { on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
+  expect_document_rejected byte-order-mark-flow $'\ufeff{ on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
+  expect_document_rejected byte-order-mark-document-marker-flow $'\ufeff--- { on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
   expect_document_rejected anchored-flow-mapping $'shared: &step { uses: actions/checkout@v7 }\njobs:\n  contract:\n    steps:\n      - *step'
   expect_document_rejected explicit-block-key $'jobs:\n  contract:\n    steps:\n      - ? >-\n          uses\n        : actions/checkout@v7'
   expect_document_rejected continued-quoted-key $'jobs:\n  contract:\n    steps:\n      - "us\\\n          es": actions/checkout@v7'
@@ -91,6 +94,7 @@ else
   expect_rejected missing-source-comment "uses: actions/checkout@$sha"
   expect_rejected empty-source-comment "uses: actions/checkout@$sha #"
   expect_rejected nested-comment "uses: actions/checkout@$sha # # v7.0.1"
+  expect_rejected spaced-key-separator 'uses : actions/checkout@v7 # v7.0.1'
   expect_rejected quoted-key "\"uses\": actions/checkout@v7 # @$sha # v7.0.1"
   expect_rejected escaped-uses-key '"us\x65s": actions/checkout@v7 # v7.0.1'
   expect_rejected flow-mapping "{ uses: actions/checkout@v7, name: Checkout } # @$sha # v7.0.1"
