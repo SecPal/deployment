@@ -47,6 +47,7 @@ required_files=(
   scripts/fetch-oci-attestation.py
   scripts/reject-sensitive-paths.sh
   scripts/validate-origin.sh
+  scripts/validate-workflow-action-pins.sh
   tests/repository-contract.sh
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
@@ -54,6 +55,7 @@ required_files=(
   tests/local-integration-lifecycle.sh
   tests/preflight-origin-contract.sh
   tests/sensitive-path-contract.sh
+  tests/workflow-action-pin-contract.sh
   tests/fixtures/fake-docker.sh
   tests/fixtures/fake-gh.sh
   tests/fixtures/fake-python3.sh
@@ -90,17 +92,12 @@ require_text AGENTS.md "activity-hash-chain worker: exactly one"
 require_text AGENTS.md "scheduler: exactly one"
 require_text CHANGELOG.md "## 2026-08-01 - Bootstrap Deployment Repository"
 
-while IFS= read -r -d '' workflow; do
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[[:space:]]*uses:[[:space:]]*([^[:space:]#]+) ]]; then
-      action_reference="${BASH_REMATCH[1]}"
-      if [[ "$action_reference" != ./* ]] &&
-        [[ ! "$line" =~ @[0-9a-f]{40}[[:space:]]+#[[:space:]]+[^[:space:]#]+ ]]; then
-        fail "$workflow must pin external uses references to a full commit SHA with a source tag or branch comment"
-      fi
-    fi
-  done < "$workflow"
-done < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
+mapfile -d '' workflow_files < <(
+  find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
+)
+if ! scripts/validate-workflow-action-pins.sh "${workflow_files[@]}"; then
+  fail "workflow action references do not satisfy the pinning contract"
+fi
 
 while IFS= read -r -d '' script; do
   if ! head -n 6 "$script" | grep -Fq 'SPDX-FileCopyrightText:'; then
