@@ -242,7 +242,7 @@ if [ -f compose.yaml ]; then
 fi
 
 if [ -f .github/workflows/local-integration.yml ]; then
-  if ! scripts/validate-workflow-action-pins.py .github/workflows/local-integration.yml; then
+  if ! python3 scripts/validate-workflow-action-pins.py .github/workflows/local-integration.yml; then
     fail "the hosted integration workflow must pin every action to a full commit SHA with a source tag or branch comment"
   fi
   if ! grep -Eq '^[[:space:]]*python-version: "[0-9]+\.[0-9]+\.[0-9]+"$' .github/workflows/local-integration.yml; then

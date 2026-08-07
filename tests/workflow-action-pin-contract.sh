@@ -13,7 +13,7 @@ check_document() {
   local name="$2"
   local document="$3"
 
-  if "$VALIDATOR" <(printf '%s\n' "$document") >/dev/null 2>&1; then
+  if python3 "$VALIDATOR" <(printf '%s\n' "$document") >/dev/null 2>&1; then
     [ "$expectation" = accept ] || {
       printf 'FAIL: invalid workflow was accepted: %s\n' "$name" >&2
       failures=$((failures + 1))
@@ -42,7 +42,7 @@ check_document reject yaml-1-2-job-ids $'jobs:\n  on:\n    steps:\n      - uses:
 mapfile -d '' workflow_files < <(
   find "$ROOT_DIR/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
 )
-if ! "$VALIDATOR" "${workflow_files[@]}" >/dev/null; then
+if ! python3 "$VALIDATOR" "${workflow_files[@]}" >/dev/null; then
   printf 'FAIL: repository workflows violate the action pin contract\n' >&2
   failures=$((failures + 1))
 fi
