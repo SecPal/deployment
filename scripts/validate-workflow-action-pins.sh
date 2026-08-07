@@ -10,8 +10,11 @@ if [ "$#" -eq 0 ]; then
 fi
 
 failures=0
-quoted_uses_key_pattern="^[[:space:]]*(-[[:space:]]+)?[\"']uses[\"'][[:space:]]*:"
-flow_uses_key_pattern="\\{[^}]*[\"']?uses[\"']?[[:space:]]*:"
+noncanonical_key_pattern="^[[:space:]]*(-[[:space:]]+)?([\"'].*[\"'][[:space:]]*:|[!&*?].*:)"
+flow_sequence_pattern="^[[:space:]]*-[[:space:]]*\\{"
+flow_mapping_pattern="^[[:space:]]*[^#[:space:]][^:]*:[[:space:]]*\\{"
+flow_uses_key_pattern="(^|[,{[:space:]])[\"']?uses[\"']?[[:space:]]*:"
+block_scalar_pattern="^[[:space:]]*[^#[:space:]][^:]*:[[:space:]]*[>|][-+0-9]*[[:space:]]*(#.*)?$"
 
 fail() {
   local line_number="$1"
@@ -37,10 +40,33 @@ for workflow in "$@"; do
   fi
 
   line_number=0
+  block_scalar_indent=-1
   while IFS= read -r -u 3 line || [ -n "$line" ]; do
     line_number=$((line_number + 1))
+    leading_whitespace="${line%%[![:space:]]*}"
+    line_indent=${#leading_whitespace}
+    trimmed_line="$(trim_whitespace "$line")"
 
-    if [[ "$line" =~ $quoted_uses_key_pattern ]] || [[ "$line" =~ $flow_uses_key_pattern ]]; then
+    if [ "$block_scalar_indent" -ge 0 ]; then
+      if [ -z "$trimmed_line" ] || [ "$line_indent" -gt "$block_scalar_indent" ]; then
+        continue
+      fi
+      block_scalar_indent=-1
+    fi
+
+    if [[ "$line" =~ $block_scalar_pattern ]]; then
+      block_scalar_indent=$line_indent
+      continue
+    fi
+
+    if [[ "$line" =~ $noncanonical_key_pattern ]]; then
+      fail "$line_number" \
+        "mapping keys must use the canonical plain syntax"
+      continue
+    fi
+
+    if { [[ "$line" =~ $flow_sequence_pattern ]] || [[ "$line" =~ $flow_mapping_pattern ]]; } &&
+      [[ "$line" =~ $flow_uses_key_pattern ]]; then
       fail "$line_number" \
         "uses declarations must use the canonical block mapping syntax"
       continue

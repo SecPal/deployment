@@ -95,8 +95,12 @@ require_text CHANGELOG.md "## 2026-08-01 - Bootstrap Deployment Repository"
 mapfile -d '' workflow_files < <(
   find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
 )
-if ! scripts/validate-workflow-action-pins.sh "${workflow_files[@]}"; then
-  fail "workflow action references do not satisfy the pinning contract"
+mapfile -d '' action_metadata_files < <(
+  find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o \
+    -type f \( -name action.yml -o -name action.yaml \) -print0 | sort -z
+)
+if ! scripts/validate-workflow-action-pins.sh "${workflow_files[@]}" "${action_metadata_files[@]}"; then
+  fail "workflow and local action references do not satisfy the pinning contract"
 fi
 
 while IFS= read -r -d '' script; do

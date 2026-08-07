@@ -42,6 +42,17 @@ expect_rejected() {
   fi
 }
 
+expect_document_accepted() {
+  local name="$1"
+  local document="$2"
+  local workflow="$TEMP_DIR/$name.yml"
+
+  printf '%s\n' "$document" > "$workflow"
+  if ! "$VALIDATOR" "$workflow" >/dev/null 2>&1; then
+    fail "valid workflow document was rejected: $name"
+  fi
+}
+
 if [ ! -x "$VALIDATOR" ]; then
   fail "the workflow action pin validator is missing or not executable"
 else
@@ -51,6 +62,9 @@ else
   expect_accepted pinned-branch "uses: SecPal/.github/.github/workflows/reuse.yml@$sha # main"
   expect_accepted quoted-pin "uses: \"actions/checkout@$sha\" # v7.0.1"
   expect_accepted local-action 'uses: ./.github/actions/local'
+  expect_accepted scalar-containing-flow-syntax 'run: "echo '\''{ uses: not-an-action }'\''"'
+  expect_document_accepted block-scalar-content $'jobs:\n  contract:\n    steps:\n      - run: |\n          "https://example.invalid/{ uses: not-an-action }"'
+  expect_document_accepted quoted-list-value $'on:\n  push:\n    branches:\n      - "main"'
 
   expect_rejected mutable-tag 'uses: actions/checkout@v7 # v7.0.1'
   expect_rejected sha-in-comment "uses: actions/checkout@v7 # decoy @$sha # v7.0.1"
@@ -60,6 +74,7 @@ else
   expect_rejected empty-source-comment "uses: actions/checkout@$sha #"
   expect_rejected nested-comment "uses: actions/checkout@$sha # # v7.0.1"
   expect_rejected quoted-key "\"uses\": actions/checkout@v7 # @$sha # v7.0.1"
+  expect_rejected escaped-uses-key '"us\x65s": actions/checkout@v7 # v7.0.1'
   expect_rejected flow-mapping "{ uses: actions/checkout@v7, name: Checkout } # @$sha # v7.0.1"
 fi
 
