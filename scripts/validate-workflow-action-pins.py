@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 from yaml.composer import ComposerError
 from yaml.events import AliasEvent
-from yaml.nodes import ScalarNode
+from yaml.nodes import MappingNode, ScalarNode
 
 
 PINNED_GIT_REFERENCE = re.compile(r"[^@#\s]+@[0-9a-f]{40}\Z")
@@ -42,14 +42,48 @@ WORKFLOW_IMAGE_PATHS = (
 ACTION_IMAGE_PATHS = (("runs", "image"),)
 
 
+def alias_scalar(
+    node: ScalarNode, start_mark: Any, end_mark: Any, *, keep_original: bool = False
+) -> ScalarNode:
+    """Copy a scalar to an alias occurrence, optionally retaining its anchor."""
+
+    relocated = ScalarNode(node.tag, node.value, start_mark, end_mark, None)
+    if keep_original:
+        relocated.original_node = node
+    return relocated
+
+
+def alias_mapping(
+    node: MappingNode, start_mark: Any, end_mark: Any
+) -> MappingNode:
+    """Relocate only direct scalar entries of an aliased mapping."""
+
+    entries = []
+    for key_node, value_node in node.value:
+        key = (
+            alias_scalar(key_node, start_mark, start_mark, keep_original=True)
+            if isinstance(key_node, ScalarNode)
+            else key_node
+        )
+        value = (
+            alias_scalar(value_node, start_mark, end_mark, keep_original=True)
+            if isinstance(value_node, ScalarNode)
+            else value_node
+        )
+        entries.append((key, value))
+    return MappingNode(node.tag, entries, start_mark, end_mark, node.flow_style)
+
+
 class LocatedString(str):
     """A safely constructed YAML string with its original source location."""
 
     node: ScalarNode
+    original_node: ScalarNode | None
 
     def __new__(cls, value: str, node: ScalarNode) -> LocatedString:
         instance = super().__new__(cls, value)
         instance.node = node
+        instance.original_node = getattr(node, "original_node", None)
         return instance
 
 
@@ -69,13 +103,12 @@ class WorkflowLoader(yaml.SafeLoader):
                 )
             node = self.anchors[event.anchor]
             if isinstance(node, ScalarNode):
-                return ScalarNode(
-                    node.tag,
-                    node.value,
-                    event.start_mark,
-                    event.end_mark,
-                    None,
-                )
+                return alias_scalar(node, event.start_mark, event.end_mark)
+            if isinstance(node, MappingNode):
+                # Direct values may be annotated either where the mapping is
+                # anchored or where it is used. Nested values keep their own
+                # locations so one alias comment cannot cover multiple steps.
+                return alias_mapping(node, event.start_mark, event.end_mark)
             return node
         return super().compose_node(parent, index)
 
@@ -135,17 +168,17 @@ def entries_at_paths(
         yield from entries_at(root, path)
 
 
-def has_source_comment(
-    lines: list[str], key: LocatedString, value: LocatedString
+def nodes_have_source_comment(
+    lines: list[str], key_node: ScalarNode, value_node: ScalarNode
 ) -> bool:
-    key_mark = key.node.end_mark
-    start_mark = value.node.start_mark
-    end_mark = value.node.end_mark
+    key_mark = key_node.end_mark
+    start_mark = value_node.start_mark
+    end_mark = value_node.end_mark
     if start_mark.index < key_mark.index:
         return False
     if start_mark.line >= len(lines):
         return False
-    if value.node.style in {">", "|"}:
+    if value_node.style in {">", "|"}:
         header = lines[start_mark.line][start_mark.column :]
         return BLOCK_SOURCE_COMMENT.fullmatch(header) is not None
     if end_mark.line >= len(lines):
@@ -153,6 +186,16 @@ def has_source_comment(
 
     remainder = lines[end_mark.line][end_mark.column :]
     return SOURCE_COMMENT.fullmatch(remainder) is not None
+
+
+def has_source_comment(
+    lines: list[str], key: LocatedString, value: LocatedString
+) -> bool:
+    if nodes_have_source_comment(lines, key.node, value.node):
+        return True
+    if key.original_node is None or value.original_node is None:
+        return False
+    return nodes_have_source_comment(lines, key.original_node, value.original_node)
 
 
 def validate_entry(

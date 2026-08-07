@@ -83,6 +83,9 @@ else
   expect_document_accepted pinned-flow-trailing-comma "jobs: { contract: { steps: [{ uses: actions/checkout@$sha, }] } } # v7.0.1"
   expect_document_accepted aliased-pin-with-source-comment $'reference: &reference actions/checkout@'"$sha"$'\njobs:\n  contract:\n    steps:\n      - uses: *reference # v7.0.1'
   expect_document_accepted block-aliased-pin-with-source-comment $'reference: &reference >-\n  actions/checkout@'"$sha"$'\njobs:\n  contract:\n    steps:\n      - uses: *reference # v7.0.1'
+  expect_document_accepted aliased-step-with-source-comment $'step: &step\n  uses: actions/checkout@'"$sha"$'\njobs:\n  contract:\n    steps:\n      - *step # v7.0.1'
+  expect_document_accepted anchored-step-with-source-comment $'step: &step\n  uses: actions/checkout@'"$sha"$' # v7.0.1\njobs:\n  contract:\n    steps:\n      - *step'
+  expect_document_accepted aliased-job-with-source-comment $'job: &job\n  uses: owner/repository/.github/workflows/check.yml@'"$sha"$'\njobs:\n  contract: *job # main'
   expect_document_accepted quoted-list-value $'on:\n  push:\n    branches:\n      - "main"'
   expect_document_accepted quoted-flow-scalar $'env:\n  EXAMPLE: ["uses: not-an-action"]'
   expect_document_accepted matrix-metadata-uses $'jobs:\n  contract:\n    strategy:\n      matrix:\n        include:\n          - uses: metadata-only\n    steps:\n      - run: echo contract'
@@ -98,6 +101,7 @@ else
   expect_document_rejected byte-order-mark-flow $'\ufeff{ on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
   expect_document_rejected byte-order-mark-document-marker-flow $'\ufeff--- { on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
   expect_document_rejected anchored-flow-mapping $'shared: &step { uses: actions/checkout@v7 }\njobs:\n  contract:\n    steps:\n      - *step'
+  expect_document_rejected aliased-job-comment-does-not-cover-nested-steps $'job: &job\n  steps:\n    - uses: actions/checkout@'"$sha"$'\njobs:\n  contract: *job # v7.0.1'
   expect_document_rejected merged-step $'shared: &step\n  uses: actions/checkout@v7\njobs:\n  contract:\n    steps:\n      - <<: *step'
   expect_document_rejected aliased-pinned-reference $'reference: &reference actions/checkout@'"$sha"$' # v7.0.1\njobs:\n  contract:\n    steps:\n      - uses: *reference'
   expect_document_rejected multiline-explicit-flow-key $'jobs:\n  contract:\n    steps:\n      - { ? "us\\\n            es"\n          : actions/checkout@v7 }'
