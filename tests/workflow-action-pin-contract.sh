@@ -53,6 +53,17 @@ expect_document_accepted() {
   fi
 }
 
+expect_document_rejected() {
+  local name="$1"
+  local document="$2"
+  local workflow="$TEMP_DIR/$name.yml"
+
+  printf '%s\n' "$document" > "$workflow"
+  if "$VALIDATOR" "$workflow" >/dev/null 2>&1; then
+    fail "invalid workflow document was accepted: $name"
+  fi
+}
+
 if [ ! -x "$VALIDATOR" ]; then
   fail "the workflow action pin validator is missing or not executable"
 else
@@ -65,6 +76,13 @@ else
   expect_accepted scalar-containing-flow-syntax 'run: "echo '\''{ uses: not-an-action }'\''"'
   expect_document_accepted block-scalar-content $'jobs:\n  contract:\n    steps:\n      - run: |\n          "https://example.invalid/{ uses: not-an-action }"'
   expect_document_accepted quoted-list-value $'on:\n  push:\n    branches:\n      - "main"'
+  expect_document_accepted quoted-flow-scalar $'env:\n  EXAMPLE: ["uses: not-an-action"]'
+
+  expect_document_rejected implicit-flow-sequence $'jobs:\n  contract:\n    steps: [uses: actions/checkout@v7]'
+  expect_document_rejected multiline-implicit-flow-sequence $'jobs:\n  contract:\n    steps:\n      [uses: actions/checkout@v7]'
+  expect_document_rejected anchored-flow-mapping $'shared: &step { uses: actions/checkout@v7 }\njobs:\n  contract:\n    steps:\n      - *step'
+  expect_document_rejected explicit-block-key $'jobs:\n  contract:\n    steps:\n      - ? >-\n          uses\n        : actions/checkout@v7'
+  expect_document_rejected continued-quoted-key $'jobs:\n  contract:\n    steps:\n      - "us\\\n          es": actions/checkout@v7'
 
   expect_rejected mutable-tag 'uses: actions/checkout@v7 # v7.0.1'
   expect_rejected sha-in-comment "uses: actions/checkout@v7 # decoy @$sha # v7.0.1"

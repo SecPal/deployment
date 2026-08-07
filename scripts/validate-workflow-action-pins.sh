@@ -11,9 +11,13 @@ fi
 
 failures=0
 noncanonical_key_pattern="^[[:space:]]*(-[[:space:]]+)?([\"'].*[\"'][[:space:]]*:|[!&*?].*:)"
-flow_sequence_pattern="^[[:space:]]*-[[:space:]]*\\{"
-flow_mapping_pattern="^[[:space:]]*[^#[:space:]][^:]*:[[:space:]]*\\{"
-flow_uses_key_pattern="(^|[,{[:space:]])[\"']?uses[\"']?[[:space:]]*:"
+explicit_key_pattern="^[[:space:]]*(-[[:space:]]+)?\\?([[:space:]]|$)"
+multiline_quoted_scalar_pattern="^[[:space:]]*(-[[:space:]]+)?(\"[^\"]*|'[^']*)$"
+flow_sequence_pattern="^[[:space:]]*-[[:space:]]*([!&][^[:space:]]+[[:space:]]+)*[\\[{]"
+flow_mapping_pattern="^[[:space:]]*[^#[:space:]][^:]*:[[:space:]]*([!&][^[:space:]]+[[:space:]]+)*[\\[{]"
+flow_bare_pattern="^[[:space:]]*([!&][^[:space:]]+[[:space:]]+)*[\\[{]"
+flow_uses_key_pattern="(^|[,{[:space:]]|\\[)(uses|\"uses\"|'uses')[[:space:]]*:"
+flow_noncanonical_key_pattern="(^|[,{[:space:]]|\\[)([\"'][^\"']*[\"'][[:space:]]*:|[!&*?][^,:}]*:)"
 block_scalar_pattern="^[[:space:]]*[^#[:space:]][^:]*:[[:space:]]*[>|][-+0-9]*[[:space:]]*(#.*)?$"
 
 fail() {
@@ -59,14 +63,19 @@ for workflow in "$@"; do
       continue
     fi
 
-    if [[ "$line" =~ $noncanonical_key_pattern ]]; then
+    if [[ "$line" =~ $noncanonical_key_pattern ]] ||
+      [[ "$line" =~ $explicit_key_pattern ]] ||
+      [[ "$line" =~ $multiline_quoted_scalar_pattern ]]; then
       fail "$line_number" \
         "mapping keys must use the canonical plain syntax"
       continue
     fi
 
-    if { [[ "$line" =~ $flow_sequence_pattern ]] || [[ "$line" =~ $flow_mapping_pattern ]]; } &&
-      [[ "$line" =~ $flow_uses_key_pattern ]]; then
+    if { [[ "$line" =~ $flow_sequence_pattern ]] ||
+      [[ "$line" =~ $flow_mapping_pattern ]] ||
+      [[ "$line" =~ $flow_bare_pattern ]]; } && {
+      [[ "$line" =~ $flow_uses_key_pattern ]] || [[ "$line" =~ $flow_noncanonical_key_pattern ]]
+    }; then
       fail "$line_number" \
         "uses declarations must use the canonical block mapping syntax"
       continue
