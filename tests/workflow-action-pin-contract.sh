@@ -77,6 +77,12 @@ else
   expect_accepted local-action 'uses: ./.github/actions/local'
   expect_accepted scalar-containing-flow-syntax 'run: "echo '\''{ uses: not-an-action }'\''"'
   expect_document_accepted block-scalar-content $'jobs:\n  contract:\n    steps:\n      - run: |\n          "https://example.invalid/{ uses: not-an-action }"'
+  expect_document_accepted block-scalar-pinned $'jobs:\n  contract:\n    steps:\n      - uses: >- # v7.0.1\n          actions/checkout@'"$sha"
+  expect_document_accepted multiline-quoted-pin $'jobs:\n  contract:\n    steps:\n      - uses: "actions/checkout@\\\n          '"$sha"$'" # v7.0.1'
+  expect_document_accepted pinned-flow "jobs: { contract: { steps: [{ uses: actions/checkout@$sha }] } } # v7.0.1"
+  expect_document_accepted pinned-flow-trailing-comma "jobs: { contract: { steps: [{ uses: actions/checkout@$sha, }] } } # v7.0.1"
+  expect_document_accepted aliased-pin-with-source-comment $'reference: &reference actions/checkout@'"$sha"$'\njobs:\n  contract:\n    steps:\n      - uses: *reference # v7.0.1'
+  expect_document_accepted block-aliased-pin-with-source-comment $'reference: &reference >-\n  actions/checkout@'"$sha"$'\njobs:\n  contract:\n    steps:\n      - uses: *reference # v7.0.1'
   expect_document_accepted quoted-list-value $'on:\n  push:\n    branches:\n      - "main"'
   expect_document_accepted quoted-flow-scalar $'env:\n  EXAMPLE: ["uses: not-an-action"]'
   expect_document_accepted matrix-metadata-uses $'jobs:\n  contract:\n    strategy:\n      matrix:\n        include:\n          - uses: metadata-only\n    steps:\n      - run: echo contract'
@@ -119,6 +125,35 @@ else
     '    - uses: actions/checkout@v7' > "$TEMP_DIR/composite/action.yml"
   if "$VALIDATOR" "$TEMP_DIR/composite/action.yml" >/dev/null 2>&1; then
     fail "mutable composite action reference was accepted"
+  fi
+
+  mkdir -p "$TEMP_DIR/.github/workflows/local-action"
+  printf '%s\n' \
+    'name: Nested composite contract' \
+    'runs:' \
+    '  using: composite' \
+    '  steps:' \
+    '    - uses: actions/checkout@v7' > "$TEMP_DIR/.github/workflows/local-action/action.yml"
+  if "$VALIDATOR" "$TEMP_DIR/.github/workflows/local-action/action.yml" >/dev/null 2>&1; then
+    fail "mutable nested composite action reference was accepted"
+  fi
+
+  mkdir -p "$TEMP_DIR/docker-action"
+  printf '%s\n' \
+    'name: Docker contract' \
+    'runs:' \
+    '  using: docker' \
+    '  image: docker://registry.example.invalid/action:latest' > "$TEMP_DIR/docker-action/action.yml"
+  if "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "mutable Docker action image was accepted"
+  fi
+  printf '%s\n' \
+    'name: Docker contract' \
+    'runs:' \
+    '  using: docker' \
+    "  image: docker://registry.example.invalid/action@sha256:$digest" > "$TEMP_DIR/docker-action/action.yml"
+  if ! "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "pinned Docker action image was rejected"
   fi
 
   mapfile -d '' workflow_files < <(
