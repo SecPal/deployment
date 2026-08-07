@@ -68,22 +68,28 @@ if [ ! -x "$VALIDATOR" ]; then
   fail "the workflow action pin validator is missing or not executable"
 else
   sha='0123456789abcdef0123456789abcdef01234567'
+  digest='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 
   expect_accepted pinned-tag "uses: actions/checkout@$sha # v7.0.1"
   expect_accepted pinned-branch "uses: SecPal/.github/.github/workflows/reuse.yml@$sha # main"
+  expect_accepted pinned-docker-digest "uses: docker://registry.example.invalid/action@sha256:$digest # v1.2.3"
   expect_accepted quoted-pin "uses: \"actions/checkout@$sha\" # v7.0.1"
   expect_accepted local-action 'uses: ./.github/actions/local'
   expect_accepted scalar-containing-flow-syntax 'run: "echo '\''{ uses: not-an-action }'\''"'
   expect_document_accepted block-scalar-content $'jobs:\n  contract:\n    steps:\n      - run: |\n          "https://example.invalid/{ uses: not-an-action }"'
   expect_document_accepted quoted-list-value $'on:\n  push:\n    branches:\n      - "main"'
   expect_document_accepted quoted-flow-scalar $'env:\n  EXAMPLE: ["uses: not-an-action"]'
+  expect_document_accepted matrix-metadata-uses $'jobs:\n  contract:\n    strategy:\n      matrix:\n        include:\n          - uses: metadata-only\n    steps:\n      - run: echo contract'
+  expect_document_accepted overridden-merged-step $'shared: &step\n  uses: actions/checkout@v7\njobs:\n  contract:\n    steps:\n      - <<: *step\n        uses: actions/checkout@'"$sha"$' # v7.0.1'
 
+  expect_document_rejected mutable-reusable-workflow $'jobs:\n  contract:\n    uses: owner/repository/.github/workflows/check.yml@main'
   expect_document_rejected implicit-flow-sequence $'jobs:\n  contract:\n    steps: [uses: actions/checkout@v7]'
   expect_document_rejected multiline-implicit-flow-sequence $'jobs:\n  contract:\n    steps:\n      [uses: actions/checkout@v7]'
   expect_document_rejected document-marker-flow $'--- { on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
   expect_document_rejected byte-order-mark-flow $'\ufeff{ on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
   expect_document_rejected byte-order-mark-document-marker-flow $'\ufeff--- { on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
   expect_document_rejected anchored-flow-mapping $'shared: &step { uses: actions/checkout@v7 }\njobs:\n  contract:\n    steps:\n      - *step'
+  expect_document_rejected merged-step $'shared: &step\n  uses: actions/checkout@v7\njobs:\n  contract:\n    steps:\n      - <<: *step'
   expect_document_rejected aliased-pinned-reference $'reference: &reference actions/checkout@'"$sha"$' # v7.0.1\njobs:\n  contract:\n    steps:\n      - uses: *reference'
   expect_document_rejected multiline-explicit-flow-key $'jobs:\n  contract:\n    steps:\n      - { ? "us\\\n            es"\n          : actions/checkout@v7 }'
   expect_document_rejected compact-sequence-block-scalar $'jobs:\n  contract:\n    steps:\n      - name: |\n          Checkout\n        uses: actions/checkout@v7'
@@ -98,10 +104,22 @@ else
   expect_rejected missing-source-comment "uses: actions/checkout@$sha"
   expect_rejected empty-source-comment "uses: actions/checkout@$sha #"
   expect_rejected nested-comment "uses: actions/checkout@$sha # # v7.0.1"
+  expect_rejected mutable-docker-tag 'uses: docker://registry.example.invalid/action:v1.2.3 # v1.2.3'
   expect_rejected spaced-key-separator 'uses : actions/checkout@v7 # v7.0.1'
   expect_rejected quoted-key "\"uses\": actions/checkout@v7 # @$sha # v7.0.1"
   expect_rejected escaped-uses-key '"us\x65s": actions/checkout@v7 # v7.0.1'
   expect_rejected flow-mapping "{ uses: actions/checkout@v7, name: Checkout } # @$sha # v7.0.1"
+
+  mkdir -p "$TEMP_DIR/composite"
+  printf '%s\n' \
+    'name: Composite contract' \
+    'runs:' \
+    '  using: composite' \
+    '  steps:' \
+    '    - uses: actions/checkout@v7' > "$TEMP_DIR/composite/action.yml"
+  if "$VALIDATOR" "$TEMP_DIR/composite/action.yml" >/dev/null 2>&1; then
+    fail "mutable composite action reference was accepted"
+  fi
 
   mapfile -d '' workflow_files < <(
     find "$ROOT_DIR/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
