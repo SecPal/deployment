@@ -243,8 +243,8 @@ fi
 
 if [ -f .github/workflows/local-integration.yml ]; then
   if grep -E '^[[:space:]]*uses:[[:space:]]*[^[:space:]]+' .github/workflows/local-integration.yml |
-    grep -Ev '@[0-9a-f]{40}$' >/dev/null; then
-    fail "the hosted integration workflow must pin every action to a full commit SHA"
+    grep -Ev '@[0-9a-f]{40}[[:space:]]+#[[:space:]]+[^[:space:]#]+$' >/dev/null; then
+    fail "the hosted integration workflow must pin every action to a full commit SHA with a source tag or branch comment"
   fi
   if ! grep -Eq '^[[:space:]]*python-version: "[0-9]+\.[0-9]+\.[0-9]+"$' .github/workflows/local-integration.yml; then
     fail "the hosted integration workflow must pin an exact Python patch version"
