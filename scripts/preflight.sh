@@ -29,6 +29,11 @@ if [ "${#missing_tools[@]}" -ne 0 ]; then
   exit 1
 fi
 
+if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  printf 'ERROR: required Python module missing: PyYAML\n' >&2
+  exit 1
+fi
+
 {
   git ls-files -z
   git ls-files --others --exclude-standard -z -- . ':!node_modules' ':!playwright-report' ':!test-results'

@@ -47,7 +47,7 @@ required_files=(
   scripts/fetch-oci-attestation.py
   scripts/reject-sensitive-paths.sh
   scripts/validate-origin.sh
-  scripts/validate-workflow-action-pins.sh
+  scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
@@ -91,17 +91,6 @@ require_text AGENTS.md "Docker socket"
 require_text AGENTS.md "activity-hash-chain worker: exactly one"
 require_text AGENTS.md "scheduler: exactly one"
 require_text CHANGELOG.md "## 2026-08-01 - Bootstrap Deployment Repository"
-
-mapfile -d '' workflow_files < <(
-  find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
-)
-mapfile -d '' action_metadata_files < <(
-  find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o \
-    -type f \( -name action.yml -o -name action.yaml \) -print0 | sort -z
-)
-if ! scripts/validate-workflow-action-pins.sh "${workflow_files[@]}" "${action_metadata_files[@]}"; then
-  fail "workflow and local action references do not satisfy the pinning contract"
-fi
 
 while IFS= read -r -d '' script; do
   if ! head -n 6 "$script" | grep -Fq 'SPDX-FileCopyrightText:'; then

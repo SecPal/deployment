@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
-VALIDATOR="$ROOT_DIR/scripts/validate-workflow-action-pins.sh"
+VALIDATOR="$ROOT_DIR/scripts/validate-workflow-action-pins.py"
 umask 077
 TEMP_DIR="$(mktemp -d -t secpal-workflow-action-pins.XXXXXXXXXX)"
 failures=0
@@ -84,6 +84,10 @@ else
   expect_document_rejected byte-order-mark-flow $'\ufeff{ on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
   expect_document_rejected byte-order-mark-document-marker-flow $'\ufeff--- { on: push, jobs: { contract: { uses: owner/repository/.github/workflows/check.yml@v1 } } }'
   expect_document_rejected anchored-flow-mapping $'shared: &step { uses: actions/checkout@v7 }\njobs:\n  contract:\n    steps:\n      - *step'
+  expect_document_rejected aliased-pinned-reference $'reference: &reference actions/checkout@'"$sha"$' # v7.0.1\njobs:\n  contract:\n    steps:\n      - uses: *reference'
+  expect_document_rejected multiline-explicit-flow-key $'jobs:\n  contract:\n    steps:\n      - { ? "us\\\n            es"\n          : actions/checkout@v7 }'
+  expect_document_rejected compact-sequence-block-scalar $'jobs:\n  contract:\n    steps:\n      - name: |\n          Checkout\n        uses: actions/checkout@v7'
+  expect_document_rejected carriage-return-line-breaks $'name: Contract\ron: push\rjobs:\r  contract:\r    steps:\r      - uses: actions/checkout@v7'
   expect_document_rejected explicit-block-key $'jobs:\n  contract:\n    steps:\n      - ? >-\n          uses\n        : actions/checkout@v7'
   expect_document_rejected continued-quoted-key $'jobs:\n  contract:\n    steps:\n      - "us\\\n          es": actions/checkout@v7'
 
@@ -98,6 +102,17 @@ else
   expect_rejected quoted-key "\"uses\": actions/checkout@v7 # @$sha # v7.0.1"
   expect_rejected escaped-uses-key '"us\x65s": actions/checkout@v7 # v7.0.1'
   expect_rejected flow-mapping "{ uses: actions/checkout@v7, name: Checkout } # @$sha # v7.0.1"
+
+  mapfile -d '' workflow_files < <(
+    find "$ROOT_DIR/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z
+  )
+  mapfile -d '' action_metadata_files < <(
+    find "$ROOT_DIR" \( -path "$ROOT_DIR/.git" -o -path "$ROOT_DIR/.context" -o -path "$ROOT_DIR/node_modules" -o -path "$ROOT_DIR/playwright-report" -o -path "$ROOT_DIR/test-results" \) -prune -o \
+      -type f \( -name action.yml -o -name action.yaml \) -print0 | sort -z
+  )
+  if ! "$VALIDATOR" "${workflow_files[@]}" "${action_metadata_files[@]}" >/dev/null; then
+    fail "repository workflow and local action references do not satisfy the pinning contract"
+  fi
 fi
 
 if [ "$failures" -ne 0 ]; then
