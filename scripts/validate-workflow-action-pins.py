@@ -18,15 +18,18 @@ from yaml.events import AliasEvent
 from yaml.nodes import MappingNode, ScalarNode
 
 
+DOCKER_SCHEME = "docker://"
 PINNED_GIT_REFERENCE = re.compile(r"[^@#\s]+@[0-9a-f]{40}\Z")
 PINNED_DOCKER_REFERENCE = re.compile(
     r"docker://[^@#\s]+@sha256:[0-9a-f]{64}\Z"
 )
 PINNED_IMAGE_REFERENCE = re.compile(r"[^@#\s]+@sha256:[0-9a-f]{64}\Z")
+DOCKER_STAGE_NAME = re.compile(r"[A-Za-z0-9_.-]+\Z")
 SOURCE_COMMENT = re.compile(
     r"[ \t,}\]]*[ \t]+#[ \t]*[^#\s]+(?:[ \t]+.*)?\Z"
 )
 BLOCK_SOURCE_COMMENT = re.compile(
+    r"(?:(?:![^ \t]+|&[^ \t]+)[ \t]+)*"
     r"[>|][0-9+-]*[ \t]+#[ \t]*[^#\s]+(?:[ \t]+.*)?\Z"
 )
 USE_PATHS = (
@@ -128,6 +131,15 @@ def report(path: Path, line: int, message: str) -> None:
     print(f"FAIL: {path}:{line} {message}", file=sys.stderr)
 
 
+def normalize_docker_scheme(reference: str) -> str | None:
+    """Return a runner-equivalent lowercase Docker scheme when present."""
+
+    scheme = reference[: len(DOCKER_SCHEME)]
+    if scheme.lower() != DOCKER_SCHEME:
+        return None
+    return DOCKER_SCHEME + reference[len(DOCKER_SCHEME) :]
+
+
 def mapping_entry(mapping: Any, name: str) -> tuple[LocatedString, Any] | None:
     if not isinstance(mapping, dict):
         return None
@@ -208,14 +220,14 @@ def validate_entry(
 
     reference = str(value)
     if reference.startswith("./"):
-        return 0
+        return validate_local_action(path, key, reference)
 
-    pattern = (
-        PINNED_DOCKER_REFERENCE
-        if reference.startswith("docker://")
-        else PINNED_GIT_REFERENCE
-    )
-    if pattern.fullmatch(reference) is None:
+    docker_reference = normalize_docker_scheme(reference)
+    if docker_reference is None:
+        pinned = PINNED_GIT_REFERENCE.fullmatch(reference) is not None
+    else:
+        pinned = PINNED_DOCKER_REFERENCE.fullmatch(docker_reference) is not None
+    if not pinned:
         report(
             path,
             line,
@@ -250,6 +262,163 @@ def validate_job_container(path: Path, key: LocatedString, value: Any) -> int:
     return validate_workflow_image(path, key, value)
 
 
+def repository_boundary(path: Path) -> Path:
+    """Return the containing Git worktree, or the manifest directory."""
+
+    resolved = path.resolve()
+    for parent in resolved.parents:
+        if (parent / ".git").exists():
+            return parent
+    return resolved.parent
+
+
+def is_dockerfile_reference(reference: str) -> bool:
+    """Match the Dockerfile names recognized by the GitHub Actions runner."""
+
+    name = reference.rsplit("/", maxsplit=1)[-1].lower()
+    return name.startswith("dockerfile.") or name.endswith("dockerfile")
+
+
+def dockerfile_path(action_path: Path, reference: str) -> Path | None:
+    """Resolve a repository-local Dockerfile referenced by action metadata."""
+
+    relative = Path(reference)
+    if relative.is_absolute() or not is_dockerfile_reference(reference):
+        return None
+    try:
+        candidate = (action_path.parent / relative).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not candidate.is_file() or not candidate.is_relative_to(
+        repository_boundary(action_path)
+    ):
+        return None
+    return candidate
+
+
+def validate_action_dockerfile(
+    action_path: Path, key: LocatedString, reference: str
+) -> int:
+    """Resolve and validate a Dockerfile referenced by action metadata."""
+
+    dockerfile = dockerfile_path(action_path, reference)
+    line = key.node.start_mark.line + 1
+    if dockerfile is None:
+        report(
+            action_path,
+            line,
+            "Docker action image must reference a repository-local Dockerfile",
+        )
+        return 1
+    return validate_dockerfile(dockerfile)
+
+
+def validate_dockerfile(dockerfile: Path) -> int:
+    """Require every external Dockerfile base to use an exact digest."""
+
+    try:
+        with dockerfile.open(encoding="utf-8-sig", newline=None) as stream:
+            lines = stream.read().splitlines()
+    except (OSError, UnicodeError) as error:
+        report(dockerfile, 0, f"unable to read Docker action Dockerfile: {error}")
+        return 1
+
+    failures = 0
+    stages: set[str] = set()
+    from_count = 0
+    for line_number, source_line in enumerate(lines, start=1):
+        fields = source_line.split()
+        if not fields or fields[0].lower() != "from":
+            continue
+        from_count += 1
+        index = 1
+        while index < len(fields) and fields[index].startswith("--"):
+            if not fields[index].lower().startswith("--platform="):
+                report(dockerfile, line_number, "unsupported Dockerfile FROM option")
+                failures += 1
+            index += 1
+        if index >= len(fields):
+            report(dockerfile, line_number, "Dockerfile FROM image is missing")
+            failures += 1
+            continue
+
+        image = fields[index]
+        trailing = fields[index + 1 :]
+        stage_name = None
+        if trailing:
+            if (
+                len(trailing) != 2
+                or trailing[0].lower() != "as"
+                or DOCKER_STAGE_NAME.fullmatch(trailing[1]) is None
+            ):
+                report(
+                    dockerfile,
+                    line_number,
+                    "Dockerfile FROM syntax is not statically verifiable",
+                )
+                failures += 1
+            else:
+                stage_name = trailing[1].lower()
+
+        if (
+            image != "scratch"
+            and image.lower() not in stages
+            and PINNED_IMAGE_REFERENCE.fullmatch(image) is None
+        ):
+            report(
+                dockerfile,
+                line_number,
+                "external Dockerfile base image must use a full sha256 digest",
+            )
+            failures += 1
+        if stage_name is not None:
+            stages.add(stage_name)
+
+    if from_count == 0:
+        report(dockerfile, 0, "Docker action Dockerfile must contain a FROM instruction")
+        return failures + 1
+    return failures
+
+
+def validate_local_action(
+    source_path: Path, key: LocatedString, reference: str
+) -> int:
+    """Validate a referenced local action that consists only of a Dockerfile."""
+
+    boundary = repository_boundary(source_path)
+    try:
+        action_directory = (boundary / reference).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return 0
+    if not action_directory.is_relative_to(boundary):
+        report(
+            source_path,
+            key.node.start_mark.line + 1,
+            "local action reference must remain inside the repository",
+        )
+        return 1
+    if not action_directory.is_dir() or any(
+        (action_directory / name).is_file() for name in ("action.yml", "action.yaml")
+    ):
+        return 0
+    for name in ("Dockerfile", "dockerfile"):
+        dockerfile = action_directory / name
+        if dockerfile.is_file():
+            try:
+                resolved_dockerfile = dockerfile.resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if not resolved_dockerfile.is_relative_to(boundary):
+                report(
+                    source_path,
+                    key.node.start_mark.line + 1,
+                    "local action Dockerfile must remain inside the repository",
+                )
+                return 1
+            return validate_dockerfile(resolved_dockerfile)
+    return 0
+
+
 def validate_action_image(path: Path, key: LocatedString, value: Any) -> int:
     line = key.node.start_mark.line + 1
     if not isinstance(value, LocatedString):
@@ -257,9 +426,10 @@ def validate_action_image(path: Path, key: LocatedString, value: Any) -> int:
         return 1
 
     reference = str(value)
-    if not reference.startswith("docker://"):
-        return 0
-    if PINNED_DOCKER_REFERENCE.fullmatch(reference) is None:
+    docker_reference = normalize_docker_scheme(reference)
+    if docker_reference is None:
+        return validate_action_dockerfile(path, key, reference)
+    if PINNED_DOCKER_REFERENCE.fullmatch(docker_reference) is None:
         report(path, line, "external Docker action image must use a full sha256 digest")
         return 1
     return 0

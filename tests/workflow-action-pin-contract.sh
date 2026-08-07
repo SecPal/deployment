@@ -8,6 +8,7 @@ ROOT_DIR="$(git rev-parse --show-toplevel)"
 VALIDATOR="$ROOT_DIR/scripts/validate-workflow-action-pins.py"
 umask 077
 TEMP_DIR="$(mktemp -d -t secpal-workflow-action-pins.XXXXXXXXXX)"
+mkdir "$TEMP_DIR/.git"
 failures=0
 
 cleanup() {
@@ -73,11 +74,14 @@ else
   expect_accepted pinned-tag "uses: actions/checkout@$sha # v7.0.1"
   expect_accepted pinned-branch "uses: SecPal/.github/.github/workflows/reuse.yml@$sha # main"
   expect_accepted pinned-docker-digest "uses: docker://registry.example.invalid/action@sha256:$digest # v1.2.3"
+  expect_accepted mixed-case-pinned-docker-digest "uses: DoCkEr://registry.example.invalid/action@sha256:$digest # v1.2.3"
   expect_accepted quoted-pin "uses: \"actions/checkout@$sha\" # v7.0.1"
   expect_accepted local-action 'uses: ./.github/actions/local'
   expect_accepted scalar-containing-flow-syntax 'run: "echo '\''{ uses: not-an-action }'\''"'
   expect_document_accepted block-scalar-content $'jobs:\n  contract:\n    steps:\n      - run: |\n          "https://example.invalid/{ uses: not-an-action }"'
   expect_document_accepted block-scalar-pinned $'jobs:\n  contract:\n    steps:\n      - uses: >- # v7.0.1\n          actions/checkout@'"$sha"
+  expect_document_accepted tagged-block-scalar-pinned $'jobs:\n  contract:\n    steps:\n      - uses: !!str >- # v7.0.1\n          actions/checkout@'"$sha"
+  expect_document_accepted anchored-block-scalar-pinned $'jobs:\n  contract:\n    steps:\n      - uses: &checkout >- # v7.0.1\n          actions/checkout@'"$sha"$'\n      - uses: *checkout # v7.0.1'
   expect_document_accepted multiline-quoted-pin $'jobs:\n  contract:\n    steps:\n      - uses: "actions/checkout@\\\n          '"$sha"$'" # v7.0.1'
   expect_document_accepted pinned-flow "jobs: { contract: { steps: [{ uses: actions/checkout@$sha }] } } # v7.0.1"
   expect_document_accepted pinned-flow-trailing-comma "jobs: { contract: { steps: [{ uses: actions/checkout@$sha, }] } } # v7.0.1"
@@ -121,6 +125,7 @@ else
   expect_rejected empty-source-comment "uses: actions/checkout@$sha #"
   expect_rejected nested-comment "uses: actions/checkout@$sha # # v7.0.1"
   expect_rejected mutable-docker-tag 'uses: docker://registry.example.invalid/action:v1.2.3 # v1.2.3'
+  expect_rejected mixed-case-mutable-docker-tag 'uses: DoCkEr://registry.example.invalid/action:v1.2.3 # v1.2.3'
   expect_rejected spaced-key-separator 'uses : actions/checkout@v7 # v7.0.1'
   expect_rejected quoted-key "\"uses\": actions/checkout@v7 # @$sha # v7.0.1"
   expect_rejected escaped-uses-key '"us\x65s": actions/checkout@v7 # v7.0.1'
@@ -164,6 +169,94 @@ else
     "  image: docker://registry.example.invalid/action@sha256:$digest" > "$TEMP_DIR/docker-action/action.yml"
   if ! "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
     fail "pinned Docker action image was rejected"
+  fi
+  printf '%s\n' \
+    'name: Docker contract' \
+    'runs:' \
+    '  using: docker' \
+    '  image: Docker://registry.example.invalid/action:latest' > "$TEMP_DIR/docker-action/action.yml"
+  if "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "mixed-case mutable Docker action image was accepted"
+  fi
+  printf '%s\n' \
+    'name: Docker contract' \
+    'runs:' \
+    '  using: docker' \
+    "  image: DoCkEr://registry.example.invalid/action@sha256:$digest" > "$TEMP_DIR/docker-action/action.yml"
+  if ! "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "mixed-case pinned Docker action image was rejected"
+  fi
+  printf '%s\n' \
+    'name: Dockerfile contract' \
+    'runs:' \
+    '  using: docker' \
+    '  image: Dockerfile' > "$TEMP_DIR/docker-action/action.yml"
+  printf '%s\n' 'FROM alpine:latest' > "$TEMP_DIR/docker-action/Dockerfile"
+  if "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "mutable Dockerfile action base image was accepted"
+  fi
+  printf '%s\n' "FROM alpine@sha256:$digest" > "$TEMP_DIR/docker-action/Dockerfile"
+  if ! "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "pinned Dockerfile action base image was rejected"
+  fi
+  printf '%s\n' \
+    "FROM --platform=linux/amd64 alpine@sha256:$digest AS build" \
+    'FROM build AS packaged' \
+    'FROM scratch' > "$TEMP_DIR/docker-action/Dockerfile"
+  if ! "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "pinned multi-stage Dockerfile action was rejected"
+  fi
+  printf '%s\n' \
+    "FROM alpine@sha256:$digest AS build" \
+    'FROM node:22' > "$TEMP_DIR/docker-action/Dockerfile"
+  if "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "mutable later Dockerfile action stage was accepted"
+  fi
+  # shellcheck disable=SC2016
+  printf '%s\n' \
+    'ARG BASE=alpine:latest' \
+    'FROM ${BASE}' > "$TEMP_DIR/docker-action/Dockerfile"
+  if "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "variable Dockerfile action base image was accepted"
+  fi
+  printf '%s\n' \
+    "FROM \\" \
+    "  alpine@sha256:$digest" > "$TEMP_DIR/docker-action/Dockerfile"
+  if "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "continued Dockerfile action base image was accepted without static proof"
+  fi
+  mkdir -p "$TEMP_DIR/docker-action/nested"
+  printf '%s\n' \
+    'name: Custom Dockerfile contract' \
+    'runs:' \
+    '  using: docker' \
+    '  image: nested/dOcKeRfIlE.action' > "$TEMP_DIR/docker-action/action.yml"
+  printf '%s\n' "FROM alpine@sha256:$digest" > "$TEMP_DIR/docker-action/nested/dOcKeRfIlE.action"
+  if ! "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "pinned custom Dockerfile prefix was rejected"
+  fi
+  printf '%s\n' \
+    'name: Custom Dockerfile contract' \
+    'runs:' \
+    '  using: docker' \
+    '  image: nested/ActionDockerfile' > "$TEMP_DIR/docker-action/action.yml"
+  printf '%s\n' "FROM alpine@sha256:$digest" > "$TEMP_DIR/docker-action/nested/ActionDockerfile"
+  if ! "$VALIDATOR" "$TEMP_DIR/docker-action/action.yml" >/dev/null 2>&1; then
+    fail "pinned custom Dockerfile suffix was rejected"
+  fi
+  mkdir -p "$TEMP_DIR/bare-action"
+  printf '%s\n' \
+    'jobs:' \
+    '  contract:' \
+    '    steps:' \
+    '      - uses: ./bare-action' > "$TEMP_DIR/bare-workflow.yml"
+  printf '%s\n' 'FROM alpine:latest' > "$TEMP_DIR/bare-action/Dockerfile"
+  if "$VALIDATOR" "$TEMP_DIR/bare-workflow.yml" >/dev/null 2>&1; then
+    fail "mutable bare Dockerfile action base image was accepted"
+  fi
+  printf '%s\n' "FROM alpine@sha256:$digest" > "$TEMP_DIR/bare-action/Dockerfile"
+  if ! "$VALIDATOR" "$TEMP_DIR/bare-workflow.yml" >/dev/null 2>&1; then
+    fail "pinned bare Dockerfile action base image was rejected"
   fi
 
   mapfile -d '' workflow_files < <(
