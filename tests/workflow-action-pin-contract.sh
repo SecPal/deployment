@@ -87,6 +87,9 @@ else
   expect_document_accepted quoted-flow-scalar $'env:\n  EXAMPLE: ["uses: not-an-action"]'
   expect_document_accepted matrix-metadata-uses $'jobs:\n  contract:\n    strategy:\n      matrix:\n        include:\n          - uses: metadata-only\n    steps:\n      - run: echo contract'
   expect_document_accepted overridden-merged-step $'shared: &step\n  uses: actions/checkout@v7\njobs:\n  contract:\n    steps:\n      - <<: *step\n        uses: actions/checkout@'"$sha"$' # v7.0.1'
+  expect_document_accepted pinned-job-container $'jobs:\n  contract:\n    container: registry.example.invalid/build@sha256:'"$digest"$'\n    steps:\n      - run: true'
+  expect_document_accepted pinned-job-container-mapping $'jobs:\n  contract:\n    container:\n      image: registry.example.invalid/build@sha256:'"$digest"$'\n    steps:\n      - run: true'
+  expect_document_accepted pinned-service-image $'jobs:\n  contract:\n    services:\n      database:\n        image: registry.example.invalid/database@sha256:'"$digest"$'\n    steps:\n      - run: true'
 
   expect_document_rejected mutable-reusable-workflow $'jobs:\n  contract:\n    uses: owner/repository/.github/workflows/check.yml@main'
   expect_document_rejected implicit-flow-sequence $'jobs:\n  contract:\n    steps: [uses: actions/checkout@v7]'
@@ -102,6 +105,9 @@ else
   expect_document_rejected carriage-return-line-breaks $'name: Contract\ron: push\rjobs:\r  contract:\r    steps:\r      - uses: actions/checkout@v7'
   expect_document_rejected explicit-block-key $'jobs:\n  contract:\n    steps:\n      - ? >-\n          uses\n        : actions/checkout@v7'
   expect_document_rejected continued-quoted-key $'jobs:\n  contract:\n    steps:\n      - "us\\\n          es": actions/checkout@v7'
+  expect_document_rejected mutable-job-container $'jobs:\n  contract:\n    container: node:22\n    steps:\n      - run: true'
+  expect_document_rejected mutable-job-container-mapping $'jobs:\n  contract:\n    container:\n      image: node:22\n    steps:\n      - run: true'
+  expect_document_rejected mutable-service-image $'jobs:\n  contract:\n    services:\n      database:\n        image: postgres:17\n    steps:\n      - run: true'
 
   expect_rejected mutable-tag 'uses: actions/checkout@v7 # v7.0.1'
   expect_rejected sha-in-comment "uses: actions/checkout@v7 # decoy @$sha # v7.0.1"

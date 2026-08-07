@@ -22,6 +22,7 @@ PINNED_GIT_REFERENCE = re.compile(r"[^@#\s]+@[0-9a-f]{40}\Z")
 PINNED_DOCKER_REFERENCE = re.compile(
     r"docker://[^@#\s]+@sha256:[0-9a-f]{64}\Z"
 )
+PINNED_IMAGE_REFERENCE = re.compile(r"[^@#\s]+@sha256:[0-9a-f]{64}\Z")
 SOURCE_COMMENT = re.compile(
     r"[ \t,}\]]*[ \t]+#[ \t]*[^#\s]+(?:[ \t]+.*)?\Z"
 )
@@ -33,7 +34,12 @@ USE_PATHS = (
     ("jobs", "*", "steps", "*", "uses"),
     ("runs", "steps", "*", "uses"),
 )
-DOCKER_IMAGE_PATHS = (("runs", "image"),)
+WORKFLOW_CONTAINER_PATHS = (("jobs", "*", "container"),)
+WORKFLOW_IMAGE_PATHS = (
+    ("jobs", "*", "container", "image"),
+    ("jobs", "*", "services", "*", "image"),
+)
+ACTION_IMAGE_PATHS = (("runs", "image"),)
 
 
 class LocatedString(str):
@@ -122,7 +128,7 @@ def entries_at(
         yield entry
 
 
-def uses_entries(
+def entries_at_paths(
     root: Any, paths: tuple[tuple[str, ...], ...]
 ) -> Iterator[tuple[LocatedString, Any]]:
     for path in paths:
@@ -182,7 +188,26 @@ def validate_entry(
     return 0
 
 
-def validate_docker_image(path: Path, key: LocatedString, value: Any) -> int:
+def validate_workflow_image(path: Path, key: LocatedString, value: Any) -> int:
+    line = key.node.start_mark.line + 1
+    if not isinstance(value, LocatedString):
+        report(path, line, "workflow container image must be a scalar string")
+        return 1
+
+    reference = str(value)
+    if PINNED_IMAGE_REFERENCE.fullmatch(reference) is None:
+        report(path, line, "workflow container image must use a full sha256 digest")
+        return 1
+    return 0
+
+
+def validate_job_container(path: Path, key: LocatedString, value: Any) -> int:
+    if isinstance(value, dict):
+        return 0
+    return validate_workflow_image(path, key, value)
+
+
+def validate_action_image(path: Path, key: LocatedString, value: Any) -> int:
     line = key.node.start_mark.line + 1
     if not isinstance(value, LocatedString):
         report(path, line, "Docker action image must be a scalar string")
@@ -219,12 +244,22 @@ def validate(path: Path) -> int:
     uses_failures = sum(
         validate_entry(path, lines, key, value)
         for root in roots
-        for key, value in uses_entries(root, USE_PATHS)
+        for key, value in entries_at_paths(root, USE_PATHS)
     )
     image_failures = sum(
-        validate_docker_image(path, key, value)
+        validate_job_container(path, key, value)
         for root in roots
-        for key, value in uses_entries(root, DOCKER_IMAGE_PATHS)
+        for key, value in entries_at_paths(root, WORKFLOW_CONTAINER_PATHS)
+    )
+    image_failures += sum(
+        validate_workflow_image(path, key, value)
+        for root in roots
+        for key, value in entries_at_paths(root, WORKFLOW_IMAGE_PATHS)
+    )
+    image_failures += sum(
+        validate_action_image(path, key, value)
+        for root in roots
+        for key, value in entries_at_paths(root, ACTION_IMAGE_PATHS)
     )
     return uses_failures + image_failures
 
