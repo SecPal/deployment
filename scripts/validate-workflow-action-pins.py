@@ -20,7 +20,7 @@ PINNED_DOCKER_REFERENCE = re.compile(
     r"docker://[^@#\s]+@sha256:[0-9a-f]{64}\Z"
 )
 SOURCE_COMMENT = re.compile(
-    r"[ \t]+#[ \t]*[^#\s]+(?:[ \t]+[^#\r\n]*)?\Z"
+    r"[ \t]*(?:[\]},][ \t]*)*#[ \t]*[^#\s]+(?:[ \t]+[^#\r\n]*)?\Z"
 )
 USE_PATHS = (
     ("jobs", "*", "uses"),
@@ -58,8 +58,6 @@ def entries_at(node: Node, path: tuple[str, ...]) -> Iterator[tuple[ScalarNode, 
 
 def has_source_comment(lines: list[str], value: ScalarNode) -> bool:
     end = value.end_mark
-    if value.start_mark.line != end.line:
-        return False
     if end.line >= len(lines):
         return False
     return SOURCE_COMMENT.fullmatch(lines[end.line][end.column :]) is not None

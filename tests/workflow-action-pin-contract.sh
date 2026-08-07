@@ -6,23 +6,14 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 VALIDATOR="$ROOT_DIR/scripts/validate-workflow-action-pins.py"
-umask 077
-TEMP_DIR="$(mktemp -d -t secpal-workflow-action-pins.XXXXXXXXXX)"
 failures=0
-
-cleanup() {
-  rm -rf -- "$TEMP_DIR"
-}
-trap cleanup EXIT HUP INT TERM
 
 check_document() {
   local expectation="$1"
   local name="$2"
   local document="$3"
-  local workflow="$TEMP_DIR/$name.yml"
 
-  printf '%s\n' "$document" > "$workflow"
-  if "$VALIDATOR" "$workflow" >/dev/null 2>&1; then
+  if "$VALIDATOR" <(printf '%s\n' "$document") >/dev/null 2>&1; then
     [ "$expectation" = accept ] || {
       printf 'FAIL: invalid workflow was accepted: %s\n' "$name" >&2
       failures=$((failures + 1))
@@ -40,6 +31,8 @@ check_document accept pinned-action $'jobs:\n  test:\n    steps:\n      - uses: 
 check_document accept pinned-workflow $'jobs:\n  test:\n    uses: owner/repository/.github/workflows/test.yml@'"$sha"$' # main'
 check_document accept pinned-docker $'jobs:\n  test:\n    steps:\n      - uses: docker://example.invalid/action@sha256:'"$digest"$' # v1.2.3'
 check_document accept local-action $'jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/local'
+check_document accept multiline-quoted $'jobs:\n  test:\n    steps:\n      - uses: "actions/checkout@\\\n          '"$sha"$'" # v7.0.1'
+check_document accept flow-comment $'jobs: { test: { steps: [{ uses: actions/checkout@'"$sha"$' }] } } # v7.0.1'
 
 check_document reject mutable-action $'jobs:\n  test:\n    steps:\n      - uses: actions/checkout@v7 # v7.0.1'
 check_document reject missing-source $'jobs:\n  test:\n    steps:\n      - uses: actions/checkout@'"$sha"
