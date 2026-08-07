@@ -47,6 +47,7 @@ required_files=(
   scripts/fetch-oci-attestation.py
   scripts/reject-sensitive-paths.sh
   scripts/validate-origin.sh
+  scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
@@ -54,6 +55,7 @@ required_files=(
   tests/local-integration-lifecycle.sh
   tests/preflight-origin-contract.sh
   tests/sensitive-path-contract.sh
+  tests/workflow-action-pin-contract.sh
   tests/fixtures/fake-docker.sh
   tests/fixtures/fake-gh.sh
   tests/fixtures/fake-python3.sh

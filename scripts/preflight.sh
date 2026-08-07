@@ -29,6 +29,11 @@ if [ "${#missing_tools[@]}" -ne 0 ]; then
   exit 1
 fi
 
+if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  printf 'ERROR: required Python module missing: PyYAML\n' >&2
+  exit 1
+fi
+
 {
   git ls-files -z
   git ls-files --others --exclude-standard -z -- . ':!node_modules' ':!playwright-report' ':!test-results'
@@ -55,6 +60,7 @@ bash tests/runtime-secret-contract.sh
 bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh
 bash tests/sensitive-path-contract.sh
+bash tests/workflow-action-pin-contract.sh
 
 mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"
