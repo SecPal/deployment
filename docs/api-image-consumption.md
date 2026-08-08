@@ -113,7 +113,10 @@ environment variables, and manual tag changes are never rollback inputs.
 Phase C is in progress. API publication and token-free, fail-closed API digest
 consumption are implemented.
 
-Frontend publication remains outstanding.
+Frontend publication is complete, and its reviewed digest is consumed through
+the equivalent fail-closed contract documented in
+[`frontend-image-consumption.md`](frontend-image-consumption.md). Phase C.4 is
+ready for review but still requires merge and post-merge evidence.
 
 Phase D and production host automation remain outside this change. No real
 host, cloud resource, DNS, TLS, secret, inventory, persistent production data,

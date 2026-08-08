@@ -49,7 +49,7 @@ for path in \
 done
 
 require_text compose.yaml "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
-require_text compose.yaml "https://github.com/SecPal/frontend.git#fcd427d9b55d7945c439c670077e12928e47ddd6"
+require_text compose.yaml "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
 require_text compose.yaml "127.0.0.1:\${SECPAL_PHASE_B_PORT:-8443}:8443"
 # The Compose interpolation must remain literal.
 # shellcheck disable=SC2016
@@ -61,8 +61,11 @@ require_text compose.yaml 'FRONTEND_URL: https://app.secpal.example.invalid:${SE
 # The Compose interpolation must remain literal.
 # shellcheck disable=SC2016
 require_text compose.yaml 'SECPAL_API_URL: https://api.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}'
-require_text compose.yaml "\${SECPAL_PHASE_B_FRONTEND_IMAGE:-secpal-frontend:phase-b-fcd427d9b55d}"
 require_text compose.yaml "\${SECPAL_PHASE_B_GATEWAY_IMAGE:-secpal-test-gateway:phase-b-2.10.2}"
+if grep -Eq 'SECPAL_PHASE_B_FRONTEND_IMAGE|SecPal/frontend\.git|^    build:' \
+  <<<"$(sed -n '/^  frontend:$/,/^  gateway:$/p' compose.yaml)"; then
+  fail "the Phase B runtime frontend contract must consume only the published digest"
+fi
 # The Compose interpolation must remain literal.
 # shellcheck disable=SC2016
 require_text compose.yaml 'SANCTUM_STATEFUL_DOMAINS: app.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}'

@@ -63,18 +63,20 @@ provisioning, durable storage, and production operations.
 
 **Goal:** Define reproducible publication and consumption of product images.
 
-**Implemented:** API publication and the fail-closed API digest consumption
-target contract are implemented. The public local integration contract pins
-the verified SecPal API image by canonical OCI index digest, anonymously pulls
-that digest, anonymously retrieves and validates its raw OCI index and Sigstore
-bundle, and verifies the private digest-matching index with the pinned GitHub
-CLI before API execution. No GitHub or registry account credentials are used,
-and the verifier does not reopen the registry. The phase remains incomplete
-because frontend publication is still outstanding.
+**Implemented:** API and frontend publication and their fail-closed digest
+consumption contracts are implemented. The public local integration contract
+pins both verified SecPal images by canonical OCI index digest, anonymously
+pulls each digest with separate empty Docker configuration, validates each raw
+OCI index and registry digest header, and verifies each private
+digest-matching index and Sigstore bundle with the pinned GitHub CLI before
+container execution. No GitHub or registry account credentials are used, and
+the verifier does not reopen the registry. Phase C.4 implementation is ready
+for review; the phase remains incomplete pending merge and post-merge
+evidence.
 
 **Expected artifacts:** Completed API and frontend version and digest
-contracts, provenance policy, image signing policy, and publication
-verification. Frontend publication remains outstanding.
+contracts, provenance policy, image signing policy, publication verification,
+and merge-commit integration evidence.
 
 **Entry criteria:** Phase B proves the product integration contract.
 
@@ -82,8 +84,8 @@ verification. Frontend publication remains outstanding.
 verifiable, and bound by digest with no `latest` dependency. The API half does
 not complete the whole phase.
 
-**Deferred:** Frontend publication, Phase D, public reference deployment,
-production host automation, and managed-hosting automation.
+**Deferred:** Phase D, public reference deployment, production host
+automation, and managed-hosting automation.
 
 ## Phase D — Public Compose reference deployment
 

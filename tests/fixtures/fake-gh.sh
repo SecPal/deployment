@@ -4,8 +4,6 @@
 
 set -euo pipefail
 
-readonly SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
-
 if [ "${1:-}" = attestation ] && [ "${2:-}" = verify ] && [ "${3:-}" = --help ]; then
   if [ "${SECPAL_TEST_GH_ATTESTATION_UNAVAILABLE:-0}" -eq 1 ]; then
     exit 1
@@ -31,20 +29,38 @@ fi
 actual_args=("${@:3}")
 subject_path="${actual_args[0]:-}"
 bundle_path="${actual_args[2]:-}"
+image_kind=
+case "${subject_path##*/}" in
+  api-image-index.json)
+    image_kind=API
+    source_commit='87d1432389adac3a02574b399322928a77c5e67f'
+    repository='SecPal/api'
+    workflow='SecPal/api/.github/workflows/publish-container.yml'
+    bundle_name='api-attestation.json'
+    ;;
+  frontend-image-index.json)
+    image_kind=FRONTEND
+    source_commit='b755ca0d0ee5a85eca5ad5688d457241f070b1b4'
+    repository='SecPal/frontend'
+    workflow='SecPal/frontend/.github/workflows/publish-container.yml'
+    bundle_name='frontend-attestation.json'
+    ;;
+  *) exit 71 ;;
+esac
 expected_args=(
   "$subject_path"
   --bundle
   "$bundle_path"
   --repo
-  SecPal/api
+  "$repository"
   --signer-workflow
-  SecPal/api/.github/workflows/publish-container.yml
+  "$workflow"
   --signer-digest
-  "$SOURCE_COMMIT"
+  "$source_commit"
   --source-ref
   refs/heads/main
   --source-digest
-  "$SOURCE_COMMIT"
+  "$source_commit"
   --deny-self-hosted-runners
   --hostname
   github.com
@@ -82,15 +98,14 @@ if [ -z "${GH_CONFIG_DIR:-}" ] || [ ! -d "$GH_CONFIG_DIR" ] ||
   exit 73
 fi
 
-if [ "${subject_path##*/}" != api-image-index.json ] ||
-  [ ! -f "$subject_path" ] ||
+if [ ! -f "$subject_path" ] ||
   [ "$(stat -c '%a' "$subject_path")" != 600 ] ||
   [ ! -s "$subject_path" ]; then
   printf 'fixture rejected a missing or insecure local OCI subject\n' >&2
   exit 74
 fi
 
-if [ "${bundle_path##*/}" != api-attestation.json ] ||
+if [ "${bundle_path##*/}" != "$bundle_name" ] ||
   [ ! -f "$bundle_path" ] ||
   [ "$(stat -c '%a' "$bundle_path")" != 600 ] ||
   [ ! -s "$bundle_path" ]; then
@@ -98,21 +113,40 @@ if [ "${bundle_path##*/}" != api-attestation.json ] ||
   exit 74
 fi
 
-observed_source_commit="$SOURCE_COMMIT"
-observed_workflow='SecPal/api/.github/workflows/publish-container.yml'
+observed_source_commit="$source_commit"
+observed_signer_commit="$source_commit"
+observed_workflow="$workflow"
+observed_repository="$repository"
+observed_source_ref='refs/heads/main'
 observed_runner='github-hosted'
 
-case "${SECPAL_TEST_ATTESTATION_RESULT:-success}" in
+result="${SECPAL_TEST_ATTESTATION_RESULT:-success}"
+if [ "$image_kind" = API ] && [ -n "${SECPAL_TEST_API_ATTESTATION_RESULT:-}" ]; then
+  result="$SECPAL_TEST_API_ATTESTATION_RESULT"
+elif [ "$image_kind" = FRONTEND ] && [ -n "${SECPAL_TEST_FRONTEND_ATTESTATION_RESULT:-}" ]; then
+  result="$SECPAL_TEST_FRONTEND_ATTESTATION_RESULT"
+fi
+
+case "$result" in
   success) ;;
   failure)
     printf 'fixture rejected the attestation verification request\n' >&2
     exit 75
     ;;
   wrong-source-commit)
-    observed_source_commit='97d1432389adac3a02574b399322928a77c5e67f'
+    observed_source_commit="f${source_commit:1}"
     ;;
   wrong-workflow)
-    observed_workflow='SecPal/api/.github/workflows/untrusted.yml'
+    observed_workflow="${repository}/.github/workflows/untrusted.yml"
+    ;;
+  wrong-repository)
+    observed_repository='SecPal/untrusted'
+    ;;
+  wrong-source-ref)
+    observed_source_ref='refs/heads/untrusted'
+    ;;
+  wrong-signer-digest)
+    observed_signer_commit="f${source_commit:1}"
     ;;
   wrong-subject-digest)
     printf 'fixture rejected subject digest mismatch\n' >&2
@@ -128,9 +162,21 @@ case "${SECPAL_TEST_ATTESTATION_RESULT:-success}" in
   *) exit 76 ;;
 esac
 
+if [ "${actual_args[4]}" != "$observed_repository" ]; then
+  printf 'fixture rejected repository mismatch\n' >&2
+  exit 77
+fi
 if [ "${actual_args[6]}" != "$observed_workflow" ]; then
   printf 'fixture rejected signer workflow mismatch\n' >&2
   exit 77
+fi
+if [ "${actual_args[8]}" != "$observed_signer_commit" ]; then
+  printf 'fixture rejected signer digest mismatch\n' >&2
+  exit 78
+fi
+if [ "${actual_args[10]}" != "$observed_source_ref" ]; then
+  printf 'fixture rejected source ref mismatch\n' >&2
+  exit 78
 fi
 if [ "${actual_args[12]}" != "$observed_source_commit" ]; then
   printf 'fixture rejected source digest mismatch\n' >&2

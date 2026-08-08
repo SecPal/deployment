@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Fetch the reviewed API index and Sigstore bundle from public GHCR metadata."""
+"""Fetch a reviewed SecPal image index and Sigstore bundle from public GHCR."""
 
 from __future__ import annotations
 
@@ -50,15 +50,51 @@ MANIFEST_RESPONSE_LIMIT = 1024 * 1024
 BUNDLE_RESPONSE_LIMIT = 16 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
-BEARER_PATTERN = re.compile(r"[A-Za-z0-9._~-]{1,32768}")
+BEARER_PATTERN = re.compile(r"[A-Za-z0-9._~+/-]{1,32768}={0,2}")
 REGISTRY_BLOB_PATH_PATTERN = re.compile(
     rf"/v2/{re.escape(REPOSITORY)}/blobs/sha256:[0-9a-f]{{64}}"
 )
 GITHUB_BLOB_PATH_PATTERN = re.compile(r"/ghcrblobs[0-9]+/blobs/sha256:[0-9a-f]{64}")
 
 RequestBytes = Callable[
-    [str, dict[str, str], int, frozenset[int]], tuple[int, str, bytes]
+    [str, dict[str, str], int, frozenset[int]], tuple[int, str, str, bytes]
 ]
+
+
+def configure_identity(
+    canonical_image: str,
+    canonical_digest: str,
+    expected_registry_path: str,
+) -> None:
+    """Bind every registry URL and signed subject check to explicit inputs."""
+    global REPOSITORY
+    global SUBJECT_NAME
+    global SUBJECT_DIGEST
+    global TOKEN_URL
+    global REGISTRY_BASE_URL
+    global REFERRERS_URL
+    global FALLBACK_INDEX_URL
+    global REGISTRY_BLOB_PATH_PATTERN
+
+    if re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*/[a-z0-9]+(?:[._-][a-z0-9]+)*", expected_registry_path) is None:
+        raise ValueError("expected registry path was not canonical")
+    if canonical_image != f"{REGISTRY}/{expected_registry_path}":
+        raise ValueError("canonical image did not match the expected registry path")
+    _require_digest(canonical_digest, "canonical image")
+
+    REPOSITORY = expected_registry_path
+    SUBJECT_NAME = canonical_image
+    SUBJECT_DIGEST = canonical_digest
+    quoted_scope = urllib.parse.quote(f"repository:{REPOSITORY}:pull", safe="")
+    TOKEN_URL = f"https://{REGISTRY}/token?service={REGISTRY}&scope={quoted_scope}"
+    REGISTRY_BASE_URL = f"https://{REGISTRY}/v2/{REPOSITORY}"
+    REFERRERS_URL = f"{REGISTRY_BASE_URL}/referrers/{SUBJECT_DIGEST}"
+    FALLBACK_INDEX_URL = (
+        f"{REGISTRY_BASE_URL}/manifests/{SUBJECT_DIGEST.replace(':', '-', 1)}"
+    )
+    REGISTRY_BLOB_PATH_PATTERN = re.compile(
+        rf"/v2/{re.escape(REPOSITORY)}/blobs/sha256:[0-9a-f]{{64}}"
+    )
 
 
 def _is_default_https_url(parsed: urllib.parse.SplitResult) -> bool:
@@ -139,7 +175,7 @@ def _request_bytes(
     headers: dict[str, str],
     max_bytes: int,
     allowed_statuses: frozenset[int],
-) -> tuple[int, str, bytes]:
+) -> tuple[int, str, str, bytes]:
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
         response = HTTPS_OPENER.open(request, timeout=REQUEST_TIMEOUT_SECONDS)
@@ -171,7 +207,8 @@ def _request_bytes(
         if len(body) > max_bytes:
             raise ValueError("registry response exceeded its size limit")
         content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
-        return status, content_type, body
+        registry_digest = response.headers.get("Docker-Content-Digest", "").strip()
+        return status, content_type, registry_digest, body
 
 
 def _parse_object(body: bytes, label: str) -> dict[str, Any]:
@@ -260,7 +297,7 @@ def _select_bundle_layer(manifest: dict[str, Any]) -> tuple[str, int]:
         subject.get("mediaType") != OCI_INDEX_MEDIA_TYPE
         or subject.get("digest") != SUBJECT_DIGEST
     ):
-        raise ValueError("OCI attestation subject digest was not the reviewed API digest")
+        raise ValueError("OCI attestation subject digest was not the reviewed image digest")
     _require_size(subject.get("size"), "subject")
 
     layers = manifest.get("layers")
@@ -308,14 +345,14 @@ def _validate_bundle_shape(body: bytes) -> None:
         or subjects[0]["digest"].get("sha256") != expected_digest
     ):
         raise ValueError(
-            "Sigstore statement subject identity was not the reviewed API image"
+            "Sigstore statement subject identity was not the reviewed image"
         )
 
 
 def _validate_subject_index(body: bytes) -> None:
     observed_digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
     if observed_digest != SUBJECT_DIGEST:
-        raise ValueError("subject index digest was not the reviewed API digest")
+        raise ValueError("subject index digest was not the reviewed image digest")
     index = _parse_object(body, "OCI subject index")
     if (
         index.get("schemaVersion") != 2
@@ -363,7 +400,7 @@ def fetch_bundle(
                 f"subject output directory does not exist: {subject_output_path.parent}"
             )
 
-    _status, content_type, token_body = request_bytes(
+    _status, content_type, _registry_digest, token_body = request_bytes(
         TOKEN_URL,
         {"Accept": "application/json"},
         TOKEN_RESPONSE_LIMIT,
@@ -380,7 +417,7 @@ def fetch_bundle(
     }
     subject_body = b""
     if subject_output_path is not None:
-        status, content_type, subject_body = request_bytes(
+        status, content_type, registry_digest, subject_body = request_bytes(
             manifest_url(SUBJECT_DIGEST),
             registry_headers,
             MANIFEST_RESPONSE_LIMIT,
@@ -389,16 +426,18 @@ def fetch_bundle(
         if status != 200:
             raise RuntimeError("OCI subject index was unavailable")
         _require_media_type(content_type, OCI_INDEX_MEDIA_TYPE, "OCI subject index")
+        if registry_digest != SUBJECT_DIGEST:
+            raise ValueError("OCI subject registry digest header did not match")
         _validate_subject_index(subject_body)
 
-    status, content_type, index_body = request_bytes(
+    status, content_type, _registry_digest, index_body = request_bytes(
         REFERRERS_URL,
         registry_headers,
         MANIFEST_RESPONSE_LIMIT,
         frozenset({200, 404}),
     )
     if status == 404:
-        status, content_type, index_body = request_bytes(
+        status, content_type, _registry_digest, index_body = request_bytes(
             FALLBACK_INDEX_URL,
             registry_headers,
             MANIFEST_RESPONSE_LIMIT,
@@ -411,7 +450,7 @@ def fetch_bundle(
         _parse_object(index_body, "OCI referrer index")
     )
 
-    status, content_type, manifest_body = request_bytes(
+    status, content_type, _registry_digest, manifest_body = request_bytes(
         manifest_url(manifest_digest),
         {
             "Accept": OCI_MANIFEST_MEDIA_TYPE,
@@ -428,7 +467,7 @@ def fetch_bundle(
         _parse_object(manifest_body, "OCI attestation manifest")
     )
 
-    status, content_type, bundle_body = request_bytes(
+    status, content_type, _registry_digest, bundle_body = request_bytes(
         blob_url(bundle_digest),
         {
             "Accept": BUNDLE_MEDIA_TYPE,
@@ -456,13 +495,15 @@ def fetch_bundle(
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
+    if len(argv) != 6:
         print(
-            f"Usage: {Path(argv[0]).name} SUBJECT_OUTPUT_PATH BUNDLE_OUTPUT_PATH",
+            f"Usage: {Path(argv[0]).name} SUBJECT_OUTPUT_PATH BUNDLE_OUTPUT_PATH "
+            "CANONICAL_IMAGE CANONICAL_DIGEST EXPECTED_REGISTRY_PATH",
             file=sys.stderr,
         )
         return 2
     try:
+        configure_identity(argv[3], argv[4], argv[5])
         fetch_bundle(Path(argv[2]), subject_output_path=Path(argv[1]))
     except (OSError, RuntimeError, ValueError) as error:
         print(f"ERROR: anonymous OCI attestation bundle retrieval failed: {error}", file=sys.stderr)
