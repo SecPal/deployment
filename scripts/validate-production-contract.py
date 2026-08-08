@@ -44,12 +44,10 @@ REQUIRED_TOOLS = {
     "stat",
     "timedatectl",
 }
-RESERVED_SERVICE_IDS = {10001, 10002}
 MANAGED_PATH_ROOTS = {
     "runtime_secrets": PurePosixPath("/run/secpal"),
 }
 DEFAULT_MANAGED_PATH_ROOT = PurePosixPath("/srv/secpal")
-SERVICE_ACCOUNT_HOME_ROOT = PurePosixPath("/var/lib")
 DOCKER_DATA_ROOT = PurePosixPath("/var/lib/docker")
 
 SECRET_FIELD_NAMES = {
@@ -446,8 +444,11 @@ def parse_address(raw: Any, location: str) -> ipaddress.IPv4Address | ipaddress.
         address = ipaddress.ip_address(raw)
     except ValueError as exc:
         raise ContractViolation(f"invalid IP address at {location}") from exc
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        raise ContractViolation(f"IPv4-mapped IPv6 address is forbidden at {location}")
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.scope_id is not None:
+            raise ContractViolation(f"scoped IPv6 address is forbidden at {location}")
+        if address.ipv4_mapped is not None:
+            raise ContractViolation(f"IPv4-mapped IPv6 address is forbidden at {location}")
     return address
 
 
@@ -465,15 +466,24 @@ def parse_unique_addresses(
     return parsed
 
 
-def validate_addresses(host: dict[str, Any]) -> None:
+def validate_addresses(host: dict[str, Any], *, synthetic: bool) -> None:
     public = parse_address(host["public_address"], "inventory.host.public_address")
     deprecated_site_local = (
         isinstance(public, ipaddress.IPv6Address) and public.is_site_local
     )
-    if public.is_multicast or deprecated_site_local or (
-        not public.is_global and not is_documentation_address(public)
+    documentation_address = is_documentation_address(public)
+    if documentation_address:
+        if not synthetic:
+            raise ContractViolation(
+                "documentation public address requires explicit synthetic mode"
+            )
+    elif (
+        public.is_multicast
+        or deprecated_site_local
+        or public.is_reserved
+        or not public.is_global
     ):
-        raise ContractViolation("public address is not public or documentation-only")
+        raise ContractViolation("public address is not globally routable")
 
     private_addresses = parse_unique_addresses(
         host["private_addresses"], "inventory.host.private_addresses"
@@ -656,25 +666,14 @@ def validate_storage_requirements(resources: dict[str, Any]) -> None:
             raise ContractViolation(f"free-inode percentage is below the contract floor at {location}")
 
 
-def validate_inventory(inventory: dict[str, Any]) -> None:
+def validate_inventory(inventory: dict[str, Any], *, synthetic: bool = False) -> None:
     validate_inventory_schema(inventory)
     host = inventory["host"]
     host_hostname = validate_hostname(host["hostname"], "inventory.host.hostname")
-    validate_addresses(host)
+    validate_addresses(host, synthetic=synthetic)
 
     service_account = inventory["service_account"]
-    if service_account["name"] == "root" or service_account["group"] == "root":
-        raise ContractViolation("service-account name and group must be unprivileged")
-    if service_account["uid"] in RESERVED_SERVICE_IDS:
-        raise ContractViolation("service-account UID conflicts with a container runtime identity")
-    if service_account["gid"] in RESERVED_SERVICE_IDS:
-        raise ContractViolation("service-account GID conflicts with a container runtime identity")
     validate_absolute_path(service_account["home"], "inventory.service_account.home")
-    require_managed_descendant(
-        service_account["home"],
-        SERVICE_ACCOUNT_HOME_ROOT,
-        "inventory.service_account.home",
-    )
 
     frontend_hostname = validate_origin(
         inventory["origins"]["frontend"], "inventory.origins.frontend"
@@ -687,18 +686,6 @@ def validate_inventory(inventory: dict[str, Any]) -> None:
 
     validate_path_contracts(inventory)
     validate_storage_requirements(inventory["resources"])
-
-    features = inventory["features"]
-    if features["opentimestamps"] != features["bitcoin_quorum"]:
-        raise ContractViolation(
-            "OpenTimestamp and Bitcoin quorum feature gates must be enabled or disabled together"
-        )
-    if (inventory["backup"]["target_type"] == "object-storage") != features[
-        "object_storage"
-    ]:
-        raise ContractViolation(
-            "object-storage target and feature gate must be enabled or disabled together"
-        )
 
 
 def parse_version(raw: Any, location: str) -> tuple[int, int, int]:
@@ -767,9 +754,7 @@ def validate_service_account_facts(
                 "effective service-account identity does not match the inventory"
             )
     docker_gid = runtime["socket"]["gid"]
-    if docker_gid == service_account["gid"] or docker_gid in service_account[
-        "supplementary_gids"
-    ]:
+    if docker_gid == service_account["gid"]:
         raise ContractViolation(
             "service-account has Docker-authorized group membership"
         )
@@ -843,6 +828,19 @@ def validate_headroom_fact(
         if actual < requirement[requirement_name]:
             raise ContractViolation(f"storage headroom is insufficient at {name}.{fact_name}")
 
+    consistency_checks = (
+        ("free_bytes", "free_percent", "storage_total_bytes"),
+        ("free_inodes", "free_inode_percent", "total_inodes"),
+    )
+    for absolute_name, percentage_name, total_name in consistency_checks:
+        free = headroom[absolute_name]
+        percentage = headroom[percentage_name]
+        total = resource_totals[total_name]
+        if free * 100 >= total * (percentage + 1):
+            raise ContractViolation(
+                f"storage absolute and percentage facts conflict at {name}"
+            )
+
 
 def validate_resource_facts(
     inventory: dict[str, Any], resource_facts: dict[str, Any]
@@ -882,6 +880,11 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--inventory", required=True, type=Path)
     parser.add_argument("--host-facts", required=True, type=Path)
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="permit reserved documentation addresses in synthetic fixtures",
+    )
     return parser.parse_args()
 
 
@@ -894,7 +897,7 @@ def main() -> int:
     arguments = parse_arguments()
     try:
         inventory = read_document(arguments.inventory, "inventory")
-        validate_inventory(inventory)
+        validate_inventory(inventory, synthetic=arguments.synthetic)
         host_facts = read_document(arguments.host_facts, "host facts")
         validate_host_facts(inventory, host_facts)
     except ContractViolation as exc:

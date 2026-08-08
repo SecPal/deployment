@@ -41,7 +41,10 @@ profile from a trusted installation or image record rather than infer it from
 the absence of a desktop process. Missing or different provenance, derivatives,
 and later or earlier Ubuntu releases fail closed until a reviewed contract
 update adds them. The minimum kernel is Linux 6.8, the base kernel of Ubuntu
-24.04 LTS.
+24.04 LTS. A conforming kernel fact also states that the running release is
+owned by an installed Ubuntu archive package. A future collector must derive
+that provenance from package ownership; a locally built or merely relabelled
+kernel cannot satisfy the contract.
 
 Both `linux/amd64` and `linux/arm64` are equally supported host architectures.
 The reviewed SecPal API and frontend OCI indexes each publish and smoke-test
@@ -67,12 +70,13 @@ source branch head, and a later publisher result are not deployment inputs.
 
 A conforming fact document reports all of the following:
 
-- a stable Linux 6.8 or newer Ubuntu kernel (release candidates fail closed);
+- a stable, Ubuntu-archive-package-managed Linux 6.8 or newer Ubuntu kernel
+  (release candidates and unverified provenance fail closed);
 - unified cgroup v2;
 - OverlayFS support;
 - enabled AppArmor and seccomp enforcement;
-- local `ext4`, or local XFS with `ftype=1`, for every persistent state path
-  and backup staging;
+- writable local `ext4`, or writable local XFS with `ftype=1`, for every
+  persistent state path and backup staging;
 - working `d_type` directory-entry support; and
 - the required commands `bash`, `curl`, `df`, `docker`, `findmnt`, `getent`,
   `gh`, `id`, `install`, `mktemp`, `python3`, `realpath`, `sha256sum`, `stat`,
@@ -189,6 +193,9 @@ reviewed migration note changes schema version 1.
 Each area fails if either its absolute reserve or 20% free-space and free-inode
 reserve is breached. Sharing a backing device does not make the checks
 additive; operators must evaluate every reported path and the device-wide total.
+Percentage observations are whole-number floors. An absolute free value and its
+percentage must imply a possible backing-device total no larger than the
+reported aggregate host total; contradictory evidence fails admission.
 
 | Area                        | Absolute free bytes | Free inodes | Notes                                                                                  |
 | --------------------------- | ------------------: | ----------: | -------------------------------------------------------------------------------------- |
@@ -210,19 +217,27 @@ classified as persistent plus reconstructable backup staging and must match
 the corresponding inventory path. This includes configuration and deployment
 state even though those two paths have no separate capacity floor. Runtime
 secrets are reconstructable state under `/run`; D.2 (#10) owns their eventual
-filesystem and lifecycle decision.
+filesystem and lifecycle decision. Every represented mount must explicitly
+report `mount_read_only: false`; omission and a read-only mount both fail
+closed. A future collector must derive this from the effective mount covering
+the path rather than infer writability from the filesystem type.
 
 ## Network and clock assumptions
 
 Inventory records one globally routable public address fact and at least one
-non-loopback private address fact. Only reserved documentation networks are
-accepted in synthetic examples; carrier-grade NAT and other non-global address
-ranges fail admission. Private addresses are exactly RFC 1918 IPv4 or IPv6 ULA;
+non-loopback private address fact. Reserved documentation networks are accepted
+only when the validator is invoked with the explicit `--synthetic` fixture
+flag; the normal production-validation path rejects them. Carrier-grade NAT and
+other non-global address ranges fail admission. IANA-reserved IPv6 space also
+fails even when the local language runtime classifies it as global. Private
+addresses are exactly RFC 1918 IPv4 or IPv6 ULA;
 documentation and benchmarking ranges are not private-use substitutes.
 IPv4-mapped IPv6 values are representations of IPv4 rather than accepted IPv6
-host addresses and fail admission. Address facts are strings and are never
-coerced from numeric or binary YAML values. Private-address collection order is
-insignificant, but duplicates and mismatches fail closed. The public edge will
+host addresses and fail admission. Scoped IPv6 literals also fail because an
+interface-zone suffix is not a stable inventory identity. Address facts are
+strings and are never coerced from numeric or binary YAML values.
+Private-address collection order is insignificant, but duplicates and
+mismatches fail closed. The public edge will
 be the only publicly reachable container boundary; product and data services
 remain on private container networks. Firewall mutation, routing, port
 publication, cloud metadata, and public reachability checks are outside D.1.
@@ -243,11 +258,13 @@ such as `systemd-timesyncd` and `chrony`.
 
 Inventory selects the unprivileged account and primary group name plus numeric
 UID/GID. Schema version 1 requires IDs from 1000 through 60000 and rejects
-known container identities. `root` is forbidden as either name. Facts must
-report the effective name, primary group, UID, primary GID, supplementary GIDs,
-home, shell, interactive-login state, sudo-authorization state, and effective
-host-privilege-authorization state. The name, group, IDs, and home must match
-inventory; the remaining facts must prove a
+known container identities. `root` is forbidden as an account name. Known
+privileged or sensitive Ubuntu primary-group names are forbidden, and facts
+must report no supplementary group membership.
+Facts must report the effective name, primary group, UID, primary GID,
+supplementary GIDs, home, shell, interactive-login state, sudo-authorization
+state, and effective host-privilege-authorization state. The name, group, IDs,
+and home must match inventory; the remaining facts must prove a
 non-login shell, disabled interactive login, no sudo authorization, no
 Docker-authorized membership, and no other effective host-privilege grant.
 That last denial covers privileged supplementary groups and grants through
@@ -285,11 +302,12 @@ ext4/XFS representation limits. ASCII control characters are forbidden.
 
 Schema version 1 also confines path selection by purpose: SecPal state paths
 are strict children of `/srv/secpal`, runtime secrets are a strict child of
-`/run/secpal`, the service-account home is a strict child of `/var/lib`, and
-the Docker data root is exactly its dedicated `/var/lib/docker` subtree. A
-namespace root itself is not selectable. This structural allowlist rejects
-`/etc`, `/usr`, `/var/lib/dpkg`, and other host-owned trees without maintaining
-an incomplete directory blacklist.
+`/run/secpal`, the service-account home stays within its dedicated
+`/var/lib/secpal` subtree, and the Docker data root is exactly its dedicated
+`/var/lib/docker` subtree. State and runtime-secret namespace roots themselves
+are not selectable. This structural allowlist rejects `/etc`, `/usr`,
+`/var/lib/dpkg`, and other host-owned trees without maintaining an incomplete
+directory blacklist.
 
 | Inventory key                 | Example path                   | Owner and UID:GID                  |   Mode | Class           | Decision owner       |
 | ----------------------------- | ------------------------------ | ---------------------------------- | -----: | --------------- | -------------------- |

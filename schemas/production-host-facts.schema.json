@@ -81,10 +81,7 @@
         },
         "supplementary_gids": {
           "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/systemId"
-          }
+          "maxItems": 0
         },
         "home": {
           "type": "string",
@@ -119,6 +116,7 @@
       "additionalProperties": false,
       "required": [
         "release",
+        "package_source",
         "cgroup_version",
         "overlayfs_supported",
         "apparmor_enabled",
@@ -129,6 +127,9 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 255
+        },
+        "package_source": {
+          "const": "ubuntu-archive"
         },
         "cgroup_version": {
           "const": 2
@@ -404,7 +405,14 @@
     "filesystemFact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "filesystem", "local", "d_type", "xfs_ftype"],
+      "required": [
+        "path",
+        "filesystem",
+        "local",
+        "mount_read_only",
+        "d_type",
+        "xfs_ftype"
+      ],
       "properties": {
         "path": {
           "type": "string",
@@ -415,6 +423,9 @@
         },
         "local": {
           "const": true
+        },
+        "mount_read_only": {
+          "const": false
         },
         "d_type": {
           "const": true

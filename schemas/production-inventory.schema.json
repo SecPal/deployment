@@ -75,23 +75,55 @@
       ],
       "properties": {
         "name": {
-          "$ref": "#/$defs/accountName"
+          "allOf": [
+            {
+              "$ref": "#/$defs/accountName"
+            },
+            {
+              "not": {
+                "enum": ["root"]
+              }
+            }
+          ]
         },
         "group": {
-          "$ref": "#/$defs/accountName"
+          "allOf": [
+            {
+              "$ref": "#/$defs/accountName"
+            },
+            {
+              "not": {
+                "enum": [
+                  "adm",
+                  "disk",
+                  "docker",
+                  "kmem",
+                  "lxd",
+                  "root",
+                  "shadow",
+                  "staff",
+                  "sudo",
+                  "systemd-journal"
+                ]
+              }
+            }
+          ]
         },
         "uid": {
-          "type": "integer",
-          "minimum": 1000,
-          "maximum": 60000
+          "$ref": "#/$defs/serviceAccountId"
         },
         "gid": {
-          "type": "integer",
-          "minimum": 1000,
-          "maximum": 60000
+          "$ref": "#/$defs/serviceAccountId"
         },
         "home": {
-          "$ref": "#/$defs/absolutePath"
+          "allOf": [
+            {
+              "$ref": "#/$defs/absolutePath"
+            },
+            {
+              "pattern": "^/var/lib/secpal(?:/.*)?$"
+            }
+          ]
         },
         "shell": {
           "const": "/usr/sbin/nologin"
@@ -314,6 +346,14 @@
     "accountName": {
       "type": "string",
       "pattern": "^[a-z_][a-z0-9_-]{0,30}$"
+    },
+    "serviceAccountId": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 60000,
+      "not": {
+        "enum": [10001, 10002]
+      }
     },
     "absolutePath": {
       "type": "string",

@@ -76,8 +76,10 @@ asserted facts that later collection must match. Architecture is exactly
 `amd64` or `arm64`. The host-fact document separately requires the normalized
 `ubuntu-server` installation profile; Ubuntu release identifiers alone do not
 establish the supported server provenance. Public addresses must be globally
-routable, except for reserved documentation addresses in synthetic examples;
-multicast and deprecated IPv6 site-local ranges are never host addresses.
+routable. Reserved documentation addresses are permitted only by the explicit
+`--synthetic` fixture mode; normal validation rejects them. Multicast,
+IANA-reserved IPv6 space, deprecated IPv6 site-local ranges, and scoped IPv6
+literals are never host addresses.
 Public and private address comparison uses parsed IP identities, so equivalent
 IPv6 spellings match while semantic duplicates fail. IPv4-mapped IPv6 values
 are rejected rather than treated as native IPv6 host addresses. DNS hostname
@@ -97,9 +99,11 @@ interactive-login state, and Docker-authority state are explicit. UID/GID
 values are strict YAML integers, are bounded, and cannot reuse known SecPal
 runtime IDs. Integral floating-point spellings are not coerced for UID/GID,
 path ownership, decision-issue, or resource fields. The account never carries
-a credential in inventory. `root` is forbidden as either account or group
-name. Supplied host facts report the effective UID, primary GID, and
-supplementary GIDs resolved for the configured identity, as well as its name,
+a credential in inventory. `root` is forbidden as an account name; known
+privileged or sensitive Ubuntu primary-group names are also forbidden. Host
+facts must report no supplementary group membership.
+Supplied host facts report the effective UID, primary GID, and supplementary
+GIDs resolved for the configured identity, as well as its name,
 primary group, home, shell, interactive-login state, effective sudo
 authorization, and effective host-privilege authorization. Identity and home
 facts must match inventory. Shell and login facts must prove the non-interactive
@@ -129,11 +133,11 @@ unique, mutually non-overlapping, non-empty, non-root, and outside `/tmp`.
 They must not contain or be contained by the service-account home. Fixed
 metadata cannot be changed by an operator. Version 1 confines SecPal state to
 strict children of `/srv/secpal`, runtime secrets to a strict child of
-`/run/secpal`, and the service-account home to a strict child of `/var/lib`.
-The Docker data root is exactly `/var/lib/docker`; it is recorded in inventory
-but is not an operator override. These namespace rules prevent a later owner or
-mode operation from targeting system directories such as `/etc`, `/usr`, or
-unrelated `/var/lib` trees.
+`/run/secpal`, and the service-account home to its dedicated
+`/var/lib/secpal` subtree. The Docker data root is exactly `/var/lib/docker`; it
+is recorded in inventory but is not an operator override. These namespace
+rules prevent a later owner or mode operation from targeting system directories
+such as `/etc`, `/usr`, or unrelated `/var/lib` trees.
 
 Paths use UTF-8 byte limits shared by the supported ext4/XFS host model: at
 most 255 encoded bytes per component and 4095 encoded bytes for the complete
@@ -149,9 +153,12 @@ explicitly delegated to their owning Phase D issue rather than guessed.
 The inventory declares admission requirements, never lower limits than the
 schema contract. CPU, memory, total storage, and total inode values are
 compared with supplied facts. `resources.storage` contains only byte and inode
-headroom observations. The separate closed `filesystems` fact group contains
-path, filesystem, locality, `d_type`, and XFS `ftype` observations for every
-persistent inventory path plus backup staging. This separation ensures that
+headroom observations. Each absolute/percentage pair must be mutually possible
+within the corresponding aggregate host total, allowing whole-number flooring.
+The separate closed `filesystems` fact group contains path, filesystem,
+locality, effective read-only mount state, `d_type`, and XFS `ftype`
+observations for every persistent inventory path plus backup staging. Every
+represented mount must explicitly be writable. This separation ensures that
 configuration and deployment state are checked even though they have no
 separate capacity floor. Passing the floor is not a capacity guarantee; the
 evidence method is defined in the host contract.
@@ -181,24 +188,29 @@ Run the pure validator with an inventory and a supplied fact document:
 ```bash
 python3 scripts/validate-production-contract.py \
   --inventory config/production/inventory.example.yaml \
-  --host-facts tests/fixtures/production-host/valid-amd64.yaml
+  --host-facts tests/fixtures/production-host/valid-amd64.yaml \
+  --synthetic
 ```
 
-The validator reads only those two files and the two repository schemas. It does
-not query DNS, the network, Docker, `/proc`, `/sys`, cloud metadata, or a
-remote machine and does not change the filesystem.
+`--synthetic` exists only for checked-in fixtures that use reserved
+documentation addresses. Omit it for external production inventories; without
+it, documentation addresses fail closed. The validator reads only the two input
+files and the two repository schemas. It does not query DNS, the network,
+Docker, `/proc`, `/sys`, cloud metadata, or a remote machine and does not change
+the filesystem.
 
 Validation consists of:
 
 1. recursive secret and supply-chain field rejection;
 2. closed JSON Schema Draft 2020-12 structure and type validation for both
    inventory and host facts;
-3. cross-field rules for origins, paths, ownership, feature gates, addresses,
-   and fixed resource floors; and
+3. cross-field rules for origins, paths, ownership, addresses, and fixed
+   resource floors; and
 4. comparison with synthetic host facts for OS, architecture, effective
-   service identity and privilege state, root SSH policy, kernel, cgroup,
-   Docker package provenance, daemon socket authority, Compose, clock, tools,
-   persistent-path filesystems, resources, and storage headroom.
+   service identity and privilege state, root SSH policy, kernel package
+   provenance, cgroup, Docker package provenance, daemon socket authority,
+   Compose, clock, tools, writable persistent-path filesystems, resources, and
+   storage headroom.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state

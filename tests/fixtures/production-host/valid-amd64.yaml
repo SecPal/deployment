@@ -23,6 +23,7 @@ ssh:
   direct_root_login_permitted: false
 kernel:
   release: 6.8.0
+  package_source: ubuntu-archive
   cgroup_version: 2
   overlayfs_supported: true
   apparmor_enabled: true
@@ -71,66 +72,77 @@ filesystems:
     path: /srv/secpal/config
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   deployment_state:
     path: /srv/secpal/deployment-state
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   postgresql_data:
     path: /srv/secpal/postgresql
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   private_application_storage:
     path: /srv/secpal/private-storage
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   public_application_storage:
     path: /srv/secpal/public-storage
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   edge_state:
     path: /srv/secpal/edge
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   acme_state:
     path: /srv/secpal/acme
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   crowdsec_state:
     path: /srv/secpal/crowdsec
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   logs:
     path: /srv/secpal/logs
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   backup_staging:
     path: /srv/secpal/backup-staging
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
   docker_data_root:
     path: /var/lib/docker
     filesystem: ext4
     local: true
+    mount_read_only: false
     d_type: true
     xfs_ftype: null
 resources:

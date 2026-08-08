@@ -39,16 +39,21 @@ def write_yaml(path: Path, document: dict[str, Any]) -> None:
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 
 
-def run_validator(inventory: Path, host_facts: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(
+    inventory: Path, host_facts: Path, *, synthetic: bool = True
+) -> subprocess.CompletedProcess[str]:
+    arguments = [
+        sys.executable,
+        str(VALIDATOR),
+        "--inventory",
+        str(inventory),
+        "--host-facts",
+        str(host_facts),
+    ]
+    if synthetic:
+        arguments.append("--synthetic")
     return subprocess.run(
-        [
-            sys.executable,
-            str(VALIDATOR),
-            "--inventory",
-            str(inventory),
-            "--host-facts",
-            str(host_facts),
-        ],
+        arguments,
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -463,6 +468,19 @@ def main() -> int:
         temp_root = Path(directory)
         valid_host = HOST_FIXTURES / "valid-amd64.yaml"
         valid_host_document = load_yaml(valid_host)
+
+        production_example_result = run_validator(
+            EXAMPLE, valid_host, synthetic=False
+        )
+        if production_example_result.returncode == 0:
+            raise AssertionError(
+                "documentation public address was accepted without synthetic mode"
+            )
+        if "explicit synthetic mode" not in production_example_result.stderr:
+            raise AssertionError(
+                "documentation-address failure did not identify synthetic mode"
+            )
+
         for name, mutate, sensitive_marker in mutations:
             candidate = copy.deepcopy(example)
             mutate(candidate)
@@ -538,7 +556,7 @@ def main() -> int:
                     f"host-fact failure was not deterministic: {fixture_name}"
                 )
 
-    total_negative = len(mutations) + len(negative_host_fixtures) + 2
+    total_negative = len(mutations) + len(negative_host_fixtures) + 3
     print(
         "Production inventory contract passed "
         f"({closed_object_count} closed schema objects, 3 positive schema documents, "

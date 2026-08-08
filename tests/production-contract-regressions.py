@@ -76,6 +76,9 @@ class ProductionContractRegressionTests(unittest.TestCase):
         if expected_message is not None:
             self.assertIn(expected_message, str(context.exception))
 
+    def validate_synthetic_inventory(self, inventory: dict[str, object]) -> None:
+        self.validator.validate_inventory(inventory, synthetic=True)
+
     def test_noncanonical_numeric_ipv4_origins_are_rejected(self) -> None:
         for hostname in ("127.1", "0177.0.0.1", "0x7f.1"):
             with self.subTest(hostname=hostname):
@@ -159,7 +162,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 inventory = copy.deepcopy(self.inventory)
                 inventory["schema_version"] = malformed_version
                 self.assert_contract_violation(
-                    lambda inventory=inventory: self.validator.validate_inventory(
+                    lambda inventory=inventory: self.validate_synthetic_inventory(
                         inventory
                     )
                 )
@@ -171,7 +174,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             raise AssertionError("host inventory fixture must be a mapping")
         host["public_address"] = "100.64.0.1"
         self.assert_contract_violation(
-            lambda: self.validator.validate_inventory(inventory)
+            lambda: self.validate_synthetic_inventory(inventory)
         )
 
     def test_multicast_public_addresses_are_rejected(self) -> None:
@@ -183,7 +186,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     raise AssertionError("host inventory fixture must be a mapping")
                 host["public_address"] = address
                 self.assert_contract_violation(
-                    lambda inventory=inventory: self.validator.validate_inventory(
+                    lambda inventory=inventory: self.validate_synthetic_inventory(
                         inventory
                     )
                 )
@@ -195,7 +198,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             raise AssertionError("host inventory fixture must be a mapping")
         host["public_address"] = "fec0::1"
         self.assert_contract_violation(
-            lambda: self.validator.validate_inventory(inventory)
+            lambda: self.validate_synthetic_inventory(inventory)
         )
 
     def test_ipv4_mapped_ipv6_public_addresses_are_rejected(self) -> None:
@@ -203,8 +206,23 @@ class ProductionContractRegressionTests(unittest.TestCase):
         host = nested_mapping(inventory, "host")
         host["public_address"] = "::ffff:8.8.8.8"
         self.assert_contract_violation(
-            lambda: self.validator.validate_inventory(inventory)
+            lambda: self.validate_synthetic_inventory(inventory)
         )
+
+    def test_documentation_public_addresses_require_synthetic_mode(self) -> None:
+        self.assert_contract_violation(
+            lambda: self.validator.validate_inventory(self.inventory)
+        )
+        self.validator.validate_inventory(self.inventory, synthetic=True)
+
+    def test_scoped_ipv6_addresses_are_rejected(self) -> None:
+        for address in ("2001:db8::1%eth0", "fd00::1%2"):
+            with self.subTest(address=address):
+                self.assert_contract_violation(
+                    lambda address=address: self.validator.parse_address(
+                        address, "inventory.host.public_address"
+                    )
+                )
 
     def test_semantic_duplicate_inventory_addresses_are_rejected(self) -> None:
         inventory = copy.deepcopy(self.inventory)
@@ -213,7 +231,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             raise AssertionError("host inventory fixture must be a mapping")
         host["private_addresses"] = ["fd00::1", "fd00:0::1"]
         self.assert_contract_violation(
-            lambda: self.validator.validate_inventory(inventory)
+            lambda: self.validate_synthetic_inventory(inventory)
         )
 
     def test_public_address_fact_comparison_is_semantic(self) -> None:
@@ -228,7 +246,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             raise AssertionError("host network fixture must be a mapping")
         network["public_address"] = "2001:db8::10"
 
-        self.validator.validate_inventory(inventory)
+        self.validate_synthetic_inventory(inventory)
         self.validator.validate_host_facts(inventory, facts)
 
     def test_host_fact_hostname_comparison_is_case_insensitive(self) -> None:
@@ -240,7 +258,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
         facts = copy.deepcopy(self.host_facts)
         facts["hostname"] = "secpal-host.example.invalid"
 
-        self.validator.validate_inventory(inventory)
+        self.validate_synthetic_inventory(inventory)
         self.validator.validate_host_facts(inventory, facts)
 
     def test_runtime_requires_local_daemon_endpoint_fact(self) -> None:
@@ -273,7 +291,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             raise AssertionError("inventory storage fixture must be a mapping")
         inventory_storage.pop("public_application_storage", None)
         self.assert_contract_violation(
-            lambda: self.validator.validate_inventory(inventory)
+            lambda: self.validate_synthetic_inventory(inventory)
         )
 
         facts = copy.deepcopy(self.host_facts)
@@ -323,6 +341,25 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_storage_absolute_and_percentage_facts_must_be_consistent(self) -> None:
+        for absolute_field, percentage_field, total_field in (
+            ("free_bytes", "free_percent", "storage_total_bytes"),
+            ("free_inodes", "free_inode_percent", "total_inodes"),
+        ):
+            with self.subTest(absolute_field=absolute_field):
+                facts = copy.deepcopy(self.host_facts)
+                resources = nested_mapping(facts, "resources")
+                docker_data = nested_mapping(
+                    resources, "storage", "docker_data_root"
+                )
+                docker_data[absolute_field] = resources[total_field]
+                docker_data[percentage_field] = 20
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
     def test_private_address_fact_order_is_not_significant(self) -> None:
         inventory = copy.deepcopy(self.inventory)
         host = inventory["host"]
@@ -335,7 +372,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             raise AssertionError("host network fixture must be a mapping")
         network["private_addresses"] = ["10.0.0.11", "10.0.0.10"]
 
-        self.validator.validate_inventory(inventory)
+        self.validate_synthetic_inventory(inventory)
         self.validator.validate_host_facts(inventory, facts)
 
     def test_duplicate_private_address_facts_are_rejected(self) -> None:
@@ -367,7 +404,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ),
             (
                 "unknown-field",
-                lambda: self.validator.validate_inventory(
+                lambda: self.validate_synthetic_inventory(
                     {**copy.deepcopy(self.inventory), synthetic_token: "synthetic"}
                 ),
             ),
@@ -383,17 +420,36 @@ class ProductionContractRegressionTests(unittest.TestCase):
             self.validator.scan_forbidden_input({f"{marker}_token": "synthetic"})
         self.assertNotIn(marker, str(context.exception))
 
-    def test_service_account_cannot_use_the_root_identity(self) -> None:
-        for field in ("name", "group"):
-            with self.subTest(field=field):
+    def test_service_account_cannot_use_privileged_identities(self) -> None:
+        for field, identity in (
+            ("name", "root"),
+            ("group", "adm"),
+            ("group", "disk"),
+            ("group", "docker"),
+            ("group", "kmem"),
+            ("group", "lxd"),
+            ("group", "root"),
+            ("group", "shadow"),
+            ("group", "staff"),
+            ("group", "sudo"),
+            ("group", "systemd-journal"),
+        ):
+            with self.subTest(field=field, identity=identity):
                 inventory = copy.deepcopy(self.inventory)
                 service_account = nested_mapping(inventory, "service_account")
-                service_account[field] = "root"
+                service_account[field] = identity
                 self.assert_contract_violation(
                     lambda inventory=inventory: (
-                        self.validator.validate_inventory(inventory)
+                        self.validate_synthetic_inventory(inventory)
                     )
                 )
+
+    def test_service_account_cannot_have_supplementary_groups(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        nested_mapping(facts, "service_account")["supplementary_gids"] = [1000]
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
 
     def test_effective_service_identity_must_match_the_inventory(self) -> None:
         for field in ("uid", "gid"):
@@ -484,22 +540,15 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_service_account_cannot_inherit_docker_socket_authority(self) -> None:
-        for membership in ("primary", "supplementary"):
-            with self.subTest(membership=membership):
-                facts = copy.deepcopy(self.host_facts)
-                service_account = nested_mapping(facts, "service_account")
-                socket = nested_mapping(facts, "runtime", "socket")
-                if membership == "primary":
-                    socket["gid"] = service_account["gid"]
-                else:
-                    service_account["supplementary_gids"] = [socket["gid"]]
-                self.assert_contract_violation(
-                    lambda facts=facts: (
-                        self.validator.validate_host_facts(self.inventory, facts)
-                    ),
-                    "Docker-authorized",
-                )
+    def test_primary_group_cannot_inherit_docker_socket_authority(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        service_account = nested_mapping(facts, "service_account")
+        socket = nested_mapping(facts, "runtime", "socket")
+        socket["gid"] = service_account["gid"]
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts),
+            "Docker-authorized",
+        )
 
     def test_docker_socket_contract_is_exact(self) -> None:
         for field, value in (
@@ -547,6 +596,21 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     lambda: self.validator.validate_host_facts(self.inventory, facts)
                 )
 
+    def test_host_facts_require_ubuntu_kernel_package_provenance(self) -> None:
+        for source in (None, "local-build"):
+            with self.subTest(source=source):
+                facts = copy.deepcopy(self.host_facts)
+                kernel = nested_mapping(facts, "kernel")
+                if source is None:
+                    kernel.pop("package_source")
+                else:
+                    kernel["package_source"] = source
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
     def test_managed_paths_cannot_target_system_directories(self) -> None:
         for path_name, unsafe_path in (
             ("configuration", "/etc"),
@@ -562,21 +626,60 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 path_contract["path"] = unsafe_path
                 self.assert_contract_violation(
                     lambda inventory=inventory: (
-                        self.validator.validate_inventory(inventory)
+                        self.validate_synthetic_inventory(inventory)
                     )
                 )
+
+    def test_service_account_home_stays_in_its_dedicated_subtree(self) -> None:
+        for unsafe_home in (
+            "/var/lib/dpkg",
+            "/var/lib/docker",
+            "/var/lib/postgresql",
+            "/var/lib/secpal-other",
+        ):
+            with self.subTest(unsafe_home=unsafe_home):
+                inventory = copy.deepcopy(self.inventory)
+                nested_mapping(inventory, "service_account")["home"] = unsafe_home
+                self.assert_contract_violation(
+                    lambda inventory=inventory: self.validate_synthetic_inventory(
+                        inventory
+                    )
+                )
+
+        inventory = copy.deepcopy(self.inventory)
+        nested_mapping(inventory, "service_account")[
+            "home"
+        ] = "/var/lib/secpal/account"
+        self.validate_synthetic_inventory(inventory)
 
     def test_configuration_and_deployment_state_require_filesystem_facts(self) -> None:
         for path_name in ("configuration", "deployment_state"):
             with self.subTest(path_name=path_name):
                 inventory = copy.deepcopy(self.inventory)
                 nested_mapping(inventory, "paths", path_name)["path"] += "-moved"
-                self.validator.validate_inventory(inventory)
+                self.validate_synthetic_inventory(inventory)
                 self.assert_contract_violation(
                     lambda: self.validator.validate_host_facts(
                         inventory, self.host_facts
                     ),
                     path_name,
+                )
+
+    def test_managed_filesystems_must_not_be_read_only(self) -> None:
+        for read_only in (None, True):
+            with self.subTest(read_only=read_only):
+                facts = copy.deepcopy(self.host_facts)
+                filesystem = nested_mapping(
+                    facts, "filesystems", "postgresql_data"
+                )
+                if read_only is None:
+                    filesystem.pop("mount_read_only")
+                else:
+                    filesystem["mount_read_only"] = read_only
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
                 )
 
     def test_release_candidate_kernel_is_rejected_at_stable_floor(self) -> None:
@@ -652,7 +755,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     raise AssertionError("host inventory fixture must be a mapping")
                 host["private_addresses"] = [address]
                 self.assert_contract_violation(
-                    lambda inventory=inventory: self.validator.validate_inventory(
+                    lambda inventory=inventory: self.validate_synthetic_inventory(
                         inventory
                     )
                 )
@@ -662,7 +765,18 @@ class ProductionContractRegressionTests(unittest.TestCase):
         if not isinstance(host, dict):
             raise AssertionError("host inventory fixture must be a mapping")
         host["private_addresses"] = ["fd00::20"]
-        self.validator.validate_inventory(inventory)
+        self.validate_synthetic_inventory(inventory)
+
+    def test_reserved_ipv6_ranges_are_not_public_addresses(self) -> None:
+        for address in ("5f00::1", "4000::1"):
+            with self.subTest(address=address):
+                inventory = copy.deepcopy(self.inventory)
+                nested_mapping(inventory, "host")["public_address"] = address
+                self.assert_contract_violation(
+                    lambda inventory=inventory: self.validate_synthetic_inventory(
+                        inventory
+                    )
+                )
 
     def test_public_address_fact_requires_a_string(self) -> None:
         for address in (3221225994, b"\xc0\x00\x02\x0a"):
@@ -728,7 +842,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     target = child
                 target[path[-1]] = float(target[path[-1]])
                 self.assert_contract_violation(
-                    lambda inventory=inventory: self.validator.validate_inventory(
+                    lambda inventory=inventory: self.validate_synthetic_inventory(
                         inventory
                     )
                 )
