@@ -267,7 +267,9 @@ require_text docs/api-image-consumption.md "$GH_LINUX_AMD64_SHA256"
 forbid_text README.md 'real runner currently succeeds only|blocked before API execution'
 forbid_text docs/api-image-consumption.md 'blocked at token-free attestation|blocked fail-closed target contract'
 require_text docs/roadmap.md 'Phase C — Immutable image publishing (complete)'
-require_text docs/roadmap.md '**Completion evidence:**'
+# Backticks are literal Markdown, not shell substitutions.
+# shellcheck disable=SC2016
+require_text docs/roadmap.md '**Completion evidence:** Deployment PR `SecPal/deployment#6` merged as'
 require_text CHANGELOG.md 'Consume Verified API Image Digest'
 
 forbid_text README.md 'SecPal deployment is production-ready|Phase D is complete|production deployment is complete'
@@ -287,7 +289,8 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
     wrong-digest tag registry repository api-build environment-override \
     github-config-override github-host-override github-host-flag \
     docker-auth-isolation gh-version-pin oci-verifier-reopen source-commit-duplication \
-    bundle-fetch-bypass fetcher-wrong-digest fetcher-wrong-subject-name; do
+    bundle-fetch-bypass fetcher-wrong-digest fetcher-wrong-subject-name \
+    roadmap-phase-c-evidence; do
     fixture="$negative_temp/$mutation"
     install -d -m 0700 \
       "$fixture/.github/workflows" "$fixture/docs" "$fixture/scripts" "$fixture/tests"
@@ -365,6 +368,12 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
       fetcher-wrong-subject-name)
         sed -i 's|SUBJECT_NAME = "ghcr.io/secpal/api"|SUBJECT_NAME = "ghcr.io/secpal/not-api"|' \
           "$fixture/scripts/fetch-oci-attestation.py"
+        ;;
+      roadmap-phase-c-evidence)
+        # Backticks are intentional literal mutation input.
+        # shellcheck disable=SC2016
+        sed -i 's|Deployment PR `SecPal/deployment#6` merged as|Deployment evidence removed|' \
+          "$fixture/docs/roadmap.md"
         ;;
     esac
 
