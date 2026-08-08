@@ -22,7 +22,7 @@ origins:
   frontend: https://app.example.invalid
   api: https://api.example.invalid
 paths:
-  configuration: &service-path
+  configuration:
     path: /srv/secpal/config
     owner_role: service-account
     uid: 20000
@@ -31,8 +31,13 @@ paths:
     lifecycle: persistent
     decision_issue: null
   deployment_state:
-    <<: *service-path
     path: /srv/secpal/deployment-state
+    owner_role: service-account
+    uid: 20000
+    gid: 20000
+    mode: "0750"
+    lifecycle: persistent
+    decision_issue: null
   runtime_secrets:
     path: /run/secpal/secrets
     owner_role: state-contract
@@ -49,7 +54,7 @@ paths:
     mode: "0700"
     lifecycle: persistent
     decision_issue: 10
-  private_application_storage: &api-storage
+  private_application_storage:
     path: /srv/secpal/private-storage
     owner_role: api-runtime
     uid: 10001
@@ -58,8 +63,12 @@ paths:
     lifecycle: persistent
     decision_issue: null
   public_application_storage:
-    <<: *api-storage
     path: /srv/secpal/public-storage
+    owner_role: api-runtime
+    uid: 10001
+    gid: 10001
+    mode: "0750"
+    lifecycle: persistent
     decision_issue: 10
   edge_state:
     path: /srv/secpal/edge
@@ -86,12 +95,18 @@ paths:
     lifecycle: persistent
     decision_issue: 14
   logs:
-    <<: *service-path
     path: /srv/secpal/logs
+    owner_role: service-account
+    uid: 20000
+    gid: 20000
+    mode: "0750"
     lifecycle: persistent
+    decision_issue: null
   backup_staging:
-    <<: *service-path
     path: /srv/secpal/backup-staging
+    owner_role: service-account
+    uid: 20000
+    gid: 20000
     mode: "0700"
     lifecycle: reconstructable
     decision_issue: 15
@@ -120,7 +135,7 @@ resources:
       minimum_free_percent: 20
       minimum_free_inodes: 100000
       minimum_free_inode_percent: 20
-    logs: &small-headroom
+    logs:
       minimum_free_bytes: 5368709120
       minimum_free_percent: 20
       minimum_free_inodes: 50000
@@ -141,8 +156,10 @@ resources:
       minimum_free_inodes: 50000
       minimum_free_inode_percent: 20
     backup_staging:
-      <<: *small-headroom
       minimum_free_bytes: 10737418240
+      minimum_free_percent: 20
+      minimum_free_inodes: 50000
+      minimum_free_inode_percent: 20
 backup:
   target_type: external-filesystem
   target_identifier: example-backup-target

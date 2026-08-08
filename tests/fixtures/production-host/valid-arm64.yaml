@@ -47,7 +47,7 @@ resources:
   storage_total_bytes: 268435456000
   total_inodes: 2000000
   storage:
-    docker_data: &large-storage
+    docker_data:
       path: /var/lib/docker
       filesystem: ext4
       local: true
@@ -58,32 +58,72 @@ resources:
       free_inodes: 400000
       free_inode_percent: 30
     postgresql_data:
-      <<: *large-storage
       path: /srv/secpal/postgresql
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
+      free_bytes: 68719476736
+      free_percent: 30
+      free_inodes: 400000
+      free_inode_percent: 30
     private_application_storage:
-      <<: *large-storage
       path: /srv/secpal/private-storage
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
       free_bytes: 34359738368
+      free_percent: 30
       free_inodes: 200000
+      free_inode_percent: 30
     logs:
-      <<: *large-storage
       path: /srv/secpal/logs
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
       free_bytes: 17179869184
+      free_percent: 30
       free_inodes: 100000
-    edge_state: &small-storage
-      <<: *large-storage
+      free_inode_percent: 30
+    edge_state:
       path: /srv/secpal/edge
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
       free_bytes: 8589934592
+      free_percent: 30
       free_inodes: 100000
+      free_inode_percent: 30
     acme_state:
-      <<: *small-storage
       path: /srv/secpal/acme
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
       free_bytes: 4294967296
-    crowdsec_state:
-      <<: *small-storage
-      path: /srv/secpal/crowdsec
-    backup_staging:
-      <<: *large-storage
-      path: /srv/secpal/backup-staging
-      free_bytes: 34359738368
+      free_percent: 30
       free_inodes: 100000
+      free_inode_percent: 30
+    crowdsec_state:
+      path: /srv/secpal/crowdsec
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
+      free_bytes: 8589934592
+      free_percent: 30
+      free_inodes: 100000
+      free_inode_percent: 30
+    backup_staging:
+      path: /srv/secpal/backup-staging
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
+      free_bytes: 34359738368
+      free_percent: 30
+      free_inodes: 100000
+      free_inode_percent: 30

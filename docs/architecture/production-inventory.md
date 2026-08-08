@@ -25,7 +25,9 @@ versions. D.1 provides no implicit inventory migration.
 
 Duplicate YAML mapping keys are malformed input and fail before schema
 validation. A later duplicate cannot replace an unsupported schema version or
-any other reviewed value.
+any other reviewed value. YAML merge keys may only add non-conflicting fields;
+a merge collision is a duplicate. Shared aliases are scanned once per object,
+and recursive alias graphs fail deterministically.
 
 The schema uses `additionalProperties: false` at every object boundary. A
 field that is not explicitly reviewed is invalid, even when its value would
@@ -146,10 +148,12 @@ Validation consists of:
 4. comparison with synthetic host facts for OS, architecture, kernel, cgroup,
    Docker, Compose, clock, tools, resources, and storage headroom.
 
-Missing fields, unknown or duplicate fields, unsupported versions and topology,
-relative or traversing paths, duplicate or nested state paths, invalid UID/GID
-or modes, secret material, image overrides, loopback values, collapsed origins,
-premature or contradictory features, and mismatched facts all fail closed.
+Missing fields, unknown or duplicate fields, conflicting merges, unsupported
+versions and topology, relative or traversing paths, duplicate or nested state
+paths, invalid UID/GID or modes, secret material, image overrides, canonical or
+non-canonical loopback values, collapsed origins, premature or contradictory
+features, recursive aliases, excessive input depth, and mismatched facts all
+fail closed.
 
 ## Examples and fixtures
 

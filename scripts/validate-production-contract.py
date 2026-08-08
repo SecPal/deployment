@@ -75,13 +75,14 @@ SUPPLY_CHAIN_FIELD_NAMES = {
 }
 SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"),
-    re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
+    re.compile(r"(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}"),
     re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^/@\s:]+:[^/@\s]+@"),
 )
 HOSTNAME_PATTERN = re.compile(
     r"(?=^.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
 )
+NUMERIC_HOST_LABEL_PATTERN = re.compile(r"(?:0x[0-9a-f]+|[0-9]+)\Z", re.IGNORECASE)
 DOCUMENTATION_NETWORKS = (
     ipaddress.ip_network("192.0.2.0/24"),
     ipaddress.ip_network("198.51.100.0/24"),
@@ -212,16 +213,15 @@ class ContractViolation(Exception):
 
 
 class NoDuplicateSafeLoader(yaml.SafeLoader):
-    """Safe YAML loader that rejects ambiguous explicit mapping keys."""
+    """Safe YAML loader that rejects duplicate effective mapping keys."""
 
     def construct_mapping(self, node: MappingNode, deep: bool = False) -> dict[Any, Any]:
-        explicit_keys: set[Any] = set()
+        self.flatten_mapping(node)
+        effective_keys: set[Any] = set()
         for key_node, _ in node.value:
-            if key_node.tag == "tag:yaml.org,2002:merge":
-                continue
             key = self.construct_object(key_node, deep=deep)
             try:
-                duplicate = key in explicit_keys
+                duplicate = key in effective_keys
             except TypeError as exc:
                 raise ConstructorError(
                     "while constructing a mapping",
@@ -236,7 +236,7 @@ class NoDuplicateSafeLoader(yaml.SafeLoader):
                     "duplicate mapping key is forbidden",
                     key_node.start_mark,
                 )
-            explicit_keys.add(key)
+            effective_keys.add(key)
         return super().construct_mapping(node, deep=deep)
 
 
@@ -254,13 +254,18 @@ def scan_forbidden_input(
     parts: tuple[object, ...] = (),
     root: str = "inventory",
     active: set[int] | None = None,
+    visited: set[int] | None = None,
 ) -> None:
     if active is None:
         active = set()
+    if visited is None:
+        visited = set()
     if isinstance(value, (Mapping, list)):
         identity = id(value)
         if identity in active:
             raise ContractViolation(f"recursive YAML aliases are forbidden at {field_path(parts, root)}")
+        if identity in visited:
+            return
         active.add(identity)
     try:
         if isinstance(value, Mapping):
@@ -279,10 +284,10 @@ def scan_forbidden_input(
                     raise ContractViolation(
                         f"image or registry identity field is forbidden at {field_path(child_parts, root)}"
                     )
-                scan_forbidden_input(child, child_parts, root, active)
+                scan_forbidden_input(child, child_parts, root, active, visited)
         elif isinstance(value, list):
             for index, child in enumerate(value):
-                scan_forbidden_input(child, (*parts, index), root, active)
+                scan_forbidden_input(child, (*parts, index), root, active, visited)
         elif isinstance(value, str):
             if any(pattern.search(value) for pattern in SENSITIVE_VALUE_PATTERNS):
                 raise ContractViolation(
@@ -291,20 +296,25 @@ def scan_forbidden_input(
     finally:
         if isinstance(value, (Mapping, list)):
             active.remove(id(value))
+            visited.add(id(value))
 
 
 def read_document(path: Path, label: str) -> dict[str, Any]:
     try:
-        if path.stat().st_size > MAX_INPUT_BYTES:
+        with path.open("rb") as stream:
+            raw = stream.read(MAX_INPUT_BYTES + 1)
+        if len(raw) > MAX_INPUT_BYTES:
             raise ContractViolation(f"{label} exceeds the 1 MiB input limit")
-        loaded = yaml.load(path.read_text(encoding="utf-8"), Loader=NoDuplicateSafeLoader)
+        loaded = yaml.load(raw.decode("utf-8"), Loader=NoDuplicateSafeLoader)
+        if not isinstance(loaded, dict):
+            raise ContractViolation(f"{label} root must be an object")
+        scan_forbidden_input(loaded, root=label.replace(" ", "_"))
     except ContractViolation:
         raise
+    except RecursionError as exc:
+        raise ContractViolation(f"{label} exceeds the maximum structural depth") from exc
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ContractViolation(f"{label} could not be read as one YAML document") from exc
-    if not isinstance(loaded, dict):
-        raise ContractViolation(f"{label} root must be an object")
-    scan_forbidden_input(loaded, root=label.replace(" ", "_"))
     return loaded
 
 
@@ -422,6 +432,8 @@ def validate_origin(origin: str, location: str) -> str:
     hostname = parsed.hostname
     if hostname is None:
         raise ContractViolation(f"origin hostname is missing at {location}")
+    if all(NUMERIC_HOST_LABEL_PATTERN.fullmatch(label) for label in hostname.split(".")):
+        raise ContractViolation(f"origin must use a DNS name at {location}")
     try:
         ipaddress.ip_address(hostname)
     except ValueError:
@@ -553,7 +565,9 @@ def require_integer(value: Any, location: str, minimum: int = 0) -> int:
 
 
 def parse_version(raw: Any, location: str) -> tuple[int, int, int]:
-    if not isinstance(raw, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", raw):
+    if not isinstance(raw, str) or not re.fullmatch(
+        r"[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}", raw
+    ):
         raise ContractViolation(f"{location} must be a three-part numeric version")
     return tuple(int(part) for part in raw.split("."))  # type: ignore[return-value]
 
@@ -575,7 +589,10 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
         },
         "host facts",
     )
-    if facts["schema_version"] != 1:
+    schema_version = require_integer(
+        facts["schema_version"], "host facts.schema_version", minimum=1
+    )
+    if schema_version != 1:
         raise ContractViolation("unsupported host-facts schema version")
     if facts["hostname"] != inventory["host"]["hostname"]:
         raise ContractViolation("host-facts hostname does not match the inventory")
@@ -604,7 +621,7 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
     if not isinstance(kernel["release"], str):
         raise ContractViolation("host kernel release must be a string")
     kernel_match = re.fullmatch(
-        r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+        r"(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})"
         r"(?:[-+._][A-Za-z0-9][A-Za-z0-9+._-]*)?",
         kernel["release"],
     )

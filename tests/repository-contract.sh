@@ -56,6 +56,7 @@ required_files=(
   tests/repository-contract.sh
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
+  tests/production-contract-regressions.py
   tests/production-host-contract.sh
   tests/production-inventory-contract.py
   tests/runtime-secret-contract.sh
