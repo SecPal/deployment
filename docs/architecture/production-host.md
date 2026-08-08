@@ -90,6 +90,11 @@ accepted. Version detection uses the three-part numeric output recorded in
 synthetic facts; later collectors must derive it from `docker version` and
 `docker compose version --short` without coercion.
 
+Facts must also report the effective daemon endpoint as
+`unix:///var/run/docker.sock`. A TCP, SSH, alternate Unix socket, or otherwise
+remote Docker context fails admission even when its version and data-root
+values appear compatible.
+
 The Docker daemon and its socket are root-owned. Docker daemon authority is
 privileged host authority: a user able to control the daemon can normally
 obtain host-root-equivalent access. The unprivileged SecPal service account is
@@ -141,10 +146,11 @@ The 100 GiB and 1,000,000-inode floor is likewise an explicit planning sum:
 | Docker data reserve               |      20 GiB |       200,000 |
 | PostgreSQL reserve                |      20 GiB |       200,000 |
 | Private application storage       |      10 GiB |       100,000 |
+| Public application storage        |       1 GiB |        20,000 |
 | Logs                              |       5 GiB |        50,000 |
 | Edge, ACME, and CrowdSec state    |       5 GiB |        90,000 |
 | Backup staging                    |      10 GiB |        50,000 |
-| Unassigned admission reserve      |      10 GiB |       200,000 |
+| Unassigned admission reserve      |       9 GiB |       180,000 |
 | **Minimum admission envelope**    | **100 GiB** | **1,000,000** |
 
 The recommended CPU and RAM tier doubles the minimum so that the admission
@@ -155,12 +161,12 @@ assumptions and must be replaced by measured values through the evidence method
 below, rather than presented as production observations.
 
 The evidence method is: record per-service CPU and peak RSS under D.10's
-acceptance workload; measure OCI unpacked size; measure PostgreSQL and private
-storage growth over a stated retention window; measure log rotation; and use
-the latest successful full-backup size from D.7. Recommended capacity becomes
-`measured peak + stated growth window + at least 30% operational margin`. The
-static values above remain conservative admission floors until a reviewed
-migration note changes schema version 1.
+acceptance workload; measure OCI unpacked size; measure PostgreSQL plus private
+and public storage growth over a stated retention window; measure log rotation;
+and use the latest successful full-backup size from D.7. Recommended capacity
+becomes `measured peak + stated growth window + at least 30% operational
+margin`. The static values above remain conservative admission floors until a
+reviewed migration note changes schema version 1.
 
 ## Disk and inode headroom
 
@@ -173,6 +179,7 @@ additive; operators must evaluate every reported path and the device-wide total.
 | Docker data                 |              20 GiB |     200,000 | Image pull and unpack headroom; no automatic pruning contract.                         |
 | PostgreSQL                  |              20 GiB |     200,000 | Admission reserve only; WAL and database sizing belong to D.2.                         |
 | Private application storage |              10 GiB |     100,000 | Business-critical files remain separate from PostgreSQL.                               |
+| Public application storage  |               1 GiB |      20,000 | Initial public-artifact reserve; publication and backup policy belong to D.2.          |
 | Logs                        |               5 GiB |      50,000 | Rotation and retention are deferred; exhaustion fails admission.                       |
 | Edge state                  |               2 GiB |      20,000 | Edge choice and sizing belong to D.3/D.4.                                              |
 | ACME state                  |               1 GiB |      20,000 | Certificate lifecycle belongs to D.5.                                                  |

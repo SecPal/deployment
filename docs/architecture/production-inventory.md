@@ -70,10 +70,13 @@ attestation verification, or fail-closed ordering.
 `hostname`, `architecture`, `public_address`, and `private_addresses` are
 asserted facts that later collection must match. Architecture is exactly
 `amd64` or `arm64`. Public addresses must be globally routable, except for
-reserved documentation addresses in synthetic examples. Private-address order
-is not significant; duplicate or mismatched facts fail closed. Clock
-synchronization is mandatory and cannot be disabled. The validator does not
-call cloud metadata or inspect a machine.
+reserved documentation addresses in synthetic examples; multicast and
+deprecated IPv6 site-local ranges are never host addresses. Public and private
+address comparison uses parsed IP identities, so equivalent IPv6 spellings
+match while semantic duplicates fail. DNS hostname comparison is
+case-insensitive. Private-address order is not significant; duplicate or
+mismatched facts fail closed. Clock synchronization is mandatory and cannot be
+disabled. The validator does not call cloud metadata or inspect a machine.
 
 ### `service_account`
 
@@ -107,8 +110,9 @@ explicitly delegated to their owning Phase D issue rather than guessed.
 The inventory declares admission requirements, never lower limits than the
 schema contract. CPU, memory, total storage, and total inode values are
 compared with supplied facts. Each security-relevant storage area has both an
-absolute and percentage reserve for bytes and inodes. Passing the floor is not
-a capacity guarantee; the evidence method is defined in the host contract.
+absolute and percentage reserve for bytes and inodes, including separate
+private and public application storage facts. Passing the floor is not a
+capacity guarantee; the evidence method is defined in the host contract.
 
 ### `backup`
 

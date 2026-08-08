@@ -135,6 +135,11 @@ resources:
       minimum_free_percent: 20
       minimum_free_inodes: 100000
       minimum_free_inode_percent: 20
+    public_application_storage:
+      minimum_free_bytes: 1073741824
+      minimum_free_percent: 20
+      minimum_free_inodes: 20000
+      minimum_free_inode_percent: 20
     logs:
       minimum_free_bytes: 5368709120
       minimum_free_percent: 20

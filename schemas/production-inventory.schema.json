@@ -211,6 +211,7 @@
             "docker_data",
             "postgresql_data",
             "private_application_storage",
+            "public_application_storage",
             "logs",
             "edge_state",
             "acme_state",
@@ -225,6 +226,9 @@
               "$ref": "#/$defs/storageRequirement"
             },
             "private_application_storage": {
+              "$ref": "#/$defs/storageRequirement"
+            },
+            "public_application_storage": {
               "$ref": "#/$defs/storageRequirement"
             },
             "logs": {

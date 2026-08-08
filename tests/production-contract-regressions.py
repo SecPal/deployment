@@ -130,6 +130,121 @@ class ProductionContractRegressionTests(unittest.TestCase):
             lambda: self.validator.validate_inventory(inventory)
         )
 
+    def test_multicast_public_addresses_are_rejected(self) -> None:
+        for address in ("224.0.0.1", "ff0e::1"):
+            with self.subTest(address=address):
+                inventory = copy.deepcopy(self.inventory)
+                host = inventory["host"]
+                if not isinstance(host, dict):
+                    raise AssertionError("host inventory fixture must be a mapping")
+                host["public_address"] = address
+                self.assert_contract_violation(
+                    lambda inventory=inventory: self.validator.validate_inventory(
+                        inventory
+                    )
+                )
+
+    def test_deprecated_site_local_public_address_is_rejected(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        host = inventory["host"]
+        if not isinstance(host, dict):
+            raise AssertionError("host inventory fixture must be a mapping")
+        host["public_address"] = "fec0::1"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_inventory(inventory)
+        )
+
+    def test_semantic_duplicate_inventory_addresses_are_rejected(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        host = inventory["host"]
+        if not isinstance(host, dict):
+            raise AssertionError("host inventory fixture must be a mapping")
+        host["private_addresses"] = ["fd00::1", "fd00:0::1"]
+        self.assert_contract_violation(
+            lambda: self.validator.validate_inventory(inventory)
+        )
+
+    def test_public_address_fact_comparison_is_semantic(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        host = inventory["host"]
+        if not isinstance(host, dict):
+            raise AssertionError("host inventory fixture must be a mapping")
+        host["public_address"] = "2001:0db8::10"
+        facts = copy.deepcopy(self.host_facts)
+        network = facts["network"]
+        if not isinstance(network, dict):
+            raise AssertionError("host network fixture must be a mapping")
+        network["public_address"] = "2001:db8::10"
+
+        self.validator.validate_inventory(inventory)
+        self.validator.validate_host_facts(inventory, facts)
+
+    def test_host_fact_hostname_comparison_is_case_insensitive(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        host = inventory["host"]
+        if not isinstance(host, dict):
+            raise AssertionError("host inventory fixture must be a mapping")
+        host["hostname"] = "SecPal-Host.EXAMPLE.invalid"
+        facts = copy.deepcopy(self.host_facts)
+        facts["hostname"] = "secpal-host.example.invalid"
+
+        self.validator.validate_inventory(inventory)
+        self.validator.validate_host_facts(inventory, facts)
+
+    def test_runtime_requires_local_daemon_endpoint_fact(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        runtime = facts["runtime"]
+        if not isinstance(runtime, dict):
+            raise AssertionError("host runtime fixture must be a mapping")
+        runtime.pop("daemon_endpoint", None)
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
+
+    def test_remote_daemon_endpoint_is_rejected(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        runtime = facts["runtime"]
+        if not isinstance(runtime, dict):
+            raise AssertionError("host runtime fixture must be a mapping")
+        runtime["daemon_endpoint"] = "tcp://192.0.2.50:2376"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
+
+    def test_public_application_storage_requires_inventory_and_host_facts(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        inventory_resources = inventory["resources"]
+        if not isinstance(inventory_resources, dict):
+            raise AssertionError("inventory resource fixture must be a mapping")
+        inventory_storage = inventory_resources["storage"]
+        if not isinstance(inventory_storage, dict):
+            raise AssertionError("inventory storage fixture must be a mapping")
+        inventory_storage.pop("public_application_storage", None)
+        self.assert_contract_violation(
+            lambda: self.validator.validate_inventory(inventory)
+        )
+
+        facts = copy.deepcopy(self.host_facts)
+        fact_resources = facts["resources"]
+        if not isinstance(fact_resources, dict):
+            raise AssertionError("host resource fixture must be a mapping")
+        fact_storage = fact_resources["storage"]
+        if not isinstance(fact_storage, dict):
+            raise AssertionError("host storage fixture must be a mapping")
+        fact_storage.pop("public_application_storage", None)
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
+
+    def test_runtime_versions_reject_zero_padded_components(self) -> None:
+        for version in ("029.6.2", "29.06.2", "29.6.02"):
+            with self.subTest(version=version):
+                self.assert_contract_violation(
+                    lambda version=version: self.validator.parse_version(
+                        version, "host facts.runtime.docker_engine_version"
+                    )
+                )
+
     def test_per_path_capacity_cannot_exceed_host_totals(self) -> None:
         for path_fact, total_fact in (
             ("free_bytes", "storage_total_bytes"),
@@ -252,6 +367,16 @@ class ProductionContractRegressionTests(unittest.TestCase):
         if not isinstance(kernel, dict):
             raise AssertionError("kernel fixture must be a mapping")
         kernel["release"] = ("9" * 5000) + ".8.0"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
+
+    def test_unicode_kernel_version_digits_are_rejected(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        kernel = facts["kernel"]
+        if not isinstance(kernel, dict):
+            raise AssertionError("kernel fixture must be a mapping")
+        kernel["release"] = "6.8.1١"
         self.assert_contract_violation(
             lambda: self.validator.validate_host_facts(self.inventory, facts)
         )

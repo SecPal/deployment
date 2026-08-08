@@ -18,6 +18,7 @@ runtime:
   docker_compose_version: 2.40.3
   rootless: false
   daemon_running: true
+  daemon_endpoint: unix:///var/run/docker.sock
   data_root: /var/lib/docker
 clock:
   synchronized: true
@@ -76,6 +77,16 @@ resources:
       free_bytes: 34359738368
       free_percent: 30
       free_inodes: 200000
+      free_inode_percent: 30
+    public_application_storage:
+      path: /srv/secpal/public-storage
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
+      free_bytes: 8589934592
+      free_percent: 30
+      free_inodes: 100000
       free_inode_percent: 30
     logs:
       path: /srv/secpal/logs
