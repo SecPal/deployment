@@ -246,7 +246,19 @@ def normalize_field_name(name: str) -> str:
 
 
 def field_path(parts: Sequence[object], root: str = "inventory") -> str:
-    return ".".join([root, *(str(part) for part in parts)])
+    safe_parts: list[str] = []
+    for part in parts:
+        if isinstance(part, int):
+            safe_parts.append(str(part))
+        elif (
+            isinstance(part, str)
+            and re.fullmatch(r"[a-z][a-z0-9_]*", part)
+            and not any(pattern.search(part) for pattern in SENSITIVE_VALUE_PATTERNS)
+        ):
+            safe_parts.append(part)
+        else:
+            safe_parts.append("<redacted-field>")
+    return ".".join([root, *safe_parts])
 
 
 def scan_forbidden_input(
@@ -313,7 +325,7 @@ def read_document(path: Path, label: str) -> dict[str, Any]:
         raise
     except RecursionError as exc:
         raise ContractViolation(f"{label} exceeds the maximum structural depth") from exc
-    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
         raise ContractViolation(f"{label} could not be read as one YAML document") from exc
     return loaded
 
@@ -329,16 +341,17 @@ def read_schema() -> dict[str, Any]:
 
 
 def schema_error_message(error: jsonschema.ValidationError) -> str:
-    location = field_path(tuple(error.absolute_path))
+    path = tuple(error.absolute_path)
+    location = field_path(path)
     if error.validator == "required":
         missing = sorted(set(error.validator_value) - set(error.instance))
-        suffix = f".{missing[0]}" if missing else ""
-        return f"required field missing at {location}{suffix}"
+        missing_location = field_path((*path, missing[0])) if missing else location
+        return f"required field missing at {missing_location}"
     if error.validator == "additionalProperties":
         known = set(error.schema.get("properties", {}))
         unknown = sorted(set(error.instance) - known)
-        suffix = f".{unknown[0]}" if unknown else ""
-        return f"unknown field at {location}{suffix}"
+        unknown_location = field_path((*path, unknown[0])) if unknown else location
+        return f"unknown field at {unknown_location}"
     if error.validator in {"const", "enum"}:
         return f"unsupported or fixed value at {location}"
     if error.validator == "format":
@@ -376,13 +389,7 @@ def parse_address(raw: str, location: str) -> ipaddress.IPv4Address | ipaddress.
 
 def validate_addresses(host: dict[str, Any]) -> None:
     public = parse_address(host["public_address"], "inventory.host.public_address")
-    if (
-        public.is_loopback
-        or public.is_link_local
-        or public.is_multicast
-        or public.is_unspecified
-        or (public.is_private and not is_documentation_address(public))
-    ):
+    if not public.is_global and not is_documentation_address(public):
         raise ContractViolation("public address is not public or documentation-only")
 
     private_addresses = [
@@ -513,6 +520,11 @@ def validate_storage_requirements(resources: dict[str, Any]) -> None:
 
 def validate_inventory(inventory: dict[str, Any]) -> None:
     validate_schema(inventory)
+    schema_version = require_integer(
+        inventory["schema_version"], "inventory.schema_version", minimum=1
+    )
+    if schema_version != 1:
+        raise ContractViolation("unsupported inventory schema version")
     host = inventory["host"]
     validate_hostname(host["hostname"], "inventory.host.hostname")
     validate_addresses(host)
@@ -622,10 +634,14 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
         raise ContractViolation("host kernel release must be a string")
     kernel_match = re.fullmatch(
         r"(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})"
-        r"(?:[-+._][A-Za-z0-9][A-Za-z0-9+._-]*)?",
+        r"(?P<suffix>[-+._][A-Za-z0-9][A-Za-z0-9+._-]*)?",
         kernel["release"],
     )
-    if kernel_match is None or tuple(map(int, kernel_match.groups())) < (6, 8):
+    if kernel_match is None:
+        raise ContractViolation("host kernel must be Linux 6.8 or newer")
+    kernel_version = tuple(int(kernel_match.group(index)) for index in (1, 2, 3))
+    kernel_suffix = kernel_match.group("suffix") or ""
+    if kernel_version < (6, 8) or kernel_suffix.lower().startswith("-rc"):
         raise ContractViolation("host kernel must be Linux 6.8 or newer")
     if kernel["cgroup_version"] != 2:
         raise ContractViolation("host must use cgroup v2")
@@ -675,7 +691,22 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
     )
     if network["public_address"] != inventory["host"]["public_address"]:
         raise ContractViolation("host public-address fact does not match the inventory")
-    if network["private_addresses"] != inventory["host"]["private_addresses"]:
+    fact_private_addresses = network["private_addresses"]
+    if not isinstance(fact_private_addresses, list) or any(
+        not isinstance(address, str) for address in fact_private_addresses
+    ):
+        raise ContractViolation("host private-address facts must be a string array")
+    parsed_fact_addresses = [
+        parse_address(address, f"host facts.network.private_addresses.{index}")
+        for index, address in enumerate(fact_private_addresses)
+    ]
+    parsed_inventory_addresses = [
+        parse_address(address, f"inventory.host.private_addresses.{index}")
+        for index, address in enumerate(inventory["host"]["private_addresses"])
+    ]
+    if len(set(parsed_fact_addresses)) != len(parsed_fact_addresses):
+        raise ContractViolation("host private-address facts contain duplicates")
+    if set(parsed_fact_addresses) != set(parsed_inventory_addresses):
         raise ContractViolation("host private-address facts do not match the inventory")
 
     tools = facts["tools"]
@@ -690,8 +721,10 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
         {"logical_cpus", "memory_bytes", "storage_total_bytes", "total_inodes", "storage"},
         "host facts.resources",
     )
+    resource_totals: dict[str, int] = {}
     for field in ("logical_cpus", "memory_bytes", "storage_total_bytes", "total_inodes"):
         actual = require_integer(resource_facts[field], f"host facts.resources.{field}")
+        resource_totals[field] = actual
         if actual < inventory["resources"][field]:
             raise ContractViolation(f"host resource is below inventory floor: {field}")
 
@@ -745,6 +778,10 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
             )
             if fact_name.endswith("percent") and actual > 100:
                 raise ContractViolation(f"storage percentage exceeds 100 at {name}.{fact_name}")
+            if fact_name == "free_bytes" and actual > resource_totals["storage_total_bytes"]:
+                raise ContractViolation(f"storage free bytes exceed host total at {name}")
+            if fact_name == "free_inodes" and actual > resource_totals["total_inodes"]:
+                raise ContractViolation(f"storage free inodes exceed host total at {name}")
             if actual < requirement[requirement_name]:
                 raise ContractViolation(f"storage headroom is insufficient at {name}.{fact_name}")
 

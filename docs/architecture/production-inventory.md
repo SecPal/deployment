@@ -69,8 +69,11 @@ attestation verification, or fail-closed ordering.
 
 `hostname`, `architecture`, `public_address`, and `private_addresses` are
 asserted facts that later collection must match. Architecture is exactly
-`amd64` or `arm64`. Clock synchronization is mandatory and cannot be disabled.
-The validator does not call cloud metadata or inspect a machine.
+`amd64` or `arm64`. Public addresses must be globally routable, except for
+reserved documentation addresses in synthetic examples. Private-address order
+is not significant; duplicate or mismatched facts fail closed. Clock
+synchronization is mandatory and cannot be disabled. The validator does not
+call cloud metadata or inspect a machine.
 
 ### `service_account`
 

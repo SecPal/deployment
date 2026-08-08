@@ -62,7 +62,7 @@ source branch head, and a later publisher result are not deployment inputs.
 
 A conforming fact document reports all of the following:
 
-- Linux 6.8 or newer on Ubuntu 24.04;
+- a stable Linux 6.8 or newer Ubuntu kernel (release candidates fail closed);
 - unified cgroup v2;
 - OverlayFS support;
 - enabled AppArmor and seccomp enforcement;
@@ -184,12 +184,14 @@ reads `/proc`, or inspects the developer machine.
 
 ## Network and clock assumptions
 
-Inventory records one public address fact and at least one non-loopback private
-address fact. Documentation fixtures use reserved addresses. The public edge
-will be the only publicly reachable container boundary; product and data
-services remain on private container networks. Firewall mutation, routing,
-port publication, cloud metadata, and public reachability checks are outside
-D.1.
+Inventory records one globally routable public address fact and at least one
+non-loopback private address fact. Only reserved documentation networks are
+accepted in synthetic examples; carrier-grade NAT and other non-global address
+ranges fail admission. Private-address collection order is insignificant, but
+duplicates and mismatches fail closed. The public edge will be the only
+publicly reachable container boundary; product and data services remain on
+private container networks. Firewall mutation, routing, port publication,
+cloud metadata, and public reachability checks are outside D.1.
 
 The host has a stable DNS hostname distinct from both application origins.
 Frontend and API use separate DNS-name-only HTTPS origins. Origins cannot

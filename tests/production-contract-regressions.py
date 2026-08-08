@@ -109,6 +109,119 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_inventory_schema_version_requires_an_exact_integer(self) -> None:
+        for malformed_version in (True, 1.0):
+            with self.subTest(schema_version=malformed_version):
+                inventory = copy.deepcopy(self.inventory)
+                inventory["schema_version"] = malformed_version
+                self.assert_contract_violation(
+                    lambda inventory=inventory: self.validator.validate_inventory(
+                        inventory
+                    )
+                )
+
+    def test_public_address_must_be_global_or_documentation_only(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        host = inventory["host"]
+        if not isinstance(host, dict):
+            raise AssertionError("host inventory fixture must be a mapping")
+        host["public_address"] = "100.64.0.1"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_inventory(inventory)
+        )
+
+    def test_per_path_capacity_cannot_exceed_host_totals(self) -> None:
+        for path_fact, total_fact in (
+            ("free_bytes", "storage_total_bytes"),
+            ("free_inodes", "total_inodes"),
+        ):
+            with self.subTest(path_fact=path_fact):
+                facts = copy.deepcopy(self.host_facts)
+                resources = facts["resources"]
+                if not isinstance(resources, dict):
+                    raise AssertionError("host resource fixture must be a mapping")
+                storage = resources["storage"]
+                if not isinstance(storage, dict):
+                    raise AssertionError("host storage fixture must be a mapping")
+                docker_data = storage["docker_data"]
+                if not isinstance(docker_data, dict):
+                    raise AssertionError("Docker storage fixture must be a mapping")
+                total = resources[total_fact]
+                if not isinstance(total, int):
+                    raise AssertionError("host total fixture must be an integer")
+                docker_data[path_fact] = total + 1
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_private_address_fact_order_is_not_significant(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        host = inventory["host"]
+        if not isinstance(host, dict):
+            raise AssertionError("host inventory fixture must be a mapping")
+        host["private_addresses"] = ["10.0.0.10", "10.0.0.11"]
+        facts = copy.deepcopy(self.host_facts)
+        network = facts["network"]
+        if not isinstance(network, dict):
+            raise AssertionError("host network fixture must be a mapping")
+        network["private_addresses"] = ["10.0.0.11", "10.0.0.10"]
+
+        self.validator.validate_inventory(inventory)
+        self.validator.validate_host_facts(inventory, facts)
+
+    def test_duplicate_private_address_facts_are_rejected(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        network = facts["network"]
+        if not isinstance(network, dict):
+            raise AssertionError("host network fixture must be a mapping")
+        network["private_addresses"] = ["10.0.0.10", "10.0.0.10"]
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
+
+    def test_oversized_yaml_integer_is_translated(self) -> None:
+        document = self.write_temporary_document(
+            "schema_version: " + ("9" * 5000) + "\n"
+        )
+        self.assert_contract_violation(
+            lambda: self.validator.read_document(document, "inventory")
+        )
+
+    def test_sensitive_mapping_keys_are_redacted_from_errors(self) -> None:
+        synthetic_token = "ghp_" + ("A" * 36)
+        for case, action in (
+            (
+                "forbidden-field",
+                lambda: self.validator.scan_forbidden_input(
+                    {f"{synthetic_token}_token": "synthetic"}
+                ),
+            ),
+            (
+                "unknown-field",
+                lambda: self.validator.validate_inventory(
+                    {**copy.deepcopy(self.inventory), synthetic_token: "synthetic"}
+                ),
+            ),
+        ):
+            with self.subTest(case=case):
+                with self.assertRaises(self.validator.ContractViolation) as context:
+                    action()
+                self.assertNotIn(synthetic_token, str(context.exception))
+
+    def test_release_candidate_kernel_is_rejected_at_stable_floor(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        kernel = facts["kernel"]
+        if not isinstance(kernel, dict):
+            raise AssertionError("kernel fixture must be a mapping")
+        for release in ("6.8.0-rc1", "6.8.0-rc", "6.8.0-RC2-generic"):
+            with self.subTest(release=release):
+                kernel["release"] = release
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_host_facts(self.inventory, facts)
+                )
+
     def test_loader_recursion_error_is_translated(self) -> None:
         document = self.write_temporary_document("schema_version: 1\n")
         with mock.patch.object(self.validator.yaml, "load", side_effect=RecursionError):
