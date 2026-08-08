@@ -4,6 +4,8 @@
 name: secpal-phase-b
 
 x-api-image: &api-image ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e
+x-frontend-image: &frontend-image >-
+  ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077
 x-api-environment: &api-environment
   APP_DEBUG: "false"
   APP_ENV: local
@@ -256,12 +258,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: ${SECPAL_PHASE_B_FRONTEND_IMAGE:-secpal-frontend:phase-b-fcd427d9b55d}
-    build:
-      context: https://github.com/SecPal/frontend.git#fcd427d9b55d7945c439c670077e12928e47ddd6
-      args:
-        SECPAL_IMAGE_REVISION: fcd427d9b55d7945c439c670077e12928e47ddd6
-        SECPAL_IMAGE_VERSION: 0.0.1-phase-b
+    image: *frontend-image
     user: "101:101"
     environment:
       SECPAL_API_URL: https://api.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}

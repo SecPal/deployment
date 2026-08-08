@@ -5,6 +5,32 @@ SPDX-License-Identifier: CC0-1.0
 
 # Changelog
 
+## 2026-08-08 - Consume Verified Frontend Image Digest
+
+### Added
+
+- A canonical SecPal frontend OCI index digest and fixed publisher identity.
+- Anonymous frontend digest pull, raw OCI index and registry-header binding,
+  and offline GitHub Artifact Attestation verification before container
+  execution.
+- Static, mutation, OCI, credential-isolation, lifecycle, update, and rollback
+  contracts for Phase C.4.
+
+### Changed
+
+- Compose now consumes the verified public frontend image and no longer builds
+  frontend source or accepts a frontend image override.
+- The hardened image verifier receives explicit image, digest, repository,
+  workflow, ref, source, signer, and registry-path identities for both API and
+  frontend without weakening the existing API contract.
+- The integration runner builds only the project-scoped test gateway after
+  both published SecPal images have passed verification.
+
+### Not included
+
+- Production deployment, registry writes, API digest updates, Phase D, and a
+  premature declaration that Phase C is complete remain outside this work.
+
 ## 2026-08-03 - Consume Verified API Image Digest
 
 ### Added

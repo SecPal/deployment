@@ -95,7 +95,7 @@ printf '%s\n' \
   '#!/bin/sh' \
   'if [ "${1:-}" = - ]; then' \
   '  while IFS= read -r _line; do :; done' \
-  '  printf "%s" "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"' \
+  '  printf "%s\n%s\n" "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e" "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"' \
   'fi' \
   'exit 0' \
   >"$FAKE_BIN/node"
@@ -139,7 +139,10 @@ printf '%s\n' \
   'if [ "${1##*/}" = fetch-oci-attestation.py ]; then' \
   '  subject_path="${2:?}"' \
   '  bundle_path="${3:?}"' \
-  '  printf "%s\t\t\t\t\t\tpython3 fetch-oci-attestation %s %s\t%s\t%s\n" "${SECPAL_TEST_RUN_ID:-unknown}" "$subject_path" "$bundle_path" "${DOCKER_CONFIG:-}" "${GH_CONFIG_DIR:-}" >>"${SECPAL_TEST_COMMAND_LOG:?}"' \
+  '  canonical_image="${4:?}"' \
+  '  canonical_digest="${5:?}"' \
+  '  expected_registry_path="${6:?}"' \
+  '  printf "%s\t\t\t\t\t\tpython3 fetch-oci-attestation %s %s %s %s %s\t%s\t%s\n" "${SECPAL_TEST_RUN_ID:-unknown}" "$subject_path" "$bundle_path" "$canonical_image" "$canonical_digest" "$expected_registry_path" "${DOCKER_CONFIG:-}" "${GH_CONFIG_DIR:-}" >>"${SECPAL_TEST_COMMAND_LOG:?}"' \
   '  (umask 077 && printf "{\"fixture\":\"oci-index\"}\n" >"$subject_path")' \
   '  (umask 077 && printf "{\"fixture\":\"offline-attestation\"}\n" >"$bundle_path")' \
   '  chmod 0600 "$subject_path" "$bundle_path"' \
@@ -221,30 +224,44 @@ fi
 if ! grep -Fq 'GitHub CLI: gh version 2.97.0 (fixture)' "$TEMP_DIR/gh-version.out"; then
   fail "the exact reviewed GitHub CLI version was not logged"
 fi
-if ! awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
-  fail "the capable hosted-runner GitHub CLI did not reach the API pull"
+if [ "$(awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { count++ } END { print count + 0 }' "$COMMAND_LOG")" -ne 2 ]; then
+  fail "the capable hosted-runner GitHub CLI did not reach both image pulls"
 fi
-if [ "$(awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { print $9; exit }' "$COMMAND_LOG")" != unset ]; then
-  fail "caller-provided DOCKER_AUTH_CONFIG reached the API pull"
+if ! grep -Fq 'pull ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e' "$COMMAND_LOG" ||
+  ! grep -Fq 'pull ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077' "$COMMAND_LOG"; then
+  fail "the lifecycle did not pull both exact canonical image digests"
 fi
-successful_anon_config="$(awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { print $8; exit }' "$COMMAND_LOG")"
-if [ -z "$successful_anon_config" ] || [ -e "$successful_anon_config" ]; then
-  fail "the successful credential-free pull did not remove its anonymous Docker configuration"
+if awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / && $9 != "unset" { found = 1 } END { exit !found }' \
+  "$COMMAND_LOG"; then
+  fail "caller-provided DOCKER_AUTH_CONFIG reached an image pull"
 fi
+mapfile -t successful_anon_configs < <(awk -F '\t' '$1 == "gh-version" && $7 ~ /^pull / { print $8 }' "$COMMAND_LOG")
+if [ "${#successful_anon_configs[@]}" -ne 2 ] ||
+  [ "${successful_anon_configs[0]}" = "${successful_anon_configs[1]}" ]; then
+  fail "the two image pulls did not use separate anonymous Docker configurations"
+fi
+for successful_anon_config in "${successful_anon_configs[@]}"; do
+  if [ -z "$successful_anon_config" ] || [ -e "$successful_anon_config" ]; then
+    fail "a successful credential-free pull did not remove its anonymous Docker configuration"
+  fi
+done
 
-direct_anon_config="$TEMP_DIR/direct-anonymous-docker-config"
-install -d -m 0700 "$direct_anon_config"
-if env \
-  DOCKER_CONFIG="$direct_anon_config" \
-  DOCKER_AUTH_CONFIG='{"auths":{"ghcr.io":{"auth":"forbidden-direct-fixture"}}}' \
-  SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
-  SECPAL_TEST_PERSISTENT_DOCKER_CONFIG="$PERSISTENT_DOCKER_CONFIG" \
-  SECPAL_TEST_RUN_ID=docker-auth-contract-violation \
-  "$FAKE_BIN/docker" pull \
-  ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e; then
-  fail "fake Docker accepted an API pull with DOCKER_AUTH_CONFIG"
-fi
-rm -rf -- "$direct_anon_config"
+for direct_image in \
+  ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e \
+  ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077; do
+  direct_anon_config="$TEMP_DIR/direct-anonymous-docker-config-${direct_image#ghcr.io/secpal/}"
+  install -d -m 0700 "$direct_anon_config"
+  if env \
+    DOCKER_CONFIG="$direct_anon_config" \
+    DOCKER_AUTH_CONFIG='{"auths":{"ghcr.io":{"auth":"forbidden-direct-fixture"}}}' \
+    SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+    SECPAL_TEST_PERSISTENT_DOCKER_CONFIG="$PERSISTENT_DOCKER_CONFIG" \
+    SECPAL_TEST_RUN_ID=docker-auth-contract-violation \
+    "$FAKE_BIN/docker" pull "$direct_image"; then
+    fail "fake Docker accepted an image pull with DOCKER_AUTH_CONFIG"
+  fi
+  rm -rf -- "$direct_anon_config"
+done
 
 : >"$COMMAND_LOG"
 if env \
@@ -330,6 +347,74 @@ for gate_case in pull bundle attestation wrong-source-commit wrong-workflow wron
       fail "$gate_case did not isolate and remove its anonymous GitHub CLI configuration"
     fi
   fi
+done
+
+: >"$COMMAND_LOG"
+for gate_case in \
+  pull bundle attestation wrong-source-commit wrong-signer-digest wrong-workflow \
+  wrong-repository wrong-source-ref wrong-subject-digest wrong-subject-name self-hosted; do
+  : >"$COMMAND_LOG"
+  run_id="frontend-gate-$gate_case"
+  gate_environment=(SECPAL_TEST_FRONTEND_ATTESTATION_RESULT=success)
+  case "$gate_case" in
+    pull) gate_environment=(SECPAL_TEST_FAIL_FRONTEND_PULL=1) ;;
+    bundle) gate_environment=(SECPAL_TEST_FAIL_FRONTEND_ATTESTATION_FETCH=1) ;;
+    attestation) gate_environment=(SECPAL_TEST_FRONTEND_ATTESTATION_RESULT=failure) ;;
+    *) gate_environment=("SECPAL_TEST_FRONTEND_ATTESTATION_RESULT=$gate_case") ;;
+  esac
+
+  if env \
+    PATH="$FAKE_BIN:$PATH" \
+    "${INHERITED_GH_ENVIRONMENT[@]}" \
+    "${INHERITED_DOCKER_ENVIRONMENT[@]}" \
+    SECPAL_PHASE_B_PORT=18441 \
+    SECPAL_TEST_COMMAND_LOG="$COMMAND_LOG" \
+    SECPAL_TEST_CURL_LOG="$CURL_LOG" \
+    SECPAL_TEST_RUN_ID="$run_id" \
+    "${gate_environment[@]}" \
+    bash "$ROOT_DIR/scripts/local-integration.sh" >"$TEMP_DIR/$run_id.out" 2>&1; then
+    fail "frontend $gate_case gate failure returned success"
+  fi
+
+  expected_attestation_error=
+  case "$gate_case" in
+    attestation) expected_attestation_error='fixture rejected the attestation verification request' ;;
+    wrong-source-commit) expected_attestation_error='fixture rejected source digest mismatch' ;;
+    wrong-signer-digest) expected_attestation_error='fixture rejected signer digest mismatch' ;;
+    wrong-workflow) expected_attestation_error='fixture rejected signer workflow mismatch' ;;
+    wrong-repository) expected_attestation_error='fixture rejected repository mismatch' ;;
+    wrong-source-ref) expected_attestation_error='fixture rejected source ref mismatch' ;;
+    wrong-subject-digest) expected_attestation_error='fixture rejected subject digest mismatch' ;;
+    wrong-subject-name) expected_attestation_error='fixture rejected subject name mismatch' ;;
+    self-hosted) expected_attestation_error='fixture rejected self-hosted runner' ;;
+  esac
+  if [ -n "$expected_attestation_error" ] &&
+    ! grep -Fq "$expected_attestation_error" "$TEMP_DIR/$run_id.out"; then
+    fail "frontend $gate_case did not exercise its distinct identity failure"
+  fi
+
+  if awk -F '\t' -v run_id="$run_id" '$1 == run_id &&
+    ($7 ~ /up --detach postgres valkey|--profile tools run --rm --no-TTY migrate|up --detach api|exec -T (api|worker)/) { found = 1 }
+    END { exit !found }' "$COMMAND_LOG"; then
+    fail "frontend $gate_case gate failure allowed a container to start"
+  fi
+  if ! awk -F '\t' -v run_id="$run_id" '$1 == run_id &&
+    $7 ~ /^gh attestation verify .*api-image-index\.json/ { found = 1 } END { exit !found }' \
+    "$COMMAND_LOG"; then
+    fail "frontend $gate_case did not run after successful API verification"
+  fi
+
+  while IFS= read -r anonymous_config; do
+    if [ -z "$anonymous_config" ] || [ -e "$anonymous_config" ]; then
+      fail "frontend $gate_case did not remove an anonymous Docker configuration"
+    fi
+  done < <(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print $8 }' "$COMMAND_LOG")
+
+  while IFS= read -r private_path; do
+    if [ -z "$private_path" ] || [ -e "$private_path" ]; then
+      fail "frontend $gate_case did not remove a local OCI verification file"
+    fi
+  done < <(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7 }' "$COMMAND_LOG" | awk '{ print $3; print $4 }')
 done
 
 : >"$COMMAND_LOG"
@@ -423,12 +508,25 @@ for specification in one:18443 two:18444; do
     ! grep -Fq "api.secpal.example.invalid:$port:127.0.0.1" "$run_curl_log"; then
     fail "parallel run $run_id did not use both isolated loopback origins"
   fi
+  for rejected_frontend_path in \
+    /v1/phase-b-not-an-api-route /sanctum/csrf-cookie /health/ready; do
+    if ! grep -Fq "https://app.secpal.example.invalid:$port$rejected_frontend_path" \
+      "$run_curl_log"; then
+      fail "parallel run $run_id did not reject frontend path $rejected_frontend_path"
+    fi
+  done
 done
 
-one_images="$(awk -F '\t' '$1 == "one" { print $3 FS $4; exit }' "$COMMAND_LOG")"
-two_images="$(awk -F '\t' '$1 == "two" { print $3 FS $4; exit }' "$COMMAND_LOG")"
-if [ -z "$one_images" ] || [ -z "$two_images" ] || [ "$one_images" = "$two_images" ]; then
-  fail "parallel runs did not use distinct project-scoped image tags"
+one_frontend_override="$(awk -F '\t' '$1 == "one" { print $3; exit }' "$COMMAND_LOG")"
+two_frontend_override="$(awk -F '\t' '$1 == "two" { print $3; exit }' "$COMMAND_LOG")"
+one_gateway_image="$(awk -F '\t' '$1 == "one" { print $4; exit }' "$COMMAND_LOG")"
+two_gateway_image="$(awk -F '\t' '$1 == "two" { print $4; exit }' "$COMMAND_LOG")"
+if [ -n "$one_frontend_override" ] || [ -n "$two_frontend_override" ]; then
+  fail "parallel runs exported a forbidden frontend image override"
+fi
+if [ -z "$one_gateway_image" ] || [ -z "$two_gateway_image" ] ||
+  [ "$one_gateway_image" = "$two_gateway_image" ]; then
+  fail "parallel runs did not use distinct project-scoped gateway image tags"
 fi
 
 one_project="$(awk -F '\t' '$1 == "one" { count = split($7, part, " "); for (position = 1; position <= count; position++) if (part[position] == "--project-name") { print part[position + 1]; exit } }' "$COMMAND_LOG")"
@@ -474,22 +572,38 @@ for run_id in one two; do
     fail "parallel run $run_id did not execute the browser after all runtime probes"
   fi
 
-  pull_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print NR; exit }' "$COMMAND_LOG")"
-  bundle_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print NR; exit }' "$COMMAND_LOG")"
-  verify_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print NR; exit }' "$COMMAND_LOG")"
-  build_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ / build frontend gateway$/ { print NR; exit }' "$COMMAND_LOG")"
+  api_pull_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull ghcr\.io\/secpal\/api@/ { print NR; exit }' "$COMMAND_LOG")"
+  api_bundle_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation .*api-image-index\.json/ { print NR; exit }' "$COMMAND_LOG")"
+  api_verify_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify .*api-image-index\.json/ { print NR; exit }' "$COMMAND_LOG")"
+  frontend_pull_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull ghcr\.io\/secpal\/frontend@/ { print NR; exit }' "$COMMAND_LOG")"
+  frontend_bundle_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation .*frontend-image-index\.json/ { print NR; exit }' "$COMMAND_LOG")"
+  frontend_verify_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify .*frontend-image-index\.json/ { print NR; exit }' "$COMMAND_LOG")"
+  build_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ / build gateway$/ { print NR; exit }' "$COMMAND_LOG")"
   secrets_line="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ / up --detach postgres valkey$/ { print NR; exit }' "$COMMAND_LOG")"
-  if [ -z "$pull_line" ] || [ -z "$bundle_line" ] || [ -z "$verify_line" ] || [ -z "$build_line" ] ||
-    [ -z "$secrets_line" ] || [ "$pull_line" -ge "$verify_line" ] ||
-    [ "$pull_line" -ge "$bundle_line" ] || [ "$bundle_line" -ge "$verify_line" ] ||
-    [ "$verify_line" -ge "$build_line" ] || [ "$build_line" -ge "$secrets_line" ]; then
-    fail "parallel run $run_id did not gate API execution on pull and attestation verification"
+  if [ -z "$api_pull_line" ] || [ -z "$api_bundle_line" ] || [ -z "$api_verify_line" ] ||
+    [ -z "$frontend_pull_line" ] || [ -z "$frontend_bundle_line" ] ||
+    [ -z "$frontend_verify_line" ] || [ -z "$build_line" ] || [ -z "$secrets_line" ] ||
+    [ "$api_pull_line" -ge "$api_bundle_line" ] ||
+    [ "$api_bundle_line" -ge "$api_verify_line" ] ||
+    [ "$api_verify_line" -ge "$frontend_pull_line" ] ||
+    [ "$frontend_pull_line" -ge "$frontend_bundle_line" ] ||
+    [ "$frontend_bundle_line" -ge "$frontend_verify_line" ] ||
+    [ "$frontend_verify_line" -ge "$build_line" ] || [ "$build_line" -ge "$secrets_line" ]; then
+    fail "parallel run $run_id did not verify API and frontend before secrets-init"
   fi
 
-  anon_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print $8; exit }' "$COMMAND_LOG")"
-  verify_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $8; exit }' "$COMMAND_LOG")"
-  if [ -z "$anon_config" ] || [ -n "$verify_config" ] || [ -e "$anon_config" ]; then
-    fail "parallel run $run_id did not isolate the pull and remove Docker configuration from local verification"
+  mapfile -t anon_configs < <(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^pull / { print $8 }' "$COMMAND_LOG")
+  if [ "${#anon_configs[@]}" -ne 2 ] || [ "${anon_configs[0]}" = "${anon_configs[1]}" ]; then
+    fail "parallel run $run_id did not isolate both anonymous image pulls"
+  fi
+  for anon_config in "${anon_configs[@]}"; do
+    if [ -z "$anon_config" ] || [ -e "$anon_config" ]; then
+      fail "parallel run $run_id did not remove an anonymous Docker configuration"
+    fi
+  done
+  if awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / && $8 != "" { found = 1 } END { exit !found }' \
+    "$COMMAND_LOG"; then
+    fail "parallel run $run_id exposed Docker configuration to local verification"
   fi
   anonymous_gh_config="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^gh attestation verify / { print $9; exit }' "$COMMAND_LOG")"
   if [ -z "$anonymous_gh_config" ] ||
@@ -497,12 +611,11 @@ for run_id in one two; do
     [ -e "$anonymous_gh_config" ]; then
     fail "parallel run $run_id did not isolate and remove its anonymous GitHub CLI configuration"
   fi
-  local_subject="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $3 }')"
-  offline_bundle="$(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7; exit }' "$COMMAND_LOG" | awk '{ print $4 }')"
-  if [ -z "$local_subject" ] || [ -e "$local_subject" ] ||
-    [ -z "$offline_bundle" ] || [ -e "$offline_bundle" ]; then
-    fail "parallel run $run_id did not remove its local OCI subject and offline bundle"
-  fi
+  while IFS= read -r private_path; do
+    if [ -z "$private_path" ] || [ -e "$private_path" ]; then
+      fail "parallel run $run_id did not remove a local OCI verification file"
+    fi
+  done < <(awk -F '\t' -v run_id="$run_id" '$1 == run_id && $7 ~ /^python3 fetch-oci-attestation / { print $7 }' "$COMMAND_LOG" | awk '{ print $3; print $4 }')
 done
 
 one_commands="$(awk -F '\t' '$1 == "one" { print $7 }' "$COMMAND_LOG")"
@@ -518,7 +631,7 @@ if [ "$(printf '%s\n' "$one_commands" | grep -Eo 'phase-b-queue-hash-chain-[a-z0
   fail "parallel runs reused a hash-queue or storage probe name"
 fi
 
-for failure_case in queue storage browser; do
+for failure_case in queue storage browser frontend_route; do
   : >"$COMMAND_LOG"
   failure_variable="SECPAL_TEST_FAIL_${failure_case^^}"
   if env \
@@ -546,6 +659,9 @@ fi
 
 if awk -F '\t' '$7 ~ /^image rm / && $7 ~ /ghcr\.io\/secpal\/api/ { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
   fail "the published API digest was treated as a local cleanup image"
+fi
+if awk -F '\t' '$7 ~ /^image rm / && $7 ~ /ghcr\.io\/secpal\/frontend/ { found = 1 } END { exit !found }' "$COMMAND_LOG"; then
+  fail "the published frontend digest was treated as a local cleanup image"
 fi
 
 if [ ! -f "$PERSISTENT_GH_CONFIG/hosts.yml" ]; then

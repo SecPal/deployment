@@ -56,6 +56,7 @@ python3 tests/oci-attestation-bundle-contract.py
 bash tests/repository-contract.sh
 bash tests/phase-b-contract.sh
 bash tests/phase-c-api-image-contract.sh
+bash tests/phase-c-frontend-image-contract.sh
 bash tests/runtime-secret-contract.sh
 bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh

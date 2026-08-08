@@ -43,10 +43,16 @@ def digest(value: bytes) -> str:
 
 
 class RegistryFixture:
-    def __init__(self, fetcher: Any) -> None:
+    def __init__(
+        self,
+        fetcher: Any,
+        canonical_image: str = "ghcr.io/secpal/api",
+        expected_registry_path: str = "secpal/api",
+    ) -> None:
         self.fetcher = fetcher
         self.calls: list[tuple[str, dict[str, str]]] = []
         self.referrers_status = 404
+        self.token = "anonymous-fixture"
         self.subject = json_bytes(
             {
                 "manifests": [
@@ -68,7 +74,11 @@ class RegistryFixture:
             }
         )
         self.subject_digest = digest(self.subject)
-        fetcher.SUBJECT_DIGEST = self.subject_digest
+        fetcher.configure_identity(
+            canonical_image,
+            self.subject_digest,
+            expected_registry_path,
+        )
         self.statement = {
             "_type": "https://in-toto.io/Statement/v1",
             "predicate": {},
@@ -168,28 +178,33 @@ class RegistryFixture:
         headers: dict[str, str],
         max_bytes: int,
         allowed_statuses: frozenset[int],
-    ) -> tuple[int, str, bytes]:
+    ) -> tuple[int, str, str, bytes]:
         del max_bytes
         self.calls.append((url, headers))
         if url == self.fetcher.TOKEN_URL:
             self.assert_no_authorization(headers)
-            return 200, "application/json", json_bytes({"token": "anonymous-fixture"})
+            return 200, "application/json", "", json_bytes({"token": self.token})
 
         self.assert_anonymous_bearer(headers)
         if url == self.fetcher.manifest_url(self.fetcher.SUBJECT_DIGEST):
-            return 200, self.fetcher.OCI_INDEX_MEDIA_TYPE, self.subject
+            return (
+                200,
+                self.fetcher.OCI_INDEX_MEDIA_TYPE,
+                self.fetcher.SUBJECT_DIGEST,
+                self.subject,
+            )
         if url == self.fetcher.REFERRERS_URL:
             if self.referrers_status not in allowed_statuses:
                 raise AssertionError("fixture referrer status was not allowed")
             if self.referrers_status == 200:
-                return 200, self.fetcher.OCI_INDEX_MEDIA_TYPE, self.index
-            return self.referrers_status, "application/json", b"{}"
+                return 200, self.fetcher.OCI_INDEX_MEDIA_TYPE, "", self.index
+            return self.referrers_status, "application/json", "", b"{}"
         if url == self.fetcher.FALLBACK_INDEX_URL:
-            return 200, self.fetcher.OCI_INDEX_MEDIA_TYPE, self.index
+            return 200, self.fetcher.OCI_INDEX_MEDIA_TYPE, "", self.index
         if url.startswith(f"{self.fetcher.REGISTRY_BASE_URL}/manifests/sha256:"):
-            return 200, self.fetcher.OCI_MANIFEST_MEDIA_TYPE, self.manifest
+            return 200, self.fetcher.OCI_MANIFEST_MEDIA_TYPE, "", self.manifest
         if url.startswith(f"{self.fetcher.REGISTRY_BASE_URL}/blobs/sha256:"):
-            return 200, self.fetcher.BUNDLE_MEDIA_TYPE, self.bundle
+            return 200, self.fetcher.BUNDLE_MEDIA_TYPE, "", self.bundle
         raise AssertionError(f"unexpected fixture URL: {url}")
 
     def assert_no_authorization(self, headers: dict[str, str]) -> None:
@@ -197,7 +212,7 @@ class RegistryFixture:
             raise AssertionError("token request unexpectedly carried authorization")
 
     def assert_anonymous_bearer(self, headers: dict[str, str]) -> None:
-        if headers.get("Authorization") != "Bearer anonymous-fixture":
+        if headers.get("Authorization") != f"Bearer {self.token}":
             raise AssertionError("registry request did not use the anonymous bearer")
 
 
@@ -258,6 +273,23 @@ class OciAttestationBundleContractTest(unittest.TestCase):
                 ],
             )
 
+    def test_accepts_a_standard_padded_anonymous_bearer(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+        fixture.token = "YW5vbnltb3VzLWZpeHR1cmU="
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
+            self.assertEqual(output.read_bytes(), fixture.bundle)
+
+    def test_rejects_padding_inside_an_anonymous_bearer(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+        fixture.token = "invalid=middle"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            with self.assertRaisesRegex(ValueError, "bearer was missing or malformed"):
+                self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
+            self.assertFalse(output.exists())
+
     def test_rejects_subject_index_digest_mismatch_without_writing_outputs(self) -> None:
         fixture = RegistryFixture(self.fetcher)
         fixture.subject += b"\n"
@@ -273,6 +305,62 @@ class OciAttestationBundleContractTest(unittest.TestCase):
                 )
             self.assertFalse(subject.exists())
             self.assertFalse(output.exists())
+
+    def test_rejects_subject_registry_digest_header_mismatch(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+        original_request = fixture.request
+
+        def request(
+            url: str,
+            headers: dict[str, str],
+            max_bytes: int,
+            allowed_statuses: frozenset[int],
+        ) -> tuple[int, str, str, bytes]:
+            status, content_type, registry_digest, body = original_request(
+                url, headers, max_bytes, allowed_statuses
+            )
+            if url == self.fetcher.manifest_url(self.fetcher.SUBJECT_DIGEST):
+                registry_digest = f"sha256:{'f' * 64}"
+            return status, content_type, registry_digest, body
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subject = Path(temp_dir) / "api-image-index.json"
+            output = Path(temp_dir) / "attestation.json"
+            with self.assertRaisesRegex(ValueError, "registry digest header"):
+                self.fetcher.fetch_bundle(
+                    output,
+                    request_bytes=request,
+                    subject_output_path=subject,
+                )
+            self.assertFalse(subject.exists())
+            self.assertFalse(output.exists())
+
+    def test_frontend_identity_uses_only_the_explicit_registry_path(self) -> None:
+        fixture = RegistryFixture(
+            self.fetcher,
+            canonical_image="ghcr.io/secpal/frontend",
+            expected_registry_path="secpal/frontend",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subject = Path(temp_dir) / "frontend-image-index.json"
+            output = Path(temp_dir) / "frontend-attestation.json"
+            self.fetcher.fetch_bundle(
+                output,
+                request_bytes=fixture.request,
+                subject_output_path=subject,
+            )
+            self.assertEqual(subject.read_bytes(), fixture.subject)
+            self.assertEqual(output.read_bytes(), fixture.bundle)
+            self.assertEqual(self.fetcher.SUBJECT_NAME, "ghcr.io/secpal/frontend")
+            self.assertEqual(self.fetcher.REPOSITORY, "secpal/frontend")
+
+    def test_rejects_identity_that_does_not_match_the_expected_registry_path(self) -> None:
+        with self.assertRaisesRegex(ValueError, "canonical image"):
+            self.fetcher.configure_identity(
+                "ghcr.io/secpal/not-frontend",
+                f"sha256:{'a' * 64}",
+                "secpal/frontend",
+            )
 
     def test_refuses_to_overwrite_an_existing_subject_path(self) -> None:
         fixture = RegistryFixture(self.fetcher)
@@ -349,7 +437,7 @@ class OciAttestationBundleContractTest(unittest.TestCase):
             headers: dict[str, str],
             max_bytes: int,
             allowed_statuses: frozenset[int],
-        ) -> tuple[int, str, bytes]:
+        ) -> tuple[int, str, str, bytes]:
             if url == self.fetcher.REFERRERS_URL:
                 with mock.patch.object(
                     self.fetcher, "HTTPS_OPENER", self.http_error_opener(404)
@@ -417,6 +505,26 @@ class OciAttestationBundleContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "attestation.json"
             with self.assertRaisesRegex(ValueError, "bundle digest"):
+                self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
+            self.assertFalse(output.exists())
+
+    def test_rejects_malformed_bundle_after_descriptor_validation(self) -> None:
+        fixture = RegistryFixture(self.fetcher)
+        fixture.bundle = b"{}"
+        fixture.bundle_digest = digest(fixture.bundle)
+        manifest = json.loads(fixture.manifest)
+        manifest["layers"][0]["digest"] = fixture.bundle_digest
+        manifest["layers"][0]["size"] = len(fixture.bundle)
+        fixture.manifest = json_bytes(manifest)
+        fixture.manifest_digest = digest(fixture.manifest)
+        index = json.loads(fixture.index)
+        index["manifests"][0]["digest"] = fixture.manifest_digest
+        index["manifests"][0]["size"] = len(fixture.manifest)
+        fixture.index = json_bytes(index)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "attestation.json"
+            with self.assertRaisesRegex(ValueError, "Sigstore bundle shape"):
                 self.fetcher.fetch_bundle(output, request_bytes=fixture.request)
             self.assertFalse(output.exists())
 

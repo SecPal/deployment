@@ -50,7 +50,7 @@ unset SECPAL_PHASE_B_SUPERVISED
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 TEMP_DIR="$(mktemp -d -t secpal-phase-b.XXXXXXXXXX)"
-ANON_DOCKER_CONFIG=""
+ANON_DOCKER_CONFIGS=()
 project_token="${TEMP_DIR##*.}"
 project_token="${project_token,,}"
 PROJECT_NAME="secpal-phase-b-$project_token"
@@ -60,10 +60,12 @@ cleanup_completed=0
 automatic_port=0
 PROBE_SCRIPT=/run/secpal/phase-b-runtime-probe.php
 readonly EXPECTED_API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
+readonly EXPECTED_API_DIGEST='sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
 readonly API_SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
+readonly EXPECTED_FRONTEND_IMAGE='ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077'
+readonly EXPECTED_FRONTEND_DIGEST='sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077'
+readonly FRONTEND_SOURCE_COMMIT='b755ca0d0ee5a85eca5ad5688d457241f070b1b4'
 readonly EXPECTED_GH_VERSION='2.97.0'
-readonly ATTESTATION_SUBJECT="$TEMP_DIR/api-image-index.json"
-readonly ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"
 readonly ANONYMOUS_GH_CONFIG="$TEMP_DIR/anonymous-gh-config"
 
 cleanup() {
@@ -73,9 +75,10 @@ cleanup() {
   if [ "${#LOCAL_IMAGES[@]}" -ne 0 ] && [ "$cleanup_completed" -ne 1 ]; then
     docker image rm "${LOCAL_IMAGES[@]}" >/dev/null 2>&1 || true
   fi
-  if [ -n "$ANON_DOCKER_CONFIG" ]; then
-    rm -rf -- "$ANON_DOCKER_CONFIG"
-  fi
+  local anonymous_docker_config
+  for anonymous_docker_config in "${ANON_DOCKER_CONFIGS[@]}"; do
+    rm -rf -- "$anonymous_docker_config"
+  done
   rm -rf -- "$TEMP_DIR"
 }
 
@@ -108,6 +111,88 @@ run_isolated_gh() {
     GH_TELEMETRY=false \
     env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST -u DOCKER_CONFIG -u DOCKER_AUTH_CONFIG \
     gh "$@"
+}
+
+verify_published_image() {
+  local image_label="$1"
+  local canonical_image="$2"
+  local canonical_digest="$3"
+  local repository="$4"
+  local publisher_workflow="$5"
+  local source_ref="$6"
+  local source_digest="$7"
+  local signer_digest="$8"
+  local expected_registry_path="$9"
+  local canonical_name="${canonical_image%@*}"
+  local anonymous_docker_config
+  local attestation_subject="$TEMP_DIR/$image_label-image-index.json"
+  local attestation_bundle="$TEMP_DIR/$image_label-attestation.json"
+
+  [ "$canonical_image" = "$canonical_name@$canonical_digest" ] ||
+    fail "$image_label image reference did not match its explicit canonical digest."
+  [ "$canonical_name" = "ghcr.io/$expected_registry_path" ] ||
+    fail "$image_label image reference did not match its explicit registry path."
+
+  anonymous_docker_config="$(mktemp -d -t "secpal-$image_label-anon-docker.XXXXXXXXXX")"
+  chmod 0700 "$anonymous_docker_config"
+  ANON_DOCKER_CONFIGS+=("$anonymous_docker_config")
+
+  env -u DOCKER_AUTH_CONFIG \
+    DOCKER_CONFIG="$anonymous_docker_config" \
+    docker pull "$canonical_image"
+
+  if ! env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST -u DOCKER_CONFIG -u DOCKER_AUTH_CONFIG \
+    python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" \
+      "$attestation_subject" \
+      "$attestation_bundle" \
+      "$canonical_name" \
+      "$canonical_digest" \
+      "$expected_registry_path"; then
+    fail "anonymous $image_label OCI attestation bundle retrieval failed."
+  fi
+
+  if ! run_isolated_gh attestation verify \
+    "$attestation_subject" \
+    --bundle "$attestation_bundle" \
+    --repo "$repository" \
+    --signer-workflow "$publisher_workflow" \
+    --signer-digest "$signer_digest" \
+    --source-ref "$source_ref" \
+    --source-digest "$source_digest" \
+    --deny-self-hosted-runners \
+    --hostname github.com; then
+    fail "public token-free $image_label artifact attestation verification failed."
+  fi
+
+  rm -rf -- "$anonymous_docker_config"
+  printf 'Verified %s image: %s\n' "$image_label" "$canonical_image"
+  printf 'Verified %s source commit: %s\n' "$image_label" "$source_digest"
+}
+
+verify_api_image() {
+  verify_published_image \
+    api \
+    "$API_IMAGE" \
+    "$EXPECTED_API_DIGEST" \
+    SecPal/api \
+    SecPal/api/.github/workflows/publish-container.yml \
+    refs/heads/main \
+    "$API_SOURCE_COMMIT" \
+    "$API_SOURCE_COMMIT" \
+    secpal/api
+}
+
+verify_frontend_image() {
+  verify_published_image \
+    frontend \
+    "$FRONTEND_IMAGE" \
+    "$EXPECTED_FRONTEND_DIGEST" \
+    SecPal/frontend \
+    SecPal/frontend/.github/workflows/publish-container.yml \
+    refs/heads/main \
+    "$FRONTEND_SOURCE_COMMIT" \
+    "$FRONTEND_SOURCE_COMMIT" \
+    secpal/frontend
 }
 
 allocate_port() {
@@ -149,7 +234,7 @@ wait_for_cache_value() {
 require_command docker "Docker is required."
 require_command python3 "Python 3 is required."
 require_command curl "curl is required."
-require_command gh "GitHub CLI is required for API artifact attestation verification."
+require_command gh "GitHub CLI is required for published image artifact attestation verification."
 require_command node "Node.js is required."
 require_command npm "npm is required."
 
@@ -184,17 +269,14 @@ fi
 validate_port
 set_origins
 
-SECPAL_PHASE_B_FRONTEND_IMAGE="$PROJECT_NAME-frontend:phase-b-fcd427d9b55d"
 SECPAL_PHASE_B_GATEWAY_IMAGE="$PROJECT_NAME-gateway:phase-b-2.10.2"
 SECPAL_PHASE_B_HASH_CHAIN_CONTAINER_NAME="$PROJECT_NAME-worker-hash-chain"
 SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME="$PROJECT_NAME-scheduler"
 export \
-  SECPAL_PHASE_B_FRONTEND_IMAGE \
   SECPAL_PHASE_B_GATEWAY_IMAGE \
   SECPAL_PHASE_B_HASH_CHAIN_CONTAINER_NAME \
   SECPAL_PHASE_B_SCHEDULER_CONTAINER_NAME
 LOCAL_IMAGES=(
-  "$SECPAL_PHASE_B_FRONTEND_IMAGE"
   "$SECPAL_PHASE_B_GATEWAY_IMAGE"
 )
 COMPOSE=(docker compose --project-name "$PROJECT_NAME" --file "$ROOT_DIR/compose.yaml")
@@ -209,11 +291,12 @@ cd "$ROOT_DIR"
 
 "${COMPOSE[@]}" config --quiet
 "${COMPOSE[@]}" --profile tools config --format json >"$TEMP_DIR/compose-config.json"
-API_IMAGE="$(node - "$TEMP_DIR/compose-config.json" "$EXPECTED_API_IMAGE" <<'NODE'
+if ! resolved_images="$(node - "$TEMP_DIR/compose-config.json" "$EXPECTED_API_IMAGE" "$EXPECTED_FRONTEND_IMAGE" <<'NODE'
 const fs = require('node:fs');
 
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-const expected = process.argv[3];
+const expectedApi = process.argv[3];
+const expectedFrontend = process.argv[4];
 const apiServices = [
   'secrets-init',
   'migrate',
@@ -226,7 +309,7 @@ const images = new Set();
 
 for (const serviceName of apiServices) {
   const service = config.services?.[serviceName];
-  if (!service || service.image !== expected || service.build !== undefined) {
+  if (!service || service.image !== expectedApi || service.build !== undefined) {
     process.stderr.write(
       `ERROR: ${serviceName} must use only the canonical API digest.\n`,
     );
@@ -235,50 +318,39 @@ for (const serviceName of apiServices) {
   images.add(service.image);
 }
 
-if (images.size !== 1 || [...images][0] !== expected) {
+if (images.size !== 1 || [...images][0] !== expectedApi) {
   process.stderr.write('ERROR: API roles resolved to more than one image.\n');
   process.exit(1);
 }
 
-process.stdout.write(expected);
-NODE
-)" || fail "the resolved Compose API image contract is invalid."
-[ "$API_IMAGE" = "$EXPECTED_API_IMAGE" ] || fail "the resolved API digest is not approved."
+const frontend = config.services?.frontend;
+if (!frontend || frontend.image !== expectedFrontend || frontend.build !== undefined) {
+  process.stderr.write(
+    'ERROR: frontend must use only the canonical frontend digest.\n',
+  );
+  process.exit(1);
+}
 
-ANON_DOCKER_CONFIG="$(mktemp -d -t secpal-api-anon-docker.XXXXXXXXXX)"
-chmod 0700 "$ANON_DOCKER_CONFIG"
+process.stdout.write(`${expectedApi}\n${expectedFrontend}\n`);
+NODE
+)"; then
+  fail "the resolved Compose published image contract is invalid."
+fi
+mapfile -t RESOLVED_IMAGES <<<"$resolved_images"
+API_IMAGE="${RESOLVED_IMAGES[0]:-}"
+FRONTEND_IMAGE="${RESOLVED_IMAGES[1]:-}"
+[ "$API_IMAGE" = "$EXPECTED_API_IMAGE" ] || fail "the resolved API digest is not approved."
+[ "$FRONTEND_IMAGE" = "$EXPECTED_FRONTEND_IMAGE" ] || fail "the resolved frontend digest is not approved."
 
 printf 'GitHub CLI: %s\n' "$gh_version_line"
 printf 'Docker Engine: %s\n' "$(docker version --format '{{.Server.Version}}')"
 printf 'Docker Compose: %s\n' "$compose_version"
 printf 'Host platform: %s/%s\n' "$(uname -s)" "$(uname -m)"
 
-env -u DOCKER_AUTH_CONFIG \
-  DOCKER_CONFIG="$ANON_DOCKER_CONFIG" \
-  docker pull "$API_IMAGE"
+verify_api_image
+verify_frontend_image
 
-if ! env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST \
-  python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_SUBJECT" "$ATTESTATION_BUNDLE"; then
-  fail "anonymous OCI attestation bundle retrieval failed."
-fi
-
-if ! run_isolated_gh attestation verify \
-  "$ATTESTATION_SUBJECT" \
-  --bundle "$ATTESTATION_BUNDLE" \
-  --repo SecPal/api \
-  --signer-workflow SecPal/api/.github/workflows/publish-container.yml \
-  --signer-digest "$API_SOURCE_COMMIT" \
-  --source-ref refs/heads/main \
-  --source-digest "$API_SOURCE_COMMIT" \
-  --deny-self-hosted-runners \
-  --hostname github.com; then
-  fail "public token-free API artifact attestation verification failed."
-fi
-
-printf 'Verified API image: %s\n' "$API_IMAGE"
-printf 'Verified API source commit: %s\n' "$API_SOURCE_COMMIT"
-
-"${COMPOSE[@]}" build frontend gateway
+"${COMPOSE[@]}" build gateway
 "${COMPOSE[@]}" up --detach postgres valkey
 "${COMPOSE[@]}" --profile tools run --rm --no-TTY migrate
 
@@ -385,14 +457,18 @@ if printf '%s\n' "$foreign_headers" | grep -Fiq 'access-control-allow-credential
   fail "a foreign origin received credentialed CORS approval."
 fi
 
-frontend_api_status="$(curl --silent --show-error --insecure \
-  --output "$TEMP_DIR/frontend-api-route.out" \
-  --write-out '%{http_code}' \
-  --noproxy app.secpal.example.invalid \
-  --resolve "app.secpal.example.invalid:$SECPAL_PHASE_B_PORT:127.0.0.1" \
-  "$APP_ORIGIN/v1/phase-b-not-an-api-route")"
-[ "$frontend_api_status" = '404' ] ||
-  fail "the frontend origin exposed an API-style route."
+for rejected_frontend_path in \
+  /v1/phase-b-not-an-api-route /sanctum/csrf-cookie /health/ready; do
+  rejected_frontend_name="${rejected_frontend_path//\//-}"
+  rejected_frontend_status="$(curl --silent --show-error --insecure \
+    --output "$TEMP_DIR/frontend-route$rejected_frontend_name.out" \
+    --write-out '%{http_code}' \
+    --noproxy app.secpal.example.invalid \
+    --resolve "app.secpal.example.invalid:$SECPAL_PHASE_B_PORT:127.0.0.1" \
+    "$APP_ORIGIN$rejected_frontend_path")"
+  [ "$rejected_frontend_status" = '404' ] ||
+    fail "the frontend origin exposed forbidden route $rejected_frontend_path."
+done
 curl --silent --show-error --insecure --header 'Accept: application/json' \
   --noproxy api.secpal.example.invalid \
   --resolve "api.secpal.example.invalid:$SECPAL_PHASE_B_PORT:127.0.0.1" \

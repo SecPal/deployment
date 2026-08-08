@@ -13,7 +13,6 @@ cd "$ROOT_DIR"
 readonly API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
 readonly API_DIGEST='sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
 readonly API_SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
-readonly API_WORKFLOW='SecPal/api/.github/workflows/publish-container.yml'
 readonly GH_VERSION='2.97.0'
 readonly GH_LINUX_AMD64_SHA256='a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112'
 
@@ -113,7 +112,7 @@ if [ -f compose.yaml ]; then
     fi
   done
 
-  require_text compose.yaml 'https://github.com/SecPal/frontend.git#fcd427d9b55d7945c439c670077e12928e47ddd6'
+  require_text compose.yaml 'ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077'
   require_text compose.yaml 'postgres:16.10-bookworm@sha256:'
   require_text compose.yaml 'valkey/valkey:9.1.1-trixie@sha256:'
 fi
@@ -121,44 +120,47 @@ fi
 # Shell expressions below are intentionally matched as literal contract text.
 # shellcheck disable=SC2016
 if [ -f scripts/local-integration.sh ]; then
-  require_text scripts/local-integration.sh 'require_command gh "GitHub CLI is required for API artifact attestation verification."'
+  require_text scripts/local-integration.sh 'require_command gh "GitHub CLI is required for published image artifact attestation verification."'
   require_text scripts/local-integration.sh 'readonly ANONYMOUS_GH_CONFIG="$TEMP_DIR/anonymous-gh-config"'
+  require_text scripts/local-integration.sh 'ANON_DOCKER_CONFIGS=()'
   require_text scripts/local-integration.sh 'run_isolated_gh() {'
+  require_text scripts/local-integration.sh 'verify_published_image() {'
+  require_text scripts/local-integration.sh 'verify_api_image() {'
   require_text scripts/local-integration.sh 'GH_CONFIG_DIR="$ANONYMOUS_GH_CONFIG"'
   require_text scripts/local-integration.sh 'env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST -u DOCKER_CONFIG -u DOCKER_AUTH_CONFIG'
   require_text scripts/local-integration.sh 'gh_version_output="$(run_isolated_gh version)"'
   require_text scripts/local-integration.sh 'run_isolated_gh attestation verify --help'
   require_text scripts/local-integration.sh "readonly EXPECTED_GH_VERSION='$GH_VERSION'"
   require_text scripts/local-integration.sh 'GitHub CLI $EXPECTED_GH_VERSION is required; found $gh_version_line.'
-  require_text scripts/local-integration.sh 'ANON_DOCKER_CONFIG="$(mktemp -d -t secpal-api-anon-docker.XXXXXXXXXX)"'
-  require_text scripts/local-integration.sh 'chmod 0700 "$ANON_DOCKER_CONFIG"'
-  pull_contract="$(grep -B2 -F '  docker pull "$API_IMAGE"' scripts/local-integration.sh || true)"
-  expected_pull_contract=$'env -u DOCKER_AUTH_CONFIG \\\n  DOCKER_CONFIG="$ANON_DOCKER_CONFIG" \\\n  docker pull "$API_IMAGE"'
+  require_text scripts/local-integration.sh 'anonymous_docker_config="$(mktemp -d -t "secpal-$image_label-anon-docker.XXXXXXXXXX")"'
+  require_text scripts/local-integration.sh 'chmod 0700 "$anonymous_docker_config"'
+  pull_contract="$(grep -B2 -F '    docker pull "$canonical_image"' scripts/local-integration.sh || true)"
+  expected_pull_contract=$'  env -u DOCKER_AUTH_CONFIG \\\n    DOCKER_CONFIG="$anonymous_docker_config" \\\n    docker pull "$canonical_image"'
   [ "$pull_contract" = "$expected_pull_contract" ] ||
     fail "the API pull must unset DOCKER_AUTH_CONFIG at the concrete anonymous Docker invocation"
   require_text scripts/local-integration.sh 'install -d -m 0700 "$ANONYMOUS_GH_CONFIG"'
-  require_text scripts/local-integration.sh 'ATTESTATION_SUBJECT="$TEMP_DIR/api-image-index.json"'
-  require_text scripts/local-integration.sh 'ATTESTATION_BUNDLE="$TEMP_DIR/api-attestation.json"'
-  require_text scripts/local-integration.sh 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_SUBJECT" "$ATTESTATION_BUNDLE"'
+  require_text scripts/local-integration.sh 'local attestation_subject="$TEMP_DIR/$image_label-image-index.json"'
+  require_text scripts/local-integration.sh 'local attestation_bundle="$TEMP_DIR/$image_label-attestation.json"'
+  require_text scripts/local-integration.sh 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py"'
   require_text scripts/local-integration.sh 'run_isolated_gh attestation verify'
-  require_text scripts/local-integration.sh '"$ATTESTATION_SUBJECT"'
-  require_text scripts/local-integration.sh '--bundle "$ATTESTATION_BUNDLE"'
-  require_text scripts/local-integration.sh '--repo SecPal/api'
+  require_text scripts/local-integration.sh '"$attestation_subject"'
+  require_text scripts/local-integration.sh '--bundle "$attestation_bundle"'
+  require_text scripts/local-integration.sh '--repo "$repository"'
   require_text scripts/local-integration.sh '--hostname github.com'
-  require_text scripts/local-integration.sh "--signer-workflow $API_WORKFLOW"
-  require_text scripts/local-integration.sh '--signer-digest "$API_SOURCE_COMMIT"'
-  require_text scripts/local-integration.sh '--source-ref refs/heads/main'
-  require_text scripts/local-integration.sh '--source-digest "$API_SOURCE_COMMIT"'
+  require_text scripts/local-integration.sh '--signer-workflow "$publisher_workflow"'
+  require_text scripts/local-integration.sh '--signer-digest "$signer_digest"'
+  require_text scripts/local-integration.sh '--source-ref "$source_ref"'
+  require_text scripts/local-integration.sh '--source-digest "$source_digest"'
   require_text scripts/local-integration.sh '--deny-self-hosted-runners'
   require_text scripts/local-integration.sh '"${COMPOSE[@]}" --profile tools config --format json'
-  require_text scripts/local-integration.sh '"${COMPOSE[@]}" build frontend gateway'
+  require_text scripts/local-integration.sh '"${COMPOSE[@]}" build gateway'
   require_text scripts/local-integration.sh '"${COMPOSE[@]}" --profile tools run --rm --no-TTY migrate'
 
   forbid_text scripts/local-integration.sh 'SECPAL_(PHASE_B_)?API_IMAGE|docker[[:space:]]+login|docker[[:space:]]+logout|GHCR_TOKEN' \
     "the integration runner must not expose an API override or registry credential path"
   forbid_text scripts/local-integration.sh '--bundle-from-oci' \
     "the integration runner must use the anonymously retrieved offline bundle"
-  forbid_text scripts/local-integration.sh '"oci://\$API_IMAGE"' \
+  forbid_text scripts/local-integration.sh 'oci://' \
     "the verifier must hash the private local OCI index instead of reopening the registry"
   forbid_text scripts/local-integration.sh 'build.*(secrets-init|migrate|api|worker-hash-chain|worker-general|scheduler)' \
     "the integration runner must not build an API-based service"
@@ -167,18 +169,22 @@ if [ -f scripts/local-integration.sh ]; then
   [ "$source_commit_literal_count" -eq 1 ] ||
     fail "the reviewed API source commit must be defined exactly once in the integration runner"
 
-  pull_line="$(grep -nF '  docker pull "$API_IMAGE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
-  bundle_line="$(grep -nF 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py" "$ATTESTATION_SUBJECT" "$ATTESTATION_BUNDLE"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
+  pull_line="$(grep -nF '    docker pull "$canonical_image"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
+  bundle_line="$(grep -nF 'python3 "$ROOT_DIR/scripts/fetch-oci-attestation.py"' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   verify_line="$(grep -nF 'run_isolated_gh attestation verify' scripts/local-integration.sh | tail -n 1 | cut -d: -f1 || true)"
-  build_line="$(grep -nF '"${COMPOSE[@]}" build frontend gateway' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
+  api_gate_line="$(grep -nFx 'verify_api_image' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
+  frontend_gate_line="$(grep -nFx 'verify_frontend_image' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
+  build_line="$(grep -nF '"${COMPOSE[@]}" build gateway' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   data_line="$(grep -nF '"${COMPOSE[@]}" up --detach postgres valkey' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   migrate_line="$(grep -nF '"${COMPOSE[@]}" --profile tools run --rm --no-TTY migrate' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
   services_line="$(grep -nF 'if "${COMPOSE[@]}" up --detach' scripts/local-integration.sh | head -n 1 | cut -d: -f1 || true)"
-  if [ -z "$pull_line" ] || [ -z "$bundle_line" ] || [ -z "$verify_line" ] || [ -z "$build_line" ] ||
+  if [ -z "$pull_line" ] || [ -z "$bundle_line" ] || [ -z "$verify_line" ] ||
+    [ -z "$api_gate_line" ] || [ -z "$frontend_gate_line" ] || [ -z "$build_line" ] ||
     [ -z "$data_line" ] || [ -z "$migrate_line" ] || [ -z "$services_line" ] ||
     [ "$pull_line" -ge "$bundle_line" ] || [ "$bundle_line" -ge "$verify_line" ] ||
-    [ "$verify_line" -ge "$build_line" ] ||
-    [ "$build_line" -ge "$data_line" ] || [ "$data_line" -ge "$migrate_line" ] ||
+    [ "$verify_line" -ge "$api_gate_line" ] || [ "$api_gate_line" -ge "$frontend_gate_line" ] ||
+    [ "$frontend_gate_line" -ge "$build_line" ] || [ "$build_line" -ge "$data_line" ] ||
+    [ "$data_line" -ge "$migrate_line" ] ||
     [ "$migrate_line" -ge "$services_line" ]; then
     fail "pull and attestation verification must precede every API execution in the lifecycle"
   fi
@@ -191,9 +197,12 @@ if [ -f scripts/fetch-oci-attestation.py ]; then
   require_text scripts/fetch-oci-attestation.py "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
   require_text scripts/fetch-oci-attestation.py 'https://ghcr.io/token?service=ghcr.io&scope=repository%3Asecpal%2Fapi%3Apull'
   require_text scripts/fetch-oci-attestation.py 'expected exactly one SLSA Sigstore bundle referrer'
-  require_text scripts/fetch-oci-attestation.py 'OCI attestation subject digest was not the reviewed API digest'
-  require_text scripts/fetch-oci-attestation.py 'Sigstore statement subject identity was not the reviewed API image'
+  require_text scripts/fetch-oci-attestation.py 'OCI attestation subject digest was not the reviewed image digest'
+  require_text scripts/fetch-oci-attestation.py 'Sigstore statement subject identity was not the reviewed image'
   require_text scripts/fetch-oci-attestation.py '_validate_subject_index(subject_body)'
+  require_text scripts/fetch-oci-attestation.py 'Docker-Content-Digest'
+  require_text scripts/fetch-oci-attestation.py 'registry digest header'
+  require_text scripts/fetch-oci-attestation.py 'configure_identity('
   require_text scripts/fetch-oci-attestation.py '_write_private_file(subject_output_path, subject_body)'
   require_text scripts/fetch-oci-attestation.py 'REGISTRY_BLOB_PATH_PATTERN = re.compile('
   require_text scripts/fetch-oci-attestation.py 'GITHUB_BLOB_PATH_PATTERN = re.compile(r"/ghcrblobs[0-9]+/blobs/sha256:[0-9a-f]{64}")'
@@ -243,7 +252,7 @@ require_text docs/api-image-consumption.md 'not a deployment reference, rollback
 require_text docs/api-image-consumption.md 'requires a new reviewed deployment pull request'
 require_text docs/api-image-consumption.md 'Rollback also requires a new reviewed pull request'
 require_text docs/api-image-consumption.md 'Phase C is in progress.'
-require_text docs/api-image-consumption.md 'Frontend publication remains outstanding.'
+require_text docs/api-image-consumption.md 'Frontend publication is complete'
 require_text docs/api-image-consumption.md 'Phase D and production host automation remain outside this change.'
 require_text README.md "$API_IMAGE"
 require_text README.md 'Phase C is in progress.'
@@ -258,7 +267,7 @@ require_text docs/api-image-consumption.md "$GH_LINUX_AMD64_SHA256"
 forbid_text README.md 'real runner currently succeeds only|blocked before API execution'
 forbid_text docs/api-image-consumption.md 'blocked at token-free attestation|blocked fail-closed target contract'
 require_text docs/roadmap.md 'Phase C — Immutable image publishing (in progress)'
-require_text docs/roadmap.md 'Frontend publication remains outstanding.'
+require_text docs/roadmap.md 'Phase C.4 implementation is ready'
 require_text CHANGELOG.md 'Consume Verified API Image Digest'
 
 forbid_text README.md 'SecPal deployment is production-ready|complete Phase C|Phase C is complete'
@@ -334,19 +343,19 @@ if [ "${SECPAL_SKIP_PHASE_C_NEGATIVE:-0}" -ne 1 ]; then
       oci-verifier-reopen)
         # Shell variables are intentional literal mutation input.
         # shellcheck disable=SC2016
-        sed -i '/^  "\$ATTESTATION_SUBJECT" \\/s|"$ATTESTATION_SUBJECT"|"oci://$API_IMAGE"|' \
+        sed -i '0,/"\$attestation_subject"/s|"$attestation_subject"|"oci://$canonical_image"|' \
           "$fixture/scripts/local-integration.sh"
         ;;
       source-commit-duplication)
         # API_SOURCE_COMMIT is intentionally literal mutation input.
         # shellcheck disable=SC2016
-        sed -i 's/--signer-digest "$API_SOURCE_COMMIT"/--signer-digest 87d1432389adac3a02574b399322928a77c5e67f/' \
+        sed -i '0,/"\$API_SOURCE_COMMIT"/s//87d1432389adac3a02574b399322928a77c5e67f/' \
           "$fixture/scripts/local-integration.sh"
         ;;
       bundle-fetch-bypass)
         # The shell expressions are intentional literal contract text.
         # shellcheck disable=SC2016
-        sed -i 's|python3 "\$ROOT_DIR/scripts/fetch-oci-attestation.py" "\$ATTESTATION_SUBJECT" "\$ATTESTATION_BUNDLE"|true|' \
+        sed -i 's|python3 "\$ROOT_DIR/scripts/fetch-oci-attestation.py"|true # bypassed|' \
           "$fixture/scripts/local-integration.sh"
         ;;
       fetcher-wrong-digest)

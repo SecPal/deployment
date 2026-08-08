@@ -7,7 +7,8 @@ SPDX-License-Identifier: CC0-1.0
 
 This document defines ownership and trust boundaries for the SecPal deployment
 reference. Phase B implements the test-only local integration subset, and
-Phase C now supplies its reviewed API digest while remaining in progress.
+Phase C now supplies its reviewed API and frontend digests while remaining in
+progress.
 
 ## Repository responsibilities
 
@@ -21,9 +22,10 @@ This repository owns:
 - ephemeral runtime-secret contracts; and
 - integration-test documentation.
 
-Later phases will add immutable publication, the public reference deployment,
-the selected production edge and CrowdSec, persistent-volume contracts,
-backup/restore, update/rollback, and production operator guidance.
+The reviewed immutable API and frontend images are already consumed here.
+Later phases will add the public reference deployment, the selected production
+edge and CrowdSec, persistent-volume contracts, backup/restore, update/rollback,
+and production operator guidance.
 
 ## Out of scope
 
@@ -104,7 +106,8 @@ certificates, infrastructure-as-code, and deployment automation forbidden.
 Phase B:
 
 - consumes the API from one reviewed GHCR OCI index digest;
-- builds the frontend locally from its pinned Git commit;
+- consumes the frontend only from its reviewed public OCI index digest after
+  anonymous pull and fixed-identity attestation verification;
 - uses a local test-only TLS gateway and disposable internal CA;
 - exposes separate local frontend and API HTTPS origins;
 - avoids a final edge-technology decision;
@@ -113,12 +116,13 @@ Phase B:
 - uses Valkey for both queues and cache; and
 - shares disposable private files between API-based roles.
 
-Before any API-based role runs, the real integration runner validates the
-resolved Compose image, anonymously pulls the exact digest with an empty
-Docker configuration, retrieves and validates the digest-bound OCI Sigstore
-bundle and raw index anonymously, and verifies the local digest-matching index
-against that bundle and the fixed repository, workflow, source ref, and source
-commit without reopening the registry. It then exercises
+Before any API-based role or frontend container runs, the real integration
+runner validates both resolved Compose images, anonymously pulls each exact
+digest with a separate empty Docker configuration, retrieves and validates
+each digest-bound OCI Sigstore bundle, raw index, and registry digest header,
+and verifies each local digest-matching index against its bundle and fixed
+repository, workflow, source ref, source commit, and signer without reopening
+the registry. It then exercises
 liveness, the frontend document, runtime API origin, CORS, Sanctum CSRF and
 cookie behavior, Valkey cache and queue round trips, worker ownership, shared
 private storage, explicit migration, browser CSP and service-worker behavior,
@@ -139,7 +143,7 @@ outside Phase B.
   long-running services.
 - **Runtime state:** the temporary PostgreSQL and shared private-storage
   volumes plus per-container tmpfs mounts.
-- **Generated artifacts:** project-scoped locally built frontend and gateway
-  images and the disposable internal CA, all outside Git history and removed
-  by the explicit integration test. The published API digest is never treated
-  as a local cleanup artifact.
+- **Generated artifacts:** the project-scoped locally built gateway image and
+  disposable internal CA, both outside Git history and removed by the explicit
+  integration test. The published API and frontend digests are never treated
+  as local cleanup artifacts.

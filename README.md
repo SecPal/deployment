@@ -10,8 +10,8 @@ integration, self-hosting, deployment contracts, container orchestration,
 edge and security integration, and operational procedures for backup,
 restore, and updates.
 
-> Phase B and the API image-consumption part of Phase C provide a runnable,
-> test-only local integration stack.
+> Phase B and the reviewed API and frontend image-consumption parts of Phase C
+> provide a runnable, test-only local integration stack.
 > It is not a production-ready deployment.
 
 ## Architecture principles
@@ -36,8 +36,9 @@ local integration subset; later phases remain targets:
 
 1. Governance bootstrap: complete.
 2. Local API/frontend integration: complete.
-3. Immutable image publishing: in progress. API publication and API digest
-   consumption are implemented; frontend publication remains outstanding.
+3. Immutable image publishing: in progress. API and frontend publication are
+   implemented; their reviewed digests are consumed by the local integration
+   contract. Merge and post-merge evidence for Phase C.4 remain outstanding.
 4. Public Compose reference deployment: not implemented.
 5. Public edge, TLS, and CrowdSec: not implemented.
 6. Backup, restore, update, and rollback: not implemented.
@@ -47,17 +48,21 @@ local integration subset; later phases remain targets:
 See [the roadmap](docs/roadmap.md) for acceptance criteria and explicit
 non-goals.
 
-## Phase B local integration and Phase C API image consumption
+## Phase B local integration and Phase C image consumption
 
 The public [`compose.yaml`](compose.yaml) consumes the verified API OCI index
 by this canonical digest reference:
 
 - `ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
 
-The frontend remains a source build pinned to Git revision
-`fcd427d9b55d7945c439c670077e12928e47ddd6`. Frontend publication remains
-outstanding. PostgreSQL, Valkey, and the test-only Caddy base remain pinned by
-version and digest.
+The frontend is consumed only through its verified canonical OCI index:
+
+- `ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
+
+Its source commit is `b755ca0d0ee5a85eca5ad5688d457241f070b1b4`,
+published by run `31247196734` (attempt `1`). The frontend source build and
+image override have been removed. PostgreSQL, Valkey, and the test-only Caddy
+base remain pinned by version and digest.
 
 The stack exposes one dynamic port on `127.0.0.1` and uses two reserved HTTPS
 origins on that port:
@@ -70,8 +75,7 @@ API, frontend, workers, scheduler, and data services have no published ports.
 The intended explicit integration test requires Docker Engine, Docker Compose
 v2, GitHub CLI 2.97.0 with `gh attestation verify`, Python 3, `curl`, util-linux
 `setsid`, Node.js 22.22.2, npm dependencies installed with `npm ci`, Playwright
-Chromium installed, GitHub access for the pinned frontend source context, and
-anonymous registry access for the pinned inputs:
+Chromium installed, and anonymous registry access for the pinned inputs:
 
 ```bash
 ./scripts/local-integration.sh
@@ -90,27 +94,28 @@ the host to `github.com`, disables prompting, updates, and telemetry, and
 removes all GitHub, Docker, and registry configuration variables. The temporary
 index and bundle are removed on success, failure, and signals.
 
-The sequence validates every API role against the canonical digest and pulls it
-with a new empty Docker configuration while removing any inherited
-`DOCKER_AUTH_CONFIG` from that exact pull process. It then retrieves and
-validates the public OCI attestation bundle and requires successful GitHub
-Artifact Attestation verification before any API-based role may run. Only after
-that gate succeeds does the script build the project-scoped frontend and
-gateway images, generate random test-only secrets inside a private runtime
-volume without printing them, start private PostgreSQL and Valkey services, run
-migrations exactly once, and start the explicit service roles. The published
-API image is not a local cleanup artifact. The runner then proves Valkey cache
-and queue round trips, worker-to-queue ownership, shared visibility of the
-disposable private-storage volume, exact credentialed CORS, and the separate
-app/API origins. Playwright Chromium exercises the actual Compose frontend and
-API, including the Sanctum CSRF handshake, an intentionally unsuccessful login,
-secure cookie attributes, CSP, service-worker registration, and runtime API
-routing. Successful completion means its containers, networks, volumes,
-images, database data, private files, certificates, and secrets were removed.
-Failure paths trigger best-effort cleanup; handled signals are forwarded to the
-active integration process group and stop the run with a non-success status
-after cleanup. Interrupted secret publication rolls back partial files, and a
-later run replaces any legacy partial set.
+The sequence validates every API role and the frontend against their canonical
+digests. It pulls each image with its own new empty Docker configuration while
+removing inherited `DOCKER_AUTH_CONFIG` from each exact pull process. For each
+image it verifies the raw index byte digest and `Docker-Content-Digest` header,
+retrieves and validates the public OCI attestation bundle, and requires
+successful GitHub Artifact Attestation verification. Only after both gates
+succeed does the script build the project-scoped gateway image, generate
+random test-only secrets inside a private runtime volume without printing them,
+start private PostgreSQL and Valkey services, run migrations exactly once, and
+start the explicit service roles. Neither published SecPal image is a local
+cleanup artifact. The runner then proves Valkey cache and queue round trips,
+worker-to-queue ownership, shared visibility of the disposable private-storage
+volume, exact credentialed CORS, and the separate app/API origins. Playwright
+Chromium exercises the actual Compose frontend and API, including the Sanctum
+CSRF handshake, an intentionally unsuccessful login, secure cookie attributes,
+CSP, service-worker registration, and runtime API routing. Successful
+completion means its containers, networks, volumes, project-built images,
+database data, private files, certificates, and secrets were removed. Failure
+paths trigger best-effort cleanup; handled signals are forwarded to the active
+integration process group and stop the run with a non-success status after
+cleanup. Interrupted secret publication rolls back partial files, and a later
+run replaces any legacy partial set.
 
 For a deterministic caller-assigned port, including parallel test scheduling,
 set a distinct loopback port for each run:
@@ -142,10 +147,12 @@ This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use
 production credentials, or select the future production edge.
 
-Phase C is in progress. API publication and token-free, fail-closed API digest
-consumption are implemented. Frontend publication remains outstanding. Digest
-provenance, reviewed updates, and rollback are detailed in
-[`docs/api-image-consumption.md`](docs/api-image-consumption.md).
+Phase C is in progress. API and frontend publication and token-free,
+fail-closed digest consumption are implemented. Phase C.4 remains subject to
+review, merge, and post-merge evidence. Digest provenance, reviewed updates,
+and rollback are detailed in
+[`docs/api-image-consumption.md`](docs/api-image-consumption.md) and
+[`docs/frontend-image-consumption.md`](docs/frontend-image-consumption.md).
 
 ## Security
 
@@ -172,8 +179,9 @@ Docker-backed integration test is a separate, explicit command.
 Product code remains in [`SecPal/api`](https://github.com/SecPal/api) and
 [`SecPal/frontend`](https://github.com/SecPal/frontend). Their Dockerfiles and
 build logic are not copied here. The API follows the reviewed Phase C digest
-contract; the frontend still builds its existing Dockerfile from an exactly
-pinned source revision. This repository does not fork product build logic.
+contract, and the frontend follows the equivalent reviewed Phase C digest
+contract. This repository neither fetches frontend source nor forks product
+build logic.
 
 The detailed ownership and trust boundaries are documented in
 [`docs/architecture/scope.md`](docs/architecture/scope.md).

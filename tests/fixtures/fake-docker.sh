@@ -34,7 +34,16 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "$docker_auth_config_state" >>"${SECPAL_TEST_COMMAND_LOG:?}"
 
 if [ "${1:-}" = pull ]; then
-  if [ "$*" != 'pull ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e' ] ||
+  image_kind=
+  case "$*" in
+    'pull ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e')
+      image_kind=API
+      ;;
+    'pull ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077')
+      image_kind=FRONTEND
+      ;;
+  esac
+  if [ -z "$image_kind" ] ||
     [ -z "${DOCKER_CONFIG:-}" ] || [ ! -d "$DOCKER_CONFIG" ] ||
     [ "$DOCKER_CONFIG" = "${HOME:-}/.docker" ] ||
     { [ -n "${SECPAL_TEST_PERSISTENT_DOCKER_CONFIG:-}" ] &&
@@ -45,6 +54,10 @@ if [ "${1:-}" = pull ]; then
     exit 75
   fi
   if [ "${SECPAL_TEST_FAIL_PULL:-0}" -eq 1 ]; then
+    exit 76
+  fi
+  failure_variable="SECPAL_TEST_FAIL_${image_kind}_PULL"
+  if [ "${!failure_variable:-0}" -eq 1 ]; then
     exit 76
   fi
   exit 0
