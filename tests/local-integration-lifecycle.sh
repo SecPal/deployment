@@ -508,6 +508,13 @@ for specification in one:18443 two:18444; do
     ! grep -Fq "api.secpal.example.invalid:$port:127.0.0.1" "$run_curl_log"; then
     fail "parallel run $run_id did not use both isolated loopback origins"
   fi
+  for rejected_frontend_path in \
+    /v1/phase-b-not-an-api-route /sanctum/csrf-cookie /health/ready; do
+    if ! grep -Fq "https://app.secpal.example.invalid:$port$rejected_frontend_path" \
+      "$run_curl_log"; then
+      fail "parallel run $run_id did not reject frontend path $rejected_frontend_path"
+    fi
+  done
 done
 
 one_frontend_override="$(awk -F '\t' '$1 == "one" { print $3; exit }' "$COMMAND_LOG")"
@@ -624,7 +631,7 @@ if [ "$(printf '%s\n' "$one_commands" | grep -Eo 'phase-b-queue-hash-chain-[a-z0
   fail "parallel runs reused a hash-queue or storage probe name"
 fi
 
-for failure_case in queue storage browser; do
+for failure_case in queue storage browser frontend_route; do
   : >"$COMMAND_LOG"
   failure_variable="SECPAL_TEST_FAIL_${failure_case^^}"
   if env \

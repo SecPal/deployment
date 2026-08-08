@@ -134,8 +134,11 @@ require_text scripts/local-integration.sh 'APP_ORIGIN="https://app.secpal.exampl
 # shellcheck disable=SC2016
 require_text scripts/local-integration.sh 'API_ORIGIN="https://api.secpal.example.invalid:$SECPAL_PHASE_B_PORT"'
 require_text scripts/local-integration.sh 'npm run test:integration:browser'
-require_text scripts/local-integration.sh 'frontend_api_status'
-require_text scripts/local-integration.sh "[ \"\$frontend_api_status\" = '404' ]"
+require_text scripts/local-integration.sh 'rejected_frontend_status'
+require_text scripts/local-integration.sh "[ \"\$rejected_frontend_status\" = '404' ]"
+require_text scripts/local-integration.sh '/v1/phase-b-not-an-api-route'
+require_text scripts/local-integration.sh '/sanctum/csrf-cookie'
+require_text scripts/local-integration.sh '/health/ready'
 require_text scripts/local-integration.sh 'worker-general'
 require_text scripts/local-integration.sh 'worker-hash-chain'
 # The script expression must remain literal.

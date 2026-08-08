@@ -457,14 +457,18 @@ if printf '%s\n' "$foreign_headers" | grep -Fiq 'access-control-allow-credential
   fail "a foreign origin received credentialed CORS approval."
 fi
 
-frontend_api_status="$(curl --silent --show-error --insecure \
-  --output "$TEMP_DIR/frontend-api-route.out" \
-  --write-out '%{http_code}' \
-  --noproxy app.secpal.example.invalid \
-  --resolve "app.secpal.example.invalid:$SECPAL_PHASE_B_PORT:127.0.0.1" \
-  "$APP_ORIGIN/v1/phase-b-not-an-api-route")"
-[ "$frontend_api_status" = '404' ] ||
-  fail "the frontend origin exposed an API-style route."
+for rejected_frontend_path in \
+  /v1/phase-b-not-an-api-route /sanctum/csrf-cookie /health/ready; do
+  rejected_frontend_name="${rejected_frontend_path//\//-}"
+  rejected_frontend_status="$(curl --silent --show-error --insecure \
+    --output "$TEMP_DIR/frontend-route$rejected_frontend_name.out" \
+    --write-out '%{http_code}' \
+    --noproxy app.secpal.example.invalid \
+    --resolve "app.secpal.example.invalid:$SECPAL_PHASE_B_PORT:127.0.0.1" \
+    "$APP_ORIGIN$rejected_frontend_path")"
+  [ "$rejected_frontend_status" = '404' ] ||
+    fail "the frontend origin exposed forbidden route $rejected_frontend_path."
+done
 curl --silent --show-error --insecure --header 'Accept: application/json' \
   --noproxy api.secpal.example.invalid \
   --resolve "api.secpal.example.invalid:$SECPAL_PHASE_B_PORT:127.0.0.1" \

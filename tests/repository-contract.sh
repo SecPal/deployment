@@ -80,6 +80,11 @@ require_text README.md "Phase C is in progress."
 require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one"
 require_text docs/architecture/scope.md "scheduler: exactly one"
 require_text docs/architecture/scope.md "Step A bootstrap contract"
+require_text docs/architecture/scope.md \
+  "The reviewed immutable API and frontend images are already consumed here."
+if grep -Fq 'Later phases will add immutable publication' docs/architecture/scope.md; then
+  fail "architecture scope must not defer immutable publication that is already consumed"
+fi
 require_text docs/roadmap.md "Local container integration stack"
 require_text docs/roadmap.md "Phase B — Local container integration stack (complete)"
 require_text docs/roadmap.md "Phase C — Immutable image publishing (in progress)"

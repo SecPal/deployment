@@ -61,6 +61,53 @@ service_section() {
   ' compose.yaml
 }
 
+require_service_image() {
+  local service="$1"
+  local expected_image="$2"
+  local section
+
+  section="$(service_section "$service")"
+  if ! grep -Fqx "    image: $expected_image" <<<"$section"; then
+    fail "$service must use exactly $expected_image"
+  fi
+}
+
+require_service_healthcheck_test() {
+  local service="$1"
+  local expected_test="$2"
+  local section
+
+  section="$(service_section "$service")"
+  if ! awk -v expected="$expected_test" '
+    $0 == "    healthcheck:" { healthcheck = 1; next }
+    healthcheck && /^    [^ ]/ { healthcheck = 0 }
+    healthcheck && $0 == expected { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' <<<"$section"; then
+    fail "$service must retain its exact healthcheck command"
+  fi
+}
+
+require_healthy_dependency() {
+  local service="$1"
+  local dependency="$2"
+  local section
+
+  section="$(service_section "$service")"
+  if ! awk -v dependency="$dependency" '
+    $0 == "    depends_on:" { depends_on = 1; next }
+    depends_on && /^    [^ ]/ { depends_on = 0 }
+    depends_on && $0 == "      " dependency ":" {
+      if ((getline) > 0 && $0 == "        condition: service_healthy") {
+        found = 1
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' <<<"$section"; then
+    fail "$service must depend explicitly on a healthy $dependency"
+  fi
+}
+
 for path in \
   compose.yaml \
   scripts/local-integration.sh \
@@ -86,14 +133,14 @@ if [ -f compose.yaml ]; then
   fi
 
   require_text compose.yaml "$API_IMAGE"
-  require_text compose.yaml "$POSTGRES_IMAGE"
-  require_text compose.yaml "$VALKEY_IMAGE"
-  require_text compose.yaml '    user: "101:101"'
-  require_text compose.yaml '      SECPAL_API_URL: https://api.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}'
-  require_text compose.yaml '      - /tmp:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=0700,size=32m'
+  require_service_image postgres "$POSTGRES_IMAGE"
+  require_service_image valkey "$VALKEY_IMAGE"
 
   for required_frontend_text in \
+    '    user: "101:101"' \
+    '      SECPAL_API_URL: https://api.secpal.example.invalid:${SECPAL_PHASE_B_PORT:-8443}' \
     '    read_only: true' \
+    '      - /tmp:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=0700,size=32m' \
     '    cap_drop:' \
     '      - ALL' \
     '      - no-new-privileges:true' \
@@ -106,12 +153,9 @@ if [ -f compose.yaml ]; then
   if grep -Eq '^    ports:|^      - application$|^    privileged:|^    network_mode:' <<<"$frontend_section"; then
     fail "frontend must stay edge-only without public ports or elevated networking"
   fi
+  require_service_healthcheck_test frontend '      test: ["CMD", "nginx", "-t"]'
 
-  gateway_section="$(service_section gateway)"
-  if ! grep -Fq '      frontend:' <<<"$gateway_section" ||
-    ! grep -Fq '        condition: service_healthy' <<<"$gateway_section"; then
-    fail "gateway must continue to depend on a healthy frontend"
-  fi
+  require_healthy_dependency gateway frontend
 
   forbid_text compose.yaml \
     'SECPAL_PHASE_B_FRONTEND_IMAGE|SecPal/frontend\.git|fcd427d9b55d7945c439c670077e12928e47ddd6' \
@@ -214,7 +258,8 @@ if [ "${SECPAL_SKIP_PHASE_C4_NEGATIVE:-0}" -ne 1 ]; then
     latest discovery-tag branch-tag amd64-child arm64-child attestation-artifact \
     registry repository environment-image source-build build-context image-override \
     verification-removed verification-after-start verification-nonblocking tag-fallback \
-    docker-auth-inherited registry-login api-digest; do
+    docker-auth-inherited registry-login api-digest postgres-digest valkey-digest \
+    gateway-frontend-unhealthy frontend-healthcheck-removed; do
     fixture="$negative_temp/$mutation"
     install -d -m 0700 "$fixture/docs" "$fixture/scripts" "$fixture/tests"
     cp compose.yaml README.md CHANGELOG.md "$fixture/"
@@ -281,6 +326,24 @@ if [ "${SECPAL_SKIP_PHASE_C4_NEGATIVE:-0}" -ne 1 ]; then
         ;;
       api-digest)
         sed -i 's/5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e/6a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e/' \
+          "$fixture/compose.yaml"
+        ;;
+      postgres-digest)
+        sed -i 's/38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74/48471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74/' \
+          "$fixture/compose.yaml"
+        printf '# decoy only: %s\n' "$POSTGRES_IMAGE" >>"$fixture/compose.yaml"
+        ;;
+      valkey-digest)
+        sed -i 's/3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd/4acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd/' \
+          "$fixture/compose.yaml"
+        printf '# decoy only: %s\n' "$VALKEY_IMAGE" >>"$fixture/compose.yaml"
+        ;;
+      gateway-frontend-unhealthy)
+        sed -i '/^      frontend:$/,/^    healthcheck:$/ s/^        condition: service_healthy$/        condition: service_started/' \
+          "$fixture/compose.yaml"
+        ;;
+      frontend-healthcheck-removed)
+        sed -i '/^  frontend:$/,/^  gateway:$/ { /^    healthcheck:$/,/^      start_period: 5s$/d; }' \
           "$fixture/compose.yaml"
         ;;
     esac

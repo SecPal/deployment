@@ -22,9 +22,10 @@ This repository owns:
 - ephemeral runtime-secret contracts; and
 - integration-test documentation.
 
-Later phases will add immutable publication, the public reference deployment,
-the selected production edge and CrowdSec, persistent-volume contracts,
-backup/restore, update/rollback, and production operator guidance.
+The reviewed immutable API and frontend images are already consumed here.
+Later phases will add the public reference deployment, the selected production
+edge and CrowdSec, persistent-volume contracts, backup/restore, update/rollback,
+and production operator guidance.
 
 ## Out of scope
 

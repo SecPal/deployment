@@ -32,12 +32,16 @@ case "$url" in
       printf 'HTTP/2 204\r\n\r\n'
     fi
     ;;
-  */v1/phase-b-not-an-api-route)
+  */v1/phase-b-not-an-api-route | */sanctum/csrf-cookie | */health/ready)
     if [ -n "$output_path" ] && [ "$output_path" != /dev/null ]; then
       printf 'not found\n' >"$output_path"
     fi
     if [ -n "$write_out" ]; then
-      printf '404'
+      if [ "${SECPAL_TEST_FAIL_FRONTEND_ROUTE:-0}" -eq 1 ]; then
+        printf '200'
+      else
+        printf '404'
+      fi
     fi
     ;;
   */)
