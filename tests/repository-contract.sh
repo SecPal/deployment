@@ -76,7 +76,7 @@ require_text README.md "It is not a production-ready deployment."
 require_text README.md "./scripts/preflight.sh"
 require_text README.md "Local API/frontend integration: complete."
 require_text README.md "Phase B is complete:"
-require_text README.md "Phase C is in progress."
+require_text README.md "Phase C is complete."
 require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one"
 require_text docs/architecture/scope.md "scheduler: exactly one"
 require_text docs/architecture/scope.md "Step A bootstrap contract"
@@ -87,7 +87,7 @@ if grep -Fq 'Later phases will add immutable publication' docs/architecture/scop
 fi
 require_text docs/roadmap.md "Local container integration stack"
 require_text docs/roadmap.md "Phase B — Local container integration stack (complete)"
-require_text docs/roadmap.md "Phase C — Immutable image publishing (in progress)"
+require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
 # The Markdown backticks must remain literal.
 # shellcheck disable=SC2016
 require_text docs/roadmap.md 'is enforced for `main`'

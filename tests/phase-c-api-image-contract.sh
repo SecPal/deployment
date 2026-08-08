@@ -251,11 +251,11 @@ require_text docs/api-image-consumption.md 'Publisher run: `30833321334` (attemp
 require_text docs/api-image-consumption.md 'not a deployment reference, rollback reference, or trust anchor'
 require_text docs/api-image-consumption.md 'requires a new reviewed deployment pull request'
 require_text docs/api-image-consumption.md 'Rollback also requires a new reviewed pull request'
-require_text docs/api-image-consumption.md 'Phase C is in progress.'
-require_text docs/api-image-consumption.md 'Frontend publication is complete'
-require_text docs/api-image-consumption.md 'Phase D and production host automation remain outside this change.'
+require_text docs/api-image-consumption.md 'Phase C is complete.'
+require_text docs/api-image-consumption.md 'Phase D has not started.'
+require_text docs/api-image-consumption.md 'Production host automation remains outside this'
 require_text README.md "$API_IMAGE"
-require_text README.md 'Phase C is in progress.'
+require_text README.md 'Phase C is complete.'
 require_text README.md 'The runner does not provide a GitHub token to bypass'
 # Backticks are literal Markdown, not shell substitutions.
 # shellcheck disable=SC2016
@@ -266,13 +266,13 @@ require_text docs/api-image-consumption.md 'GitHub CLI `2.97.0`'
 require_text docs/api-image-consumption.md "$GH_LINUX_AMD64_SHA256"
 forbid_text README.md 'real runner currently succeeds only|blocked before API execution'
 forbid_text docs/api-image-consumption.md 'blocked at token-free attestation|blocked fail-closed target contract'
-require_text docs/roadmap.md 'Phase C — Immutable image publishing (in progress)'
-require_text docs/roadmap.md 'Phase C.4 implementation is ready'
+require_text docs/roadmap.md 'Phase C — Immutable image publishing (complete)'
+require_text docs/roadmap.md '**Completion evidence:**'
 require_text CHANGELOG.md 'Consume Verified API Image Digest'
 
-forbid_text README.md 'SecPal deployment is production-ready|complete Phase C|Phase C is complete'
-forbid_text docs/roadmap.md 'Phase C — Immutable image publishing \(complete\)|complete Phase C'
-forbid_text docs/api-image-consumption.md 'SecPal deployment is production-ready|Phase D is complete|Managed hosting is implemented|complete Phase C'
+forbid_text README.md 'SecPal deployment is production-ready|Phase D is complete|production deployment is complete'
+forbid_text docs/roadmap.md 'Phase D — Public Compose reference deployment \(complete\)|Phase D is complete'
+forbid_text docs/api-image-consumption.md 'SecPal deployment is production-ready|Phase D is complete|Managed hosting is implemented'
 
 if [ "$failures" -ne 0 ]; then
   printf 'Phase C API image contract failed with %d issue(s).\n' "$failures" >&2

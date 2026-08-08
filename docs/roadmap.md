@@ -59,20 +59,18 @@ again.
 **Deferred:** Frontend publication, a production edge, public exposure, tenant
 provisioning, durable storage, and production operations.
 
-## Phase C — Immutable image publishing (in progress)
+## Phase C — Immutable image publishing (complete)
 
 **Goal:** Define reproducible publication and consumption of product images.
 
 **Implemented:** API and frontend publication and their fail-closed digest
-consumption contracts are implemented. The public local integration contract
+consumption contracts are complete. The public local integration contract
 pins both verified SecPal images by canonical OCI index digest, anonymously
 pulls each digest with separate empty Docker configuration, validates each raw
 OCI index and registry digest header, and verifies each private
 digest-matching index and Sigstore bundle with the pinned GitHub CLI before
 container execution. No GitHub or registry account credentials are used, and
-the verifier does not reopen the registry. Phase C.4 implementation is ready
-for review; the phase remains incomplete pending merge and post-merge
-evidence.
+the verifier does not reopen the registry.
 
 **Expected artifacts:** Completed API and frontend version and digest
 contracts, provenance policy, image signing policy, publication verification,
@@ -84,8 +82,20 @@ and merge-commit integration evidence.
 verifiable, and bound by digest with no `latest` dependency. The API half does
 not complete the whole phase.
 
-**Deferred:** Phase D, public reference deployment, production host
-automation, and managed-hosting automation.
+**Completion evidence:** Deployment PR `SecPal/deployment#6` merged as
+`4fc2796409b7c37a541f515ccf29236f143fc132`. Its push-triggered Repository
+Quality run `31264563173` and Local Integration run `31264562902`, Compose
+Contract job `93120504279`, passed on `main`. The integration gate verified
+the frontend OCI index digest
+`sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
+and API OCI index digest
+`sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
+before runtime, then passed the gateway build, real Compose lifecycle,
+Playwright browser contract, and complete project cleanup.
+
+**Deferred:** Phase D has not started. Public reference deployment,
+production host automation, and managed-hosting automation remain outside
+Phase C.
 
 ## Phase D — Public Compose reference deployment
 

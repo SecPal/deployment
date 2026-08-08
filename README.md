@@ -10,8 +10,8 @@ integration, self-hosting, deployment contracts, container orchestration,
 edge and security integration, and operational procedures for backup,
 restore, and updates.
 
-> Phase B and the reviewed API and frontend image-consumption parts of Phase C
-> provide a runnable, test-only local integration stack.
+> Phase B and the completed Phase C provide a runnable, test-only local
+> integration stack with reviewed API and frontend image consumption.
 > It is not a production-ready deployment.
 
 ## Architecture principles
@@ -36,9 +36,11 @@ local integration subset; later phases remain targets:
 
 1. Governance bootstrap: complete.
 2. Local API/frontend integration: complete.
-3. Immutable image publishing: in progress. API and frontend publication are
-   implemented; their reviewed digests are consumed by the local integration
-   contract. Merge and post-merge evidence for Phase C.4 remain outstanding.
+3. Immutable image publishing: complete. API and frontend publication and
+   digest-only consumption are operationally verified. Deployment merge
+   commit `4fc2796409b7c37a541f515ccf29236f143fc132` passed post-merge
+   Repository Quality run `31264563173` and Local Integration run
+   `31264562902` on `main`.
 4. Public Compose reference deployment: not implemented.
 5. Public edge, TLS, and CrowdSec: not implemented.
 6. Backup, restore, update, and rollback: not implemented.
@@ -63,6 +65,15 @@ Its source commit is `b755ca0d0ee5a85eca5ad5688d457241f070b1b4`,
 published by run `31247196734` (attempt `1`). The frontend source build and
 image override have been removed. PostgreSQL, Valkey, and the test-only Caddy
 base remain pinned by version and digest.
+
+Phase C completion is bound to deployment merge commit
+`4fc2796409b7c37a541f515ccf29236f143fc132`. Its push-triggered Local
+Integration run `31264562902` verified the frontend OCI index digest
+`sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
+and API OCI index digest
+`sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
+before runtime, then passed the real Compose lifecycle, Playwright, and full
+project cleanup.
 
 The stack exposes one dynamic port on `127.0.0.1` and uses two reserved HTTPS
 origins on that port:
@@ -147,10 +158,11 @@ This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use
 production credentials, or select the future production edge.
 
-Phase C is in progress. API and frontend publication and token-free,
-fail-closed digest consumption are implemented. Phase C.4 remains subject to
-review, merge, and post-merge evidence. Digest provenance, reviewed updates,
-and rollback are detailed in
+Phase C is complete. API and frontend publication, token-free fail-closed
+digest consumption, pre-execution attestation verification, and hosted
+post-merge integration evidence are operationally verified. This does not
+claim a production deployment or public infrastructure. Phase D has not
+started. Digest provenance, reviewed updates, and rollback are detailed in
 [`docs/api-image-consumption.md`](docs/api-image-consumption.md) and
 [`docs/frontend-image-consumption.md`](docs/frontend-image-consumption.md).
 

@@ -26,10 +26,24 @@ SPDX-License-Identifier: CC0-1.0
 - The integration runner builds only the project-scoped test gateway after
   both published SecPal images have passed verification.
 
+### Post-merge evidence
+
+- Deployment PR `SecPal/deployment#6` merged as
+  `4fc2796409b7c37a541f515ccf29236f143fc132`.
+- Push-triggered Repository Quality run `31264563173` and Local Integration
+  run `31264562902`, Compose Contract job `93120504279`, passed on `main`.
+- The hosted integration run verified frontend OCI index digest
+  `sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
+  and API OCI index digest
+  `sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
+  before runtime, then passed the real Compose lifecycle, Playwright, and
+  complete project cleanup.
+- Phase C is complete. Phase D has not started.
+
 ### Not included
 
-- Production deployment, registry writes, API digest updates, Phase D, and a
-  premature declaration that Phase C is complete remain outside this work.
+- Production deployment, registry writes, API digest updates, Phase D
+  implementation, and public infrastructure remain outside this work.
 
 ## 2026-08-03 - Consume Verified API Image Digest
 
