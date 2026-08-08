@@ -198,6 +198,14 @@ class ProductionContractRegressionTests(unittest.TestCase):
             lambda: self.validator.validate_inventory(inventory)
         )
 
+    def test_ipv4_mapped_ipv6_public_addresses_are_rejected(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        host = nested_mapping(inventory, "host")
+        host["public_address"] = "::ffff:8.8.8.8"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_inventory(inventory)
+        )
+
     def test_semantic_duplicate_inventory_addresses_are_rejected(self) -> None:
         inventory = copy.deepcopy(self.inventory)
         host = inventory["host"]
@@ -398,6 +406,55 @@ class ProductionContractRegressionTests(unittest.TestCase):
                         self.inventory, facts
                     ),
                     "service-account",
+                )
+
+    def test_host_facts_enforce_the_service_account_boundary(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        self.validator.validate_host_facts(self.inventory, facts)
+
+        mutations = (
+            ("name", "different-account"),
+            ("group", "different-group"),
+            ("home", "/var/lib/different-account"),
+            ("shell", "/bin/bash"),
+            ("interactive_login", True),
+            ("sudo_authorized", True),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field, case="unsafe"):
+                candidate = copy.deepcopy(facts)
+                nested_mapping(candidate, "service_account")[field] = value
+                self.assert_contract_violation(
+                    lambda candidate=candidate: self.validator.validate_host_facts(
+                        self.inventory, candidate
+                    )
+                )
+            with self.subTest(field=field, case="missing"):
+                candidate = copy.deepcopy(facts)
+                nested_mapping(candidate, "service_account").pop(field)
+                self.assert_contract_violation(
+                    lambda candidate=candidate: self.validator.validate_host_facts(
+                        self.inventory, candidate
+                    )
+                )
+
+    def test_host_facts_reject_direct_root_ssh(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        self.validator.validate_host_facts(self.inventory, facts)
+
+        for value in (None, True):
+            with self.subTest(value=value):
+                candidate = copy.deepcopy(facts)
+                if value is None:
+                    candidate.pop("ssh")
+                else:
+                    nested_mapping(candidate, "ssh")[
+                        "direct_root_login_permitted"
+                    ] = value
+                self.assert_contract_violation(
+                    lambda candidate=candidate: self.validator.validate_host_facts(
+                        self.inventory, candidate
+                    )
                 )
 
     def test_host_facts_must_report_docker_installation_source(self) -> None:

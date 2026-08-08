@@ -11,6 +11,7 @@
     "architecture",
     "os",
     "service_account",
+    "ssh",
     "kernel",
     "runtime",
     "clock",
@@ -50,8 +51,26 @@
     "service_account": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["uid", "gid", "supplementary_gids"],
+      "required": [
+        "name",
+        "group",
+        "uid",
+        "gid",
+        "supplementary_gids",
+        "home",
+        "shell",
+        "interactive_login",
+        "sudo_authorized"
+      ],
       "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1
+        },
         "uid": {
           "$ref": "#/$defs/systemId"
         },
@@ -64,6 +83,29 @@
           "items": {
             "$ref": "#/$defs/systemId"
           }
+        },
+        "home": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shell": {
+          "const": "/usr/sbin/nologin"
+        },
+        "interactive_login": {
+          "const": false
+        },
+        "sudo_authorized": {
+          "const": false
+        }
+      }
+    },
+    "ssh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direct_root_login_permitted"],
+      "properties": {
+        "direct_root_login_permitted": {
+          "const": false
         }
       }
     },

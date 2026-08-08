@@ -210,12 +210,13 @@ non-loopback private address fact. Only reserved documentation networks are
 accepted in synthetic examples; carrier-grade NAT and other non-global address
 ranges fail admission. Private addresses are exactly RFC 1918 IPv4 or IPv6 ULA;
 documentation and benchmarking ranges are not private-use substitutes.
-Address facts are strings and are never coerced from numeric or binary YAML
-values. Private-address collection order is insignificant, but duplicates and
-mismatches fail closed. The public edge will be the only publicly reachable
-container boundary; product and data services remain on private container
-networks. Firewall mutation, routing, port publication, cloud metadata, and
-public reachability checks are outside D.1.
+IPv4-mapped IPv6 values are representations of IPv4 rather than accepted IPv6
+host addresses and fail admission. Address facts are strings and are never
+coerced from numeric or binary YAML values. Private-address collection order is
+insignificant, but duplicates and mismatches fail closed. The public edge will
+be the only publicly reachable container boundary; product and data services
+remain on private container networks. Firewall mutation, routing, port
+publication, cloud metadata, and public reachability checks are outside D.1.
 
 The host has a stable DNS hostname distinct from both application origins.
 Frontend and API use separate DNS-name-only HTTPS origins. Origins cannot
@@ -233,21 +234,29 @@ such as `systemd-timesyncd` and `chrony`.
 
 Inventory selects the unprivileged account and primary group name plus numeric
 UID/GID. Schema version 1 requires IDs from 1000 through 60000 and rejects
-known container identities. `root` is forbidden as either name. Effective UID,
-primary GID, and supplementary GIDs must be supplied as facts and match the
-configured identity without Docker-authorized membership. The example uses
+known container identities. `root` is forbidden as either name. Facts must
+report the effective name, primary group, UID, primary GID, supplementary GIDs,
+home, shell, interactive-login state, and sudo-authorization state. The name,
+group, IDs, and home must match inventory; the remaining facts must prove a
+non-login shell, disabled interactive login, no sudo authorization, and no
+Docker-authorized membership. A future collector must evaluate effective sudo
+policy, including inherited group and included policy, rather than grep one
+sudoers file. The example uses
 `secpal-deploy:20000:20000`, but that value is synthetic and not mandatory.
 
 The account owns reviewed configuration, deployment metadata, logs, and
 backup staging. Its home is an absolute state path, its shell is
 `/usr/sbin/nologin`, interactive login is disabled, it has no Docker authority,
-and it receives no blanket `sudo` rule. It does not own PostgreSQL, the Docker
+and it receives no `sudo` authorization. It does not own PostgreSQL, the Docker
 data root, or undecided edge identities.
 
 Named human operators authorize host changes. Their SSH keys, certificates,
 hardware-backed credentials, and privilege policy live outside this
-repository and outside inventory. Direct root SSH is unsupported. A human
-operator authenticates as a named account and uses audited, explicit privilege
+repository and outside inventory. Direct root SSH is unsupported, and supplied
+facts must prove that it is not permitted. A future collector must evaluate the
+effective daemon and authentication policy, including includes and drop-ins,
+rather than inspect only one SSH configuration file. A human operator
+authenticates as a named account and uses audited, explicit privilege
 escalation for package, filesystem-owner, daemon, network, or service-manager
 operations. D.1 creates no accounts, keys, SSH configuration, or sudoers file.
 
@@ -344,11 +353,12 @@ change the reviewed API artifact identity.
 ## Failure semantics and non-goals
 
 Unknown inventory or host-fact fields, unknown versions, mismatched
-architectures, effective service identities, Docker installation provenance or
-socket authority, low resources, clock drift, unsupported filesystems, and
-dependency contradictions fail before any side effect. Validation errors name
-the safe field location or invariant and never print classified field names,
-input values, or full documents.
+architectures, effective service identities, service-account login or sudo
+authority, direct root SSH, Docker installation provenance or socket authority,
+low resources, clock drift, unsupported filesystems, and dependency
+contradictions fail before any side effect. Validation errors name the safe
+field location or invariant and never print classified field names, input
+values, or full documents.
 
 D.1 deliberately does not implement host setup, remote access, provider
 selection, firewall or DNS changes, TLS/ACME, CrowdSec, secrets, persistent

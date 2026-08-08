@@ -449,9 +449,12 @@ def parse_address(raw: Any, location: str) -> ipaddress.IPv4Address | ipaddress.
     if not isinstance(raw, str):
         raise ContractViolation(f"IP address must be a string at {location}")
     try:
-        return ipaddress.ip_address(raw)
+        address = ipaddress.ip_address(raw)
     except ValueError as exc:
         raise ContractViolation(f"invalid IP address at {location}") from exc
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        raise ContractViolation(f"IPv4-mapped IPv6 address is forbidden at {location}")
+    return address
 
 
 def parse_unique_addresses(
@@ -758,13 +761,11 @@ def validate_service_account_facts(
     runtime = facts["runtime"]
     service_account = facts["service_account"]
     expected_account = inventory["service_account"]
-    if (
-        service_account["uid"] != expected_account["uid"]
-        or service_account["gid"] != expected_account["gid"]
-    ):
-        raise ContractViolation(
-            "effective service-account identity does not match the inventory"
-        )
+    for field in ("name", "group", "uid", "gid", "home"):
+        if service_account[field] != expected_account[field]:
+            raise ContractViolation(
+                "effective service-account identity does not match the inventory"
+            )
     docker_gid = runtime["socket"]["gid"]
     if docker_gid == service_account["gid"] or docker_gid in service_account[
         "supplementary_gids"

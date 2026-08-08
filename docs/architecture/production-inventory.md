@@ -79,9 +79,10 @@ establish the supported server provenance. Public addresses must be globally
 routable, except for reserved documentation addresses in synthetic examples;
 multicast and deprecated IPv6 site-local ranges are never host addresses.
 Public and private address comparison uses parsed IP identities, so equivalent
-IPv6 spellings match while semantic duplicates fail. DNS hostname comparison is
-case-insensitive; IP literals and legacy numeric IPv4 spellings are not
-hostnames. Private addresses are limited to RFC 1918 IPv4 or IPv6 ULA;
+IPv6 spellings match while semantic duplicates fail. IPv4-mapped IPv6 values
+are rejected rather than treated as native IPv6 host addresses. DNS hostname
+comparison is case-insensitive; IP literals and legacy numeric IPv4 spellings
+are not hostnames. Private addresses are limited to RFC 1918 IPv4 or IPv6 ULA;
 documentation, benchmarking, link-local, and other non-global ranges are not
 treated as private-use addresses. Private-address order is not significant;
 duplicate or mismatched facts fail closed. Address facts must use YAML strings;
@@ -98,10 +99,14 @@ runtime IDs. Integral floating-point spellings are not coerced for UID/GID,
 path ownership, decision-issue, or resource fields. The account never carries
 a credential in inventory. `root` is forbidden as either account or group
 name. Supplied host facts report the effective UID, primary GID, and
-supplementary GIDs resolved for the configured identity. They must match the
-inventory and must not grant access to the Docker socket group. The socket fact
+supplementary GIDs resolved for the configured identity, as well as its name,
+primary group, home, shell, interactive-login state, and effective sudo
+authorization. Identity and home facts must match inventory. Shell and login
+facts must prove the non-interactive policy, and sudo authorization must be
+absent. The account must not inherit the Docker socket group; the socket fact
 also requires an effective connection-denial result so an ACL grant cannot
-bypass the numeric group comparison.
+bypass the numeric group comparison. A separate closed SSH fact must prove that
+direct root login is not permitted.
 
 ### `origins`
 
@@ -184,8 +189,9 @@ Validation consists of:
 3. cross-field rules for origins, paths, ownership, feature gates, addresses,
    and fixed resource floors; and
 4. comparison with synthetic host facts for OS, architecture, effective
-   service identity, kernel, cgroup, Docker package provenance, daemon socket
-   authority, Compose, clock, tools, resources, and storage headroom.
+   service identity and privilege state, root SSH policy, kernel, cgroup,
+   Docker package provenance, daemon socket authority, Compose, clock, tools,
+   resources, and storage headroom.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state

@@ -9,9 +9,17 @@ os:
   version_id: "24.04"
   installation_profile: ubuntu-server
 service_account:
+  name: secpal-deploy
+  group: secpal-deploy
   uid: 20000
   gid: 20000
   supplementary_gids: []
+  home: /var/lib/secpal
+  shell: /usr/sbin/nologin
+  interactive_login: false
+  sudo_authorized: false
+ssh:
+  direct_root_login_permitted: false
 kernel:
   release: 6.8.0
   cgroup_version: 2
