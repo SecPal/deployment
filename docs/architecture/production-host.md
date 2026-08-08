@@ -119,6 +119,41 @@ first measurement cycle.
 | Total local storage |   100 GiB |     250 GiB | Conservative first-host envelope for images plus state paths; admission fails below 100 GiB. D.2 and D.7 replace allocations with measured data growth and backup sizes. |
 | Total inodes        | 1,000,000 |   2,000,000 | Protects image layers, logs, framework cache files, and state trees; admission fails below 1,000,000. D.10 records peak inode consumption.                               |
 
+### Quantified minimum envelope
+
+The CPU and RAM floor is the sum of explicit planning shares for the current
+eight long-lived roles. These are admission budgets, not measured utilization:
+
+| Role group                              | Logical CPU share | RAM share |
+| --------------------------------------- | ----------------: | --------: |
+| Host, Docker daemon, and future edge    |              1.00 |     2 GiB |
+| PostgreSQL and Valkey                   |              1.00 |     2 GiB |
+| API request role                        |              0.75 |   1.5 GiB |
+| General and activity-hash-chain workers |              0.75 |   1.5 GiB |
+| Scheduler and frontend                  |              0.50 |     1 GiB |
+| **Minimum admission envelope**          |          **4.00** | **8 GiB** |
+
+The 100 GiB and 1,000,000-inode floor is likewise an explicit planning sum:
+
+| Planning area                     |     Storage |        Inodes |
+| --------------------------------- | ----------: | ------------: |
+| Host OS, tools, and configuration |      20 GiB |       110,000 |
+| Docker data reserve               |      20 GiB |       200,000 |
+| PostgreSQL reserve                |      20 GiB |       200,000 |
+| Private application storage       |      10 GiB |       100,000 |
+| Logs                              |       5 GiB |        50,000 |
+| Edge, ACME, and CrowdSec state    |       5 GiB |        90,000 |
+| Backup staging                    |      10 GiB |        50,000 |
+| Unassigned admission reserve      |      10 GiB |       200,000 |
+| **Minimum admission envelope**    | **100 GiB** | **1,000,000** |
+
+The recommended CPU and RAM tier doubles the minimum so that the admission
+workload occupies at most half of those two capacities. Recommended storage is
+the 100 GiB floor plus a 100 GiB first measurement window and 50 GiB reserve;
+recommended inodes double the minimum. These are deliberately visible policy
+assumptions and must be replaced by measured values through the evidence method
+below, rather than presented as production observations.
+
 The evidence method is: record per-service CPU and peak RSS under D.10's
 acceptance workload; measure OCI unpacked size; measure PostgreSQL and private
 storage growth over a stated retention window; measure log rotation; and use
@@ -190,9 +225,10 @@ operations. D.1 creates no accounts, keys, SSH configuration, or sudoers file.
 ## Filesystem and mountpoint model
 
 The example paths are provider-neutral defaults, not real host values. Every
-inventory path must be absolute, normalized, unique, non-root, and outside
-`/tmp`. Null UID/GID means the named later issue must select and migrate the
-runtime identity before that component can be installed.
+inventory path must be absolute, normalized, unique, mutually non-overlapping,
+non-root, outside `/tmp`, and separate from the service-account home. Null
+UID/GID means the named later issue must select and migrate the runtime identity
+before that component can be installed.
 
 | Inventory key                 | Example path                   | Owner and UID:GID                  |   Mode | Class           | Decision owner       |
 | ----------------------------- | ------------------------------ | ---------------------------------- | -----: | --------------- | -------------------- |
@@ -205,7 +241,7 @@ runtime identity before that component can be installed.
 | `edge_state`                  | `/srv/secpal/edge`             | edge contract, unset               | `0750` | persistent      | D.3 (#11)            |
 | `acme_state`                  | `/srv/secpal/acme`             | TLS contract, unset                | `0700` | persistent      | D.5 (#13)            |
 | `crowdsec_state`              | `/srv/secpal/crowdsec`         | CrowdSec contract, unset           | `0750` | persistent      | D.6 (#14)            |
-| `logs`                        | `/srv/secpal/logs`             | service account, inventory UID:GID | `0750` | reconstructable | D.1; retention later |
+| `logs`                        | `/srv/secpal/logs`             | service account, inventory UID:GID | `0750` | persistent      | D.1; retention later |
 | `backup_staging`              | `/srv/secpal/backup-staging`   | service account, inventory UID:GID | `0700` | reconstructable | D.7 (#15)            |
 | `docker_data_root`            | `/var/lib/docker`              | Docker daemon `0:0`                | `0711` | persistent      | D.1                  |
 
@@ -214,11 +250,15 @@ verified API owner `10001:10001`. It is never merged with PostgreSQL data. The
 frontend remains `101:101`, serves HTTP on 8080, has a read-only root filesystem
 and writable `/tmp`, and does not own TLS, ACME, or API proxying.
 
-Public application storage remains a separate `10001:10001` path. It may hold
-only artifacts deliberately classified for public delivery, never private
-uploads, credentials, or database state. D.2 must decide its persistence,
-backup, and publication lifecycle before it is mounted in production; the edge
-must not expose the host path directly.
+D.1 fixes public application storage as persistent host state on a separate
+`10001:10001` path. It may hold only artifacts deliberately classified for
+public delivery, never private uploads, credentials, or database state. D.2
+must decide its backup and publication lifecycle before it is mounted in
+production; the edge must not expose the host path directly.
+
+Logs are persistent operational and security evidence, not reconstructable
+state. D.10 owns retention, rotation, optional external shipping, and the
+acceptance proof that exhaustion remains bounded.
 
 Valkey is queue/cache infrastructure, not a source of truth. D.1 does not
 require a persistent Valkey host path. D.2 decides whether to add one; no
@@ -232,7 +272,8 @@ staging path is not itself a backup.
 
 Every enabled path must use a documented fixed destination contract and may
 not perform an undocumented moving runtime download. All optional application
-features are disabled in the example.
+features are fixed disabled by inventory schema version 1; a future reviewed
+schema migration may enable one only after its owning contracts are complete.
 
 | Dependency                               | Owner / default               | Destination or input contract                                                                                                                                                    | Credential boundary                             | Timeout and failure                                                                                                                   | Disabled behavior                                         | Phase                             |
 | ---------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------- |
@@ -249,7 +290,8 @@ features are disabled in the example.
 The required GHCR and attestation paths are maintenance-only. They do not
 authorize a registry login, registry write, newest-image lookup, discovery-tag
 lookup, or digest refresh. Enabling any optional feature requires its later
-state/secret and runtime contract to be complete.
+state/secret and runtime contract to be complete plus a reviewed inventory
+schema migration.
 
 The current API image contains two upstream behaviors that cannot be enabled by
 inventory alone: its weekly OpenTimestamp status task can perform a moving

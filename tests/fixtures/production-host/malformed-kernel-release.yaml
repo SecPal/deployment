@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+---
+path: [kernel, release]
+value: 6.8/invalid

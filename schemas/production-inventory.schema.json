@@ -252,7 +252,7 @@
       "required": ["target_type", "target_identifier", "credential_reference"],
       "properties": {
         "target_type": {
-          "enum": ["external-filesystem", "object-storage"]
+          "const": "external-filesystem"
         },
         "target_identifier": {
           "type": "string",
@@ -282,25 +282,25 @@
           "const": true
         },
         "mail_delivery": {
-          "type": "boolean"
+          "const": false
         },
         "opentimestamps": {
-          "type": "boolean"
+          "const": false
         },
         "bitcoin_quorum": {
-          "type": "boolean"
+          "const": false
         },
         "address_data_imports": {
-          "type": "boolean"
+          "const": false
         },
         "android_push": {
-          "type": "boolean"
+          "const": false
         },
         "web_push": {
-          "type": "boolean"
+          "const": false
         },
         "object_storage": {
-          "type": "boolean"
+          "const": false
         }
       }
     }

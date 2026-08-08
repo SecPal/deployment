@@ -159,6 +159,15 @@ def main() -> int:
             None,
         ),
         (
+            "service-home-conflicts-with-postgresql",
+            lambda d: set_nested(
+                d,
+                ("service_account", "home"),
+                d["paths"]["postgresql_data"]["path"],
+            ),
+            None,
+        ),
+        (
             "world-writable-secret-mode",
             lambda d: set_nested(d, ("paths", "runtime_secrets", "mode"), "0777"),
             None,
@@ -316,6 +325,39 @@ def main() -> int:
             None,
         ),
         (
+            "mail-feature-before-runtime-contract",
+            lambda d: set_nested(d, ("features", "mail_delivery"), True),
+            None,
+        ),
+        (
+            "opentimestamps-features-before-runtime-contract",
+            lambda d: d["features"].update(opentimestamps=True, bitcoin_quorum=True),
+            None,
+        ),
+        (
+            "address-import-feature-before-runtime-contract",
+            lambda d: set_nested(d, ("features", "address_data_imports"), True),
+            None,
+        ),
+        (
+            "android-push-feature-before-runtime-contract",
+            lambda d: set_nested(d, ("features", "android_push"), True),
+            None,
+        ),
+        (
+            "web-push-feature-before-runtime-contract",
+            lambda d: set_nested(d, ("features", "web_push"), True),
+            None,
+        ),
+        (
+            "object-storage-feature-before-runtime-contract",
+            lambda d: (
+                set_nested(d, ("features", "object_storage"), True),
+                set_nested(d, ("backup", "target_type"), "object-storage"),
+            ),
+            None,
+        ),
+        (
             "object-storage-feature-with-filesystem-target",
             lambda d: set_nested(d, ("features", "object_storage"), True),
             None,
@@ -335,6 +377,11 @@ def main() -> int:
             lambda d: set_nested(
                 d, ("paths", "deployment_state", "path"), "/srv/secpal/../root"
             ),
+            None,
+        ),
+        (
+            "reconstructable-logs",
+            lambda d: set_nested(d, ("paths", "logs", "lifecycle"), "reconstructable"),
             None,
         ),
         (
@@ -398,6 +445,7 @@ def main() -> int:
         "insufficient-disk.yaml",
         "clock-unsynchronized.yaml",
         "kernel-too-old.yaml",
+        "malformed-kernel-release.yaml",
         "cgroup-v1.yaml",
         "unsupported-os.yaml",
         "docker-too-old.yaml",
@@ -410,6 +458,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="secpal-production-contract-") as directory:
         temp_root = Path(directory)
         valid_host = HOST_FIXTURES / "valid-amd64.yaml"
+        valid_host_document = load_yaml(valid_host)
         for name, mutate, sensitive_marker in mutations:
             candidate = copy.deepcopy(example)
             mutate(candidate)
@@ -426,7 +475,46 @@ def main() -> int:
             if sensitive_marker and sensitive_marker in combined_output:
                 raise AssertionError(f"validator leaked a sensitive value for mutation: {name}")
 
-        valid_host_document = load_yaml(HOST_FIXTURES / "valid-amd64.yaml")
+        duplicate_version_path = temp_root / "duplicate-schema-version.yaml"
+        duplicate_version_path.write_text(
+            EXAMPLE.read_text(encoding="utf-8").replace(
+                "schema_version: 1",
+                "schema_version: 2\nschema_version: 1",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        duplicate_result = run_validator(duplicate_version_path, valid_host)
+        if duplicate_result.returncode == 0:
+            raise AssertionError("duplicate inventory mapping key was accepted")
+        if "Traceback" in duplicate_result.stderr or not duplicate_result.stderr.startswith(
+            "ERROR: "
+        ):
+            raise AssertionError("duplicate inventory key failure was not deterministic")
+
+        nested_inventory = copy.deepcopy(example)
+        nested_path = f'{nested_inventory["paths"]["postgresql_data"]["path"]}/private'
+        set_nested(
+            nested_inventory,
+            ("paths", "private_application_storage", "path"),
+            nested_path,
+        )
+        nested_inventory_path = temp_root / "nested-private-storage-path.yaml"
+        write_yaml(nested_inventory_path, nested_inventory)
+        nested_host = copy.deepcopy(valid_host_document)
+        set_nested(
+            nested_host,
+            ("resources", "storage", "private_application_storage", "path"),
+            nested_path,
+        )
+        nested_host_path = temp_root / "nested-private-storage-host.yaml"
+        write_yaml(nested_host_path, nested_host)
+        nested_result = run_validator(nested_inventory_path, nested_host_path)
+        if nested_result.returncode == 0:
+            raise AssertionError("nested persistent inventory path was accepted")
+        if "Traceback" in nested_result.stderr or not nested_result.stderr.startswith("ERROR: "):
+            raise AssertionError("nested persistent path failure was not deterministic")
+
         for fixture_name in negative_host_fixtures:
             mutation = load_yaml(HOST_FIXTURES / fixture_name)
             path = mutation.get("path")
@@ -446,7 +534,7 @@ def main() -> int:
                     f"host-fact failure was not deterministic: {fixture_name}"
                 )
 
-    total_negative = len(mutations) + len(negative_host_fixtures)
+    total_negative = len(mutations) + len(negative_host_fixtures) + 2
     print(
         "Production inventory contract passed "
         f"({closed_object_count} closed schema objects, 3 positive schema documents, "

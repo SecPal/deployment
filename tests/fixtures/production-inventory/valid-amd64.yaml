@@ -88,7 +88,7 @@ paths:
   logs:
     <<: *service-path
     path: /srv/secpal/logs
-    lifecycle: reconstructable
+    lifecycle: persistent
   backup_staging:
     <<: *service-path
     path: /srv/secpal/backup-staging

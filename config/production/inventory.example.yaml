@@ -106,7 +106,7 @@ paths:
     uid: 20000
     gid: 20000
     mode: "0750"
-    lifecycle: reconstructable
+    lifecycle: persistent
     decision_issue: null
   backup_staging:
     path: /srv/secpal/backup-staging

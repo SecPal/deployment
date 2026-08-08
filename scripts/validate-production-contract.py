@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 
 import jsonschema
 import yaml
+from yaml.constructor import ConstructorError
+from yaml.nodes import MappingNode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -161,7 +163,7 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
     "logs": {
         "owner_role": "service-account",
         "mode": "0750",
-        "lifecycle": "reconstructable",
+        "lifecycle": "persistent",
         "decision_issue": None,
         "identity": "service-account",
     },
@@ -207,6 +209,35 @@ STORAGE_MINIMUMS = {
 
 class ContractViolation(Exception):
     """A deterministic contract error that never includes an input value."""
+
+
+class NoDuplicateSafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects ambiguous explicit mapping keys."""
+
+    def construct_mapping(self, node: MappingNode, deep: bool = False) -> dict[Any, Any]:
+        explicit_keys: set[Any] = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in explicit_keys
+            except TypeError as exc:
+                raise ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "mapping keys must be scalar",
+                    key_node.start_mark,
+                ) from exc
+            if duplicate:
+                raise ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "duplicate mapping key is forbidden",
+                    key_node.start_mark,
+                )
+            explicit_keys.add(key)
+        return super().construct_mapping(node, deep=deep)
 
 
 def normalize_field_name(name: str) -> str:
@@ -266,7 +297,7 @@ def read_document(path: Path, label: str) -> dict[str, Any]:
     try:
         if path.stat().st_size > MAX_INPUT_BYTES:
             raise ContractViolation(f"{label} exceeds the 1 MiB input limit")
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        loaded = yaml.load(path.read_text(encoding="utf-8"), Loader=NoDuplicateSafeLoader)
     except ContractViolation:
         raise
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
@@ -439,6 +470,20 @@ def validate_path_contracts(inventory: dict[str, Any]) -> None:
         if contract["uid"] != expected_uid or contract["gid"] != expected_gid:
             raise ContractViolation(f"fixed path ownership mismatch at {location}")
 
+    protected_paths = {
+        "service_account.home": service_account["home"],
+        **{f"paths.{name}": contract["path"] for name, contract in paths.items()},
+    }
+    protected_items = list(protected_paths.items())
+    for index, (left_name, left_raw) in enumerate(protected_items):
+        left = PurePosixPath(left_raw)
+        for right_name, right_raw in protected_items[index + 1 :]:
+            right = PurePosixPath(right_raw)
+            if left == right or left in right.parents or right in left.parents:
+                raise ContractViolation(
+                    f"conflicting path hierarchy between {left_name} and {right_name}"
+                )
+
 
 def validate_storage_requirements(resources: dict[str, Any]) -> None:
     for name, (minimum_bytes, minimum_inodes) in STORAGE_MINIMUMS.items():
@@ -558,7 +603,11 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
     )
     if not isinstance(kernel["release"], str):
         raise ContractViolation("host kernel release must be a string")
-    kernel_match = re.match(r"^(\d+)\.(\d+)", kernel["release"])
+    kernel_match = re.fullmatch(
+        r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+        r"(?:[-+._][A-Za-z0-9][A-Za-z0-9+._-]*)?",
+        kernel["release"],
+    )
     if kernel_match is None or tuple(map(int, kernel_match.groups())) < (6, 8):
         raise ContractViolation("host kernel must be Linux 6.8 or newer")
     if kernel["cgroup_version"] != 2:

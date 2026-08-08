@@ -57,6 +57,7 @@ for path in \
   tests/fixtures/production-host/insufficient-disk.yaml \
   tests/fixtures/production-host/clock-unsynchronized.yaml \
   tests/fixtures/production-host/contradictory-filesystem.yaml \
+  tests/fixtures/production-host/malformed-kernel-release.yaml \
   tests/fixtures/production-host/malformed-architecture.yaml \
   tests/fixtures/production-inventory/valid-amd64.yaml \
   tests/fixtures/production-inventory/valid-arm64.yaml; do
@@ -73,9 +74,12 @@ require_text docs/architecture/production-host.md "cgroup v2"
 require_text docs/architecture/production-host.md "Docker Engine 29.6.2"
 require_text docs/architecture/production-host.md "Docker Compose 2.40.3"
 require_text docs/architecture/production-host.md "Rootless Docker Engine is deferred"
+require_text docs/architecture/production-host.md "Quantified minimum envelope"
 require_prose docs/architecture/production-host.md "Docker daemon authority is privileged host authority"
 require_text docs/architecture/production-host.md "Direct root SSH is unsupported"
 require_prose docs/architecture/production-host.md "No Docker socket is mounted into a product container"
+require_prose docs/architecture/production-host.md "Logs are persistent operational and security evidence"
+require_prose docs/architecture/production-host.md "D.1 fixes public application storage as persistent host state"
 require_text docs/architecture/production-host.md "10001:10001"
 require_text docs/architecture/production-host.md "101:101"
 require_text docs/architecture/production-host.md "No host was provisioned."

@@ -23,6 +23,10 @@ requires a reviewed contract change, positive and negative fixtures, and
 reviewed migration notes that state how an operator moves an inventory between
 versions. D.1 provides no implicit inventory migration.
 
+Duplicate YAML mapping keys are malformed input and fail before schema
+validation. A later duplicate cannot replace an unsupported schema version or
+any other reviewed value.
+
 The schema uses `additionalProperties: false` at every object boundary. A
 field that is not explicitly reviewed is invalid, even when its value would
 otherwise look harmless.
@@ -85,8 +89,9 @@ preserves the credentialed CORS, Sanctum, cookie, and proxy trust boundary.
 Each path object records an absolute path, owner role, numeric identity when
 already known, baseline directory mode, persistence class, and any later issue
 that must decide the runtime identity or lifecycle. Paths must be normalized,
-unique, non-empty, non-root, and outside `/tmp`. Fixed metadata cannot be
-changed by an operator.
+unique, mutually non-overlapping, non-empty, non-root, and outside `/tmp`.
+They must not contain or be contained by the service-account home. Fixed
+metadata cannot be changed by an operator.
 
 Known API private and public storage uses `10001:10001`; Docker data uses
 `0:0`. Runtime secret, PostgreSQL, edge, ACME, and CrowdSec identities remain
@@ -102,19 +107,21 @@ a capacity guarantee; the evidence method is defined in the host contract.
 
 ### `backup`
 
-The target type is `external-filesystem` or `object-storage`, with a synthetic
-operator identifier and external credential reference. It contains no host,
-bucket credential, password, key, or backup implementation. The object-storage
-target and feature gate must agree. D.7 (#15) owns backup, encryption,
-retention, and restore proof.
+Schema version 1 permits only an `external-filesystem` target descriptor, with
+a synthetic operator identifier and external credential reference. It contains
+no host, bucket credential, password, key, or backup implementation. Object
+storage remains represented by a disabled feature gate and requires a reviewed
+schema migration after D.2 and D.7 define its endpoint, secret, backup,
+encryption, retention, and restore contracts.
 
 ### `features`
 
 Required image verification is always enabled. Mail, OpenTimestamp, Bitcoin
 quorum, address-data imports, Android push, Web Push, and object storage are
-explicit feature gates and are disabled in the example. OpenTimestamp and its
-Bitcoin quorum gate must change together. An enabled feature is invalid until
-its documented dependency and later secret/runtime contract are available.
+explicit feature gates fixed to `false` in schema version 1. They describe the
+known dependency surface without authorizing it. Enabling any one requires a
+reviewed schema migration after its documented dependency and later
+secret/runtime contract are available; an inventory cannot opt into it early.
 
 ## Validation
 
@@ -139,10 +146,10 @@ Validation consists of:
 4. comparison with synthetic host facts for OS, architecture, kernel, cgroup,
    Docker, Compose, clock, tools, resources, and storage headroom.
 
-Missing fields, unknown fields, unsupported versions and topology, relative or
-traversing paths, duplicate state paths, invalid UID/GID or modes, secret
-material, image overrides, loopback values, collapsed origins, contradictory
-features, and mismatched facts all fail closed.
+Missing fields, unknown or duplicate fields, unsupported versions and topology,
+relative or traversing paths, duplicate or nested state paths, invalid UID/GID
+or modes, secret material, image overrides, loopback values, collapsed origins,
+premature or contradictory features, and mismatched facts all fail closed.
 
 ## Examples and fixtures
 
