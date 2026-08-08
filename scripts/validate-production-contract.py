@@ -47,10 +47,10 @@ REQUIRED_TOOLS = {
 RESERVED_SERVICE_IDS = {10001, 10002}
 MANAGED_PATH_ROOTS = {
     "runtime_secrets": PurePosixPath("/run/secpal"),
-    "docker_data_root": PurePosixPath("/var/lib"),
 }
 DEFAULT_MANAGED_PATH_ROOT = PurePosixPath("/srv/secpal")
 SERVICE_ACCOUNT_HOME_ROOT = PurePosixPath("/var/lib")
+DOCKER_DATA_ROOT = PurePosixPath("/var/lib/docker")
 
 SECRET_FIELD_NAMES = {
     "password",
@@ -220,20 +220,8 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
     },
 }
 
-STORAGE_PATH_KEYS = {
-    "docker_data": "docker_data_root",
-    "postgresql_data": "postgresql_data",
-    "private_application_storage": "private_application_storage",
-    "public_application_storage": "public_application_storage",
-    "logs": "logs",
-    "edge_state": "edge_state",
-    "acme_state": "acme_state",
-    "crowdsec_state": "crowdsec_state",
-    "backup_staging": "backup_staging",
-}
-
-STORAGE_MINIMUMS = {
-    "docker_data": (21474836480, 200000),
+HEADROOM_MINIMUMS = {
+    "docker_data_root": (21474836480, 200000),
     "postgresql_data": (21474836480, 200000),
     "private_application_storage": (10737418240, 100000),
     "public_application_storage": (1073741824, 20000),
@@ -243,6 +231,12 @@ STORAGE_MINIMUMS = {
     "crowdsec_state": (2147483648, 50000),
     "backup_staging": (10737418240, 50000),
 }
+
+FILESYSTEM_PATH_KEYS = tuple(
+    name
+    for name, contract in CANONICAL_PATHS.items()
+    if contract["lifecycle"] == "persistent" or name in HEADROOM_MINIMUMS
+)
 
 
 class ContractViolation(Exception):
@@ -607,8 +601,14 @@ def validate_path_contracts(inventory: dict[str, Any]) -> None:
         location = f"inventory.paths.{name}"
         raw_path = contract["path"]
         validate_absolute_path(raw_path, f"{location}.path")
-        managed_root = MANAGED_PATH_ROOTS.get(name, DEFAULT_MANAGED_PATH_ROOT)
-        require_managed_descendant(raw_path, managed_root, f"{location}.path")
+        if name == "docker_data_root":
+            if PurePosixPath(raw_path) != DOCKER_DATA_ROOT:
+                raise ContractViolation(
+                    "Docker data root must use its dedicated canonical subtree"
+                )
+        else:
+            managed_root = MANAGED_PATH_ROOTS.get(name, DEFAULT_MANAGED_PATH_ROOT)
+            require_managed_descendant(raw_path, managed_root, f"{location}.path")
         if raw_path in seen:
             raise ContractViolation(
                 f"duplicate path between inventory.paths.{seen[raw_path]} and {location}"
@@ -643,7 +643,7 @@ def validate_path_contracts(inventory: dict[str, Any]) -> None:
 
 
 def validate_storage_requirements(resources: dict[str, Any]) -> None:
-    for name, (minimum_bytes, minimum_inodes) in STORAGE_MINIMUMS.items():
+    for name, (minimum_bytes, minimum_inodes) in HEADROOM_MINIMUMS.items():
         requirement = resources["storage"][name]
         location = f"inventory.resources.storage.{name}"
         if requirement["minimum_free_bytes"] < minimum_bytes:
@@ -800,25 +800,33 @@ def validate_tool_facts(tools: list[str]) -> None:
         raise ContractViolation(f"required host tool is missing: {missing_tools[0]}")
 
 
-def validate_storage_fact(
+def validate_filesystem_fact(
     inventory: dict[str, Any],
     name: str,
-    inventory_path_name: str,
-    storage: dict[str, Any],
-    resource_totals: dict[str, int],
-    seen_paths: set[str],
+    filesystem: dict[str, Any],
 ) -> None:
-    expected_path = inventory["paths"][inventory_path_name]["path"]
-    if storage["path"] != expected_path:
-        raise ContractViolation(f"storage path does not match inventory at {name}")
-    if storage["path"] in seen_paths:
-        raise ContractViolation("host storage facts contain duplicate mount or state paths")
-    seen_paths.add(storage["path"])
-    if storage["filesystem"] == "xfs" and storage["xfs_ftype"] is not True:
+    expected_path = inventory["paths"][name]["path"]
+    if filesystem["path"] != expected_path:
+        raise ContractViolation(f"filesystem path does not match inventory at {name}")
+    if filesystem["filesystem"] == "xfs" and filesystem["xfs_ftype"] is not True:
         raise ContractViolation(f"XFS storage must use ftype=1 at {name}")
-    if storage["filesystem"] == "ext4" and storage["xfs_ftype"] is not None:
+    if filesystem["filesystem"] == "ext4" and filesystem["xfs_ftype"] is not None:
         raise ContractViolation(f"ext4 storage must not report an XFS ftype value at {name}")
 
+
+def validate_filesystem_facts(
+    inventory: dict[str, Any], filesystems: dict[str, Any]
+) -> None:
+    for name in FILESYSTEM_PATH_KEYS:
+        validate_filesystem_fact(inventory, name, filesystems[name])
+
+
+def validate_headroom_fact(
+    inventory: dict[str, Any],
+    name: str,
+    headroom: dict[str, Any],
+    resource_totals: dict[str, int],
+) -> None:
     requirement = inventory["resources"]["storage"][name]
     checks = (
         ("free_bytes", "minimum_free_bytes"),
@@ -827,7 +835,7 @@ def validate_storage_fact(
         ("free_inode_percent", "minimum_free_inode_percent"),
     )
     for fact_name, requirement_name in checks:
-        actual = storage[fact_name]
+        actual = headroom[fact_name]
         if fact_name == "free_bytes" and actual > resource_totals["storage_total_bytes"]:
             raise ContractViolation(f"storage free bytes exceed host total at {name}")
         if fact_name == "free_inodes" and actual > resource_totals["total_inodes"]:
@@ -846,16 +854,13 @@ def validate_resource_facts(
         if actual < inventory["resources"][field]:
             raise ContractViolation(f"host resource is below inventory floor: {field}")
 
-    storage_facts = resource_facts["storage"]
-    seen_paths: set[str] = set()
-    for name, inventory_path_name in STORAGE_PATH_KEYS.items():
-        validate_storage_fact(
+    headroom_facts = resource_facts["storage"]
+    for name in HEADROOM_MINIMUMS:
+        validate_headroom_fact(
             inventory,
             name,
-            inventory_path_name,
-            storage_facts[name],
+            headroom_facts[name],
             resource_totals,
-            seen_paths,
         )
 
 
@@ -867,6 +872,7 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
     validate_service_account_facts(inventory, facts)
     validate_network_facts(inventory, facts["network"])
     validate_tool_facts(facts["tools"])
+    validate_filesystem_facts(inventory, facts["filesystems"])
     validate_resource_facts(inventory, facts["resources"])
 
 

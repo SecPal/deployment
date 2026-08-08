@@ -71,7 +71,8 @@ A conforming fact document reports all of the following:
 - unified cgroup v2;
 - OverlayFS support;
 - enabled AppArmor and seccomp enforcement;
-- local `ext4`, or local XFS with `ftype=1`, for every checked state path;
+- local `ext4`, or local XFS with `ftype=1`, for every persistent state path
+  and backup staging;
 - working `d_type` directory-entry support; and
 - the required commands `bash`, `curl`, `df`, `docker`, `findmnt`, `getent`,
   `gh`, `id`, `install`, `mktemp`, `python3`, `realpath`, `sha256sum`, `stat`,
@@ -119,8 +120,9 @@ operations. No Docker socket is mounted into a product container.
 Rootless Docker Engine is deferred. The current repository has not validated
 its bind-mount ownership, privileged-port edge behavior, networking, data-root
 layout, or future CrowdSec integration. D.3 and D.4 may not silently enable it.
-The Docker data root is inventory-controlled and defaults only in the example
-to `/var/lib/docker`.
+Schema version 1 records the reviewed Docker data root as exactly
+`/var/lib/docker`. It is an inventory fact, not an operator-selectable path;
+changing it requires a reviewed schema migration.
 
 ## Resource admission contract
 
@@ -203,6 +205,13 @@ additive; operators must evaluate every reported path and the device-wide total.
 The validator compares these values to supplied facts and never runs `df`,
 reads `/proc`, or inspects the developer machine.
 
+Filesystem facts are separate from headroom facts. They cover every path
+classified as persistent plus reconstructable backup staging and must match
+the corresponding inventory path. This includes configuration and deployment
+state even though those two paths have no separate capacity floor. Runtime
+secrets are reconstructable state under `/run`; D.2 (#10) owns their eventual
+filesystem and lifecycle decision.
+
 ## Network and clock assumptions
 
 Inventory records one globally routable public address fact and at least one
@@ -236,12 +245,16 @@ Inventory selects the unprivileged account and primary group name plus numeric
 UID/GID. Schema version 1 requires IDs from 1000 through 60000 and rejects
 known container identities. `root` is forbidden as either name. Facts must
 report the effective name, primary group, UID, primary GID, supplementary GIDs,
-home, shell, interactive-login state, and sudo-authorization state. The name,
-group, IDs, and home must match inventory; the remaining facts must prove a
-non-login shell, disabled interactive login, no sudo authorization, and no
-Docker-authorized membership. A future collector must evaluate effective sudo
-policy, including inherited group and included policy, rather than grep one
-sudoers file. The example uses
+home, shell, interactive-login state, sudo-authorization state, and effective
+host-privilege-authorization state. The name, group, IDs, and home must match
+inventory; the remaining facts must prove a
+non-login shell, disabled interactive login, no sudo authorization, no
+Docker-authorized membership, and no other effective host-privilege grant.
+That last denial covers privileged supplementary groups and grants through
+device, file, ACL, capability, service-manager, or policy authorization. A
+future collector must evaluate effective privilege and sudo policy, including
+inherited groups and included policy, rather than grep one sudoers file. The
+example uses
 `secpal-deploy:20000:20000`, but that value is synthetic and not mandatory.
 
 The account owns reviewed configuration, deployment metadata, logs, and
@@ -272,10 +285,11 @@ ext4/XFS representation limits. ASCII control characters are forbidden.
 
 Schema version 1 also confines path selection by purpose: SecPal state paths
 are strict children of `/srv/secpal`, runtime secrets are a strict child of
-`/run/secpal`, and the Docker data root and service-account home are distinct
-strict children of `/var/lib`. A namespace root itself is not selectable. This
-structural allowlist rejects `/etc`, `/usr`, and other host-owned trees without
-maintaining an incomplete directory blacklist.
+`/run/secpal`, the service-account home is a strict child of `/var/lib`, and
+the Docker data root is exactly its dedicated `/var/lib/docker` subtree. A
+namespace root itself is not selectable. This structural allowlist rejects
+`/etc`, `/usr`, `/var/lib/dpkg`, and other host-owned trees without maintaining
+an incomplete directory blacklist.
 
 | Inventory key                 | Example path                   | Owner and UID:GID                  |   Mode | Class           | Decision owner       |
 | ----------------------------- | ------------------------------ | ---------------------------------- | -----: | --------------- | -------------------- |
@@ -353,9 +367,9 @@ change the reviewed API artifact identity.
 ## Failure semantics and non-goals
 
 Unknown inventory or host-fact fields, unknown versions, mismatched
-architectures, effective service identities, service-account login or sudo
-authority, direct root SSH, Docker installation provenance or socket authority,
-low resources, clock drift, unsupported filesystems, and dependency
+architectures, effective service identities, service-account login, sudo, or
+other host authority, direct root SSH, Docker installation provenance or socket
+authority, low resources, clock drift, unsupported filesystems, and dependency
 contradictions fail before any side effect. Validation errors name the safe
 field location or invariant and never print classified field names, input
 values, or full documents.

@@ -17,6 +17,7 @@
     "clock",
     "network",
     "tools",
+    "filesystems",
     "resources"
   ],
   "properties": {
@@ -60,7 +61,8 @@
         "home",
         "shell",
         "interactive_login",
-        "sudo_authorized"
+        "sudo_authorized",
+        "host_privilege_authorized"
       ],
       "properties": {
         "name": {
@@ -95,6 +97,9 @@
           "const": false
         },
         "sudo_authorized": {
+          "const": false
+        },
+        "host_privilege_authorized": {
           "const": false
         }
       }
@@ -260,6 +265,58 @@
         "minLength": 1
       }
     },
+    "filesystems": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration",
+        "deployment_state",
+        "postgresql_data",
+        "private_application_storage",
+        "public_application_storage",
+        "edge_state",
+        "acme_state",
+        "crowdsec_state",
+        "logs",
+        "backup_staging",
+        "docker_data_root"
+      ],
+      "properties": {
+        "configuration": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "deployment_state": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "postgresql_data": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "private_application_storage": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "public_application_storage": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "edge_state": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "acme_state": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "crowdsec_state": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "logs": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "backup_staging": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "docker_data_root": {
+          "$ref": "#/$defs/filesystemFact"
+        }
+      }
+    },
     "resources": {
       "type": "object",
       "additionalProperties": false,
@@ -287,7 +344,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "docker_data",
+            "docker_data_root",
             "postgresql_data",
             "private_application_storage",
             "public_application_storage",
@@ -298,32 +355,32 @@
             "backup_staging"
           ],
           "properties": {
-            "docker_data": {
-              "$ref": "#/$defs/storageFact"
+            "docker_data_root": {
+              "$ref": "#/$defs/headroomFact"
             },
             "postgresql_data": {
-              "$ref": "#/$defs/storageFact"
+              "$ref": "#/$defs/headroomFact"
             },
             "private_application_storage": {
-              "$ref": "#/$defs/storageFact"
+              "$ref": "#/$defs/headroomFact"
             },
             "public_application_storage": {
-              "$ref": "#/$defs/storageFact"
+              "$ref": "#/$defs/headroomFact"
             },
             "logs": {
-              "$ref": "#/$defs/storageFact"
+              "$ref": "#/$defs/headroomFact"
             },
             "edge_state": {
-              "$ref": "#/$defs/storageFact"
+              "$ref": "#/$defs/headroomFact"
             },
             "acme_state": {
-              "$ref": "#/$defs/storageFact"
+              "$ref": "#/$defs/headroomFact"
             },
             "crowdsec_state": {
-              "$ref": "#/$defs/storageFact"
+              "$ref": "#/$defs/headroomFact"
             },
             "backup_staging": {
-              "$ref": "#/$defs/storageFact"
+              "$ref": "#/$defs/headroomFact"
             }
           }
         }
@@ -344,20 +401,10 @@
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
     },
-    "storageFact": {
+    "filesystemFact": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "path",
-        "filesystem",
-        "local",
-        "d_type",
-        "xfs_ftype",
-        "free_bytes",
-        "free_percent",
-        "free_inodes",
-        "free_inode_percent"
-      ],
+      "required": ["path", "filesystem", "local", "d_type", "xfs_ftype"],
       "properties": {
         "path": {
           "type": "string",
@@ -374,7 +421,19 @@
         },
         "xfs_ftype": {
           "type": ["boolean", "null"]
-        },
+        }
+      }
+    },
+    "headroomFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "free_bytes",
+        "free_percent",
+        "free_inodes",
+        "free_inode_percent"
+      ],
+      "properties": {
         "free_bytes": {
           "$ref": "#/$defs/nonNegativeInteger"
         },

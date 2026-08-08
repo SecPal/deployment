@@ -209,7 +209,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "docker_data",
+            "docker_data_root",
             "postgresql_data",
             "private_application_storage",
             "public_application_storage",
@@ -220,7 +220,7 @@
             "backup_staging"
           ],
           "properties": {
-            "docker_data": {
+            "docker_data_root": {
               "$ref": "#/$defs/storageRequirement"
             },
             "postgresql_data": {

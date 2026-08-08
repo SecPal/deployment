@@ -310,7 +310,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 storage = resources["storage"]
                 if not isinstance(storage, dict):
                     raise AssertionError("host storage fixture must be a mapping")
-                docker_data = storage["docker_data"]
+                docker_data = storage["docker_data_root"]
                 if not isinstance(docker_data, dict):
                     raise AssertionError("Docker storage fixture must be a mapping")
                 total = resources[total_fact]
@@ -419,6 +419,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("shell", "/bin/bash"),
             ("interactive_login", True),
             ("sudo_authorized", True),
+            ("host_privilege_authorized", True),
         )
         for field, value in mutations:
             with self.subTest(field=field, case="unsafe"):
@@ -552,6 +553,8 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("deployment_state", "/usr/local/secpal"),
             ("runtime_secrets", "/run/secpal"),
             ("docker_data_root", "/var/lib"),
+            ("docker_data_root", "/var/lib/dpkg"),
+            ("docker_data_root", "/var/lib/postgresql"),
         ):
             with self.subTest(path_name=path_name):
                 inventory = copy.deepcopy(self.inventory)
@@ -561,6 +564,19 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     lambda inventory=inventory: (
                         self.validator.validate_inventory(inventory)
                     )
+                )
+
+    def test_configuration_and_deployment_state_require_filesystem_facts(self) -> None:
+        for path_name in ("configuration", "deployment_state"):
+            with self.subTest(path_name=path_name):
+                inventory = copy.deepcopy(self.inventory)
+                nested_mapping(inventory, "paths", path_name)["path"] += "-moved"
+                self.validator.validate_inventory(inventory)
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_host_facts(
+                        inventory, self.host_facts
+                    ),
+                    path_name,
                 )
 
     def test_release_candidate_kernel_is_rejected_at_stable_floor(self) -> None:
@@ -698,7 +714,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("resource-floor", ("resources", "logical_cpus")),
             (
                 "storage-floor",
-                ("resources", "storage", "docker_data", "minimum_free_percent"),
+                ("resources", "storage", "docker_data_root", "minimum_free_percent"),
             ),
         )
         for case, path in cases:

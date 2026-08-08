@@ -100,13 +100,16 @@ path ownership, decision-issue, or resource fields. The account never carries
 a credential in inventory. `root` is forbidden as either account or group
 name. Supplied host facts report the effective UID, primary GID, and
 supplementary GIDs resolved for the configured identity, as well as its name,
-primary group, home, shell, interactive-login state, and effective sudo
-authorization. Identity and home facts must match inventory. Shell and login
-facts must prove the non-interactive policy, and sudo authorization must be
-absent. The account must not inherit the Docker socket group; the socket fact
-also requires an effective connection-denial result so an ACL grant cannot
-bypass the numeric group comparison. A separate closed SSH fact must prove that
-direct root login is not permitted.
+primary group, home, shell, interactive-login state, effective sudo
+authorization, and effective host-privilege authorization. Identity and home
+facts must match inventory. Shell and login facts must prove the non-interactive
+policy; sudo and broader host privilege authorization must be absent. The broad
+denial covers privileged supplementary groups and equivalent ACL, device,
+capability, service-manager, or policy grants. The account must not inherit the
+Docker socket group; the socket fact also requires an effective
+connection-denial result so an ACL grant cannot bypass the numeric group
+comparison. A separate closed SSH fact must prove that direct root login is not
+permitted.
 
 ### `origins`
 
@@ -126,10 +129,11 @@ unique, mutually non-overlapping, non-empty, non-root, and outside `/tmp`.
 They must not contain or be contained by the service-account home. Fixed
 metadata cannot be changed by an operator. Version 1 confines SecPal state to
 strict children of `/srv/secpal`, runtime secrets to a strict child of
-`/run/secpal`, and the Docker data root and service-account home to distinct
-strict children of `/var/lib`. This structural namespace rule prevents a later
-owner or mode operation from targeting system directories such as `/etc` or
-`/usr`.
+`/run/secpal`, and the service-account home to a strict child of `/var/lib`.
+The Docker data root is exactly `/var/lib/docker`; it is recorded in inventory
+but is not an operator override. These namespace rules prevent a later owner or
+mode operation from targeting system directories such as `/etc`, `/usr`, or
+unrelated `/var/lib` trees.
 
 Paths use UTF-8 byte limits shared by the supported ext4/XFS host model: at
 most 255 encoded bytes per component and 4095 encoded bytes for the complete
@@ -144,10 +148,13 @@ explicitly delegated to their owning Phase D issue rather than guessed.
 
 The inventory declares admission requirements, never lower limits than the
 schema contract. CPU, memory, total storage, and total inode values are
-compared with supplied facts. Each security-relevant storage area has both an
-absolute and percentage reserve for bytes and inodes, including separate
-private and public application storage facts. Passing the floor is not a
-capacity guarantee; the evidence method is defined in the host contract.
+compared with supplied facts. `resources.storage` contains only byte and inode
+headroom observations. The separate closed `filesystems` fact group contains
+path, filesystem, locality, `d_type`, and XFS `ftype` observations for every
+persistent inventory path plus backup staging. This separation ensures that
+configuration and deployment state are checked even though they have no
+separate capacity floor. Passing the floor is not a capacity guarantee; the
+evidence method is defined in the host contract.
 
 ### `backup`
 
@@ -191,7 +198,7 @@ Validation consists of:
 4. comparison with synthetic host facts for OS, architecture, effective
    service identity and privilege state, root SSH policy, kernel, cgroup,
    Docker package provenance, daemon socket authority, Compose, clock, tools,
-   resources, and storage headroom.
+   persistent-path filesystems, resources, and storage headroom.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state

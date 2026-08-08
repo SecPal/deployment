@@ -508,7 +508,7 @@ def main() -> int:
         nested_host = copy.deepcopy(valid_host_document)
         set_nested(
             nested_host,
-            ("resources", "storage", "private_application_storage", "path"),
+            ("filesystems", "private_application_storage", "path"),
             nested_path,
         )
         nested_host_path = temp_root / "nested-private-storage-host.yaml"
