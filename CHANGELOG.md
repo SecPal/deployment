@@ -10,8 +10,8 @@ SPDX-License-Identifier: CC0-1.0
 ### Added
 
 - A provider-neutral production host and inventory contract.
-- A versioned, non-secret production inventory schema and synthetic examples
-  for both supported architectures.
+- A versioned, non-secret production inventory schema, a closed synthetic
+  host-facts schema, and examples for both supported architectures.
 - Fail-closed inventory and synthetic host-prerequisite validation without
   host access or production mutation.
 

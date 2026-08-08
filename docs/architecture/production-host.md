@@ -78,29 +78,34 @@ unsupported. D.1 reads synthetic facts; D.8 owns any future fact collector.
 
 ## Docker Engine and Compose
 
-The supported daemon is rootful Docker Engine 29.x from the upstream Docker
-Ubuntu package family, with Docker Engine 29.6.2 as the minimum security
-baseline. Version 30 or later is not silently accepted. A reviewed contract
-update must evaluate breaking changes before widening the range.
+The supported daemon is rootful Docker Engine 29.x installed as `docker-ce`
+from Docker's upstream Ubuntu APT repository. Docker Engine 29.6.2 is the
+minimum security baseline. Version 30 or later is not silently accepted. A
+reviewed contract update must evaluate breaking changes before widening the
+range. Host facts identify the package source as `docker-apt-repository`; a
+distribution package or unreported provenance fails closed.
 
-The supported orchestrator is the `docker compose` CLI plugin in the Compose
-v2 line. Docker Compose 2.40.3 is the minimum, and version 3 or later fails
-closed until reviewed. The legacy `docker-compose` standalone command is not
-accepted. Version detection uses the three-part numeric output recorded in
-synthetic facts; later collectors must derive it from `docker version` and
-`docker compose version --short` without coercion.
+The supported orchestrator is the `docker-compose-plugin` package and its
+`docker compose` CLI in the Compose v2 line. Docker Compose 2.40.3 is the
+minimum, and version 3 or later fails closed until reviewed. The legacy
+`docker-compose` standalone command is not accepted. Version detection uses
+the three-part numeric output recorded in synthetic facts; later collectors
+must derive it from `docker version` and `docker compose version --short`
+without coercion.
 
 Facts must also report the effective daemon endpoint as
 `unix:///var/run/docker.sock`. A TCP, SSH, alternate Unix socket, or otherwise
 remote Docker context fails admission even when its version and data-root
 values appear compatible.
 
-The Docker daemon and its socket are root-owned. Docker daemon authority is
-privileged host authority: a user able to control the daemon can normally
-obtain host-root-equivalent access. The unprivileged SecPal service account is
-not a member of a Docker-authorized group. Operators use explicit privilege
-escalation for daemon operations. No Docker socket is mounted into a product
-container.
+The Docker daemon and `/var/run/docker.sock` are root-owned; the socket mode is
+exactly `0660`. Docker daemon authority is privileged host authority: a user
+able to control the daemon can normally obtain host-root-equivalent access.
+Facts report the socket UID, GID, mode, and the effective primary and
+supplementary GIDs of the SecPal service account. Admission fails unless the
+socket UID is `0` and the service account has neither primary nor supplementary
+membership in the socket group. Operators use explicit privilege escalation
+for daemon operations. No Docker socket is mounted into a product container.
 
 Rootless Docker Engine is deferred. The current repository has not validated
 its bind-mount ownership, privileged-port edge behavior, networking, data-root
@@ -219,8 +224,10 @@ such as `systemd-timesyncd` and `chrony`.
 
 Inventory selects the unprivileged account and primary group name plus numeric
 UID/GID. Schema version 1 requires IDs from 1000 through 60000 and rejects
-known container identities. The example uses `secpal-deploy:20000:20000`, but
-that value is synthetic and not mandatory.
+known container identities. `root` is forbidden as either name. Effective UID,
+primary GID, and supplementary GIDs must be supplied as facts and match the
+configured identity without Docker-authorized membership. The example uses
+`secpal-deploy:20000:20000`, but that value is synthetic and not mandatory.
 
 The account owns reviewed configuration, deployment metadata, logs, and
 backup staging. Its home is an absolute state path, its shell is
@@ -244,6 +251,13 @@ UID/GID means the named later issue must select and migrate the runtime identity
 before that component can be installed. Every path is limited to 4095 UTF-8
 bytes in total and 255 UTF-8 bytes per component, matching the supported Linux
 ext4/XFS representation limits. ASCII control characters are forbidden.
+
+Schema version 1 also confines path selection by purpose: SecPal state paths
+are strict children of `/srv/secpal`, runtime secrets are a strict child of
+`/run/secpal`, and the Docker data root and service-account home are distinct
+strict children of `/var/lib`. A namespace root itself is not selectable. This
+structural allowlist rejects `/etc`, `/usr`, and other host-owned trees without
+maintaining an incomplete directory blacklist.
 
 | Inventory key                 | Example path                   | Owner and UID:GID                  |   Mode | Class           | Decision owner       |
 | ----------------------------- | ------------------------------ | ---------------------------------- | -----: | --------------- | -------------------- |
@@ -321,9 +335,11 @@ change the reviewed API artifact identity.
 ## Failure semantics and non-goals
 
 Unknown inventory or host-fact fields, unknown versions, mismatched
-architectures, low resources, clock drift, unsupported filesystems, and
+architectures, effective service identities, Docker installation provenance or
+socket authority, low resources, clock drift, unsupported filesystems, and
 dependency contradictions fail before any side effect. Validation errors name
-the field or invariant and never print input values or full documents.
+the safe field location or invariant and never print classified field names,
+input values, or full documents.
 
 D.1 deliberately does not implement host setup, remote access, provider
 selection, firewall or DNS changes, TLS/ACME, CrowdSec, secrets, persistent

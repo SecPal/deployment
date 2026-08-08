@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/production-host-facts.schema.json",
+  "title": "SecPal synthetic production host facts",
+  "description": "Version 1 side-effect-free observations compared with the production inventory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "hostname",
+    "architecture",
+    "os",
+    "service_account",
+    "kernel",
+    "runtime",
+    "clock",
+    "network",
+    "tools",
+    "resources"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "hostname": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "architecture": {
+      "enum": ["amd64", "arm64"]
+    },
+    "os": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version_id"],
+      "properties": {
+        "id": {
+          "const": "ubuntu"
+        },
+        "version_id": {
+          "const": "24.04"
+        }
+      }
+    },
+    "service_account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "gid", "supplementary_gids"],
+      "properties": {
+        "uid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "gid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "supplementary_gids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/systemId"
+          }
+        }
+      }
+    },
+    "kernel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release",
+        "cgroup_version",
+        "overlayfs_supported",
+        "apparmor_enabled",
+        "seccomp_enabled"
+      ],
+      "properties": {
+        "release": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "cgroup_version": {
+          "const": 2
+        },
+        "overlayfs_supported": {
+          "const": true
+        },
+        "apparmor_enabled": {
+          "const": true
+        },
+        "seccomp_enabled": {
+          "const": true
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "docker_engine_version",
+        "docker_compose_version",
+        "installation",
+        "rootless",
+        "daemon_running",
+        "daemon_endpoint",
+        "socket",
+        "data_root"
+      ],
+      "properties": {
+        "docker_engine_version": {
+          "$ref": "#/$defs/version"
+        },
+        "docker_compose_version": {
+          "$ref": "#/$defs/version"
+        },
+        "installation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "engine_package", "compose_package"],
+          "properties": {
+            "source": {
+              "const": "docker-apt-repository"
+            },
+            "engine_package": {
+              "const": "docker-ce"
+            },
+            "compose_package": {
+              "const": "docker-compose-plugin"
+            }
+          }
+        },
+        "rootless": {
+          "const": false
+        },
+        "daemon_running": {
+          "const": true
+        },
+        "daemon_endpoint": {
+          "const": "unix:///var/run/docker.sock"
+        },
+        "socket": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "uid", "gid", "mode"],
+          "properties": {
+            "path": {
+              "const": "/var/run/docker.sock"
+            },
+            "uid": {
+              "const": 0
+            },
+            "gid": {
+              "$ref": "#/$defs/systemId"
+            },
+            "mode": {
+              "const": "0660"
+            }
+          }
+        },
+        "data_root": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["synchronized", "offset_milliseconds"],
+      "properties": {
+        "synchronized": {
+          "const": true
+        },
+        "offset_milliseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public_address", "private_addresses"],
+      "properties": {
+        "public_address": {
+          "type": "string",
+          "minLength": 1
+        },
+        "private_addresses": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logical_cpus",
+        "memory_bytes",
+        "storage_total_bytes",
+        "total_inodes",
+        "storage"
+      ],
+      "properties": {
+        "logical_cpus": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "memory_bytes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "storage_total_bytes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "total_inodes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "docker_data",
+            "postgresql_data",
+            "private_application_storage",
+            "public_application_storage",
+            "logs",
+            "edge_state",
+            "acme_state",
+            "crowdsec_state",
+            "backup_staging"
+          ],
+          "properties": {
+            "docker_data": {
+              "$ref": "#/$defs/storageFact"
+            },
+            "postgresql_data": {
+              "$ref": "#/$defs/storageFact"
+            },
+            "private_application_storage": {
+              "$ref": "#/$defs/storageFact"
+            },
+            "public_application_storage": {
+              "$ref": "#/$defs/storageFact"
+            },
+            "logs": {
+              "$ref": "#/$defs/storageFact"
+            },
+            "edge_state": {
+              "$ref": "#/$defs/storageFact"
+            },
+            "acme_state": {
+              "$ref": "#/$defs/storageFact"
+            },
+            "crowdsec_state": {
+              "$ref": "#/$defs/storageFact"
+            },
+            "backup_staging": {
+              "$ref": "#/$defs/storageFact"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "systemId": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967294
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
+    },
+    "storageFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "filesystem",
+        "local",
+        "d_type",
+        "xfs_ftype",
+        "free_bytes",
+        "free_percent",
+        "free_inodes",
+        "free_inode_percent"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "filesystem": {
+          "enum": ["ext4", "xfs"]
+        },
+        "local": {
+          "const": true
+        },
+        "d_type": {
+          "const": true
+        },
+        "xfs_ftype": {
+          "type": ["boolean", "null"]
+        },
+        "free_bytes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "free_percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "free_inodes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "free_inode_percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    }
+  }
+}

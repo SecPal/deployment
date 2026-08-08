@@ -7,6 +7,10 @@ architecture: amd64
 os:
   id: ubuntu
   version_id: "24.04"
+service_account:
+  uid: 20000
+  gid: 20000
+  supplementary_gids: []
 kernel:
   release: 6.8.0
   cgroup_version: 2
@@ -16,9 +20,18 @@ kernel:
 runtime:
   docker_engine_version: 29.6.2
   docker_compose_version: 2.40.3
+  installation:
+    source: docker-apt-repository
+    engine_package: docker-ce
+    compose_package: docker-compose-plugin
   rootless: false
   daemon_running: true
   daemon_endpoint: unix:///var/run/docker.sock
+  socket:
+    path: /var/run/docker.sock
+    uid: 0
+    gid: 999
+    mode: "0660"
   data_root: /var/lib/docker
 clock:
   synchronized: true

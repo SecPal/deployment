@@ -42,6 +42,16 @@ def load_mapping(path: Path) -> dict[str, object]:
     return loaded
 
 
+def nested_mapping(document: dict[str, object], *path: str) -> dict[str, object]:
+    current = document
+    for segment in path:
+        child = current[segment]
+        if not isinstance(child, dict):
+            raise AssertionError(f"fixture path must be a mapping: {'.'.join(path)}")
+        current = child
+    return current
+
+
 class ProductionContractRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -56,11 +66,15 @@ class ProductionContractRegressionTests(unittest.TestCase):
             temporary.write(raw)
         return Path(temporary.name)
 
-    def assert_contract_violation(self, action: object) -> None:
+    def assert_contract_violation(
+        self, action: object, expected_message: str | None = None
+    ) -> None:
         if not callable(action):
             raise AssertionError("contract-violation assertion requires a callable")
-        with self.assertRaises(self.validator.ContractViolation):
+        with self.assertRaises(self.validator.ContractViolation) as context:
             action()
+        if expected_message is not None:
+            self.assertIn(expected_message, str(context.exception))
 
     def test_noncanonical_numeric_ipv4_origins_are_rejected(self) -> None:
         for hostname in ("127.1", "0177.0.0.1", "0x7f.1"):
@@ -68,6 +82,36 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 self.assert_contract_violation(
                     lambda hostname=hostname: self.validator.validate_origin(
                         f"https://{hostname}", "inventory.origins.frontend"
+                    )
+                )
+
+    def test_hostnames_must_be_dns_names(self) -> None:
+        for hostname in (
+            "127.0.0.1",
+            "127.1",
+            "192.0.2.10",
+            "0177.0.0.1",
+            "0x7f.1",
+        ):
+            with self.subTest(hostname=hostname):
+                self.assert_contract_violation(
+                    lambda hostname=hostname: self.validator.validate_hostname(
+                        hostname, "inventory.host.hostname"
+                    )
+                )
+
+    def test_malformed_bracketed_origins_are_translated(self) -> None:
+        for origin in (
+            "https://[foo)",
+            "https://[foo",
+            "https://foo]",
+            "https://[]",
+            "https://[gg::1]",
+        ):
+            with self.subTest(origin=origin):
+                self.assert_contract_violation(
+                    lambda origin=origin: self.validator.validate_origin(
+                        origin, "inventory.origins.frontend"
                     )
                 )
 
@@ -325,17 +369,132 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     action()
                 self.assertNotIn(synthetic_token, str(context.exception))
 
+    def test_plain_secret_bearing_field_names_are_redacted_from_errors(self) -> None:
+        marker = "syntheticcredential"
+        with self.assertRaises(self.validator.ContractViolation) as context:
+            self.validator.scan_forbidden_input({f"{marker}_token": "synthetic"})
+        self.assertNotIn(marker, str(context.exception))
+
+    def test_service_account_cannot_use_the_root_identity(self) -> None:
+        for field in ("name", "group"):
+            with self.subTest(field=field):
+                inventory = copy.deepcopy(self.inventory)
+                service_account = nested_mapping(inventory, "service_account")
+                service_account[field] = "root"
+                self.assert_contract_violation(
+                    lambda inventory=inventory: (
+                        self.validator.validate_inventory(inventory)
+                    )
+                )
+
+    def test_effective_service_identity_must_match_the_inventory(self) -> None:
+        for field in ("uid", "gid"):
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                service_account = nested_mapping(facts, "service_account")
+                service_account[field] = 0
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    ),
+                    "service-account",
+                )
+
+    def test_host_facts_must_report_docker_installation_source(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        runtime = nested_mapping(facts, "runtime")
+        runtime.pop("installation", None)
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts),
+            "installation",
+        )
+
+    def test_docker_installation_contract_is_exact(self) -> None:
+        mutations = (
+            ("source", "distribution-package"),
+            ("engine_package", "docker.io"),
+            ("compose_package", "docker-compose"),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                installation = nested_mapping(facts, "runtime", "installation")
+                installation[field] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_service_account_cannot_inherit_docker_socket_authority(self) -> None:
+        for membership in ("primary", "supplementary"):
+            with self.subTest(membership=membership):
+                facts = copy.deepcopy(self.host_facts)
+                service_account = nested_mapping(facts, "service_account")
+                socket = nested_mapping(facts, "runtime", "socket")
+                if membership == "primary":
+                    socket["gid"] = service_account["gid"]
+                else:
+                    service_account["supplementary_gids"] = [socket["gid"]]
+                self.assert_contract_violation(
+                    lambda facts=facts: (
+                        self.validator.validate_host_facts(self.inventory, facts)
+                    ),
+                    "Docker-authorized",
+                )
+
+    def test_docker_socket_contract_is_exact(self) -> None:
+        for field, value in (
+            ("path", "/run/docker.sock"),
+            ("uid", 1),
+            ("mode", "0666"),
+        ):
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                socket = nested_mapping(facts, "runtime", "socket")
+                socket[field] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_managed_paths_cannot_target_system_directories(self) -> None:
+        for path_name, unsafe_path in (
+            ("configuration", "/etc"),
+            ("deployment_state", "/usr/local/secpal"),
+            ("runtime_secrets", "/run/secpal"),
+            ("docker_data_root", "/var/lib"),
+        ):
+            with self.subTest(path_name=path_name):
+                inventory = copy.deepcopy(self.inventory)
+                path_contract = nested_mapping(inventory, "paths", path_name)
+                path_contract["path"] = unsafe_path
+                self.assert_contract_violation(
+                    lambda inventory=inventory: (
+                        self.validator.validate_inventory(inventory)
+                    )
+                )
+
     def test_release_candidate_kernel_is_rejected_at_stable_floor(self) -> None:
         facts = copy.deepcopy(self.host_facts)
-        kernel = facts["kernel"]
-        if not isinstance(kernel, dict):
-            raise AssertionError("kernel fixture must be a mapping")
-        for release in ("6.8.0-rc1", "6.8.0-rc", "6.8.0-RC2-generic"):
+        kernel = nested_mapping(facts, "kernel")
+        for release in (
+            "6.8.0-rc1",
+            "6.8.0-rc",
+            "6.8.0-rcfoo",
+            "6.8.0-RC2-generic",
+            "6.8.0-060800rc1-generic",
+            "6.8.0-060800rc1ubuntu1-generic",
+            "6.8.0-foo-rc1",
+        ):
             with self.subTest(release=release):
                 kernel["release"] = release
                 self.assert_contract_violation(
                     lambda: self.validator.validate_host_facts(self.inventory, facts)
                 )
+        kernel["release"] = "6.8.0-notrc1-generic"
+        self.validator.validate_host_facts(self.inventory, facts)
 
     def test_loader_recursion_error_is_translated(self) -> None:
         document = self.write_temporary_document("schema_version: 1\n")
@@ -500,8 +659,9 @@ class ProductionContractRegressionTests(unittest.TestCase):
         schema = self.write_temporary_document(
             '{"type":"object","type":"array"}\n'
         )
-        with mock.patch.object(self.validator, "SCHEMA_PATH", schema):
-            self.assert_contract_violation(self.validator.read_schema)
+        self.assert_contract_violation(
+            lambda: self.validator.read_schema(schema, "inventory")
+        )
 
 
 if __name__ == "__main__":

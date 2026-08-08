@@ -24,9 +24,9 @@ from yaml.nodes import MappingNode
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_PATH = ROOT / "schemas/production-inventory.schema.json"
+INVENTORY_SCHEMA_PATH = ROOT / "schemas/production-inventory.schema.json"
+HOST_FACTS_SCHEMA_PATH = ROOT / "schemas/production-host-facts.schema.json"
 MAX_INPUT_BYTES = 1024 * 1024
-SUPPORTED_ARCHITECTURES = {"amd64", "arm64"}
 REQUIRED_TOOLS = {
     "bash",
     "curl",
@@ -45,6 +45,12 @@ REQUIRED_TOOLS = {
     "timedatectl",
 }
 RESERVED_SERVICE_IDS = {10001, 10002}
+MANAGED_PATH_ROOTS = {
+    "runtime_secrets": PurePosixPath("/run/secpal"),
+    "docker_data_root": PurePosixPath("/var/lib"),
+}
+DEFAULT_MANAGED_PATH_ROOT = PurePosixPath("/srv/secpal")
+SERVICE_ACCOUNT_HOME_ROOT = PurePosixPath("/var/lib")
 
 SECRET_FIELD_NAMES = {
     "password",
@@ -86,6 +92,9 @@ NUMERIC_HOST_LABEL_PATTERN = re.compile(r"(?:0x[0-9a-f]+|[0-9]+)\Z", re.IGNORECA
 VERSION_COMPONENT = r"(?:0|[1-9][0-9]{0,8})"
 RUNTIME_VERSION_PATTERN = re.compile(
     rf"({VERSION_COMPONENT})\.({VERSION_COMPONENT})\.({VERSION_COMPONENT})\Z"
+)
+KERNEL_RELEASE_CANDIDATE_PATTERN = re.compile(
+    r"(?<![A-Za-z])rc(?:[0-9]+|(?=$|[-+._]))", re.IGNORECASE
 )
 DOCUMENTATION_NETWORKS = (
     ipaddress.ip_network("192.0.2.0/24"),
@@ -318,11 +327,12 @@ def scan_forbidden_input(
                     normalized.endswith(f"_{name}") for name in SECRET_FIELD_NAMES
                 ):
                     raise ContractViolation(
-                        f"secret-bearing field is forbidden at {field_path(child_parts, root)}"
+                        f"secret-bearing field is forbidden below {field_path(parts, root)}"
                     )
                 if normalized in SUPPLY_CHAIN_FIELD_NAMES:
                     raise ContractViolation(
-                        f"image or registry identity field is forbidden at {field_path(child_parts, root)}"
+                        "image or registry identity field is forbidden below "
+                        f"{field_path(parts, root)}"
                     )
                 scan_forbidden_input(child, child_parts, root, active, visited)
         elif isinstance(value, list):
@@ -358,7 +368,7 @@ def read_document(path: Path, label: str) -> dict[str, Any]:
     return loaded
 
 
-def read_schema() -> dict[str, Any]:
+def read_schema(path: Path, label: str) -> dict[str, Any]:
     def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
@@ -369,50 +379,66 @@ def read_schema() -> dict[str, Any]:
 
     try:
         loaded = json.loads(
-            SCHEMA_PATH.read_text(encoding="utf-8"),
+            path.read_text(encoding="utf-8"),
             object_pairs_hook=reject_duplicate_keys,
         )
     except (OSError, UnicodeError, ValueError) as exc:
-        raise ContractViolation("repository inventory schema could not be read") from exc
+        raise ContractViolation(f"repository {label} schema could not be read") from exc
     if not isinstance(loaded, dict):
-        raise ContractViolation("repository inventory schema root must be an object")
+        raise ContractViolation(f"repository {label} schema root must be an object")
     return loaded
 
 
-def schema_error_message(error: jsonschema.ValidationError) -> str:
+def schema_error_message(
+    error: jsonschema.ValidationError, root: str, label: str
+) -> str:
     path = tuple(error.absolute_path)
-    location = field_path(path)
+    location = field_path(path, root)
     if error.validator == "required":
         missing = sorted(set(error.validator_value) - set(error.instance))
-        missing_location = field_path((*path, missing[0])) if missing else location
+        missing_location = field_path((*path, missing[0]), root) if missing else location
         return f"required field missing at {missing_location}"
     if error.validator == "additionalProperties":
         known = set(error.schema.get("properties", {}))
         unknown = sorted(set(error.instance) - known)
-        unknown_location = field_path((*path, unknown[0])) if unknown else location
+        unknown_location = field_path((*path, unknown[0]), root) if unknown else location
         return f"unknown field at {unknown_location}"
     if error.validator in {"const", "enum"}:
         return f"unsupported or fixed value at {location}"
     if error.validator == "format":
         return f"invalid formatted value at {location}"
-    return f"inventory schema violation at {location} ({error.validator})"
+    return f"{label} schema violation at {location} ({error.validator})"
 
 
-def validate_schema(inventory: dict[str, Any]) -> None:
-    schema = read_schema()
+def validate_document_schema(
+    document: dict[str, Any], schema_path: Path, root: str, label: str
+) -> None:
+    schema = read_schema(schema_path, label)
     try:
         jsonschema.Draft202012Validator.check_schema(schema)
     except jsonschema.SchemaError as exc:
-        raise ContractViolation("repository inventory schema is invalid") from exc
+        raise ContractViolation(f"repository {label} schema is invalid") from exc
     validator = StrictDraft202012Validator(
         schema, format_checker=jsonschema.FormatChecker()
     )
     errors = sorted(
-        validator.iter_errors(inventory),
+        validator.iter_errors(document),
         key=lambda error: tuple(str(part) for part in error.absolute_path),
     )
     if errors:
-        raise ContractViolation(schema_error_message(errors[0]))
+        raise ContractViolation(schema_error_message(errors[0], root, label))
+
+
+def validate_inventory_schema(inventory: dict[str, Any]) -> None:
+    validate_document_schema(
+        inventory, INVENTORY_SCHEMA_PATH, "inventory", "inventory"
+    )
+
+
+def validate_host_facts_schema(facts: dict[str, Any]) -> None:
+    validate_document_schema(
+        facts, HOST_FACTS_SCHEMA_PATH, "host_facts", "host-facts"
+    )
 
 
 def is_documentation_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -475,6 +501,17 @@ def validate_hostname(hostname: Any, location: str) -> str:
     normalized = hostname.lower()
     if normalized == "localhost" or normalized.endswith(".localhost"):
         raise ContractViolation(f"loopback hostname is forbidden at {location}")
+    if all(
+        NUMERIC_HOST_LABEL_PATTERN.fullmatch(label)
+        for label in normalized.split(".")
+    ):
+        raise ContractViolation(f"IP literals are forbidden at {location}")
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        pass
+    else:
+        raise ContractViolation(f"IP literals are forbidden at {location}")
     return normalized
 
 
@@ -487,7 +524,10 @@ def validate_origin(origin: Any, location: str) -> str:
         raise ContractViolation(
             f"origin must not contain a query or fragment delimiter at {location}"
         )
-    parsed = urlsplit(origin)
+    try:
+        parsed = urlsplit(origin)
+    except ValueError as exc:
+        raise ContractViolation(f"origin is malformed at {location}") from exc
     if parsed.scheme != "https" or not origin.startswith("https://"):
         raise ContractViolation(f"origin must use HTTPS at {location}")
     if (
@@ -548,6 +588,13 @@ def validate_absolute_path(raw: Any, location: str) -> None:
         raise ContractViolation(f"persistent contract path must not use /tmp at {location}")
 
 
+def require_managed_descendant(raw: str, root: PurePosixPath, location: str) -> None:
+    if root not in PurePosixPath(raw).parents:
+        raise ContractViolation(
+            f"managed path must be a strict descendant of {root} at {location}"
+        )
+
+
 def validate_path_contracts(inventory: dict[str, Any]) -> None:
     service_account = inventory["service_account"]
     paths = inventory["paths"]
@@ -557,6 +604,8 @@ def validate_path_contracts(inventory: dict[str, Any]) -> None:
         location = f"inventory.paths.{name}"
         raw_path = contract["path"]
         validate_absolute_path(raw_path, f"{location}.path")
+        managed_root = MANAGED_PATH_ROOTS.get(name, DEFAULT_MANAGED_PATH_ROOT)
+        require_managed_descendant(raw_path, managed_root, f"{location}.path")
         if raw_path in seen:
             raise ContractViolation(
                 f"duplicate path between inventory.paths.{seen[raw_path]} and {location}"
@@ -605,22 +654,24 @@ def validate_storage_requirements(resources: dict[str, Any]) -> None:
 
 
 def validate_inventory(inventory: dict[str, Any]) -> None:
-    validate_schema(inventory)
-    schema_version = require_integer(
-        inventory["schema_version"], "inventory.schema_version", minimum=1
-    )
-    if schema_version != 1:
-        raise ContractViolation("unsupported inventory schema version")
+    validate_inventory_schema(inventory)
     host = inventory["host"]
     host_hostname = validate_hostname(host["hostname"], "inventory.host.hostname")
     validate_addresses(host)
 
     service_account = inventory["service_account"]
+    if service_account["name"] == "root" or service_account["group"] == "root":
+        raise ContractViolation("service-account name and group must be unprivileged")
     if service_account["uid"] in RESERVED_SERVICE_IDS:
         raise ContractViolation("service-account UID conflicts with a container runtime identity")
     if service_account["gid"] in RESERVED_SERVICE_IDS:
         raise ContractViolation("service-account GID conflicts with a container runtime identity")
     validate_absolute_path(service_account["home"], "inventory.service_account.home")
+    require_managed_descendant(
+        service_account["home"],
+        SERVICE_ACCOUNT_HOME_ROOT,
+        "inventory.service_account.home",
+    )
 
     frontend_hostname = validate_origin(
         inventory["origins"]["frontend"], "inventory.origins.frontend"
@@ -647,21 +698,6 @@ def validate_inventory(inventory: dict[str, Any]) -> None:
         )
 
 
-def require_exact_keys(value: Any, expected: set[str], location: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ContractViolation(f"{location} must be an object")
-    actual = set(value)
-    if actual != expected:
-        raise ContractViolation(f"{location} has missing or unknown fields")
-    return value
-
-
-def require_integer(value: Any, location: str, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise ContractViolation(f"{location} must be an integer at or above its floor")
-    return value
-
-
 def parse_version(raw: Any, location: str) -> tuple[int, int, int]:
     match = RUNTIME_VERSION_PATTERN.fullmatch(raw) if isinstance(raw, str) else None
     if match is None:
@@ -676,32 +712,11 @@ def validate_platform_facts(inventory: dict[str, Any], facts: dict[str, Any]) ->
     )
     if fact_hostname != inventory_hostname:
         raise ContractViolation("host-facts hostname does not match the inventory")
-    if not isinstance(facts["architecture"], str):
-        raise ContractViolation("host architecture fact must be a string")
-    if facts["architecture"] not in SUPPORTED_ARCHITECTURES:
-        raise ContractViolation("host architecture is unsupported")
     if facts["architecture"] != inventory["host"]["architecture"]:
         raise ContractViolation("host architecture does not match the inventory")
 
-    os_facts = require_exact_keys(facts["os"], {"id", "version_id"}, "host facts.os")
-    if os_facts != {"id": "ubuntu", "version_id": "24.04"}:
-        raise ContractViolation("host OS must be Ubuntu Server 24.04")
 
-
-def validate_kernel_facts(value: Any) -> None:
-    kernel = require_exact_keys(
-        value,
-        {
-            "release",
-            "cgroup_version",
-            "overlayfs_supported",
-            "apparmor_enabled",
-            "seccomp_enabled",
-        },
-        "host facts.kernel",
-    )
-    if not isinstance(kernel["release"], str):
-        raise ContractViolation("host kernel release must be a string")
+def validate_kernel_facts(kernel: dict[str, Any]) -> None:
     kernel_match = re.fullmatch(
         rf"({VERSION_COMPONENT})\.({VERSION_COMPONENT})\.({VERSION_COMPONENT})"
         r"(?P<suffix>[-+._][A-Za-z0-9][A-Za-z0-9+._-]*)?",
@@ -711,28 +726,18 @@ def validate_kernel_facts(value: Any) -> None:
         raise ContractViolation("host kernel must be Linux 6.8 or newer")
     kernel_version = tuple(int(kernel_match.group(index)) for index in (1, 2, 3))
     kernel_suffix = kernel_match.group("suffix") or ""
-    if kernel_version < (6, 8) or kernel_suffix.lower().startswith("-rc"):
+    if (
+        kernel_version < (6, 8)
+        or kernel_suffix.lower().startswith("-rc")
+        or KERNEL_RELEASE_CANDIDATE_PATTERN.search(kernel_suffix)
+    ):
         raise ContractViolation("host kernel must be Linux 6.8 or newer")
-    if kernel["cgroup_version"] != 2:
-        raise ContractViolation("host must use cgroup v2")
-    for feature in ("overlayfs_supported", "apparmor_enabled", "seccomp_enabled"):
-        if kernel[feature] is not True:
-            raise ContractViolation(f"required kernel feature is disabled at host facts.kernel.{feature}")
 
 
-def validate_runtime_facts(inventory: dict[str, Any], value: Any) -> None:
-    runtime = require_exact_keys(
-        value,
-        {
-            "docker_engine_version",
-            "docker_compose_version",
-            "rootless",
-            "daemon_running",
-            "daemon_endpoint",
-            "data_root",
-        },
-        "host facts.runtime",
-    )
+def validate_runtime_facts(
+    inventory: dict[str, Any], facts: dict[str, Any]
+) -> None:
+    runtime = facts["runtime"]
     engine_version = parse_version(
         runtime["docker_engine_version"], "host facts.runtime.docker_engine_version"
     )
@@ -743,31 +748,33 @@ def validate_runtime_facts(inventory: dict[str, Any], value: Any) -> None:
     )
     if compose_version < (2, 40, 3) or compose_version >= (3, 0, 0):
         raise ContractViolation("Docker Compose must be supported v2 at or above 2.40.3")
-    if runtime["rootless"] is not False:
-        raise ContractViolation("rootless Docker Engine is not supported by this contract")
-    if runtime["daemon_running"] is not True:
-        raise ContractViolation("Docker daemon fact must report running")
-    if runtime["daemon_endpoint"] != "unix:///var/run/docker.sock":
-        raise ContractViolation("Docker daemon endpoint must be the local rootful Unix socket")
     if runtime["data_root"] != inventory["paths"]["docker_data_root"]["path"]:
         raise ContractViolation("Docker data root does not match the inventory")
 
 
-def validate_clock_facts(value: Any) -> None:
-    clock = require_exact_keys(
-        value, {"synchronized", "offset_milliseconds"}, "host facts.clock"
-    )
-    if clock["synchronized"] is not True:
-        raise ContractViolation("host clock is not synchronized")
-    offset = require_integer(clock["offset_milliseconds"], "host facts.clock.offset_milliseconds")
-    if offset > 1000:
-        raise ContractViolation("host clock offset exceeds 1000 milliseconds")
+def validate_service_account_facts(
+    inventory: dict[str, Any], facts: dict[str, Any]
+) -> None:
+    runtime = facts["runtime"]
+    service_account = facts["service_account"]
+    expected_account = inventory["service_account"]
+    if (
+        service_account["uid"] != expected_account["uid"]
+        or service_account["gid"] != expected_account["gid"]
+    ):
+        raise ContractViolation(
+            "effective service-account identity does not match the inventory"
+        )
+    docker_gid = runtime["socket"]["gid"]
+    if docker_gid == service_account["gid"] or docker_gid in service_account[
+        "supplementary_gids"
+    ]:
+        raise ContractViolation(
+            "service-account has Docker-authorized group membership"
+        )
 
 
-def validate_network_facts(inventory: dict[str, Any], value: Any) -> None:
-    network = require_exact_keys(
-        value, {"public_address", "private_addresses"}, "host facts.network"
-    )
+def validate_network_facts(inventory: dict[str, Any], network: dict[str, Any]) -> None:
     fact_public_address = parse_address(
         network["public_address"], "host facts.network.public_address"
     )
@@ -786,9 +793,7 @@ def validate_network_facts(inventory: dict[str, Any], value: Any) -> None:
         raise ContractViolation("host private-address facts do not match the inventory")
 
 
-def validate_tool_facts(tools: Any) -> None:
-    if not isinstance(tools, list) or any(not isinstance(tool, str) for tool in tools):
-        raise ContractViolation("host tools must be a string array")
+def validate_tool_facts(tools: list[str]) -> None:
     missing_tools = sorted(REQUIRED_TOOLS - set(tools))
     if missing_tools:
         raise ContractViolation(f"required host tool is missing: {missing_tools[0]}")
@@ -798,37 +803,16 @@ def validate_storage_fact(
     inventory: dict[str, Any],
     name: str,
     inventory_path_name: str,
-    value: Any,
+    storage: dict[str, Any],
     resource_totals: dict[str, int],
     seen_paths: set[str],
 ) -> None:
-    storage = require_exact_keys(
-        value,
-        {
-            "path",
-            "filesystem",
-            "local",
-            "d_type",
-            "xfs_ftype",
-            "free_bytes",
-            "free_percent",
-            "free_inodes",
-            "free_inode_percent",
-        },
-        f"host facts.resources.storage.{name}",
-    )
     expected_path = inventory["paths"][inventory_path_name]["path"]
     if storage["path"] != expected_path:
         raise ContractViolation(f"storage path does not match inventory at {name}")
     if storage["path"] in seen_paths:
         raise ContractViolation("host storage facts contain duplicate mount or state paths")
     seen_paths.add(storage["path"])
-    if not isinstance(storage["filesystem"], str):
-        raise ContractViolation(f"storage filesystem fact must be a string at {name}")
-    if storage["filesystem"] not in {"ext4", "xfs"} or storage["local"] is not True:
-        raise ContractViolation(f"storage must use local ext4 or XFS at {name}")
-    if storage["d_type"] is not True:
-        raise ContractViolation(f"storage must support d_type at {name}")
     if storage["filesystem"] == "xfs" and storage["xfs_ftype"] is not True:
         raise ContractViolation(f"XFS storage must use ftype=1 at {name}")
     if storage["filesystem"] == "ext4" and storage["xfs_ftype"] is not None:
@@ -842,11 +826,7 @@ def validate_storage_fact(
         ("free_inode_percent", "minimum_free_inode_percent"),
     )
     for fact_name, requirement_name in checks:
-        actual = require_integer(
-            storage[fact_name], f"host facts.resources.storage.{name}.{fact_name}"
-        )
-        if fact_name.endswith("percent") and actual > 100:
-            raise ContractViolation(f"storage percentage exceeds 100 at {name}.{fact_name}")
+        actual = storage[fact_name]
         if fact_name == "free_bytes" and actual > resource_totals["storage_total_bytes"]:
             raise ContractViolation(f"storage free bytes exceed host total at {name}")
         if fact_name == "free_inodes" and actual > resource_totals["total_inodes"]:
@@ -855,22 +835,17 @@ def validate_storage_fact(
             raise ContractViolation(f"storage headroom is insufficient at {name}.{fact_name}")
 
 
-def validate_resource_facts(inventory: dict[str, Any], value: Any) -> None:
-    resource_facts = require_exact_keys(
-        value,
-        {"logical_cpus", "memory_bytes", "storage_total_bytes", "total_inodes", "storage"},
-        "host facts.resources",
-    )
+def validate_resource_facts(
+    inventory: dict[str, Any], resource_facts: dict[str, Any]
+) -> None:
     resource_totals: dict[str, int] = {}
     for field in ("logical_cpus", "memory_bytes", "storage_total_bytes", "total_inodes"):
-        actual = require_integer(resource_facts[field], f"host facts.resources.{field}")
+        actual = resource_facts[field]
         resource_totals[field] = actual
         if actual < inventory["resources"][field]:
             raise ContractViolation(f"host resource is below inventory floor: {field}")
 
-    storage_facts = require_exact_keys(
-        resource_facts["storage"], set(STORAGE_PATH_KEYS), "host facts.resources.storage"
-    )
+    storage_facts = resource_facts["storage"]
     seen_paths: set[str] = set()
     for name, inventory_path_name in STORAGE_PATH_KEYS.items():
         validate_storage_fact(
@@ -884,31 +859,11 @@ def validate_resource_facts(inventory: dict[str, Any], value: Any) -> None:
 
 
 def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> None:
-    facts = require_exact_keys(
-        facts,
-        {
-            "schema_version",
-            "hostname",
-            "architecture",
-            "os",
-            "kernel",
-            "runtime",
-            "clock",
-            "network",
-            "tools",
-            "resources",
-        },
-        "host facts",
-    )
-    schema_version = require_integer(
-        facts["schema_version"], "host facts.schema_version", minimum=1
-    )
-    if schema_version != 1:
-        raise ContractViolation("unsupported host-facts schema version")
+    validate_host_facts_schema(facts)
     validate_platform_facts(inventory, facts)
     validate_kernel_facts(facts["kernel"])
-    validate_runtime_facts(inventory, facts["runtime"])
-    validate_clock_facts(facts["clock"])
+    validate_runtime_facts(inventory, facts)
+    validate_service_account_facts(inventory, facts)
     validate_network_facts(inventory, facts["network"])
     validate_tool_facts(facts["tools"])
     validate_resource_facts(inventory, facts["resources"])

@@ -46,6 +46,7 @@ required_files=(
   docs/api-image-consumption.md
   docs/roadmap.md
   config/production/inventory.example.yaml
+  schemas/production-host-facts.schema.json
   schemas/production-inventory.schema.json
   scripts/preflight.sh
   scripts/fetch-oci-attestation.py

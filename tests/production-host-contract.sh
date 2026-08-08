@@ -48,6 +48,7 @@ for path in \
   docs/architecture/production-host.md \
   docs/architecture/production-inventory.md \
   config/production/inventory.example.yaml \
+  schemas/production-host-facts.schema.json \
   schemas/production-inventory.schema.json \
   scripts/validate-production-contract.py \
   tests/production-inventory-contract.py \
@@ -126,6 +127,10 @@ require_text schemas/production-inventory.schema.json '"schema_version"'
 require_text schemas/production-inventory.schema.json '"single-host"'
 require_text schemas/production-inventory.schema.json '"amd64"'
 require_text schemas/production-inventory.schema.json '"arm64"'
+require_text schemas/production-host-facts.schema.json '"additionalProperties": false'
+require_text schemas/production-host-facts.schema.json '"docker-apt-repository"'
+require_text schemas/production-host-facts.schema.json '"docker-compose-plugin"'
+require_text schemas/production-host-facts.schema.json '"/var/run/docker.sock"'
 
 require_text CHANGELOG.md "provider-neutral production host and inventory contract"
 require_text scripts/preflight.sh "python3 tests/production-inventory-contract.py"

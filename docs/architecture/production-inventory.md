@@ -10,18 +10,21 @@ SPDX-License-Identifier: CC0-1.0
 The production inventory records provider-neutral operator inputs for one
 future SecPal reference host. Its canonical schema is
 [`schemas/production-inventory.schema.json`](../../schemas/production-inventory.schema.json),
-and the repository contains only synthetic examples. Inventory is not a
+while supplied observations use the separate closed
+[`schemas/production-host-facts.schema.json`](../../schemas/production-host-facts.schema.json)
+contract. The repository contains only synthetic examples. Inventory is not a
 deployment workflow, source of image trust, secret store, or host-discovery
 mechanism.
 
 ## Versioning and migration
 
-Schema version 1 is selected by the exact integer `schema_version: 1`. Unknown
-schema versions fail closed. Consumers do not coerce old values, ignore new
-fields, or silently accept a future version. Any incompatible schema change
-requires a reviewed contract change, positive and negative fixtures, and
-reviewed migration notes that state how an operator moves an inventory between
-versions. D.1 provides no implicit inventory migration.
+Inventory and host-fact schema version 1 are selected by the exact integer
+`schema_version: 1`. Unknown schema versions fail closed. Consumers do not
+coerce old values, ignore new fields, or silently accept a future version. Any
+incompatible schema change requires a reviewed contract change, positive and
+negative fixtures, and reviewed migration notes that state how an operator
+moves an inventory between versions. D.1 provides no implicit inventory
+migration.
 
 Duplicate YAML mapping keys are malformed input and fail before schema
 validation. A later duplicate cannot replace an unsupported schema version or
@@ -38,8 +41,9 @@ otherwise look harmless.
 Inventory must not contain secrets, credential material, private keys, tokens,
 passwords, or real customer data. Recursive policy validation rejects
 secret-looking field names, private-key markers, GitHub-token shapes, and
-credential-bearing URLs before schema validation. Error messages contain only
-the field path and invariant; they do not echo the value or whole inventory.
+credential-bearing URLs before schema validation. An error never echoes a
+classified field name, its value, or the whole inventory; it reports only the
+safe parent location and violated invariant.
 
 `backup.credential_reference` is an opaque reference beginning with
 `external-secret://`. It identifies material held by a later approved secret
@@ -74,7 +78,8 @@ reserved documentation addresses in synthetic examples; multicast and
 deprecated IPv6 site-local ranges are never host addresses. Public and private
 address comparison uses parsed IP identities, so equivalent IPv6 spellings
 match while semantic duplicates fail. DNS hostname comparison is
-case-insensitive. Private addresses are limited to RFC 1918 IPv4 or IPv6 ULA;
+case-insensitive; IP literals and legacy numeric IPv4 spellings are not
+hostnames. Private addresses are limited to RFC 1918 IPv4 or IPv6 ULA;
 documentation, benchmarking, link-local, and other non-global ranges are not
 treated as private-use addresses. Private-address order is not significant;
 duplicate or mismatched facts fail closed. Address facts must use YAML strings;
@@ -89,7 +94,10 @@ interactive-login state, and Docker-authority state are explicit. UID/GID
 values are strict YAML integers, are bounded, and cannot reuse known SecPal
 runtime IDs. Integral floating-point spellings are not coerced for UID/GID,
 path ownership, decision-issue, or resource fields. The account never carries
-a credential in inventory.
+a credential in inventory. `root` is forbidden as either account or group
+name. Supplied host facts report the effective UID, primary GID, and
+supplementary GIDs resolved for the configured identity. They must match the
+inventory and must not grant access to the Docker socket group.
 
 ### `origins`
 
@@ -107,7 +115,12 @@ already known, baseline directory mode, persistence class, and any later issue
 that must decide the runtime identity or lifecycle. Paths must be normalized,
 unique, mutually non-overlapping, non-empty, non-root, and outside `/tmp`.
 They must not contain or be contained by the service-account home. Fixed
-metadata cannot be changed by an operator.
+metadata cannot be changed by an operator. Version 1 confines SecPal state to
+strict children of `/srv/secpal`, runtime secrets to a strict child of
+`/run/secpal`, and the Docker data root and service-account home to distinct
+strict children of `/var/lib`. This structural namespace rule prevents a later
+owner or mode operation from targeting system directories such as `/etc` or
+`/usr`.
 
 Paths use UTF-8 byte limits shared by the supported ext4/XFS host model: at
 most 255 encoded bytes per component and 4095 encoded bytes for the complete
@@ -155,18 +168,20 @@ python3 scripts/validate-production-contract.py \
   --host-facts tests/fixtures/production-host/valid-amd64.yaml
 ```
 
-The validator reads only those two files and the repository schema. It does
+The validator reads only those two files and the two repository schemas. It does
 not query DNS, the network, Docker, `/proc`, `/sys`, cloud metadata, or a
 remote machine and does not change the filesystem.
 
 Validation consists of:
 
 1. recursive secret and supply-chain field rejection;
-2. JSON Schema Draft 2020-12 structure and type validation;
+2. closed JSON Schema Draft 2020-12 structure and type validation for both
+   inventory and host facts;
 3. cross-field rules for origins, paths, ownership, feature gates, addresses,
    and fixed resource floors; and
-4. comparison with synthetic host facts for OS, architecture, kernel, cgroup,
-   Docker, Compose, clock, tools, resources, and storage headroom.
+4. comparison with synthetic host facts for OS, architecture, effective
+   service identity, kernel, cgroup, Docker package provenance, daemon socket
+   authority, Compose, clock, tools, resources, and storage headroom.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state

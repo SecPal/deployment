@@ -22,6 +22,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts/validate-production-contract.py"
 SCHEMA = ROOT / "schemas/production-inventory.schema.json"
+HOST_FACTS_SCHEMA = ROOT / "schemas/production-host-facts.schema.json"
 EXAMPLE = ROOT / "config/production/inventory.example.yaml"
 INVENTORY_FIXTURES = ROOT / "tests/fixtures/production-inventory"
 HOST_FIXTURES = ROOT / "tests/fixtures/production-host"
@@ -96,13 +97,16 @@ def assert_schema_objects_are_closed(value: Any, path: tuple[str, ...] = ()) -> 
 
 
 def main() -> int:
-    for required in (VALIDATOR, SCHEMA, EXAMPLE):
+    for required in (VALIDATOR, SCHEMA, HOST_FACTS_SCHEMA, EXAMPLE):
         if not required.is_file():
             raise AssertionError(f"required D.1 artifact is missing: {required.relative_to(ROOT)}")
 
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(schema)
     closed_object_count = assert_schema_objects_are_closed(schema)
+    host_facts_schema = json.loads(HOST_FACTS_SCHEMA.read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator.check_schema(host_facts_schema)
+    closed_object_count += assert_schema_objects_are_closed(host_facts_schema)
     schema_validator = jsonschema.Draft202012Validator(
         schema, format_checker=jsonschema.FormatChecker()
     )
