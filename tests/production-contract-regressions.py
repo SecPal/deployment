@@ -381,6 +381,128 @@ class ProductionContractRegressionTests(unittest.TestCase):
             lambda: self.validator.validate_host_facts(self.inventory, facts)
         )
 
+    def test_private_addresses_require_explicit_private_use_ranges(self) -> None:
+        for address in ("192.0.2.20", "198.18.0.1", "2001:db8::20"):
+            with self.subTest(address=address):
+                inventory = copy.deepcopy(self.inventory)
+                host = inventory["host"]
+                if not isinstance(host, dict):
+                    raise AssertionError("host inventory fixture must be a mapping")
+                host["private_addresses"] = [address]
+                self.assert_contract_violation(
+                    lambda inventory=inventory: self.validator.validate_inventory(
+                        inventory
+                    )
+                )
+
+        inventory = copy.deepcopy(self.inventory)
+        host = inventory["host"]
+        if not isinstance(host, dict):
+            raise AssertionError("host inventory fixture must be a mapping")
+        host["private_addresses"] = ["fd00::20"]
+        self.validator.validate_inventory(inventory)
+
+    def test_public_address_fact_requires_a_string(self) -> None:
+        for address in (3221225994, b"\xc0\x00\x02\x0a"):
+            with self.subTest(address=address):
+                facts = copy.deepcopy(self.host_facts)
+                network = facts["network"]
+                if not isinstance(network, dict):
+                    raise AssertionError("host network fixture must be a mapping")
+                network["public_address"] = address
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_origins_reject_empty_query_and_fragment_delimiters(self) -> None:
+        for suffix in ("?", "#", "?#"):
+            with self.subTest(suffix=suffix):
+                self.assert_contract_violation(
+                    lambda suffix=suffix: self.validator.validate_origin(
+                        f"https://app.example.invalid{suffix}",
+                        "inventory.origins.frontend",
+                    )
+                )
+
+    def test_origins_reject_other_parser_normalized_forms(self) -> None:
+        for origin in (
+            "\nhttps://app.example.invalid",
+            "https://app.example.invalid\n",
+            "https://app.exam\tple.invalid",
+            "HTTPS://app.example.invalid",
+            "https://app.example.invalid:",
+            "https://app.example.invalid:0443",
+        ):
+            with self.subTest(origin=repr(origin)):
+                self.assert_contract_violation(
+                    lambda origin=origin: self.validator.validate_origin(
+                        origin, "inventory.origins.frontend"
+                    )
+                )
+
+    def test_inventory_integer_fields_reject_integral_floats(self) -> None:
+        cases = (
+            ("service-account-uid", ("service_account", "uid")),
+            ("service-account-gid", ("service_account", "gid")),
+            ("path-uid", ("paths", "configuration", "uid")),
+            ("path-gid", ("paths", "configuration", "gid")),
+            ("decision-issue", ("paths", "runtime_secrets", "decision_issue")),
+            ("resource-floor", ("resources", "logical_cpus")),
+            (
+                "storage-floor",
+                ("resources", "storage", "docker_data", "minimum_free_percent"),
+            ),
+        )
+        for case, path in cases:
+            with self.subTest(case=case):
+                inventory = copy.deepcopy(self.inventory)
+                target = inventory
+                for key in path[:-1]:
+                    child = target[key]
+                    if not isinstance(child, dict):
+                        raise AssertionError(f"inventory path {path!r} must be a mapping")
+                    target = child
+                target[path[-1]] = float(target[path[-1]])
+                self.assert_contract_violation(
+                    lambda inventory=inventory: self.validator.validate_inventory(
+                        inventory
+                    )
+                )
+
+    def test_paths_enforce_filesystem_byte_limits(self) -> None:
+        self.validator.validate_absolute_path(
+            "/srv/" + ("a" * 255), "inventory.paths.configuration.path"
+        )
+        for path in (
+            "/srv/" + ("a" * 256),
+            "/srv/" + ("é" * 128),
+            "/" + "/".join(["a" * 255] * 16),
+        ):
+            with self.subTest(encoded_length=len(path.encode("utf-8"))):
+                self.assert_contract_violation(
+                    lambda path=path: self.validator.validate_absolute_path(
+                        path, "inventory.paths.configuration.path"
+                    )
+                )
+
+    def test_paths_reject_ascii_control_characters(self) -> None:
+        for path in ("/srv/line\nbreak", "/srv/tab\tname", "/srv/delete\x7fname"):
+            with self.subTest(path=repr(path)):
+                self.assert_contract_violation(
+                    lambda path=path: self.validator.validate_absolute_path(
+                        path, "inventory.paths.configuration.path"
+                    )
+                )
+
+    def test_repository_schema_rejects_duplicate_json_keys(self) -> None:
+        schema = self.write_temporary_document(
+            '{"type":"object","type":"array"}\n'
+        )
+        with mock.patch.object(self.validator, "SCHEMA_PATH", schema):
+            self.assert_contract_violation(self.validator.read_schema)
+
 
 if __name__ == "__main__":
     unittest.main()

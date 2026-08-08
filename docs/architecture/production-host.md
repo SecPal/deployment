@@ -194,16 +194,20 @@ reads `/proc`, or inspects the developer machine.
 Inventory records one globally routable public address fact and at least one
 non-loopback private address fact. Only reserved documentation networks are
 accepted in synthetic examples; carrier-grade NAT and other non-global address
-ranges fail admission. Private-address collection order is insignificant, but
-duplicates and mismatches fail closed. The public edge will be the only
-publicly reachable container boundary; product and data services remain on
-private container networks. Firewall mutation, routing, port publication,
-cloud metadata, and public reachability checks are outside D.1.
+ranges fail admission. Private addresses are exactly RFC 1918 IPv4 or IPv6 ULA;
+documentation and benchmarking ranges are not private-use substitutes.
+Address facts are strings and are never coerced from numeric or binary YAML
+values. Private-address collection order is insignificant, but duplicates and
+mismatches fail closed. The public edge will be the only publicly reachable
+container boundary; product and data services remain on private container
+networks. Firewall mutation, routing, port publication, cloud metadata, and
+public reachability checks are outside D.1.
 
 The host has a stable DNS hostname distinct from both application origins.
 Frontend and API use separate DNS-name-only HTTPS origins. Origins cannot
 contain userinfo, a path, query, fragment, IP literal, loopback name, or a
-non-default port.
+non-default port. Empty query, fragment, or port delimiters, ASCII control
+characters, and parser-normalized scheme or port spellings are also rejected.
 
 Time synchronization is mandatory because TLS, artifact attestations, audit
 records, jobs, and backup evidence depend on trustworthy time. Facts must
@@ -237,7 +241,9 @@ The example paths are provider-neutral defaults, not real host values. Every
 inventory path must be absolute, normalized, unique, mutually non-overlapping,
 non-root, outside `/tmp`, and separate from the service-account home. Null
 UID/GID means the named later issue must select and migrate the runtime identity
-before that component can be installed.
+before that component can be installed. Every path is limited to 4095 UTF-8
+bytes in total and 255 UTF-8 bytes per component, matching the supported Linux
+ext4/XFS representation limits. ASCII control characters are forbidden.
 
 | Inventory key                 | Example path                   | Owner and UID:GID                  |   Mode | Class           | Decision owner       |
 | ----------------------------- | ------------------------------ | ---------------------------------- | -----: | --------------- | -------------------- |

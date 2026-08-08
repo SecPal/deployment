@@ -93,6 +93,28 @@ DOCUMENTATION_NETWORKS = (
     ipaddress.ip_network("203.0.113.0/24"),
     ipaddress.ip_network("2001:db8::/32"),
 )
+PRIVATE_USE_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def is_strict_integer(_checker: Any, value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def contains_ascii_control(value: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+
+
+STRICT_TYPE_CHECKER = jsonschema.Draft202012Validator.TYPE_CHECKER.redefine(
+    "integer", is_strict_integer
+)
+StrictDraft202012Validator = jsonschema.validators.extend(
+    jsonschema.Draft202012Validator, type_checker=STRICT_TYPE_CHECKER
+)
 
 CANONICAL_PATHS: dict[str, dict[str, Any]] = {
     "configuration": {
@@ -337,9 +359,20 @@ def read_document(path: Path, label: str) -> dict[str, Any]:
 
 
 def read_schema() -> dict[str, Any]:
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object key")
+            result[key] = value
+        return result
+
     try:
-        loaded = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        loaded = json.loads(
+            SCHEMA_PATH.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (OSError, UnicodeError, ValueError) as exc:
         raise ContractViolation("repository inventory schema could not be read") from exc
     if not isinstance(loaded, dict):
         raise ContractViolation("repository inventory schema root must be an object")
@@ -371,7 +404,7 @@ def validate_schema(inventory: dict[str, Any]) -> None:
         jsonschema.Draft202012Validator.check_schema(schema)
     except jsonschema.SchemaError as exc:
         raise ContractViolation("repository inventory schema is invalid") from exc
-    validator = jsonschema.Draft202012Validator(
+    validator = StrictDraft202012Validator(
         schema, format_checker=jsonschema.FormatChecker()
     )
     errors = sorted(
@@ -386,7 +419,9 @@ def is_documentation_address(address: ipaddress.IPv4Address | ipaddress.IPv6Addr
     return any(address in network for network in DOCUMENTATION_NETWORKS)
 
 
-def parse_address(raw: str, location: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+def parse_address(raw: Any, location: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    if not isinstance(raw, str):
+        raise ContractViolation(f"IP address must be a string at {location}")
     try:
         return ipaddress.ip_address(raw)
     except ValueError as exc:
@@ -423,14 +458,11 @@ def validate_addresses(host: dict[str, Any]) -> None:
     if public in private_addresses:
         raise ContractViolation("public and private host addresses conflict")
     for address in private_addresses:
-        if (
-            address.is_loopback
-            or address.is_link_local
-            or address.is_multicast
-            or address.is_unspecified
-            or not address.is_private
+        if not any(
+            address.version == network.version and address in network
+            for network in PRIVATE_USE_NETWORKS
         ):
-            raise ContractViolation("private address is not a non-loopback private address")
+            raise ContractViolation("private address is not in a supported private-use range")
 
 
 def validate_hostname(hostname: Any, location: str) -> str:
@@ -446,11 +478,17 @@ def validate_hostname(hostname: Any, location: str) -> str:
     return normalized
 
 
-def validate_origin(origin: str, location: str) -> str:
-    if not origin.isascii():
+def validate_origin(origin: Any, location: str) -> str:
+    if not isinstance(origin, str) or not origin.isascii():
         raise ContractViolation(f"origin must be ASCII at {location}")
+    if contains_ascii_control(origin):
+        raise ContractViolation(f"origin must not contain control characters at {location}")
+    if "?" in origin or "#" in origin:
+        raise ContractViolation(
+            f"origin must not contain a query or fragment delimiter at {location}"
+        )
     parsed = urlsplit(origin)
-    if parsed.scheme != "https":
+    if parsed.scheme != "https" or not origin.startswith("https://"):
         raise ContractViolation(f"origin must use HTTPS at {location}")
     if (
         parsed.username is not None
@@ -469,6 +507,9 @@ def validate_origin(origin: str, location: str) -> str:
     hostname = parsed.hostname
     if hostname is None:
         raise ContractViolation(f"origin hostname is missing at {location}")
+    canonical_authority = hostname if port is None else f"{hostname}:443"
+    if parsed.netloc.lower() != canonical_authority.lower():
+        raise ContractViolation(f"origin authority is not canonical at {location}")
     if all(NUMERIC_HOST_LABEL_PATTERN.fullmatch(label) for label in hostname.split(".")):
         raise ContractViolation(f"origin must use a DNS name at {location}")
     try:
@@ -480,7 +521,22 @@ def validate_origin(origin: str, location: str) -> str:
     return hostname.lower()
 
 
-def validate_absolute_path(raw: str, location: str) -> None:
+def validate_absolute_path(raw: Any, location: str) -> None:
+    if not isinstance(raw, str):
+        raise ContractViolation(f"path must be a string at {location}")
+    if contains_ascii_control(raw):
+        raise ContractViolation(f"path must not contain control characters at {location}")
+    try:
+        encoded_path = raw.encode("utf-8")
+        encoded_parts = tuple(part.encode("utf-8") for part in raw.split("/"))
+    except UnicodeEncodeError as exc:
+        raise ContractViolation(f"path must be valid UTF-8 at {location}") from exc
+    if len(encoded_path) > 4095:
+        raise ContractViolation(f"path exceeds the Linux byte limit at {location}")
+    if any(len(part) > 255 for part in encoded_parts):
+        raise ContractViolation(
+            f"path component exceeds the filesystem byte limit at {location}"
+        )
     path = PurePosixPath(raw)
     if not path.is_absolute() or raw == "/":
         raise ContractViolation(f"path must be absolute and non-root at {location}")

@@ -74,23 +74,31 @@ reserved documentation addresses in synthetic examples; multicast and
 deprecated IPv6 site-local ranges are never host addresses. Public and private
 address comparison uses parsed IP identities, so equivalent IPv6 spellings
 match while semantic duplicates fail. DNS hostname comparison is
-case-insensitive. Private-address order is not significant; duplicate or
-mismatched facts fail closed. Clock synchronization is mandatory and cannot be
-disabled. The validator does not call cloud metadata or inspect a machine.
+case-insensitive. Private addresses are limited to RFC 1918 IPv4 or IPv6 ULA;
+documentation, benchmarking, link-local, and other non-global ranges are not
+treated as private-use addresses. Private-address order is not significant;
+duplicate or mismatched facts fail closed. Address facts must use YAML strings;
+numeric or binary representations are not coerced. Clock synchronization is
+mandatory and cannot be disabled. The validator does not call cloud metadata
+or inspect a machine.
 
 ### `service_account`
 
 The name, primary group, numeric UID/GID, absolute home, non-login shell,
 interactive-login state, and Docker-authority state are explicit. UID/GID
-values are strictly bounded and cannot reuse known SecPal runtime IDs. The
-account never carries a credential in inventory.
+values are strict YAML integers, are bounded, and cannot reuse known SecPal
+runtime IDs. Integral floating-point spellings are not coerced for UID/GID,
+path ownership, decision-issue, or resource fields. The account never carries
+a credential in inventory.
 
 ### `origins`
 
 `frontend` and `api` are exact HTTPS origins. The frontend and API origins must
 differ. Each uses a DNS name, default HTTPS port, and no userinfo, path, query,
-fragment, localhost name, loopback address, or IP literal. Origin separation
-preserves the credentialed CORS, Sanctum, cookie, and proxy trust boundary.
+fragment, empty delimiter, control character, localhost name, loopback address,
+or IP literal. The scheme and optional `:443` spelling must be canonical;
+parser-normalized alternatives fail closed. Origin separation preserves the
+credentialed CORS, Sanctum, cookie, and proxy trust boundary.
 
 ### `paths`
 
@@ -100,6 +108,11 @@ that must decide the runtime identity or lifecycle. Paths must be normalized,
 unique, mutually non-overlapping, non-empty, non-root, and outside `/tmp`.
 They must not contain or be contained by the service-account home. Fixed
 metadata cannot be changed by an operator.
+
+Paths use UTF-8 byte limits shared by the supported ext4/XFS host model: at
+most 255 encoded bytes per component and 4095 encoded bytes for the complete
+path. ASCII control characters and character-count-only values that the target
+filesystem cannot safely represent fail admission.
 
 Known API private and public storage uses `10001:10001`; Docker data uses
 `0:0`. Runtime secret, PostgreSQL, edge, ACME, and CrowdSec identities remain

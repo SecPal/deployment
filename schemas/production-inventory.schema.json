@@ -18,6 +18,7 @@
   ],
   "properties": {
     "schema_version": {
+      "type": "integer",
       "const": 1
     },
     "topology": {
@@ -317,7 +318,7 @@
     "absolutePath": {
       "type": "string",
       "minLength": 2,
-      "maxLength": 4096,
+      "maxLength": 4095,
       "pattern": "^/[^\\u0000]+$"
     },
     "ipAddress": {
