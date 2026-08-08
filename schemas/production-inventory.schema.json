@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/production-inventory.schema.json",
+  "title": "SecPal production host inventory",
+  "description": "Version 1 provider-neutral, non-secret production host inputs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "topology",
+    "host",
+    "service_account",
+    "origins",
+    "paths",
+    "resources",
+    "backup",
+    "features"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "topology": {
+      "const": "single-host"
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hostname",
+        "architecture",
+        "public_address",
+        "private_addresses",
+        "require_clock_synchronized"
+      ],
+      "properties": {
+        "hostname": {
+          "type": "string",
+          "format": "hostname",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "architecture": {
+          "enum": ["amd64", "arm64"]
+        },
+        "public_address": {
+          "$ref": "#/$defs/ipAddress"
+        },
+        "private_addresses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ipAddress"
+          }
+        },
+        "require_clock_synchronized": {
+          "const": true
+        }
+      }
+    },
+    "service_account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "group",
+        "uid",
+        "gid",
+        "home",
+        "shell",
+        "interactive_login",
+        "docker_authority"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/accountName"
+        },
+        "group": {
+          "$ref": "#/$defs/accountName"
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
+        },
+        "gid": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
+        },
+        "home": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "shell": {
+          "const": "/usr/sbin/nologin"
+        },
+        "interactive_login": {
+          "const": false
+        },
+        "docker_authority": {
+          "const": false
+        }
+      }
+    },
+    "origins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frontend", "api"],
+      "properties": {
+        "frontend": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "api": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration",
+        "deployment_state",
+        "runtime_secrets",
+        "postgresql_data",
+        "private_application_storage",
+        "public_application_storage",
+        "edge_state",
+        "acme_state",
+        "crowdsec_state",
+        "logs",
+        "backup_staging",
+        "docker_data_root"
+      ],
+      "properties": {
+        "configuration": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "deployment_state": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "runtime_secrets": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "postgresql_data": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "private_application_storage": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "public_application_storage": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "edge_state": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "acme_state": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "crowdsec_state": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "logs": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "backup_staging": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "docker_data_root": {
+          "$ref": "#/$defs/pathContract"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logical_cpus",
+        "memory_bytes",
+        "storage_total_bytes",
+        "total_inodes",
+        "storage"
+      ],
+      "properties": {
+        "logical_cpus": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 1024
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 8589934592
+        },
+        "storage_total_bytes": {
+          "type": "integer",
+          "minimum": 107374182400
+        },
+        "total_inodes": {
+          "type": "integer",
+          "minimum": 1000000
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "docker_data",
+            "postgresql_data",
+            "private_application_storage",
+            "logs",
+            "edge_state",
+            "acme_state",
+            "crowdsec_state",
+            "backup_staging"
+          ],
+          "properties": {
+            "docker_data": {
+              "$ref": "#/$defs/storageRequirement"
+            },
+            "postgresql_data": {
+              "$ref": "#/$defs/storageRequirement"
+            },
+            "private_application_storage": {
+              "$ref": "#/$defs/storageRequirement"
+            },
+            "logs": {
+              "$ref": "#/$defs/storageRequirement"
+            },
+            "edge_state": {
+              "$ref": "#/$defs/storageRequirement"
+            },
+            "acme_state": {
+              "$ref": "#/$defs/storageRequirement"
+            },
+            "crowdsec_state": {
+              "$ref": "#/$defs/storageRequirement"
+            },
+            "backup_staging": {
+              "$ref": "#/$defs/storageRequirement"
+            }
+          }
+        }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_type", "target_identifier", "credential_reference"],
+      "properties": {
+        "target_type": {
+          "enum": ["external-filesystem", "object-storage"]
+        },
+        "target_identifier": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{2,62}$"
+        },
+        "credential_reference": {
+          "type": "string",
+          "pattern": "^external-secret://[a-zA-Z0-9][a-zA-Z0-9._/-]{2,255}$"
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image_verification",
+        "mail_delivery",
+        "opentimestamps",
+        "bitcoin_quorum",
+        "address_data_imports",
+        "android_push",
+        "web_push",
+        "object_storage"
+      ],
+      "properties": {
+        "image_verification": {
+          "const": true
+        },
+        "mail_delivery": {
+          "type": "boolean"
+        },
+        "opentimestamps": {
+          "type": "boolean"
+        },
+        "bitcoin_quorum": {
+          "type": "boolean"
+        },
+        "address_data_imports": {
+          "type": "boolean"
+        },
+        "android_push": {
+          "type": "boolean"
+        },
+        "web_push": {
+          "type": "boolean"
+        },
+        "object_storage": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "accountName": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_-]{0,30}$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/[^\\u0000]+$"
+    },
+    "ipAddress": {
+      "type": "string",
+      "oneOf": [
+        {
+          "format": "ipv4"
+        },
+        {
+          "format": "ipv6"
+        }
+      ]
+    },
+    "pathContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "owner_role",
+        "uid",
+        "gid",
+        "mode",
+        "lifecycle",
+        "decision_issue"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "owner_role": {
+          "enum": [
+            "service-account",
+            "api-runtime",
+            "docker-daemon",
+            "state-contract",
+            "edge-contract",
+            "tls-contract",
+            "crowdsec-contract"
+          ]
+        },
+        "uid": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "gid": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3}$"
+        },
+        "lifecycle": {
+          "enum": ["persistent", "reconstructable"]
+        },
+        "decision_issue": {
+          "type": ["integer", "null"],
+          "minimum": 10,
+          "maximum": 18
+        }
+      }
+    },
+    "storageRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_free_bytes",
+        "minimum_free_percent",
+        "minimum_free_inodes",
+        "minimum_free_inode_percent"
+      ],
+      "properties": {
+        "minimum_free_bytes": {
+          "type": "integer",
+          "minimum": 1073741824
+        },
+        "minimum_free_percent": {
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 100
+        },
+        "minimum_free_inodes": {
+          "type": "integer",
+          "minimum": 20000
+        },
+        "minimum_free_inode_percent": {
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 100
+        }
+      }
+    }
+  }
+}

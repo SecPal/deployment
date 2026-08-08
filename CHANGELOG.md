@@ -5,6 +5,16 @@ SPDX-License-Identifier: CC0-1.0
 
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A provider-neutral production host and inventory contract.
+- A versioned, non-secret production inventory schema and synthetic examples
+  for both supported architectures.
+- Fail-closed inventory and synthetic host-prerequisite validation without
+  host access or production mutation.
+
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 
 ### Added

@@ -1,0 +1,158 @@
+<!--
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: CC0-1.0
+-->
+
+# Production inventory contract
+
+## Purpose
+
+The production inventory records provider-neutral operator inputs for one
+future SecPal reference host. Its canonical schema is
+[`schemas/production-inventory.schema.json`](../../schemas/production-inventory.schema.json),
+and the repository contains only synthetic examples. Inventory is not a
+deployment workflow, source of image trust, secret store, or host-discovery
+mechanism.
+
+## Versioning and migration
+
+Schema version 1 is selected by the exact integer `schema_version: 1`. Unknown
+schema versions fail closed. Consumers do not coerce old values, ignore new
+fields, or silently accept a future version. Any incompatible schema change
+requires a reviewed contract change, positive and negative fixtures, and
+reviewed migration notes that state how an operator moves an inventory between
+versions. D.1 provides no implicit inventory migration.
+
+The schema uses `additionalProperties: false` at every object boundary. A
+field that is not explicitly reviewed is invalid, even when its value would
+otherwise look harmless.
+
+## Non-secret rule
+
+Inventory must not contain secrets, credential material, private keys, tokens,
+passwords, or real customer data. Recursive policy validation rejects
+secret-looking field names, private-key markers, GitHub-token shapes, and
+credential-bearing URLs before schema validation. Error messages contain only
+the field path and invariant; they do not echo the value or whole inventory.
+
+`backup.credential_reference` is an opaque reference beginning with
+`external-secret://`. It identifies material held by a later approved secret
+system; it is not the material. Secret generation, storage, rotation, and
+recovery belong to D.2 (#10).
+
+Actual production inventories must remain outside this public repository. The
+checked-in example uses `example.invalid` origins and RFC documentation
+addresses only.
+
+## Image-identity prohibition
+
+Inventory must not select image identities, registries, repositories, tags,
+digests, child manifests, discovery inputs, fallbacks, or attestation policy.
+Fields such as `api_image`, `frontend_image`, `api_registry`,
+`frontend_registry`, `api_repository`, `frontend_repository`, `api_digest`,
+`frontend_digest`, `image_tag`, and `registry_fallback` are forbidden at every
+nesting level.
+
+Official SecPal artifact identities remain reviewed repository code. The
+inventory cannot weaken anonymous digest pulls, fixed publisher identity,
+attestation verification, or fail-closed ordering.
+
+## Field groups
+
+### `host`
+
+`hostname`, `architecture`, `public_address`, and `private_addresses` are
+asserted facts that later collection must match. Architecture is exactly
+`amd64` or `arm64`. Clock synchronization is mandatory and cannot be disabled.
+The validator does not call cloud metadata or inspect a machine.
+
+### `service_account`
+
+The name, primary group, numeric UID/GID, absolute home, non-login shell,
+interactive-login state, and Docker-authority state are explicit. UID/GID
+values are strictly bounded and cannot reuse known SecPal runtime IDs. The
+account never carries a credential in inventory.
+
+### `origins`
+
+`frontend` and `api` are exact HTTPS origins. The frontend and API origins must
+differ. Each uses a DNS name, default HTTPS port, and no userinfo, path, query,
+fragment, localhost name, loopback address, or IP literal. Origin separation
+preserves the credentialed CORS, Sanctum, cookie, and proxy trust boundary.
+
+### `paths`
+
+Each path object records an absolute path, owner role, numeric identity when
+already known, baseline directory mode, persistence class, and any later issue
+that must decide the runtime identity or lifecycle. Paths must be normalized,
+unique, non-empty, non-root, and outside `/tmp`. Fixed metadata cannot be
+changed by an operator.
+
+Known API private and public storage uses `10001:10001`; Docker data uses
+`0:0`. Runtime secret, PostgreSQL, edge, ACME, and CrowdSec identities remain
+explicitly delegated to their owning Phase D issue rather than guessed.
+
+### `resources`
+
+The inventory declares admission requirements, never lower limits than the
+schema contract. CPU, memory, total storage, and total inode values are
+compared with supplied facts. Each security-relevant storage area has both an
+absolute and percentage reserve for bytes and inodes. Passing the floor is not
+a capacity guarantee; the evidence method is defined in the host contract.
+
+### `backup`
+
+The target type is `external-filesystem` or `object-storage`, with a synthetic
+operator identifier and external credential reference. It contains no host,
+bucket credential, password, key, or backup implementation. The object-storage
+target and feature gate must agree. D.7 (#15) owns backup, encryption,
+retention, and restore proof.
+
+### `features`
+
+Required image verification is always enabled. Mail, OpenTimestamp, Bitcoin
+quorum, address-data imports, Android push, Web Push, and object storage are
+explicit feature gates and are disabled in the example. OpenTimestamp and its
+Bitcoin quorum gate must change together. An enabled feature is invalid until
+its documented dependency and later secret/runtime contract are available.
+
+## Validation
+
+Run the pure validator with an inventory and a supplied fact document:
+
+```bash
+python3 scripts/validate-production-contract.py \
+  --inventory config/production/inventory.example.yaml \
+  --host-facts tests/fixtures/production-host/valid-amd64.yaml
+```
+
+The validator reads only those two files and the repository schema. It does
+not query DNS, the network, Docker, `/proc`, `/sys`, cloud metadata, or a
+remote machine and does not change the filesystem.
+
+Validation consists of:
+
+1. recursive secret and supply-chain field rejection;
+2. JSON Schema Draft 2020-12 structure and type validation;
+3. cross-field rules for origins, paths, ownership, feature gates, addresses,
+   and fixed resource floors; and
+4. comparison with synthetic host facts for OS, architecture, kernel, cgroup,
+   Docker, Compose, clock, tools, resources, and storage headroom.
+
+Missing fields, unknown fields, unsupported versions and topology, relative or
+traversing paths, duplicate state paths, invalid UID/GID or modes, secret
+material, image overrides, loopback values, collapsed origins, contradictory
+features, and mismatched facts all fail closed.
+
+## Examples and fixtures
+
+[`config/production/inventory.example.yaml`](../../config/production/inventory.example.yaml)
+is a non-production `amd64` example. Positive fixtures cover both supported
+architectures under `tests/fixtures/production-inventory/`. Host prerequisites
+are represented only by synthetic YAML under
+`tests/fixtures/production-host/`; negative mutation descriptors exercise
+architecture, disk, clock, kernel, cgroup, OS, Docker, Compose, and rootless
+failures.
+
+These examples do not authorize use of the synthetic usernames, IDs,
+addresses, origins, paths, or backup target on a real system.

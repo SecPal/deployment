@@ -161,8 +161,12 @@ production credentials, or select the future production edge.
 Phase C is complete. API and frontend publication, token-free fail-closed
 digest consumption, pre-execution attestation verification, and hosted
 post-merge integration evidence are operationally verified. This does not
-claim a production deployment or public infrastructure. Phase D has not
-started. Digest provenance, reviewed updates, and rollback are detailed in
+claim a production deployment or public infrastructure. Phase D has begun
+only with the provider-neutral, contract-only
+[`production host`](docs/architecture/production-host.md) and
+[`production inventory`](docs/architecture/production-inventory.md)
+definitions. No production orchestration or infrastructure exists. Digest
+provenance, reviewed updates, and rollback are detailed in
 [`docs/api-image-consumption.md`](docs/api-image-consumption.md) and
 [`docs/frontend-image-consumption.md`](docs/frontend-image-consumption.md).
 

@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+---
+schema_version: 1
+hostname: secpal-host.example.invalid
+architecture: amd64
+os:
+  id: ubuntu
+  version_id: "24.04"
+kernel:
+  release: 6.8.0
+  cgroup_version: 2
+  overlayfs_supported: true
+  apparmor_enabled: true
+  seccomp_enabled: true
+runtime:
+  docker_engine_version: 29.6.2
+  docker_compose_version: 2.40.3
+  rootless: false
+  daemon_running: true
+  data_root: /var/lib/docker
+clock:
+  synchronized: true
+  offset_milliseconds: 25
+network:
+  public_address: 192.0.2.10
+  private_addresses: [10.0.0.10]
+tools:
+  - bash
+  - curl
+  - df
+  - docker
+  - findmnt
+  - getent
+  - gh
+  - id
+  - install
+  - mktemp
+  - python3
+  - realpath
+  - sha256sum
+  - stat
+  - timedatectl
+resources:
+  logical_cpus: 8
+  memory_bytes: 17179869184
+  storage_total_bytes: 268435456000
+  total_inodes: 2000000
+  storage:
+    docker_data: &large-storage
+      path: /var/lib/docker
+      filesystem: ext4
+      local: true
+      d_type: true
+      xfs_ftype: null
+      free_bytes: 68719476736
+      free_percent: 30
+      free_inodes: 400000
+      free_inode_percent: 30
+    postgresql_data:
+      <<: *large-storage
+      path: /srv/secpal/postgresql
+    private_application_storage:
+      <<: *large-storage
+      path: /srv/secpal/private-storage
+      free_bytes: 34359738368
+      free_inodes: 200000
+    logs:
+      <<: *large-storage
+      path: /srv/secpal/logs
+      free_bytes: 17179869184
+      free_inodes: 100000
+    edge_state: &small-storage
+      <<: *large-storage
+      path: /srv/secpal/edge
+      free_bytes: 8589934592
+      free_inodes: 100000
+    acme_state:
+      <<: *small-storage
+      path: /srv/secpal/acme
+      free_bytes: 4294967296
+    crowdsec_state:
+      <<: *small-storage
+      path: /srv/secpal/crowdsec
+    backup_staging:
+      <<: *large-storage
+      path: /srv/secpal/backup-staging
+      free_bytes: 34359738368
+      free_inodes: 100000
