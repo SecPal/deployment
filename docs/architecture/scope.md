@@ -7,8 +7,8 @@ SPDX-License-Identifier: CC0-1.0
 
 This document defines ownership and trust boundaries for the SecPal deployment
 reference. Phase B implements the test-only local integration subset, and
-Phase C now supplies its reviewed API and frontend digests while remaining in
-progress.
+Phase C supplies its reviewed API and frontend digests and is complete. Phase
+D has not started.
 
 ## Repository responsibilities
 

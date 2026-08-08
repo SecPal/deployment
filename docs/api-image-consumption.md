@@ -110,14 +110,13 @@ environment variables, and manual tag changes are never rollback inputs.
 
 ## Scope status
 
-Phase C is in progress. API publication and token-free, fail-closed API digest
-consumption are implemented.
+Phase C is complete. API and frontend publication and token-free, fail-closed
+digest consumption are implemented and operationally verified. Deployment
+merge commit `4fc2796409b7c37a541f515ccf29236f143fc132` passed post-merge Local
+Integration run `31264562902`; the final dual-image evidence is recorded in
+[`frontend-image-consumption.md`](frontend-image-consumption.md).
 
-Frontend publication is complete, and its reviewed digest is consumed through
-the equivalent fail-closed contract documented in
-[`frontend-image-consumption.md`](frontend-image-consumption.md). Phase C.4 is
-ready for review but still requires merge and post-merge evidence.
-
-Phase D and production host automation remain outside this change. No real
-host, cloud resource, DNS, TLS, secret, inventory, persistent production data,
-backup, restore, or managed hosting automation is changed here.
+Phase D has not started. Production host automation remains outside this
+change. No real host, cloud resource, DNS, TLS, secret, inventory, persistent
+production data, backup, restore, or managed hosting automation is changed
+here.

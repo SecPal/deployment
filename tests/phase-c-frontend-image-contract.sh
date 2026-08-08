@@ -15,6 +15,10 @@ readonly FRONTEND_DIGEST='sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1
 readonly FRONTEND_SOURCE_COMMIT='b755ca0d0ee5a85eca5ad5688d457241f070b1b4'
 readonly FRONTEND_WORKFLOW='SecPal/frontend/.github/workflows/publish-container.yml'
 readonly API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
+readonly DEPLOYMENT_MERGE_COMMIT='4fc2796409b7c37a541f515ccf29236f143fc132'
+readonly REPOSITORY_QUALITY_RUN='31264563173'
+readonly LOCAL_INTEGRATION_RUN='31264562902'
+readonly COMPOSE_CONTRACT_JOB='93120504279'
 readonly POSTGRES_IMAGE='postgres:16.10-bookworm@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74'
 readonly VALKEY_IMAGE='valkey/valkey:9.1.1-trixie@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd'
 readonly AMD64_CHILD_DIGEST='sha256:9448c394cb43f4885b269c91d8df15db21d6bc33459800392136b7dcb917dfd1'
@@ -232,18 +236,22 @@ require_text docs/frontend-image-consumption.md "$FRONTEND_DIGEST"
 require_text docs/frontend-image-consumption.md "$FRONTEND_SOURCE_COMMIT"
 require_text docs/frontend-image-consumption.md 'Publisher run: `31247196734` (attempt `1`)'
 require_text docs/frontend-image-consumption.md 'Artifact Attestation ID: `39567451`'
-require_text docs/frontend-image-consumption.md 'Phase C.4 implementation is ready for review.'
-require_text docs/frontend-image-consumption.md 'Phase C remains in progress.'
+require_text docs/frontend-image-consumption.md 'Phase C completion evidence'
+require_text docs/frontend-image-consumption.md 'Phase C is complete.'
+require_text docs/frontend-image-consumption.md "$DEPLOYMENT_MERGE_COMMIT"
+require_text docs/frontend-image-consumption.md "$REPOSITORY_QUALITY_RUN"
+require_text docs/frontend-image-consumption.md "$LOCAL_INTEGRATION_RUN"
+require_text docs/frontend-image-consumption.md "$COMPOSE_CONTRACT_JOB"
 require_text docs/frontend-image-consumption.md 'requires a new reviewed deployment pull request'
 require_text docs/frontend-image-consumption.md 'Rollback also requires a new reviewed pull request'
 require_text README.md "$FRONTEND_IMAGE"
-require_text README.md 'Phase C is in progress.'
-require_text docs/roadmap.md 'Phase C — Immutable image publishing (in progress)'
+require_text README.md 'Phase C is complete.'
+require_text docs/roadmap.md 'Phase C — Immutable image publishing (complete)'
 require_text CHANGELOG.md 'Consume Verified Frontend Image Digest'
 
-forbid_text README.md 'Phase C is complete|complete Phase C'
-forbid_text docs/roadmap.md 'Phase C — Immutable image publishing \(complete\)|complete Phase C'
-forbid_text docs/frontend-image-consumption.md 'Phase C is complete|Phase D is complete|production-ready'
+forbid_text README.md 'Phase D is complete|production deployment is complete'
+forbid_text docs/roadmap.md 'Phase D — Public Compose reference deployment \(complete\)|Phase D is complete'
+forbid_text docs/frontend-image-consumption.md 'Phase D is complete|production-ready'
 
 if [ "$failures" -ne 0 ]; then
   printf 'Phase C.4 frontend image contract failed with %d issue(s).\n' "$failures" >&2

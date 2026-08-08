@@ -110,9 +110,26 @@ The deployment repository performs registry reads only. It does not push an
 image or manifest, generate an attestation, mutate a tag, or request registry
 write permission.
 
-## Scope status
+## Phase C completion evidence
 
-Phase C.4 implementation is ready for review. Phase C remains in progress.
-It cannot be marked complete until this change is merged and the merge commit
-passes the required post-merge local integration evidence. Phase D and all
-production deployment work remain out of scope.
+- Phase C.4 deployment PR: `SecPal/deployment#6`
+- Deployment merge commit:
+  `4fc2796409b7c37a541f515ccf29236f143fc132`
+- Post-merge Repository Quality run: `31264563173`
+- Post-merge Local Integration run: `31264562902`
+- Compose Contract job: `93120504279`
+- Canonical frontend OCI index digest:
+  `sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
+- Canonical API OCI index digest:
+  `sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
+
+Both push-triggered runs completed successfully on `main` for the merge
+commit. The Local Integration run verified both published images before the
+gateway build or SecPal product runtime, then passed secrets initialization,
+PostgreSQL and Valkey health, migrations, the API, workers, scheduler,
+frontend, gateway, Playwright browser contract, and complete project cleanup.
+
+Phase C is complete. This status covers immutable publication, post-merge
+verification, digest-only deployment consumption, pre-execution attestation
+verification, and hosted integration evidence. It does not claim production
+deployment or public infrastructure. Phase D has not started.
