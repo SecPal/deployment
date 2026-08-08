@@ -459,6 +459,36 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_docker_socket_requires_effective_connection_denial(self) -> None:
+        self.validator.validate_host_facts(self.inventory, self.host_facts)
+
+        for value in (None, True):
+            with self.subTest(value=value):
+                facts = copy.deepcopy(self.host_facts)
+                socket = nested_mapping(facts, "runtime", "socket")
+                if value is None:
+                    socket.pop("service_account_can_connect")
+                else:
+                    socket["service_account_can_connect"] = value
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_host_facts(self.inventory, facts)
+                )
+
+    def test_host_facts_require_the_ubuntu_server_installation_profile(self) -> None:
+        self.validator.validate_host_facts(self.inventory, self.host_facts)
+
+        for value in (None, "ubuntu-desktop"):
+            with self.subTest(value=value):
+                facts = copy.deepcopy(self.host_facts)
+                os_facts = nested_mapping(facts, "os")
+                if value is None:
+                    os_facts.pop("installation_profile")
+                else:
+                    os_facts["installation_profile"] = value
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_host_facts(self.inventory, facts)
+                )
+
     def test_managed_paths_cannot_target_system_directories(self) -> None:
         for path_name, unsafe_path in (
             ("configuration", "/etc"),

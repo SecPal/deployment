@@ -34,13 +34,16 @@
     "os": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "version_id"],
+      "required": ["id", "version_id", "installation_profile"],
       "properties": {
         "id": {
           "const": "ubuntu"
         },
         "version_id": {
           "const": "24.04"
+        },
+        "installation_profile": {
+          "const": "ubuntu-server"
         }
       }
     },
@@ -142,7 +145,13 @@
         "socket": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["path", "uid", "gid", "mode"],
+          "required": [
+            "path",
+            "uid",
+            "gid",
+            "mode",
+            "service_account_can_connect"
+          ],
           "properties": {
             "path": {
               "const": "/var/run/docker.sock"
@@ -155,6 +164,9 @@
             },
             "mode": {
               "const": "0660"
+            },
+            "service_account_can_connect": {
+              "const": false
             }
           }
         },

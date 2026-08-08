@@ -34,9 +34,14 @@ a reviewed future inventory version from adding a multi-host topology.
 ## Platform and architecture
 
 The only supported host OS is the 64-bit Ubuntu Server 24.04 LTS `noble`
-release (`ID=ubuntu`, `VERSION_ID=24.04`). Derivatives and later or earlier
-Ubuntu releases fail closed until a reviewed contract update adds them. The
-minimum kernel is Linux 6.8, the base kernel of Ubuntu 24.04 LTS.
+release. Host facts require `ID=ubuntu`, `VERSION_ID=24.04`, and the normalized
+installation-provenance value `installation_profile=ubuntu-server`; the two
+release identifiers alone are insufficient. A future collector must derive the
+profile from a trusted installation or image record rather than infer it from
+the absence of a desktop process. Missing or different provenance, derivatives,
+and later or earlier Ubuntu releases fail closed until a reviewed contract
+update adds them. The minimum kernel is Linux 6.8, the base kernel of Ubuntu
+24.04 LTS.
 
 Both `linux/amd64` and `linux/arm64` are equally supported host architectures.
 The reviewed SecPal API and frontend OCI indexes each publish and smoke-test
@@ -104,8 +109,12 @@ able to control the daemon can normally obtain host-root-equivalent access.
 Facts report the socket UID, GID, mode, and the effective primary and
 supplementary GIDs of the SecPal service account. Admission fails unless the
 socket UID is `0` and the service account has neither primary nor supplementary
-membership in the socket group. Operators use explicit privilege escalation
-for daemon operations. No Docker socket is mounted into a product container.
+membership in the socket group. Facts must additionally report that the account
+cannot connect to the socket, covering named-user, named-group, and mask-based
+POSIX ACL grants that mode and group membership alone cannot reveal. A future
+collector must perform an effective-access check; it must not infer denial only
+from mode bits. Operators use explicit privilege escalation for daemon
+operations. No Docker socket is mounted into a product container.
 
 Rootless Docker Engine is deferred. The current repository has not validated
 its bind-mount ownership, privileged-port edge behavior, networking, data-root

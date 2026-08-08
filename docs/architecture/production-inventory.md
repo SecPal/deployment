@@ -73,11 +73,13 @@ attestation verification, or fail-closed ordering.
 
 `hostname`, `architecture`, `public_address`, and `private_addresses` are
 asserted facts that later collection must match. Architecture is exactly
-`amd64` or `arm64`. Public addresses must be globally routable, except for
-reserved documentation addresses in synthetic examples; multicast and
-deprecated IPv6 site-local ranges are never host addresses. Public and private
-address comparison uses parsed IP identities, so equivalent IPv6 spellings
-match while semantic duplicates fail. DNS hostname comparison is
+`amd64` or `arm64`. The host-fact document separately requires the normalized
+`ubuntu-server` installation profile; Ubuntu release identifiers alone do not
+establish the supported server provenance. Public addresses must be globally
+routable, except for reserved documentation addresses in synthetic examples;
+multicast and deprecated IPv6 site-local ranges are never host addresses.
+Public and private address comparison uses parsed IP identities, so equivalent
+IPv6 spellings match while semantic duplicates fail. DNS hostname comparison is
 case-insensitive; IP literals and legacy numeric IPv4 spellings are not
 hostnames. Private addresses are limited to RFC 1918 IPv4 or IPv6 ULA;
 documentation, benchmarking, link-local, and other non-global ranges are not
@@ -97,7 +99,9 @@ path ownership, decision-issue, or resource fields. The account never carries
 a credential in inventory. `root` is forbidden as either account or group
 name. Supplied host facts report the effective UID, primary GID, and
 supplementary GIDs resolved for the configured identity. They must match the
-inventory and must not grant access to the Docker socket group.
+inventory and must not grant access to the Docker socket group. The socket fact
+also requires an effective connection-denial result so an ACL grant cannot
+bypass the numeric group comparison.
 
 ### `origins`
 

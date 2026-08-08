@@ -7,6 +7,7 @@ architecture: amd64
 os:
   id: ubuntu
   version_id: "24.04"
+  installation_profile: ubuntu-server
 service_account:
   uid: 20000
   gid: 20000
@@ -32,6 +33,7 @@ runtime:
     uid: 0
     gid: 999
     mode: "0660"
+    service_account_can_connect: false
   data_root: /var/lib/docker
 clock:
   synchronized: true
