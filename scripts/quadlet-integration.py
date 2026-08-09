@@ -58,6 +58,7 @@ POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6
 VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 INSTANCE_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{6,22}[a-z0-9]\Z")
+SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 
@@ -224,7 +225,17 @@ def parse_systemd_resource_properties(properties: str) -> dict[str, int]:
     return dict(sorted(observations.items()))
 
 
-def validate_runtime_info(info: Mapping, uid: int, environment: Mapping[str, str]) -> None:
+def parse_du_size(output: str) -> int | None:
+    fields = output.split(None, 1)
+    first = fields[0] if fields else ""
+    if not first.isascii() or not first.isdecimal():
+        return None
+    return int(first)
+
+
+def validate_runtime_info(
+    info: Mapping, uid: int, environment: Mapping[str, str]
+) -> tuple[Path, Path]:
     if uid == 0:
         raise IntegrationError("rootful Podman is forbidden")
     for variable in (
@@ -254,6 +265,11 @@ def validate_runtime_info(info: Mapping, uid: int, environment: Mapping[str, str
         raise IntegrationError("effective rootless network transport must be pasta")
     if nested(info, "host", "security", "seccompEnabled") is not True:
         raise IntegrationError("seccomp must be effective for Podman")
+    graph_root = Path(str(nested(info, "store", "graphRoot")))
+    run_root = Path(str(nested(info, "store", "runRoot")))
+    if not graph_root.is_absolute() or not run_root.is_absolute():
+        raise IntegrationError("Podman storage roots must be absolute")
+    return graph_root, run_root
 
 
 def validate_container_security(
@@ -343,6 +359,11 @@ def validate_oneshot_state(properties: str) -> tuple[str, str]:
 
 def validate_registry_documents(documents: Sequence[Mapping]) -> None:
     for document in documents:
+        credential_helpers = document.get("credential-helpers")
+        if credential_helpers not in (None, [], ["containers-auth.json"]):
+            raise IntegrationError("external registry credential helpers are forbidden")
+        if document.get("additional-layer-store-auth-helper"):
+            raise IntegrationError("additional-layer-store credential helpers are forbidden")
         entries = document.get("registry") or []
         if isinstance(entries, Mapping):
             entries = [entries]
@@ -362,8 +383,22 @@ def validate_registry_documents(documents: Sequence[Mapping]) -> None:
                 raise IntegrationError("registry rewrite, mirror, fallback, or insecure transport is forbidden")
 
 
-def validate_user_container_configuration(home: Path) -> None:
-    root = home / ".config" / "containers"
+def user_container_configuration_root(
+    home: Path, environment: Mapping[str, str]
+) -> Path:
+    configured = environment.get("XDG_CONFIG_HOME")
+    if configured:
+        root = Path(configured)
+        if not root.is_absolute():
+            raise IntegrationError("XDG_CONFIG_HOME must be absolute")
+        return root / "containers"
+    return home / ".config" / "containers"
+
+
+def validate_user_container_configuration(
+    home: Path, environment: Mapping[str, str] | None = None
+) -> None:
+    root = user_container_configuration_root(home, environment or {})
     paths = [
         root / "containers.conf",
         root / "mounts.conf",
@@ -375,10 +410,23 @@ def validate_user_container_configuration(home: Path) -> None:
         raise IntegrationError("user-writable Podman runtime configuration is forbidden")
 
 
-def _inspect_resource(runner: CommandRunner, command: Sequence[str]) -> Mapping | None:
-    result = runner.run(command, check=False, capture_output=True)
-    if result.returncode != 0:
+def _inspect_resource(runner: CommandRunner, kind: str, name: str) -> Mapping | None:
+    exists = runner.run(
+        ["podman", kind, "exists", name],
+        check=False,
+        capture_output=True,
+    )
+    if exists.returncode == 1:
         return None
+    if exists.returncode != 0:
+        raise IntegrationError(f"unable to verify same-named {kind}: {name}")
+    result = runner.run(
+        ["podman", kind, "inspect", name],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise IntegrationError(f"unable to inspect same-named {kind}: {name}")
     try:
         payload = json.loads(result.stdout or "[]")
     except (json.JSONDecodeError, TypeError) as error:
@@ -441,7 +489,7 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
 
     owned_containers: list[str] = []
     for role, name in zip(CONTAINER_ROLES, resources.containers, strict=True):
-        details = _inspect_resource(runner, ["podman", "container", "inspect", name])
+        details = _inspect_resource(runner, "container", name)
         if details is None:
             continue
         unit_name = f"{resources.prefix}-{role}.container"
@@ -453,7 +501,7 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
         owned_containers.append(name)
     owned_networks: list[str] = []
     for name in resources.networks:
-        details = _inspect_resource(runner, ["podman", "network", "inspect", name])
+        details = _inspect_resource(runner, "network", name)
         if details is None:
             continue
         unit_name = f"{name}.network"
@@ -465,7 +513,7 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
         owned_networks.append(name)
     owned_volumes: list[str] = []
     for name in resources.volumes:
-        details = _inspect_resource(runner, ["podman", "volume", "inspect", name])
+        details = _inspect_resource(runner, "volume", name)
         if details is None:
             continue
         unit_name = f"{name}.volume"
@@ -475,7 +523,7 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
         ):
             raise IntegrationError(f"refusing to remove same-named unowned volume: {name}")
         owned_volumes.append(name)
-    gateway = _inspect_resource(runner, ["podman", "image", "inspect", resources.gateway_image])
+    gateway = _inspect_resource(runner, "image", resources.gateway_image)
     gateway_unit = f"{resources.prefix}-gateway.container"
     if (
         gateway is not None
@@ -489,6 +537,15 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
     commands: list[list[str]] = []
     if owned_target or owned_units or owned_containers or owned_networks or owned_volumes:
         commands.append(["systemctl", "--user", "stop", resources.target])
+    resource_services: list[str] = []
+    for name in resources.networks:
+        if name in owned_networks or f"{name}.network" in owned_unit_names:
+            resource_services.append(f"{name}-network.service")
+    for name in resources.volumes:
+        if name in owned_volumes or f"{name}.volume" in owned_unit_names:
+            resource_services.append(f"{name}-volume.service")
+    if resource_services:
+        commands.append(["systemctl", "--user", "stop", *resource_services])
     commands.extend(["podman", "rm", "--force", name] for name in reversed(owned_containers))
     commands.extend(["podman", "network", "rm", name] for name in owned_networks)
     commands.extend(["podman", "volume", "rm", name] for name in owned_volumes)
@@ -500,13 +557,7 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
             ["sudo", "-n", "rm", "-f", "--", os.fspath(resources.systemd_target_file)]
         )
     commands.append(["systemctl", "--user", "daemon-reload"])
-    generated_services = [f"{resources.prefix}-{role}.service" for role in CONTAINER_ROLES]
-    generated_services.extend(
-        f"{resources.prefix}-{name}-network.service" for name in NETWORK_NAMES
-    )
-    generated_services.extend(
-        f"{resources.prefix}-{name}-volume.service" for name in VOLUME_NAMES
-    )
+    generated_services = generated_service_names(resources)
     commands.append(
         ["systemctl", "--user", "reset-failed", resources.target, *generated_services]
     )
@@ -604,6 +655,8 @@ class IntegrationLifecycle:
         self.cleanup_active = False
         self.signal_number: int | None = None
         self.runtime_admitted = False
+        self.graph_root: Path | None = None
+        self.run_root: Path | None = None
         self.apparmor_available = False
         self.migration_invocation: tuple[str, str] | None = None
         self.inspected_oneshots: set[str] = set()
@@ -642,6 +695,7 @@ class IntegrationLifecycle:
         required = (
             "catatonit",
             "curl",
+            "du",
             "gh",
             "node",
             "npm",
@@ -670,7 +724,7 @@ class IntegrationLifecycle:
         self.command(["sudo", "-n", "true"], capture=True)
 
         info = json.loads(self.captured(["podman", "info", "--format", "json"]))
-        validate_runtime_info(info, self.uid, os.environ)
+        self.graph_root, self.run_root = validate_runtime_info(info, self.uid, os.environ)
         self.apparmor_available = bool(nested(info, "host", "security", "apparmorEnabled"))
         self._validate_disabled_user_unit("podman.socket")
         self._validate_disabled_user_unit("podman-auto-update.timer")
@@ -680,7 +734,7 @@ class IntegrationLifecycle:
         connections = json.loads(connections_text or "[]")
         if any(str(item.get("URI", "")).startswith(("ssh://", "tcp://")) for item in connections):
             raise IntegrationError("remote Podman connections are forbidden")
-        validate_user_container_configuration(Path.home())
+        validate_user_container_configuration(Path.home(), os.environ)
         self._validate_registry_files()
         policy = Path("/etc/environment.d/90-secpal-quadlet.conf")
         expected_policy = f"QUADLET_UNIT_DIRS={self.active_root}\n"
@@ -706,9 +760,10 @@ class IntegrationLifecycle:
             raise IntegrationError("stale integration resources could not be removed: " + "; ".join(stale))
 
     def _validate_registry_files(self) -> None:
+        user_root = user_container_configuration_root(Path.home(), os.environ)
         user_paths = [
-            Path.home() / ".config" / "containers" / "registries.conf",
-            *(Path.home() / ".config" / "containers" / "registries.conf.d").glob("*.conf"),
+            user_root / "registries.conf",
+            *(user_root / "registries.conf.d").glob("*.conf"),
         ]
         if any(path.exists() or path.is_symlink() for path in user_paths):
             raise IntegrationError("user-writable registry configuration is forbidden")
@@ -738,20 +793,43 @@ class IntegrationLifecycle:
 
     def snapshot_unrelated_resources(self) -> None:
         self.preexisting_resources = {
-            "containers": set(self._podman_names(["podman", "ps", "--all", "--format", "{{.Names}}"]))
-            - set(self.resources.containers),
-            "networks": set(self._podman_names(["podman", "network", "ls", "--format", "{{.Name}}"]))
-            - set(self.resources.networks),
-            "volumes": set(self._podman_names(["podman", "volume", "ls", "--format", "{{.Name}}"]))
-            - set(self.resources.volumes),
+            "containers": {
+                name
+                for name in self._podman_names(
+                    ["podman", "ps", "--all", "--format", "{{.Names}}"]
+                )
+                if not is_integration_resource_name("container", name)
+            },
+            "networks": {
+                name
+                for name in self._podman_names(
+                    ["podman", "network", "ls", "--format", "{{.Name}}"]
+                )
+                if not is_integration_resource_name("network", name)
+            },
+            "volumes": {
+                name
+                for name in self._podman_names(
+                    ["podman", "volume", "ls", "--format", "{{.Name}}"]
+                )
+                if not is_integration_resource_name("volume", name)
+            },
         }
 
     def _podman_names(self, command: Sequence[str]) -> list[str]:
         output = self.captured(command)
         return [line for line in output.splitlines() if line]
 
-    def anonymous_environment(self, auth_file: Path | None = None) -> dict[str, str]:
+    def anonymous_environment(
+        self,
+        auth_file: Path | None = None,
+        *,
+        credential_root: Path | None = None,
+    ) -> dict[str, str]:
         environment = dict(os.environ)
+        storage_data_home = environment.get("XDG_DATA_HOME") or os.fspath(
+            Path(environment.get("HOME", os.fspath(Path.home()))) / ".local" / "share"
+        )
         for name in (
             "CONTAINER_HOST",
             "CONTAINER_CONNECTION",
@@ -772,6 +850,19 @@ class IntegrationLifecycle:
         ):
             environment.pop(name, None)
         if auth_file is not None:
+            if credential_root is None:
+                raise IntegrationError("anonymous registry isolation root is missing")
+            isolated = {
+                "HOME": credential_root / "home",
+                "XDG_CONFIG_HOME": credential_root / "xdg-config",
+                "DOCKER_CONFIG": credential_root / "docker-config",
+            }
+            for path in (*isolated.values(), credential_root / "certs"):
+                path.mkdir(mode=0o700)
+            environment.update(
+                {name: os.fspath(path) for name, path in isolated.items()}
+            )
+            environment["XDG_DATA_HOME"] = storage_data_home
             environment["REGISTRY_AUTH_FILE"] = os.fspath(auth_file)
         return environment
 
@@ -894,6 +985,8 @@ class IntegrationLifecycle:
         print(f"Verified and staged {label} image: {image}")
 
     def anonymous_pull(self, label: str, image: str) -> None:
+        if self.graph_root is None or self.run_root is None:
+            raise IntegrationError("admitted rootless storage paths are missing")
         auth_directory = Path(tempfile.mkdtemp(prefix=f"anon-{label}.", dir=self.fixture_root))
         auth_directory.chmod(0o700)
         auth_file = auth_directory / "auth.json"
@@ -901,8 +994,23 @@ class IntegrationLifecycle:
         auth_file.chmod(0o600)
         try:
             self.command(
-                ["podman", "pull", "--authfile", os.fspath(auth_file), image],
-                environment=self.anonymous_environment(auth_file),
+                [
+                    "podman",
+                    "--root",
+                    os.fspath(self.graph_root),
+                    "--runroot",
+                    os.fspath(self.run_root),
+                    "pull",
+                    "--authfile",
+                    os.fspath(auth_file),
+                    "--cert-dir",
+                    os.fspath(auth_directory / "certs"),
+                    image,
+                ],
+                environment=self.anonymous_environment(
+                    auth_file,
+                    credential_root=auth_directory,
+                ),
             )
         finally:
             shutil.rmtree(auth_directory)
@@ -1664,8 +1772,9 @@ class IntegrationLifecycle:
             except json.JSONDecodeError:
                 observations["podman_storage"] = "unavailable"
         observations["fixture_bytes"] = directory_size(self.fixture_root)
-        volume_sizes: dict[str, int] = {}
+        volume_sizes: dict[str, int | str] = {}
         for name in self.resources.volumes:
+            label = name.removeprefix(f"{self.resources.prefix}-")
             result = self.command(
                 ["podman", "volume", "inspect", name, "--format", "{{.Mountpoint}}"],
                 capture=True,
@@ -1673,9 +1782,25 @@ class IntegrationLifecycle:
             )
             mountpoint = Path((result.stdout or "").strip())
             if result.returncode == 0 and mountpoint.is_absolute() and mountpoint.is_dir():
-                volume_sizes[name.removeprefix(f"{self.resources.prefix}-")] = directory_size(
-                    mountpoint
+                size = self.command(
+                    [
+                        "podman",
+                        "unshare",
+                        "du",
+                        "--summarize",
+                        "--bytes",
+                        "--",
+                        os.fspath(mountpoint),
+                    ],
+                    capture=True,
+                    check=False,
                 )
+                parsed = parse_du_size(size.stdout or "") if size.returncode == 0 else None
+                volume_sizes[label] = (
+                    parsed if parsed is not None else "unavailable"
+                )
+            else:
+                volume_sizes[label] = "unavailable"
         observations["volume_bytes"] = volume_sizes
         image_sizes = {}
         for label, image in (("api", API_IMAGE), ("frontend", FRONTEND_IMAGE), ("postgres", POSTGRES_IMAGE), ("valkey", VALKEY_IMAGE)):
@@ -1719,16 +1844,49 @@ class IntegrationLifecycle:
             result = self.command(["podman", "container", "exists", name], check=False)
             if result.returncode == 0:
                 errors.append(f"container remained: {name}")
+            elif result.returncode != 1:
+                errors.append(f"unable to verify container absence: {name}")
         for kind, names in (("network", self.resources.networks), ("volume", self.resources.volumes)):
             for name in names:
                 result = self.command(["podman", kind, "exists", name], check=False)
                 if result.returncode == 0:
                     errors.append(f"{kind} remained: {name}")
+                elif result.returncode != 1:
+                    errors.append(f"unable to verify {kind} absence: {name}")
+        image = self.command(
+            ["podman", "image", "exists", self.resources.gateway_image],
+            check=False,
+        )
+        if image.returncode == 0:
+            errors.append(f"gateway image remained: {self.resources.gateway_image}")
+        elif image.returncode != 1:
+            errors.append(
+                f"unable to verify gateway image absence: {self.resources.gateway_image}"
+            )
         for path in self.resources.unit_files:
             if path.exists() or path.is_symlink():
                 errors.append(f"active unit remained: {path.name}")
         if self.resources.systemd_target_file.exists() or self.resources.systemd_target_file.is_symlink():
             errors.append(f"active systemd target remained: {self.resources.target}")
+        target = self.command(
+            ["systemctl", "--user", "is-active", self.resources.target],
+            capture=True,
+            check=False,
+        )
+        if target.returncode == 0:
+            errors.append(f"target remained active: {self.resources.target}")
+        elif target.returncode not in {3, 4}:
+            errors.append(f"unable to verify target state: {self.resources.target}")
+        for service in generated_service_names(self.resources):
+            result = self.command(
+                ["systemctl", "--user", "is-active", service],
+                capture=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                errors.append(f"generated service remained active: {service}")
+            elif result.returncode not in {3, 4}:
+                errors.append(f"unable to verify generated service state: {service}")
         return errors
 
     def _verify_unrelated_resources(self, errors: list[str]) -> None:
@@ -1764,10 +1922,45 @@ def validate_active_root(path: Path) -> None:
 
 def directory_size(path: Path) -> int:
     total = 0
-    for entry in path.rglob("*"):
-        if entry.is_file() and not entry.is_symlink():
-            total += entry.stat().st_size
+    def raise_walk_error(error: OSError) -> None:
+        raise error
+
+    for root, directories, files in os.walk(path, topdown=True, onerror=raise_walk_error):
+        root_path = Path(root)
+        directories[:] = [
+            name for name in directories if not (root_path / name).is_symlink()
+        ]
+        for name in files:
+            entry = root_path / name
+            metadata = entry.lstat()
+            if stat.S_ISREG(metadata.st_mode):
+                total += metadata.st_size
     return total
+
+
+def is_integration_resource_name(kind: str, name: str) -> bool:
+    suffixes = {
+        "container": CONTAINER_ROLES,
+        "network": NETWORK_NAMES,
+        "volume": VOLUME_NAMES,
+    }.get(kind)
+    if suffixes is None or not name.startswith("secpal-int-"):
+        return False
+    for suffix in suffixes:
+        marker = f"-{suffix}"
+        if not name.endswith(marker):
+            continue
+        instance = name[len("secpal-int-") : -len(marker)]
+        if INSTANCE_PATTERN.fullmatch(instance):
+            return True
+    return False
+
+
+def generated_service_names(resources: Resources) -> list[str]:
+    services = [f"{resources.prefix}-{role}.service" for role in CONTAINER_ROLES]
+    services.extend(f"{resources.prefix}-{name}-network.service" for name in NETWORK_NAMES)
+    services.extend(f"{resources.prefix}-{name}-volume.service" for name in VOLUME_NAMES)
+    return services
 
 
 def allocate_port() -> int:
@@ -1806,8 +1999,15 @@ def main() -> int:
         created_fixture = True
     else:
         fixture_root = arguments.fixture_root
-        if not fixture_root.is_absolute() or fixture_root.exists():
-            print("ERROR: fixture root must be a new absolute path.", file=sys.stderr)
+        if (
+            not SAFE_PATH_PATTERN.fullmatch(os.fspath(fixture_root))
+            or not fixture_root.is_absolute()
+            or fixture_root.exists()
+        ):
+            print(
+                "ERROR: fixture root must be a new safe ASCII path without whitespace or Quadlet delimiters.",
+                file=sys.stderr,
+            )
             return 1
         fixture_root.mkdir(mode=0o700, parents=False)
         created_fixture = True

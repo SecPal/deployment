@@ -77,10 +77,12 @@ The active runner is fail closed in this order:
 9. start the native systemd user target.
 
 The product units specify canonical digest references and `Pull=never`.
-Verification and pulls use empty, temporary authentication files while all
-GitHub, Docker, Podman-remote, and registry authentication environment inputs
-are removed. The runner never logs in, depends on GHCR credentials, or falls
-back to a tag or alternate registry.
+Verification and pulls use an empty authentication file plus isolated temporary
+home, XDG configuration, Docker configuration, and certificate directories.
+The admitted rootless storage location is preserved, but caller credential
+files and external registry credential helpers cannot be consulted. The runner
+never logs in, depends on GHCR credentials, or falls back to a tag or alternate
+registry.
 
 ## Lifecycle evidence and cleanup
 
@@ -97,24 +99,29 @@ the integration target active. The profiles are evidence fixtures only; they
 cannot accept arbitrary commands or Quadlet text.
 
 Success, any failed phase, and handled `SIGHUP`, `SIGINT`, or `SIGTERM` all run
-the same exact cleanup. Cleanup stops only the run target, removes only its ten
-named containers, two named networks, three named volumes, generated unit
-files, native target, and locally built gateway image, then verifies the
-resources are absent. It never prunes images, volumes, networks, or unrelated
-containers. Pre-existing unrelated resource names are snapshotted and must
-still exist afterward. The published SecPal images are not cleanup artifacts.
+the same exact cleanup. Cleanup stops the run target and its generated
+run-scoped services, removes only its ten named containers, two named networks,
+three named volumes, generated unit files, native target, and locally built
+gateway image, then verifies the resources and generated service states are
+absent. It never prunes images, volumes, networks, or unrelated containers.
+Pre-existing unrelated resource names outside the reserved integration
+namespace are snapshotted and must still exist afterward. The published SecPal
+images are not cleanup artifacts.
 
 The runner emits bounded non-secret container statistics, systemd memory
-current/peak and CPU observations, unpacked image sizes, exact disposable
-volume sizes, and fixture disk use as evidence. Those observations do not
-change the D.1 production resource floors.
+current/peak and CPU observations, unpacked image sizes, disposable volume
+sizes collected inside the rootless user namespace, and fixture disk use as
+evidence. An unavailable volume observation is reported explicitly rather than
+as a false zero. Those observations do not change the D.1 production resource
+floors.
 
 ## Running the integration
 
 The runtime requires a non-root user, Podman `>=5.4.2,<6`, `crun`, `catatonit`,
 Netavark, Aardvark, `pasta`, subordinate-ID helpers, an active systemd user
 manager, and the D.1 root-owned Quadlet search-path policy. GitHub CLI 2.97.0,
-Node.js, npm, Playwright Chromium, Python 3, and `curl` are also required.
+Node.js, npm, Playwright Chromium, Python 3, `curl`, and GNU `du` are also
+required.
 
 The administrator-owned policy must expose only the current user's root-owned
 Quadlet directory:
@@ -138,7 +145,9 @@ done
 ```
 
 For parallel scheduling, give every run a distinct identifier, port, and new
-private fixture path:
+private fixture path. Because the fixture path is embedded in Quadlet mount
+definitions, it must be an absolute canonical ASCII path containing only
+letters, digits, `/`, `.`, `_`, `@`, `+`, and `-`:
 
 ```bash
 python3 scripts/quadlet-integration.py \

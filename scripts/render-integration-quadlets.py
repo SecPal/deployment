@@ -22,6 +22,7 @@ POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6
 VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 
 INSTANCE_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{6,22}[a-z0-9]\Z")
+SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 FAILURE_CASES = ("migration", "dependency", "health")
 
 
@@ -268,13 +269,16 @@ def build_units(
         network_lines = [f"NetworkName={prefix}-{name}", *labels]
         if internal:
             network_lines.append("Internal=true")
-        units[f"{prefix}-{name}.network"] = section("Network", network_lines)
+        units[f"{prefix}-{name}.network"] = unit_description(
+            f"SecPal integration {name} network ({instance})",
+            part_of=f"{prefix}.target",
+        ) + section("Network", network_lines)
 
     for name in ("secrets", "private-storage", "postgres"):
-        units[f"{prefix}-{name}.volume"] = section(
-            "Volume",
-            [f"VolumeName={prefix}-{name}", *labels],
-        )
+        units[f"{prefix}-{name}.volume"] = unit_description(
+            f"SecPal integration {name} volume ({instance})",
+            part_of=f"{prefix}.target",
+        ) + section("Volume", [f"VolumeName={prefix}-{name}", *labels])
 
     secret_dependencies: list[str] = []
     secret_lines = common_container(instance, "secrets-init", API_IMAGE, 0, 0)
@@ -504,8 +508,10 @@ def validate_port(value: str) -> int:
 
 
 def validate_fixture_root(value: str) -> Path:
-    if any(character in value for character in "\n\r\0"):
-        raise ContractError("fixture root contains a forbidden control character")
+    if not SAFE_PATH_PATTERN.fullmatch(value):
+        raise ContractError(
+            "fixture root must use a safe ASCII path without whitespace or Quadlet delimiters"
+        )
     path = Path(value)
     if not path.is_absolute() or not path.is_dir() or path.is_symlink():
         raise ContractError("fixture root must be an existing canonical absolute directory")

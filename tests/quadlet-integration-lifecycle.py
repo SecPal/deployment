@@ -192,6 +192,27 @@ class CollidingResourceRunner:
         return subprocess.CompletedProcess(argv, returncode, stdout, "")
 
 
+class ResourceStateRunner:
+    def __init__(self, states: dict[tuple[str, ...], int]):
+        self.states = states
+        self.commands: list[tuple[str, ...]] = []
+
+    def run(self, command, **_kwargs):
+        argv = tuple(command)
+        self.commands.append(argv)
+        default = 3 if argv[:3] == ("systemctl", "--user", "is-active") else 1
+        return subprocess.CompletedProcess(argv, self.states.get(argv, default), "", "")
+
+
+class ResourceNamesRunner:
+    def __init__(self, names: dict[tuple[str, ...], str]):
+        self.names = names
+
+    def run(self, command, **_kwargs):
+        argv = tuple(command)
+        return subprocess.CompletedProcess(argv, 0, self.names.get(argv, ""), "")
+
+
 class QuadletLifecycleContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -211,10 +232,17 @@ class QuadletLifecycleContract(unittest.TestCase):
                     "seccompEnabled": True,
                 },
             },
+            "store": {
+                "graphRoot": "/srv/podman-storage",
+                "runRoot": "/run/user/1000/containers",
+            },
         }
 
     def test_runtime_admission_accepts_only_the_d1_runtime(self) -> None:
-        self.module.validate_runtime_info(self.valid_info(), uid=1000, environment={})
+        self.assertEqual(
+            self.module.validate_runtime_info(self.valid_info(), uid=1000, environment={}),
+            (Path("/srv/podman-storage"), Path("/run/user/1000/containers")),
+        )
         mutations = {
             "rootful": ("host.security.rootless", False),
             "remote": ("host.serviceIsRemote", True),
@@ -266,6 +294,87 @@ class QuadletLifecycleContract(unittest.TestCase):
         ):
             with self.subTest(entry=entry), self.assertRaises(self.module.IntegrationError):
                 self.module.validate_registry_documents([{"registry": [entry]}])
+
+        for document in (
+            {"credential-helpers": ["secretservice"]},
+            {"credential-helpers": ["containers-auth.json", "pass"]},
+            {"additional-layer-store-auth-helper": "/usr/local/bin/helper"},
+        ):
+            with self.subTest(document=document), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.validate_registry_documents([document])
+
+    def test_anonymous_pull_environment_isolates_all_fallback_authentication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            auth_root = fixture / "auth-root"
+            auth_root.mkdir(mode=0o700)
+            auth_file = auth_root / "auth.json"
+            auth_file.write_text("{}\n", encoding="utf-8")
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+            inherited = {
+                "HOME": "/home/caller",
+                "XDG_CONFIG_HOME": "/home/caller/config",
+                "XDG_DATA_HOME": "/srv/podman-data",
+                "DOCKER_CONFIG": "/home/caller/docker",
+                "REGISTRY_AUTH_FILE": "/home/caller/auth.json",
+            }
+            with mock.patch.dict(self.module.os.environ, inherited, clear=True):
+                environment = lifecycle.anonymous_environment(
+                    auth_file,
+                    credential_root=auth_root,
+                )
+            self.assertEqual(environment["REGISTRY_AUTH_FILE"], os.fspath(auth_file))
+            self.assertEqual(environment["HOME"], os.fspath(auth_root / "home"))
+            self.assertEqual(
+                environment["XDG_CONFIG_HOME"], os.fspath(auth_root / "xdg-config")
+            )
+            self.assertEqual(
+                environment["DOCKER_CONFIG"], os.fspath(auth_root / "docker-config")
+            )
+            self.assertEqual(environment["XDG_DATA_HOME"], "/srv/podman-data")
+            for name in ("home", "xdg-config", "docker-config", "certs"):
+                path = auth_root / name
+                self.assertTrue(path.is_dir())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+
+    def test_anonymous_pull_pins_the_admitted_rootless_storage_and_empty_certificates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            runner = FakeRunner()
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=runner,
+            )
+            lifecycle.graph_root = Path("/srv/podman-storage")
+            lifecycle.run_root = Path("/run/user/1000/containers")
+            lifecycle.anonymous_pull("api", "ghcr.io/secpal/api@sha256:abc")
+            pull = next(command for command in runner.commands if "pull" in command)
+            self.assertEqual(
+                pull[:6],
+                (
+                    "podman",
+                    "--root",
+                    "/srv/podman-storage",
+                    "--runroot",
+                    "/run/user/1000/containers",
+                    "pull",
+                ),
+            )
+            self.assertIn("--authfile", pull)
+            self.assertIn("--cert-dir", pull)
 
     def test_effective_container_security_rejects_expansion(self) -> None:
         valid = {
@@ -416,6 +525,18 @@ class QuadletLifecycleContract(unittest.TestCase):
                         self.module.validate_user_container_configuration(home)
                     path.unlink()
 
+            alternate = home / "alternate-config"
+            alternate_containers = alternate / "containers"
+            alternate_containers.mkdir(parents=True)
+            (alternate_containers / "containers.conf").write_text(
+                "unsafe\n", encoding="utf-8"
+            )
+            with self.assertRaises(self.module.IntegrationError):
+                self.module.validate_user_container_configuration(
+                    home,
+                    {"XDG_CONFIG_HOME": os.fspath(alternate)},
+                )
+
     def test_oneshot_state_requires_one_successful_retained_systemd_invocation(self) -> None:
         valid = "\n".join(
             (
@@ -527,6 +648,20 @@ class QuadletLifecycleContract(unittest.TestCase):
             self.module.cleanup_resources(runner, resources)
             flattened = "\n".join(" ".join(command) for command in runner.commands)
             self.assertIn("systemctl --user stop secpal-int-contract01.target", flattened)
+            resource_services = (
+                "secpal-int-contract01-application-network.service",
+                "secpal-int-contract01-edge-network.service",
+                "secpal-int-contract01-secrets-volume.service",
+                "secpal-int-contract01-private-storage-volume.service",
+                "secpal-int-contract01-postgres-volume.service",
+            )
+            self.assertTrue(
+                any(
+                    command[:3] == ("systemctl", "--user", "stop")
+                    and set(command[3:]) == set(resource_services)
+                    for command in runner.commands
+                )
+            )
             for role in self.module.CONTAINER_ROLES:
                 self.assertIn(f"secpal-int-contract01-{role}", flattened)
             for name in ("application", "edge"):
@@ -562,6 +697,27 @@ class QuadletLifecycleContract(unittest.TestCase):
             self.assertFalse(
                 any(command[:3] == ("systemctl", "--user", "stop") for command in runner.commands)
             )
+
+    def test_cleanup_refuses_to_treat_runtime_query_errors_as_absence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            resources = self.module.Resources.for_instance(
+                "contract01", uid=1000, active_root=Path(directory)
+            )
+            runner = ResourceStateRunner(
+                {
+                    (
+                        "podman",
+                        "container",
+                        "exists",
+                        "secpal-int-contract01-secrets-init",
+                    ): 125
+                }
+            )
+            with self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "unable to verify same-named container",
+            ):
+                self.module.cleanup_resources(runner, resources)
 
     def test_cleanup_recovers_unlabelled_resource_with_trusted_active_unit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -604,6 +760,81 @@ class QuadletLifecycleContract(unittest.TestCase):
         self.assertTrue(set(first.unit_files).isdisjoint(second.unit_files))
         self.assertNotEqual(first.target, second.target)
 
+    def test_parallel_snapshots_exclude_every_owned_integration_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="parallel02",
+                port=18444,
+                fixture_root=Path(directory),
+                output=Path(directory) / "quadlets",
+                runner=ResourceNamesRunner(
+                    {
+                        ("podman", "ps", "--all", "--format", "{{.Names}}"): (
+                            "secpal-int-parallel01-api\nunrelated-container\n"
+                        ),
+                        ("podman", "network", "ls", "--format", "{{.Name}}"): (
+                            "secpal-int-parallel01-edge\nunrelated-network\n"
+                        ),
+                        ("podman", "volume", "ls", "--format", "{{.Name}}"): (
+                            "secpal-int-parallel01-postgres\nunrelated-volume\n"
+                        ),
+                    }
+                ),
+            )
+            lifecycle.snapshot_unrelated_resources()
+            self.assertEqual(
+                lifecycle.preexisting_resources,
+                {
+                    "containers": {"unrelated-container"},
+                    "networks": {"unrelated-network"},
+                    "volumes": {"unrelated-volume"},
+                },
+            )
+
+    def test_cleanup_verifies_gateway_image_and_runtime_query_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=Path(directory),
+                output=Path(directory) / "quadlets",
+                runner=ResourceStateRunner(
+                    {
+                        (
+                            "podman",
+                            "image",
+                            "exists",
+                            "localhost/secpal-integration-gateway-contract01:2.10.2",
+                        ): 0,
+                        (
+                            "podman",
+                            "container",
+                            "exists",
+                            "secpal-int-contract01-api",
+                        ): 125,
+                        (
+                            "systemctl",
+                            "--user",
+                            "is-active",
+                            "secpal-int-contract01-application-network.service",
+                        ): 0,
+                        (
+                            "systemctl",
+                            "--user",
+                            "is-active",
+                            "secpal-int-contract01.target",
+                        ): 0,
+                    }
+                ),
+            )
+            errors = lifecycle._owned_resource_errors()
+            self.assertIn("gateway image remained", "\n".join(errors))
+            self.assertIn("unable to verify container", "\n".join(errors))
+            self.assertIn("generated service remained", "\n".join(errors))
+            self.assertIn("target remained active", "\n".join(errors))
+
     def test_active_runtime_uses_the_reviewed_phase_b_probe_namespace(self) -> None:
         self.assertEqual(
             self.module.runtime_probe_contract("contract01"),
@@ -639,6 +870,8 @@ class QuadletLifecycleContract(unittest.TestCase):
             ),
             {"CPUUsageNSec": 0},
         )
+        self.assertEqual(self.module.parse_du_size("12345\t/path/to/volume\n"), 12345)
+        self.assertIsNone(self.module.parse_du_size("permission denied\n"))
 
     def test_effective_network_contract_includes_both_one_shots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -696,6 +929,24 @@ class QuadletLifecycleContract(unittest.TestCase):
                 capture_output=True,
             )
             self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(fixture.exists())
+
+    def test_unsafe_fixture_path_is_rejected_before_runtime_admission(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "new fixture"
+            result = subprocess.run(
+                [
+                    "python3",
+                    os.fspath(HARNESS),
+                    "--fixture-root",
+                    os.fspath(fixture),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("safe ASCII path", result.stderr)
             self.assertFalse(fixture.exists())
 
 

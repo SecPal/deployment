@@ -121,6 +121,7 @@ class QuadletContract(unittest.TestCase):
 
     def test_complete_native_unit_set_and_security_contract(self) -> None:
         self.assertIn('"catatonit",', HARNESS.read_text(encoding="utf-8"))
+        self.assertIn('"du",', HARNESS.read_text(encoding="utf-8"))
         self.assertIn('"--force-rm=true",', HARNESS.read_text(encoding="utf-8"))
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("podman crun catatonit netavark", workflow)
@@ -167,6 +168,11 @@ class QuadletContract(unittest.TestCase):
                 self.assertIn("ReadOnly=true", text)
                 self.assertNotIn("Privileged=true", text)
                 self.assertIn("Pull=never", text)
+
+        for name, text in units.items():
+            if name.endswith((".network", ".volume")):
+                with self.subTest(name=name):
+                    self.assertIn(f"PartOf=secpal-int-{INSTANCE}.target", text)
 
         for role in PRODUCT_ROLES:
             text = units[f"secpal-int-{INSTANCE}-{role}.container"]
@@ -335,6 +341,30 @@ class QuadletContract(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         result = self.run_renderer("--failure-case", "arbitrary")
         self.assertNotEqual(result.returncode, 0)
+
+        unsafe_root = self.root / "fixture with spaces"
+        unsafe_root.mkdir(mode=0o700)
+        unsafe_output = unsafe_root / "rendered"
+        result = subprocess.run(
+            [
+                "python3",
+                os.fspath(RENDERER),
+                "render",
+                "--instance",
+                INSTANCE,
+                "--port",
+                PORT,
+                "--fixture-root",
+                os.fspath(unsafe_root),
+                "--output",
+                os.fspath(unsafe_output),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("safe ASCII path", result.stderr)
 
         escaped = subprocess.run(
             [
