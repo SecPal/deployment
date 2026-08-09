@@ -182,6 +182,42 @@ def version_tuple(value: object) -> tuple[int, int, int]:
     return tuple(int(component) for component in match.groups())
 
 
+def required_first_line(output: str, source: str) -> str:
+    lines = output.splitlines()
+    if not lines:
+        raise IntegrationError(f"{source} returned no output")
+    return lines[0]
+
+
+def parse_json_mapping(output: str, source: str) -> Mapping:
+    try:
+        payload = json.loads(output)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise IntegrationError(f"{source} returned malformed JSON") from error
+    if not isinstance(payload, Mapping):
+        raise IntegrationError(f"{source} returned an unexpected JSON document")
+    return payload
+
+
+def parse_json_objects(output: str, source: str) -> list[Mapping]:
+    try:
+        payload = json.loads(output)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise IntegrationError(f"{source} returned malformed JSON") from error
+    if not isinstance(payload, list) or not all(
+        isinstance(item, Mapping) for item in payload
+    ):
+        raise IntegrationError(f"{source} returned an unexpected JSON document")
+    return payload
+
+
+def parse_single_json_object(output: str, source: str) -> Mapping:
+    payload = parse_json_objects(output, source)
+    if len(payload) != 1:
+        raise IntegrationError(f"{source} returned an ambiguous JSON document")
+    return payload[0]
+
+
 def runtime_probe_contract(instance: str) -> dict[str, object]:
     """Map a bounded instance to the immutable Phase B probe namespace."""
 
@@ -427,13 +463,9 @@ def _inspect_resource(runner: CommandRunner, kind: str, name: str) -> Mapping | 
     )
     if result.returncode != 0:
         raise IntegrationError(f"unable to inspect same-named {kind}: {name}")
-    try:
-        payload = json.loads(result.stdout or "[]")
-    except (json.JSONDecodeError, TypeError) as error:
-        raise IntegrationError("Podman returned malformed resource ownership data") from error
-    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], Mapping):
-        raise IntegrationError("Podman returned ambiguous resource ownership data")
-    return payload[0]
+    return parse_single_json_object(
+        result.stdout or "", "Podman resource ownership inspection"
+    )
 
 
 def _ownership_labels(details: Mapping, kind: str) -> Mapping:
@@ -716,14 +748,19 @@ class IntegrationLifecycle:
         if stat_mode(self.fixture_root) != 0o700:
             raise IntegrationError("fixture root must have mode 0700")
 
-        version_line = self.captured(["gh", "version"]).splitlines()[0]
+        version_line = required_first_line(
+            self.captured(["gh", "version"]), "GitHub CLI"
+        )
         if not version_line.startswith(f"gh version {EXPECTED_GH_VERSION}"):
             raise IntegrationError(f"GitHub CLI {EXPECTED_GH_VERSION} is required")
         self.command(["gh", "attestation", "verify", "--help"], capture=True)
         self.command(["node", "-e", "require.resolve('@playwright/test')"], capture=True)
         self.command(["sudo", "-n", "true"], capture=True)
 
-        info = json.loads(self.captured(["podman", "info", "--format", "json"]))
+        info = parse_json_mapping(
+            self.captured(["podman", "info", "--format", "json"]),
+            "Podman runtime information",
+        )
         self.graph_root, self.run_root = validate_runtime_info(info, self.uid, os.environ)
         self.apparmor_available = bool(nested(info, "host", "security", "apparmorEnabled"))
         self._validate_disabled_user_unit("podman.socket")
@@ -731,7 +768,9 @@ class IntegrationLifecycle:
         connections_text = self.captured(
             ["podman", "system", "connection", "list", "--format", "json"]
         )
-        connections = json.loads(connections_text or "[]")
+        connections = parse_json_objects(
+            connections_text, "Podman connection information"
+        )
         if any(str(item.get("URI", "")).startswith(("ssh://", "tcp://")) for item in connections):
             raise IntegrationError("remote Podman connections are forbidden")
         validate_user_container_configuration(Path.home(), os.environ)
@@ -1013,15 +1052,20 @@ class IntegrationLifecycle:
                 ),
             )
         finally:
-            shutil.rmtree(auth_directory)
+            try:
+                shutil.rmtree(auth_directory)
+            except OSError as error:
+                raise IntegrationError(
+                    f"anonymous {label} pull credential isolation could not be removed"
+                ) from error
 
     def verify_staged_image(self, image: str, digest: str) -> None:
-        details = json.loads(
-            self.captured(["podman", "image", "inspect", image, "--format", "json"])
+        observed = parse_single_json_object(
+            self.captured(
+                ["podman", "image", "inspect", image, "--format", "json"]
+            ),
+            "staged image inspection",
         )
-        if not isinstance(details, list) or len(details) != 1:
-            raise IntegrationError("staged image inspection was ambiguous")
-        observed = details[0]
         repo_digests = observed.get("RepoDigests") or []
         if image not in repo_digests and observed.get("Digest") != digest:
             raise IntegrationError("staged image does not retain the reviewed digest")
@@ -1270,6 +1314,10 @@ class IntegrationLifecycle:
                     raise IntegrationError(
                         f"{self.failure_case} failure allowed dependent role to execute: {role}"
                     )
+                if exists.returncode != 1:
+                    raise IntegrationError(
+                        f"unable to verify blocked role absence: {role}"
+                    )
         if self.failure_case == "health" and self.migration_invocation is None:
             raise IntegrationError("health failure occurred without one successful migration")
 
@@ -1281,10 +1329,9 @@ class IntegrationLifecycle:
                 ["podman", "container", "inspect", name], capture=True, check=False
             )
             if result.returncode == 0:
-                inspected = json.loads(result.stdout or "[]")
-                if isinstance(inspected, list) and len(inspected) == 1:
-                    return inspected[0]
-                raise IntegrationError(f"one-shot container inspection was ambiguous: {role}")
+                return parse_single_json_object(
+                    result.stdout or "", f"one-shot container inspection for {role}"
+                )
             state = self.command(
                 [
                     "systemctl",
@@ -1330,14 +1377,49 @@ class IntegrationLifecycle:
                 self.migration_invocation = invocation
         for role in (item for item in CONTAINER_ROLES if item not in {"secrets-init", "migrate"}):
             name = f"{self.resources.prefix}-{role}"
-            inspected = json.loads(self.captured(["podman", "container", "inspect", name]))
-            if not isinstance(inspected, list) or len(inspected) != 1:
-                raise IntegrationError(f"container role is missing or duplicated: {role}")
-            details = inspected[0]
+            details = parse_single_json_object(
+                self.captured(["podman", "container", "inspect", name]),
+                f"container inspection for {role}",
+            )
             self._validate_effective_container(role, details, expected_users[role])
         self._validate_network_membership()
         self._validate_external_behavior()
         self._validate_runtime_probes_and_restart()
+        self._validate_long_running_roles()
+
+    def _validate_long_running_roles(self) -> None:
+        for role in (
+            item for item in CONTAINER_ROLES if item not in {"secrets-init", "migrate"}
+        ):
+            service = self.command(
+                [
+                    "systemctl",
+                    "--user",
+                    "is-active",
+                    f"{self.resources.prefix}-{role}.service",
+                ],
+                check=False,
+                capture=True,
+            )
+            if service.returncode != 0 or (service.stdout or "").strip() != "active":
+                raise IntegrationError(f"{role} is not systemd-active after runtime probes")
+            inspected = self.command(
+                [
+                    "podman",
+                    "container",
+                    "inspect",
+                    f"{self.resources.prefix}-{role}",
+                ],
+                check=False,
+                capture=True,
+            )
+            if inspected.returncode != 0:
+                raise IntegrationError(f"unable to verify final container state for {role}")
+            details = parse_single_json_object(
+                inspected.stdout or "", f"final container inspection for {role}"
+            )
+            if nested(details, "State", "Running") is not True:
+                raise IntegrationError(f"{role} container is not running after runtime probes")
 
     def _validate_effective_container(
         self, role: str, details: Mapping, expected_user: str | None = None
@@ -1509,7 +1591,7 @@ class IntegrationLifecycle:
             "frontend",
             "gateway",
         ):
-            details = json.loads(
+            details = parse_single_json_object(
                 self.captured(
                     [
                         "podman",
@@ -1517,8 +1599,9 @@ class IntegrationLifecycle:
                         "inspect",
                         f"{self.resources.prefix}-{role}",
                     ]
-                )
-            )[0]
+                ),
+                f"network inspection for {role}",
+            )
             bindings = (nested(details, "HostConfig").get("PortBindings") or {})
             if role == "gateway":
                 flattened = [binding for values in bindings.values() for binding in values]
@@ -1831,7 +1914,10 @@ class IntegrationLifecycle:
                     errors.extend(self._owned_resource_errors())
                     self._verify_unrelated_resources(errors)
             if self.fixture_root.exists():
-                shutil.rmtree(self.fixture_root)
+                try:
+                    shutil.rmtree(self.fixture_root)
+                except OSError:
+                    errors.append("fixture root could not be removed")
             if errors:
                 raise IntegrationError("incomplete exact cleanup: " + "; ".join(errors))
             self.cleaned = True
@@ -1984,11 +2070,13 @@ def parse_arguments(argv: Sequence[str] | None = None):
 def main() -> int:
     arguments = parse_arguments()
     root = Path(__file__).resolve().parents[1]
-    instance = arguments.instance or secrets.token_hex(6)
+    instance = (
+        secrets.token_hex(6) if arguments.instance is None else arguments.instance
+    )
     if not INSTANCE_PATTERN.fullmatch(instance):
         print("ERROR: invalid integration instance identifier.", file=sys.stderr)
         return 1
-    port = arguments.port or allocate_port()
+    port = allocate_port() if arguments.port is None else arguments.port
     if not 1024 <= port <= 65535:
         print("ERROR: integration port must be from 1024 through 65535.", file=sys.stderr)
         return 1
@@ -2009,7 +2097,11 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        fixture_root.mkdir(mode=0o700, parents=False)
+        try:
+            fixture_root.mkdir(mode=0o700, parents=False)
+        except OSError:
+            print("ERROR: unable to create private fixture root.", file=sys.stderr)
+            return 1
         created_fixture = True
     output = arguments.quadlet_output or fixture_root / "quadlets"
     if (
@@ -2019,7 +2111,14 @@ def main() -> int:
         or fixture_root not in output.parents
     ):
         if created_fixture:
-            shutil.rmtree(fixture_root)
+            try:
+                shutil.rmtree(fixture_root)
+            except OSError:
+                print(
+                    "ERROR: unable to remove invalid fixture root.",
+                    file=sys.stderr,
+                )
+                return 1
         print("ERROR: Quadlet output must be a canonical new path inside the fixture root.", file=sys.stderr)
         return 1
     lifecycle = IntegrationLifecycle(

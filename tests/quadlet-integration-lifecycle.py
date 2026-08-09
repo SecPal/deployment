@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -213,6 +214,26 @@ class ResourceNamesRunner:
         return subprocess.CompletedProcess(argv, 0, self.names.get(argv, ""), "")
 
 
+class FinalLivenessRunner:
+    def run(self, command, **_kwargs):
+        argv = tuple(command)
+        if argv[:3] == ("systemctl", "--user", "is-active"):
+            role = argv[3].removeprefix("secpal-int-contract01-").removesuffix(
+                ".service"
+            )
+            if role == "scheduler":
+                return subprocess.CompletedProcess(argv, 3, "inactive\n", "")
+            return subprocess.CompletedProcess(argv, 0, "active\n", "")
+        if argv[:3] == ("podman", "container", "inspect"):
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps([{"State": {"Running": True}}]),
+                "",
+            )
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+
 class QuadletLifecycleContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -281,6 +302,33 @@ class QuadletLifecycleContract(unittest.TestCase):
 
         with self.assertRaises(self.module.IntegrationError):
             self.module.validate_runtime_info(self.valid_info(), uid=0, environment={})
+
+    def test_required_command_output_parsers_fail_closed(self) -> None:
+        self.assertEqual(
+            self.module.required_first_line("gh version 2.97.0\n", "GitHub CLI"),
+            "gh version 2.97.0",
+        )
+        with self.assertRaises(self.module.IntegrationError):
+            self.module.required_first_line("", "GitHub CLI")
+
+        self.assertEqual(
+            self.module.parse_json_mapping('{"version":{"Version":"5.4.2"}}', "Podman info"),
+            {"version": {"Version": "5.4.2"}},
+        )
+        self.assertEqual(
+            self.module.parse_json_objects('[{"URI":"unix:///run/user/1000/podman.sock"}]', "connections"),
+            [{"URI": "unix:///run/user/1000/podman.sock"}],
+        )
+        for payload in ("", "{", "null", "[]"):
+            with self.subTest(mapping=payload), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.parse_json_mapping(payload, "Podman info")
+        for payload in ("", "{", "null", "{}", '["unexpected"]'):
+            with self.subTest(objects=payload), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.parse_json_objects(payload, "connections")
 
     def test_registry_rewrite_mirror_fallback_and_insecure_ghcr_fail_closed(self) -> None:
         self.module.validate_registry_documents([{"unqualified-search-registries": ["docker.io"]}])
@@ -375,6 +423,29 @@ class QuadletLifecycleContract(unittest.TestCase):
             )
             self.assertIn("--authfile", pull)
             self.assertIn("--cert-dir", pull)
+
+    def test_anonymous_pull_credential_cleanup_errors_are_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+            lifecycle.graph_root = Path("/srv/podman-storage")
+            lifecycle.run_root = Path("/run/user/1000/containers")
+            with mock.patch.object(
+                self.module.shutil,
+                "rmtree",
+                side_effect=PermissionError("credentials are not removable"),
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "credential isolation could not be removed",
+            ):
+                lifecycle.anonymous_pull("api", "ghcr.io/secpal/api@sha256:abc")
 
     def test_effective_container_security_rejects_expansion(self) -> None:
         valid = {
@@ -600,6 +671,28 @@ class QuadletLifecycleContract(unittest.TestCase):
             self.module.execute_lifecycle(failing)
         self.assertIn("fixture failed at start", str(raised.exception))
         self.assertIn("cleanup verification failed", str(raised.exception))
+
+    def test_fixture_cleanup_errors_are_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "fixture"
+            fixture.mkdir(mode=0o700)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+            with mock.patch.object(
+                self.module.shutil,
+                "rmtree",
+                side_effect=PermissionError("fixture is not removable"),
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "fixture root could not be removed",
+            ):
+                lifecycle.cleanup()
 
     def test_signal_cleanup_returns_conventional_status(self) -> None:
         lifecycle = SignalDuringStartLifecycle(self.module)
@@ -857,6 +950,48 @@ class QuadletLifecycleContract(unittest.TestCase):
             ("migrate", *common),
         )
 
+    def test_failure_evidence_rejects_descendant_query_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=Path(directory),
+                output=Path(directory) / "quadlets",
+                failure_case="migration",
+                runner=FakeRunner(),
+            )
+            lifecycle.expected_failure_observed = True
+            failed = "ActiveState=failed\nResult=exit-code\nExecMainStatus=1\n"
+            target = "ActiveState=failed\n"
+            query_error = subprocess.CompletedProcess(
+                ("podman", "container", "exists"), 125, "", "runtime unavailable"
+            )
+            with mock.patch.object(
+                lifecycle, "captured", side_effect=(failed, target)
+            ), mock.patch.object(
+                lifecycle, "command", return_value=query_error
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "unable to verify blocked role absence",
+            ):
+                lifecycle.prove_expected_failure()
+
+    def test_final_liveness_rejects_an_inactive_scheduler(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=Path(directory),
+                output=Path(directory) / "quadlets",
+                runner=FinalLivenessRunner(),
+            )
+            with self.assertRaisesRegex(
+                self.module.IntegrationError, "scheduler is not systemd-active"
+            ):
+                lifecycle._validate_long_running_roles()
+
     def test_systemd_resource_evidence_is_bounded_to_numeric_observations(self) -> None:
         self.assertEqual(
             self.module.parse_systemd_resource_properties(
@@ -931,6 +1066,35 @@ class QuadletLifecycleContract(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(fixture.exists())
 
+    def test_invalid_output_fixture_rollback_errors_are_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "new-fixture"
+            arguments = self.module.parse_arguments(
+                [
+                    "--fixture-root",
+                    os.fspath(fixture),
+                    "--quadlet-output",
+                    os.fspath(root / "outside"),
+                ]
+            )
+            stderr = io.StringIO()
+            with mock.patch.object(
+                self.module,
+                "parse_arguments",
+                return_value=arguments,
+            ), mock.patch.object(
+                self.module.shutil,
+                "rmtree",
+                side_effect=PermissionError("fixture is not removable"),
+            ), mock.patch.object(
+                self.module.sys,
+                "stderr",
+                stderr,
+            ):
+                self.assertEqual(self.module.main(), 1)
+            self.assertIn("unable to remove invalid fixture root", stderr.getvalue())
+
     def test_unsafe_fixture_path_is_rejected_before_runtime_admission(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "new fixture"
@@ -947,6 +1111,53 @@ class QuadletLifecycleContract(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("safe ASCII path", result.stderr)
+            self.assertFalse(fixture.exists())
+
+    def test_explicit_empty_instance_and_port_zero_are_not_defaulted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for label, arguments, message in (
+                ("empty-instance", ("--instance", ""), "invalid integration instance"),
+                ("zero-port", ("--port", "0"), "port must be from 1024"),
+            ):
+                with self.subTest(label=label):
+                    fixture = root / label
+                    result = subprocess.run(
+                        [
+                            "python3",
+                            os.fspath(HARNESS),
+                            *arguments,
+                            "--fixture-root",
+                            os.fspath(fixture),
+                            "--quadlet-output",
+                            os.fspath(root / "outside"),
+                        ],
+                        cwd=ROOT,
+                        text=True,
+                        capture_output=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertFalse(fixture.exists())
+
+    def test_fixture_creation_errors_are_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "missing-parent" / "fixture"
+            result = subprocess.run(
+                [
+                    "python3",
+                    os.fspath(HARNESS),
+                    "--fixture-root",
+                    os.fspath(fixture),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unable to create private fixture root", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
             self.assertFalse(fixture.exists())
 
 
