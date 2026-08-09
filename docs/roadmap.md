@@ -97,19 +97,23 @@ Playwright browser contract, and complete project cleanup.
 production host automation, and managed-hosting automation remain outside
 Phase C.
 
-## Phase D — Public Compose reference deployment
+## Phase D — Public rootless Podman/Quadlet reference deployment
 
 **Goal:** Provide a reproducible public self-hosting reference.
 
 **Implemented:** D.1 defines only the provider-neutral production host and
 versioned non-secret inventory admission contract for Debian 13/trixie,
-including its OS lifecycle boundary. It provisions no host and implements no
-production orchestration. See
+including its OS lifecycle, rootless Podman, systemd/Quadlet, subordinate-ID,
+and local runtime-storage boundaries. The historical Phase B/C Docker/Compose
+harness remains until [D.1a (#20)](https://github.com/SecPal/deployment/issues/20)
+transfers and re-proves those invariants on the new
+runtime. It provisions no host and implements no production orchestration. See
 [`production-host.md`](architecture/production-host.md) and
 [`production-inventory.md`](architecture/production-inventory.md).
 
-**Expected artifacts:** Compose orchestration, service dependencies, persistent
-volume contracts, secret mounts, health checks, and operator guidance.
+**Expected artifacts:** Native Quadlet orchestration, service dependencies,
+persistent-state contracts, secret mounts, health checks, and operator
+guidance after D.1a (#20) proves runtime parity.
 
 **Entry criteria:** Immutable image contracts exist.
 

@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 ---
-path: [runtime, docker_compose_version]
-value: 1.29.2
+path: [runtime, systemd_user, linger_enabled]
+value: false

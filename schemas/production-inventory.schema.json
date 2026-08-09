@@ -71,7 +71,8 @@
         "home",
         "shell",
         "interactive_login",
-        "docker_authority"
+        "runtime_authority",
+        "subordinate_ids"
       ],
       "properties": {
         "name": {
@@ -95,15 +96,24 @@
               "not": {
                 "enum": [
                   "adm",
+                  "backup",
+                  "bin",
                   "disk",
                   "docker",
+                  "input",
                   "kmem",
                   "lxd",
+                  "operator",
+                  "render",
                   "root",
                   "shadow",
+                  "ssl-cert",
                   "staff",
                   "sudo",
-                  "systemd-journal"
+                  "systemd-journal",
+                  "tape",
+                  "tty",
+                  "video"
                 ]
               }
             }
@@ -131,8 +141,21 @@
         "interactive_login": {
           "const": false
         },
-        "docker_authority": {
-          "const": false
+        "runtime_authority": {
+          "const": "rootless-podman"
+        },
+        "subordinate_ids": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["uid", "gid"],
+          "properties": {
+            "uid": {
+              "$ref": "#/$defs/subordinateIdRange"
+            },
+            "gid": {
+              "$ref": "#/$defs/subordinateIdRange"
+            }
+          }
         }
       }
     },
@@ -168,7 +191,8 @@
         "crowdsec_state",
         "logs",
         "backup_staging",
-        "docker_data_root"
+        "podman_graph_root",
+        "quadlet_definitions"
       ],
       "properties": {
         "configuration": {
@@ -204,7 +228,10 @@
         "backup_staging": {
           "$ref": "#/$defs/pathContract"
         },
-        "docker_data_root": {
+        "podman_graph_root": {
+          "$ref": "#/$defs/pathContract"
+        },
+        "quadlet_definitions": {
           "$ref": "#/$defs/pathContract"
         }
       }
@@ -241,7 +268,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "docker_data_root",
+            "podman_graph_root",
             "postgresql_data",
             "private_application_storage",
             "public_application_storage",
@@ -252,7 +279,7 @@
             "backup_staging"
           ],
           "properties": {
-            "docker_data_root": {
+            "podman_graph_root": {
               "$ref": "#/$defs/storageRequirement"
             },
             "postgresql_data": {
@@ -361,6 +388,22 @@
       "maxLength": 4095,
       "pattern": "^/[^\\u0000]+$"
     },
+    "subordinateIdRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "count"],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 4294901759
+        },
+        "count": {
+          "type": "integer",
+          "const": 65536
+        }
+      }
+    },
     "ipAddress": {
       "type": "string",
       "oneOf": [
@@ -380,6 +423,8 @@
         "owner_role",
         "uid",
         "gid",
+        "container_uid",
+        "container_gid",
         "mode",
         "lifecycle",
         "decision_issue"
@@ -391,12 +436,12 @@
         "owner_role": {
           "enum": [
             "service-account",
-            "api-runtime",
-            "docker-daemon",
+            "operator-root",
             "state-contract",
             "edge-contract",
             "tls-contract",
-            "crowdsec-contract"
+            "crowdsec-contract",
+            "rootless-container-storage"
           ]
         },
         "uid": {
@@ -408,6 +453,16 @@
           "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 2147483647
+        },
+        "container_uid": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 4294967294
+        },
+        "container_gid": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 4294967294
         },
         "mode": {
           "type": "string",

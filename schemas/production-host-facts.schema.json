@@ -139,7 +139,10 @@
         "shell",
         "interactive_login",
         "sudo_authorized",
-        "host_privilege_authorized"
+        "host_privilege_authorized",
+        "rootful_runtime_authorized",
+        "system_unit_authorized",
+        "remote_runtime_authorized"
       ],
       "properties": {
         "name": {
@@ -174,6 +177,15 @@
           "const": false
         },
         "host_privilege_authorized": {
+          "const": false
+        },
+        "rootful_runtime_authorized": {
+          "const": false
+        },
+        "system_unit_authorized": {
+          "const": false
+        },
+        "remote_runtime_authorized": {
           "const": false
         }
       }
@@ -234,22 +246,36 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "docker_engine_version",
-        "docker_compose_version",
-        "installation",
-        "updates",
+        "engine",
+        "version",
         "rootless",
-        "daemon_running",
-        "daemon_endpoint",
-        "socket",
-        "data_root"
+        "owner_uid",
+        "owner_gid",
+        "installation",
+        "user_namespace",
+        "systemd_user",
+        "quadlet",
+        "storage",
+        "network",
+        "api",
+        "updates",
+        "registries"
       ],
       "properties": {
-        "docker_engine_version": {
+        "engine": {
+          "const": "podman"
+        },
+        "version": {
           "$ref": "#/$defs/version"
         },
-        "docker_compose_version": {
-          "$ref": "#/$defs/version"
+        "rootless": {
+          "const": true
+        },
+        "owner_uid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "owner_gid": {
+          "$ref": "#/$defs/systemId"
         },
         "installation": {
           "type": "object",
@@ -257,81 +283,257 @@
           "required": [
             "source",
             "distribution",
-            "suite",
-            "engine_package",
-            "compose_package"
+            "release_codename",
+            "external_repository",
+            "installed_packages",
+            "forbidden_packages_present"
           ],
           "properties": {
             "source": {
-              "const": "docker-apt-repository"
+              "const": "debian-archive"
             },
             "distribution": {
               "const": "debian"
             },
-            "suite": {
+            "release_codename": {
               "const": "trixie"
             },
-            "engine_package": {
-              "const": "docker-ce"
+            "external_repository": {
+              "const": false
             },
-            "compose_package": {
-              "const": "docker-compose-plugin"
+            "installed_packages": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "podman",
+                "conmon",
+                "crun",
+                "netavark",
+                "aardvark_dns",
+                "passt",
+                "uidmap",
+                "dbus_user_session"
+              ],
+              "properties": {
+                "podman": { "const": "podman" },
+                "conmon": { "const": "conmon" },
+                "crun": { "const": "crun" },
+                "netavark": { "const": "netavark" },
+                "aardvark_dns": { "const": "aardvark-dns" },
+                "passt": { "const": "passt" },
+                "uidmap": { "const": "uidmap" },
+                "dbus_user_session": { "const": "dbus-user-session" }
+              }
+            },
+            "forbidden_packages_present": {
+              "type": "array",
+              "maxItems": 0
             }
+          }
+        },
+        "user_namespace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "account",
+            "subuid",
+            "subgid",
+            "newuidmap_available",
+            "newgidmap_available"
+          ],
+          "properties": {
+            "account": {
+              "type": "string",
+              "minLength": 1
+            },
+            "subuid": {
+              "$ref": "#/$defs/subordinateIdFact"
+            },
+            "subgid": {
+              "$ref": "#/$defs/subordinateIdFact"
+            },
+            "newuidmap_available": {
+              "const": true
+            },
+            "newgidmap_available": {
+              "const": true
+            }
+          }
+        },
+        "systemd_user": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "manager_available",
+            "starts_at_boot",
+            "linger_enabled",
+            "dbus_session_available",
+            "runtime_directory"
+          ],
+          "properties": {
+            "manager_available": {
+              "const": true
+            },
+            "starts_at_boot": {
+              "const": true
+            },
+            "linger_enabled": {
+              "const": true
+            },
+            "dbus_session_available": {
+              "const": true
+            },
+            "runtime_directory": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "quadlet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "available",
+            "orchestrator",
+            "generator_path",
+            "definition_path",
+            "definition_directory_uid",
+            "definition_directory_gid",
+            "definition_directory_mode",
+            "unit_files_uid",
+            "unit_files_gid",
+            "unit_files_mode",
+            "writable_search_paths_empty",
+            "service_account_can_read",
+            "service_account_can_traverse",
+            "service_account_can_write"
+          ],
+          "properties": {
+            "available": { "const": true },
+            "orchestrator": { "const": "systemd-user" },
+            "generator_path": {
+              "const": "/usr/lib/systemd/user-generators/podman-user-generator"
+            },
+            "definition_path": { "type": "string", "minLength": 1 },
+            "definition_directory_uid": { "const": 0 },
+            "definition_directory_gid": { "const": 0 },
+            "definition_directory_mode": { "const": "0755" },
+            "unit_files_uid": { "const": 0 },
+            "unit_files_gid": { "const": 0 },
+            "unit_files_mode": { "const": "0644" },
+            "writable_search_paths_empty": { "const": true },
+            "service_account_can_read": { "const": true },
+            "service_account_can_traverse": { "const": true },
+            "service_account_can_write": { "const": false }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "graphroot",
+            "runroot",
+            "driver",
+            "graphroot_uid",
+            "graphroot_gid",
+            "graphroot_mode",
+            "graphroot_writable",
+            "runroot_uid",
+            "runroot_gid",
+            "runroot_writable",
+            "transient_store",
+            "graphroot_reconstructable"
+          ],
+          "properties": {
+            "graphroot": { "type": "string", "minLength": 1 },
+            "runroot": { "type": "string", "minLength": 1 },
+            "driver": { "const": "overlay" },
+            "graphroot_uid": { "$ref": "#/$defs/systemId" },
+            "graphroot_gid": { "$ref": "#/$defs/systemId" },
+            "graphroot_mode": { "const": "0700" },
+            "graphroot_writable": { "const": true },
+            "runroot_uid": { "$ref": "#/$defs/systemId" },
+            "runroot_gid": { "$ref": "#/$defs/systemId" },
+            "runroot_writable": { "const": true },
+            "transient_store": { "const": false },
+            "graphroot_reconstructable": { "const": true }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "backend",
+            "dns_backend",
+            "rootless_transport",
+            "host_network",
+            "unprivileged_port_override"
+          ],
+          "properties": {
+            "backend": { "const": "netavark" },
+            "dns_backend": { "const": "aardvark-dns" },
+            "rootless_transport": { "const": "pasta" },
+            "host_network": { "const": false },
+            "unprivileged_port_override": { "const": false }
+          }
+        },
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "connection",
+            "remote",
+            "service_enabled",
+            "socket_enabled",
+            "tcp_listener",
+            "application_dependency"
+          ],
+          "properties": {
+            "connection": { "const": "local-cli" },
+            "remote": { "const": false },
+            "service_enabled": { "const": false },
+            "socket_enabled": { "const": false },
+            "tcp_listener": { "const": false },
+            "application_dependency": { "const": false }
           }
         },
         "updates": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["automatic", "automatic_daemon_restart"],
+          "required": [
+            "automatic",
+            "automatic_service_restart",
+            "major_version_automatic",
+            "image_auto_update",
+            "auto_update_timer_enabled"
+          ],
           "properties": {
-            "automatic": {
-              "const": false
-            },
-            "automatic_daemon_restart": {
-              "const": false
-            }
+            "automatic": { "const": false },
+            "automatic_service_restart": { "const": false },
+            "major_version_automatic": { "const": false },
+            "image_auto_update": { "const": false },
+            "auto_update_timer_enabled": { "const": false }
           }
         },
-        "rootless": {
-          "const": false
-        },
-        "daemon_running": {
-          "const": true
-        },
-        "daemon_endpoint": {
-          "const": "unix:///var/run/docker.sock"
-        },
-        "socket": {
+        "registries": {
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "path",
-            "uid",
-            "gid",
-            "mode",
-            "service_account_can_connect"
+            "secpal_references_fully_qualified",
+            "secpal_mirrors",
+            "secpal_location_rewrite",
+            "ghcr_insecure",
+            "fallback_enabled",
+            "short_name_resolution_required"
           ],
           "properties": {
-            "path": {
-              "const": "/var/run/docker.sock"
-            },
-            "uid": {
-              "const": 0
-            },
-            "gid": {
-              "$ref": "#/$defs/systemId"
-            },
-            "mode": {
-              "const": "0660"
-            },
-            "service_account_can_connect": {
-              "const": false
-            }
+            "secpal_references_fully_qualified": { "const": true },
+            "secpal_mirrors": { "type": "array", "maxItems": 0 },
+            "secpal_location_rewrite": { "const": false },
+            "ghcr_insecure": { "const": false },
+            "fallback_enabled": { "const": false },
+            "short_name_resolution_required": { "const": false }
           }
-        },
-        "data_root": {
-          "type": "string",
-          "minLength": 1
         }
       }
     },
@@ -391,7 +593,7 @@
         "crowdsec_state",
         "logs",
         "backup_staging",
-        "docker_data_root"
+        "podman_graph_root"
       ],
       "properties": {
         "configuration": {
@@ -424,7 +626,7 @@
         "backup_staging": {
           "$ref": "#/$defs/filesystemFact"
         },
-        "docker_data_root": {
+        "podman_graph_root": {
           "$ref": "#/$defs/filesystemFact"
         }
       }
@@ -456,7 +658,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "docker_data_root",
+            "podman_graph_root",
             "postgresql_data",
             "private_application_storage",
             "public_application_storage",
@@ -467,7 +669,7 @@
             "backup_staging"
           ],
           "properties": {
-            "docker_data_root": {
+            "podman_graph_root": {
               "$ref": "#/$defs/headroomFact"
             },
             "postgresql_data": {
@@ -512,6 +714,42 @@
     "version": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
+    },
+    "subordinateIdFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "start",
+        "count",
+        "source_entry_count",
+        "overlaps_other_accounts",
+        "overlaps_host_identities"
+      ],
+      "properties": {
+        "source": {
+          "enum": ["/etc/subuid", "/etc/subgid"]
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 4294901759
+        },
+        "count": {
+          "type": "integer",
+          "const": 65536
+        },
+        "source_entry_count": {
+          "type": "integer",
+          "const": 1
+        },
+        "overlaps_other_accounts": {
+          "const": false
+        },
+        "overlaps_host_identities": {
+          "const": false
+        }
+      }
     },
     "filesystemFact": {
       "type": "object",

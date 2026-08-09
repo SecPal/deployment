@@ -309,6 +309,36 @@ def main() -> int:
             None,
         ),
         (
+            "subuid-too-small",
+            lambda d: set_nested(
+                d, ("service_account", "subordinate_ids", "uid", "count"), 65535
+            ),
+            None,
+        ),
+        (
+            "malformed-subgid-start",
+            lambda d: set_nested(
+                d, ("service_account", "subordinate_ids", "gid", "start"), "200000"
+            ),
+            None,
+        ),
+        (
+            "subuid-overlaps-host-identities",
+            lambda d: set_nested(
+                d, ("service_account", "subordinate_ids", "uid", "start"), 10000
+            ),
+            None,
+        ),
+        (
+            "subgid-range-overflow",
+            lambda d: set_nested(
+                d,
+                ("service_account", "subordinate_ids", "gid", "start"),
+                4294901760,
+            ),
+            None,
+        ),
+        (
             "invalid-filesystem-mode",
             lambda d: set_nested(d, ("paths", "logs", "mode"), "0890"),
             None,
@@ -394,6 +424,45 @@ def main() -> int:
             None,
         ),
         (
+            "podman-graphroot-outside-managed-namespace",
+            lambda d: set_nested(
+                d, ("paths", "podman_graph_root", "path"), "/var/lib/containers"
+            ),
+            None,
+        ),
+        (
+            "quadlet-path-user-writable",
+            lambda d: set_nested(
+                d,
+                ("paths", "quadlet_definitions", "path"),
+                "/var/lib/secpal/.config/containers/systemd",
+            ),
+            None,
+        ),
+        (
+            "private-storage-conflates-container-and-host-owner",
+            lambda d: (
+                set_nested(d, ("paths", "private_application_storage", "uid"), 10001),
+                set_nested(d, ("paths", "private_application_storage", "gid"), 10001),
+            ),
+            None,
+        ),
+        (
+            "arbitrary-podman-flags",
+            lambda d: d.update({"podman_flags": ["--privileged"]}),
+            None,
+        ),
+        (
+            "arbitrary-quadlet-snippet",
+            lambda d: d.update({"quadlet": "[Container]\\nNetwork=host"}),
+            None,
+        ),
+        (
+            "runtime-socket-override",
+            lambda d: d.update({"runtime_socket_path": "/run/user/20000/podman.sock"}),
+            None,
+        ),
+        (
             "private-key-field",
             lambda d: d["features"].update({"private_key": "synthetic"}),
             "synthetic",
@@ -465,10 +534,34 @@ def main() -> int:
         "automatic-reboot-enabled.yaml",
         "local-kernel-source.yaml",
         "kernel-backports-suite.yaml",
-        "wrong-docker-distribution.yaml",
-        "docker-too-old.yaml",
-        "compose-v1.yaml",
-        "rootless-engine.yaml",
+        "docker-runtime.yaml",
+        "podman-too-old.yaml",
+        "podman-future-major.yaml",
+        "rootful-podman.yaml",
+        "wrong-podman-source.yaml",
+        "external-podman-repository.yaml",
+        "podman-docker-installed.yaml",
+        "wrong-oci-runtime.yaml",
+        "missing-netavark.yaml",
+        "missing-pasta.yaml",
+        "missing-uidmap.yaml",
+        "missing-subuid.yaml",
+        "missing-subgid.yaml",
+        "subuid-too-small.yaml",
+        "malformed-subgid.yaml",
+        "subuid-mapping-mismatch.yaml",
+        "systemd-user-manager-unavailable.yaml",
+        "linger-disabled.yaml",
+        "quadlet-unavailable.yaml",
+        "remote-podman-connection.yaml",
+        "podman-tcp-api.yaml",
+        "podman-socket-dependency.yaml",
+        "podman-auto-update.yaml",
+        "secpal-registry-mirror.yaml",
+        "insecure-ghcr.yaml",
+        "remote-podman-graphroot.yaml",
+        "read-only-podman-graphroot.yaml",
+        "podman-graphroot-mismatch.yaml",
         "contradictory-filesystem.yaml",
         "malformed-architecture.yaml",
     )

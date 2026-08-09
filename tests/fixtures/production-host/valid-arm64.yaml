@@ -35,6 +35,9 @@ service_account:
   interactive_login: false
   sudo_authorized: false
   host_privilege_authorized: false
+  rootful_runtime_authorized: false
+  system_unit_authorized: false
+  remote_runtime_authorized: false
 ssh:
   direct_root_login_permitted: false
 kernel:
@@ -47,27 +50,104 @@ kernel:
   apparmor_enabled: true
   seccomp_enabled: true
 runtime:
-  docker_engine_version: 29.6.2
-  docker_compose_version: 2.40.3
+  engine: podman
+  version: 5.4.2
+  rootless: true
+  owner_uid: 20000
+  owner_gid: 20000
   installation:
-    source: docker-apt-repository
+    source: debian-archive
     distribution: debian
-    suite: trixie
-    engine_package: docker-ce
-    compose_package: docker-compose-plugin
+    release_codename: trixie
+    external_repository: false
+    installed_packages:
+      podman: podman
+      conmon: conmon
+      crun: crun
+      netavark: netavark
+      aardvark_dns: aardvark-dns
+      passt: passt
+      uidmap: uidmap
+      dbus_user_session: dbus-user-session
+    forbidden_packages_present: []
+  user_namespace:
+    account: secpal-deploy
+    subuid:
+      source: /etc/subuid
+      start: 100000
+      count: 65536
+      source_entry_count: 1
+      overlaps_other_accounts: false
+      overlaps_host_identities: false
+    subgid:
+      source: /etc/subgid
+      start: 200000
+      count: 65536
+      source_entry_count: 1
+      overlaps_other_accounts: false
+      overlaps_host_identities: false
+    newuidmap_available: true
+    newgidmap_available: true
+  systemd_user:
+    manager_available: true
+    starts_at_boot: true
+    linger_enabled: true
+    dbus_session_available: true
+    runtime_directory: /run/user/20000
+  quadlet:
+    available: true
+    orchestrator: systemd-user
+    generator_path: /usr/lib/systemd/user-generators/podman-user-generator
+    definition_path: /etc/containers/systemd/users/20000
+    definition_directory_uid: 0
+    definition_directory_gid: 0
+    definition_directory_mode: "0755"
+    unit_files_uid: 0
+    unit_files_gid: 0
+    unit_files_mode: "0644"
+    writable_search_paths_empty: true
+    service_account_can_read: true
+    service_account_can_traverse: true
+    service_account_can_write: false
+  storage:
+    graphroot: /srv/secpal/podman-storage
+    runroot: /run/user/20000/containers
+    driver: overlay
+    graphroot_uid: 20000
+    graphroot_gid: 20000
+    graphroot_mode: "0700"
+    graphroot_writable: true
+    runroot_uid: 20000
+    runroot_gid: 20000
+    runroot_writable: true
+    transient_store: false
+    graphroot_reconstructable: true
+  network:
+    backend: netavark
+    dns_backend: aardvark-dns
+    rootless_transport: pasta
+    host_network: false
+    unprivileged_port_override: false
+  api:
+    connection: local-cli
+    remote: false
+    service_enabled: false
+    socket_enabled: false
+    tcp_listener: false
+    application_dependency: false
   updates:
     automatic: false
-    automatic_daemon_restart: false
-  rootless: false
-  daemon_running: true
-  daemon_endpoint: unix:///var/run/docker.sock
-  socket:
-    path: /var/run/docker.sock
-    uid: 0
-    gid: 999
-    mode: "0660"
-    service_account_can_connect: false
-  data_root: /var/lib/docker
+    automatic_service_restart: false
+    major_version_automatic: false
+    image_auto_update: false
+    auto_update_timer_enabled: false
+  registries:
+    secpal_references_fully_qualified: true
+    secpal_mirrors: []
+    secpal_location_rewrite: false
+    ghcr_insecure: false
+    fallback_enabled: false
+    short_name_resolution_required: false
 clock:
   synchronized: true
   offset_milliseconds: 25
@@ -78,7 +158,11 @@ tools:
   - bash
   - curl
   - df
-  - docker
+  - loginctl
+  - newgidmap
+  - newuidmap
+  - podman
+  - systemctl
   - findmnt
   - getent
   - gh
@@ -161,8 +245,8 @@ filesystems:
     mount_read_only: false
     d_type: true
     xfs_ftype: null
-  docker_data_root:
-    path: /var/lib/docker
+  podman_graph_root:
+    path: /srv/secpal/podman-storage
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -174,7 +258,7 @@ resources:
   storage_total_bytes: 268435456000
   total_inodes: 2000000
   storage:
-    docker_data_root:
+    podman_graph_root:
       free_bytes: 68719476736
       free_percent: 30
       free_inodes: 400000

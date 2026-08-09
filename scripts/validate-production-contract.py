@@ -31,24 +31,30 @@ REQUIRED_TOOLS = {
     "bash",
     "curl",
     "df",
-    "docker",
     "findmnt",
     "getent",
     "gh",
     "id",
     "install",
+    "loginctl",
     "mktemp",
+    "newgidmap",
+    "newuidmap",
+    "podman",
     "python3",
     "realpath",
     "sha256sum",
     "stat",
+    "systemctl",
     "timedatectl",
 }
 MANAGED_PATH_ROOTS = {
     "runtime_secrets": PurePosixPath("/run/secpal"),
 }
 DEFAULT_MANAGED_PATH_ROOT = PurePosixPath("/srv/secpal")
-DOCKER_DATA_ROOT = PurePosixPath("/var/lib/docker")
+QUADLET_DEFINITION_ROOT = PurePosixPath("/etc/containers/systemd/users")
+MAX_SYSTEM_ID = 4294967294
+SUBORDINATE_ID_COUNT = 65536
 
 SECRET_FIELD_NAMES = {
     "password",
@@ -125,18 +131,18 @@ StrictDraft202012Validator = jsonschema.validators.extend(
 
 CANONICAL_PATHS: dict[str, dict[str, Any]] = {
     "configuration": {
-        "owner_role": "service-account",
+        "owner_role": "operator-root",
         "mode": "0750",
         "lifecycle": "persistent",
         "decision_issue": None,
-        "identity": "service-account",
+        "identity": "operator-readable",
     },
     "deployment_state": {
-        "owner_role": "service-account",
+        "owner_role": "operator-root",
         "mode": "0750",
         "lifecycle": "persistent",
         "decision_issue": None,
-        "identity": "service-account",
+        "identity": "operator-readable",
     },
     "runtime_secrets": {
         "owner_role": "state-contract",
@@ -155,17 +161,21 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
         "decision_issue": 10,
     },
     "private_application_storage": {
-        "owner_role": "api-runtime",
-        "uid": 10001,
-        "gid": 10001,
+        "owner_role": "state-contract",
+        "uid": None,
+        "gid": None,
+        "container_uid": 10001,
+        "container_gid": 10001,
         "mode": "0750",
         "lifecycle": "persistent",
-        "decision_issue": None,
+        "decision_issue": 10,
     },
     "public_application_storage": {
-        "owner_role": "api-runtime",
-        "uid": 10001,
-        "gid": 10001,
+        "owner_role": "state-contract",
+        "uid": None,
+        "gid": None,
+        "container_uid": 10001,
+        "container_gid": 10001,
         "mode": "0750",
         "lifecycle": "persistent",
         "decision_issue": 10,
@@ -208,18 +218,25 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
         "decision_issue": 15,
         "identity": "service-account",
     },
-    "docker_data_root": {
-        "owner_role": "docker-daemon",
+    "podman_graph_root": {
+        "owner_role": "rootless-container-storage",
+        "mode": "0700",
+        "lifecycle": "reconstructable",
+        "decision_issue": None,
+        "identity": "service-account",
+    },
+    "quadlet_definitions": {
+        "owner_role": "operator-root",
         "uid": 0,
         "gid": 0,
-        "mode": "0711",
-        "lifecycle": "persistent",
+        "mode": "0755",
+        "lifecycle": "reconstructable",
         "decision_issue": None,
     },
 }
 
 HEADROOM_MINIMUMS = {
-    "docker_data_root": (21474836480, 200000),
+    "podman_graph_root": (21474836480, 200000),
     "postgresql_data": (21474836480, 200000),
     "private_application_storage": (10737418240, 100000),
     "public_application_storage": (1073741824, 20000),
@@ -611,10 +628,11 @@ def validate_path_contracts(inventory: dict[str, Any]) -> None:
         location = f"inventory.paths.{name}"
         raw_path = contract["path"]
         validate_absolute_path(raw_path, f"{location}.path")
-        if name == "docker_data_root":
-            if PurePosixPath(raw_path) != DOCKER_DATA_ROOT:
+        if name == "quadlet_definitions":
+            expected_path = QUADLET_DEFINITION_ROOT / str(service_account["uid"])
+            if PurePosixPath(raw_path) != expected_path:
                 raise ContractViolation(
-                    "Docker data root must use its dedicated canonical subtree"
+                    "Quadlet definitions must use the administrator-managed per-user path"
                 )
         else:
             managed_root = MANAGED_PATH_ROOTS.get(name, DEFAULT_MANAGED_PATH_ROOT)
@@ -631,11 +649,21 @@ def validate_path_contracts(inventory: dict[str, Any]) -> None:
         if expected.get("identity") == "service-account":
             expected_uid = service_account["uid"]
             expected_gid = service_account["gid"]
+        elif expected.get("identity") == "operator-readable":
+            expected_uid = 0
+            expected_gid = service_account["gid"]
         else:
             expected_uid = expected["uid"]
             expected_gid = expected["gid"]
         if contract["uid"] != expected_uid or contract["gid"] != expected_gid:
             raise ContractViolation(f"fixed path ownership mismatch at {location}")
+        if (
+            contract["container_uid"] != expected.get("container_uid")
+            or contract["container_gid"] != expected.get("container_gid")
+        ):
+            raise ContractViolation(
+                f"fixed container ownership mismatch at {location}"
+            )
 
     protected_paths = {
         "service_account.home": service_account["home"],
@@ -666,6 +694,30 @@ def validate_storage_requirements(resources: dict[str, Any]) -> None:
             raise ContractViolation(f"free-inode percentage is below the contract floor at {location}")
 
 
+def validate_subordinate_id_contract(service_account: dict[str, Any]) -> None:
+    subordinate_ids = service_account["subordinate_ids"]
+    account_ids = {
+        "uid": service_account["uid"],
+        "gid": service_account["gid"],
+    }
+    for dimension in ("uid", "gid"):
+        selected_range = subordinate_ids[dimension]
+        start = selected_range["start"]
+        count = selected_range["count"]
+        location = f"inventory.service_account.subordinate_ids.{dimension}"
+        if count != SUBORDINATE_ID_COUNT:
+            raise ContractViolation(
+                f"subordinate {dimension} range must contain 65536 identities"
+            )
+        end = start + count - 1
+        if end > MAX_SYSTEM_ID:
+            raise ContractViolation(
+                f"subordinate {dimension} range exceeds the Linux identity limit"
+            )
+        if start <= account_ids[dimension] <= end:
+            raise ContractViolation(
+                f"subordinate {dimension} range overlaps the service account at {location}"
+            )
 def validate_inventory(inventory: dict[str, Any], *, synthetic: bool = False) -> None:
     validate_inventory_schema(inventory)
     host = inventory["host"]
@@ -674,6 +726,7 @@ def validate_inventory(inventory: dict[str, Any], *, synthetic: bool = False) ->
 
     service_account = inventory["service_account"]
     validate_absolute_path(service_account["home"], "inventory.service_account.home")
+    validate_subordinate_id_contract(service_account)
 
     frontend_hostname = validate_origin(
         inventory["origins"]["frontend"], "inventory.origins.frontend"
@@ -732,24 +785,71 @@ def validate_runtime_facts(
     inventory: dict[str, Any], facts: dict[str, Any]
 ) -> None:
     runtime = facts["runtime"]
-    engine_version = parse_version(
-        runtime["docker_engine_version"], "host facts.runtime.docker_engine_version"
-    )
-    if engine_version < (29, 6, 2) or engine_version >= (30, 0, 0):
-        raise ContractViolation("Docker Engine must be supported 29.x at or above 29.6.2")
-    compose_version = parse_version(
-        runtime["docker_compose_version"], "host facts.runtime.docker_compose_version"
-    )
-    if compose_version < (2, 40, 3) or compose_version >= (3, 0, 0):
-        raise ContractViolation("Docker Compose must be supported v2 at or above 2.40.3")
-    if runtime["data_root"] != inventory["paths"]["docker_data_root"]["path"]:
-        raise ContractViolation("Docker data root does not match the inventory")
+    service_account = inventory["service_account"]
+    podman_version = parse_version(runtime["version"], "host facts.runtime.version")
+    if podman_version < (5, 4, 2) or podman_version >= (6, 0, 0):
+        raise ContractViolation("Podman must be supported 5.x at or above 5.4.2")
+    if (
+        runtime["owner_uid"] != service_account["uid"]
+        or runtime["owner_gid"] != service_account["gid"]
+    ):
+        raise ContractViolation(
+            "rootless Podman authority does not belong to the service account"
+        )
+
+    user_namespace = runtime["user_namespace"]
+    if user_namespace["account"] != service_account["name"]:
+        raise ContractViolation(
+            "rootless user-namespace account does not match the inventory"
+        )
+    for fact_name, inventory_name, source in (
+        ("subuid", "uid", "/etc/subuid"),
+        ("subgid", "gid", "/etc/subgid"),
+    ):
+        fact_range = user_namespace[fact_name]
+        expected_range = service_account["subordinate_ids"][inventory_name]
+        if fact_range["source"] != source or any(
+            fact_range[field] != expected_range[field]
+            for field in ("start", "count")
+        ):
+            raise ContractViolation(
+                f"effective {fact_name} mapping does not match the inventory"
+            )
+
+    expected_runtime_directory = f"/run/user/{service_account['uid']}"
+    systemd_user = runtime["systemd_user"]
+    if systemd_user["runtime_directory"] != expected_runtime_directory:
+        raise ContractViolation(
+            "systemd user runtime directory does not match the service account"
+        )
+
+    expected_quadlet_path = inventory["paths"]["quadlet_definitions"]["path"]
+    if runtime["quadlet"]["definition_path"] != expected_quadlet_path:
+        raise ContractViolation("Quadlet definition path does not match the inventory")
+
+    storage = runtime["storage"]
+    if storage["graphroot"] != inventory["paths"]["podman_graph_root"]["path"]:
+        raise ContractViolation("Podman graphroot does not match the inventory")
+    expected_runroot = f"{expected_runtime_directory}/containers"
+    if storage["runroot"] != expected_runroot:
+        raise ContractViolation(
+            "rootless Podman runroot does not match the user runtime boundary"
+        )
+    for path_name in ("graphroot", "runroot"):
+        if (
+            storage[f"{path_name}_uid"] != service_account["uid"]
+            or storage[f"{path_name}_gid"] != service_account["gid"]
+        ):
+            raise ContractViolation(
+                f"rootless Podman {path_name} ownership does not match the service account"
+            )
+    validate_absolute_path(storage["graphroot"], "host facts.runtime.storage.graphroot")
+    validate_absolute_path(storage["runroot"], "host facts.runtime.storage.runroot")
 
 
 def validate_service_account_facts(
     inventory: dict[str, Any], facts: dict[str, Any]
 ) -> None:
-    runtime = facts["runtime"]
     service_account = facts["service_account"]
     expected_account = inventory["service_account"]
     for field in ("name", "group", "uid", "gid", "home"):
@@ -757,11 +857,6 @@ def validate_service_account_facts(
             raise ContractViolation(
                 "effective service-account identity does not match the inventory"
             )
-    docker_gid = runtime["socket"]["gid"]
-    if docker_gid == service_account["gid"]:
-        raise ContractViolation(
-            "service-account has Docker-authorized group membership"
-        )
 
 
 def validate_network_facts(inventory: dict[str, Any], network: dict[str, Any]) -> None:

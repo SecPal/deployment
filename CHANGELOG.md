@@ -15,7 +15,10 @@ SPDX-License-Identifier: CC0-1.0
 - Fail-closed inventory and synthetic host-prerequisite validation without
   host access or production mutation.
 - An exact Debian 13/trixie host identity and reviewed security-update, reboot,
-  Docker-maintenance, and major-release lifecycle contract.
+  rootless Podman/Quadlet maintenance, and major-release lifecycle contract.
+- A closed subordinate-ID, systemd user-manager, local Podman graphroot,
+  runtime-API denial, and registry-redirection denial contract while preserving
+  the historical Docker/Compose integration evidence.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

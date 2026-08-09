@@ -21,7 +21,14 @@ service_account:
   home: /var/lib/secpal
   shell: /usr/sbin/nologin
   interactive_login: false
-  docker_authority: false
+  runtime_authority: rootless-podman
+  subordinate_ids:
+    uid:
+      start: 100000
+      count: 65536
+    gid:
+      start: 200000
+      count: 65536
 
 origins:
   frontend: https://app.example.invalid
@@ -30,17 +37,21 @@ origins:
 paths:
   configuration:
     path: /srv/secpal/config
-    owner_role: service-account
-    uid: 20000
+    owner_role: operator-root
+    uid: 0
     gid: 20000
+    container_uid: null
+    container_gid: null
     mode: "0750"
     lifecycle: persistent
     decision_issue: null
   deployment_state:
     path: /srv/secpal/deployment-state
-    owner_role: service-account
-    uid: 20000
+    owner_role: operator-root
+    uid: 0
     gid: 20000
+    container_uid: null
+    container_gid: null
     mode: "0750"
     lifecycle: persistent
     decision_issue: null
@@ -49,6 +60,8 @@ paths:
     owner_role: state-contract
     uid: null
     gid: null
+    container_uid: null
+    container_gid: null
     mode: "0750"
     lifecycle: reconstructable
     decision_issue: 10
@@ -57,22 +70,28 @@ paths:
     owner_role: state-contract
     uid: null
     gid: null
+    container_uid: null
+    container_gid: null
     mode: "0700"
     lifecycle: persistent
     decision_issue: 10
   private_application_storage:
     path: /srv/secpal/private-storage
-    owner_role: api-runtime
-    uid: 10001
-    gid: 10001
+    owner_role: state-contract
+    uid: null
+    gid: null
+    container_uid: 10001
+    container_gid: 10001
     mode: "0750"
     lifecycle: persistent
-    decision_issue: null
+    decision_issue: 10
   public_application_storage:
     path: /srv/secpal/public-storage
-    owner_role: api-runtime
-    uid: 10001
-    gid: 10001
+    owner_role: state-contract
+    uid: null
+    gid: null
+    container_uid: 10001
+    container_gid: 10001
     mode: "0750"
     lifecycle: persistent
     decision_issue: 10
@@ -81,6 +100,8 @@ paths:
     owner_role: edge-contract
     uid: null
     gid: null
+    container_uid: null
+    container_gid: null
     mode: "0750"
     lifecycle: persistent
     decision_issue: 11
@@ -89,6 +110,8 @@ paths:
     owner_role: tls-contract
     uid: null
     gid: null
+    container_uid: null
+    container_gid: null
     mode: "0700"
     lifecycle: persistent
     decision_issue: 13
@@ -97,6 +120,8 @@ paths:
     owner_role: crowdsec-contract
     uid: null
     gid: null
+    container_uid: null
+    container_gid: null
     mode: "0750"
     lifecycle: persistent
     decision_issue: 14
@@ -105,6 +130,8 @@ paths:
     owner_role: service-account
     uid: 20000
     gid: 20000
+    container_uid: null
+    container_gid: null
     mode: "0750"
     lifecycle: persistent
     decision_issue: null
@@ -113,16 +140,30 @@ paths:
     owner_role: service-account
     uid: 20000
     gid: 20000
+    container_uid: null
+    container_gid: null
     mode: "0700"
     lifecycle: reconstructable
     decision_issue: 15
-  docker_data_root:
-    path: /var/lib/docker
-    owner_role: docker-daemon
+  podman_graph_root:
+    path: /srv/secpal/podman-storage
+    owner_role: rootless-container-storage
+    uid: 20000
+    gid: 20000
+    container_uid: null
+    container_gid: null
+    mode: "0700"
+    lifecycle: reconstructable
+    decision_issue: null
+  quadlet_definitions:
+    path: /etc/containers/systemd/users/20000
+    owner_role: operator-root
     uid: 0
     gid: 0
-    mode: "0711"
-    lifecycle: persistent
+    container_uid: null
+    container_gid: null
+    mode: "0755"
+    lifecycle: reconstructable
     decision_issue: null
 
 resources:
@@ -131,7 +172,7 @@ resources:
   storage_total_bytes: 107374182400
   total_inodes: 1000000
   storage:
-    docker_data_root:
+    podman_graph_root:
       minimum_free_bytes: 21474836480
       minimum_free_percent: 20
       minimum_free_inodes: 200000

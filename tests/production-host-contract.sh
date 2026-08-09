@@ -65,7 +65,22 @@ for path in \
   tests/fixtures/production-host/automatic-reboot-enabled.yaml \
   tests/fixtures/production-host/local-kernel-source.yaml \
   tests/fixtures/production-host/kernel-backports-suite.yaml \
-  tests/fixtures/production-host/wrong-docker-distribution.yaml \
+  tests/fixtures/production-host/docker-runtime.yaml \
+  tests/fixtures/production-host/rootful-podman.yaml \
+  tests/fixtures/production-host/podman-too-old.yaml \
+  tests/fixtures/production-host/podman-future-major.yaml \
+  tests/fixtures/production-host/wrong-podman-source.yaml \
+  tests/fixtures/production-host/podman-docker-installed.yaml \
+  tests/fixtures/production-host/quadlet-unavailable.yaml \
+  tests/fixtures/production-host/linger-disabled.yaml \
+  tests/fixtures/production-host/missing-subuid.yaml \
+  tests/fixtures/production-host/missing-subgid.yaml \
+  tests/fixtures/production-host/remote-podman-connection.yaml \
+  tests/fixtures/production-host/podman-tcp-api.yaml \
+  tests/fixtures/production-host/podman-auto-update.yaml \
+  tests/fixtures/production-host/secpal-registry-mirror.yaml \
+  tests/fixtures/production-host/insecure-ghcr.yaml \
+  tests/fixtures/production-host/remote-podman-graphroot.yaml \
   tests/fixtures/production-host/contradictory-filesystem.yaml \
   tests/fixtures/production-host/malformed-kernel-release.yaml \
   tests/fixtures/production-host/malformed-architecture.yaml \
@@ -87,13 +102,20 @@ require_text docs/architecture/production-host.md "Automatic reboots are forbidd
 require_text docs/architecture/production-host.md "Automatic major-release upgrades are forbidden"
 require_prose docs/architecture/production-host.md "Replace/rebuild before in-place major upgrade"
 require_text docs/architecture/production-host.md "cgroup v2"
-require_text docs/architecture/production-host.md "Docker Engine 29.6.2"
-require_text docs/architecture/production-host.md "Docker Compose 2.40.3"
-require_text docs/architecture/production-host.md "Rootless Docker Engine is deferred"
+require_text docs/architecture/production-host.md "Podman 5.4.2"
+require_text docs/architecture/production-host.md "rootless Podman"
+require_text docs/architecture/production-host.md "Quadlet"
+require_text docs/architecture/production-host.md "systemd user manager"
+require_text docs/architecture/production-host.md "/etc/subuid"
+require_text docs/architecture/production-host.md "/etc/subgid"
+require_text docs/architecture/production-host.md "65536"
+require_text docs/architecture/production-host.md "/etc/containers/systemd/users/"
+require_text docs/architecture/production-host.md "/usr/lib/systemd/user-generators/podman-user-generator"
 require_text docs/architecture/production-host.md "Quantified minimum envelope"
-require_prose docs/architecture/production-host.md "Docker daemon authority is privileged host authority"
+require_prose docs/architecture/production-host.md "Rootful Podman is unsupported"
 require_text docs/architecture/production-host.md "Direct root SSH is unsupported"
-require_prose docs/architecture/production-host.md "No Docker socket is mounted into a product container"
+require_prose docs/architecture/production-host.md "The Podman API is not a production dependency"
+require_text docs/architecture/production-host.md "Pull=never"
 require_prose docs/architecture/production-host.md "Logs are persistent operational and security evidence"
 require_prose docs/architecture/production-host.md "D.1 fixes public application storage as persistent host state"
 require_text docs/architecture/production-host.md "10001:10001"
@@ -126,7 +148,8 @@ for path_name in \
   crowdsec_state \
   logs \
   backup_staging \
-  docker_data_root; do
+  podman_graph_root \
+  quadlet_definitions; do
   require_text config/production/inventory.example.yaml "$path_name:"
 done
 
@@ -143,14 +166,21 @@ require_text schemas/production-inventory.schema.json '"single-host"'
 require_text schemas/production-inventory.schema.json '"amd64"'
 require_text schemas/production-inventory.schema.json '"arm64"'
 require_text schemas/production-host-facts.schema.json '"additionalProperties": false'
-require_text schemas/production-host-facts.schema.json '"docker-apt-repository"'
-require_text schemas/production-host-facts.schema.json '"docker-compose-plugin"'
+require_text schemas/production-host-facts.schema.json '"engine"'
+require_text schemas/production-host-facts.schema.json '"podman"'
+require_text schemas/production-host-facts.schema.json '"rootless"'
+require_text schemas/production-host-facts.schema.json '"quadlet"'
+require_text schemas/production-host-facts.schema.json '"subuid"'
+require_text schemas/production-host-facts.schema.json '"subgid"'
+require_text schemas/production-host-facts.schema.json '"podman_graph_root"'
 require_text schemas/production-host-facts.schema.json '"debian_release_suites"'
 require_text schemas/production-host-facts.schema.json '"trixie-security"'
 require_text schemas/production-host-facts.schema.json '"major_release_upgrades_automatic"'
 require_text schemas/production-host-facts.schema.json '"automatic_reboot"'
 require_text schemas/production-host-facts.schema.json '"debian-archive"'
-require_text schemas/production-host-facts.schema.json '"/var/run/docker.sock"'
+require_text schemas/production-host-facts.schema.json '"netavark"'
+require_text schemas/production-host-facts.schema.json '"pasta"'
+require_text schemas/production-host-facts.schema.json '"image_auto_update"'
 
 require_text CHANGELOG.md "provider-neutral production host and inventory contract"
 require_text scripts/preflight.sh "python3 tests/production-inventory-contract.py"
@@ -180,6 +210,19 @@ if grep -ERin \
   tests/fixtures/production-inventory \
   config/production/inventory.example.yaml; then
   fail "active D.1 contract artifacts must not retain an Ubuntu host assumption"
+fi
+
+checks=$((checks + 1))
+if grep -ERin \
+  'docker_engine_version|docker_compose_version|docker_data_root|docker-apt-repository|docker-compose-plugin|/var/run/docker\.sock' \
+  schemas/production-host-facts.schema.json \
+  schemas/production-inventory.schema.json \
+  scripts/validate-production-contract.py \
+  tests/fixtures/production-host/valid-amd64.yaml \
+  tests/fixtures/production-host/valid-arm64.yaml \
+  tests/fixtures/production-inventory \
+  config/production/inventory.example.yaml; then
+  fail "active D.1 machine contracts must not retain Docker runtime fields"
 fi
 
 if [ "$failures" -ne 0 ]; then

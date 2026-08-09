@@ -98,7 +98,8 @@ or inspect a machine.
 ### `service_account`
 
 The name, primary group, numeric UID/GID, absolute home, non-login shell,
-interactive-login state, and Docker-authority state are explicit. UID/GID
+interactive-login state, rootless-Podman authority, and selected subordinate
+UID/GID ranges are explicit. UID/GID
 values are strict YAML integers, are bounded, and cannot reuse known SecPal
 runtime IDs. Integral floating-point spellings are not coerced for UID/GID,
 path ownership, decision-issue, or resource fields. The account never carries
@@ -113,11 +114,29 @@ authorization, and effective host-privilege authorization. Identity and home
 facts must match inventory. Shell and login facts must prove the non-interactive
 policy; sudo and broader host privilege authorization must be absent. The broad
 denial covers privileged supplementary groups and equivalent ACL, device,
-capability, service-manager, or policy grants. The account must not inherit the
-Docker socket group; the socket fact also requires an effective
-connection-denial result so an ACL grant cannot bypass the numeric group
-comparison. A separate closed SSH fact must prove that direct root login is not
-permitted.
+capability, system-unit, rootful-runtime, remote-runtime, or policy grants. A
+separate closed SSH fact must prove that direct root login is not permitted.
+
+Schema version 1 selects one contiguous 65536-identity range from `/etc/subuid`
+and one from `/etc/subgid`. Starts and counts are strict integers; arithmetic
+overflow, a range in the supported host-identity space, malformed facts, a
+different account, multiple effective entries, overlap with another account,
+or an effective mapping that differs from inventory fails closed. The size maps
+all current known container identities without guessing the future PostgreSQL
+or Valkey identity.
+
+### Rootless runtime host facts
+
+Runtime policy is reviewed schema, not an inventory escape hatch. Host facts
+must prove Podman `>=5.4.2,<6.0.0`, rootless ownership by the selected account,
+authenticated Debian installed-package provenance, crun, Netavark/Aardvark DNS, pasta,
+uidmap, a boot-capable systemd user manager with linger, Quadlet, local overlay
+storage, and a matching runroot. Rootful Podman, Docker as the selected
+production runtime, Compose orchestration, compatibility packages, remote or
+socket APIs, host networking, auto-update, registry redirects, user-writable
+Quadlet overrides, and non-root-owned Quadlet units fail closed.
+Inventory cannot supply arbitrary Podman flags, Quadlet text, security options,
+host-network toggles, runtime sockets, or update policy.
 
 ### `origins`
 
@@ -130,27 +149,33 @@ credentialed CORS, Sanctum, cookie, and proxy trust boundary.
 
 ### `paths`
 
-Each path object records an absolute path, owner role, numeric identity when
-already known, baseline directory mode, persistence class, and any later issue
-that must decide the runtime identity or lifecycle. Paths must be normalized,
+Each path object records an absolute path, host owner role and numeric identity
+when known, any known container UID/GID, baseline directory mode, persistence
+class, and any later issue that must decide the mapped host identity or
+lifecycle. Paths must be normalized,
 unique, mutually non-overlapping, non-empty, non-root, and outside `/tmp`.
 They must not contain or be contained by the service-account home. Fixed
 metadata cannot be changed by an operator. Version 1 confines SecPal state to
 strict children of `/srv/secpal`, runtime secrets to a strict child of
 `/run/secpal`, and the service-account home to its dedicated
-`/var/lib/secpal` subtree. The Docker data root is exactly `/var/lib/docker`; it
-is recorded in inventory but is not an operator override. These namespace
-rules prevent a later owner or mode operation from targeting system directories
-such as `/etc`, `/usr`, or unrelated `/var/lib` trees.
+`/var/lib/secpal` subtree. Rootless Podman graphroot is a dedicated child of
+`/srv/secpal`; Quadlet definitions are derived exactly as
+`/etc/containers/systemd/users/<service UID>` and remain operator/root owned.
+These namespace rules prevent a later owner or mode operation from targeting
+unrelated system trees.
 
 Paths use UTF-8 byte limits shared by the supported ext4/XFS host model: at
 most 255 encoded bytes per component and 4095 encoded bytes for the complete
 path. ASCII control characters and character-count-only values that the target
 filesystem cannot safely represent fail admission.
 
-Known API private and public storage uses `10001:10001`; Docker data uses
-`0:0`. Runtime secret, PostgreSQL, edge, ACME, and CrowdSec identities remain
-explicitly delegated to their owning Phase D issue rather than guessed.
+Known API private and public storage requires container identity
+`10001:10001`; the inventory deliberately records null host UID/GID for those
+bind paths. Rootless namespace mapping means the container identity is not the
+same host identity. D.2 owns safe host-side ownership materialization. Runtime
+secret, PostgreSQL, edge, ACME, and CrowdSec identities remain explicitly
+delegated rather than guessed. Podman graphroot is service-account-owned and
+reconstructable; authoritative business data must remain outside it.
 
 ### `resources`
 
@@ -200,7 +225,7 @@ python3 scripts/validate-production-contract.py \
 documentation addresses. Omit it for external production inventories; without
 it, documentation addresses fail closed. The validator reads only the two input
 files and the two repository schemas. It does not query DNS, the network,
-Docker, `/proc`, `/sys`, cloud metadata, or a remote machine and does not change
+Podman, `/proc`, `/sys`, cloud metadata, or a remote machine and does not change
 the filesystem.
 
 Validation consists of:
@@ -212,10 +237,10 @@ Validation consists of:
    resource floors; and
 4. comparison with synthetic host facts for OS, architecture, effective
    service identity and privilege state, root SSH policy, Debian release,
-   update and kernel package provenance, cgroup, Docker Debian package
-   provenance, daemon socket authority,
-   Compose, clock, tools, writable persistent-path filesystems, resources, and
-   storage headroom.
+   update and kernel package provenance, cgroup, Podman package provenance,
+   subuid/subgid, systemd user/linger, Quadlet ownership, runtime/API and
+   registry policy, clock, tools, writable filesystems, resources, and storage
+   headroom.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state
@@ -232,7 +257,9 @@ architectures under `tests/fixtures/production-inventory/`. Host prerequisites
 are represented only by synthetic YAML under
 `tests/fixtures/production-host/`; negative mutation descriptors exercise
 architecture, disk, clock, Debian release/suite/update lifecycle, kernel
-provenance, cgroup, Docker Debian provenance, Compose, and rootless failures.
+provenance, cgroup, Podman provenance/version, rootful operation, subordinate
+mapping, Quadlet/user-manager, API exposure, registry rewrite, graphroot, and
+auto-update failures.
 
 These examples do not authorize use of the synthetic usernames, IDs,
 addresses, origins, paths, or backup target on a real system.

@@ -18,18 +18,22 @@ created or changed by D.1.
 
 ## Supported topology
 
-The first supported reference topology is `single-host`: one Linux host runs
-the future Compose project, its data services, the product roles, and the
-future public edge. This follows the existing single-project Compose contract,
-its one scheduler, its one `activity-hash-chain` worker, and its explicit
-one-shot migration role. A single host is the smallest topology whose current
-service relationships are already integration-tested and does not invent a
-distributed-state or quorum contract.
+The first supported reference topology is `single-host`: one admitted Linux
+host will run the data services, product roles, and future public edge through
+rootless Podman and systemd/Quadlet. The historical Phase B/C Docker/Compose
+integration proves the service relationships, one scheduler, one
+`activity-hash-chain` worker, and explicit one-shot migration role. D.1 does
+not claim Podman integration parity; [D.1a (#20)](https://github.com/SecPal/deployment/issues/20)
+owns that migration and proof before
+D.2 builds production state handling on the new runtime.
 
 Multi-host and high availability are deferred and unsupported by schema
 version 1. Kubernetes, clustering, multi-region operation, automatic failover,
 and provider-managed replacements are also unsupported. This does not prevent
-a reviewed future inventory version from adding a multi-host topology.
+a reviewed future inventory version from adding a multi-host topology. Such a
+version may assign roles to multiple independently admitted Podman hosts while
+preserving the reviewed OCI image identities. Kubernetes remains a separate
+future architecture if cross-host scheduling or self-healing is required.
 
 ## Platform and architecture
 
@@ -53,7 +57,7 @@ cannot trigger an implicit major upgrade.
 
 Both `linux/amd64` and `linux/arm64` are equally supported host architectures.
 The reviewed SecPal API and frontend OCI indexes each publish and smoke-test
-both platforms, and Debian and Docker publish Debian packages for both. The host-fact
+both platforms, and Debian publishes Podman packages for both. The host-fact
 architecture must equal the inventory architecture. Later installation work
 must still resolve the reviewed OCI index for that architecture before any
 container starts; a missing child platform is a hard failure, never a fallback
@@ -83,13 +87,13 @@ A conforming fact document reports all of the following:
 - writable local `ext4`, or writable local XFS with `ftype=1`, for every
   persistent state path and backup staging;
 - working `d_type` directory-entry support; and
-- the required commands `bash`, `curl`, `df`, `docker`, `findmnt`, `getent`,
-  `gh`, `id`, `install`, `mktemp`, `python3`, `realpath`, `sha256sum`, `stat`,
-  and `timedatectl`.
+- the required commands `bash`, `curl`, `df`, `findmnt`, `getent`, `gh`, `id`,
+  `install`, `loginctl`, `mktemp`, `newgidmap`, `newuidmap`, `podman`,
+  `python3`, `realpath`, `sha256sum`, `stat`, `systemctl`, and `timedatectl`.
 
-Network filesystems, FUSE-backed persistent state, remote Docker contexts,
-Docker Desktop, and filesystems without reliable POSIX ownership and modes are
-unsupported. D.1 reads synthetic facts; D.8 owns any future fact collector.
+Network filesystems, FUSE-backed remote state, remote runtime contexts, and
+filesystems without reliable POSIX ownership and modes are unsupported. D.1
+reads synthetic facts; D.8 owns any future fact collector.
 
 The collector must join the running `uname` release to the package that owns
 its installed kernel image and verify that package's authenticated APT origin
@@ -97,7 +101,7 @@ and suite. Release candidates, local or mainline builds, merely relabelled
 kernels, other kernel series, and backports fail closed. Patch-level security
 updates within Linux 6.12 remain valid. Debian's standard kernel supports
 AppArmor; admission still requires the effective AppArmor LSM to be enabled and
-enforcing and seccomp to be available to Docker. Package presence alone is not
+enforcing and seccomp to be available to Podman. Package presence alone is not
 sufficient evidence for either control.
 
 ## Operating-system lifecycle
@@ -112,9 +116,9 @@ operation. Automatic major-release upgrades are forbidden.
 A future collector derives these facts from the installed mechanism, merged
 APT periodic and unattended-upgrade configuration, enabled timers, allowed
 origins, and reboot settings. Merely installing `unattended-upgrades` is not
-sufficient. The same effective-state inspection must prove that Docker-origin
-packages are excluded from automatic updates and cannot automatically restart
-the daemon.
+sufficient. The same effective-state inspection must prove that the Podman
+runtime stack is excluded from unattended updates and cannot automatically
+restart services.
 
 Automatic reboots are forbidden. A kernel or critical-library update may leave
 the host in a `reboot required` state; later maintenance automation must surface
@@ -122,11 +126,12 @@ that state and a named operator controls the reboot. Because the reference
 topology has one host, that reboot may cause planned short downtime; D.1 makes no
 high-availability or zero-downtime claim.
 
-Docker Engine, Compose, and containerd are outside the unattended Debian
-security-update set. Their updates require review and a maintenance window,
-daemon restarts are controlled, and both host admission and SecPal acceptance
-must pass afterward. Docker 30 or another Docker major line requires a reviewed
-contract update before installation.
+Podman, crun, Netavark, Aardvark DNS, and passt are outside the unattended
+Debian security-update set. Runtime-stack updates are reviewed maintenance;
+urgent security fixes are applied through a bounded maintenance operation, not
+deferred indefinitely. No package update automatically restarts SecPal units.
+Host admission and SecPal acceptance must pass afterward. Podman 6 or another
+major line requires a reviewed contract update before installation.
 
 Debian 13 full support ends on 2028-08-09 and Debian LTS ends on 2030-06-30.
 The successor schedule is deliberately ahead of the full-support boundary:
@@ -151,51 +156,87 @@ version 1 does not claim an in-place major upgrade as a supported automatic
 operations path; any later exception requires its own reviewed compatibility
 and runbook contract.
 
-## Docker Engine and Compose
+## Rootless Podman and Quadlet
 
-The supported daemon is rootful Docker Engine 29.x installed as `docker-ce`
-from Docker's official Debian APT repository for `trixie`. Docker Engine 29.6.2 is the
-minimum security baseline. Version 30 or later is not silently accepted. A
-reviewed contract update must evaluate breaking changes before widening the
-range. Host facts identify `docker-apt-repository`, distribution `debian`, and
-suite `trixie`; a future collector derives them from the installed package's
-APT policy and authenticated Docker source metadata. Debian's `docker.io`,
-Snap, a static install, Docker Desktop, or unreported provenance fails closed.
-Docker's repository component named `stable` is a package channel, not a Debian
-release-suite selector; its configured Debian suite must still be `trixie`.
+The only production runtime admitted by schema version 1 is rootless Podman
+5.x, at least Podman 5.4.2 and below 6.0.0. Podman and its required components
+come from authenticated Debian 13 archives for `trixie` or its reviewed
+security-maintenance suite; external Podman repositories and backports are
+unsupported. The narrow runtime matrix is `podman`, `conmon`, `crun`,
+`netavark`, `aardvark-dns`, `passt`, `uidmap`, and `dbus-user-session`. Buildah is not a
+production requirement. `podman-docker`, Docker Engine, Docker CLI aliases,
+Docker Compose, `podman-compose`, and `podman compose` are not supported
+production runtime paths. Rootful Podman is unsupported and fails closed.
 
-The supported orchestrator is the `docker-compose-plugin` package and its
-`docker compose` CLI in the Compose v2 line. Docker Compose 2.40.3 is the
-minimum, and version 3 or later fails closed until reviewed. The legacy
-`docker-compose` standalone command is not accepted. Version detection uses
-the three-part numeric output recorded in synthetic facts; later collectors
-must derive it from `docker version` and `docker compose version --short`
-without coercion.
+Podman is daemonless for this contract. The dedicated service account owns the
+local rootless runtime, while host root remains a distinct authority. The
+account has no sudo, system-unit, rootful-runtime, remote-runtime, raw-device,
+or equivalent host authorization. The Podman API is not a production
+dependency: system and user API services and socket activation are disabled,
+TCP listeners and remote connections are forbidden, and product containers do
+not receive a runtime socket.
 
-Facts must also report the effective daemon endpoint as
-`unix:///var/run/docker.sock`. A TCP, SSH, alternate Unix socket, or otherwise
-remote Docker context fails admission even when its version and data-root
-values appear compatible.
+Each account has exactly one contiguous `/etc/subuid` range and one contiguous
+`/etc/subgid` range. Each contains 65536 identities, starts above the supported
+host-account range, remains within Linux's 32-bit mapping limit, does not
+overlap another account's range in the corresponding subordinate-ID namespace,
+and matches the selected inventory range. A collector must parse every
+effective entry and report exactly one selected entry per dimension;
+it also rejects overlap with any effective host UID/GID or another account's
+subordinate range.
+`newuidmap` and `newgidmap` must be effective.
+This normal rootless namespace maps all current known container identities,
+including API `10001:10001` and frontend `101:101`. Exact PostgreSQL and Valkey
+container identities remain D.2 decisions; selecting an identity outside this
+namespace requires a reviewed contract migration.
 
-The Docker daemon and `/var/run/docker.sock` are root-owned; the socket mode is
-exactly `0660`. Docker daemon authority is privileged host authority: a user
-able to control the daemon can normally obtain host-root-equivalent access.
-Facts report the socket UID, GID, mode, and the effective primary and
-supplementary GIDs of the SecPal service account. Admission fails unless the
-socket UID is `0` and the service account has neither primary nor supplementary
-membership in the socket group. Facts must additionally report that the account
-cannot connect to the socket, covering named-user, named-group, and mask-based
-POSIX ACL grants that mode and group membership alone cannot reveal. A future
-collector must perform an effective-access check; it must not infer denial only
-from mode bits. Operators use explicit privilege escalation for daemon
-operations. No Docker socket is mounted into a product container.
+Production orchestration is the systemd user manager plus Quadlet. cgroup v2,
+the Quadlet generator, the user manager, its DBus session, and boot startup are
+required. Debian's rootless generator path is
+`/usr/lib/systemd/user-generators/podman-user-generator`. The non-login service
+account has linger enabled so its user manager
+starts at boot without an interactive login. Its runtime boundary is
+`/run/user/<UID>` and its transient Podman runroot is
+`/run/user/<UID>/containers`; neither is authoritative or backed up.
 
-Rootless Docker Engine is deferred. The current repository has not validated
-its bind-mount ownership, privileged-port edge behavior, networking, data-root
-layout, or future CrowdSec integration. D.3 and D.4 may not silently enable it.
-Schema version 1 records the reviewed Docker data root as exactly
-`/var/lib/docker`. It is an inventory fact, not an operator-selectable path;
-changing it requires a reviewed schema migration.
+Root/operator-owned definitions live at
+`/etc/containers/systemd/users/<SECPAL_UID>/`, mode `0755` on the directory,
+with root-owned `0644` unit files. They are readable/traversable but not writable
+by the service account. Effective service-account-writable Quadlet search paths
+must contain no definitions, drop-ins, or symlinks that could override the
+reviewed tree. This uses Podman
+5.4.2's administrator-managed rootless-user search path. Later D.1a (#20)/D.8 work
+must keep unit files and policy root-owned so a product process cannot rewrite
+its future production definition. D.1 defines only this capability and does
+not add Quadlet files.
+
+The rootless network contract is Netavark with Aardvark DNS and `pasta` from
+Debian packages. Host networking is forbidden. D.1 does not change
+`net.ipv4.ip_unprivileged_port_start`, firewall rules, forwarding, or ports
+80/443; D.3/D.4 must choose and prove the edge/public-port path without
+weakening rootless isolation.
+
+Effective Podman registry configuration is supply-chain state. SecPal image
+references remain fully qualified and digest-only; no mirror, physical-location
+rewrite, fallback, insecure GHCR transport, or short-name dependency may apply
+to them. User-level and system-level configuration must be evaluated together.
+No registry credential is introduced.
+
+Podman auto-update and its timer are disabled for SecPal. Quadlet
+`AutoUpdate=registry` and automatic newest-image selection are forbidden. The
+later runtime implementation must pre-stage the exact reviewed OCI indexes,
+verify the required publisher attestations, and only then permit units to
+start. Its Quadlets must use `Pull=never` or an equivalently proven
+no-opportunistic-pull policy. D.1 records that downstream invariant but does
+not implement pulling, verification, or execution.
+
+A future D.8 collector derives runtime facts from authenticated `dpkg`/APT
+package records, `podman info`, merged system and user `containers.conf`,
+`storage.conf` and `registries.conf`, the complete subordinate-ID databases,
+`loginctl` plus the effective user manager, the installed user generator and
+administrator-owned Quadlet tree, and the mount covering graphroot. It must
+report effective state rather than infer compliance from package presence or
+copy declarative inventory values.
 
 ## Resource admission contract
 
@@ -220,7 +261,7 @@ eight long-lived roles. These are admission budgets, not measured utilization:
 
 | Role group                              | Logical CPU share | RAM share |
 | --------------------------------------- | ----------------: | --------: |
-| Host, Docker daemon, and future edge    |              1.00 |     2 GiB |
+| Host, Podman/systemd user runtime, edge |              1.00 |     2 GiB |
 | PostgreSQL and Valkey                   |              1.00 |     2 GiB |
 | API request role                        |              0.75 |   1.5 GiB |
 | General and activity-hash-chain workers |              0.75 |   1.5 GiB |
@@ -232,7 +273,7 @@ The 100 GiB and 1,000,000-inode floor is likewise an explicit planning sum:
 | Planning area                     |     Storage |        Inodes |
 | --------------------------------- | ----------: | ------------: |
 | Host OS, tools, and configuration |      20 GiB |       110,000 |
-| Docker data reserve               |      20 GiB |       200,000 |
+| Podman rootless storage reserve   |      20 GiB |       200,000 |
 | PostgreSQL reserve                |      20 GiB |       200,000 |
 | Private application storage       |      10 GiB |       100,000 |
 | Public application storage        |       1 GiB |        20,000 |
@@ -268,7 +309,7 @@ reported aggregate host total; contradictory evidence fails admission.
 
 | Area                        | Absolute free bytes | Free inodes | Notes                                                                                  |
 | --------------------------- | ------------------: | ----------: | -------------------------------------------------------------------------------------- |
-| Docker data                 |              20 GiB |     200,000 | Image pull and unpack headroom; no automatic pruning contract.                         |
+| Podman graphroot            |              20 GiB |     200,000 | Reconstructable image/layer headroom; no automatic pruning contract.                   |
 | PostgreSQL                  |              20 GiB |     200,000 | Admission reserve only; WAL and database sizing belong to D.2.                         |
 | Private application storage |              10 GiB |     100,000 | Business-critical files remain separate from PostgreSQL.                               |
 | Public application storage  |               1 GiB |      20,000 | Initial public-artifact reserve; publication and backup policy belong to D.2.          |
@@ -335,7 +376,8 @@ supplementary GIDs, home, shell, interactive-login state, sudo-authorization
 state, and effective host-privilege-authorization state. The name, group, IDs,
 and home must match inventory; the remaining facts must prove a
 non-login shell, disabled interactive login, no sudo authorization, no
-Docker-authorized membership, and no other effective host-privilege grant.
+rootful or remote runtime authorization, no arbitrary system-unit authority,
+and no other effective host-privilege grant.
 That last denial covers privileged supplementary groups and grants through
 device, file, ACL, capability, service-manager, or policy authorization. A
 future collector must evaluate effective privilege and sudo policy, including
@@ -343,11 +385,12 @@ inherited groups and included policy, rather than grep one sudoers file. The
 example uses
 `secpal-deploy:20000:20000`, but that value is synthetic and not mandatory.
 
-The account owns reviewed configuration, deployment metadata, logs, and
-backup staging. Its home is an absolute state path, its shell is
-`/usr/sbin/nologin`, interactive login is disabled, it has no Docker authority,
-and it receives no `sudo` authorization. It does not own PostgreSQL, the Docker
-data root, or undecided edge identities.
+Root owns reviewed configuration and deployment metadata with the account's
+primary group receiving read/execute access. The account owns its rootless
+Podman graphroot, logs, and backup staging. Its home is an absolute state path,
+its shell is `/usr/sbin/nologin`, interactive login is disabled, and it receives
+no `sudo` authorization. It does not own PostgreSQL, Quadlet definitions, or
+undecided edge identities.
 
 Named human operators authorize host changes. Their SSH keys, certificates,
 hardware-backed credentials, and privilege policy live outside this
@@ -356,7 +399,7 @@ facts must prove that it is not permitted. A future collector must evaluate the
 effective daemon and authentication policy, including includes and drop-ins,
 rather than inspect only one SSH configuration file. A human operator
 authenticates as a named account and uses audited, explicit privilege
-escalation for package, filesystem-owner, daemon, network, or service-manager
+escalation for package, filesystem-owner, network, or service-manager
 operations. D.1 creates no accounts, keys, SSH configuration, or sudoers file.
 
 ## Filesystem and mountpoint model
@@ -372,34 +415,41 @@ ext4/XFS representation limits. ASCII control characters are forbidden.
 Schema version 1 also confines path selection by purpose: SecPal state paths
 are strict children of `/srv/secpal`, runtime secrets are a strict child of
 `/run/secpal`, the service-account home stays within its dedicated
-`/var/lib/secpal` subtree, and the Docker data root is exactly its dedicated
-`/var/lib/docker` subtree. State and runtime-secret namespace roots themselves
-are not selectable. This structural allowlist rejects `/etc`, `/usr`,
-`/var/lib/dpkg`, and other host-owned trees without maintaining an incomplete
-directory blacklist.
+`/var/lib/secpal` subtree, and the rootless Podman graphroot is a dedicated
+strict child of `/srv/secpal`. Quadlet definitions are the sole exception:
+their path is derived exactly as `/etc/containers/systemd/users/<UID>` and is
+root-owned. State and runtime-secret namespace roots themselves are not
+selectable. This structural allowlist rejects unrelated `/etc`, `/usr`, and
+`/var/lib` trees without maintaining an incomplete directory blacklist.
 
-| Inventory key                 | Example path                   | Owner and UID:GID                  |   Mode | Class           | Decision owner       |
-| ----------------------------- | ------------------------------ | ---------------------------------- | -----: | --------------- | -------------------- |
-| `configuration`               | `/srv/secpal/config`           | service account, inventory UID:GID | `0750` | persistent      | D.1                  |
-| `deployment_state`            | `/srv/secpal/deployment-state` | service account, inventory UID:GID | `0750` | persistent      | D.1                  |
-| `runtime_secrets`             | `/run/secpal/secrets`          | state contract, unset              | `0750` | reconstructable | D.2 (#10)            |
-| `postgresql_data`             | `/srv/secpal/postgresql`       | state contract, unset              | `0700` | persistent      | D.2 (#10)            |
-| `private_application_storage` | `/srv/secpal/private-storage`  | API runtime `10001:10001`          | `0750` | persistent      | D.1/D.2              |
-| `public_application_storage`  | `/srv/secpal/public-storage`   | API runtime `10001:10001`          | `0750` | persistent      | D.2 (#10)            |
-| `edge_state`                  | `/srv/secpal/edge`             | edge contract, unset               | `0750` | persistent      | D.3 (#11)            |
-| `acme_state`                  | `/srv/secpal/acme`             | TLS contract, unset                | `0700` | persistent      | D.5 (#13)            |
-| `crowdsec_state`              | `/srv/secpal/crowdsec`         | CrowdSec contract, unset           | `0750` | persistent      | D.6 (#14)            |
-| `logs`                        | `/srv/secpal/logs`             | service account, inventory UID:GID | `0750` | persistent      | D.1; retention later |
-| `backup_staging`              | `/srv/secpal/backup-staging`   | service account, inventory UID:GID | `0700` | reconstructable | D.7 (#15)            |
-| `docker_data_root`            | `/var/lib/docker`              | Docker daemon `0:0`                | `0711` | persistent      | D.1                  |
+| Inventory key                 | Example path                          | Owner and UID:GID                           |   Mode | Class           | Decision owner       |
+| ----------------------------- | ------------------------------------- | ------------------------------------------- | -----: | --------------- | -------------------- |
+| `configuration`               | `/srv/secpal/config`                  | root:service GID, runtime read-only         | `0750` | persistent      | D.1                  |
+| `deployment_state`            | `/srv/secpal/deployment-state`        | root:service GID, runtime read-only         | `0750` | persistent      | D.1                  |
+| `runtime_secrets`             | `/run/secpal/secrets`                 | state contract, unset                       | `0750` | reconstructable | D.2 (#10)            |
+| `postgresql_data`             | `/srv/secpal/postgresql`              | state contract, unset                       | `0700` | persistent      | D.2 (#10)            |
+| `private_application_storage` | `/srv/secpal/private-storage`         | host mapping unset; container `10001:10001` | `0750` | persistent      | D.2 (#10)            |
+| `public_application_storage`  | `/srv/secpal/public-storage`          | host mapping unset; container `10001:10001` | `0750` | persistent      | D.2 (#10)            |
+| `edge_state`                  | `/srv/secpal/edge`                    | edge contract, unset                        | `0750` | persistent      | D.3 (#11)            |
+| `acme_state`                  | `/srv/secpal/acme`                    | TLS contract, unset                         | `0700` | persistent      | D.5 (#13)            |
+| `crowdsec_state`              | `/srv/secpal/crowdsec`                | CrowdSec contract, unset                    | `0750` | persistent      | D.6 (#14)            |
+| `logs`                        | `/srv/secpal/logs`                    | service account, inventory UID:GID          | `0750` | persistent      | D.1; retention later |
+| `backup_staging`              | `/srv/secpal/backup-staging`          | service account, inventory UID:GID          | `0700` | reconstructable | D.7 (#15)            |
+| `podman_graph_root`           | `/srv/secpal/podman-storage`          | service account, inventory UID:GID          | `0700` | reconstructable | D.1                  |
+| `quadlet_definitions`         | `/etc/containers/systemd/users/<UID>` | operator root `0:0`                         | `0755` | reconstructable | D.1                  |
 
 `/app/storage/app/private` is business-critical container state and retains the
-verified API owner `10001:10001`. It is never merged with PostgreSQL data. The
+verified API container owner `10001:10001`. Under rootless Podman those are not
+host UID/GID `10001:10001`: the host owner is derived through the reviewed user
+namespace mapping. D.2 owns the bind-mount initialization method and may choose
+only a reviewed mapping mechanism; D.1 does not preselect `:U`, `keep-id`, an
+idmapped mount, or `podman unshare chown`. It is never merged with PostgreSQL data. The
 frontend remains `101:101`, serves HTTP on 8080, has a read-only root filesystem
 and writable `/tmp`, and does not own TLS, ACME, or API proxying.
 
 D.1 fixes public application storage as persistent host state on a separate
-`10001:10001` path. It may hold only artifacts deliberately classified for
+path with required container identity `10001:10001` and D.2-owned host mapping.
+It may hold only artifacts deliberately classified for
 public delivery, never private uploads, credentials, or database state. D.2
 must decide its backup and publication lifecycle before it is mounted in
 production; the edge must not expose the host path directly.
@@ -407,6 +457,12 @@ production; the edge must not expose the host path directly.
 Logs are persistent operational and security evidence, not reconstructable
 state. D.10 owns retention, rotation, optional external shipping, and the
 acceptance proof that exhaustion remains bounded.
+
+The Podman graphroot contains reconstructable images, layers, and container
+metadata. It is never the recovery authority for PostgreSQL, private or public
+application storage, runtime secrets, or reviewed deployment policy. Loss of
+graphroot must be recoverable by reinstalling the reviewed runtime state and
+re-pulling and re-verifying the approved OCI identities; D.7/D.8 own that proof.
 
 Valkey is queue/cache infrastructure, not a source of truth. D.1 does not
 require a persistent Valkey host path. D.2 decides whether to add one; no
@@ -456,8 +512,9 @@ change the reviewed API artifact identity.
 Unknown inventory or host-fact fields, unknown versions, Debian release or
 update-policy drift, mismatched
 architectures, effective service identities, service-account login, sudo, or
-other host authority, direct root SSH, Docker installation provenance or socket
-authority, low resources, clock drift, unsupported filesystems, and dependency
+other host authority, direct root SSH, Podman provenance, rootless mapping,
+Quadlet/user-manager, API exposure, registry rewrite, low resources, clock
+drift, unsupported filesystems, and dependency
 contradictions fail before any side effect. Validation errors name the safe
 field location or invariant and never print classified field names, input
 values, or full documents.
@@ -465,7 +522,8 @@ values, or full documents.
 D.1 deliberately does not implement host setup, remote access, provider
 selection, firewall or DNS changes, TLS/ACME, CrowdSec, secrets, persistent
 volume creation, database initialization, backup/restore, Compose production
-orchestration, install/update/rollback workflows, or container startup. Those
+or Podman production orchestration, legacy integration migration,
+install/update/rollback workflows, or container startup. Those
 remain with #10 through #18 according to the parent epic.
 
 ## Evidence references
@@ -476,8 +534,22 @@ remain with #10 through #18 according to the parent epic.
 - [Debian security and LTS lifecycle](https://www.debian.org/security/faq#lifespan)
 - [Debian `unattended-upgrades` package](https://packages.debian.org/trixie/unattended-upgrades)
 - [Debian AppArmor guidance](https://www.debian.org/doc/manuals/debian-handbook/sect.apparmor.en.html)
-- [Docker Engine Debian platform support](https://docs.docker.com/engine/install/debian/)
-- [Docker Engine 29 release notes](https://docs.docker.com/engine/release-notes/29/)
-- [Docker Compose plugin installation](https://docs.docker.com/compose/install/linux/)
+- [Debian 13 Podman package](https://packages.debian.org/trixie/podman)
+- [Debian 13 conmon package](https://packages.debian.org/trixie/conmon)
+- [Debian 13 crun package](https://packages.debian.org/trixie/crun)
+- [Debian 13 Netavark package](https://packages.debian.org/trixie/netavark)
+- [Debian 13 Aardvark DNS package](https://packages.debian.org/trixie/aardvark-dns)
+- [Debian 13 passt package](https://packages.debian.org/trixie/passt)
+- [Debian 13 uidmap package](https://packages.debian.org/trixie/uidmap)
+- [Debian 13 DBus user-session package](https://packages.debian.org/trixie/dbus-user-session)
+- [Debian subordinate-ID format](https://manpages.debian.org/trixie/passwd/subuid.5.en.html)
+- [Podman 5.4.2 rootless requirements](https://docs.podman.io/en/v5.4.2/markdown/podman.1.html#rootless-mode)
+- [Podman 5.4.2 Quadlet contract](https://docs.podman.io/en/v5.4.2/markdown/podman-systemd.unit.5.html)
+- [Podman 5.4.2 networking](https://docs.podman.io/en/v5.4.2/markdown/podman-network.1.html)
+- [Podman container storage](https://github.com/containers/storage/blob/main/docs/containers-storage.conf.5.md)
+- [Podman auto-update](https://docs.podman.io/en/v5.4.2/markdown/podman-auto-update.1.html)
+- [Podman API service security](https://docs.podman.io/en/v5.4.2/markdown/podman-system-service.1.html)
+- [Containers registry configuration](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md)
+- [systemd lingering user managers](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html#enable-linger%20USER%E2%80%A6)
 - [`docs/api-image-consumption.md`](../api-image-consumption.md)
 - [`docs/frontend-image-consumption.md`](../frontend-image-consumption.md)

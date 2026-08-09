@@ -261,25 +261,72 @@ class ProductionContractRegressionTests(unittest.TestCase):
         self.validate_synthetic_inventory(inventory)
         self.validator.validate_host_facts(inventory, facts)
 
-    def test_runtime_requires_local_daemon_endpoint_fact(self) -> None:
+    def test_runtime_requires_direct_local_cli_operation(self) -> None:
         facts = copy.deepcopy(self.host_facts)
-        runtime = facts["runtime"]
-        if not isinstance(runtime, dict):
-            raise AssertionError("host runtime fixture must be a mapping")
-        runtime.pop("daemon_endpoint", None)
+        nested_mapping(facts, "runtime", "api")["connection"] = "remote"
         self.assert_contract_violation(
             lambda: self.validator.validate_host_facts(self.inventory, facts)
         )
 
-    def test_remote_daemon_endpoint_is_rejected(self) -> None:
+    def test_podman_api_and_remote_operation_are_rejected(self) -> None:
+        mutations = (
+            ("remote", True),
+            ("service_enabled", True),
+            ("socket_enabled", True),
+            ("tcp_listener", True),
+            ("application_dependency", True),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "runtime", "api")[field] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_rootful_podman_is_rejected(self) -> None:
         facts = copy.deepcopy(self.host_facts)
-        runtime = facts["runtime"]
-        if not isinstance(runtime, dict):
-            raise AssertionError("host runtime fixture must be a mapping")
-        runtime["daemon_endpoint"] = "tcp://192.0.2.50:2376"
+        nested_mapping(facts, "runtime")["rootless"] = False
         self.assert_contract_violation(
             lambda: self.validator.validate_host_facts(self.inventory, facts)
         )
+
+    def test_legacy_docker_runtime_is_rejected_by_the_production_contract(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        facts["runtime"] = {
+            "docker_engine_version": "29.6.2",
+            "docker_compose_version": "2.40.3",
+            "rootless": False,
+        }
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(
+                self.inventory, facts
+            )
+        )
+
+    def test_runtime_schema_requires_rootless_podman_quadlet_admission(self) -> None:
+        schema = self.validator.read_schema(
+            self.validator.HOST_FACTS_SCHEMA_PATH, "host-facts"
+        )
+        runtime = nested_mapping(schema, "properties", "runtime")
+        properties = nested_mapping(runtime, "properties")
+
+        self.assertEqual(properties["engine"], {"const": "podman"})
+        self.assertEqual(properties["rootless"], {"const": True})
+        for required_fact in (
+            "user_namespace",
+            "systemd_user",
+            "quadlet",
+            "storage",
+        ):
+            self.assertIn(required_fact, runtime["required"])
+
+        graphroot = nested_mapping(
+            properties, "storage", "properties", "graphroot"
+        )
+        self.assertEqual(graphroot["type"], "string")
 
     def test_public_application_storage_requires_inventory_and_host_facts(self) -> None:
         inventory = copy.deepcopy(self.inventory)
@@ -307,11 +354,11 @@ class ProductionContractRegressionTests(unittest.TestCase):
         )
 
     def test_runtime_versions_reject_zero_padded_components(self) -> None:
-        for version in ("029.6.2", "29.06.2", "29.6.02"):
+        for version in ("05.4.2", "5.04.2", "5.4.02"):
             with self.subTest(version=version):
                 self.assert_contract_violation(
                     lambda version=version: self.validator.parse_version(
-                        version, "host facts.runtime.docker_engine_version"
+                        version, "host facts.runtime.version"
                     )
                 )
 
@@ -328,13 +375,13 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 storage = resources["storage"]
                 if not isinstance(storage, dict):
                     raise AssertionError("host storage fixture must be a mapping")
-                docker_data = storage["docker_data_root"]
-                if not isinstance(docker_data, dict):
-                    raise AssertionError("Docker storage fixture must be a mapping")
+                runtime_storage = storage["podman_graph_root"]
+                if not isinstance(runtime_storage, dict):
+                    raise AssertionError("Podman storage fixture must be a mapping")
                 total = resources[total_fact]
                 if not isinstance(total, int):
                     raise AssertionError("host total fixture must be an integer")
-                docker_data[path_fact] = total + 1
+                runtime_storage[path_fact] = total + 1
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
@@ -349,11 +396,11 @@ class ProductionContractRegressionTests(unittest.TestCase):
             with self.subTest(absolute_field=absolute_field):
                 facts = copy.deepcopy(self.host_facts)
                 resources = nested_mapping(facts, "resources")
-                docker_data = nested_mapping(
-                    resources, "storage", "docker_data_root"
+                runtime_storage = nested_mapping(
+                    resources, "storage", "podman_graph_root"
                 )
-                docker_data[absolute_field] = resources[total_field]
-                docker_data[percentage_field] = 20
+                runtime_storage[absolute_field] = resources[total_field]
+                runtime_storage[percentage_field] = 20
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
@@ -424,15 +471,24 @@ class ProductionContractRegressionTests(unittest.TestCase):
         for field, identity in (
             ("name", "root"),
             ("group", "adm"),
+            ("group", "backup"),
+            ("group", "bin"),
             ("group", "disk"),
             ("group", "docker"),
+            ("group", "input"),
             ("group", "kmem"),
             ("group", "lxd"),
+            ("group", "operator"),
+            ("group", "render"),
             ("group", "root"),
             ("group", "shadow"),
+            ("group", "ssl-cert"),
             ("group", "staff"),
             ("group", "sudo"),
             ("group", "systemd-journal"),
+            ("group", "tape"),
+            ("group", "tty"),
+            ("group", "video"),
         ):
             with self.subTest(field=field, identity=identity):
                 inventory = copy.deepcopy(self.inventory)
@@ -476,6 +532,9 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("interactive_login", True),
             ("sudo_authorized", True),
             ("host_privilege_authorized", True),
+            ("rootful_runtime_authorized", True),
+            ("system_unit_authorized", True),
+            ("remote_runtime_authorized", True),
         )
         for field, value in mutations:
             with self.subTest(field=field, case="unsafe"):
@@ -514,7 +573,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_host_facts_must_report_docker_installation_source(self) -> None:
+    def test_host_facts_must_report_podman_installation_source(self) -> None:
         facts = copy.deepcopy(self.host_facts)
         runtime = nested_mapping(facts, "runtime")
         runtime.pop("installation", None)
@@ -523,13 +582,12 @@ class ProductionContractRegressionTests(unittest.TestCase):
             "installation",
         )
 
-    def test_docker_installation_contract_is_exact(self) -> None:
+    def test_podman_installation_contract_is_exact(self) -> None:
         mutations = (
-            ("source", "distribution-package"),
+            ("source", "external-repository"),
             ("distribution", "ubuntu"),
-            ("suite", "stable"),
-            ("engine_package", "docker.io"),
-            ("compose_package", "docker-compose"),
+            ("release_codename", "stable"),
+            ("external_repository", True),
         )
         for field, value in mutations:
             with self.subTest(field=field):
@@ -542,45 +600,149 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_primary_group_cannot_inherit_docker_socket_authority(self) -> None:
-        facts = copy.deepcopy(self.host_facts)
-        service_account = nested_mapping(facts, "service_account")
-        socket = nested_mapping(facts, "runtime", "socket")
-        socket["gid"] = service_account["gid"]
-        self.assert_contract_violation(
-            lambda: self.validator.validate_host_facts(self.inventory, facts),
-            "Docker-authorized",
-        )
-
-    def test_docker_socket_contract_is_exact(self) -> None:
-        for field, value in (
-            ("path", "/run/docker.sock"),
-            ("uid", 1),
-            ("mode", "0666"),
+    def test_required_runtime_packages_are_exact_and_compatibility_is_absent(self) -> None:
+        for package, replacement in (
+            ("podman", "podman-remote"),
+            ("conmon", ""),
+            ("crun", "runc"),
+            ("netavark", ""),
+            ("aardvark_dns", ""),
+            ("passt", "slirp4netns"),
+            ("uidmap", ""),
+            ("dbus_user_session", "dbus-x11"),
         ):
-            with self.subTest(field=field):
+            with self.subTest(package=package):
                 facts = copy.deepcopy(self.host_facts)
-                socket = nested_mapping(facts, "runtime", "socket")
-                socket[field] = value
+                packages = nested_mapping(
+                    facts, "runtime", "installation", "installed_packages"
+                )
+                packages[package] = replacement
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
                     )
                 )
 
-    def test_docker_socket_requires_effective_connection_denial(self) -> None:
-        self.validator.validate_host_facts(self.inventory, self.host_facts)
+        facts = copy.deepcopy(self.host_facts)
+        installation = nested_mapping(facts, "runtime", "installation")
+        installation["forbidden_packages_present"] = ["podman-docker"]
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
 
-        for value in (None, True):
-            with self.subTest(value=value):
+    def test_user_namespace_helpers_account_and_sources_are_exact(self) -> None:
+        mutations = (
+            (("account",), "other-account"),
+            (("newuidmap_available",), False),
+            (("newgidmap_available",), False),
+            (("subuid", "source"), "/etc/subgid"),
+            (("subgid", "source"), "/etc/subuid"),
+            (("subuid", "source_entry_count"), 2),
+            (("subgid", "overlaps_other_accounts"), True),
+            (("subuid", "overlaps_host_identities"), True),
+        )
+        for path, value in mutations:
+            with self.subTest(path=path):
                 facts = copy.deepcopy(self.host_facts)
-                socket = nested_mapping(facts, "runtime", "socket")
-                if value is None:
-                    socket.pop("service_account_can_connect")
-                else:
-                    socket["service_account_can_connect"] = value
+                user_namespace = nested_mapping(facts, "runtime", "user_namespace")
+                target = user_namespace
+                for segment in path[:-1]:
+                    target = nested_mapping(target, segment)
+                target[path[-1]] = value
                 self.assert_contract_violation(
-                    lambda: self.validator.validate_host_facts(self.inventory, facts)
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_systemd_user_and_quadlet_trust_boundary_is_exact(self) -> None:
+        mutations = (
+            (("systemd_user", "manager_available"), False),
+            (("systemd_user", "starts_at_boot"), False),
+            (("systemd_user", "linger_enabled"), False),
+            (("systemd_user", "dbus_session_available"), False),
+            (("quadlet", "available"), False),
+            (("quadlet", "orchestrator"), "podman-compose"),
+            (("quadlet", "definition_directory_uid"), 20000),
+            (("quadlet", "definition_directory_gid"), 20000),
+            (("quadlet", "definition_directory_mode"), "0775"),
+            (("quadlet", "unit_files_uid"), 20000),
+            (("quadlet", "unit_files_gid"), 20000),
+            (("quadlet", "unit_files_mode"), "0664"),
+            (("quadlet", "writable_search_paths_empty"), False),
+            (("quadlet", "service_account_can_read"), False),
+            (("quadlet", "service_account_can_traverse"), False),
+            (("quadlet", "service_account_can_write"), True),
+        )
+        for path, value in mutations:
+            with self.subTest(path=path):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "runtime", path[0])[path[1]] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_rootless_network_storage_and_registry_boundaries_are_exact(self) -> None:
+        mutations = (
+            (("network", "backend"), "cni"),
+            (("network", "dns_backend"), "none"),
+            (("network", "rootless_transport"), "slirp4netns"),
+            (("network", "host_network"), True),
+            (("network", "unprivileged_port_override"), True),
+            (("storage", "driver"), "vfs"),
+            (("storage", "graphroot_uid"), 0),
+            (("storage", "graphroot_gid"), 0),
+            (("storage", "graphroot_mode"), "0755"),
+            (("storage", "graphroot_writable"), False),
+            (("storage", "runroot_uid"), 0),
+            (("storage", "runroot_gid"), 0),
+            (("storage", "runroot_writable"), False),
+            (("storage", "graphroot_reconstructable"), False),
+            (("registries", "secpal_mirrors"), ["mirror.example.invalid"]),
+            (("registries", "secpal_location_rewrite"), True),
+            (("registries", "ghcr_insecure"), True),
+            (("registries", "fallback_enabled"), True),
+            (("registries", "short_name_resolution_required"), True),
+        )
+        for path, value in mutations:
+            with self.subTest(path=path):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "runtime", path[0])[path[1]] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_rootless_runtime_owner_must_match_the_service_account(self) -> None:
+        for field, value in (("owner_uid", 0), ("owner_gid", 0)):
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "runtime")[field] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    ),
+                    "rootless Podman authority",
+                )
+
+    def test_subordinate_id_facts_must_match_inventory(self) -> None:
+        for dimension, field in (("subuid", "uid"), ("subgid", "gid")):
+            with self.subTest(dimension=dimension):
+                facts = copy.deepcopy(self.host_facts)
+                selected_range = nested_mapping(
+                    facts, "runtime", "user_namespace", dimension
+                )
+                selected_range["start"] = nested_mapping(
+                    self.inventory, "service_account", "subordinate_ids", field
+                )["start"] + 1
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    ),
+                    dimension,
                 )
 
     def test_host_facts_require_exact_debian_13_identity(self) -> None:
@@ -614,10 +776,6 @@ class ProductionContractRegressionTests(unittest.TestCase):
         kernel["package_source"] = "ubuntu-archive"
         kernel.pop("package_suite")
         kernel.pop("package_owned")
-        installation = nested_mapping(facts, "runtime", "installation")
-        installation.pop("distribution")
-        installation.pop("suite")
-        nested_mapping(facts, "runtime").pop("updates")
         self.assert_contract_violation(
             lambda: self.validator.validate_host_facts(self.inventory, facts)
         )
@@ -716,10 +874,13 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_docker_updates_require_controlled_maintenance(self) -> None:
+    def test_podman_updates_require_controlled_maintenance(self) -> None:
         for field, value in (
             ("automatic", True),
-            ("automatic_daemon_restart", True),
+            ("automatic_service_restart", True),
+            ("major_version_automatic", True),
+            ("image_auto_update", True),
+            ("auto_update_timer_enabled", True),
         ):
             with self.subTest(field=field):
                 facts = copy.deepcopy(self.host_facts)
@@ -735,9 +896,9 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("configuration", "/etc"),
             ("deployment_state", "/usr/local/secpal"),
             ("runtime_secrets", "/run/secpal"),
-            ("docker_data_root", "/var/lib"),
-            ("docker_data_root", "/var/lib/dpkg"),
-            ("docker_data_root", "/var/lib/postgresql"),
+            ("podman_graph_root", "/var/lib"),
+            ("podman_graph_root", "/var/lib/dpkg"),
+            ("podman_graph_root", "/var/lib/postgresql"),
         ):
             with self.subTest(path_name=path_name):
                 inventory = copy.deepcopy(self.inventory)
@@ -840,7 +1001,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
         oversized_version = ("9" * 5000) + ".0.0"
         self.assert_contract_violation(
             lambda: self.validator.parse_version(
-                oversized_version, "host facts.runtime.docker_engine_version"
+                oversized_version, "host facts.runtime.version"
             )
         )
 
@@ -942,11 +1103,19 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("service-account-gid", ("service_account", "gid")),
             ("path-uid", ("paths", "configuration", "uid")),
             ("path-gid", ("paths", "configuration", "gid")),
+            (
+                "container-uid",
+                ("paths", "private_application_storage", "container_uid"),
+            ),
+            (
+                "subuid-start",
+                ("service_account", "subordinate_ids", "uid", "start"),
+            ),
             ("decision-issue", ("paths", "runtime_secrets", "decision_issue")),
             ("resource-floor", ("resources", "logical_cpus")),
             (
                 "storage-floor",
-                ("resources", "storage", "docker_data_root", "minimum_free_percent"),
+                ("resources", "storage", "podman_graph_root", "minimum_free_percent"),
             ),
         )
         for case, path in cases:

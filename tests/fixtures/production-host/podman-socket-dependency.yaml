@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 ---
-path: [runtime, installation, distribution]
-value: ubuntu
+path: [runtime, api, application_dependency]
+value: true
