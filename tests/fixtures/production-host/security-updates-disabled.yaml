@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 ---
-path: [kernel, release]
-value: 6.11.0
+path: [os, security_updates, automatic]
+value: false

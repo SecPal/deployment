@@ -57,6 +57,15 @@ for path in \
   tests/fixtures/production-host/invalid-architecture.yaml \
   tests/fixtures/production-host/insufficient-disk.yaml \
   tests/fixtures/production-host/clock-unsynchronized.yaml \
+  tests/fixtures/production-host/ubuntu-host.yaml \
+  tests/fixtures/production-host/future-debian-major.yaml \
+  tests/fixtures/production-host/floating-stable-suite.yaml \
+  tests/fixtures/production-host/missing-security-suite.yaml \
+  tests/fixtures/production-host/security-updates-disabled.yaml \
+  tests/fixtures/production-host/automatic-reboot-enabled.yaml \
+  tests/fixtures/production-host/local-kernel-source.yaml \
+  tests/fixtures/production-host/kernel-backports-suite.yaml \
+  tests/fixtures/production-host/wrong-docker-distribution.yaml \
   tests/fixtures/production-host/contradictory-filesystem.yaml \
   tests/fixtures/production-host/malformed-kernel-release.yaml \
   tests/fixtures/production-host/malformed-architecture.yaml \
@@ -67,10 +76,16 @@ done
 
 require_text docs/architecture/production-host.md "single-host"
 require_text docs/architecture/production-host.md "Multi-host and high availability are deferred"
-require_text docs/architecture/production-host.md "Ubuntu Server 24.04 LTS"
+require_text docs/architecture/production-host.md "Debian 13"
+require_text docs/architecture/production-host.md "trixie"
 require_text docs/architecture/production-host.md "linux/amd64"
 require_text docs/architecture/production-host.md "linux/arm64"
-require_text docs/architecture/production-host.md "Linux 6.8"
+require_text docs/architecture/production-host.md "Linux 6.12"
+require_text docs/architecture/production-host.md "Operating-system lifecycle"
+require_text docs/architecture/production-host.md "Automatic security updates are required"
+require_text docs/architecture/production-host.md "Automatic reboots are forbidden"
+require_text docs/architecture/production-host.md "Automatic major-release upgrades are forbidden"
+require_prose docs/architecture/production-host.md "Replace/rebuild before in-place major upgrade"
 require_text docs/architecture/production-host.md "cgroup v2"
 require_text docs/architecture/production-host.md "Docker Engine 29.6.2"
 require_text docs/architecture/production-host.md "Docker Compose 2.40.3"
@@ -130,6 +145,11 @@ require_text schemas/production-inventory.schema.json '"arm64"'
 require_text schemas/production-host-facts.schema.json '"additionalProperties": false'
 require_text schemas/production-host-facts.schema.json '"docker-apt-repository"'
 require_text schemas/production-host-facts.schema.json '"docker-compose-plugin"'
+require_text schemas/production-host-facts.schema.json '"debian_release_suites"'
+require_text schemas/production-host-facts.schema.json '"trixie-security"'
+require_text schemas/production-host-facts.schema.json '"major_release_upgrades_automatic"'
+require_text schemas/production-host-facts.schema.json '"automatic_reboot"'
+require_text schemas/production-host-facts.schema.json '"debian-archive"'
 require_text schemas/production-host-facts.schema.json '"/var/run/docker.sock"'
 
 require_text CHANGELOG.md "provider-neutral production host and inventory contract"
@@ -145,6 +165,21 @@ checks=$((checks + 1))
 if grep -Eiq 'host provisioning|ssh connection|terraform|ansible|cloud provider' \
   scripts/validate-production-contract.py 2>/dev/null; then
   fail "the pure production contract validator must not implement provisioning, SSH, or providers"
+fi
+
+checks=$((checks + 1))
+if grep -ERin \
+  'Ubuntu|ubuntu|noble|ubuntu-server|ubuntu-archive|Linux 6\.8' \
+  docs/architecture/production-host.md \
+  docs/architecture/production-inventory.md \
+  schemas/production-host-facts.schema.json \
+  schemas/production-inventory.schema.json \
+  scripts/validate-production-contract.py \
+  tests/fixtures/production-host/valid-amd64.yaml \
+  tests/fixtures/production-host/valid-arm64.yaml \
+  tests/fixtures/production-inventory \
+  config/production/inventory.example.yaml; then
+  fail "active D.1 contract artifacts must not retain an Ubuntu host assumption"
 fi
 
 if [ "$failures" -ne 0 ]; then

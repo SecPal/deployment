@@ -5,9 +5,25 @@ schema_version: 1
 hostname: secpal-host.example.invalid
 architecture: amd64
 os:
-  id: ubuntu
-  version_id: "24.04"
-  installation_profile: ubuntu-server
+  id: debian
+  version_id: "13"
+  version_codename: trixie
+  package_provenance:
+    release_origins: [Debian]
+    archive_keyring_package: debian-archive-keyring
+    release_signatures_verified: true
+  debian_release_suites:
+    - trixie
+    - trixie-security
+    - trixie-updates
+  security_updates:
+    mechanism: unattended-upgrades
+    automatic: true
+    release_codename: trixie
+    security_suite: trixie-security
+    normal_updates_automatic: false
+    major_release_upgrades_automatic: false
+    automatic_reboot: false
 service_account:
   name: secpal-deploy
   group: secpal-deploy
@@ -22,8 +38,10 @@ service_account:
 ssh:
   direct_root_login_permitted: false
 kernel:
-  release: 6.8.0
-  package_source: ubuntu-archive
+  release: 6.12.38+deb13-amd64
+  package_source: debian-archive
+  package_suite: trixie-security
+  package_owned: true
   cgroup_version: 2
   overlayfs_supported: true
   apparmor_enabled: true
@@ -33,8 +51,13 @@ runtime:
   docker_compose_version: 2.40.3
   installation:
     source: docker-apt-repository
+    distribution: debian
+    suite: trixie
     engine_package: docker-ce
     compose_package: docker-compose-plugin
+  updates:
+    automatic: false
+    automatic_daemon_restart: false
   rootless: false
   daemon_running: true
   daemon_endpoint: unix:///var/run/docker.sock

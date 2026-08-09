@@ -526,6 +526,8 @@ class ProductionContractRegressionTests(unittest.TestCase):
     def test_docker_installation_contract_is_exact(self) -> None:
         mutations = (
             ("source", "distribution-package"),
+            ("distribution", "ubuntu"),
+            ("suite", "stable"),
             ("engine_package", "docker.io"),
             ("compose_package", "docker-compose"),
         )
@@ -581,30 +583,147 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     lambda: self.validator.validate_host_facts(self.inventory, facts)
                 )
 
-    def test_host_facts_require_the_ubuntu_server_installation_profile(self) -> None:
+    def test_host_facts_require_exact_debian_13_identity(self) -> None:
         self.validator.validate_host_facts(self.inventory, self.host_facts)
 
-        for value in (None, "ubuntu-desktop"):
-            with self.subTest(value=value):
+        for field, value in (
+            ("id", "ubuntu"),
+            ("version_id", "12"),
+            ("version_id", "14"),
+            ("version_codename", "bookworm"),
+            ("version_codename", "testing"),
+            ("version_codename", "unstable"),
+        ):
+            with self.subTest(field=field, value=value):
                 facts = copy.deepcopy(self.host_facts)
                 os_facts = nested_mapping(facts, "os")
-                if value is None:
-                    os_facts.pop("installation_profile")
-                else:
-                    os_facts["installation_profile"] = value
+                os_facts[field] = value
                 self.assert_contract_violation(
                     lambda: self.validator.validate_host_facts(self.inventory, facts)
                 )
 
-    def test_host_facts_require_ubuntu_kernel_package_provenance(self) -> None:
-        for source in (None, "local-build"):
-            with self.subTest(source=source):
+    def test_ubuntu_host_facts_are_rejected(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        facts["os"] = {
+            "id": "ubuntu",
+            "version_id": "24.04",
+            "installation_profile": "ubuntu-server",
+        }
+        kernel = nested_mapping(facts, "kernel")
+        kernel["release"] = "6.8.0"
+        kernel["package_source"] = "ubuntu-archive"
+        kernel.pop("package_suite")
+        kernel.pop("package_owned")
+        installation = nested_mapping(facts, "runtime", "installation")
+        installation.pop("distribution")
+        installation.pop("suite")
+        nested_mapping(facts, "runtime").pop("updates")
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
+
+    def test_debian_release_suites_are_codename_pinned(self) -> None:
+        for suites in (
+            ["trixie", "trixie-updates"],
+            ["stable", "trixie-security", "trixie-updates"],
+            ["testing", "trixie-security", "trixie-updates"],
+            ["unstable", "trixie-security", "trixie-updates"],
+            ["sid", "trixie-security", "trixie-updates"],
+            ["trixie", "trixie-security", "trixie-backports"],
+        ):
+            with self.subTest(suites=suites):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "os")["debian_release_suites"] = suites
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_debian_release_suite_order_is_not_significant(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        nested_mapping(facts, "os")["debian_release_suites"] = [
+            "trixie-updates",
+            "trixie",
+            "trixie-security",
+        ]
+        self.validator.validate_host_facts(self.inventory, facts)
+
+    def test_debian_archive_provenance_is_exact(self) -> None:
+        for field, value in (
+            ("release_origins", ["Debian", "Debian derivative"]),
+            ("archive_keyring_package", "custom-keyring"),
+            ("release_signatures_verified", False),
+        ):
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                provenance = nested_mapping(facts, "os", "package_provenance")
+                provenance[field] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_debian_security_update_policy_is_fail_closed(self) -> None:
+        mutations = (
+            ("mechanism", "manual"),
+            ("automatic", False),
+            ("release_codename", "stable"),
+            ("security_suite", "stable-security"),
+            ("normal_updates_automatic", True),
+            ("major_release_upgrades_automatic", True),
+            ("automatic_reboot", True),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                update_policy = nested_mapping(facts, "os", "security_updates")
+                update_policy[field] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_host_facts_require_debian_kernel_package_provenance(self) -> None:
+        mutations = (
+            ("package_source", "local-build"),
+            ("package_source", "mainline"),
+            ("package_source", "ubuntu-archive"),
+            ("package_suite", "trixie-backports"),
+            ("package_owned", False),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
                 facts = copy.deepcopy(self.host_facts)
                 kernel = nested_mapping(facts, "kernel")
-                if source is None:
-                    kernel.pop("package_source")
-                else:
-                    kernel["package_source"] = source
+                kernel[field] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_kernel_series_is_exactly_debian_13_stable(self) -> None:
+        for release in ("6.11.99+deb13-amd64", "6.13.0+deb13-amd64"):
+            with self.subTest(release=release):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "kernel")["release"] = release
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_docker_updates_require_controlled_maintenance(self) -> None:
+        for field, value in (
+            ("automatic", True),
+            ("automatic_daemon_restart", True),
+        ):
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "runtime", "updates")[field] = value
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
@@ -686,20 +805,19 @@ class ProductionContractRegressionTests(unittest.TestCase):
         facts = copy.deepcopy(self.host_facts)
         kernel = nested_mapping(facts, "kernel")
         for release in (
-            "6.8.0-rc1",
-            "6.8.0-rc",
-            "6.8.0-rcfoo",
-            "6.8.0-RC2-generic",
-            "6.8.0-060800rc1-generic",
-            "6.8.0-060800rc1ubuntu1-generic",
-            "6.8.0-foo-rc1",
+            "6.12.0-rc1",
+            "6.12.0-rc",
+            "6.12.0-rcfoo",
+            "6.12.0-RC2-amd64",
+            "6.12.0-061200rc1-amd64",
+            "6.12.0-foo-rc1",
         ):
             with self.subTest(release=release):
                 kernel["release"] = release
                 self.assert_contract_violation(
                     lambda: self.validator.validate_host_facts(self.inventory, facts)
                 )
-        kernel["release"] = "6.8.0-notrc1-generic"
+        kernel["release"] = "6.12.0-notrc1-amd64"
         self.validator.validate_host_facts(self.inventory, facts)
 
     def test_loader_recursion_error_is_translated(self) -> None:
@@ -741,7 +859,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
         kernel = facts["kernel"]
         if not isinstance(kernel, dict):
             raise AssertionError("kernel fixture must be a mapping")
-        kernel["release"] = "6.8.1١"
+        kernel["release"] = "6.12.1١"
         self.assert_contract_violation(
             lambda: self.validator.validate_host_facts(self.inventory, facts)
         )

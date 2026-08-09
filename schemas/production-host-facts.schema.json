@@ -36,16 +36,93 @@
     "os": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "version_id", "installation_profile"],
+      "required": [
+        "id",
+        "version_id",
+        "version_codename",
+        "package_provenance",
+        "debian_release_suites",
+        "security_updates"
+      ],
       "properties": {
         "id": {
-          "const": "ubuntu"
+          "const": "debian"
         },
         "version_id": {
-          "const": "24.04"
+          "const": "13"
         },
-        "installation_profile": {
-          "const": "ubuntu-server"
+        "version_codename": {
+          "const": "trixie"
+        },
+        "package_provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "release_origins",
+            "archive_keyring_package",
+            "release_signatures_verified"
+          ],
+          "properties": {
+            "release_origins": {
+              "const": ["Debian"]
+            },
+            "archive_keyring_package": {
+              "const": "debian-archive-keyring"
+            },
+            "release_signatures_verified": {
+              "const": true
+            }
+          }
+        },
+        "debian_release_suites": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["trixie", "trixie-security", "trixie-updates"]
+          },
+          "allOf": [
+            { "contains": { "const": "trixie" } },
+            { "contains": { "const": "trixie-security" } },
+            { "contains": { "const": "trixie-updates" } }
+          ]
+        },
+        "security_updates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mechanism",
+            "automatic",
+            "release_codename",
+            "security_suite",
+            "normal_updates_automatic",
+            "major_release_upgrades_automatic",
+            "automatic_reboot"
+          ],
+          "properties": {
+            "mechanism": {
+              "const": "unattended-upgrades"
+            },
+            "automatic": {
+              "const": true
+            },
+            "release_codename": {
+              "const": "trixie"
+            },
+            "security_suite": {
+              "const": "trixie-security"
+            },
+            "normal_updates_automatic": {
+              "const": false
+            },
+            "major_release_upgrades_automatic": {
+              "const": false
+            },
+            "automatic_reboot": {
+              "const": false
+            }
+          }
         }
       }
     },
@@ -117,6 +194,8 @@
       "required": [
         "release",
         "package_source",
+        "package_suite",
+        "package_owned",
         "cgroup_version",
         "overlayfs_supported",
         "apparmor_enabled",
@@ -129,7 +208,13 @@
           "maxLength": 255
         },
         "package_source": {
-          "const": "ubuntu-archive"
+          "const": "debian-archive"
+        },
+        "package_suite": {
+          "enum": ["trixie", "trixie-security"]
+        },
+        "package_owned": {
+          "const": true
         },
         "cgroup_version": {
           "const": 2
@@ -152,6 +237,7 @@
         "docker_engine_version",
         "docker_compose_version",
         "installation",
+        "updates",
         "rootless",
         "daemon_running",
         "daemon_endpoint",
@@ -168,16 +254,41 @@
         "installation": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["source", "engine_package", "compose_package"],
+          "required": [
+            "source",
+            "distribution",
+            "suite",
+            "engine_package",
+            "compose_package"
+          ],
           "properties": {
             "source": {
               "const": "docker-apt-repository"
+            },
+            "distribution": {
+              "const": "debian"
+            },
+            "suite": {
+              "const": "trixie"
             },
             "engine_package": {
               "const": "docker-ce"
             },
             "compose_package": {
               "const": "docker-compose-plugin"
+            }
+          }
+        },
+        "updates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["automatic", "automatic_daemon_restart"],
+          "properties": {
+            "automatic": {
+              "const": false
+            },
+            "automatic_daemon_restart": {
+              "const": false
             }
           }
         },

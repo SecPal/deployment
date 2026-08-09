@@ -33,22 +33,27 @@ a reviewed future inventory version from adding a multi-host topology.
 
 ## Platform and architecture
 
-The only supported host OS is the 64-bit Ubuntu Server 24.04 LTS `noble`
-release. Host facts require `ID=ubuntu`, `VERSION_ID=24.04`, and the normalized
-installation-provenance value `installation_profile=ubuntu-server`; the two
-release identifiers alone are insufficient. A future collector must derive the
-profile from a trusted installation or image record rather than infer it from
-the absence of a desktop process. Missing or different provenance, derivatives,
-and later or earlier Ubuntu releases fail closed until a reviewed contract
-update adds them. The minimum kernel is Linux 6.8, the base kernel of Ubuntu
-24.04 LTS. A conforming kernel fact also states that the running release is
-owned by an installed Ubuntu archive package. A future collector must derive
-that provenance from package ownership; a locally built or merely relabelled
-kernel cannot satisfy the contract.
+The only supported host OS is 64-bit Debian 13 `trixie`. Host facts require the
+exact `/etc/os-release` identity `ID=debian`, `VERSION_ID=13`, and
+`VERSION_CODENAME=trixie`; Debian point releases remain inside that major-release
+identity. There is no invented Debian "server edition" assertion. Debian 12,
+future Debian major releases, derivatives, testing, unstable, and `sid` fail
+closed until a reviewed contract update adds them.
+
+Release provenance is evidence, not a self-selected label. A future D.8
+collector must combine `/etc/os-release`, active APT source configuration,
+verified Debian `InRelease` metadata (the complete unique origin set is
+`Debian`), and the installed `debian-archive-keyring` package. It normalizes the unique
+configured suite selectors from all enabled Debian release sources. They must be exactly `trixie`,
+`trixie-security`, and `trixie-updates`; source order and Debian point-release
+updates are immaterial. Floating aliases such as `stable` and `oldstable`,
+development aliases such as `testing`, `unstable`, and `sid`, and
+`trixie-backports` are unsupported. A changed meaning of `stable` therefore
+cannot trigger an implicit major upgrade.
 
 Both `linux/amd64` and `linux/arm64` are equally supported host architectures.
 The reviewed SecPal API and frontend OCI indexes each publish and smoke-test
-both platforms, and Docker publishes Ubuntu packages for both. The host-fact
+both platforms, and Debian and Docker publish Debian packages for both. The host-fact
 architecture must equal the inventory architecture. Later installation work
 must still resolve the reviewed OCI index for that architecture before any
 container starts; a missing child platform is a hard failure, never a fallback
@@ -70,8 +75,8 @@ source branch head, and a later publisher result are not deployment inputs.
 
 A conforming fact document reports all of the following:
 
-- a stable, Ubuntu-archive-package-managed Linux 6.8 or newer Ubuntu kernel
-  (release candidates and unverified provenance fail closed);
+- the Debian 13 Stable/Security Linux 6.12 series, owned by an installed Debian
+  archive package from `trixie` or `trixie-security`;
 - unified cgroup v2;
 - OverlayFS support;
 - enabled AppArmor and seccomp enforcement;
@@ -86,14 +91,78 @@ Network filesystems, FUSE-backed persistent state, remote Docker contexts,
 Docker Desktop, and filesystems without reliable POSIX ownership and modes are
 unsupported. D.1 reads synthetic facts; D.8 owns any future fact collector.
 
+The collector must join the running `uname` release to the package that owns
+its installed kernel image and verify that package's authenticated APT origin
+and suite. Release candidates, local or mainline builds, merely relabelled
+kernels, other kernel series, and backports fail closed. Patch-level security
+updates within Linux 6.12 remain valid. Debian's standard kernel supports
+AppArmor; admission still requires the effective AppArmor LSM to be enabled and
+enforcing and seccomp to be available to Docker. Package presence alone is not
+sufficient evidence for either control.
+
+## Operating-system lifecycle
+
+Automatic security updates are required within Debian 13 through
+`unattended-upgrades`. Its effective allowed origins must select
+`trixie-security`, ordinary package updates must not be included in that
+automatic policy, and the active release sources remain codename-pinned.
+Normal package and Debian point-release maintenance is a controlled maintenance
+operation. Automatic major-release upgrades are forbidden.
+
+A future collector derives these facts from the installed mechanism, merged
+APT periodic and unattended-upgrade configuration, enabled timers, allowed
+origins, and reboot settings. Merely installing `unattended-upgrades` is not
+sufficient. The same effective-state inspection must prove that Docker-origin
+packages are excluded from automatic updates and cannot automatically restart
+the daemon.
+
+Automatic reboots are forbidden. A kernel or critical-library update may leave
+the host in a `reboot required` state; later maintenance automation must surface
+that state and a named operator controls the reboot. Because the reference
+topology has one host, that reboot may cause planned short downtime; D.1 makes no
+high-availability or zero-downtime claim.
+
+Docker Engine, Compose, and containerd are outside the unattended Debian
+security-update set. Their updates require review and a maintenance window,
+daemon restarts are controlled, and both host admission and SecPal acceptance
+must pass afterward. Docker 30 or another Docker major line requires a reviewed
+contract update before installation.
+
+Debian 13 full support ends on 2028-08-09 and Debian LTS ends on 2030-06-30.
+The successor schedule is deliberately ahead of the full-support boundary:
+
+- 2027-08-09 (12 months before): start successor qualification;
+- 2027-11-09 (9 months before): keep host-contract compatibility work active;
+- 2028-02-09 (6 months before): prove the replacement or upgrade path in an
+  isolated environment; and
+- 2028-05-09 (3 months before): complete the production migration target.
+
+LTS is a contingency and safety window, not the default migration date. A
+Debian 13 to successor migration first requires a reviewed D.1 contract and
+new host-fact evidence, compatibility evidence for every required component, a
+successful D.7 backup/restore proof, a reproducible D.8 host installation, and
+complete D.10 acceptance evidence.
+
+The architectural preference is **Replace/rebuild before in-place major
+upgrade**: validate a new supported host, install it through D.8, restore state
+through D.7, verify the reviewed SecPal OCI identities, run acceptance, cut
+over, and retire the previous host only after the evidence passes. Schema
+version 1 does not claim an in-place major upgrade as a supported automatic
+operations path; any later exception requires its own reviewed compatibility
+and runbook contract.
+
 ## Docker Engine and Compose
 
 The supported daemon is rootful Docker Engine 29.x installed as `docker-ce`
-from Docker's upstream Ubuntu APT repository. Docker Engine 29.6.2 is the
+from Docker's official Debian APT repository for `trixie`. Docker Engine 29.6.2 is the
 minimum security baseline. Version 30 or later is not silently accepted. A
 reviewed contract update must evaluate breaking changes before widening the
-range. Host facts identify the package source as `docker-apt-repository`; a
-distribution package or unreported provenance fails closed.
+range. Host facts identify `docker-apt-repository`, distribution `debian`, and
+suite `trixie`; a future collector derives them from the installed package's
+APT policy and authenticated Docker source metadata. Debian's `docker.io`,
+Snap, a static install, Docker Desktop, or unreported provenance fails closed.
+Docker's repository component named `stable` is a package channel, not a Debian
+release-suite selector; its configured Debian suite must still be `trixie`.
 
 The supported orchestrator is the `docker-compose-plugin` package and its
 `docker compose` CLI in the Compose v2 line. Docker Compose 2.40.3 is the
@@ -259,7 +328,7 @@ such as `systemd-timesyncd` and `chrony`.
 Inventory selects the unprivileged account and primary group name plus numeric
 UID/GID. Schema version 1 requires IDs from 1000 through 60000 and rejects
 known container identities. `root` is forbidden as an account name. Known
-privileged or sensitive Ubuntu primary-group names are forbidden, and facts
+privileged or sensitive Debian and runtime primary-group names are forbidden, and facts
 must report no supplementary group membership.
 Facts must report the effective name, primary group, UID, primary GID,
 supplementary GIDs, home, shell, interactive-login state, sudo-authorization
@@ -384,7 +453,8 @@ change the reviewed API artifact identity.
 
 ## Failure semantics and non-goals
 
-Unknown inventory or host-fact fields, unknown versions, mismatched
+Unknown inventory or host-fact fields, unknown versions, Debian release or
+update-policy drift, mismatched
 architectures, effective service identities, service-account login, sudo, or
 other host authority, direct root SSH, Docker installation provenance or socket
 authority, low resources, clock drift, unsupported filesystems, and dependency
@@ -400,10 +470,14 @@ remain with #10 through #18 according to the parent epic.
 
 ## Evidence references
 
-- [Docker Engine Ubuntu platform support](https://docs.docker.com/engine/install/ubuntu/)
+- [Debian 13 release information](https://www.debian.org/releases/trixie/)
+- [Debian 13 release notes](https://www.debian.org/releases/stable/release-notes/)
+- [Debian stable release update policy](https://www.debian.org/releases/stable/errata)
+- [Debian security and LTS lifecycle](https://www.debian.org/security/faq#lifespan)
+- [Debian `unattended-upgrades` package](https://packages.debian.org/trixie/unattended-upgrades)
+- [Debian AppArmor guidance](https://www.debian.org/doc/manuals/debian-handbook/sect.apparmor.en.html)
+- [Docker Engine Debian platform support](https://docs.docker.com/engine/install/debian/)
 - [Docker Engine 29 release notes](https://docs.docker.com/engine/release-notes/29/)
 - [Docker Compose plugin installation](https://docs.docker.com/compose/install/linux/)
-- [Ubuntu 24.04 LTS release notes](https://documentation.ubuntu.com/release-notes/24.04/)
-- [Ubuntu time synchronization](https://documentation.ubuntu.com/server/explanation/networking/about-time-synchronisation/)
 - [`docs/api-image-consumption.md`](../api-image-consumption.md)
 - [`docs/frontend-image-consumption.md`](../frontend-image-consumption.md)

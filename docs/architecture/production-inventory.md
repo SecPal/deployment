@@ -73,9 +73,12 @@ attestation verification, or fail-closed ordering.
 
 `hostname`, `architecture`, `public_address`, and `private_addresses` are
 asserted facts that later collection must match. Architecture is exactly
-`amd64` or `arm64`. The host-fact document separately requires the normalized
-`ubuntu-server` installation profile; Ubuntu release identifiers alone do not
-establish the supported server provenance. Public addresses must be globally
+`amd64` or `arm64`. The closed host-fact document separately requires Debian
+13/trixie identity, authenticated Debian archive provenance, the exact
+codename-pinned release-suite set, the security-update and reboot policy, and
+Debian Stable/Security kernel provenance. These observations must be collected
+from effective OS, APT, package, kernel, and update-policy state; a self-selected
+distribution label is insufficient. Public addresses must be globally
 routable. Reserved documentation addresses are permitted only by the explicit
 `--synthetic` fixture mode; normal validation rejects them. Multicast,
 IANA-reserved IPv6 space, deprecated IPv6 site-local ranges, and scoped IPv6
@@ -100,7 +103,8 @@ values are strict YAML integers, are bounded, and cannot reuse known SecPal
 runtime IDs. Integral floating-point spellings are not coerced for UID/GID,
 path ownership, decision-issue, or resource fields. The account never carries
 a credential in inventory. `root` is forbidden as an account name; known
-privileged or sensitive Ubuntu primary-group names are also forbidden. Host
+privileged or sensitive Debian and runtime primary-group names are also
+forbidden. Host
 facts must report no supplementary group membership.
 Supplied host facts report the effective UID, primary GID, and supplementary
 GIDs resolved for the configured identity, as well as its name,
@@ -207,8 +211,9 @@ Validation consists of:
 3. cross-field rules for origins, paths, ownership, addresses, and fixed
    resource floors; and
 4. comparison with synthetic host facts for OS, architecture, effective
-   service identity and privilege state, root SSH policy, kernel package
-   provenance, cgroup, Docker package provenance, daemon socket authority,
+   service identity and privilege state, root SSH policy, Debian release,
+   update and kernel package provenance, cgroup, Docker Debian package
+   provenance, daemon socket authority,
    Compose, clock, tools, writable persistent-path filesystems, resources, and
    storage headroom.
 
@@ -226,8 +231,8 @@ is a non-production `amd64` example. Positive fixtures cover both supported
 architectures under `tests/fixtures/production-inventory/`. Host prerequisites
 are represented only by synthetic YAML under
 `tests/fixtures/production-host/`; negative mutation descriptors exercise
-architecture, disk, clock, kernel, cgroup, OS, Docker, Compose, and rootless
-failures.
+architecture, disk, clock, Debian release/suite/update lifecycle, kernel
+provenance, cgroup, Docker Debian provenance, Compose, and rootless failures.
 
 These examples do not authorize use of the synthetic usernames, IDs,
 addresses, origins, paths, or backup target on a real system.

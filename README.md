@@ -165,7 +165,9 @@ claim a production deployment or public infrastructure. Phase D has begun
 only with the provider-neutral, contract-only
 [`production host`](docs/architecture/production-host.md) and
 [`production inventory`](docs/architecture/production-inventory.md)
-definitions. No production orchestration or infrastructure exists. Digest
+definitions. Schema version 1 admits only Debian 13/trixie hosts and defines
+its security-update, controlled-reboot, and reviewed major-upgrade boundary.
+No production orchestration or infrastructure exists. Digest
 provenance, reviewed updates, and rollback are detailed in
 [`docs/api-image-consumption.md`](docs/api-image-consumption.md) and
 [`docs/frontend-image-consumption.md`](docs/frontend-image-consumption.md).

@@ -102,8 +102,9 @@ Phase C.
 **Goal:** Provide a reproducible public self-hosting reference.
 
 **Implemented:** D.1 defines only the provider-neutral production host and
-versioned non-secret inventory admission contract. It provisions no host and
-implements no production orchestration. See
+versioned non-secret inventory admission contract for Debian 13/trixie,
+including its OS lifecycle boundary. It provisions no host and implements no
+production orchestration. See
 [`production-host.md`](architecture/production-host.md) and
 [`production-inventory.md`](architecture/production-inventory.md).
 

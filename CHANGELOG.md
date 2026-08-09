@@ -14,6 +14,8 @@ SPDX-License-Identifier: CC0-1.0
   host-facts schema, and examples for both supported architectures.
 - Fail-closed inventory and synthetic host-prerequisite validation without
   host access or production mutation.
+- An exact Debian 13/trixie host identity and reviewed security-update, reboot,
+  Docker-maintenance, and major-release lifecycle contract.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

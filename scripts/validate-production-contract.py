@@ -713,15 +713,19 @@ def validate_kernel_facts(kernel: dict[str, Any]) -> None:
         kernel["release"],
     )
     if kernel_match is None:
-        raise ContractViolation("host kernel must be Linux 6.8 or newer")
+        raise ContractViolation(
+            "host kernel must be the Debian 13 stable Linux 6.12 series"
+        )
     kernel_version = tuple(int(kernel_match.group(index)) for index in (1, 2, 3))
     kernel_suffix = kernel_match.group("suffix") or ""
     if (
-        kernel_version < (6, 8)
+        kernel_version[:2] != (6, 12)
         or kernel_suffix.lower().startswith("-rc")
         or KERNEL_RELEASE_CANDIDATE_PATTERN.search(kernel_suffix)
     ):
-        raise ContractViolation("host kernel must be Linux 6.8 or newer")
+        raise ContractViolation(
+            "host kernel must be the Debian 13 stable Linux 6.12 series"
+        )
 
 
 def validate_runtime_facts(
