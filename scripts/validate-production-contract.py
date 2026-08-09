@@ -55,6 +55,9 @@ DEFAULT_MANAGED_PATH_ROOT = PurePosixPath("/srv/secpal")
 QUADLET_DEFINITION_ROOT = PurePosixPath("/etc/containers/systemd/users")
 MAX_SYSTEM_ID = 4294967294
 SUBORDINATE_ID_COUNT = 65536
+SERVICE_ACCOUNT_WRITABLE_OWNER_ROLES = frozenset(
+    {"service-account", "rootless-container-storage"}
+)
 
 SECRET_FIELD_NAMES = {
     "password",
@@ -959,15 +962,10 @@ def validate_filesystem_fact(
         raise ContractViolation(
             f"effective path mode does not match inventory at {name}"
         )
-    expected_service_write = {
-        "operator-root": False,
-        "service-account": True,
-        "rootless-container-storage": True,
-    }.get(path_contract["owner_role"])
-    if (
-        expected_service_write is not None
-        and filesystem["service_account_can_write"] is not expected_service_write
-    ):
+    expected_service_write = (
+        path_contract["owner_role"] in SERVICE_ACCOUNT_WRITABLE_OWNER_ROLES
+    )
+    if filesystem["service_account_can_write"] is not expected_service_write:
         raise ContractViolation(
             f"effective path access does not match inventory at {name}"
         )

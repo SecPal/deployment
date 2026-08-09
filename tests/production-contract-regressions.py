@@ -1039,24 +1039,12 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_managed_path_metadata_and_access_are_effective(self) -> None:
+    def test_managed_path_metadata_and_ancestry_are_effective(self) -> None:
         mutations = (
             ("configuration", "uid", 20000, "effective path ownership"),
             ("deployment_state", "gid", 0, "effective path ownership"),
             ("logs", "uid", 0, "effective path ownership"),
             ("backup_staging", "mode", "0777", "effective path mode"),
-            (
-                "configuration",
-                "service_account_can_write",
-                True,
-                "effective path access",
-            ),
-            (
-                "logs",
-                "service_account_can_write",
-                False,
-                "effective path access",
-            ),
             (
                 "configuration",
                 "ancestors_service_account_can_write",
@@ -1073,6 +1061,30 @@ class ProductionContractRegressionTests(unittest.TestCase):
                         self.inventory, facts
                     ),
                     message,
+                )
+
+    def test_every_managed_path_enforces_service_account_write_policy(self) -> None:
+        writable_owner_roles = {"service-account", "rootless-container-storage"}
+        filesystems = nested_mapping(self.host_facts, "filesystems")
+        paths = nested_mapping(self.inventory, "paths")
+        for path_name, filesystem in filesystems.items():
+            with self.subTest(path_name=path_name):
+                if not isinstance(filesystem, dict):
+                    raise AssertionError("filesystem fact must be a mapping")
+                path_contract = paths[path_name]
+                if not isinstance(path_contract, dict):
+                    raise AssertionError("path contract must be a mapping")
+                expected_write = path_contract["owner_role"] in writable_owner_roles
+                self.assertIs(filesystem["service_account_can_write"], expected_write)
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "filesystems", path_name)[
+                    "service_account_can_write"
+                ] = not expected_write
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    ),
+                    "effective path access",
                 )
 
     def test_release_candidate_kernel_is_rejected_at_stable_floor(self) -> None:
