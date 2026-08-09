@@ -136,6 +136,11 @@
         "gid",
         "supplementary_gids",
         "home",
+        "home_uid",
+        "home_gid",
+        "home_mode",
+        "home_local",
+        "containers_configuration_account_writable",
         "shell",
         "interactive_login",
         "sudo_authorized",
@@ -166,6 +171,21 @@
         "home": {
           "type": "string",
           "minLength": 1
+        },
+        "home_uid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "home_gid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "home_mode": {
+          "const": "0750"
+        },
+        "home_local": {
+          "const": true
+        },
+        "containers_configuration_account_writable": {
+          "const": false
         },
         "shell": {
           "const": "/usr/sbin/nologin"
@@ -286,6 +306,7 @@
             "release_codename",
             "external_repository",
             "installed_packages",
+            "package_suites",
             "forbidden_packages_present"
           ],
           "properties": {
@@ -325,6 +346,32 @@
                 "dbus_user_session": { "const": "dbus-user-session" }
               }
             },
+            "package_suites": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "podman",
+                "conmon",
+                "crun",
+                "netavark",
+                "aardvark_dns",
+                "passt",
+                "uidmap",
+                "dbus_user_session"
+              ],
+              "properties": {
+                "podman": { "$ref": "#/$defs/runtimePackageSuite" },
+                "conmon": { "$ref": "#/$defs/runtimePackageSuite" },
+                "crun": { "$ref": "#/$defs/runtimePackageSuite" },
+                "netavark": { "$ref": "#/$defs/runtimePackageSuite" },
+                "aardvark_dns": { "$ref": "#/$defs/runtimePackageSuite" },
+                "passt": { "$ref": "#/$defs/runtimePackageSuite" },
+                "uidmap": { "$ref": "#/$defs/runtimePackageSuite" },
+                "dbus_user_session": {
+                  "$ref": "#/$defs/runtimePackageSuite"
+                }
+              }
+            },
             "forbidden_packages_present": {
               "type": "array",
               "maxItems": 0
@@ -338,8 +385,8 @@
             "account",
             "subuid",
             "subgid",
-            "newuidmap_available",
-            "newgidmap_available"
+            "newuidmap_effective",
+            "newgidmap_effective"
           ],
           "properties": {
             "account": {
@@ -352,10 +399,10 @@
             "subgid": {
               "$ref": "#/$defs/subordinateIdFact"
             },
-            "newuidmap_available": {
+            "newuidmap_effective": {
               "const": true
             },
-            "newgidmap_available": {
+            "newgidmap_effective": {
               "const": true
             }
           }
@@ -368,7 +415,11 @@
             "starts_at_boot",
             "linger_enabled",
             "dbus_session_available",
-            "runtime_directory"
+            "runtime_directory",
+            "runtime_directory_uid",
+            "runtime_directory_gid",
+            "runtime_directory_mode",
+            "runtime_directory_local"
           ],
           "properties": {
             "manager_available": {
@@ -386,6 +437,18 @@
             "runtime_directory": {
               "type": "string",
               "minLength": 1
+            },
+            "runtime_directory_uid": {
+              "$ref": "#/$defs/systemId"
+            },
+            "runtime_directory_gid": {
+              "$ref": "#/$defs/systemId"
+            },
+            "runtime_directory_mode": {
+              "const": "0700"
+            },
+            "runtime_directory_local": {
+              "const": true
             }
           }
         },
@@ -403,7 +466,9 @@
             "unit_files_uid",
             "unit_files_gid",
             "unit_files_mode",
-            "writable_search_paths_empty",
+            "effective_search_paths",
+            "persistent_search_path_configuration_account_writable",
+            "tree_symlinks_present",
             "service_account_can_read",
             "service_account_can_traverse",
             "service_account_can_write"
@@ -421,7 +486,17 @@
             "unit_files_uid": { "const": 0 },
             "unit_files_gid": { "const": 0 },
             "unit_files_mode": { "const": "0644" },
-            "writable_search_paths_empty": { "const": true },
+            "effective_search_paths": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "persistent_search_path_configuration_account_writable": {
+              "const": false
+            },
+            "tree_symlinks_present": { "const": false },
             "service_account_can_read": { "const": true },
             "service_account_can_traverse": { "const": true },
             "service_account_can_write": { "const": false }
@@ -440,6 +515,8 @@
             "graphroot_writable",
             "runroot_uid",
             "runroot_gid",
+            "runroot_mode",
+            "runroot_local",
             "runroot_writable",
             "transient_store",
             "graphroot_reconstructable"
@@ -454,6 +531,8 @@
             "graphroot_writable": { "const": true },
             "runroot_uid": { "$ref": "#/$defs/systemId" },
             "runroot_gid": { "$ref": "#/$defs/systemId" },
+            "runroot_mode": { "const": "0700" },
+            "runroot_local": { "const": true },
             "runroot_writable": { "const": true },
             "transient_store": { "const": false },
             "graphroot_reconstructable": { "const": true }
@@ -714,6 +793,9 @@
     "version": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
+    },
+    "runtimePackageSuite": {
+      "enum": ["trixie", "trixie-security"]
     },
     "subordinateIdFact": {
       "type": "object",

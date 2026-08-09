@@ -31,6 +31,11 @@ service_account:
   gid: 20000
   supplementary_gids: []
   home: /var/lib/secpal
+  home_uid: 0
+  home_gid: 20000
+  home_mode: "0750"
+  home_local: true
+  containers_configuration_account_writable: false
   shell: /usr/sbin/nologin
   interactive_login: false
   sudo_authorized: false
@@ -69,6 +74,15 @@ runtime:
       passt: passt
       uidmap: uidmap
       dbus_user_session: dbus-user-session
+    package_suites:
+      podman: trixie
+      conmon: trixie
+      crun: trixie
+      netavark: trixie
+      aardvark_dns: trixie
+      passt: trixie
+      uidmap: trixie
+      dbus_user_session: trixie
     forbidden_packages_present: []
   user_namespace:
     account: secpal-deploy
@@ -86,14 +100,18 @@ runtime:
       source_entry_count: 1
       overlaps_other_accounts: false
       overlaps_host_identities: false
-    newuidmap_available: true
-    newgidmap_available: true
+    newuidmap_effective: true
+    newgidmap_effective: true
   systemd_user:
     manager_available: true
     starts_at_boot: true
     linger_enabled: true
     dbus_session_available: true
     runtime_directory: /run/user/20000
+    runtime_directory_uid: 20000
+    runtime_directory_gid: 20000
+    runtime_directory_mode: "0700"
+    runtime_directory_local: true
   quadlet:
     available: true
     orchestrator: systemd-user
@@ -105,7 +123,10 @@ runtime:
     unit_files_uid: 0
     unit_files_gid: 0
     unit_files_mode: "0644"
-    writable_search_paths_empty: true
+    effective_search_paths:
+      - /etc/containers/systemd/users/20000
+    persistent_search_path_configuration_account_writable: false
+    tree_symlinks_present: false
     service_account_can_read: true
     service_account_can_traverse: true
     service_account_can_write: false
@@ -119,6 +140,8 @@ runtime:
     graphroot_writable: true
     runroot_uid: 20000
     runroot_gid: 20000
+    runroot_mode: "0700"
+    runroot_local: true
     runroot_writable: true
     transient_store: false
     graphroot_reconstructable: true

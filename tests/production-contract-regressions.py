@@ -528,6 +528,11 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("name", "different-account"),
             ("group", "different-group"),
             ("home", "/var/lib/different-account"),
+            ("home_uid", 20000),
+            ("home_gid", 0),
+            ("home_mode", "0770"),
+            ("home_local", False),
+            ("containers_configuration_account_writable", True),
             ("shell", "/bin/bash"),
             ("interactive_login", True),
             ("sudo_authorized", True),
@@ -623,6 +628,28 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+        for package in (
+            "podman",
+            "conmon",
+            "crun",
+            "netavark",
+            "aardvark_dns",
+            "passt",
+            "uidmap",
+            "dbus_user_session",
+        ):
+            with self.subTest(package=package, provenance="backports"):
+                facts = copy.deepcopy(self.host_facts)
+                suites = nested_mapping(
+                    facts, "runtime", "installation", "package_suites"
+                )
+                suites[package] = "trixie-backports"
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
         facts = copy.deepcopy(self.host_facts)
         installation = nested_mapping(facts, "runtime", "installation")
         installation["forbidden_packages_present"] = ["podman-docker"]
@@ -633,8 +660,8 @@ class ProductionContractRegressionTests(unittest.TestCase):
     def test_user_namespace_helpers_account_and_sources_are_exact(self) -> None:
         mutations = (
             (("account",), "other-account"),
-            (("newuidmap_available",), False),
-            (("newgidmap_available",), False),
+            (("newuidmap_effective",), False),
+            (("newgidmap_effective",), False),
             (("subuid", "source"), "/etc/subgid"),
             (("subgid", "source"), "/etc/subuid"),
             (("subuid", "source_entry_count"), 2),
@@ -661,6 +688,10 @@ class ProductionContractRegressionTests(unittest.TestCase):
             (("systemd_user", "starts_at_boot"), False),
             (("systemd_user", "linger_enabled"), False),
             (("systemd_user", "dbus_session_available"), False),
+            (("systemd_user", "runtime_directory_uid"), 0),
+            (("systemd_user", "runtime_directory_gid"), 0),
+            (("systemd_user", "runtime_directory_mode"), "0755"),
+            (("systemd_user", "runtime_directory_local"), False),
             (("quadlet", "available"), False),
             (("quadlet", "orchestrator"), "podman-compose"),
             (("quadlet", "definition_directory_uid"), 20000),
@@ -669,7 +700,15 @@ class ProductionContractRegressionTests(unittest.TestCase):
             (("quadlet", "unit_files_uid"), 20000),
             (("quadlet", "unit_files_gid"), 20000),
             (("quadlet", "unit_files_mode"), "0664"),
-            (("quadlet", "writable_search_paths_empty"), False),
+            (
+                ("quadlet", "effective_search_paths"),
+                ["/run/user/20000/containers/systemd"],
+            ),
+            (
+                ("quadlet", "persistent_search_path_configuration_account_writable"),
+                True,
+            ),
+            (("quadlet", "tree_symlinks_present"), True),
             (("quadlet", "service_account_can_read"), False),
             (("quadlet", "service_account_can_traverse"), False),
             (("quadlet", "service_account_can_write"), True),
@@ -698,6 +737,8 @@ class ProductionContractRegressionTests(unittest.TestCase):
             (("storage", "graphroot_writable"), False),
             (("storage", "runroot_uid"), 0),
             (("storage", "runroot_gid"), 0),
+            (("storage", "runroot_mode"), "0777"),
+            (("storage", "runroot_local"), False),
             (("storage", "runroot_writable"), False),
             (("storage", "graphroot_reconstructable"), False),
             (("registries", "secpal_mirrors"), ["mirror.example.invalid"]),

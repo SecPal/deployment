@@ -163,8 +163,11 @@ The only production runtime admitted by schema version 1 is rootless Podman
 come from authenticated Debian 13 archives for `trixie` or its reviewed
 security-maintenance suite; external Podman repositories and backports are
 unsupported. The narrow runtime matrix is `podman`, `conmon`, `crun`,
-`netavark`, `aardvark-dns`, `passt`, `uidmap`, and `dbus-user-session`. Buildah is not a
-production requirement. `podman-docker`, Docker Engine, Docker CLI aliases,
+`netavark`, `aardvark-dns`, `passt`, `uidmap`, and `dbus-user-session`. Every
+installed runtime package reports its effective APT suite, which must be
+`trixie` or `trixie-security`; an installed `trixie-backports` package remains
+unsupported even if its source entry was subsequently removed. Buildah is not
+a production requirement. `podman-docker`, Docker Engine, Docker CLI aliases,
 Docker Compose, `podman-compose`, and `podman compose` are not supported
 production runtime paths. Rootful Podman is unsupported and fails closed.
 
@@ -184,7 +187,10 @@ and matches the selected inventory range. A collector must parse every
 effective entry and report exactly one selected entry per dimension;
 it also rejects overlap with any effective host UID/GID or another account's
 subordinate range.
-`newuidmap` and `newgidmap` must be effective.
+`newuidmap` and `newgidmap` must be effective, not merely installed. A future
+collector must prove that each helper can establish the selected mapping for a
+short-lived user-namespace probe owned by the service account; executable
+presence alone is insufficient.
 This normal rootless namespace maps all current known container identities,
 including API `10001:10001` and frontend `101:101`. Exact PostgreSQL and Valkey
 container identities remain D.2 decisions; selecting an identity outside this
@@ -196,19 +202,25 @@ required. Debian's rootless generator path is
 `/usr/lib/systemd/user-generators/podman-user-generator`. The non-login service
 account has linger enabled so its user manager
 starts at boot without an interactive login. Its runtime boundary is
-`/run/user/<UID>` and its transient Podman runroot is
-`/run/user/<UID>/containers`; neither is authoritative or backed up.
+the local, service-account-owned `/run/user/<UID>` directory with mode `0700`.
+Its transient, local Podman runroot is `/run/user/<UID>/containers`, also mode
+`0700` and owned by the service account; neither is authoritative or backed up.
 
 Root/operator-owned definitions live at
 `/etc/containers/systemd/users/<SECPAL_UID>/`, mode `0755` on the directory,
 with root-owned `0644` unit files. They are readable/traversable but not writable
-by the service account. Effective service-account-writable Quadlet search paths
-must contain no definitions, drop-ins, or symlinks that could override the
-reviewed tree. This uses Podman
-5.4.2's administrator-managed rootless-user search path. Later D.1a (#20)/D.8 work
-must keep unit files and policy root-owned so a product process cannot rewrite
-its future production definition. D.1 defines only this capability and does
-not add Quadlet files.
+by the service account. The effective Quadlet generator search path is restricted
+to that one reviewed directory through an administrator-owned, persistent
+Quadlet search-path configuration that the service account cannot change.
+Default user-writable runtime and home search paths are not effective inputs.
+The complete reviewed tree, including drop-ins, contains no symlinks and all
+unit content retains the stated root ownership and modes. A future collector
+must inspect the effective generator environment and dry-run output rather than
+accept an empty user directory as proof. This uses Podman 5.4.2's documented
+search-path restriction and administrator-managed rootless-user path. Later
+D.1a (#20)/D.8 work must keep the search-path policy, unit files, and drop-ins
+root-owned so a product process cannot rewrite its future production
+definition. D.1 defines only this capability and does not add Quadlet files.
 
 The rootless network contract is Netavark with Aardvark DNS and `pasta` from
 Debian packages. Host networking is forbidden. D.1 does not change
@@ -233,10 +245,12 @@ not implement pulling, verification, or execution.
 A future D.8 collector derives runtime facts from authenticated `dpkg`/APT
 package records, `podman info`, merged system and user `containers.conf`,
 `storage.conf` and `registries.conf`, the complete subordinate-ID databases,
-`loginctl` plus the effective user manager, the installed user generator and
-administrator-owned Quadlet tree, and the mount covering graphroot. It must
-report effective state rather than infer compliance from package presence or
-copy declarative inventory values.
+an effective helper-backed mapping probe, `loginctl` plus the effective user
+manager and runtime-directory metadata, the installed user generator, its
+effective search-path configuration and dry-run output, the complete
+administrator-owned Quadlet tree, and the mounts covering the service-account
+home, runroot, and graphroot. It must report effective state rather than infer
+compliance from package presence or copy declarative inventory values.
 
 ## Resource admission contract
 
@@ -372,9 +386,12 @@ known container identities. `root` is forbidden as an account name. Known
 privileged or sensitive Debian and runtime primary-group names are forbidden, and facts
 must report no supplementary group membership.
 Facts must report the effective name, primary group, UID, primary GID,
-supplementary GIDs, home, shell, interactive-login state, sudo-authorization
-state, and effective host-privilege-authorization state. The name, group, IDs,
-and home must match inventory; the remaining facts must prove a
+supplementary GIDs, home, home ownership/mode/locality, shell,
+interactive-login state, sudo-authorization state, and effective
+host-privilege-authorization state. The name, group, IDs, and home must match
+inventory. The home is local, root-owned, group-owned by the service account's
+primary GID, mode `0750`, and its containers configuration is not writable by
+the account. The remaining facts must prove a
 non-login shell, disabled interactive login, no sudo authorization, no
 rootful or remote runtime authorization, no arbitrary system-unit authority,
 and no other effective host-privilege grant.
@@ -385,9 +402,10 @@ inherited groups and included policy, rather than grep one sudoers file. The
 example uses
 `secpal-deploy:20000:20000`, but that value is synthetic and not mandatory.
 
-Root owns reviewed configuration and deployment metadata with the account's
-primary group receiving read/execute access. The account owns its rootless
-Podman graphroot, logs, and backup staging. Its home is an absolute state path,
+Root owns reviewed configuration, deployment metadata, and the service-account
+home, with the account's primary group receiving read/execute access. The
+account owns its rootless Podman graphroot, logs, and backup staging. Its home
+is an absolute local state path but is not a user-writable Podman policy source;
 its shell is `/usr/sbin/nologin`, interactive login is disabled, and it receives
 no `sudo` authorization. It does not own PostgreSQL, Quadlet definitions, or
 undecided edge identities.
@@ -543,6 +561,8 @@ remain with #10 through #18 according to the parent epic.
 - [Debian 13 uidmap package](https://packages.debian.org/trixie/uidmap)
 - [Debian 13 DBus user-session package](https://packages.debian.org/trixie/dbus-user-session)
 - [Debian subordinate-ID format](https://manpages.debian.org/trixie/passwd/subuid.5.en.html)
+- [Debian `newuidmap` behavior](https://manpages.debian.org/trixie/uidmap/newuidmap.1.en.html)
+- [Debian systemd user runtime directory](https://manpages.debian.org/trixie/libpam-systemd/pam_systemd.8.en.html)
 - [Podman 5.4.2 rootless requirements](https://docs.podman.io/en/v5.4.2/markdown/podman.1.html#rootless-mode)
 - [Podman 5.4.2 Quadlet contract](https://docs.podman.io/en/v5.4.2/markdown/podman-systemd.unit.5.html)
 - [Podman 5.4.2 networking](https://docs.podman.io/en/v5.4.2/markdown/podman-network.1.html)

@@ -822,10 +822,22 @@ def validate_runtime_facts(
         raise ContractViolation(
             "systemd user runtime directory does not match the service account"
         )
+    if (
+        systemd_user["runtime_directory_uid"] != service_account["uid"]
+        or systemd_user["runtime_directory_gid"] != service_account["gid"]
+    ):
+        raise ContractViolation(
+            "systemd user runtime directory ownership does not match the service account"
+        )
 
     expected_quadlet_path = inventory["paths"]["quadlet_definitions"]["path"]
-    if runtime["quadlet"]["definition_path"] != expected_quadlet_path:
+    quadlet = runtime["quadlet"]
+    if quadlet["definition_path"] != expected_quadlet_path:
         raise ContractViolation("Quadlet definition path does not match the inventory")
+    if quadlet["effective_search_paths"] != [expected_quadlet_path]:
+        raise ContractViolation(
+            "effective Quadlet search path is not restricted to the reviewed tree"
+        )
 
     storage = runtime["storage"]
     if storage["graphroot"] != inventory["paths"]["podman_graph_root"]["path"]:
@@ -857,6 +869,13 @@ def validate_service_account_facts(
             raise ContractViolation(
                 "effective service-account identity does not match the inventory"
             )
+    if (
+        service_account["home_uid"] != 0
+        or service_account["home_gid"] != expected_account["gid"]
+    ):
+        raise ContractViolation(
+            "service-account home ownership does not preserve operator control"
+        )
 
 
 def validate_network_facts(inventory: dict[str, Any], network: dict[str, Any]) -> None:

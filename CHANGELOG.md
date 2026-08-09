@@ -19,6 +19,8 @@ SPDX-License-Identifier: CC0-1.0
 - A closed subordinate-ID, systemd user-manager, local Podman graphroot,
   runtime-API denial, and registry-redirection denial contract while preserving
   the historical Docker/Compose integration evidence.
+- Effective runtime-package suite, mapping-helper, user-runtime-directory, and
+  administrator-only Quadlet search-path evidence.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

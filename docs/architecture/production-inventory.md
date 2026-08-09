@@ -111,11 +111,13 @@ Supplied host facts report the effective UID, primary GID, and supplementary
 GIDs resolved for the configured identity, as well as its name,
 primary group, home, shell, interactive-login state, effective sudo
 authorization, and effective host-privilege authorization. Identity and home
-facts must match inventory. Shell and login facts must prove the non-interactive
-policy; sudo and broader host privilege authorization must be absent. The broad
-denial covers privileged supplementary groups and equivalent ACL, device,
-capability, system-unit, rootful-runtime, remote-runtime, or policy grants. A
-separate closed SSH fact must prove that direct root login is not permitted.
+facts must match inventory. Home facts additionally prove a local root-owned
+`0750` directory with the service primary GID and no account-writable containers
+configuration. Shell and login facts must prove the non-interactive policy;
+sudo and broader host privilege authorization must be absent. The broad denial
+covers privileged supplementary groups and equivalent ACL, device, capability,
+system-unit, rootful-runtime, remote-runtime, or policy grants. A separate
+closed SSH fact must prove that direct root login is not permitted.
 
 Schema version 1 selects one contiguous 65536-identity range from `/etc/subuid`
 and one from `/etc/subgid`. Starts and counts are strict integers; arithmetic
@@ -129,9 +131,13 @@ or Valkey identity.
 
 Runtime policy is reviewed schema, not an inventory escape hatch. Host facts
 must prove Podman `>=5.4.2,<6.0.0`, rootless ownership by the selected account,
-authenticated Debian installed-package provenance, crun, Netavark/Aardvark DNS, pasta,
-uidmap, a boot-capable systemd user manager with linger, Quadlet, local overlay
-storage, and a matching runroot. Rootful Podman, Docker as the selected
+authenticated Debian installed-package provenance and an allowed installed
+suite for every runtime package, effective mapping helpers, crun,
+Netavark/Aardvark DNS, pasta, uidmap, a boot-capable systemd user manager with
+linger, a local owner-only runtime directory and runroot, Quadlet, and local
+overlay storage. The effective Quadlet search list contains only the reviewed
+administrator path; its configuration is not account-writable and its complete
+definition tree contains no symlinks. Rootful Podman, Docker as the selected
 production runtime, Compose orchestration, compatibility packages, remote or
 socket APIs, host networking, auto-update, registry redirects, user-writable
 Quadlet overrides, and non-root-owned Quadlet units fail closed.
