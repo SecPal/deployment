@@ -296,7 +296,14 @@ class QuadletContract(unittest.TestCase):
             self.assertIn(f"secpal-int-{INSTANCE}-{role}.service", target)
 
     def test_renderer_accepts_only_bounded_runtime_values(self) -> None:
-        for bad_instance in ("UPPER", "short", "../escape", "a" * 25, "socket.sock"):
+        for bad_instance in (
+            "UPPER",
+            "short",
+            "../escape",
+            "a" * 25,
+            "socket.sock",
+            "parallel-01",
+        ):
             result = subprocess.run(
                 [
                     "python3",

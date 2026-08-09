@@ -353,6 +353,16 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 self.module.validate_registry_documents([document])
 
+    def test_malformed_system_registry_configuration_is_reported_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            malformed = Path(directory) / "registries.conf"
+            malformed.write_text("=\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "system registry configuration could not be parsed safely",
+            ):
+                self.module.load_registry_document(malformed)
+
     def test_anonymous_pull_environment_isolates_all_fallback_authentication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
@@ -941,6 +951,64 @@ class QuadletLifecycleContract(unittest.TestCase):
                 ),
             },
         )
+        with self.assertRaises(self.module.IntegrationError):
+            self.module.runtime_probe_contract("parallel-01")
+
+    def test_forbidden_user_unit_queries_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=Path(directory),
+                output=Path(directory) / "quadlets",
+                runner=FakeRunner(),
+            )
+            query_error = subprocess.CompletedProcess(
+                ("systemctl", "--user", "show"),
+                125,
+                "",
+                "user manager unavailable",
+            )
+            with mock.patch.object(
+                lifecycle,
+                "command",
+                return_value=query_error,
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "unable to verify forbidden user unit",
+            ):
+                lifecycle._validate_disabled_user_unit("podman.socket")
+
+            safe = subprocess.CompletedProcess(
+                ("systemctl", "--user", "show"),
+                0,
+                "LoadState=loaded\nUnitFileState=disabled\nActiveState=inactive\n",
+                "",
+            )
+            with mock.patch.object(lifecycle, "command", return_value=safe):
+                lifecycle._validate_disabled_user_unit("podman.socket")
+
+            for unsafe_output in (
+                "LoadState=loaded\nUnitFileState=enabled\nActiveState=inactive\n",
+                "LoadState=loaded\nUnitFileState=disabled\nActiveState=active\n",
+            ):
+                with self.subTest(output=unsafe_output):
+                    unsafe = subprocess.CompletedProcess(
+                        ("systemctl", "--user", "show"),
+                        0,
+                        unsafe_output,
+                        "",
+                    )
+                    with mock.patch.object(
+                        lifecycle,
+                        "command",
+                        return_value=unsafe,
+                    ), self.assertRaisesRegex(
+                        self.module.IntegrationError,
+                        "forbidden user unit is enabled or active",
+                    ):
+                        lifecycle._validate_disabled_user_unit("podman.socket")
 
     def test_failure_profiles_check_only_actual_dependency_descendants(self) -> None:
         common = ("api", "worker-general", "worker-hash-chain", "scheduler", "gateway")
@@ -1023,6 +1091,19 @@ class QuadletLifecycleContract(unittest.TestCase):
                 lifecycle._expected_networks("migrate"),
                 {"secpal-int-contract01-application"},
             )
+
+    def test_frontend_dns_isolation_rejects_probe_errors(self) -> None:
+        self.module.validate_dns_isolation_result(2, "postgres")
+        with self.assertRaisesRegex(
+            self.module.IntegrationError, "unexpectedly resolved data service"
+        ):
+            self.module.validate_dns_isolation_result(0, "postgres")
+        for returncode in (1, 3, 125):
+            with self.subTest(returncode=returncode), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "unable to verify frontend DNS isolation",
+            ):
+                self.module.validate_dns_isolation_result(returncode, "postgres")
 
     def test_application_restart_does_not_replan_the_fail_closed_dependency_graph(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -57,7 +57,7 @@ FRONTEND_SOURCE_COMMIT = "b755ca0d0ee5a85eca5ad5688d457241f070b1b4"
 POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
 VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
-INSTANCE_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{6,22}[a-z0-9]\Z")
+INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
@@ -417,6 +417,23 @@ def validate_registry_documents(documents: Sequence[Mapping]) -> None:
                 or entry.get("blocked") is True
             ):
                 raise IntegrationError("registry rewrite, mirror, fallback, or insecure transport is forbidden")
+
+
+def load_registry_document(path: Path) -> Mapping:
+    try:
+        with path.open("rb") as stream:
+            return tomllib.load(stream)
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+        raise IntegrationError(
+            "system registry configuration could not be parsed safely"
+        ) from error
+
+
+def validate_dns_isolation_result(returncode: int, service: str) -> None:
+    if returncode == 0:
+        raise IntegrationError(f"frontend unexpectedly resolved data service {service}")
+    if returncode != 2:
+        raise IntegrationError(f"unable to verify frontend DNS isolation for {service}")
 
 
 def user_container_configuration_root(
@@ -814,21 +831,71 @@ class IntegrationLifecycle:
         for path in system_paths:
             if not path.exists():
                 continue
-            metadata = path.stat()
-            if path.is_symlink() or metadata.st_uid != 0 or metadata.st_gid != 0 or metadata.st_mode & 0o022:
-                raise IntegrationError("system registry configuration is not trusted")
-            with path.open("rb") as stream:
-                documents.append(tomllib.load(stream))
+            try:
+                metadata = path.stat()
+                if (
+                    path.is_symlink()
+                    or metadata.st_uid != 0
+                    or metadata.st_gid != 0
+                    or metadata.st_mode & 0o022
+                ):
+                    raise IntegrationError(
+                        "system registry configuration is not trusted"
+                    )
+                documents.append(load_registry_document(path))
+            except IntegrationError:
+                raise
+            except (OSError, UnicodeError) as error:
+                raise IntegrationError(
+                    "system registry configuration could not be parsed safely"
+                ) from error
         validate_registry_documents(documents)
 
     def _validate_disabled_user_unit(self, name: str) -> None:
-        for operation in ("is-enabled", "is-active"):
-            result = self.command(
-                ["systemctl", "--user", operation, name], capture=True, check=False
+        result = self.command(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                name,
+                "--property=LoadState",
+                "--property=UnitFileState",
+                "--property=ActiveState",
+            ],
+            capture=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise IntegrationError(f"unable to verify forbidden user unit: {name}")
+        properties: dict[str, str] = {}
+        for line in (result.stdout or "").splitlines():
+            if "=" not in line:
+                raise IntegrationError(f"unable to verify forbidden user unit: {name}")
+            key, value = line.split("=", 1)
+            if key in properties:
+                raise IntegrationError(f"unable to verify forbidden user unit: {name}")
+            properties[key] = value
+        if set(properties) != {"LoadState", "UnitFileState", "ActiveState"}:
+            raise IntegrationError(f"unable to verify forbidden user unit: {name}")
+        safe_state = (
+            properties["ActiveState"] == "inactive"
+            and (
+                (
+                    properties["LoadState"] == "loaded"
+                    and properties["UnitFileState"] == "disabled"
+                )
+                or (
+                    properties["LoadState"] == "masked"
+                    and properties["UnitFileState"] in {"masked", "masked-runtime"}
+                )
+                or (
+                    properties["LoadState"] == "not-found"
+                    and properties["UnitFileState"] in {"", "not-found"}
+                )
             )
-            state = (result.stdout or "").strip()
-            if result.returncode == 0 or state in {"enabled", "active", "activating"}:
-                raise IntegrationError(f"forbidden user unit is enabled or active: {name}")
+        )
+        if not safe_state:
+            raise IntegrationError(f"forbidden user unit is enabled or active: {name}")
 
     def snapshot_unrelated_resources(self) -> None:
         self.preexisting_resources = {
@@ -1636,8 +1703,7 @@ class IntegrationLifecycle:
                 check=False,
                 capture=True,
             )
-            if probe.returncode == 0:
-                raise IntegrationError(f"frontend unexpectedly resolved data service {forbidden}")
+            validate_dns_isolation_result(probe.returncode, forbidden)
 
     def curl(self, origin: str, path: str, *extra: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         host = "app.secpal.example.invalid" if origin == "app" else "api.secpal.example.invalid"

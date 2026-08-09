@@ -21,7 +21,7 @@ FRONTEND_IMAGE = "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a
 POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
 VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 
-INSTANCE_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{6,22}[a-z0-9]\Z")
+INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 FAILURE_CASES = ("migration", "dependency", "health")
 
@@ -494,7 +494,7 @@ def build_units(
 
 def validate_instance(value: str) -> str:
     if not INSTANCE_PATTERN.fullmatch(value):
-        raise ContractError("instance must be 8-24 lowercase ASCII letters, digits, or interior hyphens")
+        raise ContractError("instance must be 8-24 lowercase ASCII letters or digits")
     return value
 
 
