@@ -123,11 +123,33 @@ PRIVATE_USE_NETWORKS = (
     ipaddress.ip_network("fc00::/7"),
 )
 IPV6_GLOBAL_UNICAST_NETWORK = ipaddress.ip_network("2000::/3")
-IPV6_SPECIAL_PURPOSE_NETWORKS = (
-    ipaddress.ip_network("2001::/23"),
-    ipaddress.ip_network("2002::/16"),
-    ipaddress.ip_network("2620:4f:8000::/48"),
-)
+# Reviewed against the IANA IPv4 and IPv6 special-purpose registries whose
+# current revisions were last updated on 2025-10-09. Documentation networks
+# remain separate because checked-in synthetic fixtures may use them.
+PUBLIC_ADDRESS_EXCLUDED_NETWORKS = {
+    4: (
+        ipaddress.ip_network("0.0.0.0/8"),
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("100.64.0.0/10"),
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("169.254.0.0/16"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.0.0.0/24"),
+        ipaddress.ip_network("192.31.196.0/24"),
+        ipaddress.ip_network("192.52.193.0/24"),
+        ipaddress.ip_network("192.88.99.0/24"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("192.175.48.0/24"),
+        ipaddress.ip_network("198.18.0.0/15"),
+        ipaddress.ip_network("224.0.0.0/4"),
+        ipaddress.ip_network("240.0.0.0/4"),
+    ),
+    6: (
+        ipaddress.ip_network("2001::/23"),
+        ipaddress.ip_network("2002::/16"),
+        ipaddress.ip_network("2620:4f:8000::/48"),
+    ),
+}
 DOCUMENTATION_DNS_SUFFIXES = (
     "invalid",
     "test",
@@ -485,9 +507,19 @@ def is_documentation_address(address: ipaddress.IPv4Address | ipaddress.IPv6Addr
     return any(address in network for network in DOCUMENTATION_NETWORKS)
 
 
-def is_non_public_special_purpose_ipv6(address: ipaddress.IPv6Address) -> bool:
-    return address not in IPV6_GLOBAL_UNICAST_NETWORK or any(
-        address in network for network in IPV6_SPECIAL_PURPOSE_NETWORKS
+def is_eligible_public_host_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    if is_documentation_address(address):
+        return False
+    if (
+        isinstance(address, ipaddress.IPv6Address)
+        and address not in IPV6_GLOBAL_UNICAST_NETWORK
+    ):
+        return False
+    return not any(
+        address in network
+        for network in PUBLIC_ADDRESS_EXCLUDED_NETWORKS[address.version]
     )
 
 
@@ -522,25 +554,13 @@ def parse_unique_addresses(
 
 def validate_addresses(host: dict[str, Any], *, synthetic: bool) -> None:
     public = parse_address(host["public_address"], "inventory.host.public_address")
-    deprecated_site_local = (
-        isinstance(public, ipaddress.IPv6Address) and public.is_site_local
-    )
     documentation_address = is_documentation_address(public)
     if documentation_address:
         if not synthetic:
             raise ContractViolation(
                 "documentation public address requires explicit synthetic mode"
             )
-    elif (
-        public.is_multicast
-        or deprecated_site_local
-        or public.is_reserved
-        or not public.is_global
-        or (
-            isinstance(public, ipaddress.IPv6Address)
-            and is_non_public_special_purpose_ipv6(public)
-        )
-    ):
+    elif not is_eligible_public_host_address(public):
         raise ContractViolation(
             "public address is not an eligible global-unicast host address"
         )

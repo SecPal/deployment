@@ -262,7 +262,8 @@ Validation consists of:
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state
 paths, invalid UID/GID or modes, secret material, image overrides, canonical or
-non-canonical loopback values, IANA special-purpose public addresses,
+non-canonical loopback values, IPv4 or IPv6 IANA special-purpose public
+addresses under the reviewed 2025-10-09 registry snapshot,
 special-use public DNS names, collapsed origins, premature or contradictory
 features, recursive aliases, excessive input depth, and mismatched facts all
 fail closed.

@@ -177,48 +177,41 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_public_address_must_be_global_or_documentation_only(self) -> None:
-        inventory = copy.deepcopy(self.inventory)
-        host = inventory["host"]
-        if not isinstance(host, dict):
-            raise AssertionError("host inventory fixture must be a mapping")
-        host["public_address"] = "100.64.0.1"
-        self.assert_contract_violation(
-            lambda: self.validate_synthetic_inventory(inventory)
-        )
-
-    def test_multicast_public_addresses_are_rejected(self) -> None:
-        for address in ("224.0.0.1", "ff0e::1"):
-            with self.subTest(address=address):
-                inventory = copy.deepcopy(self.inventory)
-                host = inventory["host"]
-                if not isinstance(host, dict):
-                    raise AssertionError("host inventory fixture must be a mapping")
-                host["public_address"] = address
-                self.assert_contract_violation(
-                    lambda inventory=inventory: self.validate_synthetic_inventory(
-                        inventory
-                    )
-                )
-
-    def test_deprecated_site_local_public_address_is_rejected(self) -> None:
-        inventory = copy.deepcopy(self.inventory)
-        host = inventory["host"]
-        if not isinstance(host, dict):
-            raise AssertionError("host inventory fixture must be a mapping")
-        host["public_address"] = "fec0::1"
-        self.assert_contract_violation(
-            lambda: self.validate_synthetic_inventory(inventory)
-        )
-
-    def test_non_public_special_purpose_ipv6_addresses_are_rejected(self) -> None:
+    def test_non_public_special_purpose_addresses_are_rejected(self) -> None:
         host = copy.deepcopy(nested_mapping(self.inventory, "host"))
         for address in (
+            "0.0.0.1",  # this network
+            "10.0.0.1",  # private use
+            "100.64.0.1",  # shared address space
+            "127.0.0.1",  # loopback
+            "169.254.0.1",  # link local
+            "172.16.0.1",  # private use
+            "192.0.0.9",  # Port Control Protocol Anycast
+            "192.0.0.10",  # TURN Anycast
+            "192.31.196.1",  # AS112-v4
+            "192.52.193.1",  # Automatic Multicast Tunneling
+            "192.88.99.1",  # deprecated 6to4 Relay Anycast
+            "192.168.0.1",  # private use
+            "192.175.48.1",  # AS112 direct delegation
+            "198.18.0.1",  # benchmarking
+            "224.0.0.1",  # multicast
+            "240.0.0.1",  # reserved
+            "::",  # unspecified
+            "::1",  # loopback
+            "64:ff9b::1",  # IPv4/IPv6 translation
+            "100::1",  # discard only
+            "100:0:0:1::1",  # dummy prefix
+            "2001:1::1",  # protocol anycast
             "2001:20::1",  # ORCHIDv2
             "2001:30::1",  # Drone Remote ID Protocol Entity Tags
             "2002::1",  # deprecated 6to4
             "2620:4f:8000::1",  # AS112 direct delegation
+            "4000::1",  # outside schema-v1 Global Unicast
             "5f00::1",  # Segment Routing SIDs
+            "fc00::1",  # unique local
+            "fe80::1",  # link local
+            "fec0::1",  # deprecated site local
+            "ff0e::1",  # multicast
         ):
             with self.subTest(address=address):
                 host["public_address"] = address
@@ -236,17 +229,23 @@ class ProductionContractRegressionTests(unittest.TestCase):
         )
 
     def test_documentation_public_addresses_require_synthetic_mode(self) -> None:
-        self.assert_contract_violation(
-            lambda: self.validator.validate_inventory(self.inventory)
-        )
-        self.validator.validate_inventory(self.inventory, synthetic=True)
         host = copy.deepcopy(nested_mapping(self.inventory, "host"))
-        host["public_address"] = "3fff::10"
-        self.assert_contract_violation(
-            lambda: self.validator.validate_addresses(host, synthetic=False),
-            "explicit synthetic mode",
-        )
-        self.validator.validate_addresses(host, synthetic=True)
+        for address in (
+            "192.0.2.10",
+            "198.51.100.10",
+            "203.0.113.10",
+            "2001:db8::10",
+            "3fff::10",
+        ):
+            with self.subTest(address=address):
+                host["public_address"] = address
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_addresses(
+                        host, synthetic=False
+                    ),
+                    "explicit synthetic mode",
+                )
+                self.validator.validate_addresses(host, synthetic=True)
 
     def test_documentation_origins_require_synthetic_mode(self) -> None:
         origin = "https://app.example.invalid"
@@ -1306,17 +1305,6 @@ class ProductionContractRegressionTests(unittest.TestCase):
             raise AssertionError("host inventory fixture must be a mapping")
         host["private_addresses"] = ["fd00::20"]
         self.validate_synthetic_inventory(inventory)
-
-    def test_reserved_ipv6_ranges_are_not_public_addresses(self) -> None:
-        for address in ("5f00::1", "4000::1"):
-            with self.subTest(address=address):
-                inventory = copy.deepcopy(self.inventory)
-                nested_mapping(inventory, "host")["public_address"] = address
-                self.assert_contract_violation(
-                    lambda inventory=inventory: self.validate_synthetic_inventory(
-                        inventory
-                    )
-                )
 
     def test_public_address_fact_requires_a_string(self) -> None:
         for address in (3221225994, b"\xc0\x00\x02\x0a"):

@@ -382,13 +382,17 @@ flag; reserved documentation DNS origins are gated by the same flag. Other
 IANA special-use origin suffixes, including `.alt`, `.arpa`, `.local`, and
 `.onion`, are never production origins and remain rejected in synthetic mode.
 The normal production-validation path rejects all reserved inputs. IPv6
-schema version 1 admits only `2000::/3` Global Unicast addresses outside the
-reviewed IANA special-purpose prefixes; this explicit policy also rejects
-ORCHID, protocol-assignment, AS112, deprecated 6to4, documentation, and
-segment-routing identifiers even where the local language runtime reports
-them as global. This classification is an admission prerequisite, not proof of
-DNS publication, BGP routing, or reachability; D.4 owns that later evidence.
-Carrier-grade NAT and other non-global address ranges fail admission. Private
+schema version 1 admits only `2000::/3` Global Unicast addresses. Both address
+families then use one explicit exclusion policy derived from the IANA IPv4 and
+IPv6 Special-Purpose Address Registries last updated on 2025-10-09 and reviewed
+for this contract on 2026-08-09. It excludes private, loopback, link-local,
+shared, benchmarking, multicast, reserved, protocol-assignment, anycast,
+AS112, AMT, ORCHID, deprecated 6to4, documentation, and segment-routing
+identities as applicable. Validation does not delegate this security decision
+to a language runtime's changing `is_global` classification. Registry changes
+require reviewed contract evidence; the validator performs no runtime registry
+download. This classification is an admission prerequisite, not proof of DNS
+publication, BGP routing, or reachability; D.4 owns that later evidence. Private
 addresses are exactly RFC 1918 IPv4 or IPv6 ULA;
 documentation and benchmarking ranges are not private-use substitutes.
 IPv4-mapped IPv6 values are representations of IPv4 rather than accepted IPv6
@@ -606,6 +610,7 @@ remain with #10 through #18 according to the parent epic.
 - [Podman API service security](https://docs.podman.io/en/v5.4.2/markdown/podman-system-service.1.html)
 - [Containers registry configuration](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md)
 - [systemd lingering user managers](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html#enable-linger%20USER%E2%80%A6)
+- [IANA IPv4 Special-Purpose Address Registry](https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml)
 - [IANA IPv6 Special-Purpose Address Registry](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml)
 - [IANA Special-Use Domain Names Registry](https://www.iana.org/assignments/special-use-domain-names/special-use-domain-names.xhtml)
 - [`docs/api-image-consumption.md`](../api-image-consumption.md)
