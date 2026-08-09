@@ -31,10 +31,6 @@ service_account:
   gid: 20000
   supplementary_gids: []
   home: /var/lib/secpal
-  home_uid: 0
-  home_gid: 20000
-  home_mode: "0750"
-  home_local: true
   containers_configuration_account_writable: false
   shell: /usr/sbin/nologin
   interactive_login: false
@@ -53,8 +49,11 @@ kernel:
   package_owned: true
   cgroup_version: 2
   overlayfs_supported: true
-  apparmor_enabled: true
-  seccomp_enabled: true
+  apparmor:
+    enabled: true
+    profiles_loaded: 12
+    profiles_in_enforce_mode: 12
+  seccomp_available_to_podman: true
 runtime:
   engine: podman
   version: 5.4.2
@@ -109,19 +108,10 @@ runtime:
     starts_at_boot: true
     linger_enabled: true
     dbus_session_available: true
-    runtime_directory: /run/user/20000
-    runtime_directory_uid: 20000
-    runtime_directory_gid: 20000
-    runtime_directory_mode: "0700"
-    runtime_directory_local: true
   quadlet:
     available: true
     orchestrator: systemd-user
     generator_path: /usr/lib/systemd/user-generators/podman-user-generator
-    definition_path: /etc/containers/systemd/users/20000
-    definition_directory_uid: 0
-    definition_directory_gid: 0
-    definition_directory_mode: "0755"
     unit_files_uid: 0
     unit_files_gid: 0
     unit_files_mode: "0644"
@@ -129,22 +119,13 @@ runtime:
       - /etc/containers/systemd/users/20000
     persistent_search_path_configuration_account_writable: false
     tree_symlinks_present: false
-    service_account_can_read: true
-    service_account_can_traverse: true
-    service_account_can_write: false
+    tree_service_account_can_read: true
+    tree_service_account_can_traverse: true
+    tree_service_account_can_write: false
   storage:
     graphroot: /srv/secpal/podman-storage
     runroot: /run/user/20000/containers
     driver: overlay
-    graphroot_uid: 20000
-    graphroot_gid: 20000
-    graphroot_mode: "0700"
-    graphroot_writable: true
-    runroot_uid: 20000
-    runroot_gid: 20000
-    runroot_mode: "0700"
-    runroot_local: true
-    runroot_writable: true
     transient_store: false
     graphroot_reconstructable: true
   network:
@@ -179,23 +160,39 @@ clock:
 network:
   public_address: 192.0.2.10
   private_addresses: [10.0.0.10]
-resolved_paths:
-  service_account_home: /var/lib/secpal
-  systemd_runtime_directory: /run/user/20000
-  podman_runroot: /run/user/20000/containers
-  configuration: /srv/secpal/config
-  deployment_state: /srv/secpal/deployment-state
-  runtime_secrets: /run/secpal/secrets
-  postgresql_data: /srv/secpal/postgresql
-  private_application_storage: /srv/secpal/private-storage
-  public_application_storage: /srv/secpal/public-storage
-  edge_state: /srv/secpal/edge
-  acme_state: /srv/secpal/acme
-  crowdsec_state: /srv/secpal/crowdsec
-  logs: /srv/secpal/logs
-  backup_staging: /srv/secpal/backup-staging
-  podman_graph_root: /srv/secpal/podman-storage
-  quadlet_definitions: /etc/containers/systemd/users/20000
+path_access:
+  service_account_home:
+    path: /var/lib/secpal
+    uid: 0
+    gid: 20000
+    mode: "0750"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
+    local: true
+  systemd_runtime_directory:
+    path: /run/user/20000
+    uid: 20000
+    gid: 20000
+    mode: "0700"
+    service_account_can_write: true
+    ancestors_service_account_can_write: false
+    local: true
+  podman_runroot:
+    path: /run/user/20000/containers
+    uid: 20000
+    gid: 20000
+    mode: "0700"
+    service_account_can_write: true
+    ancestors_service_account_can_write: true
+    local: true
+  quadlet_definitions:
+    path: /etc/containers/systemd/users/20000
+    uid: 0
+    gid: 0
+    mode: "0755"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
+    local: true
 tools:
   - bash
   - curl
@@ -218,134 +215,145 @@ tools:
   - timedatectl
 filesystems:
   configuration:
-    path: /srv/secpal/config
-    uid: 0
-    gid: 20000
-    mode: "0750"
-    service_account_can_write: false
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/config
+      uid: 0
+      gid: 20000
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   deployment_state:
-    path: /srv/secpal/deployment-state
-    uid: 0
-    gid: 20000
-    mode: "0750"
-    service_account_can_write: false
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/deployment-state
+      uid: 0
+      gid: 20000
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   postgresql_data:
-    path: /srv/secpal/postgresql
-    uid: 0
-    gid: 0
-    mode: "0700"
-    service_account_can_write: false
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/postgresql
+      uid: 0
+      gid: 0
+      mode: "0700"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   private_application_storage:
-    path: /srv/secpal/private-storage
-    uid: 0
-    gid: 0
-    mode: "0750"
-    service_account_can_write: false
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/private-storage
+      uid: 0
+      gid: 0
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   public_application_storage:
-    path: /srv/secpal/public-storage
-    uid: 0
-    gid: 0
-    mode: "0750"
-    service_account_can_write: false
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/public-storage
+      uid: 0
+      gid: 0
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   edge_state:
-    path: /srv/secpal/edge
-    uid: 0
-    gid: 0
-    mode: "0750"
-    service_account_can_write: false
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/edge
+      uid: 0
+      gid: 0
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   acme_state:
-    path: /srv/secpal/acme
-    uid: 0
-    gid: 0
-    mode: "0700"
-    service_account_can_write: false
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/acme
+      uid: 0
+      gid: 0
+      mode: "0700"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   crowdsec_state:
-    path: /srv/secpal/crowdsec
-    uid: 0
-    gid: 0
-    mode: "0750"
-    service_account_can_write: false
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/crowdsec
+      uid: 0
+      gid: 0
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   logs:
-    path: /srv/secpal/logs
-    uid: 20000
-    gid: 20000
-    mode: "0750"
-    service_account_can_write: true
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/logs
+      uid: 20000
+      gid: 20000
+      mode: "0750"
+      service_account_can_write: true
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   backup_staging:
-    path: /srv/secpal/backup-staging
-    uid: 20000
-    gid: 20000
-    mode: "0700"
-    service_account_can_write: true
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/backup-staging
+      uid: 20000
+      gid: 20000
+      mode: "0700"
+      service_account_can_write: true
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null
   podman_graph_root:
-    path: /srv/secpal/podman-storage
-    uid: 20000
-    gid: 20000
-    mode: "0700"
-    service_account_can_write: true
-    ancestors_service_account_can_write: false
+    access:
+      path: /srv/secpal/podman-storage
+      uid: 20000
+      gid: 20000
+      mode: "0700"
+      service_account_can_write: true
+      ancestors_service_account_can_write: false
+      local: true
     filesystem: ext4
-    local: true
     mount_read_only: false
     d_type: true
     xfs_ftype: null

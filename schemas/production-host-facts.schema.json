@@ -16,7 +16,7 @@
     "runtime",
     "clock",
     "network",
-    "resolved_paths",
+    "path_access",
     "tools",
     "filesystems",
     "resources"
@@ -137,10 +137,6 @@
         "gid",
         "supplementary_gids",
         "home",
-        "home_uid",
-        "home_gid",
-        "home_mode",
-        "home_local",
         "containers_configuration_account_writable",
         "shell",
         "interactive_login",
@@ -172,18 +168,6 @@
         "home": {
           "type": "string",
           "minLength": 1
-        },
-        "home_uid": {
-          "$ref": "#/$defs/systemId"
-        },
-        "home_gid": {
-          "$ref": "#/$defs/systemId"
-        },
-        "home_mode": {
-          "const": "0750"
-        },
-        "home_local": {
-          "const": true
         },
         "containers_configuration_account_writable": {
           "const": false
@@ -232,8 +216,8 @@
         "package_owned",
         "cgroup_version",
         "overlayfs_supported",
-        "apparmor_enabled",
-        "seccomp_enabled"
+        "apparmor",
+        "seccomp_available_to_podman"
       ],
       "properties": {
         "release": {
@@ -259,10 +243,27 @@
         "overlayfs_supported": {
           "const": true
         },
-        "apparmor_enabled": {
-          "const": true
+        "apparmor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "profiles_loaded",
+            "profiles_in_enforce_mode"
+          ],
+          "properties": {
+            "enabled": { "const": true },
+            "profiles_loaded": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "profiles_in_enforce_mode": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
         },
-        "seccomp_enabled": {
+        "seccomp_available_to_podman": {
           "const": true
         }
       }
@@ -423,12 +424,7 @@
             "manager_available",
             "starts_at_boot",
             "linger_enabled",
-            "dbus_session_available",
-            "runtime_directory",
-            "runtime_directory_uid",
-            "runtime_directory_gid",
-            "runtime_directory_mode",
-            "runtime_directory_local"
+            "dbus_session_available"
           ],
           "properties": {
             "manager_available": {
@@ -442,22 +438,6 @@
             },
             "dbus_session_available": {
               "const": true
-            },
-            "runtime_directory": {
-              "type": "string",
-              "minLength": 1
-            },
-            "runtime_directory_uid": {
-              "$ref": "#/$defs/systemId"
-            },
-            "runtime_directory_gid": {
-              "$ref": "#/$defs/systemId"
-            },
-            "runtime_directory_mode": {
-              "const": "0700"
-            },
-            "runtime_directory_local": {
-              "const": true
             }
           }
         },
@@ -468,19 +448,15 @@
             "available",
             "orchestrator",
             "generator_path",
-            "definition_path",
-            "definition_directory_uid",
-            "definition_directory_gid",
-            "definition_directory_mode",
             "unit_files_uid",
             "unit_files_gid",
             "unit_files_mode",
             "effective_search_paths",
             "persistent_search_path_configuration_account_writable",
             "tree_symlinks_present",
-            "service_account_can_read",
-            "service_account_can_traverse",
-            "service_account_can_write"
+            "tree_service_account_can_read",
+            "tree_service_account_can_traverse",
+            "tree_service_account_can_write"
           ],
           "properties": {
             "available": { "const": true },
@@ -488,10 +464,6 @@
             "generator_path": {
               "const": "/usr/lib/systemd/user-generators/podman-user-generator"
             },
-            "definition_path": { "type": "string", "minLength": 1 },
-            "definition_directory_uid": { "const": 0 },
-            "definition_directory_gid": { "const": 0 },
-            "definition_directory_mode": { "const": "0755" },
             "unit_files_uid": { "const": 0 },
             "unit_files_gid": { "const": 0 },
             "unit_files_mode": { "const": "0644" },
@@ -506,9 +478,9 @@
               "const": false
             },
             "tree_symlinks_present": { "const": false },
-            "service_account_can_read": { "const": true },
-            "service_account_can_traverse": { "const": true },
-            "service_account_can_write": { "const": false }
+            "tree_service_account_can_read": { "const": true },
+            "tree_service_account_can_traverse": { "const": true },
+            "tree_service_account_can_write": { "const": false }
           }
         },
         "storage": {
@@ -518,15 +490,6 @@
             "graphroot",
             "runroot",
             "driver",
-            "graphroot_uid",
-            "graphroot_gid",
-            "graphroot_mode",
-            "graphroot_writable",
-            "runroot_uid",
-            "runroot_gid",
-            "runroot_mode",
-            "runroot_local",
-            "runroot_writable",
             "transient_store",
             "graphroot_reconstructable"
           ],
@@ -534,15 +497,6 @@
             "graphroot": { "type": "string", "minLength": 1 },
             "runroot": { "type": "string", "minLength": 1 },
             "driver": { "const": "overlay" },
-            "graphroot_uid": { "$ref": "#/$defs/systemId" },
-            "graphroot_gid": { "$ref": "#/$defs/systemId" },
-            "graphroot_mode": { "const": "0700" },
-            "graphroot_writable": { "const": true },
-            "runroot_uid": { "$ref": "#/$defs/systemId" },
-            "runroot_gid": { "$ref": "#/$defs/systemId" },
-            "runroot_mode": { "const": "0700" },
-            "runroot_local": { "const": true },
-            "runroot_writable": { "const": true },
             "transient_store": { "const": false },
             "graphroot_reconstructable": { "const": true }
           }
@@ -659,44 +613,28 @@
         }
       }
     },
-    "resolved_paths": {
+    "path_access": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "service_account_home",
         "systemd_runtime_directory",
         "podman_runroot",
-        "configuration",
-        "deployment_state",
-        "runtime_secrets",
-        "postgresql_data",
-        "private_application_storage",
-        "public_application_storage",
-        "edge_state",
-        "acme_state",
-        "crowdsec_state",
-        "logs",
-        "backup_staging",
-        "podman_graph_root",
         "quadlet_definitions"
       ],
       "properties": {
-        "service_account_home": { "$ref": "#/$defs/absolutePathFact" },
-        "systemd_runtime_directory": { "$ref": "#/$defs/absolutePathFact" },
-        "podman_runroot": { "$ref": "#/$defs/absolutePathFact" },
-        "configuration": { "$ref": "#/$defs/absolutePathFact" },
-        "deployment_state": { "$ref": "#/$defs/absolutePathFact" },
-        "runtime_secrets": { "$ref": "#/$defs/absolutePathFact" },
-        "postgresql_data": { "$ref": "#/$defs/absolutePathFact" },
-        "private_application_storage": { "$ref": "#/$defs/absolutePathFact" },
-        "public_application_storage": { "$ref": "#/$defs/absolutePathFact" },
-        "edge_state": { "$ref": "#/$defs/absolutePathFact" },
-        "acme_state": { "$ref": "#/$defs/absolutePathFact" },
-        "crowdsec_state": { "$ref": "#/$defs/absolutePathFact" },
-        "logs": { "$ref": "#/$defs/absolutePathFact" },
-        "backup_staging": { "$ref": "#/$defs/absolutePathFact" },
-        "podman_graph_root": { "$ref": "#/$defs/absolutePathFact" },
-        "quadlet_definitions": { "$ref": "#/$defs/absolutePathFact" }
+        "service_account_home": {
+          "$ref": "#/$defs/pathAccessFact"
+        },
+        "systemd_runtime_directory": {
+          "$ref": "#/$defs/pathAccessFact"
+        },
+        "podman_runroot": {
+          "$ref": "#/$defs/pathAccessFact"
+        },
+        "quadlet_definitions": {
+          "$ref": "#/$defs/pathAccessFact"
+        }
       }
     },
     "tools": {
@@ -830,12 +768,6 @@
     }
   },
   "$defs": {
-    "absolutePathFact": {
-      "type": "string",
-      "minLength": 2,
-      "maxLength": 4096,
-      "pattern": "^/"
-    },
     "nonNegativeInteger": {
       "type": "integer",
       "minimum": 0
@@ -888,7 +820,7 @@
         }
       }
     },
-    "filesystemFact": {
+    "pathAccessFact": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -898,11 +830,7 @@
         "mode",
         "service_account_can_write",
         "ancestors_service_account_can_write",
-        "filesystem",
-        "local",
-        "mount_read_only",
-        "d_type",
-        "xfs_ftype"
+        "local"
       ],
       "properties": {
         "path": {
@@ -925,11 +853,27 @@
         "ancestors_service_account_can_write": {
           "type": "boolean"
         },
-        "filesystem": {
-          "enum": ["ext4", "xfs"]
-        },
         "local": {
           "const": true
+        }
+      }
+    },
+    "filesystemFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "access",
+        "filesystem",
+        "mount_read_only",
+        "d_type",
+        "xfs_ftype"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/pathAccessFact"
+        },
+        "filesystem": {
+          "enum": ["ext4", "xfs"]
         },
         "mount_read_only": {
           "const": false

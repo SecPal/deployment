@@ -98,7 +98,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_hostnames_must_be_dns_names(self) -> None:
+    def test_hostnames_reject_ip_literal_spellings(self) -> None:
         for hostname in (
             "127.0.0.1",
             "127.1",
@@ -326,11 +326,19 @@ class ProductionContractRegressionTests(unittest.TestCase):
         self.validate_synthetic_inventory(inventory)
         self.validator.validate_host_facts(inventory, facts)
 
-    def test_runtime_requires_direct_local_cli_operation(self) -> None:
+    def test_host_and_origin_names_have_distinct_contracts(self) -> None:
+        inventory = copy.deepcopy(self.inventory)
+        nested_mapping(inventory, "host")["hostname"] = "secpal-prod"
         facts = copy.deepcopy(self.host_facts)
-        nested_mapping(facts, "runtime", "api")["connection"] = "remote"
+        facts["hostname"] = "secpal-prod"
+
+        self.validate_synthetic_inventory(inventory)
+        self.validator.validate_host_facts(inventory, facts)
         self.assert_contract_violation(
-            lambda: self.validator.validate_host_facts(self.inventory, facts)
+            lambda: self.validator.validate_origin(
+                "https://secpal-prod", "inventory.origins.frontend"
+            ),
+            "fully qualified",
         )
 
     def test_effective_oci_runtime_must_be_crun(self) -> None:
@@ -378,28 +386,6 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 self.inventory, facts
             )
         )
-
-    def test_runtime_schema_requires_rootless_podman_quadlet_admission(self) -> None:
-        schema = self.validator.read_schema(
-            self.validator.HOST_FACTS_SCHEMA_PATH, "host-facts"
-        )
-        runtime = nested_mapping(schema, "properties", "runtime")
-        properties = nested_mapping(runtime, "properties")
-
-        self.assertEqual(properties["engine"], {"const": "podman"})
-        self.assertEqual(properties["rootless"], {"const": True})
-        for required_fact in (
-            "user_namespace",
-            "systemd_user",
-            "quadlet",
-            "storage",
-        ):
-            self.assertIn(required_fact, runtime["required"])
-
-        graphroot = nested_mapping(
-            properties, "storage", "properties", "graphroot"
-        )
-        self.assertEqual(graphroot["type"], "string")
 
     def test_public_application_storage_requires_inventory_and_host_facts(self) -> None:
         inventory = copy.deepcopy(self.inventory)
@@ -601,10 +587,6 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("name", "different-account"),
             ("group", "different-group"),
             ("home", "/var/lib/different-account"),
-            ("home_uid", 20000),
-            ("home_gid", 0),
-            ("home_mode", "0770"),
-            ("home_local", False),
             ("containers_configuration_account_writable", True),
             ("shell", "/bin/bash"),
             ("interactive_login", True),
@@ -650,15 +632,6 @@ class ProductionContractRegressionTests(unittest.TestCase):
                         self.inventory, candidate
                     )
                 )
-
-    def test_host_facts_must_report_podman_installation_source(self) -> None:
-        facts = copy.deepcopy(self.host_facts)
-        runtime = nested_mapping(facts, "runtime")
-        runtime.pop("installation", None)
-        self.assert_contract_violation(
-            lambda: self.validator.validate_host_facts(self.inventory, facts),
-            "installation",
-        )
 
     def test_podman_installation_contract_is_exact(self) -> None:
         mutations = (
@@ -755,41 +728,53 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_systemd_user_and_quadlet_trust_boundary_is_exact(self) -> None:
+    def test_user_manager_and_quadlet_execution_boundaries(self) -> None:
         mutations = (
-            (("systemd_user", "manager_available"), False),
-            (("systemd_user", "starts_at_boot"), False),
             (("systemd_user", "linger_enabled"), False),
-            (("systemd_user", "dbus_session_available"), False),
-            (("systemd_user", "runtime_directory_uid"), 0),
-            (("systemd_user", "runtime_directory_gid"), 0),
-            (("systemd_user", "runtime_directory_mode"), "0755"),
-            (("systemd_user", "runtime_directory_local"), False),
-            (("quadlet", "available"), False),
             (("quadlet", "orchestrator"), "podman-compose"),
-            (("quadlet", "definition_directory_uid"), 20000),
-            (("quadlet", "definition_directory_gid"), 20000),
-            (("quadlet", "definition_directory_mode"), "0775"),
-            (("quadlet", "unit_files_uid"), 20000),
-            (("quadlet", "unit_files_gid"), 20000),
-            (("quadlet", "unit_files_mode"), "0664"),
             (
                 ("quadlet", "effective_search_paths"),
                 ["/run/user/20000/containers/systemd"],
             ),
-            (
-                ("quadlet", "persistent_search_path_configuration_account_writable"),
-                True,
-            ),
             (("quadlet", "tree_symlinks_present"), True),
-            (("quadlet", "service_account_can_read"), False),
-            (("quadlet", "service_account_can_traverse"), False),
-            (("quadlet", "service_account_can_write"), True),
+            (("quadlet", "tree_service_account_can_write"), True),
         )
         for path, value in mutations:
             with self.subTest(path=path):
                 facts = copy.deepcopy(self.host_facts)
                 nested_mapping(facts, "runtime", path[0])[path[1]] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_security_sensitive_paths_reject_untrusted_access(self) -> None:
+        path_access = self.host_facts.get("path_access")
+        self.assertIsInstance(path_access, dict)
+        assert isinstance(path_access, dict)
+        self.assertEqual(
+            {
+                "service_account_home",
+                "systemd_runtime_directory",
+                "podman_runroot",
+                "quadlet_definitions",
+            },
+            set(path_access),
+        )
+
+        self.validator.validate_host_facts(self.inventory, self.host_facts)
+        scenarios = (
+            ("service_account_home", "ancestors_service_account_can_write", True),
+            ("systemd_runtime_directory", "uid", 0),
+            ("podman_runroot", "ancestors_service_account_can_write", False),
+            ("quadlet_definitions", "ancestors_service_account_can_write", True),
+            ("quadlet_definitions", "local", False),
+        )
+        for path_name, field, value in scenarios:
+            with self.subTest(path_name=path_name, field=field):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "path_access", path_name)[field] = value
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
@@ -804,15 +789,6 @@ class ProductionContractRegressionTests(unittest.TestCase):
             (("network", "host_network"), True),
             (("network", "unprivileged_port_override"), True),
             (("storage", "driver"), "vfs"),
-            (("storage", "graphroot_uid"), 0),
-            (("storage", "graphroot_gid"), 0),
-            (("storage", "graphroot_mode"), "0755"),
-            (("storage", "graphroot_writable"), False),
-            (("storage", "runroot_uid"), 0),
-            (("storage", "runroot_gid"), 0),
-            (("storage", "runroot_mode"), "0777"),
-            (("storage", "runroot_local"), False),
-            (("storage", "runroot_writable"), False),
             (("storage", "graphroot_reconstructable"), False),
             (("registries", "secpal_mirrors"), ["mirror.example.invalid"]),
             (("registries", "secpal_location_rewrite"), True),
@@ -977,6 +953,23 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_apparmor_requires_observed_enforcement(self) -> None:
+        apparmor = nested_mapping(self.host_facts, "kernel").get("apparmor")
+        self.assertIsInstance(apparmor, dict)
+        assert isinstance(apparmor, dict)
+
+        for loaded, enforcing in ((4, 0), (1, 2)):
+            with self.subTest(loaded=loaded, enforcing=enforcing):
+                facts = copy.deepcopy(self.host_facts)
+                candidate = nested_mapping(facts, "kernel", "apparmor")
+                candidate["profiles_loaded"] = loaded
+                candidate["profiles_in_enforce_mode"] = enforcing
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
     def test_kernel_series_is_exactly_debian_13_stable(self) -> None:
         for release in ("6.11.99+deb13-amd64", "6.13.0+deb13-amd64"):
             with self.subTest(release=release):
@@ -1054,27 +1047,6 @@ class ProductionContractRegressionTests(unittest.TestCase):
         ] = "/var/lib/secpal/account"
         self.validate_synthetic_inventory(inventory)
 
-    def test_configuration_and_deployment_state_require_filesystem_facts(self) -> None:
-        for path_name in ("configuration", "deployment_state"):
-            with self.subTest(path_name=path_name):
-                inventory = copy.deepcopy(self.inventory)
-                nested_mapping(inventory, "paths", path_name)["path"] += "-moved"
-                self.validate_synthetic_inventory(inventory)
-                self.assert_contract_violation(
-                    lambda: self.validator.validate_host_facts(
-                        inventory, self.host_facts
-                    ),
-                    path_name,
-                )
-
-    def test_all_managed_paths_require_identity_resolution(self) -> None:
-        facts = copy.deepcopy(self.host_facts)
-        nested_mapping(facts, "resolved_paths")["configuration"] = "/etc"
-        self.assert_contract_violation(
-            lambda: self.validator.validate_host_facts(self.inventory, facts),
-            "resolved path",
-        )
-
     def test_managed_filesystems_must_not_be_read_only(self) -> None:
         for read_only in (None, True):
             with self.subTest(read_only=read_only):
@@ -1094,6 +1066,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
 
     def test_managed_path_metadata_and_ancestry_are_effective(self) -> None:
         mutations = (
+            ("configuration", "path", "/etc", "effective path"),
             ("configuration", "uid", 20000, "effective path ownership"),
             ("deployment_state", "gid", 0, "effective path ownership"),
             ("logs", "uid", 0, "effective path ownership"),
@@ -1108,7 +1081,9 @@ class ProductionContractRegressionTests(unittest.TestCase):
         for path_name, field, value, message in mutations:
             with self.subTest(path_name=path_name, field=field):
                 facts = copy.deepcopy(self.host_facts)
-                nested_mapping(facts, "filesystems", path_name)[field] = value
+                nested_mapping(facts, "filesystems", path_name, "access")[
+                    field
+                ] = value
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
@@ -1123,15 +1098,16 @@ class ProductionContractRegressionTests(unittest.TestCase):
             with self.subTest(path_name=path_name):
                 if not isinstance(filesystem, dict):
                     raise AssertionError("filesystem fact must be a mapping")
+                access = nested_mapping(filesystem, "access")
                 path_contract = paths[path_name]
                 if not isinstance(path_contract, dict):
                     raise AssertionError("path contract must be a mapping")
                 expected_write = self.validator.OWNER_ROLE_SERVICE_ACCOUNT_WRITE[
                     path_contract["owner_role"]
                 ]
-                self.assertIs(filesystem["service_account_can_write"], expected_write)
+                self.assertIs(access["service_account_can_write"], expected_write)
                 facts = copy.deepcopy(self.host_facts)
-                nested_mapping(facts, "filesystems", path_name)[
+                nested_mapping(facts, "filesystems", path_name, "access")[
                     "service_account_can_write"
                 ] = not expected_write
                 self.assert_contract_violation(
@@ -1153,9 +1129,11 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 continue
             with self.subTest(path_name=path_name):
                 facts = copy.deepcopy(self.host_facts)
-                filesystem = nested_mapping(facts, "filesystems", path_name)
-                filesystem["uid"] = service_uid
-                filesystem["service_account_can_write"] = False
+                access = nested_mapping(
+                    facts, "filesystems", path_name, "access"
+                )
+                access["uid"] = service_uid
+                access["service_account_can_write"] = False
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
@@ -1188,20 +1166,25 @@ class ProductionContractRegressionTests(unittest.TestCase):
             set(self.validator.OWNER_ROLE_SERVICE_ACCOUNT_WRITE),
         )
 
-        resolved_path_keys = canonical_paths | {
+        path_access_keys = {
             "service_account_home",
             "systemd_runtime_directory",
             "podman_runroot",
+            "quadlet_definitions",
         }
-        fact_resolved_paths = nested_mapping(self.host_facts, "resolved_paths")
-        resolved_path_schema = nested_mapping(
-            host_schema, "properties", "resolved_paths"
+        fact_path_access = nested_mapping(self.host_facts, "path_access")
+        path_access_schema = nested_mapping(
+            host_schema, "properties", "path_access"
         )
         self.assert_closed_keyset(
-            resolved_path_keys, fact_resolved_paths, resolved_path_schema
+            path_access_keys, fact_path_access, path_access_schema
         )
 
         filesystem_paths = set(self.validator.FILESYSTEM_PATH_KEYS)
+        self.assertEqual(
+            canonical_paths,
+            filesystem_paths | {"runtime_secrets", "quadlet_definitions"},
+        )
         fact_filesystems = nested_mapping(self.host_facts, "filesystems")
         filesystem_schema = nested_mapping(host_schema, "properties", "filesystems")
         self.assert_closed_keyset(

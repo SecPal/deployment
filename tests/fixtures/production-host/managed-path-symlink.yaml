@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 ---
-path: [resolved_paths, configuration]
+path: [filesystems, configuration, access, path]
 value: /etc

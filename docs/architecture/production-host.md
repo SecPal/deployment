@@ -83,7 +83,8 @@ A conforming fact document reports all of the following:
   archive package from `trixie` or `trixie-security`;
 - unified cgroup v2;
 - OverlayFS support;
-- enabled AppArmor and seccomp enforcement;
+- AppArmor enabled with at least one loaded profile in enforce mode, plus
+  seccomp available to Podman;
 - writable local `ext4`, or writable local XFS with `ftype=1`, for every
   persistent state path and backup staging;
 - working `d_type` directory-entry support; and
@@ -100,11 +101,16 @@ its installed kernel image and verify that package's authenticated APT origin
 and suite. It must also read the installed package architecture and require it
 to equal the admitted `amd64` or `arm64` host architecture; a release suffix is
 not architecture evidence. Release candidates, local or mainline builds,
-merely relabelled kernels, other kernel series, and backports fail closed. Patch-level security
-updates within Linux 6.12 remain valid. Debian's standard kernel supports
-AppArmor; admission still requires the effective AppArmor LSM to be enabled and
-enforcing and seccomp to be available to Podman. Package presence alone is not
-sufficient evidence for either control.
+merely relabelled kernels, other kernel series, and backports fail closed.
+Patch-level security updates within Linux 6.12 remain valid. Debian's standard
+kernel supports AppArmor; admission still requires the effective AppArmor LSM
+to be enabled, at least one loaded profile to be in enforce mode, and the
+enforcing-profile count not to exceed the loaded-profile count. A future
+collector derives those
+counts from effective AppArmor status, not package presence. D.1a must later
+prove the profile applied to each SecPal workload; D.1 does not claim workload
+enforcement before those units exist. Seccomp must be reported as available to
+Podman from effective runtime facts rather than inferred from installation.
 
 ## Operating-system lifecycle
 
@@ -210,19 +216,29 @@ starts at boot without an interactive login. Its runtime boundary is
 the local, service-account-owned `/run/user/<UID>` directory with mode `0700`.
 Its transient, local Podman runroot is `/run/user/<UID>/containers`, also mode
 `0700` and owned by the service account; neither is authoritative or backed up.
+Their shared path-access facts prove canonical resolution, locality, ownership,
+mode, and effective write access. The runtime directory itself is not
+replaceable through an account-writable parent. The runroot deliberately has
+an account-writable parent because it lives inside that account-owned runtime
+directory; admission requires that exact relationship instead of treating it
+as an operator-controlled path.
 
 Root/operator-owned definitions live at
 `/etc/containers/systemd/users/<SECPAL_UID>/`, mode `0755` on the directory,
 with root-owned `0644` unit files. They are readable/traversable but not writable
-by the service account. The effective Quadlet generator search path is restricted
-to that one reviewed directory through an administrator-owned, persistent
+by the service account. The shared path-access fact also proves that no
+ancestor of the definition directory is writable by that account, so it cannot
+rename and replace the reviewed tree through its parent. The effective Quadlet
+generator search path is restricted to that one reviewed directory through an
+administrator-owned, persistent
 Quadlet search-path configuration that the service account cannot change.
 Default user-writable runtime and home search paths are not effective inputs.
 The complete reviewed tree, including drop-ins, contains no symlinks and all
-unit content retains the stated root ownership and modes. A future collector
-must inspect the effective generator environment and dry-run output rather than
-accept an empty user directory as proof. This uses Podman 5.4.2's documented
-search-path restriction and administrator-managed rootless-user path. Later
+unit content retains the stated root ownership and modes; its tree-wide access
+facts must prove that the service account cannot mutate any entry. A future
+collector must inspect the effective generator environment and dry-run output
+rather than accept an empty user directory as proof. This uses Podman 5.4.2's
+documented search-path restriction and administrator-managed rootless-user path. Later
 D.1a (#20)/D.8 work must keep the search-path policy, unit files, and drop-ins
 root-owned so a product process cannot rewrite its future production
 definition. D.1 defines only this capability and does not add Quadlet files.
@@ -341,21 +357,25 @@ reported aggregate host total; contradictory evidence fails admission.
 The validator compares these values to supplied facts and never runs `df`,
 reads `/proc`, or inspects the developer machine.
 
-For every inventory-managed path, the service-account home, the systemd user
-runtime directory, and the Podman runroot, host facts also contain the
-canonical path obtained by a future collector using existence-
-requiring resolution and component-wise `lstat` checks. The resolved value must
-be byte-for-byte identical to the normalized inventory path. This rejects a
-symlink at the namespace root, at any ancestor, or at the managed leaf before
-ownership, mode, or mount facts are trusted.
+Path-access facts contain the canonical path obtained by a future collector
+using existence-requiring resolution and component-wise `lstat` checks. The
+value must be byte-for-byte identical to the normalized inventory path. This
+rejects a symlink at the namespace root, at any ancestor, or at the managed
+leaf before ownership, mode, or mount facts are trusted. The same closed
+`pathAccessFact` structure is used by filesystem-backed state, the systemd
+runtime directory and Podman runroot, and the root-controlled service-account
+home and Quadlet definition paths. Ownership, mode, locality, effective write
+access, and expected ancestor access therefore have one validator
+implementation. There is no parallel Quadlet-only or runtime-only ownership
+model.
 
-Filesystem facts are separate from headroom facts. They cover every path
+Filesystem facts remain separate from headroom facts. They cover every path
 classified as persistent plus reconstructable backup staging and must match
 the corresponding inventory path. This includes configuration and deployment
 state even though those two paths have no separate capacity floor. Runtime
 secrets are reconstructable state under `/run`; D.2 (#10) owns their eventual
-filesystem, ownership, mode materialization, and lifecycle decision. Each
-represented path reports its effective
+filesystem, canonicalization, ownership, mode materialization, and lifecycle
+decision. Each represented path reports its effective
 numeric UID, GID, and directory mode. D.1 compares fixed owners for
 configuration, deployment state, logs, backup staging, and Podman graphroot;
 owners delegated to later state or edge contracts are observed but not selected
@@ -405,8 +425,10 @@ be the only publicly reachable container boundary; product and data services
 remain on private container networks. Firewall mutation, routing, port
 publication, cloud metadata, and public reachability checks are outside D.1.
 
-The host has a stable DNS hostname distinct from both application origins.
-Frontend and API use separate DNS-name-only HTTPS origins. Origins cannot
+The host has a stable DNS hostname distinct from both application origins. A
+valid single-label host name such as `secpal-prod` is supported; it is a local
+host identity, not a public origin. Frontend and API use separate, fully
+qualified multi-label DNS names in their HTTPS origins. Origins cannot
 contain userinfo, a path, query, fragment, IP literal, loopback name, or a
 non-default port. Empty query, fragment, or port delimiters, ASCII control
 characters, and parser-normalized scheme or port spellings are also rejected.
@@ -422,15 +444,17 @@ such as `systemd-timesyncd` and `chrony`.
 Inventory selects the unprivileged account and primary group name plus numeric
 UID/GID. Schema version 1 requires IDs from 1000 through 60000 and rejects
 known container identities. `root` is forbidden as an account name. Known
-privileged or sensitive Debian and runtime primary-group names are forbidden, and facts
-must report no supplementary group membership.
+privileged or sensitive Debian and runtime primary-group names are forbidden,
+and facts must report no supplementary group membership.
 Facts must report the effective name, primary group, UID, primary GID,
-supplementary GIDs, home, home ownership/mode/locality, shell,
+supplementary GIDs, home, home locality, shell,
 interactive-login state, sudo-authorization state, and effective
 host-privilege-authorization state. The name, group, IDs, and home must match
-inventory. The home is local, root-owned, group-owned by the service account's
-primary GID, mode `0750`, and its containers configuration is not writable by
-the account. The remaining facts must prove a
+inventory. The shared path-access fact proves that the home is root-owned,
+group-owned by the service account's primary GID, mode `0750`, not writable by
+the account, and not replaceable through a writable ancestor. The home is local
+and its containers configuration is not writable by the account. The remaining
+facts must prove a
 non-login shell, disabled interactive login, no sudo authorization, no
 rootful or remote runtime authorization, no arbitrary system-unit authority,
 and no other effective host-privilege grant.

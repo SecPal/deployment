@@ -97,9 +97,9 @@ SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}"),
     re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^/@\s:]+:[^/@\s]+@"),
 )
+DNS_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 HOSTNAME_PATTERN = re.compile(
-    r"(?=^.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
+    rf"(?=^.{{1,253}}$){DNS_LABEL}(?:\.{DNS_LABEL})*\Z"
 )
 NUMERIC_HOST_LABEL_PATTERN = re.compile(r"(?:0x[0-9a-f]+|[0-9]+)\Z", re.IGNORECASE)
 VERSION_COMPONENT = r"(?:0|[1-9][0-9]{0,8})"
@@ -654,10 +654,13 @@ def validate_origin(origin: Any, location: str, *, synthetic: bool = False) -> s
     try:
         ipaddress.ip_address(hostname)
     except ValueError:
-        validate_hostname(hostname, location)
+        normalized_hostname = validate_hostname(hostname, location)
     else:
         raise ContractViolation(f"origin must use a DNS name at {location}")
-    normalized_hostname = hostname.lower()
+    if "." not in normalized_hostname:
+        raise ContractViolation(
+            f"origin must use a fully qualified DNS name at {location}"
+        )
     if is_documentation_hostname(normalized_hostname) and not synthetic:
         raise ContractViolation(
             f"reserved DNS name requires explicit synthetic mode at {location}"
@@ -873,6 +876,11 @@ def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:
         raise ContractViolation(
             "kernel package architecture does not match the admitted host architecture"
         )
+    apparmor = kernel["apparmor"]
+    if apparmor["profiles_in_enforce_mode"] > apparmor["profiles_loaded"]:
+        raise ContractViolation(
+            "AppArmor enforcing-profile count exceeds the loaded-profile count"
+        )
 
 
 def validate_runtime_facts(
@@ -911,23 +919,8 @@ def validate_runtime_facts(
             )
 
     expected_runtime_directory = f"/run/user/{service_account['uid']}"
-    systemd_user = runtime["systemd_user"]
-    if systemd_user["runtime_directory"] != expected_runtime_directory:
-        raise ContractViolation(
-            "systemd user runtime directory does not match the service account"
-        )
-    if (
-        systemd_user["runtime_directory_uid"] != service_account["uid"]
-        or systemd_user["runtime_directory_gid"] != service_account["gid"]
-    ):
-        raise ContractViolation(
-            "systemd user runtime directory ownership does not match the service account"
-        )
-
     expected_quadlet_path = inventory["paths"]["quadlet_definitions"]["path"]
     quadlet = runtime["quadlet"]
-    if quadlet["definition_path"] != expected_quadlet_path:
-        raise ContractViolation("Quadlet definition path does not match the inventory")
     if quadlet["effective_search_paths"] != [expected_quadlet_path]:
         raise ContractViolation(
             "effective Quadlet search path is not restricted to the reviewed tree"
@@ -941,14 +934,6 @@ def validate_runtime_facts(
         raise ContractViolation(
             "rootless Podman runroot does not match the user runtime boundary"
         )
-    for path_name in ("graphroot", "runroot"):
-        if (
-            storage[f"{path_name}_uid"] != service_account["uid"]
-            or storage[f"{path_name}_gid"] != service_account["gid"]
-        ):
-            raise ContractViolation(
-                f"rootless Podman {path_name} ownership does not match the service account"
-            )
     validate_absolute_path(storage["graphroot"], "host facts.runtime.storage.graphroot")
     validate_absolute_path(storage["runroot"], "host facts.runtime.storage.runroot")
 
@@ -963,13 +948,6 @@ def validate_service_account_facts(
             raise ContractViolation(
                 "effective service-account identity does not match the inventory"
             )
-    if (
-        service_account["home_uid"] != 0
-        or service_account["home_gid"] != expected_account["gid"]
-    ):
-        raise ContractViolation(
-            "service-account home ownership does not preserve operator control"
-        )
 
 
 def validate_network_facts(inventory: dict[str, Any], network: dict[str, Any]) -> None:
@@ -998,14 +976,61 @@ def validate_tool_facts(tools: list[str]) -> None:
 
 
 def posix_mode_grants_service_account_write(
-    filesystem: dict[str, Any], service_account: dict[str, Any]
+    access: dict[str, Any], service_account: dict[str, Any]
 ) -> bool:
-    mode = int(filesystem["mode"], 8)
+    mode = int(access["mode"], 8)
     return (
-        filesystem["uid"] == service_account["uid"] and bool(mode & 0o200)
+        access["uid"] == service_account["uid"] and bool(mode & 0o200)
     ) or (
-        filesystem["gid"] == service_account["gid"] and bool(mode & 0o020)
+        access["gid"] == service_account["gid"] and bool(mode & 0o020)
     ) or bool(mode & 0o002)
+
+
+def validate_path_access_fact(
+    service_account: dict[str, Any],
+    name: str,
+    access: dict[str, Any],
+    *,
+    expected_path: str,
+    expected_uid: int | None,
+    expected_gid: int | None,
+    expected_mode: str,
+    expected_service_write: bool,
+    expected_ancestor_write: bool,
+) -> None:
+    if access["path"] != expected_path:
+        raise ContractViolation(f"effective path does not match inventory at {name}")
+    if (
+        expected_uid is not None
+        and access["uid"] != expected_uid
+    ) or (
+        expected_gid is not None
+        and access["gid"] != expected_gid
+    ):
+        raise ContractViolation(
+            f"effective path ownership does not match inventory at {name}"
+        )
+    if access["mode"] != expected_mode:
+        raise ContractViolation(
+            f"effective path mode does not match inventory at {name}"
+        )
+    if posix_mode_grants_service_account_write(
+        access, service_account
+    ) and not access["service_account_can_write"]:
+        raise ContractViolation(
+            f"effective path access contradicts ownership or mode at {name}"
+        )
+    if access["service_account_can_write"] is not expected_service_write:
+        raise ContractViolation(
+            f"effective path access does not match inventory at {name}"
+        )
+    if (
+        access["ancestors_service_account_can_write"]
+        is not expected_ancestor_write
+    ):
+        raise ContractViolation(
+            f"effective path ancestry does not match the trust boundary at {name}"
+        )
 
 
 def validate_filesystem_fact(
@@ -1014,44 +1039,22 @@ def validate_filesystem_fact(
     filesystem: dict[str, Any],
 ) -> None:
     path_contract = inventory["paths"][name]
-    expected_path = path_contract["path"]
-    if filesystem["path"] != expected_path:
-        raise ContractViolation(f"filesystem path does not match inventory at {name}")
-    expected_uid = path_contract["uid"]
-    expected_gid = path_contract["gid"]
-    if (
-        expected_uid is not None
-        and filesystem["uid"] != expected_uid
-    ) or (
-        expected_gid is not None
-        and filesystem["gid"] != expected_gid
-    ):
-        raise ContractViolation(
-            f"effective path ownership does not match inventory at {name}"
-        )
-    if filesystem["mode"] != path_contract["mode"]:
-        raise ContractViolation(
-            f"effective path mode does not match inventory at {name}"
-        )
     owner_role = path_contract["owner_role"]
     try:
         expected_service_write = OWNER_ROLE_SERVICE_ACCOUNT_WRITE[owner_role]
     except KeyError as exc:
         raise ContractViolation(f"unsupported path owner role at {name}") from exc
-    if posix_mode_grants_service_account_write(
-        filesystem, inventory["service_account"]
-    ) and not filesystem["service_account_can_write"]:
-        raise ContractViolation(
-            f"effective path access contradicts ownership or mode at {name}"
-        )
-    if filesystem["service_account_can_write"] is not expected_service_write:
-        raise ContractViolation(
-            f"effective path access does not match inventory at {name}"
-        )
-    if filesystem["ancestors_service_account_can_write"]:
-        raise ContractViolation(
-            f"effective path ancestry permits service-account replacement at {name}"
-        )
+    validate_path_access_fact(
+        inventory["service_account"],
+        name,
+        filesystem["access"],
+        expected_path=path_contract["path"],
+        expected_uid=path_contract["uid"],
+        expected_gid=path_contract["gid"],
+        expected_mode=path_contract["mode"],
+        expected_service_write=expected_service_write,
+        expected_ancestor_write=False,
+    )
     if filesystem["filesystem"] == "xfs" and filesystem["xfs_ftype"] is not True:
         raise ContractViolation(f"XFS storage must use ftype=1 at {name}")
     if filesystem["filesystem"] == "ext4" and filesystem["xfs_ftype"] is not None:
@@ -1065,29 +1068,61 @@ def validate_filesystem_facts(
         validate_filesystem_fact(inventory, name, filesystems[name])
 
 
-def validate_resolved_paths(
-    inventory: dict[str, Any], resolved_paths: dict[str, Any]
+def validate_path_access_facts(
+    inventory: dict[str, Any], path_access: dict[str, Any]
 ) -> None:
-    service_uid = inventory["service_account"]["uid"]
-    runtime_directory = f"/run/user/{service_uid}"
-    expected_paths = {
-        "service_account_home": inventory["service_account"]["home"],
-        "systemd_runtime_directory": runtime_directory,
-        "podman_runroot": f"{runtime_directory}/containers",
-        **{
-            name: contract["path"]
-            for name, contract in inventory["paths"].items()
-        },
-    }
-    for name, expected_path in expected_paths.items():
-        resolved_path = resolved_paths[name]
-        validate_absolute_path(
-            resolved_path, f"host facts.resolved_paths.{name}"
+    service_account = inventory["service_account"]
+    runtime_directory = f"/run/user/{service_account['uid']}"
+    expectations = (
+        (
+            "service_account_home",
+            service_account["home"],
+            0,
+            service_account["gid"],
+            "0750",
+            False,
+            False,
+        ),
+        (
+            "systemd_runtime_directory",
+            runtime_directory,
+            service_account["uid"],
+            service_account["gid"],
+            "0700",
+            True,
+            False,
+        ),
+        (
+            "podman_runroot",
+            f"{runtime_directory}/containers",
+            service_account["uid"],
+            service_account["gid"],
+            "0700",
+            True,
+            True,
+        ),
+        (
+            "quadlet_definitions",
+            inventory["paths"]["quadlet_definitions"]["path"],
+            0,
+            0,
+            "0755",
+            False,
+            False,
+        ),
+    )
+    for name, path, uid, gid, mode, service_write, ancestor_write in expectations:
+        validate_path_access_fact(
+            service_account,
+            name,
+            path_access[name],
+            expected_path=path,
+            expected_uid=uid,
+            expected_gid=gid,
+            expected_mode=mode,
+            expected_service_write=service_write,
+            expected_ancestor_write=ancestor_write,
         )
-        if resolved_path != expected_path:
-            raise ContractViolation(
-                f"resolved path traverses a symlink or mismatches inventory at {name}"
-            )
 
 
 def validate_headroom_fact(
@@ -1153,7 +1188,7 @@ def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> Non
     validate_runtime_facts(inventory, facts)
     validate_service_account_facts(inventory, facts)
     validate_network_facts(inventory, facts["network"])
-    validate_resolved_paths(inventory, facts["resolved_paths"])
+    validate_path_access_facts(inventory, facts["path_access"])
     validate_tool_facts(facts["tools"])
     validate_filesystem_facts(inventory, facts["filesystems"])
     validate_resource_facts(inventory, facts["resources"])

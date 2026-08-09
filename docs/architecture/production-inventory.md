@@ -87,8 +87,10 @@ literals are never host addresses.
 Public and private address comparison uses parsed IP identities, so equivalent
 IPv6 spellings match while semantic duplicates fail. IPv4-mapped IPv6 values
 are rejected rather than treated as native IPv6 host addresses. DNS hostname
-comparison is case-insensitive; IP literals and legacy numeric IPv4 spellings
-are not hostnames. Private addresses are limited to RFC 1918 IPv4 or IPv6 ULA;
+comparison is case-insensitive; host identity permits a valid single label,
+while public frontend and API origins require fully qualified multi-label DNS
+names. IP literals and legacy numeric IPv4 spellings are not hostnames. Private
+addresses are limited to RFC 1918 IPv4 or IPv6 ULA;
 documentation, benchmarking, link-local, and other non-global ranges are not
 treated as private-use addresses. Private-address order is not significant;
 duplicate or mismatched facts fail closed. Address facts must use YAML strings;
@@ -139,23 +141,27 @@ Netavark/Aardvark DNS, pasta, uidmap, a boot-capable systemd user manager with
 linger, a local owner-only runtime directory and runroot, Quadlet, and local
 overlay storage. The effective Quadlet search list contains only the reviewed
 administrator path; its configuration is not account-writable and its complete
-definition tree contains no symlinks. Rootful Podman, Docker as the selected
-production runtime, Compose orchestration, compatibility packages, remote or
-socket APIs, host networking, auto-update, registry redirects, user-writable
-Quadlet overrides, and non-root-owned Quadlet units fail closed.
+definition tree contains no symlinks. The definition directory and the
+root-controlled service-account home use one shared path-access fact model;
+their canonical path, owner, mode, effective account write access, and complete
+ancestor write access are validated identically. Rootful Podman, Docker as the
+selected production runtime, Compose orchestration, compatibility packages,
+remote or socket APIs, host networking, auto-update, registry redirects,
+user-writable Quadlet overrides, and non-root-owned Quadlet units fail closed.
 Inventory cannot supply arbitrary Podman flags, Quadlet text, security options,
 host-network toggles, runtime sockets, or update policy.
 
 ### `origins`
 
 `frontend` and `api` are exact HTTPS origins. The frontend and API origins must
-differ. Each uses a DNS name, default HTTPS port, and no userinfo, path, query,
-fragment, empty delimiter, control character, localhost name, loopback address,
-or IP literal. Reserved documentation names such as `.invalid`, `.test`,
+differ. Each uses a fully qualified multi-label DNS name, the default HTTPS
+port, and no userinfo, path, query, fragment, empty delimiter, control
+character, localhost name, loopback address, or IP literal. Reserved
+documentation names such as `.invalid`, `.test`,
 `.example`, and `example.com`/`.net`/`.org` are accepted only in explicit
 `--synthetic` fixture mode. The scheme and optional `:443` spelling must be
-canonical; parser-normalized alternatives fail closed. Origin separation preserves the
-credentialed CORS, Sanctum, cookie, and proxy trust boundary.
+canonical; parser-normalized alternatives fail closed. Origin separation
+preserves the credentialed CORS, Sanctum, cookie, and proxy trust boundary.
 
 ### `paths`
 
@@ -197,10 +203,15 @@ schema contract. CPU, memory, total storage, and total inode values are
 compared with supplied facts. `resources.storage` contains only byte and inode
 headroom observations. Each absolute/percentage pair must be mutually possible
 within the corresponding aggregate host total, allowing whole-number flooring.
-The separate closed `filesystems` fact group contains path, filesystem,
-locality, effective read-only mount state, `d_type`, and XFS `ftype`
-observations for every persistent inventory path plus backup staging. Every
-represented mount must explicitly be writable. This separation ensures that
+The separate closed `filesystems` fact group contains a shared `access` fact
+for canonical path, ownership, mode, locality, and effective account access,
+plus filesystem type, effective read-only mount state, `d_type`, and XFS
+`ftype` observations for every persistent inventory path plus backup staging.
+The same access schema is used by `path_access` for the systemd runtime
+directory, Podman runroot, root-owned service-account home, and Quadlet
+definitions, without imposing a storage filesystem choice on `/run`, `/var`,
+or `/etc`. Every represented mount must explicitly be writable. This
+separation ensures that
 configuration and deployment state are checked even though they have no
 separate capacity floor. Passing the floor is not a capacity guarantee; the
 evidence method is defined in the host contract.
@@ -253,11 +264,12 @@ Validation consists of:
    update and kernel package provenance, cgroup, Podman package provenance,
    subuid/subgid, systemd user/linger, Quadlet ownership, runtime/API and
    registry policy, clock, tools, filesystem ownership, modes, effective
-   service-account access, trusted ancestry and writable mounts, resources,
-   and storage headroom. Collector-resolved values for the service-account home,
-   systemd runtime directory, Podman runroot, and every managed path must exactly
-   equal their contract spelling, proving that no path component traverses a
-   symlink.
+   service-account access, trusted ancestry and writable mounts, AppArmor
+   enforcing-profile evidence, resources, and storage headroom. Every supplied
+   path-access value is the collector-resolved canonical path and must exactly
+   equal its contract spelling, proving that no represented path component
+   traverses a symlink. Runtime secrets receive that effective path evidence in
+   D.2 when their materialization contract is defined.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state

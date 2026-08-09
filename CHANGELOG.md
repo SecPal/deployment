@@ -21,6 +21,8 @@ SPDX-License-Identifier: CC0-1.0
   the historical Docker/Compose integration evidence.
 - Effective runtime-package suite, mapping-helper, user-runtime-directory, and
   administrator-only Quadlet search-path evidence.
+- Shared path-access admission for host policy and rootless runtime paths, explicit AppArmor
+  enforcement evidence, and distinct host-name versus public-origin rules.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 
