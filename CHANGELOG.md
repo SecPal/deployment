@@ -9,6 +9,14 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- A constrained native Quadlet renderer and rootless Podman/systemd-user
+  lifecycle that transfer the disposable Phase B/C integration contract
+  without rewriting its historical Docker/Compose evidence.
+- Fail-closed static and lifecycle contracts for exact service roles,
+  dependency health, one-shot migration, runtime security, registry policy,
+  signals, parallel fixtures, stale state, and exact non-pruning cleanup.
+- Real runtime inspection, browser parity, restart/persistence fixtures, and
+  bounded non-secret resource observations in the active integration runner.
 - A provider-neutral production host and inventory contract.
 - A versioned, non-secret production inventory schema, a closed synthetic
   host-facts schema, and examples for both supported architectures.
@@ -21,8 +29,21 @@ SPDX-License-Identifier: CC0-1.0
   the historical Docker/Compose integration evidence.
 - Effective runtime-package suite, mapping-helper, user-runtime-directory, and
   administrator-only Quadlet search-path evidence.
-- Shared path-access admission for host policy and rootless runtime paths, explicit AppArmor
-  enforcement evidence, and distinct host-name versus public-origin rules.
+- Shared path-access admission for host policy and rootless runtime paths,
+  explicit AppArmor enforcement evidence, and distinct host-name versus
+  public-origin rules.
+
+### Changed
+
+- The active required integration workflow uses explicit Ubuntu 26.04 amd64
+  and arm64 hosted evidence for Podman 5 and native Quadlet. The completed
+  Compose workflow and stack remain historical evidence.
+
+### Not included
+
+- D.1a does not implement production orchestration, persistence, secrets,
+  public edge, DNS, ACME/TLS lifecycle, CrowdSec, backup, update, rollback,
+  provider provisioning, or other D.2+ work.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

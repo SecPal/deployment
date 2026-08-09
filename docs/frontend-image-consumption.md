@@ -9,6 +9,12 @@ The local integration contract consumes the public SecPal frontend image by
 its reviewed OCI index digest. This is a test-only, loopback-only, disposable
 integration stack, not a production deployment.
 
+The Docker/Compose wording below is the retained Phase C completion record.
+The active D.1a runner repeats the same token-free OCI and attestation gates,
+stages the reviewed digest through a new empty Podman authentication file, and
+uses the canonical digest from native Quadlet with `Pull=never`. It does not
+reinterpret the historical Compose run as Podman evidence.
+
 ## Canonical identity and evidence
 
 The only approved frontend deployment reference is:
@@ -75,12 +81,15 @@ For the frontend, the anonymous OCI Distribution verifier:
 6. writes private mode-`0600` local index and bundle files for offline
    cryptographic verification.
 
-The hosted workflow installs GitHub CLI `2.97.0` and verifies the official
-Linux AMD64 archive checksum
+At Phase C completion, the hosted workflow installed GitHub CLI `2.97.0` and
+verified the official Linux AMD64 archive checksum
 `a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112`.
-The runner requires that exact version. GitHub CLI verifies the local raw
-index and bundle with exact bindings to `SecPal/frontend`, the publisher
-workflow, `refs/heads/main`, source digest and signer digest
+The active D.1a matrix additionally verifies the official Linux ARM64 archive
+checksum
+`73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5`.
+The runner requires that exact version. GitHub CLI verifies the local raw index
+and bundle with exact bindings to `SecPal/frontend`, the publisher workflow,
+`refs/heads/main`, source digest and signer digest
 `b755ca0d0ee5a85eca5ad5688d457241f070b1b4`, and GitHub-hosted runners only.
 It does not reopen the registry during cryptographic verification.
 
@@ -132,4 +141,6 @@ frontend, gateway, Playwright browser contract, and complete project cleanup.
 Phase C is complete. This status covers immutable publication, post-merge
 verification, digest-only deployment consumption, pre-execution attestation
 verification, and hosted integration evidence. It does not claim production
-deployment or public infrastructure. Phase D has not started.
+deployment or public infrastructure. At that completion point, Phase D had
+not started; D.1a adds disposable runtime parity rather than production
+deployment.

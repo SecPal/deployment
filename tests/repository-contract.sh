@@ -44,12 +44,19 @@ required_files=(
   docs/architecture/production-host.md
   docs/architecture/production-inventory.md
   docs/api-image-consumption.md
+  docs/frontend-image-consumption.md
+  docs/quadlet-integration.md
   docs/roadmap.md
   config/production/inventory.example.yaml
+  config/quadlet/Caddyfile
   schemas/production-host-facts.schema.json
   schemas/production-inventory.schema.json
   scripts/preflight.sh
   scripts/fetch-oci-attestation.py
+  scripts/quadlet-integration.py
+  scripts/quadlet-oneshot-entrypoint.sh
+  scripts/render-integration-quadlets.py
+  scripts/valkey-entrypoint.sh
   scripts/reject-sensitive-paths.sh
   scripts/validate-production-contract.py
   scripts/validate-origin.sh
@@ -70,7 +77,10 @@ required_files=(
   tests/fixtures/fake-python3.sh
   tests/fixtures/fake-curl.sh
   tests/oci-attestation-bundle-contract.py
+  tests/quadlet-integration-contract.py
+  tests/quadlet-integration-lifecycle.py
   .github/workflows/quality.yml
+  .github/actionlint.yaml
   LICENSES/AGPL-3.0-or-later.txt
   LICENSES/CC0-1.0.txt
   LICENSES/LicenseRef-SecPal-Attribution.txt
@@ -84,7 +94,7 @@ done
 require_text README.md "It is not a production-ready deployment."
 require_text README.md "./scripts/preflight.sh"
 require_text README.md "Local API/frontend integration: complete."
-require_text README.md "Phase B is complete:"
+require_text README.md "Phase B completed in the required check context"
 require_text README.md "Phase C is complete."
 require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one"
 require_text docs/architecture/scope.md "scheduler: exactly one"
@@ -100,7 +110,9 @@ require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
 # The Markdown backticks must remain literal.
 # shellcheck disable=SC2016
 require_text docs/roadmap.md 'is enforced for `main`'
-require_text .github/workflows/local-integration.yml "runs-on: ubuntu-latest"
+require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04"
+require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04-arm"
+require_text .github/actionlint.yaml 'label "ubuntu-26\.04(-arm)?" is unknown'
 require_text AGENTS.md "Docker socket"
 require_text AGENTS.md "activity-hash-chain worker: exactly one"
 require_text AGENTS.md "scheduler: exactly one"

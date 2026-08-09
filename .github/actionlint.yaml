@@ -1,0 +1,9 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+# actionlint 1.7.x predates GitHub's Ubuntu 26.04 public-preview labels.
+paths:
+  .github/workflows/local-integration.yml:
+    ignore:
+      - 'label "ubuntu-26\.04(-arm)?" is unknown'

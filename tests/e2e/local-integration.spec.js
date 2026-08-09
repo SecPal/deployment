@@ -6,7 +6,7 @@ const { expect, test } = require("@playwright/test");
 const appOrigin = process.env.APP_ORIGIN;
 const apiOrigin = process.env.API_ORIGIN;
 
-test("the cross-origin SPA contract works through the real Compose gateway", async ({
+test("the cross-origin SPA contract works through the real integration gateway", async ({
   page,
   context,
 }) => {

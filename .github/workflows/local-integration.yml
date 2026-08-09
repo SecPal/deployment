@@ -18,9 +18,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  compose-contract:
-    name: Compose Contract
-    runs-on: ubuntu-latest
+  quadlet-contract:
+    name: Quadlet Contract (${{ matrix.architecture }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-26.04
+            gh_arch: amd64
+            gh_sha256: a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
+          - architecture: arm64
+            runner: ubuntu-26.04-arm
+            gh_arch: arm64
+            gh_sha256: 73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 55
     steps:
       - name: Checkout repository
@@ -29,19 +41,21 @@ jobs:
       - name: Install pinned GitHub CLI
         env:
           GH_VERSION: "2.97.0"
-          GH_LINUX_AMD64_SHA256: "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
+          GH_LINUX_ARCH: ${{ matrix.gh_arch }}
+          GH_LINUX_SHA256: ${{ matrix.gh_sha256 }}
         run: |
-          archive="$RUNNER_TEMP/gh_${GH_VERSION}_linux_amd64.tar.gz"
+          release="gh_${GH_VERSION}_linux_${GH_LINUX_ARCH}.tar.gz"
+          archive="$RUNNER_TEMP/$release"
           curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
-            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/$release" \
             --output "$archive"
-          printf '%s  %s\n' "$GH_LINUX_AMD64_SHA256" "$archive" | \
+          printf '%s  %s\n' "$GH_LINUX_SHA256" "$archive" | \
             sha256sum --check --strict
           tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" \
             --no-same-owner
           install -d -m 0755 "$RUNNER_TEMP/gh-bin"
           install -m 0755 \
-            "$RUNNER_TEMP/gh_${GH_VERSION}_linux_amd64/bin/gh" \
+            "$RUNNER_TEMP/${release%.tar.gz}/bin/gh" \
             "$RUNNER_TEMP/gh-bin/gh"
           echo "$RUNNER_TEMP/gh-bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/gh-bin/gh" version
@@ -68,8 +82,67 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Admit hosted rootless Podman and systemd-user runtime
+        run: |
+          podman --version
+          test "$(id -u)" -ne 0
+          dpkg-query --show \
+            podman crun catatonit netavark aardvark-dns passt uidmap dbus-user-session
+          command -v catatonit
+          command -v crun
+          command -v pasta
+          command -v newuidmap
+          sudo -n loginctl enable-linger "$USER"
+          runtime_uid="$(id -u)"
+          export XDG_RUNTIME_DIR="/run/user/$runtime_uid"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          test -S "$XDG_RUNTIME_DIR/bus"
+          {
+            printf 'XDG_RUNTIME_DIR=%s\n' "$XDG_RUNTIME_DIR"
+            printf 'DBUS_SESSION_BUS_ADDRESS=%s\n' "$DBUS_SESSION_BUS_ADDRESS"
+          } >> "$GITHUB_ENV"
+          quadlet_root="/etc/containers/systemd/users/$runtime_uid"
+          policy="$RUNNER_TEMP/90-secpal-quadlet.conf"
+          printf 'QUADLET_UNIT_DIRS=%s\n' "$quadlet_root" > "$policy"
+          sudo -n install -d -o root -g root -m 0755 "$quadlet_root"
+          sudo -n install -o root -g root -m 0644 \
+            "$policy" /etc/environment.d/90-secpal-quadlet.conf
+          export QUADLET_UNIT_DIRS="$quadlet_root"
+          systemctl --user import-environment QUADLET_UNIT_DIRS
+          systemctl --user daemon-reload
+          podman info --format json
+
       - name: Run static preflight
         run: ./scripts/preflight.sh
 
-      - name: Run real Compose integration
-        run: ./scripts/local-integration.sh
+      - name: Run real rootless Podman and Quadlet integration
+        run: python3 scripts/quadlet-integration.py
+
+      - name: Prove fail-closed migration, dependency, and health behavior
+        run: |
+          for failure_case in migration dependency health; do
+            python3 scripts/quadlet-integration.py --failure-case "$failure_case"
+          done
+
+      - name: Prove parallel fixture isolation
+        run: |
+          first_status=0
+          second_status=0
+          python3 scripts/quadlet-integration.py \
+            --instance parallel01 \
+            --port 18443 \
+            --fixture-root "$RUNNER_TEMP/secpal-quadlet-parallel01" \
+            >"$RUNNER_TEMP/secpal-quadlet-parallel01.log" 2>&1 &
+          first_pid=$!
+          python3 scripts/quadlet-integration.py \
+            --instance parallel02 \
+            --port 18444 \
+            --fixture-root "$RUNNER_TEMP/secpal-quadlet-parallel02" \
+            >"$RUNNER_TEMP/secpal-quadlet-parallel02.log" 2>&1 &
+          second_pid=$!
+          wait "$first_pid" || first_status=$?
+          wait "$second_pid" || second_status=$?
+          cat "$RUNNER_TEMP/secpal-quadlet-parallel01.log"
+          cat "$RUNNER_TEMP/secpal-quadlet-parallel02.log"
+          test "$first_status" -eq 0
+          test "$second_status" -eq 0

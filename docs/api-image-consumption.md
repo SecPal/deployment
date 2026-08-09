@@ -9,6 +9,12 @@ The public local integration contract consumes the verified SecPal API image
 by canonical OCI index digest. It is a test-only, loopback-only, disposable
 integration contract, not a production deployment.
 
+The Docker/Compose language below records the completed Phase C evidence. The
+active D.1a runner preserves the same OCI and attestation verifier, uses a new
+mode-`0700` empty Podman authentication file for each pull, stages the exact
+digest in rootless local storage, and starts only native Quadlet units with
+`Pull=never`. The historical evidence is not rewritten as Podman evidence.
+
 ## Canonical identity
 
 The only approved API image reference is:
@@ -41,12 +47,15 @@ removes inherited `DOCKER_AUTH_CONFIG` only from the exact `docker pull`
 process. The runner therefore cannot reuse either file-backed or environment-
 provided Docker registry credentials for the reviewed API digest.
 
-The hosted workflow installs the official GitHub CLI `2.97.0` Linux AMD64
-release archive and verifies its published SHA-256 checksum
+At Phase C completion, the hosted workflow installed the official GitHub CLI `2.97.0`
+Linux AMD64 release archive and verified its published SHA-256 checksum
 `a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112`
 before use. The integration runner requires that exact version, checks for
 `gh attestation verify`, and fails closed before the API pull if either contract
-does not match. It does not introduce a GitHub token.
+does not match. The active D.1a hosted matrix also verifies the official ARM64
+archive checksum
+`73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5`.
+Neither path introduces a GitHub token.
 
 ## Token-free OCI bundle verification
 
@@ -116,7 +125,8 @@ merge commit `4fc2796409b7c37a541f515ccf29236f143fc132` passed post-merge Local
 Integration run `31264562902`; the final dual-image evidence is recorded in
 [`frontend-image-consumption.md`](frontend-image-consumption.md).
 
-Phase D has not started. Production host automation remains outside this
-change. No real host, cloud resource, DNS, TLS, secret, inventory, persistent
-production data, backup, restore, or managed hosting automation is changed
-here.
+At Phase C completion, Phase D had not started. D.1 now defines the production
+host contract and D.1a provides only disposable Podman/Quadlet integration
+parity. No production orchestration, cloud resource, DNS, TLS, production
+secret, persistent production data, backup, restore, or managed-hosting
+automation is implemented here.

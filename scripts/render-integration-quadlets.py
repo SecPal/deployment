@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+"""Render and validate the closed integration Quadlet contract."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import sys
+import tempfile
+
+
+API_IMAGE = "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
+FRONTEND_IMAGE = "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
+POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
+VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
+
+INSTANCE_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{6,22}[a-z0-9]\Z")
+FAILURE_CASES = ("migration", "dependency", "health")
+
+
+class ContractError(ValueError):
+    """Raised when a rendered Quadlet contract is unsafe or incomplete."""
+
+
+def section(name: str, lines: list[str]) -> str:
+    return f"[{name}]\n" + "\n".join(lines) + "\n"
+
+
+def unit_description(
+    description: str,
+    dependencies: list[str] | None = None,
+    part_of: str | None = None,
+    start_limited: bool = False,
+) -> str:
+    lines = [f"Description={description}"]
+    if part_of:
+        lines.append(f"PartOf={part_of}")
+    if dependencies:
+        joined = " ".join(dependencies)
+        lines.extend((f"Requires={joined}", f"After={joined}"))
+    if start_limited:
+        lines.extend(("StartLimitIntervalSec=60", "StartLimitBurst=3"))
+    return section("Unit", lines)
+
+
+def common_container(instance: str, role: str, image: str, uid: int, gid: int) -> list[str]:
+    return [
+        f"ContainerName=secpal-int-{instance}-{role}",
+        f"Image={image}",
+        "Pull=never",
+        f"User={uid}",
+        f"Group={gid}",
+        "ReadOnly=true",
+        "ReadOnlyTmpfs=false",
+        "DropCapability=all",
+        "NoNewPrivileges=true",
+        "RunInit=true",
+        "StopTimeout=30",
+        "LogDriver=journald",
+        "PidsLimit=512",
+        "Label=org.secpal.integration=true",
+        f"Label=org.secpal.integration.instance={instance}",
+        f"Label=org.secpal.role={role}",
+    ]
+
+
+def service(restart: str = "on-failure") -> str:
+    lines = [f"Restart={restart}", "TimeoutStartSec=180"]
+    if restart != "no":
+        lines.append("RestartSec=2")
+    return section("Service", lines)
+
+
+def tmpfs(destination: str, size: str, mode: str, *, noexec: bool = True) -> str:
+    options = (
+        f"Mount=type=tmpfs,destination={destination},tmpfs-size={size},"
+        f"tmpfs-mode={mode},U=true,nosuid=true,nodev=true"
+    )
+    return options + (",noexec=true" if noexec else "")
+
+
+def api_environment(port: int) -> list[str]:
+    values = {
+        "APP_DEBUG": "false",
+        "APP_ENV": "local",
+        "APP_NAME": "SecPal",
+        "APP_URL": f"https://api.secpal.example.invalid:{port}",
+        "CACHE_STORE": "redis",
+        "DB_CONNECTION": "pgsql",
+        "DB_DATABASE": "secpal_local",
+        "DB_HOST": "postgres",
+        "DB_PORT": "5432",
+        "DB_USERNAME": "secpal_local",
+        "FILESYSTEM_DISK": "local",
+        "FRONTEND_URL": f"https://app.secpal.example.invalid:{port}",
+        "LOG_CHANNEL": "stderr",
+        "QUEUE_CONNECTION": "redis",
+        "REDIS_CLIENT": "phpredis",
+        "REDIS_CACHE_DB": "1",
+        "REDIS_DB": "0",
+        "REDIS_HOST": "valkey",
+        "REDIS_PORT": "6379",
+        "REDIS_QUEUE": "default",
+        "REDIS_QUEUE_CONNECTION": "default",
+        "SANCTUM_STATEFUL_DOMAINS": f"app.secpal.example.invalid:{port}",
+        "CORS_ALLOWED_HEADERS": "Content-Type,Authorization,X-Requested-With,X-XSRF-TOKEN",
+        "CORS_ALLOWED_METHODS": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+        "CORS_ALLOWED_ORIGINS": f"https://app.secpal.example.invalid:{port}",
+        "CORS_SUPPORTS_CREDENTIALS": "true",
+        "SESSION_DOMAIN": ".secpal.example.invalid",
+        "SESSION_DRIVER": "database",
+        "SESSION_HTTP_ONLY": "true",
+        "SESSION_SAME_SITE": "lax",
+        "SESSION_SECURE_COOKIE": "true",
+        "TRUSTED_PROXIES": "REMOTE_ADDR",
+    }
+    return [f"Environment={name}={value}" for name, value in values.items()]
+
+
+def api_container(
+    instance: str,
+    port: int,
+    fixture_root: Path,
+    role: str,
+    command: str,
+    networks: list[str],
+    *,
+    oneshot: bool = False,
+    health: bool = False,
+) -> str:
+    prefix = f"secpal-int-{instance}"
+    dependencies = [f"{prefix}-migrate.service"] if role != "migrate" else [
+        f"{prefix}-postgres.service",
+        f"{prefix}-valkey.service",
+    ]
+    lines = common_container(instance, role, API_IMAGE, 10001, 10001)
+    lines.extend(api_environment(port))
+    entrypoint = (
+        '["/bin/sh","/run/secpal/quadlet-oneshot-entrypoint.sh"]'
+        if oneshot
+        else '["/bin/bash","/run/secpal/container-entrypoint.sh"]'
+    )
+    execution = (
+        f"/bin/bash /run/secpal/container-entrypoint.sh {command}" if oneshot else command
+    )
+    lines.extend(
+        (
+            f"Entrypoint={entrypoint}",
+            f"Exec={execution}",
+            f"Mount=type=bind,source={fixture_root}/assets/container-entrypoint.sh,target=/run/secpal/container-entrypoint.sh,ro=true",
+            f"Mount=type=bind,source={fixture_root}/assets/phase-b-runtime-probe.php,target=/run/secpal/phase-b-runtime-probe.php,ro=true",
+            f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
+            f"Volume={prefix}-private-storage.volume:/app/storage/app/private",
+            tmpfs("/tmp", "32m", "0700"),
+            tmpfs("/config", "16m", "0700"),
+            tmpfs("/data", "16m", "0700"),
+            tmpfs("/app/storage/app/public", "32m", "0750", noexec=False),
+            tmpfs("/app/storage/framework/cache/data", "32m", "0750"),
+            tmpfs("/app/storage/framework/sessions", "32m", "0750"),
+            tmpfs("/app/storage/framework/views", "32m", "0750"),
+            tmpfs("/app/storage/logs", "32m", "0750"),
+            tmpfs("/app/bootstrap/cache", "16m", "0750"),
+        )
+    )
+    if oneshot:
+        lines.append(
+            f"Mount=type=bind,source={fixture_root}/assets/quadlet-oneshot-entrypoint.sh,target=/run/secpal/quadlet-oneshot-entrypoint.sh,ro=true"
+        )
+    for network in networks:
+        lines.append(f"Network={prefix}-{network}.network")
+    lines.append(f"NetworkAlias={role}")
+    if health:
+        lines.extend(
+            (
+                "HealthCmd=/usr/local/bin/secpal-http-live",
+                "HealthInterval=10s",
+                "HealthTimeout=5s",
+                "HealthRetries=12",
+                "HealthStartPeriod=15s",
+                "HealthOnFailure=kill",
+                "Notify=healthy",
+            )
+        )
+    service_lines = ["Restart=no", "TimeoutStartSec=180"] if oneshot else [
+        "Restart=on-failure",
+        "RestartSec=2",
+        "TimeoutStartSec=180",
+    ]
+    if oneshot:
+        service_lines.extend(("Type=oneshot", "RemainAfterExit=yes"))
+    return unit_description(
+        f"SecPal integration {role} ({instance})",
+        dependencies,
+        f"{prefix}.target",
+        not oneshot,
+    ) + section("Container", lines) + section("Service", service_lines)
+
+
+def replace_once(content: str, old: str, new: str) -> str:
+    if content.count(old) != 1:
+        raise ContractError("fixed failure profile no longer matches its reviewed unit")
+    return content.replace(old, new, 1)
+
+
+def apply_failure_profile(
+    units: dict[str, str], instance: str, failure_case: str | None
+) -> dict[str, str]:
+    """Apply one closed integration-only fault with no caller-controlled text."""
+
+    if failure_case is None:
+        return units
+    prefix = f"secpal-int-{instance}"
+    if failure_case == "migration":
+        name = f"{prefix}-migrate.container"
+        units[name] = replace_once(
+            units[name],
+            "Exec=/bin/bash /run/secpal/container-entrypoint.sh php artisan migrate --force",
+            "Exec=/bin/false",
+        )
+    elif failure_case == "dependency":
+        name = f"{prefix}-postgres.container"
+        units[name] = replace_once(
+            units[name],
+            "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secrets/postgres-password",
+            "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secrets/postgres-password\nExec=/bin/false",
+        )
+        units[name] = replace_once(
+            units[name], "Restart=on-failure\nTimeoutStartSec=180\nRestartSec=2", "Restart=no\nTimeoutStartSec=180"
+        )
+    elif failure_case == "health":
+        name = f"{prefix}-gateway.container"
+        units[name] = replace_once(
+            units[name],
+            "HealthCmd=wget --no-check-certificate -q -T 3 -O /dev/null https://app.secpal.example.invalid:8443/health/live",
+            "HealthCmd=/bin/false",
+        )
+        units[name] = replace_once(units[name], "HealthInterval=10s", "HealthInterval=1s")
+        units[name] = replace_once(units[name], "HealthRetries=12", "HealthRetries=1")
+        units[name] = replace_once(units[name], "HealthStartPeriod=5s", "HealthStartPeriod=1s")
+        units[name] = replace_once(
+            units[name], "Restart=on-failure\nTimeoutStartSec=180\nRestartSec=2", "Restart=no\nTimeoutStartSec=180"
+        )
+    else:
+        raise ContractError("unsupported failure profile")
+    return units
+
+
+def build_units(
+    instance: str, port: int, fixture_root: Path, failure_case: str | None = None
+) -> dict[str, str]:
+    prefix = f"secpal-int-{instance}"
+    app_network = f"{prefix}-application.network"
+    edge_network = f"{prefix}-edge.network"
+    labels = [
+        "Label=org.secpal.integration=true",
+        f"Label=org.secpal.integration.instance={instance}",
+    ]
+    units: dict[str, str] = {}
+
+    for name, internal in (("application", True), ("edge", True)):
+        network_lines = [f"NetworkName={prefix}-{name}", *labels]
+        if internal:
+            network_lines.append("Internal=true")
+        units[f"{prefix}-{name}.network"] = section("Network", network_lines)
+
+    for name in ("secrets", "private-storage", "postgres"):
+        units[f"{prefix}-{name}.volume"] = section(
+            "Volume",
+            [f"VolumeName={prefix}-{name}", *labels],
+        )
+
+    secret_dependencies: list[str] = []
+    secret_lines = common_container(instance, "secrets-init", API_IMAGE, 0, 0)
+    secret_lines.extend(
+        (
+            "AddCapability=CHOWN FOWNER",
+            'Entrypoint=["/bin/sh","/run/secpal/quadlet-oneshot-entrypoint.sh"]',
+            "Exec=/bin/bash /run/secpal/init-local-secrets.sh",
+            "Environment=SECPAL_API_UID=10001",
+            "Environment=SECPAL_API_GID=10001",
+            "Environment=SECPAL_POSTGRES_UID=999",
+            "Environment=SECPAL_VALKEY_UID=10002",
+            "Environment=SECPAL_SECRET_DIR=/run/secpal-secrets",
+            "Environment=SECPAL_POSTGRES_DATA_DIR=/var/lib/postgresql/data",
+            "Environment=SECPAL_PRIVATE_STORAGE_DIR=/mnt/secpal-private-storage",
+            f"Mount=type=bind,source={fixture_root}/assets/init-local-secrets.sh,target=/run/secpal/init-local-secrets.sh,ro=true",
+            f"Mount=type=bind,source={fixture_root}/assets/quadlet-oneshot-entrypoint.sh,target=/run/secpal/quadlet-oneshot-entrypoint.sh,ro=true",
+            f"Volume={prefix}-secrets.volume:/run/secpal-secrets",
+            f"Volume={prefix}-postgres.volume:/var/lib/postgresql/data",
+            f"Volume={prefix}-private-storage.volume:/mnt/secpal-private-storage",
+            tmpfs("/tmp", "16m", "0700"),
+            "Network=none",
+        )
+    )
+    units[f"{prefix}-secrets-init.container"] = (
+        unit_description(
+            f"SecPal integration secret initialization ({instance})",
+            secret_dependencies,
+            f"{prefix}.target",
+        )
+        + section("Container", secret_lines)
+        + section("Service", ["Type=oneshot", "RemainAfterExit=yes", "Restart=no", "TimeoutStartSec=60"])
+    )
+
+    postgres_lines = common_container(instance, "postgres", POSTGRES_IMAGE, 999, 999)
+    postgres_lines.extend(
+        (
+            "Environment=POSTGRES_DB=secpal_local",
+            "Environment=POSTGRES_USER=secpal_local",
+            "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secrets/postgres-password",
+            f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
+            f"Volume={prefix}-postgres.volume:/var/lib/postgresql/data",
+            tmpfs("/tmp", "32m", "0700"),
+            tmpfs("/run/postgresql", "16m", "0750"),
+            f"Network={app_network}",
+            "NetworkAlias=postgres",
+            "HealthCmd=pg_isready -U secpal_local -d secpal_local",
+            "HealthInterval=5s",
+            "HealthTimeout=3s",
+            "HealthRetries=20",
+            "HealthStartPeriod=10s",
+            "HealthOnFailure=kill",
+            "Notify=healthy",
+        )
+    )
+    units[f"{prefix}-postgres.container"] = (
+        unit_description(
+            f"SecPal integration PostgreSQL ({instance})",
+            [f"{prefix}-secrets-init.service"],
+            f"{prefix}.target",
+            True,
+        )
+        + section("Container", postgres_lines)
+        + service()
+    )
+
+    valkey_lines = common_container(instance, "valkey", VALKEY_IMAGE, 10002, 10002)
+    valkey_lines.extend(
+        (
+            'Entrypoint=["/bin/sh","/run/secpal/valkey-entrypoint.sh"]',
+            f"Mount=type=bind,source={fixture_root}/assets/valkey-entrypoint.sh,target=/run/secpal/valkey-entrypoint.sh,ro=true",
+            f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
+            tmpfs("/tmp", "16m", "0700"),
+            tmpfs("/data", "32m", "0700"),
+            f"Network={app_network}",
+            "NetworkAlias=valkey",
+            "HealthCmd=VALKEYCLI_AUTH=$(cat /run/secpal-secrets/valkey-password) valkey-cli ping | grep -qx PONG",
+            "HealthInterval=5s",
+            "HealthTimeout=3s",
+            "HealthRetries=20",
+            "HealthStartPeriod=5s",
+            "HealthOnFailure=kill",
+            "Notify=healthy",
+        )
+    )
+    units[f"{prefix}-valkey.container"] = (
+        unit_description(
+            f"SecPal integration Valkey ({instance})",
+            [f"{prefix}-secrets-init.service"],
+            f"{prefix}.target",
+            True,
+        )
+        + section("Container", valkey_lines)
+        + service()
+    )
+
+    units[f"{prefix}-migrate.container"] = api_container(
+        instance,
+        port,
+        fixture_root,
+        "migrate",
+        "php artisan migrate --force",
+        ["application"],
+        oneshot=True,
+    )
+    units[f"{prefix}-api.container"] = api_container(
+        instance,
+        port,
+        fixture_root,
+        "api",
+        "frankenphp run --config /etc/frankenphp/Caddyfile",
+        ["application", "edge"],
+        health=True,
+    )
+    units[f"{prefix}-worker-general.container"] = api_container(
+        instance,
+        port,
+        fixture_root,
+        "worker-general",
+        "php artisan queue:work --queue=merkle,opentimestamp,default --sleep=1 --tries=3 --timeout=90",
+        ["application"],
+    )
+    units[f"{prefix}-worker-hash-chain.container"] = api_container(
+        instance,
+        port,
+        fixture_root,
+        "worker-hash-chain",
+        "php artisan queue:work --queue=activity-hash-chain --sleep=1 --tries=3 --timeout=90",
+        ["application"],
+    )
+    units[f"{prefix}-scheduler.container"] = api_container(
+        instance,
+        port,
+        fixture_root,
+        "scheduler",
+        "php artisan schedule:work",
+        ["application"],
+    )
+
+    frontend_lines = common_container(instance, "frontend", FRONTEND_IMAGE, 101, 101)
+    frontend_lines.extend(
+        (
+            f"Environment=SECPAL_API_URL=https://api.secpal.example.invalid:{port}",
+            tmpfs("/tmp", "32m", "0700"),
+            f"Network={edge_network}",
+            "NetworkAlias=frontend",
+            "HealthCmd=curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/health/live",
+            "HealthInterval=10s",
+            "HealthTimeout=5s",
+            "HealthRetries=12",
+            "HealthStartPeriod=5s",
+            "HealthOnFailure=kill",
+            "Notify=healthy",
+        )
+    )
+    units[f"{prefix}-frontend.container"] = (
+        unit_description(
+            f"SecPal integration frontend ({instance})",
+            part_of=f"{prefix}.target",
+            start_limited=True,
+        )
+        + section("Container", frontend_lines)
+        + service()
+    )
+
+    gateway_image = f"localhost/secpal-integration-gateway-{instance}:2.10.2"
+    gateway_lines = common_container(instance, "gateway", gateway_image, 10003, 10003)
+    gateway_lines.extend(
+        (
+            "Environment=HOME=/config",
+            "Environment=XDG_CONFIG_HOME=/config",
+            "Environment=XDG_DATA_HOME=/data",
+            f"Mount=type=bind,source={fixture_root}/assets/Caddyfile,target=/etc/caddy/Caddyfile,ro=true",
+            tmpfs("/tmp", "16m", "0700"),
+            tmpfs("/config", "16m", "0700"),
+            tmpfs("/data", "32m", "0700"),
+            f"Network={edge_network}",
+            "NetworkAlias=gateway",
+            f"PublishPort=127.0.0.1:{port}:8443",
+            "AddHost=app.secpal.example.invalid:127.0.0.1",
+            "HealthCmd=wget --no-check-certificate -q -T 3 -O /dev/null https://app.secpal.example.invalid:8443/health/live",
+            "HealthInterval=10s",
+            "HealthTimeout=5s",
+            "HealthRetries=12",
+            "HealthStartPeriod=5s",
+            "HealthOnFailure=kill",
+            "Notify=healthy",
+        )
+    )
+    units[f"{prefix}-gateway.container"] = (
+        unit_description(
+            f"SecPal integration gateway fixture ({instance})",
+            [f"{prefix}-api.service", f"{prefix}-frontend.service"],
+            f"{prefix}.target",
+            True,
+        )
+        + section("Container", gateway_lines)
+        + service()
+    )
+
+    target_dependencies = [
+        f"{prefix}-gateway.service",
+        f"{prefix}-worker-general.service",
+        f"{prefix}-worker-hash-chain.service",
+        f"{prefix}-scheduler.service",
+    ]
+    units[f"{prefix}.target"] = unit_description(
+        f"SecPal rootless Podman integration fixture ({instance})",
+        target_dependencies,
+    ) + section("Install", ["WantedBy=default.target"])
+    return apply_failure_profile(units, instance, failure_case)
+
+
+def validate_instance(value: str) -> str:
+    if not INSTANCE_PATTERN.fullmatch(value):
+        raise ContractError("instance must be 8-24 lowercase ASCII letters, digits, or interior hyphens")
+    return value
+
+
+def validate_port(value: str) -> int:
+    if not value.isascii() or not value.isdecimal():
+        raise ContractError("port must be an integer from 1024 through 65535")
+    port = int(value)
+    if not 1024 <= port <= 65535:
+        raise ContractError("port must be an integer from 1024 through 65535")
+    return port
+
+
+def validate_fixture_root(value: str) -> Path:
+    if any(character in value for character in "\n\r\0"):
+        raise ContractError("fixture root contains a forbidden control character")
+    path = Path(value)
+    if not path.is_absolute() or not path.is_dir() or path.is_symlink():
+        raise ContractError("fixture root must be an existing canonical absolute directory")
+    resolved = path.resolve(strict=True)
+    if resolved != path:
+        raise ContractError("fixture root must be canonical and contain no symlink component")
+    return path
+
+
+def validate_directory(
+    path: Path,
+    expected: dict[str, str],
+    require_root_owned: bool,
+    allow_unrelated: bool,
+) -> None:
+    if not path.is_absolute() or not path.is_dir() or path.is_symlink():
+        raise ContractError("unit directory must be an existing absolute non-symlink directory")
+    actual_paths = list(path.iterdir())
+    actual_names = {item.name for item in actual_paths}
+    if not set(expected) <= actual_names or (not allow_unrelated and actual_names != set(expected)):
+        raise ContractError("unit directory is incomplete or contains an unreviewed entry")
+    selected_paths = actual_paths if not allow_unrelated else [path / name for name in expected]
+    for item in selected_paths:
+        metadata = item.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o644:
+            raise ContractError(f"unsafe unit file metadata: {item.name}")
+        if require_root_owned and (metadata.st_uid != 0 or metadata.st_gid != 0):
+            raise ContractError(f"active unit is not root-owned: {item.name}")
+        if item.read_text(encoding="utf-8") != expected[item.name]:
+            raise ContractError(f"unit content differs from the reviewed contract: {item.name}")
+
+
+def render(output: Path, fixture_root: Path, expected: dict[str, str]) -> None:
+    if (
+        not output.is_absolute()
+        or output.exists()
+        or output.resolve(strict=False) != output
+        or fixture_root not in output.parents
+        or not output.parent.is_dir()
+        or output.parent.is_symlink()
+        or output.parent.resolve(strict=True) != output.parent
+    ):
+        raise ContractError("output must be a canonical new directory inside the fixture root")
+    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
+    try:
+        os.chmod(staging, 0o700)
+        for name, content in expected.items():
+            destination = staging / name
+            destination.write_text(content, encoding="utf-8")
+            destination.chmod(0o644)
+        staging.rename(output)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(description=__doc__)
+    subparsers = root.add_subparsers(dest="action", required=True)
+    for action in ("render", "validate"):
+        command = subparsers.add_parser(action)
+        command.add_argument("--instance", required=True)
+        command.add_argument("--port", required=True)
+        command.add_argument("--fixture-root", required=True)
+        command.add_argument("--failure-case", choices=FAILURE_CASES)
+        if action == "render":
+            command.add_argument("--output", required=True)
+        else:
+            command.add_argument("--input", required=True)
+            command.add_argument("--require-root-owned", action="store_true")
+            command.add_argument("--allow-unrelated", action="store_true")
+    return root
+
+
+def main() -> int:
+    arguments = parser().parse_args()
+    try:
+        instance = validate_instance(arguments.instance)
+        port = validate_port(arguments.port)
+        fixture_root = validate_fixture_root(arguments.fixture_root)
+        expected = build_units(instance, port, fixture_root, arguments.failure_case)
+        if arguments.action == "render":
+            render(Path(arguments.output), fixture_root, expected)
+        else:
+            validate_directory(
+                Path(arguments.input),
+                expected,
+                arguments.require_root_owned,
+                arguments.allow_unrelated,
+            )
+    except (ContractError, OSError, UnicodeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
