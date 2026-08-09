@@ -122,6 +122,17 @@ all service-role, persistence, and secret-handling invariants.
 
 **Deferred:** Final public-edge security and operational lifecycle automation.
 
+### Independent Debian 13 conformance infrastructure
+
+A non-production CI foundation can provision one disposable official Debian
+13 DigitalOcean host for an exact deployment commit SHA, preserve the cloud
+credential/target-code boundary, collect D.1-oriented evidence, perform exact
+OpenTofu cleanup, and delete expired owned billable Droplets through a bounded
+TTL janitor. This is test infrastructure for Phase D evidence, not production
+host provisioning and not completion evidence for D.1a or a later phase.
+DigitalOcean Intel/AMD are implemented; GCP Axion/C4A arm64 with repository-
+scoped Workload Identity Federation is the next provider-specific PR.
+
 ## Phase E — Public edge, TLS, and CrowdSec
 
 **Goal:** Define secure public ingress separate from product containers.

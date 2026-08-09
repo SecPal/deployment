@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secpal.app/schemas/ci-cloud-evidence.schema.json",
+  "title": "SecPal ephemeral cloud conformance evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workflow",
+    "test",
+    "platform",
+    "apt",
+    "runtime"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "run_id", "run_attempt", "target_sha"],
+      "properties": {
+        "repository": { "const": "SecPal/deployment" },
+        "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+        "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
+        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "region",
+        "profile",
+        "started_at",
+        "ended_at",
+        "target_exit_status",
+        "result",
+        "failed_admission_invariants"
+      ],
+      "properties": {
+        "provider": { "const": "digitalocean" },
+        "region": { "const": "fra1" },
+        "profile": { "enum": ["intel", "amd"] },
+        "started_at": { "type": "string", "format": "date-time" },
+        "ended_at": { "type": "string", "format": "date-time" },
+        "target_exit_status": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "result": { "enum": ["passed", "failed"] },
+        "failed_admission_invariants": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z0-9_]+$" }
+        }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os_release",
+        "architecture",
+        "uname",
+        "kernel",
+        "cpu",
+        "virtualization",
+        "logical_cpu",
+        "memory_bytes",
+        "root_filesystem_bytes"
+      ],
+      "properties": {
+        "os_release": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ID", "VERSION_ID", "VERSION_CODENAME", "PRETTY_NAME"],
+          "properties": {
+            "ID": { "type": "string", "maxLength": 64 },
+            "VERSION_ID": { "type": "string", "maxLength": 64 },
+            "VERSION_CODENAME": { "type": "string", "maxLength": 64 },
+            "PRETTY_NAME": { "type": "string", "maxLength": 256 }
+          }
+        },
+        "architecture": { "type": "string", "maxLength": 32 },
+        "uname": { "type": "string", "maxLength": 1024 },
+        "kernel": { "type": "string", "maxLength": 256 },
+        "cpu": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vendor", "model"],
+          "properties": {
+            "vendor": { "type": "string", "maxLength": 512 },
+            "model": { "type": "string", "maxLength": 512 }
+          }
+        },
+        "virtualization": { "type": "string", "maxLength": 128 },
+        "logical_cpu": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "memory_bytes": { "type": "integer", "minimum": 0 },
+        "root_filesystem_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "apt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_files",
+        "source_hosts",
+        "configured_suites",
+        "debian_archive_keyring_version",
+        "runtime_packages"
+      ],
+      "properties": {
+        "source_files": { "$ref": "#/$defs/stringArray" },
+        "source_hosts": { "$ref": "#/$defs/stringArray" },
+        "configured_suites": { "$ref": "#/$defs/stringArray" },
+        "debian_archive_keyring_version": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "runtime_packages": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "podman",
+            "conmon",
+            "crun",
+            "netavark",
+            "aardvark-dns",
+            "passt",
+            "uidmap",
+            "dbus-user-session"
+          ],
+          "properties": {
+            "podman": { "$ref": "#/$defs/version" },
+            "conmon": { "$ref": "#/$defs/version" },
+            "crun": { "$ref": "#/$defs/version" },
+            "netavark": { "$ref": "#/$defs/version" },
+            "aardvark-dns": { "$ref": "#/$defs/version" },
+            "passt": { "$ref": "#/$defs/version" },
+            "uidmap": { "$ref": "#/$defs/version" },
+            "dbus-user-session": { "$ref": "#/$defs/version" }
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "podman",
+        "crun_version",
+        "crun_features",
+        "netavark_version",
+        "aardvark_version",
+        "pasta_version",
+        "passt_version",
+        "uidmap",
+        "cgroup_version",
+        "systemd_version",
+        "apparmor_host"
+      ],
+      "properties": {
+        "podman": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "rootless",
+            "seccomp_enabled",
+            "apparmor_enabled",
+            "oci_runtime",
+            "network_backend",
+            "rootless_network_command",
+            "cgroup_version"
+          ],
+          "properties": {
+            "version": { "$ref": "#/$defs/version" },
+            "rootless": { "type": ["boolean", "null"] },
+            "seccomp_enabled": { "type": ["boolean", "null"] },
+            "apparmor_enabled": { "type": ["boolean", "null"] },
+            "oci_runtime": { "type": "string", "maxLength": 128 },
+            "network_backend": { "type": "string", "maxLength": 128 },
+            "rootless_network_command": { "type": "string", "maxLength": 128 },
+            "cgroup_version": { "type": ["string", "null"], "maxLength": 32 }
+          }
+        },
+        "crun_version": { "$ref": "#/$defs/version" },
+        "crun_features": { "type": "string", "maxLength": 8192 },
+        "netavark_version": { "$ref": "#/$defs/version" },
+        "aardvark_version": { "$ref": "#/$defs/version" },
+        "pasta_version": { "$ref": "#/$defs/version" },
+        "passt_version": { "$ref": "#/$defs/version" },
+        "uidmap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["newuidmap", "newgidmap"],
+          "properties": {
+            "newuidmap": { "type": "string", "maxLength": 4096 },
+            "newgidmap": { "type": "string", "maxLength": 4096 }
+          }
+        },
+        "cgroup_version": { "type": "string", "maxLength": 32 },
+        "systemd_version": { "type": "string", "maxLength": 256 },
+        "apparmor_host": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kernel_enabled",
+            "loaded_profiles",
+            "enforcing_profiles"
+          ],
+          "properties": {
+            "kernel_enabled": { "type": "boolean" },
+            "loaded_profiles": { "type": ["integer", "null"], "minimum": 0 },
+            "enforcing_profiles": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 128,
+      "items": { "type": "string", "maxLength": 4096 }
+    },
+    "version": { "type": "string", "maxLength": 256 }
+  }
+}

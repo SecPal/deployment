@@ -1,0 +1,38 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+name: Cloud TTL Janitor
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-ttl-janitor
+  cancel-in-progress: false
+
+jobs:
+  digitalocean:
+    name: Delete expired owned DigitalOcean droplets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ci-cloud-digitalocean-cleanup
+    steps:
+      - name: Checkout trusted janitor from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Delete only revalidated expired droplets
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: |
+          scripts/ci-cloud/digitalocean-janitor.py \
+            --apply \
+            --now "$(date -u +%s)"

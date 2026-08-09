@@ -16,6 +16,8 @@
 *.asc
 *.tfstate
 *.tfstate.*
+**/.terraform/
+**/run.auto.tfvars.json
 secrets/
 private/
 credentials/
@@ -24,6 +26,8 @@ credentials/
 tmp/
 .cache/
 coverage/
+__pycache__/
+*.pyc
 node_modules/
 playwright-report/
 test-results/

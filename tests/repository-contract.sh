@@ -44,17 +44,34 @@ required_files=(
   docs/architecture/production-host.md
   docs/architecture/production-inventory.md
   docs/api-image-consumption.md
+  docs/ci-cloud-conformance.md
   docs/roadmap.md
+  infra/ci-cloud/digitalocean/.terraform.lock.hcl
+  infra/ci-cloud/digitalocean/cloud-init.tftpl
+  infra/ci-cloud/digitalocean/main.tf
+  infra/ci-cloud/digitalocean/outputs.tf
+  infra/ci-cloud/digitalocean/variables.tf
+  infra/ci-cloud/digitalocean/versions.tf
+  schemas/ci-cloud-evidence.schema.json
   config/production/inventory.example.yaml
   schemas/production-host-facts.schema.json
   schemas/production-inventory.schema.json
   scripts/preflight.sh
   scripts/fetch-oci-attestation.py
+  scripts/ci-cloud/collect-host-evidence.py
+  scripts/ci-cloud/digitalocean-janitor.py
+  scripts/ci-cloud/run-remote-conformance.sh
+  scripts/ci-cloud/target-conformance.sh
+  scripts/ci-cloud/validate-evidence.py
   scripts/reject-sensitive-paths.sh
+  scripts/validate-ci-cloud.py
   scripts/validate-production-contract.py
   scripts/validate-origin.sh
   scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
+  tests/ci-cloud-contract.py
+  tests/ci-cloud-evidence.py
+  tests/ci-cloud-janitor.py
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
   tests/production-contract-regressions.py
@@ -71,6 +88,8 @@ required_files=(
   tests/fixtures/fake-curl.sh
   tests/oci-attestation-bundle-contract.py
   .github/workflows/quality.yml
+  .github/workflows/cloud-conformance.yml
+  .github/workflows/cloud-janitor.yml
   LICENSES/AGPL-3.0-or-later.txt
   LICENSES/CC0-1.0.txt
   LICENSES/LicenseRef-SecPal-Attribution.txt
@@ -86,6 +105,7 @@ require_text README.md "./scripts/preflight.sh"
 require_text README.md "Local API/frontend integration: complete."
 require_text README.md "Phase B is complete:"
 require_text README.md "Phase C is complete."
+require_text README.md "Ephemeral Debian 13 cloud conformance"
 require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one"
 require_text docs/architecture/scope.md "scheduler: exactly one"
 require_text docs/architecture/scope.md "Step A bootstrap contract"
@@ -97,6 +117,7 @@ fi
 require_text docs/roadmap.md "Local container integration stack"
 require_text docs/roadmap.md "Phase B — Local container integration stack (complete)"
 require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
+require_text docs/ci-cloud-conformance.md "The workflow never checks out"
 # The Markdown backticks must remain literal.
 # shellcheck disable=SC2016
 require_text docs/roadmap.md 'is enforced for `main`'
