@@ -47,6 +47,7 @@ ssh:
   direct_root_login_permitted: false
 kernel:
   release: 6.12.38+deb13-arm64
+  package_architecture: arm64
   package_source: debian-archive
   package_suite: trixie-security
   package_owned: true
@@ -57,6 +58,7 @@ kernel:
 runtime:
   engine: podman
   version: 5.4.2
+  effective_oci_runtime: crun
   rootless: true
   owner_uid: 20000
   owner_gid: 20000
@@ -177,6 +179,23 @@ clock:
 network:
   public_address: 198.51.100.20
   private_addresses: [10.0.0.20]
+resolved_paths:
+  service_account_home: /var/lib/secpal
+  systemd_runtime_directory: /run/user/20000
+  podman_runroot: /run/user/20000/containers
+  configuration: /srv/secpal/config
+  deployment_state: /srv/secpal/deployment-state
+  runtime_secrets: /run/secpal/secrets
+  postgresql_data: /srv/secpal/postgresql
+  private_application_storage: /srv/secpal/private-storage
+  public_application_storage: /srv/secpal/public-storage
+  edge_state: /srv/secpal/edge
+  acme_state: /srv/secpal/acme
+  crowdsec_state: /srv/secpal/crowdsec
+  logs: /srv/secpal/logs
+  backup_staging: /srv/secpal/backup-staging
+  podman_graph_root: /srv/secpal/podman-storage
+  quadlet_definitions: /etc/containers/systemd/users/20000
 tools:
   - bash
   - curl

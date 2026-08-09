@@ -215,6 +215,18 @@ class ProductionContractRegressionTests(unittest.TestCase):
         )
         self.validator.validate_inventory(self.inventory, synthetic=True)
 
+    def test_documentation_origins_require_synthetic_mode(self) -> None:
+        origin = "https://app.example.invalid"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_origin(
+                origin, "inventory.origins.frontend"
+            ),
+            "reserved DNS name",
+        )
+        self.validator.validate_origin(
+            origin, "inventory.origins.frontend", synthetic=True
+        )
+
     def test_scoped_ipv6_addresses_are_rejected(self) -> None:
         for address in ("2001:db8::1%eth0", "fd00::1%2"):
             with self.subTest(address=address):
@@ -266,6 +278,14 @@ class ProductionContractRegressionTests(unittest.TestCase):
         nested_mapping(facts, "runtime", "api")["connection"] = "remote"
         self.assert_contract_violation(
             lambda: self.validator.validate_host_facts(self.inventory, facts)
+        )
+
+    def test_effective_oci_runtime_must_be_crun(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        nested_mapping(facts, "runtime")["effective_oci_runtime"] = "runc"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts),
+            "effective_oci_runtime",
         )
 
     def test_podman_api_and_remote_operation_are_rejected(self) -> None:
@@ -915,6 +935,14 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_kernel_package_architecture_matches_host(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        nested_mapping(facts, "kernel")["package_architecture"] = "arm64"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts),
+            "kernel package architecture",
+        )
+
     def test_podman_updates_require_controlled_maintenance(self) -> None:
         for field, value in (
             ("automatic", True),
@@ -985,6 +1013,14 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     ),
                     path_name,
                 )
+
+    def test_all_managed_paths_require_identity_resolution(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        nested_mapping(facts, "resolved_paths")["configuration"] = "/etc"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts),
+            "resolved path",
+        )
 
     def test_managed_filesystems_must_not_be_read_only(self) -> None:
         for read_only in (None, True):

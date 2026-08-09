@@ -65,6 +65,7 @@ for path in \
   tests/fixtures/production-host/automatic-reboot-enabled.yaml \
   tests/fixtures/production-host/local-kernel-source.yaml \
   tests/fixtures/production-host/kernel-backports-suite.yaml \
+  tests/fixtures/production-host/kernel-architecture-mismatch.yaml \
   tests/fixtures/production-host/docker-runtime.yaml \
   tests/fixtures/production-host/rootful-podman.yaml \
   tests/fixtures/production-host/podman-too-old.yaml \
@@ -82,6 +83,7 @@ for path in \
   tests/fixtures/production-host/insecure-ghcr.yaml \
   tests/fixtures/production-host/remote-podman-graphroot.yaml \
   tests/fixtures/production-host/contradictory-filesystem.yaml \
+  tests/fixtures/production-host/managed-path-symlink.yaml \
   tests/fixtures/production-host/malformed-kernel-release.yaml \
   tests/fixtures/production-host/malformed-architecture.yaml \
   tests/fixtures/production-inventory/valid-amd64.yaml \
@@ -180,6 +182,9 @@ require_text schemas/production-host-facts.schema.json '"runtime_directory_mode"
 require_text schemas/production-host-facts.schema.json '"runroot_mode"'
 require_text schemas/production-host-facts.schema.json '"effective_search_paths"'
 require_text schemas/production-host-facts.schema.json '"tree_symlinks_present"'
+require_text schemas/production-host-facts.schema.json '"resolved_paths"'
+require_text schemas/production-host-facts.schema.json '"package_architecture"'
+require_text schemas/production-host-facts.schema.json '"effective_oci_runtime"'
 require_text schemas/production-host-facts.schema.json '"containers_configuration_account_writable"'
 require_text schemas/production-host-facts.schema.json '"debian_release_suites"'
 require_text schemas/production-host-facts.schema.json '"trixie-security"'

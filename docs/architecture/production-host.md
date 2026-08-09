@@ -97,8 +97,10 @@ reads synthetic facts; D.8 owns any future fact collector.
 
 The collector must join the running `uname` release to the package that owns
 its installed kernel image and verify that package's authenticated APT origin
-and suite. Release candidates, local or mainline builds, merely relabelled
-kernels, other kernel series, and backports fail closed. Patch-level security
+and suite. It must also read the installed package architecture and require it
+to equal the admitted `amd64` or `arm64` host architecture; a release suffix is
+not architecture evidence. Release candidates, local or mainline builds,
+merely relabelled kernels, other kernel series, and backports fail closed. Patch-level security
 updates within Linux 6.12 remain valid. Debian's standard kernel supports
 AppArmor; admission still requires the effective AppArmor LSM to be enabled and
 enforcing and seccomp to be available to Podman. Package presence alone is not
@@ -170,6 +172,9 @@ unsupported even if its source entry was subsequently removed. Buildah is not
 a production requirement. `podman-docker`, Docker Engine, Docker CLI aliases,
 Docker Compose, `podman-compose`, and `podman compose` are not supported
 production runtime paths. Rootful Podman is unsupported and fails closed.
+The collector obtains Podman's effective OCI-runtime selection from the
+effective `podman info` output; it must be `crun`. Installing the `crun` package
+while selecting another runtime does not satisfy admission.
 
 Podman is daemonless for this contract. The dedicated service account owns the
 local rootless runtime, while host root remains a distinct authority. The
@@ -336,6 +341,14 @@ reported aggregate host total; contradictory evidence fails admission.
 The validator compares these values to supplied facts and never runs `df`,
 reads `/proc`, or inspects the developer machine.
 
+For every inventory-managed path, the service-account home, the systemd user
+runtime directory, and the Podman runroot, host facts also contain the
+canonical path obtained by a future collector using existence-
+requiring resolution and component-wise `lstat` checks. The resolved value must
+be byte-for-byte identical to the normalized inventory path. This rejects a
+symlink at the namespace root, at any ancestor, or at the managed leaf before
+ownership, mode, or mount facts are trusted.
+
 Filesystem facts are separate from headroom facts. They cover every path
 classified as persistent plus reconstructable backup staging and must match
 the corresponding inventory path. This includes configuration and deployment
@@ -351,7 +364,8 @@ the path rather than infer writability from the filesystem type.
 Inventory records one globally routable public address fact and at least one
 non-loopback private address fact. Reserved documentation networks are accepted
 only when the validator is invoked with the explicit `--synthetic` fixture
-flag; the normal production-validation path rejects them. Carrier-grade NAT and
+flag; reserved documentation DNS origins are gated by the same flag. The normal
+production-validation path rejects both. Carrier-grade NAT and
 other non-global address ranges fail admission. IANA-reserved IPv6 space also
 fails even when the local language runtime classifies it as global. Private
 addresses are exactly RFC 1918 IPv4 or IPv6 ULA;

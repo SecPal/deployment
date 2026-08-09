@@ -16,6 +16,7 @@
     "runtime",
     "clock",
     "network",
+    "resolved_paths",
     "tools",
     "filesystems",
     "resources"
@@ -225,6 +226,7 @@
       "additionalProperties": false,
       "required": [
         "release",
+        "package_architecture",
         "package_source",
         "package_suite",
         "package_owned",
@@ -238,6 +240,9 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 255
+        },
+        "package_architecture": {
+          "enum": ["amd64", "arm64"]
         },
         "package_source": {
           "const": "debian-archive"
@@ -268,6 +273,7 @@
       "required": [
         "engine",
         "version",
+        "effective_oci_runtime",
         "rootless",
         "owner_uid",
         "owner_gid",
@@ -287,6 +293,9 @@
         },
         "version": {
           "$ref": "#/$defs/version"
+        },
+        "effective_oci_runtime": {
+          "const": "crun"
         },
         "rootless": {
           "const": true
@@ -650,6 +659,46 @@
         }
       }
     },
+    "resolved_paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service_account_home",
+        "systemd_runtime_directory",
+        "podman_runroot",
+        "configuration",
+        "deployment_state",
+        "runtime_secrets",
+        "postgresql_data",
+        "private_application_storage",
+        "public_application_storage",
+        "edge_state",
+        "acme_state",
+        "crowdsec_state",
+        "logs",
+        "backup_staging",
+        "podman_graph_root",
+        "quadlet_definitions"
+      ],
+      "properties": {
+        "service_account_home": { "$ref": "#/$defs/absolutePathFact" },
+        "systemd_runtime_directory": { "$ref": "#/$defs/absolutePathFact" },
+        "podman_runroot": { "$ref": "#/$defs/absolutePathFact" },
+        "configuration": { "$ref": "#/$defs/absolutePathFact" },
+        "deployment_state": { "$ref": "#/$defs/absolutePathFact" },
+        "runtime_secrets": { "$ref": "#/$defs/absolutePathFact" },
+        "postgresql_data": { "$ref": "#/$defs/absolutePathFact" },
+        "private_application_storage": { "$ref": "#/$defs/absolutePathFact" },
+        "public_application_storage": { "$ref": "#/$defs/absolutePathFact" },
+        "edge_state": { "$ref": "#/$defs/absolutePathFact" },
+        "acme_state": { "$ref": "#/$defs/absolutePathFact" },
+        "crowdsec_state": { "$ref": "#/$defs/absolutePathFact" },
+        "logs": { "$ref": "#/$defs/absolutePathFact" },
+        "backup_staging": { "$ref": "#/$defs/absolutePathFact" },
+        "podman_graph_root": { "$ref": "#/$defs/absolutePathFact" },
+        "quadlet_definitions": { "$ref": "#/$defs/absolutePathFact" }
+      }
+    },
     "tools": {
       "type": "array",
       "uniqueItems": true,
@@ -781,6 +830,12 @@
     }
   },
   "$defs": {
+    "absolutePathFact": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/"
+    },
     "nonNegativeInteger": {
       "type": "integer",
       "minimum": 0

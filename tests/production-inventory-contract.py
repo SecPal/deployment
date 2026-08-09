@@ -534,6 +534,7 @@ def main() -> int:
         "automatic-reboot-enabled.yaml",
         "local-kernel-source.yaml",
         "kernel-backports-suite.yaml",
+        "kernel-architecture-mismatch.yaml",
         "docker-runtime.yaml",
         "podman-too-old.yaml",
         "podman-future-major.yaml",
@@ -563,6 +564,7 @@ def main() -> int:
         "read-only-podman-graphroot.yaml",
         "podman-graphroot-mismatch.yaml",
         "contradictory-filesystem.yaml",
+        "managed-path-symlink.yaml",
         "malformed-architecture.yaml",
     )
 

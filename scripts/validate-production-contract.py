@@ -112,6 +112,14 @@ PRIVATE_USE_NETWORKS = (
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("fc00::/7"),
 )
+DOCUMENTATION_DNS_SUFFIXES = (
+    "invalid",
+    "test",
+    "example",
+    "example.com",
+    "example.net",
+    "example.org",
+)
 
 
 def is_strict_integer(_checker: Any, value: Any) -> bool:
@@ -539,7 +547,15 @@ def validate_hostname(hostname: Any, location: str) -> str:
     return normalized
 
 
-def validate_origin(origin: Any, location: str) -> str:
+def is_documentation_hostname(hostname: str) -> bool:
+    normalized = hostname.lower()
+    return any(
+        normalized == suffix or normalized.endswith(f".{suffix}")
+        for suffix in DOCUMENTATION_DNS_SUFFIXES
+    )
+
+
+def validate_origin(origin: Any, location: str, *, synthetic: bool = False) -> str:
     if not isinstance(origin, str) or not origin.isascii():
         raise ContractViolation(f"origin must be ASCII at {location}")
     if contains_ascii_control(origin):
@@ -582,7 +598,12 @@ def validate_origin(origin: Any, location: str) -> str:
         validate_hostname(hostname, location)
     else:
         raise ContractViolation(f"origin must use a DNS name at {location}")
-    return hostname.lower()
+    normalized_hostname = hostname.lower()
+    if is_documentation_hostname(normalized_hostname) and not synthetic:
+        raise ContractViolation(
+            f"reserved DNS name requires explicit synthetic mode at {location}"
+        )
+    return normalized_hostname
 
 
 def validate_absolute_path(raw: Any, location: str) -> None:
@@ -729,9 +750,15 @@ def validate_inventory(inventory: dict[str, Any], *, synthetic: bool = False) ->
     validate_subordinate_id_contract(service_account)
 
     frontend_hostname = validate_origin(
-        inventory["origins"]["frontend"], "inventory.origins.frontend"
+        inventory["origins"]["frontend"],
+        "inventory.origins.frontend",
+        synthetic=synthetic,
     )
-    api_hostname = validate_origin(inventory["origins"]["api"], "inventory.origins.api")
+    api_hostname = validate_origin(
+        inventory["origins"]["api"],
+        "inventory.origins.api",
+        synthetic=synthetic,
+    )
     if frontend_hostname == api_hostname:
         raise ContractViolation("frontend and API origins must use different DNS names")
     if host_hostname in {frontend_hostname, api_hostname}:
@@ -759,7 +786,7 @@ def validate_platform_facts(inventory: dict[str, Any], facts: dict[str, Any]) ->
         raise ContractViolation("host architecture does not match the inventory")
 
 
-def validate_kernel_facts(kernel: dict[str, Any]) -> None:
+def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:
     kernel_match = re.fullmatch(
         rf"({VERSION_COMPONENT})\.({VERSION_COMPONENT})\.({VERSION_COMPONENT})"
         r"(?P<suffix>[-+._][A-Za-z0-9][A-Za-z0-9+._-]*)?",
@@ -778,6 +805,10 @@ def validate_kernel_facts(kernel: dict[str, Any]) -> None:
     ):
         raise ContractViolation(
             "host kernel must be the Debian 13 stable Linux 6.12 series"
+        )
+    if kernel["package_architecture"] != architecture:
+        raise ContractViolation(
+            "kernel package architecture does not match the admitted host architecture"
         )
 
 
@@ -924,6 +955,31 @@ def validate_filesystem_facts(
         validate_filesystem_fact(inventory, name, filesystems[name])
 
 
+def validate_resolved_paths(
+    inventory: dict[str, Any], resolved_paths: dict[str, Any]
+) -> None:
+    service_uid = inventory["service_account"]["uid"]
+    runtime_directory = f"/run/user/{service_uid}"
+    expected_paths = {
+        "service_account_home": inventory["service_account"]["home"],
+        "systemd_runtime_directory": runtime_directory,
+        "podman_runroot": f"{runtime_directory}/containers",
+        **{
+            name: contract["path"]
+            for name, contract in inventory["paths"].items()
+        },
+    }
+    for name, expected_path in expected_paths.items():
+        resolved_path = resolved_paths[name]
+        validate_absolute_path(
+            resolved_path, f"host facts.resolved_paths.{name}"
+        )
+        if resolved_path != expected_path:
+            raise ContractViolation(
+                f"resolved path traverses a symlink or mismatches inventory at {name}"
+            )
+
+
 def validate_headroom_fact(
     inventory: dict[str, Any],
     name: str,
@@ -983,10 +1039,11 @@ def validate_resource_facts(
 def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> None:
     validate_host_facts_schema(facts)
     validate_platform_facts(inventory, facts)
-    validate_kernel_facts(facts["kernel"])
+    validate_kernel_facts(facts["kernel"], facts["architecture"])
     validate_runtime_facts(inventory, facts)
     validate_service_account_facts(inventory, facts)
     validate_network_facts(inventory, facts["network"])
+    validate_resolved_paths(inventory, facts["resolved_paths"])
     validate_tool_facts(facts["tools"])
     validate_filesystem_facts(inventory, facts["filesystems"])
     validate_resource_facts(inventory, facts["resources"])

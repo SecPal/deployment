@@ -78,7 +78,8 @@ asserted facts that later collection must match. Architecture is exactly
 codename-pinned release-suite set, the security-update and reboot policy, and
 Debian Stable/Security kernel provenance. These observations must be collected
 from effective OS, APT, package, kernel, and update-policy state; a self-selected
-distribution label is insufficient. Public addresses must be globally
+distribution label is insufficient. The kernel package architecture must equal
+the admitted host architecture. Public addresses must be globally
 routable. Reserved documentation addresses are permitted only by the explicit
 `--synthetic` fixture mode; normal validation rejects them. Multicast,
 IANA-reserved IPv6 space, deprecated IPv6 site-local ranges, and scoped IPv6
@@ -132,7 +133,8 @@ or Valkey identity.
 Runtime policy is reviewed schema, not an inventory escape hatch. Host facts
 must prove Podman `>=5.4.2,<6.0.0`, rootless ownership by the selected account,
 authenticated Debian installed-package provenance and an allowed installed
-suite for every runtime package, effective mapping helpers, crun,
+suite for every runtime package, effective mapping helpers, and `crun` as both
+the installed and Podman-selected OCI runtime,
 Netavark/Aardvark DNS, pasta, uidmap, a boot-capable systemd user manager with
 linger, a local owner-only runtime directory and runroot, Quadlet, and local
 overlay storage. The effective Quadlet search list contains only the reviewed
@@ -149,8 +151,10 @@ host-network toggles, runtime sockets, or update policy.
 `frontend` and `api` are exact HTTPS origins. The frontend and API origins must
 differ. Each uses a DNS name, default HTTPS port, and no userinfo, path, query,
 fragment, empty delimiter, control character, localhost name, loopback address,
-or IP literal. The scheme and optional `:443` spelling must be canonical;
-parser-normalized alternatives fail closed. Origin separation preserves the
+or IP literal. Reserved documentation names such as `.invalid`, `.test`,
+`.example`, and `example.com`/`.net`/`.org` are accepted only in explicit
+`--synthetic` fixture mode. The scheme and optional `:443` spelling must be
+canonical; parser-normalized alternatives fail closed. Origin separation preserves the
 credentialed CORS, Sanctum, cookie, and proxy trust boundary.
 
 ### `paths`
@@ -246,7 +250,9 @@ Validation consists of:
    update and kernel package provenance, cgroup, Podman package provenance,
    subuid/subgid, systemd user/linger, Quadlet ownership, runtime/API and
    registry policy, clock, tools, writable filesystems, resources, and storage
-   headroom.
+   headroom. Collector-resolved values for the service-account home, systemd
+   runtime directory, Podman runroot, and every managed path must exactly equal
+   their contract spelling, proving that no path component traverses a symlink.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state
