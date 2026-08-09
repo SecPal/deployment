@@ -1039,6 +1039,42 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_managed_path_metadata_and_access_are_effective(self) -> None:
+        mutations = (
+            ("configuration", "uid", 20000, "effective path ownership"),
+            ("deployment_state", "gid", 0, "effective path ownership"),
+            ("logs", "uid", 0, "effective path ownership"),
+            ("backup_staging", "mode", "0777", "effective path mode"),
+            (
+                "configuration",
+                "service_account_can_write",
+                True,
+                "effective path access",
+            ),
+            (
+                "logs",
+                "service_account_can_write",
+                False,
+                "effective path access",
+            ),
+            (
+                "configuration",
+                "ancestors_service_account_can_write",
+                True,
+                "effective path ancestry",
+            ),
+        )
+        for path_name, field, value, message in mutations:
+            with self.subTest(path_name=path_name, field=field):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "filesystems", path_name)[field] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    ),
+                    message,
+                )
+
     def test_release_candidate_kernel_is_rejected_at_stable_floor(self) -> None:
         facts = copy.deepcopy(self.host_facts)
         kernel = nested_mapping(facts, "kernel")

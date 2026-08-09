@@ -354,10 +354,21 @@ classified as persistent plus reconstructable backup staging and must match
 the corresponding inventory path. This includes configuration and deployment
 state even though those two paths have no separate capacity floor. Runtime
 secrets are reconstructable state under `/run`; D.2 (#10) owns their eventual
-filesystem and lifecycle decision. Every represented mount must explicitly
+filesystem, ownership, mode materialization, and lifecycle decision. Each
+represented path reports its effective
+numeric UID, GID, and directory mode. D.1 compares fixed owners for
+configuration, deployment state, logs, backup staging, and Podman graphroot;
+owners delegated to later state or edge contracts are observed but not selected
+here. Every baseline mode is fixed and enforced, including for delegated-owner
+paths. Effective access facts additionally prove that the service account can
+write only its fixed service-owned paths and cannot replace any represented
+path through a writable ancestor. The collector must evaluate ACLs and all
+other effective permission sources rather than infer access from mode bits
+alone. Every represented mount must explicitly
 report `mount_read_only: false`; omission and a read-only mount both fail
 closed. A future collector must derive this from the effective mount covering
-the path rather than infer writability from the filesystem type.
+the path and obtain ownership/mode with a non-following stat after canonical
+path validation rather than infer either from the filesystem type.
 
 ## Network and clock assumptions
 

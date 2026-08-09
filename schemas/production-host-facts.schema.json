@@ -893,6 +893,11 @@
       "additionalProperties": false,
       "required": [
         "path",
+        "uid",
+        "gid",
+        "mode",
+        "service_account_can_write",
+        "ancestors_service_account_can_write",
         "filesystem",
         "local",
         "mount_read_only",
@@ -903,6 +908,22 @@
         "path": {
           "type": "string",
           "minLength": 1
+        },
+        "uid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "gid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3}$"
+        },
+        "service_account_can_write": {
+          "type": "boolean"
+        },
+        "ancestors_service_account_can_write": {
+          "type": "boolean"
         },
         "filesystem": {
           "enum": ["ext4", "xfs"]

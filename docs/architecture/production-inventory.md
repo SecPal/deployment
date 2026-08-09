@@ -249,10 +249,12 @@ Validation consists of:
    service identity and privilege state, root SSH policy, Debian release,
    update and kernel package provenance, cgroup, Podman package provenance,
    subuid/subgid, systemd user/linger, Quadlet ownership, runtime/API and
-   registry policy, clock, tools, writable filesystems, resources, and storage
-   headroom. Collector-resolved values for the service-account home, systemd
-   runtime directory, Podman runroot, and every managed path must exactly equal
-   their contract spelling, proving that no path component traverses a symlink.
+   registry policy, clock, tools, filesystem ownership, modes, effective
+   service-account access, trusted ancestry and writable mounts, resources,
+   and storage headroom. Collector-resolved values for the service-account home,
+   systemd runtime directory, Podman runroot, and every managed path must exactly
+   equal their contract spelling, proving that no path component traverses a
+   symlink.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state

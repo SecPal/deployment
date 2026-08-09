@@ -219,6 +219,11 @@ tools:
 filesystems:
   configuration:
     path: /srv/secpal/config
+    uid: 0
+    gid: 20000
+    mode: "0750"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -226,6 +231,11 @@ filesystems:
     xfs_ftype: null
   deployment_state:
     path: /srv/secpal/deployment-state
+    uid: 0
+    gid: 20000
+    mode: "0750"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -233,6 +243,11 @@ filesystems:
     xfs_ftype: null
   postgresql_data:
     path: /srv/secpal/postgresql
+    uid: 0
+    gid: 0
+    mode: "0700"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -240,6 +255,11 @@ filesystems:
     xfs_ftype: null
   private_application_storage:
     path: /srv/secpal/private-storage
+    uid: 0
+    gid: 0
+    mode: "0750"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -247,6 +267,11 @@ filesystems:
     xfs_ftype: null
   public_application_storage:
     path: /srv/secpal/public-storage
+    uid: 0
+    gid: 0
+    mode: "0750"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -254,6 +279,11 @@ filesystems:
     xfs_ftype: null
   edge_state:
     path: /srv/secpal/edge
+    uid: 0
+    gid: 0
+    mode: "0750"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -261,6 +291,11 @@ filesystems:
     xfs_ftype: null
   acme_state:
     path: /srv/secpal/acme
+    uid: 0
+    gid: 0
+    mode: "0700"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -268,6 +303,11 @@ filesystems:
     xfs_ftype: null
   crowdsec_state:
     path: /srv/secpal/crowdsec
+    uid: 0
+    gid: 0
+    mode: "0750"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -275,6 +315,11 @@ filesystems:
     xfs_ftype: null
   logs:
     path: /srv/secpal/logs
+    uid: 20000
+    gid: 20000
+    mode: "0750"
+    service_account_can_write: true
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -282,6 +327,11 @@ filesystems:
     xfs_ftype: null
   backup_staging:
     path: /srv/secpal/backup-staging
+    uid: 20000
+    gid: 20000
+    mode: "0700"
+    service_account_can_write: true
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false
@@ -289,6 +339,11 @@ filesystems:
     xfs_ftype: null
   podman_graph_root:
     path: /srv/secpal/podman-storage
+    uid: 20000
+    gid: 20000
+    mode: "0700"
+    service_account_can_write: true
+    ancestors_service_account_can_write: false
     filesystem: ext4
     local: true
     mount_read_only: false

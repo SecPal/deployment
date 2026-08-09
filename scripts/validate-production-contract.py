@@ -939,9 +939,42 @@ def validate_filesystem_fact(
     name: str,
     filesystem: dict[str, Any],
 ) -> None:
-    expected_path = inventory["paths"][name]["path"]
+    path_contract = inventory["paths"][name]
+    expected_path = path_contract["path"]
     if filesystem["path"] != expected_path:
         raise ContractViolation(f"filesystem path does not match inventory at {name}")
+    expected_uid = path_contract["uid"]
+    expected_gid = path_contract["gid"]
+    if (
+        expected_uid is not None
+        and filesystem["uid"] != expected_uid
+    ) or (
+        expected_gid is not None
+        and filesystem["gid"] != expected_gid
+    ):
+        raise ContractViolation(
+            f"effective path ownership does not match inventory at {name}"
+        )
+    if filesystem["mode"] != path_contract["mode"]:
+        raise ContractViolation(
+            f"effective path mode does not match inventory at {name}"
+        )
+    expected_service_write = {
+        "operator-root": False,
+        "service-account": True,
+        "rootless-container-storage": True,
+    }.get(path_contract["owner_role"])
+    if (
+        expected_service_write is not None
+        and filesystem["service_account_can_write"] is not expected_service_write
+    ):
+        raise ContractViolation(
+            f"effective path access does not match inventory at {name}"
+        )
+    if filesystem["ancestors_service_account_can_write"]:
+        raise ContractViolation(
+            f"effective path ancestry permits service-account replacement at {name}"
+        )
     if filesystem["filesystem"] == "xfs" and filesystem["xfs_ftype"] is not True:
         raise ContractViolation(f"XFS storage must use ftype=1 at {name}")
     if filesystem["filesystem"] == "ext4" and filesystem["xfs_ftype"] is not None:
