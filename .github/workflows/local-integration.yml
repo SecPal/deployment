@@ -104,6 +104,7 @@ jobs:
           quadlet_root="/etc/containers/systemd/users/$runtime_uid"
           policy="$RUNNER_TEMP/90-secpal-quadlet.conf"
           printf 'QUADLET_UNIT_DIRS=%s\n' "$quadlet_root" > "$policy"
+          sudo -n install -d -o root -g root -m 0755 /etc/environment.d
           sudo -n install -d -o root -g root -m 0755 "$quadlet_root"
           sudo -n install -o root -g root -m 0644 \
             "$policy" /etc/environment.d/90-secpal-quadlet.conf

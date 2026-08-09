@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,17 @@ HARNESS = ROOT / "scripts" / "quadlet-integration.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "local-integration.yml"
 INSTANCE = "contract01"
 PORT = "18443"
+MINIMUM_PODMAN_VERSION = (5, 4, 2)
+MAXIMUM_PODMAN_VERSION = (6, 0, 0)
+
+
+def quadlet_generator_version_supported(value: str) -> bool:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", value)
+    if match is None:
+        return False
+    version = tuple(int(part) for part in match.groups())
+    return MINIMUM_PODMAN_VERSION <= version < MAXIMUM_PODMAN_VERSION
+
 
 EXPECTED_FILES = {
     f"secpal-int-{INSTANCE}-api.container",
@@ -426,6 +438,24 @@ class QuadletContract(unittest.TestCase):
         generator = Path("/usr/libexec/podman/quadlet")
         if not generator.is_file():
             self.skipTest("Podman Quadlet generator is not installed")
+        podman = shutil.which("podman")
+        if podman is None:
+            self.skipTest("Podman client is not installed")
+        version_result = subprocess.run(
+            [podman, "version", "--format", "{{.Client.Version}}"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        version = version_result.stdout.strip()
+        if (
+            version_result.returncode != 0
+            or not quadlet_generator_version_supported(version)
+        ):
+            observed = version or "unknown"
+            self.skipTest(
+                f"installed Quadlet generator belongs to unsupported Podman {observed}"
+            )
         units = self.render()
         environment = dict(os.environ)
         environment["QUADLET_UNIT_DIRS"] = os.fspath(self.output)
@@ -487,6 +517,13 @@ class QuadletContract(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_quadlet_generator_version_gate_matches_runtime_contract(self) -> None:
+        self.assertFalse(quadlet_generator_version_supported("4.9.3"))
+        self.assertTrue(quadlet_generator_version_supported("5.4.2"))
+        self.assertTrue(quadlet_generator_version_supported("5.7.0"))
+        self.assertFalse(quadlet_generator_version_supported("6.0.0"))
+        self.assertFalse(quadlet_generator_version_supported("not-a-version"))
 
 
 if __name__ == "__main__":

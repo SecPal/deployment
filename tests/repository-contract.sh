@@ -112,6 +112,8 @@ require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
 require_text docs/roadmap.md 'is enforced for `main`'
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04"
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04-arm"
+require_text .github/workflows/local-integration.yml \
+  "sudo -n install -d -o root -g root -m 0755 /etc/environment.d"
 require_text .github/actionlint.yaml 'label "ubuntu-26\.04(-arm)?" is unknown'
 require_text AGENTS.md "Docker socket"
 require_text AGENTS.md "activity-hash-chain worker: exactly one"
