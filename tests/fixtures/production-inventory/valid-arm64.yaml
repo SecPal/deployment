@@ -1,0 +1,221 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+---
+schema_version: 1
+topology: single-host
+host:
+  hostname: secpal-arm64.example.invalid
+  architecture: arm64
+  public_address: 198.51.100.20
+  private_addresses: [10.0.0.20]
+  require_clock_synchronized: true
+service_account:
+  name: secpal-deploy
+  group: secpal-deploy
+  uid: 20000
+  gid: 20000
+  home: /var/lib/secpal
+  shell: /usr/sbin/nologin
+  interactive_login: false
+  runtime_authority: rootless-podman
+  subordinate_ids:
+    uid:
+      start: 100000
+      count: 65536
+    gid:
+      start: 200000
+      count: 65536
+origins:
+  frontend: https://app.example.invalid
+  api: https://api.example.invalid
+paths:
+  configuration:
+    path: /srv/secpal/config
+    owner_role: operator-root
+    uid: 0
+    gid: 20000
+    container_uid: null
+    container_gid: null
+    mode: "0750"
+    lifecycle: persistent
+    decision_issue: null
+  deployment_state:
+    path: /srv/secpal/deployment-state
+    owner_role: operator-root
+    uid: 0
+    gid: 20000
+    container_uid: null
+    container_gid: null
+    mode: "0750"
+    lifecycle: persistent
+    decision_issue: null
+  runtime_secrets:
+    path: /run/secpal/secrets
+    owner_role: state-contract
+    uid: null
+    gid: null
+    container_uid: null
+    container_gid: null
+    mode: "0750"
+    lifecycle: reconstructable
+    decision_issue: 10
+  postgresql_data:
+    path: /srv/secpal/postgresql
+    owner_role: state-contract
+    uid: null
+    gid: null
+    container_uid: null
+    container_gid: null
+    mode: "0700"
+    lifecycle: persistent
+    decision_issue: 10
+  private_application_storage:
+    path: /srv/secpal/private-storage
+    owner_role: state-contract
+    uid: null
+    gid: null
+    container_uid: 10001
+    container_gid: 10001
+    mode: "0750"
+    lifecycle: persistent
+    decision_issue: 10
+  public_application_storage:
+    path: /srv/secpal/public-storage
+    owner_role: state-contract
+    uid: null
+    gid: null
+    container_uid: 10001
+    container_gid: 10001
+    mode: "0750"
+    lifecycle: persistent
+    decision_issue: 10
+  edge_state:
+    path: /srv/secpal/edge
+    owner_role: edge-contract
+    uid: null
+    gid: null
+    container_uid: null
+    container_gid: null
+    mode: "0750"
+    lifecycle: persistent
+    decision_issue: 11
+  acme_state:
+    path: /srv/secpal/acme
+    owner_role: tls-contract
+    uid: null
+    gid: null
+    container_uid: null
+    container_gid: null
+    mode: "0700"
+    lifecycle: persistent
+    decision_issue: 13
+  crowdsec_state:
+    path: /srv/secpal/crowdsec
+    owner_role: crowdsec-contract
+    uid: null
+    gid: null
+    container_uid: null
+    container_gid: null
+    mode: "0750"
+    lifecycle: persistent
+    decision_issue: 14
+  logs:
+    path: /srv/secpal/logs
+    owner_role: service-account
+    uid: 20000
+    gid: 20000
+    container_uid: null
+    container_gid: null
+    mode: "0750"
+    lifecycle: persistent
+    decision_issue: null
+  backup_staging:
+    path: /srv/secpal/backup-staging
+    owner_role: service-account
+    uid: 20000
+    gid: 20000
+    container_uid: null
+    container_gid: null
+    mode: "0700"
+    lifecycle: reconstructable
+    decision_issue: 15
+  podman_graph_root:
+    path: /srv/secpal/podman-storage
+    owner_role: rootless-container-storage
+    uid: 20000
+    gid: 20000
+    container_uid: null
+    container_gid: null
+    mode: "0700"
+    lifecycle: reconstructable
+    decision_issue: null
+  quadlet_definitions:
+    path: /etc/containers/systemd/users/20000
+    owner_role: operator-root
+    uid: 0
+    gid: 0
+    container_uid: null
+    container_gid: null
+    mode: "0755"
+    lifecycle: reconstructable
+    decision_issue: null
+resources:
+  logical_cpus: 4
+  memory_bytes: 8589934592
+  storage_total_bytes: 107374182400
+  total_inodes: 1000000
+  storage:
+    podman_graph_root: &large-headroom
+      minimum_free_bytes: 21474836480
+      minimum_free_percent: 20
+      minimum_free_inodes: 200000
+      minimum_free_inode_percent: 20
+    postgresql_data: *large-headroom
+    private_application_storage:
+      minimum_free_bytes: 10737418240
+      minimum_free_percent: 20
+      minimum_free_inodes: 100000
+      minimum_free_inode_percent: 20
+    public_application_storage:
+      minimum_free_bytes: 1073741824
+      minimum_free_percent: 20
+      minimum_free_inodes: 20000
+      minimum_free_inode_percent: 20
+    logs:
+      minimum_free_bytes: 5368709120
+      minimum_free_percent: 20
+      minimum_free_inodes: 50000
+      minimum_free_inode_percent: 20
+    edge_state:
+      minimum_free_bytes: 2147483648
+      minimum_free_percent: 20
+      minimum_free_inodes: 20000
+      minimum_free_inode_percent: 20
+    acme_state:
+      minimum_free_bytes: 1073741824
+      minimum_free_percent: 20
+      minimum_free_inodes: 20000
+      minimum_free_inode_percent: 20
+    crowdsec_state:
+      minimum_free_bytes: 2147483648
+      minimum_free_percent: 20
+      minimum_free_inodes: 50000
+      minimum_free_inode_percent: 20
+    backup_staging:
+      minimum_free_bytes: 10737418240
+      minimum_free_percent: 20
+      minimum_free_inodes: 50000
+      minimum_free_inode_percent: 20
+backup:
+  target_type: external-filesystem
+  target_identifier: example-backup-target
+  credential_reference: external-secret://backup/example-target
+features:
+  image_verification: true
+  mail_delivery: false
+  opentimestamps: false
+  bitcoin_quorum: false
+  address_data_imports: false
+  android_push: false
+  web_push: false
+  object_storage: false

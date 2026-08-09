@@ -41,16 +41,25 @@ required_files=(
   .pre-commit-config.yaml
   CHANGELOG.md
   docs/architecture/scope.md
+  docs/architecture/production-host.md
+  docs/architecture/production-inventory.md
   docs/api-image-consumption.md
   docs/roadmap.md
+  config/production/inventory.example.yaml
+  schemas/production-host-facts.schema.json
+  schemas/production-inventory.schema.json
   scripts/preflight.sh
   scripts/fetch-oci-attestation.py
   scripts/reject-sensitive-paths.sh
+  scripts/validate-production-contract.py
   scripts/validate-origin.sh
   scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
+  tests/production-contract-regressions.py
+  tests/production-host-contract.sh
+  tests/production-inventory-contract.py
   tests/runtime-secret-contract.sh
   tests/local-integration-lifecycle.sh
   tests/preflight-origin-contract.sh

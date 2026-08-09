@@ -29,8 +29,8 @@ if [ "${#missing_tools[@]}" -ne 0 ]; then
   exit 1
 fi
 
-if ! python3 -c 'import yaml' >/dev/null 2>&1; then
-  printf 'ERROR: required Python module missing: PyYAML\n' >&2
+if ! python3 -c 'import jsonschema, yaml' >/dev/null 2>&1; then
+  printf 'ERROR: required Python modules missing: jsonschema and/or PyYAML\n' >&2
   exit 1
 fi
 
@@ -53,10 +53,13 @@ bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
 php -l scripts/phase-b-runtime-probe.php
 python3 tests/oci-attestation-bundle-contract.py
+python3 tests/production-contract-regressions.py
+python3 tests/production-inventory-contract.py
 bash tests/repository-contract.sh
 bash tests/phase-b-contract.sh
 bash tests/phase-c-api-image-contract.sh
 bash tests/phase-c-frontend-image-contract.sh
+bash tests/production-host-contract.sh
 bash tests/runtime-secret-contract.sh
 bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh

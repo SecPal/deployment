@@ -13,3 +13,11 @@ SPDX-License-Identifier = "CC0-1.0"
 path = ["package.json", "package-lock.json"]
 SPDX-FileCopyrightText = "2026 SecPal Contributors"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = [
+  "schemas/production-host-facts.schema.json",
+  "schemas/production-inventory.schema.json",
+]
+SPDX-FileCopyrightText = "2026 SecPal Contributors"
+SPDX-License-Identifier = "CC0-1.0"

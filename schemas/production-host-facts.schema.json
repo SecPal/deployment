@@ -1,0 +1,918 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/production-host-facts.schema.json",
+  "title": "SecPal synthetic production host facts",
+  "description": "Version 1 side-effect-free observations compared with the production inventory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "hostname",
+    "architecture",
+    "os",
+    "service_account",
+    "ssh",
+    "kernel",
+    "runtime",
+    "clock",
+    "network",
+    "path_access",
+    "tools",
+    "filesystems",
+    "resources"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "hostname": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "architecture": {
+      "enum": ["amd64", "arm64"]
+    },
+    "os": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version_id",
+        "version_codename",
+        "package_provenance",
+        "debian_release_suites",
+        "security_updates"
+      ],
+      "properties": {
+        "id": {
+          "const": "debian"
+        },
+        "version_id": {
+          "const": "13"
+        },
+        "version_codename": {
+          "const": "trixie"
+        },
+        "package_provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "release_origins",
+            "archive_keyring_package",
+            "release_signatures_verified"
+          ],
+          "properties": {
+            "release_origins": {
+              "const": ["Debian"]
+            },
+            "archive_keyring_package": {
+              "const": "debian-archive-keyring"
+            },
+            "release_signatures_verified": {
+              "const": true
+            }
+          }
+        },
+        "debian_release_suites": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["trixie", "trixie-security", "trixie-updates"]
+          },
+          "allOf": [
+            { "contains": { "const": "trixie" } },
+            { "contains": { "const": "trixie-security" } },
+            { "contains": { "const": "trixie-updates" } }
+          ]
+        },
+        "security_updates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mechanism",
+            "automatic",
+            "release_codename",
+            "security_suite",
+            "normal_updates_automatic",
+            "major_release_upgrades_automatic",
+            "automatic_reboot"
+          ],
+          "properties": {
+            "mechanism": {
+              "const": "unattended-upgrades"
+            },
+            "automatic": {
+              "const": true
+            },
+            "release_codename": {
+              "const": "trixie"
+            },
+            "security_suite": {
+              "const": "trixie-security"
+            },
+            "normal_updates_automatic": {
+              "const": false
+            },
+            "major_release_upgrades_automatic": {
+              "const": false
+            },
+            "automatic_reboot": {
+              "const": false
+            }
+          }
+        }
+      }
+    },
+    "service_account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "group",
+        "uid",
+        "gid",
+        "supplementary_gids",
+        "home",
+        "containers_configuration_account_writable",
+        "shell",
+        "interactive_login",
+        "sudo_authorized",
+        "host_privilege_authorized",
+        "rootful_runtime_authorized",
+        "system_unit_authorized",
+        "remote_runtime_authorized"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "gid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "supplementary_gids": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "home": {
+          "type": "string",
+          "minLength": 1
+        },
+        "containers_configuration_account_writable": {
+          "const": false
+        },
+        "shell": {
+          "const": "/usr/sbin/nologin"
+        },
+        "interactive_login": {
+          "const": false
+        },
+        "sudo_authorized": {
+          "const": false
+        },
+        "host_privilege_authorized": {
+          "const": false
+        },
+        "rootful_runtime_authorized": {
+          "const": false
+        },
+        "system_unit_authorized": {
+          "const": false
+        },
+        "remote_runtime_authorized": {
+          "const": false
+        }
+      }
+    },
+    "ssh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direct_root_login_permitted"],
+      "properties": {
+        "direct_root_login_permitted": {
+          "const": false
+        }
+      }
+    },
+    "kernel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release",
+        "package_architecture",
+        "package_source",
+        "package_suite",
+        "package_owned",
+        "cgroup_version",
+        "overlayfs_supported",
+        "apparmor",
+        "seccomp_available_to_podman"
+      ],
+      "properties": {
+        "release": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "package_architecture": {
+          "enum": ["amd64", "arm64"]
+        },
+        "package_source": {
+          "const": "debian-archive"
+        },
+        "package_suite": {
+          "enum": ["trixie", "trixie-security"]
+        },
+        "package_owned": {
+          "const": true
+        },
+        "cgroup_version": {
+          "const": 2
+        },
+        "overlayfs_supported": {
+          "const": true
+        },
+        "apparmor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "profiles_loaded",
+            "profiles_in_enforce_mode"
+          ],
+          "properties": {
+            "enabled": { "const": true },
+            "profiles_loaded": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "profiles_in_enforce_mode": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "seccomp_available_to_podman": {
+          "const": true
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "version",
+        "effective_oci_runtime",
+        "rootless",
+        "owner_uid",
+        "owner_gid",
+        "installation",
+        "user_namespace",
+        "systemd_user",
+        "quadlet",
+        "storage",
+        "network",
+        "api",
+        "updates",
+        "registries"
+      ],
+      "properties": {
+        "engine": {
+          "const": "podman"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "effective_oci_runtime": {
+          "const": "crun"
+        },
+        "rootless": {
+          "const": true
+        },
+        "owner_uid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "owner_gid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "installation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "distribution",
+            "release_codename",
+            "external_repository",
+            "installed_packages",
+            "package_suites",
+            "forbidden_packages_present"
+          ],
+          "properties": {
+            "source": {
+              "const": "debian-archive"
+            },
+            "distribution": {
+              "const": "debian"
+            },
+            "release_codename": {
+              "const": "trixie"
+            },
+            "external_repository": {
+              "const": false
+            },
+            "installed_packages": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "podman",
+                "conmon",
+                "crun",
+                "netavark",
+                "aardvark_dns",
+                "passt",
+                "uidmap",
+                "dbus_user_session"
+              ],
+              "properties": {
+                "podman": { "const": "podman" },
+                "conmon": { "const": "conmon" },
+                "crun": { "const": "crun" },
+                "netavark": { "const": "netavark" },
+                "aardvark_dns": { "const": "aardvark-dns" },
+                "passt": { "const": "passt" },
+                "uidmap": { "const": "uidmap" },
+                "dbus_user_session": { "const": "dbus-user-session" }
+              }
+            },
+            "package_suites": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "podman",
+                "conmon",
+                "crun",
+                "netavark",
+                "aardvark_dns",
+                "passt",
+                "uidmap",
+                "dbus_user_session"
+              ],
+              "properties": {
+                "podman": { "$ref": "#/$defs/runtimePackageSuite" },
+                "conmon": { "$ref": "#/$defs/runtimePackageSuite" },
+                "crun": { "$ref": "#/$defs/runtimePackageSuite" },
+                "netavark": { "$ref": "#/$defs/runtimePackageSuite" },
+                "aardvark_dns": { "$ref": "#/$defs/runtimePackageSuite" },
+                "passt": { "$ref": "#/$defs/runtimePackageSuite" },
+                "uidmap": { "$ref": "#/$defs/runtimePackageSuite" },
+                "dbus_user_session": {
+                  "$ref": "#/$defs/runtimePackageSuite"
+                }
+              }
+            },
+            "forbidden_packages_present": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        },
+        "user_namespace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "account",
+            "subuid",
+            "subgid",
+            "newuidmap_effective",
+            "newgidmap_effective"
+          ],
+          "properties": {
+            "account": {
+              "type": "string",
+              "minLength": 1
+            },
+            "subuid": {
+              "$ref": "#/$defs/subordinateIdFact"
+            },
+            "subgid": {
+              "$ref": "#/$defs/subordinateIdFact"
+            },
+            "newuidmap_effective": {
+              "const": true
+            },
+            "newgidmap_effective": {
+              "const": true
+            }
+          }
+        },
+        "systemd_user": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "manager_available",
+            "starts_at_boot",
+            "linger_enabled",
+            "dbus_session_available"
+          ],
+          "properties": {
+            "manager_available": {
+              "const": true
+            },
+            "starts_at_boot": {
+              "const": true
+            },
+            "linger_enabled": {
+              "const": true
+            },
+            "dbus_session_available": {
+              "const": true
+            }
+          }
+        },
+        "quadlet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "available",
+            "orchestrator",
+            "generator_path",
+            "unit_files_uid",
+            "unit_files_gid",
+            "unit_files_mode",
+            "effective_search_paths",
+            "persistent_search_path_configuration_account_writable",
+            "tree_symlinks_present",
+            "tree_service_account_can_read",
+            "tree_service_account_can_traverse",
+            "tree_service_account_can_write"
+          ],
+          "properties": {
+            "available": { "const": true },
+            "orchestrator": { "const": "systemd-user" },
+            "generator_path": {
+              "const": "/usr/lib/systemd/user-generators/podman-user-generator"
+            },
+            "unit_files_uid": { "const": 0 },
+            "unit_files_gid": { "const": 0 },
+            "unit_files_mode": { "const": "0644" },
+            "effective_search_paths": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "persistent_search_path_configuration_account_writable": {
+              "const": false
+            },
+            "tree_symlinks_present": { "const": false },
+            "tree_service_account_can_read": { "const": true },
+            "tree_service_account_can_traverse": { "const": true },
+            "tree_service_account_can_write": { "const": false }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "graphroot",
+            "runroot",
+            "driver",
+            "transient_store",
+            "graphroot_reconstructable"
+          ],
+          "properties": {
+            "graphroot": { "type": "string", "minLength": 1 },
+            "runroot": { "type": "string", "minLength": 1 },
+            "driver": { "const": "overlay" },
+            "transient_store": { "const": false },
+            "graphroot_reconstructable": { "const": true }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "backend",
+            "dns_backend",
+            "rootless_transport",
+            "host_network",
+            "unprivileged_port_override"
+          ],
+          "properties": {
+            "backend": { "const": "netavark" },
+            "dns_backend": { "const": "aardvark-dns" },
+            "rootless_transport": { "const": "pasta" },
+            "host_network": { "const": false },
+            "unprivileged_port_override": { "const": false }
+          }
+        },
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "connection",
+            "remote",
+            "service_enabled",
+            "socket_enabled",
+            "tcp_listener",
+            "application_dependency"
+          ],
+          "properties": {
+            "connection": { "const": "local-cli" },
+            "remote": { "const": false },
+            "service_enabled": { "const": false },
+            "socket_enabled": { "const": false },
+            "tcp_listener": { "const": false },
+            "application_dependency": { "const": false }
+          }
+        },
+        "updates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "automatic",
+            "automatic_service_restart",
+            "major_version_automatic",
+            "image_auto_update",
+            "auto_update_timer_enabled"
+          ],
+          "properties": {
+            "automatic": { "const": false },
+            "automatic_service_restart": { "const": false },
+            "major_version_automatic": { "const": false },
+            "image_auto_update": { "const": false },
+            "auto_update_timer_enabled": { "const": false }
+          }
+        },
+        "registries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "secpal_references_fully_qualified",
+            "secpal_mirrors",
+            "secpal_location_rewrite",
+            "ghcr_insecure",
+            "fallback_enabled",
+            "short_name_resolution_required"
+          ],
+          "properties": {
+            "secpal_references_fully_qualified": { "const": true },
+            "secpal_mirrors": { "type": "array", "maxItems": 0 },
+            "secpal_location_rewrite": { "const": false },
+            "ghcr_insecure": { "const": false },
+            "fallback_enabled": { "const": false },
+            "short_name_resolution_required": { "const": false }
+          }
+        }
+      }
+    },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["synchronized", "offset_milliseconds"],
+      "properties": {
+        "synchronized": {
+          "const": true
+        },
+        "offset_milliseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public_address", "private_addresses"],
+      "properties": {
+        "public_address": {
+          "type": "string",
+          "minLength": 1
+        },
+        "private_addresses": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "path_access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service_account_home",
+        "systemd_runtime_directory",
+        "podman_runroot",
+        "quadlet_definitions"
+      ],
+      "properties": {
+        "service_account_home": {
+          "$ref": "#/$defs/pathAccessFact"
+        },
+        "systemd_runtime_directory": {
+          "$ref": "#/$defs/pathAccessFact"
+        },
+        "podman_runroot": {
+          "$ref": "#/$defs/pathAccessFact"
+        },
+        "quadlet_definitions": {
+          "$ref": "#/$defs/pathAccessFact"
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "filesystems": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration",
+        "deployment_state",
+        "postgresql_data",
+        "private_application_storage",
+        "public_application_storage",
+        "edge_state",
+        "acme_state",
+        "crowdsec_state",
+        "logs",
+        "backup_staging",
+        "podman_graph_root"
+      ],
+      "properties": {
+        "configuration": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "deployment_state": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "postgresql_data": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "private_application_storage": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "public_application_storage": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "edge_state": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "acme_state": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "crowdsec_state": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "logs": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "backup_staging": {
+          "$ref": "#/$defs/filesystemFact"
+        },
+        "podman_graph_root": {
+          "$ref": "#/$defs/filesystemFact"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logical_cpus",
+        "memory_bytes",
+        "storage_total_bytes",
+        "total_inodes",
+        "storage"
+      ],
+      "properties": {
+        "logical_cpus": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "memory_bytes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "storage_total_bytes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "total_inodes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "podman_graph_root",
+            "postgresql_data",
+            "private_application_storage",
+            "public_application_storage",
+            "logs",
+            "edge_state",
+            "acme_state",
+            "crowdsec_state",
+            "backup_staging"
+          ],
+          "properties": {
+            "podman_graph_root": {
+              "$ref": "#/$defs/headroomFact"
+            },
+            "postgresql_data": {
+              "$ref": "#/$defs/headroomFact"
+            },
+            "private_application_storage": {
+              "$ref": "#/$defs/headroomFact"
+            },
+            "public_application_storage": {
+              "$ref": "#/$defs/headroomFact"
+            },
+            "logs": {
+              "$ref": "#/$defs/headroomFact"
+            },
+            "edge_state": {
+              "$ref": "#/$defs/headroomFact"
+            },
+            "acme_state": {
+              "$ref": "#/$defs/headroomFact"
+            },
+            "crowdsec_state": {
+              "$ref": "#/$defs/headroomFact"
+            },
+            "backup_staging": {
+              "$ref": "#/$defs/headroomFact"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "systemId": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967294
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
+    },
+    "runtimePackageSuite": {
+      "enum": ["trixie", "trixie-security"]
+    },
+    "subordinateIdFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "start",
+        "count",
+        "source_entry_count",
+        "overlaps_other_accounts",
+        "overlaps_host_identities"
+      ],
+      "properties": {
+        "source": {
+          "enum": ["/etc/subuid", "/etc/subgid"]
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 4294901759
+        },
+        "count": {
+          "type": "integer",
+          "const": 65536
+        },
+        "source_entry_count": {
+          "type": "integer",
+          "const": 1
+        },
+        "overlaps_other_accounts": {
+          "const": false
+        },
+        "overlaps_host_identities": {
+          "const": false
+        }
+      }
+    },
+    "pathAccessFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "uid",
+        "gid",
+        "mode",
+        "service_account_can_write",
+        "ancestors_service_account_can_write",
+        "local"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "gid": {
+          "$ref": "#/$defs/systemId"
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3}$"
+        },
+        "service_account_can_write": {
+          "type": "boolean"
+        },
+        "ancestors_service_account_can_write": {
+          "type": "boolean"
+        },
+        "local": {
+          "const": true
+        }
+      }
+    },
+    "filesystemFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "access",
+        "filesystem",
+        "mount_read_only",
+        "d_type",
+        "xfs_ftype"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/pathAccessFact"
+        },
+        "filesystem": {
+          "enum": ["ext4", "xfs"]
+        },
+        "mount_read_only": {
+          "const": false
+        },
+        "d_type": {
+          "const": true
+        },
+        "xfs_ftype": {
+          "type": ["boolean", "null"]
+        }
+      }
+    },
+    "headroomFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "free_bytes",
+        "free_percent",
+        "free_inodes",
+        "free_inode_percent"
+      ],
+      "properties": {
+        "free_bytes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "free_percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "free_inodes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "free_inode_percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    }
+  }
+}

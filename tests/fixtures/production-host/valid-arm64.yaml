@@ -1,0 +1,410 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+---
+schema_version: 1
+hostname: secpal-arm64.example.invalid
+architecture: arm64
+os:
+  id: debian
+  version_id: "13"
+  version_codename: trixie
+  package_provenance:
+    release_origins: [Debian]
+    archive_keyring_package: debian-archive-keyring
+    release_signatures_verified: true
+  debian_release_suites:
+    - trixie
+    - trixie-security
+    - trixie-updates
+  security_updates:
+    mechanism: unattended-upgrades
+    automatic: true
+    release_codename: trixie
+    security_suite: trixie-security
+    normal_updates_automatic: false
+    major_release_upgrades_automatic: false
+    automatic_reboot: false
+service_account:
+  name: secpal-deploy
+  group: secpal-deploy
+  uid: 20000
+  gid: 20000
+  supplementary_gids: []
+  home: /var/lib/secpal
+  containers_configuration_account_writable: false
+  shell: /usr/sbin/nologin
+  interactive_login: false
+  sudo_authorized: false
+  host_privilege_authorized: false
+  rootful_runtime_authorized: false
+  system_unit_authorized: false
+  remote_runtime_authorized: false
+ssh:
+  direct_root_login_permitted: false
+kernel:
+  release: 6.12.38+deb13-arm64
+  package_architecture: arm64
+  package_source: debian-archive
+  package_suite: trixie-security
+  package_owned: true
+  cgroup_version: 2
+  overlayfs_supported: true
+  apparmor:
+    enabled: true
+    profiles_loaded: 12
+    profiles_in_enforce_mode: 12
+  seccomp_available_to_podman: true
+runtime:
+  engine: podman
+  version: 5.4.2
+  effective_oci_runtime: crun
+  rootless: true
+  owner_uid: 20000
+  owner_gid: 20000
+  installation:
+    source: debian-archive
+    distribution: debian
+    release_codename: trixie
+    external_repository: false
+    installed_packages:
+      podman: podman
+      conmon: conmon
+      crun: crun
+      netavark: netavark
+      aardvark_dns: aardvark-dns
+      passt: passt
+      uidmap: uidmap
+      dbus_user_session: dbus-user-session
+    package_suites:
+      podman: trixie
+      conmon: trixie
+      crun: trixie
+      netavark: trixie
+      aardvark_dns: trixie
+      passt: trixie
+      uidmap: trixie
+      dbus_user_session: trixie
+    forbidden_packages_present: []
+  user_namespace:
+    account: secpal-deploy
+    subuid:
+      source: /etc/subuid
+      start: 100000
+      count: 65536
+      source_entry_count: 1
+      overlaps_other_accounts: false
+      overlaps_host_identities: false
+    subgid:
+      source: /etc/subgid
+      start: 200000
+      count: 65536
+      source_entry_count: 1
+      overlaps_other_accounts: false
+      overlaps_host_identities: false
+    newuidmap_effective: true
+    newgidmap_effective: true
+  systemd_user:
+    manager_available: true
+    starts_at_boot: true
+    linger_enabled: true
+    dbus_session_available: true
+  quadlet:
+    available: true
+    orchestrator: systemd-user
+    generator_path: /usr/lib/systemd/user-generators/podman-user-generator
+    unit_files_uid: 0
+    unit_files_gid: 0
+    unit_files_mode: "0644"
+    effective_search_paths:
+      - /etc/containers/systemd/users/20000
+    persistent_search_path_configuration_account_writable: false
+    tree_symlinks_present: false
+    tree_service_account_can_read: true
+    tree_service_account_can_traverse: true
+    tree_service_account_can_write: false
+  storage:
+    graphroot: /srv/secpal/podman-storage
+    runroot: /run/user/20000/containers
+    driver: overlay
+    transient_store: false
+    graphroot_reconstructable: true
+  network:
+    backend: netavark
+    dns_backend: aardvark-dns
+    rootless_transport: pasta
+    host_network: false
+    unprivileged_port_override: false
+  api:
+    connection: local-cli
+    remote: false
+    service_enabled: false
+    socket_enabled: false
+    tcp_listener: false
+    application_dependency: false
+  updates:
+    automatic: false
+    automatic_service_restart: false
+    major_version_automatic: false
+    image_auto_update: false
+    auto_update_timer_enabled: false
+  registries:
+    secpal_references_fully_qualified: true
+    secpal_mirrors: []
+    secpal_location_rewrite: false
+    ghcr_insecure: false
+    fallback_enabled: false
+    short_name_resolution_required: false
+clock:
+  synchronized: true
+  offset_milliseconds: 25
+network:
+  public_address: 198.51.100.20
+  private_addresses: [10.0.0.20]
+path_access:
+  service_account_home:
+    path: /var/lib/secpal
+    uid: 0
+    gid: 20000
+    mode: "0750"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
+    local: true
+  systemd_runtime_directory:
+    path: /run/user/20000
+    uid: 20000
+    gid: 20000
+    mode: "0700"
+    service_account_can_write: true
+    ancestors_service_account_can_write: false
+    local: true
+  podman_runroot:
+    path: /run/user/20000/containers
+    uid: 20000
+    gid: 20000
+    mode: "0700"
+    service_account_can_write: true
+    ancestors_service_account_can_write: true
+    local: true
+  quadlet_definitions:
+    path: /etc/containers/systemd/users/20000
+    uid: 0
+    gid: 0
+    mode: "0755"
+    service_account_can_write: false
+    ancestors_service_account_can_write: false
+    local: true
+tools:
+  - bash
+  - curl
+  - df
+  - loginctl
+  - newgidmap
+  - newuidmap
+  - podman
+  - systemctl
+  - findmnt
+  - getent
+  - gh
+  - id
+  - install
+  - mktemp
+  - python3
+  - realpath
+  - sha256sum
+  - stat
+  - timedatectl
+filesystems:
+  configuration:
+    access:
+      path: /srv/secpal/config
+      uid: 0
+      gid: 20000
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  deployment_state:
+    access:
+      path: /srv/secpal/deployment-state
+      uid: 0
+      gid: 20000
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  postgresql_data:
+    access:
+      path: /srv/secpal/postgresql
+      uid: 0
+      gid: 0
+      mode: "0700"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  private_application_storage:
+    access:
+      path: /srv/secpal/private-storage
+      uid: 0
+      gid: 0
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  public_application_storage:
+    access:
+      path: /srv/secpal/public-storage
+      uid: 0
+      gid: 0
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  edge_state:
+    access:
+      path: /srv/secpal/edge
+      uid: 0
+      gid: 0
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  acme_state:
+    access:
+      path: /srv/secpal/acme
+      uid: 0
+      gid: 0
+      mode: "0700"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  crowdsec_state:
+    access:
+      path: /srv/secpal/crowdsec
+      uid: 0
+      gid: 0
+      mode: "0750"
+      service_account_can_write: false
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  logs:
+    access:
+      path: /srv/secpal/logs
+      uid: 20000
+      gid: 20000
+      mode: "0750"
+      service_account_can_write: true
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  backup_staging:
+    access:
+      path: /srv/secpal/backup-staging
+      uid: 20000
+      gid: 20000
+      mode: "0700"
+      service_account_can_write: true
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+  podman_graph_root:
+    access:
+      path: /srv/secpal/podman-storage
+      uid: 20000
+      gid: 20000
+      mode: "0700"
+      service_account_can_write: true
+      ancestors_service_account_can_write: false
+      local: true
+    filesystem: ext4
+    mount_read_only: false
+    d_type: true
+    xfs_ftype: null
+resources:
+  logical_cpus: 8
+  memory_bytes: 17179869184
+  storage_total_bytes: 268435456000
+  total_inodes: 2000000
+  storage:
+    podman_graph_root:
+      free_bytes: 68719476736
+      free_percent: 30
+      free_inodes: 400000
+      free_inode_percent: 30
+    postgresql_data:
+      free_bytes: 68719476736
+      free_percent: 30
+      free_inodes: 400000
+      free_inode_percent: 30
+    private_application_storage:
+      free_bytes: 34359738368
+      free_percent: 30
+      free_inodes: 200000
+      free_inode_percent: 30
+    public_application_storage:
+      free_bytes: 8589934592
+      free_percent: 30
+      free_inodes: 100000
+      free_inode_percent: 30
+    logs:
+      free_bytes: 17179869184
+      free_percent: 30
+      free_inodes: 100000
+      free_inode_percent: 30
+    edge_state:
+      free_bytes: 8589934592
+      free_percent: 30
+      free_inodes: 100000
+      free_inode_percent: 30
+    acme_state:
+      free_bytes: 4294967296
+      free_percent: 30
+      free_inodes: 100000
+      free_inode_percent: 30
+    crowdsec_state:
+      free_bytes: 8589934592
+      free_percent: 30
+      free_inodes: 100000
+      free_inode_percent: 30
+    backup_staging:
+      free_bytes: 34359738368
+      free_percent: 30
+      free_inodes: 100000
+      free_inode_percent: 30

@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+---
+path: [resources, storage, postgresql_data, free_bytes]
+value: 1073741824

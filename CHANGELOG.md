@@ -5,6 +5,25 @@ SPDX-License-Identifier: CC0-1.0
 
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A provider-neutral production host and inventory contract.
+- A versioned, non-secret production inventory schema, a closed synthetic
+  host-facts schema, and examples for both supported architectures.
+- Fail-closed inventory and synthetic host-prerequisite validation without
+  host access or production mutation.
+- An exact Debian 13/trixie host identity and reviewed security-update, reboot,
+  rootless Podman/Quadlet maintenance, and major-release lifecycle contract.
+- A closed subordinate-ID, systemd user-manager, local Podman graphroot,
+  runtime-API denial, and registry-redirection denial contract while preserving
+  the historical Docker/Compose integration evidence.
+- Effective runtime-package suite, mapping-helper, user-runtime-directory, and
+  administrator-only Quadlet search-path evidence.
+- Shared path-access admission for host policy and rootless runtime paths, explicit AppArmor
+  enforcement evidence, and distinct host-name versus public-origin rules.
+
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 
 ### Added
