@@ -53,6 +53,7 @@ required_files=(
   schemas/production-inventory.schema.json
   scripts/preflight.sh
   scripts/fetch-oci-attestation.py
+  scripts/integration_runtime_contract.py
   scripts/quadlet-integration.py
   scripts/quadlet-oneshot-entrypoint.sh
   scripts/render-integration-quadlets.py

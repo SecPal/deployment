@@ -23,6 +23,27 @@ import time
 import tomllib
 from typing import Mapping, Protocol, Sequence
 
+sys.dont_write_bytecode = True
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if os.fspath(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, os.fspath(SCRIPT_DIRECTORY))
+
+from integration_runtime_contract import (
+    API_DIGEST,
+    API_IMAGE,
+    API_SOURCE_COMMIT,
+    CADDY_IMAGE,
+    FRONTEND_DIGEST,
+    FRONTEND_IMAGE,
+    FRONTEND_SOURCE_COMMIT,
+    POSTGRES_IMAGE,
+    REQUIRED_CONTAINER_GIDS,
+    REQUIRED_CONTAINER_UIDS,
+    TmpfsSpec,
+    VALKEY_IMAGE,
+    role_spec,
+)
+
 
 CONTAINER_ROLES = (
     "secrets-init",
@@ -48,15 +69,6 @@ ONESHOT_SYSTEMD_PROPERTIES = (
     "ExecMainStartTimestampMonotonic",
 )
 EXPECTED_GH_VERSION = "2.97.0"
-API_IMAGE = "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
-API_DIGEST = "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
-API_SOURCE_COMMIT = "87d1432389adac3a02574b399322928a77c5e67f"
-FRONTEND_IMAGE = "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
-FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
-FRONTEND_SOURCE_COMMIT = "b755ca0d0ee5a85eca5ad5688d457241f070b1b4"
-POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
-VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
-CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
@@ -64,6 +76,10 @@ HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 class IntegrationError(RuntimeError):
     """A fail-closed integration admission or lifecycle failure."""
+
+
+class PortCollisionError(IntegrationError):
+    """A verified loopback bind collision eligible for bounded automatic retry."""
 
 
 class IntegrationInterrupted(BaseException):
@@ -189,6 +205,20 @@ def required_first_line(output: str, source: str) -> str:
     return lines[0]
 
 
+def validate_gh_version_line(line: str) -> None:
+    if not re.fullmatch(rf"gh version {re.escape(EXPECTED_GH_VERSION)}(?: .*)?", line):
+        raise IntegrationError(f"GitHub CLI {EXPECTED_GH_VERSION} is required")
+
+
+def playwright_admission_command() -> tuple[str, str, str]:
+    return (
+        "node",
+        "-e",
+        "const fs=require('node:fs');const {chromium}=require('@playwright/test');"
+        "fs.accessSync(chromium.executablePath(),fs.constants.X_OK)",
+    )
+
+
 def parse_json_mapping(output: str, source: str) -> Mapping:
     try:
         payload = json.loads(output)
@@ -301,6 +331,13 @@ def validate_runtime_info(
         raise IntegrationError("effective rootless network transport must be pasta")
     if nested(info, "host", "security", "seccompEnabled") is not True:
         raise IntegrationError("seccomp must be effective for Podman")
+    mappings = nested(info, "host", "idMappings")
+    validate_id_mapping(
+        nested(mappings, "uidmap"), REQUIRED_CONTAINER_UIDS, "uid"
+    )
+    validate_id_mapping(
+        nested(mappings, "gidmap"), REQUIRED_CONTAINER_GIDS, "gid"
+    )
     graph_root = Path(str(nested(info, "store", "graphRoot")))
     run_root = Path(str(nested(info, "store", "runRoot")))
     if not graph_root.is_absolute() or not run_root.is_absolute():
@@ -308,12 +345,86 @@ def validate_runtime_info(
     return graph_root, run_root
 
 
+def validate_id_mapping(
+    entries: object, required_ids: frozenset[int], mapping_name: str
+) -> None:
+    if not isinstance(entries, list) or not entries:
+        raise IntegrationError(f"usable subordinate {mapping_name} mapping is required")
+    ranges: list[tuple[int, int]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise IntegrationError(
+                f"usable subordinate {mapping_name} mapping is required"
+            )
+        start = entry.get("container_id")
+        host = entry.get("host_id")
+        size = entry.get("size")
+        if (
+            not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(host, int)
+            or isinstance(host, bool)
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or start < 0
+            or host < 0
+            or size <= 0
+        ):
+            raise IntegrationError(
+                f"usable subordinate {mapping_name} mapping is required"
+            )
+        ranges.append((start, start + size))
+    if any(not any(start <= identity < end for start, end in ranges) for identity in required_ids):
+        raise IntegrationError(f"usable subordinate {mapping_name} mapping is required")
+
+
+def parse_tmpfs_size(value: str) -> int:
+    match = re.fullmatch(r"([1-9][0-9]*)([kmg]?)", value.lower())
+    if not match:
+        raise IntegrationError("effective runtime tmpfs options are malformed")
+    multipliers = {"": 1, "k": 1024, "m": 1024 * 1024, "g": 1024 * 1024 * 1024}
+    return int(match.group(1)) * multipliers[match.group(2)]
+
+
+def validate_tmpfs_options(options: object, expected: TmpfsSpec) -> None:
+    if not isinstance(options, str):
+        raise IntegrationError("effective runtime tmpfs options are malformed")
+    flags: set[str] = set()
+    values: dict[str, str] = {}
+    for raw_option in options.split(","):
+        option = raw_option.strip()
+        if not option:
+            raise IntegrationError("effective runtime tmpfs options are malformed")
+        if "=" in option:
+            name, value = option.split("=", 1)
+            name = name.lower()
+            if name in values or name not in {"size", "mode"} or not value:
+                raise IntegrationError("effective runtime tmpfs options are malformed")
+            values[name] = value
+        else:
+            flag = option.lower()
+            if flag in flags:
+                raise IntegrationError("effective runtime tmpfs options are malformed")
+            flags.add(flag)
+    required_flags = {"rw", "rprivate", "tmpcopyup", "u", "nosuid", "nodev"}
+    if expected.noexec:
+        required_flags.add("noexec")
+    if flags != required_flags or set(values) != {"size", "mode"}:
+        raise IntegrationError("effective runtime tmpfs options differ from the reviewed contract")
+    try:
+        mode = int(values["mode"], 8)
+    except ValueError as error:
+        raise IntegrationError("effective runtime tmpfs options are malformed") from error
+    if parse_tmpfs_size(values["size"]) != expected.size or mode != expected.mode:
+        raise IntegrationError("effective runtime tmpfs options differ from the reviewed contract")
+
+
 def validate_container_security(
     inspect: Mapping,
     apparmor_available: bool,
     allowed_capabilities: frozenset[str] = frozenset(),
     expected_mounts: Mapping[str, tuple[str, str, bool]] | None = None,
-    expected_tmpfs: frozenset[str] | set[str] = frozenset(),
+    expected_tmpfs: Mapping[str, TmpfsSpec] | None = None,
 ) -> None:
     host = nested(inspect, "HostConfig")
     if host.get("Privileged") is not False:
@@ -362,6 +473,7 @@ def validate_container_security(
             observed_mounts[destination] = (mount_type, source, mount.get("RW") is True)
         if observed_mounts != dict(expected_mounts):
             raise IntegrationError("effective runtime mounts differ from the reviewed contract")
+    if expected_tmpfs is not None:
         tmpfs = host.get("Tmpfs") or {}
         if not isinstance(tmpfs, Mapping) or set(tmpfs) != set(expected_tmpfs):
             observed_tmpfs = sorted(tmpfs) if isinstance(tmpfs, Mapping) else ["<invalid>"]
@@ -369,6 +481,8 @@ def validate_container_security(
                 "effective runtime tmpfs paths differ from the reviewed contract: "
                 f"expected {sorted(expected_tmpfs)}, observed {observed_tmpfs}"
             )
+        for destination, expected in expected_tmpfs.items():
+            validate_tmpfs_options(tmpfs[destination], expected)
 
 
 def validate_oneshot_state(properties: str) -> tuple[str, str]:
@@ -617,13 +731,31 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
             continue
 
 
-def execute_lifecycle(lifecycle) -> None:
+def execute_lifecycle(lifecycle, port_allocator=None) -> None:
     failure: BaseException | None = None
     try:
         lifecycle.validate_repository_and_runtime()
         lifecycle.retrieve_verify_and_stage_images()
-        lifecycle.render_validate_and_install_units()
-        lifecycle.start_target()
+        automatic_port = getattr(lifecycle, "port", 1) is None
+        allocator = port_allocator or allocate_port
+        previous_port: int | None = None
+        for attempt in range(3):
+            if automatic_port:
+                selected = allocate_distinct_port(allocator, previous_port)
+                lifecycle.select_port(selected)
+                previous_port = selected
+            lifecycle.render_validate_and_install_units()
+            try:
+                lifecycle.start_target()
+                break
+            except PortCollisionError as error:
+                if not automatic_port:
+                    raise
+                if attempt == 2:
+                    raise IntegrationError(
+                        "an isolated loopback port could not be allocated after three attempts"
+                    ) from error
+                lifecycle.prepare_port_retry()
         lifecycle.prove_runtime()
         lifecycle.collect_resource_evidence()
     except BaseException as error:
@@ -645,6 +777,8 @@ def execute_expected_failure_lifecycle(lifecycle) -> None:
     try:
         lifecycle.validate_repository_and_runtime()
         lifecycle.retrieve_verify_and_stage_images()
+        if getattr(lifecycle, "port", 1) is None:
+            lifecycle.select_port(allocate_port())
         lifecycle.render_validate_and_install_units()
         lifecycle.start_expected_failure()
         lifecycle.prove_expected_failure()
@@ -660,6 +794,27 @@ def execute_expected_failure_lifecycle(lifecycle) -> None:
         raise
     if failure is not None:
         raise failure
+
+
+def allocate_distinct_port(port_allocator, previous_port: int | None) -> int:
+    for _attempt in range(10):
+        port = port_allocator()
+        if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
+            raise IntegrationError("automatic loopback port allocator returned an invalid port")
+        if port != previous_port:
+            return port
+    raise IntegrationError("a new isolated loopback port could not be selected")
+
+
+def is_port_collision_log(output: str) -> bool:
+    return bool(
+        re.search(
+            r"address already in use|port is already allocated|"
+            r"failed to bind host port|bind for .* failed",
+            output,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def handle_signal(lifecycle, signal_number: int) -> None:
@@ -682,7 +837,7 @@ class IntegrationLifecycle:
         *,
         root: Path,
         instance: str,
-        port: int,
+        port: int | None,
         fixture_root: Path,
         output: Path,
         failure_case: str | None = None,
@@ -711,6 +866,11 @@ class IntegrationLifecycle:
         self.inspected_oneshots: set[str] = set()
         self.preexisting_resources: dict[str, set[str]] = {}
         self.expected_failure_observed = False
+
+    def select_port(self, port: int) -> None:
+        if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
+            raise IntegrationError("integration port must be from 1024 through 65535")
+        self.port = port
 
     def command(
         self,
@@ -746,6 +906,7 @@ class IntegrationLifecycle:
             "curl",
             "du",
             "gh",
+            "journalctl",
             "node",
             "npm",
             "podman",
@@ -758,7 +919,7 @@ class IntegrationLifecycle:
             raise IntegrationError(f"required command(s) missing: {' '.join(missing)}")
         if not INSTANCE_PATTERN.fullmatch(self.instance):
             raise IntegrationError("invalid integration instance identifier")
-        if not 1024 <= self.port <= 65535:
+        if self.port is not None and not 1024 <= self.port <= 65535:
             raise IntegrationError("integration port must be from 1024 through 65535")
         if self.fixture_root.is_symlink() or self.fixture_root.resolve() != self.fixture_root:
             raise IntegrationError("fixture root must be canonical and contain no symlink component")
@@ -768,10 +929,9 @@ class IntegrationLifecycle:
         version_line = required_first_line(
             self.captured(["gh", "version"]), "GitHub CLI"
         )
-        if not version_line.startswith(f"gh version {EXPECTED_GH_VERSION}"):
-            raise IntegrationError(f"GitHub CLI {EXPECTED_GH_VERSION} is required")
+        validate_gh_version_line(version_line)
         self.command(["gh", "attestation", "verify", "--help"], capture=True)
-        self.command(["node", "-e", "require.resolve('@playwright/test')"], capture=True)
+        self.command(playwright_admission_command(), capture=True)
         self.command(["sudo", "-n", "true"], capture=True)
 
         info = parse_json_mapping(
@@ -1138,7 +1298,11 @@ class IntegrationLifecycle:
             raise IntegrationError("staged image does not retain the reviewed digest")
 
     def render_validate_and_install_units(self) -> None:
-        self.assets.mkdir(mode=0o700)
+        if self.port is None:
+            raise IntegrationError("integration port was not selected before rendering")
+        self.assets.mkdir(mode=0o700, exist_ok=True)
+        if self.assets.is_symlink() or stat_mode(self.assets) != 0o700:
+            raise IntegrationError("integration asset directory is not private")
         for source, name, mode in (
             (self.root / "scripts" / "container-entrypoint.sh", "container-entrypoint.sh", 0o755),
             (self.root / "scripts" / "init-local-secrets.sh", "init-local-secrets.sh", 0o755),
@@ -1233,33 +1397,36 @@ class IntegrationLifecycle:
             self.command(["systemctl", "--user", "cat", f"{self.resources.prefix}-{role}.service"], capture=True)
 
     def start_target(self) -> None:
-        queued = self.command(
-            ["systemctl", "--user", "start", "--no-block", self.resources.target],
-            capture=True,
-            check=False,
-        )
-        if queued.returncode != 0:
-            raise IntegrationError("systemd-user target could not be queued")
-        for role in ("secrets-init", "migrate"):
-            details = self._wait_for_oneshot_container(role)
-            self._validate_effective_container(role, details)
-            self.inspected_oneshots.add(role)
-            self.command(
-                [
-                    "podman",
-                    "exec",
-                    f"{self.resources.prefix}-{role}",
-                    "/bin/sh",
-                    "-c",
-                    ": > /tmp/secpal-inspection-release",
-                ]
+        if not self.inspected_oneshots:
+            queued = self.command(
+                ["systemctl", "--user", "start", "--no-block", self.resources.target],
+                capture=True,
+                check=False,
             )
+            if queued.returncode != 0:
+                raise IntegrationError("systemd-user target could not be queued")
+            for role in ("secrets-init", "migrate"):
+                details = self._wait_for_oneshot_container(role)
+                self._validate_effective_container(role, details)
+                self.inspected_oneshots.add(role)
+                self.command(
+                    [
+                        "podman",
+                        "exec",
+                        f"{self.resources.prefix}-{role}",
+                        "/bin/sh",
+                        "-c",
+                        ": > /tmp/secpal-inspection-release",
+                    ]
+                )
         result = self.command(
             ["systemctl", "--user", "start", self.resources.target],
             capture=True,
             check=False,
         )
         if result.returncode != 0:
+            if self._gateway_port_collision():
+                raise PortCollisionError("gateway loopback port is already allocated")
             states = []
             for role in CONTAINER_ROLES:
                 unit = f"{self.resources.prefix}-{role}.service"
@@ -1270,6 +1437,81 @@ class IntegrationLifecycle:
                 )
                 states.append(f"{unit}: {(state.stdout or '').strip()}")
             raise IntegrationError("systemd-user target failed closed; " + "; ".join(states))
+
+    def _gateway_port_collision(self) -> bool:
+        service = f"{self.resources.prefix}-gateway.service"
+        invocation = self.command(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                service,
+                "--property=InvocationID",
+                "--value",
+            ],
+            capture=True,
+            check=False,
+        )
+        invocation_id = (invocation.stdout or "").strip()
+        if invocation.returncode != 0 or not re.fullmatch(r"[a-f0-9]{32}", invocation_id):
+            return False
+        journal = self.command(
+            [
+                "journalctl",
+                "--user",
+                "--unit",
+                service,
+                f"_SYSTEMD_INVOCATION_ID={invocation_id}",
+                "--lines",
+                "80",
+                "--no-pager",
+                "--output=cat",
+            ],
+            capture=True,
+            check=False,
+        )
+        return journal.returncode == 0 and is_port_collision_log(
+            (journal.stdout or "") + "\n" + (journal.stderr or "")
+        )
+
+    def prepare_port_retry(self) -> None:
+        if self.port is None or self.inspected_oneshots != {"secrets-init", "migrate"}:
+            raise IntegrationError("port retry was requested before one-shot completion")
+        migration_invocation = self.oneshot_invocation("migrate")
+        if self.migration_invocation is not None and self.migration_invocation != migration_invocation:
+            raise IntegrationError("migration executed more than once before port retry")
+        self.migration_invocation = migration_invocation
+        retry_roles = (
+            "api",
+            "worker-general",
+            "worker-hash-chain",
+            "scheduler",
+            "frontend",
+            "gateway",
+        )
+        services = [f"{self.resources.prefix}-{role}.service" for role in retry_roles]
+        self.command(["systemctl", "--user", "stop", *services])
+        for role in reversed(retry_roles):
+            name = f"{self.resources.prefix}-{role}"
+            details = _inspect_resource(self.runner, "container", name)
+            if details is None:
+                continue
+            if not _owned_by_instance(details, "container", self.instance, role):
+                raise IntegrationError(
+                    f"refusing to reset same-named unowned container: {name}"
+                )
+            self.command(["podman", "rm", "--force", name])
+        self.command(
+            ["systemctl", "--user", "reset-failed", self.resources.target, *services],
+        )
+        if self.output.exists():
+            try:
+                shutil.rmtree(self.output)
+            except OSError as error:
+                raise IntegrationError(
+                    "previous Quadlet attempt could not be removed"
+                ) from error
+        self.port = None
 
     def start_expected_failure(self) -> None:
         if self.failure_case not in {"migration", "dependency", "health"}:
@@ -1426,21 +1668,16 @@ class IntegrationLifecycle:
         raise IntegrationError(f"one-shot container did not become inspectable: {role}")
 
     def prove_runtime(self) -> None:
-        expected_users = {
-            "postgres": "999:999",
-            "valkey": "10002:10002",
-            "api": "10001:10001",
-            "worker-general": "10001:10001",
-            "worker-hash-chain": "10001:10001",
-            "scheduler": "10001:10001",
-            "frontend": "101:101",
-            "gateway": "10003:10003",
-        }
         for role in ("secrets-init", "migrate"):
             if role not in self.inspected_oneshots:
                 raise IntegrationError(f"one-shot effective security was not inspected: {role}")
             invocation = self.oneshot_invocation(role)
             if role == "migrate":
+                if (
+                    self.migration_invocation is not None
+                    and self.migration_invocation != invocation
+                ):
+                    raise IntegrationError("migration executed more than once")
                 self.migration_invocation = invocation
         for role in (item for item in CONTAINER_ROLES if item not in {"secrets-init", "migrate"}):
             name = f"{self.resources.prefix}-{role}"
@@ -1448,7 +1685,10 @@ class IntegrationLifecycle:
                 self.captured(["podman", "container", "inspect", name]),
                 f"container inspection for {role}",
             )
-            self._validate_effective_container(role, details, expected_users[role])
+            contract = role_spec(role)
+            self._validate_effective_container(
+                role, details, f"{contract.uid}:{contract.gid}"
+            )
         self._validate_network_membership()
         self._validate_external_behavior()
         self._validate_runtime_probes_and_restart()
@@ -1491,10 +1731,7 @@ class IntegrationLifecycle:
     def _validate_effective_container(
         self, role: str, details: Mapping, expected_user: str | None = None
     ) -> None:
-        users = {
-            "secrets-init": "0:0",
-            "migrate": "10001:10001",
-        }
+        contract = role_spec(role)
         allowed = frozenset({"CHOWN", "FOWNER"}) if role == "secrets-init" else frozenset()
         validate_container_security(
             details,
@@ -1504,7 +1741,7 @@ class IntegrationLifecycle:
             self._expected_tmpfs(role),
         )
         user = str(nested(details, "Config", "User"))
-        if user != (expected_user or users[role]):
+        if user != (expected_user or f"{contract.uid}:{contract.gid}"):
             raise IntegrationError(f"unexpected container identity for {role}")
         labels = nested(details, "Config", "Labels")
         if (
@@ -1520,22 +1757,10 @@ class IntegrationLifecycle:
             raise IntegrationError(f"network isolation mismatch for {role}")
 
     def _expected_networks(self, role: str) -> set[str]:
-        application = f"{self.resources.prefix}-application"
-        edge = f"{self.resources.prefix}-edge"
         return {
-            # Podman exposes Network=none as a synthetic "none" network in
-            # inspect output even though the container has no network stack.
-            "secrets-init": {"none"},
-            "postgres": {application},
-            "valkey": {application},
-            "migrate": {application},
-            "api": {application, edge},
-            "worker-general": {application},
-            "worker-hash-chain": {application},
-            "scheduler": {application},
-            "frontend": {edge},
-            "gateway": {edge},
-        }[role]
+            "none" if name == "none" else f"{self.resources.prefix}-{name}"
+            for name in role_spec(role).networks
+        }
 
     def _expected_mounts(self, role: str) -> dict[str, tuple[str, str, bool]]:
         prefix = self.resources.prefix
@@ -1611,29 +1836,8 @@ class IntegrationLifecycle:
             return {}
         raise IntegrationError(f"missing reviewed mount contract for role: {role}")
 
-    def _expected_tmpfs(self, role: str) -> frozenset[str]:
-        api_tmpfs = frozenset(
-            {
-                "/tmp",
-                "/config",
-                "/data",
-                "/app/storage/app/public",
-                "/app/storage/framework/cache/data",
-                "/app/storage/framework/sessions",
-                "/app/storage/framework/views",
-                "/app/storage/logs",
-                "/app/bootstrap/cache",
-            }
-        )
-        if role in {"api", "migrate", "worker-general", "worker-hash-chain", "scheduler"}:
-            return api_tmpfs
-        return {
-            "secrets-init": frozenset({"/tmp"}),
-            "postgres": frozenset({"/tmp", "/run/postgresql"}),
-            "valkey": frozenset({"/tmp", "/data"}),
-            "frontend": frozenset({"/tmp"}),
-            "gateway": frozenset({"/tmp", "/config", "/data"}),
-        }[role]
+    def _expected_tmpfs(self, role: str) -> Mapping[str, TmpfsSpec]:
+        return role_spec(role).tmpfs
 
     def oneshot_invocation(self, role: str) -> tuple[str, str]:
         properties = self.captured(
@@ -2142,8 +2346,8 @@ def main() -> int:
     if not INSTANCE_PATTERN.fullmatch(instance):
         print("ERROR: invalid integration instance identifier.", file=sys.stderr)
         return 1
-    port = allocate_port() if arguments.port is None else arguments.port
-    if not 1024 <= port <= 65535:
+    port = arguments.port
+    if port is not None and not 1024 <= port <= 65535:
         print("ERROR: integration port must be from 1024 through 65535.", file=sys.stderr)
         return 1
     created_fixture = False

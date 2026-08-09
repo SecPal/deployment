@@ -85,6 +85,29 @@ class RecordingExpectedFailureLifecycle(RecordingLifecycle):
         self._phase("failure-prove")
 
 
+class PortRetryLifecycle(RecordingLifecycle):
+    def __init__(self, module, collisions: int, port: int | None = None):
+        super().__init__(module)
+        self.port = port
+        self.collisions = collisions
+        self.port_attempts: list[int] = []
+        self.retry_cleanups = 0
+
+    def select_port(self, port: int) -> None:
+        self.port = port
+        self.port_attempts.append(port)
+
+    def start_target(self) -> None:
+        self._phase("start")
+        if self.collisions:
+            self.collisions -= 1
+            raise self.module.PortCollisionError("loopback port is already allocated")
+
+    def prepare_port_retry(self) -> None:
+        self.retry_cleanups += 1
+        self.events.append("retry-cleanup")
+
+
 class TerminatingRunner:
     def __init__(self):
         self.termination_requests = 0
@@ -243,6 +266,16 @@ class QuadletLifecycleContract(unittest.TestCase):
         return {
             "version": {"Version": "5.4.2"},
             "host": {
+                "idMappings": {
+                    "uidmap": [
+                        {"container_id": 0, "host_id": 1000, "size": 1},
+                        {"container_id": 1, "host_id": 100000, "size": 65536},
+                    ],
+                    "gidmap": [
+                        {"container_id": 0, "host_id": 1000, "size": 1},
+                        {"container_id": 1, "host_id": 100000, "size": 65536},
+                    ],
+                },
                 "serviceIsRemote": False,
                 "networkBackend": "netavark",
                 "rootlessNetworkCmd": "pasta",
@@ -303,6 +336,19 @@ class QuadletLifecycleContract(unittest.TestCase):
         with self.assertRaises(self.module.IntegrationError):
             self.module.validate_runtime_info(self.valid_info(), uid=0, environment={})
 
+    def test_runtime_admission_requires_every_configured_container_identity_mapping(self) -> None:
+        for mapping_name in ("uidmap", "gidmap"):
+            with self.subTest(mapping=mapping_name):
+                info = self.valid_info()
+                info["host"]["idMappings"][mapping_name] = [
+                    {"container_id": 0, "host_id": 1000, "size": 1}
+                ]
+                with self.assertRaisesRegex(
+                    self.module.IntegrationError,
+                    f"usable subordinate {mapping_name.removesuffix('map')} mapping",
+                ):
+                    self.module.validate_runtime_info(info, uid=1000, environment={})
+
     def test_required_command_output_parsers_fail_closed(self) -> None:
         self.assertEqual(
             self.module.required_first_line("gh version 2.97.0\n", "GitHub CLI"),
@@ -310,6 +356,29 @@ class QuadletLifecycleContract(unittest.TestCase):
         )
         with self.assertRaises(self.module.IntegrationError):
             self.module.required_first_line("", "GitHub CLI")
+
+        for line in (
+            "gh version 2.97.0",
+            "gh version 2.97.0 (2026-07-31)",
+        ):
+            with self.subTest(accepted=line):
+                self.module.validate_gh_version_line(line)
+        for line in (
+            "gh version 2.97.01",
+            "gh version 2.97.0-rc.1",
+            "gh version 2.97.0foo",
+            "gh version 2.97",
+        ):
+            with self.subTest(rejected=line), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.validate_gh_version_line(line)
+
+        playwright_probe = self.module.playwright_admission_command()
+        self.assertEqual(playwright_probe[:2], ("node", "-e"))
+        self.assertIn("chromium.executablePath()", playwright_probe[2])
+        self.assertIn("fs.accessSync", playwright_probe[2])
+        self.assertIn("fs.constants.X_OK", playwright_probe[2])
 
         self.assertEqual(
             self.module.parse_json_mapping('{"version":{"Version":"5.4.2"}}', "Podman info"),
@@ -467,7 +536,9 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "CapDrop": ["CAP_ALL"],
                 "SecurityOpt": ["no-new-privileges"],
                 "Binds": [],
-                "Tmpfs": {"/tmp": "rw,noexec,nosuid,nodev,size=16m"},
+                "Tmpfs": {
+                    "/tmp": "size=16m,mode=0700,U,nosuid,nodev,noexec,rw,rprivate,tmpcopyup"
+                },
             },
             "Mounts": [
                 {
@@ -491,7 +562,9 @@ class QuadletLifecycleContract(unittest.TestCase):
                     True,
                 )
             },
-            expected_tmpfs={"/tmp"},
+            expected_tmpfs={
+                "/tmp": self.module.TmpfsSpec(size=16 * 1024 * 1024, mode=0o700)
+            },
         )
         for label, path, value in (
             ("privileged", ("HostConfig", "Privileged"), True),
@@ -519,7 +592,11 @@ class QuadletLifecycleContract(unittest.TestCase):
                                 True,
                             )
                         },
-                        expected_tmpfs={"/tmp"},
+                        expected_tmpfs={
+                            "/tmp": self.module.TmpfsSpec(
+                                size=16 * 1024 * 1024, mode=0o700
+                            )
+                        },
                     )
 
         for label, mutation in (
@@ -563,7 +640,11 @@ class QuadletLifecycleContract(unittest.TestCase):
                                 True,
                             )
                         },
-                        expected_tmpfs={"/tmp"},
+                        expected_tmpfs={
+                            "/tmp": self.module.TmpfsSpec(
+                                size=16 * 1024 * 1024, mode=0o700
+                            )
+                        },
                     )
 
         candidate = json.loads(json.dumps(valid))
@@ -582,8 +663,42 @@ class QuadletLifecycleContract(unittest.TestCase):
                         True,
                     )
                 },
-                expected_tmpfs={"/tmp"},
+                expected_tmpfs={
+                    "/tmp": self.module.TmpfsSpec(
+                        size=16 * 1024 * 1024, mode=0o700
+                    )
+                },
             )
+
+        for label, options in (
+            ("size", "rw,noexec,nosuid,nodev,size=8m,mode=0700,U,rprivate,tmpcopyup"),
+            ("mode", "rw,noexec,nosuid,nodev,size=16m,mode=0755,U,rprivate,tmpcopyup"),
+            ("nosuid", "rw,noexec,nodev,size=16m,mode=0700,U,rprivate,tmpcopyup"),
+            ("nodev", "rw,noexec,nosuid,size=16m,mode=0700,U,rprivate,tmpcopyup"),
+            ("noexec", "rw,nosuid,nodev,size=16m,mode=0700,U,rprivate,tmpcopyup"),
+        ):
+            with self.subTest(tmpfs_option=label):
+                candidate = json.loads(json.dumps(valid))
+                candidate["HostConfig"]["Tmpfs"]["/tmp"] = options
+                with self.assertRaisesRegex(
+                    self.module.IntegrationError, "tmpfs options"
+                ):
+                    self.module.validate_container_security(
+                        candidate,
+                        apparmor_available=True,
+                        expected_mounts={
+                            "/app/storage/app/private": (
+                                "volume",
+                                "secpal-int-contract01-private-storage",
+                                True,
+                            )
+                        },
+                        expected_tmpfs={
+                            "/tmp": self.module.TmpfsSpec(
+                                size=16 * 1024 * 1024, mode=0o700
+                            )
+                        },
+                    )
 
     def test_user_writable_runtime_configuration_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -668,6 +783,128 @@ class QuadletLifecycleContract(unittest.TestCase):
                 self.assertEqual(failing.cleanup_calls, 1)
                 self.assertEqual(failing.events[-1], "cleanup")
                 self.assertNotIn("observe", failing.events if phase != "observe" else [])
+
+    def test_automatic_port_collisions_retry_only_the_fixture_attempt(self) -> None:
+        lifecycle = PortRetryLifecycle(self.module, collisions=2)
+        allocated = iter((18445, 18446, 18447))
+
+        self.module.execute_lifecycle(lifecycle, port_allocator=lambda: next(allocated))
+
+        self.assertEqual(lifecycle.port_attempts, [18445, 18446, 18447])
+        self.assertEqual(lifecycle.retry_cleanups, 2)
+        self.assertEqual(lifecycle.events.count("admission"), 1)
+        self.assertEqual(lifecycle.events.count("verify-stage"), 1)
+        self.assertEqual(lifecycle.events.count("quadlets"), 3)
+        self.assertEqual(lifecycle.events.count("start"), 3)
+        self.assertEqual(lifecycle.cleanup_calls, 1)
+
+    def test_only_verified_gateway_bind_errors_are_retryable(self) -> None:
+        for message in (
+            "Error: rootlessport listen tcp 127.0.0.1:18443: bind: address already in use",
+            "failed to bind host port 127.0.0.1:18443",
+            "port is already allocated",
+            "Bind for 127.0.0.1:18443 failed",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(self.module.is_port_collision_log(message))
+        for message in (
+            "migration failed",
+            "permission denied while opening port configuration",
+            "gateway health check failed",
+            "",
+        ):
+            with self.subTest(message=message):
+                self.assertFalse(self.module.is_port_collision_log(message))
+
+    def test_gateway_collision_evidence_is_bound_to_the_current_systemd_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+            invocation = "b" * 32
+            with mock.patch.object(
+                lifecycle,
+                "command",
+                side_effect=(
+                    subprocess.CompletedProcess((), 0, invocation + "\n", ""),
+                    subprocess.CompletedProcess(
+                        (), 0, "bind: address already in use\n", ""
+                    ),
+                ),
+            ) as command:
+                self.assertTrue(lifecycle._gateway_port_collision())
+
+            journal_command = command.call_args_list[1].args[0]
+            self.assertIn(f"_SYSTEMD_INVOCATION_ID={invocation}", journal_command)
+
+            with mock.patch.object(
+                lifecycle,
+                "command",
+                return_value=subprocess.CompletedProcess((), 0, "not-an-id\n", ""),
+            ) as command:
+                self.assertFalse(lifecycle._gateway_port_collision())
+                command.assert_called_once()
+
+    def test_port_retry_preserves_data_roles_and_completed_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            output = fixture / "quadlets"
+            output.mkdir()
+            (output / "attempt.unit").write_text("attempt\n", encoding="utf-8")
+            runner = FakeRunner()
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=output,
+                runner=runner,
+            )
+            lifecycle.inspected_oneshots = {"secrets-init", "migrate"}
+            invocation = ("a" * 32, "1234")
+            with mock.patch.object(
+                lifecycle, "oneshot_invocation", return_value=invocation
+            ):
+                lifecycle.prepare_port_retry()
+
+            removed = {
+                command[-1]
+                for command in runner.commands
+                if command[:3] == ("podman", "rm", "--force")
+            }
+            self.assertEqual(
+                removed,
+                {
+                    "secpal-int-contract01-api",
+                    "secpal-int-contract01-worker-general",
+                    "secpal-int-contract01-worker-hash-chain",
+                    "secpal-int-contract01-scheduler",
+                    "secpal-int-contract01-frontend",
+                    "secpal-int-contract01-gateway",
+                },
+            )
+            self.assertNotIn("secpal-int-contract01-migrate", removed)
+            self.assertNotIn("secpal-int-contract01-postgres", removed)
+            self.assertNotIn("secpal-int-contract01-valkey", removed)
+            self.assertEqual(lifecycle.migration_invocation, invocation)
+            self.assertIsNone(lifecycle.port)
+            self.assertFalse(output.exists())
+
+    def test_explicit_port_collision_never_retries(self) -> None:
+        lifecycle = PortRetryLifecycle(self.module, collisions=1, port=18443)
+
+        with self.assertRaises(self.module.PortCollisionError):
+            self.module.execute_lifecycle(lifecycle, port_allocator=lambda: 18444)
+
+        self.assertEqual(lifecycle.port_attempts, [])
+        self.assertEqual(lifecycle.retry_cleanups, 0)
+        self.assertEqual(lifecycle.cleanup_calls, 1)
 
     def test_image_verification_failure_cannot_reach_quadlet_or_product_execution(self) -> None:
         failing = RecordingLifecycle(self.module, fail_at="verify-stage")

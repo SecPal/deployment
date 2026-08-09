@@ -98,6 +98,13 @@ starts migration or its dependents, and a gateway health failure cannot leave
 the integration target active. The profiles are evidence fixtures only; they
 cannot accept arbitrary commands or Quadlet text.
 
+An automatically selected loopback port is chosen only after image verification
+and staging. A current-invocation gateway bind collision triggers at most two
+new selections. The retry preserves PostgreSQL, Valkey, both completed
+one-shots, and the migration invocation; it replaces only the long-running
+application roles whose origin configuration contains the port. An explicitly
+provided port is never silently replaced.
+
 Success, any failed phase, and handled `SIGHUP`, `SIGINT`, or `SIGTERM` all run
 the same exact cleanup. Cleanup stops the run target and its generated
 run-scoped services, removes only its ten named containers, two named networks,

@@ -15,11 +15,16 @@ import stat
 import sys
 import tempfile
 
+sys.dont_write_bytecode = True
 
-API_IMAGE = "ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
-FRONTEND_IMAGE = "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
-POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
-VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
+from integration_runtime_contract import (
+    API_IMAGE,
+    FRONTEND_IMAGE,
+    POSTGRES_IMAGE,
+    VALKEY_IMAGE,
+    role_spec,
+    tmpfs_mounts,
+)
 
 INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
@@ -51,13 +56,14 @@ def unit_description(
     return section("Unit", lines)
 
 
-def common_container(instance: str, role: str, image: str, uid: int, gid: int) -> list[str]:
+def common_container(instance: str, role: str, image: str) -> list[str]:
+    contract = role_spec(role)
     return [
         f"ContainerName=secpal-int-{instance}-{role}",
         f"Image={image}",
         "Pull=never",
-        f"User={uid}",
-        f"Group={gid}",
+        f"User={contract.uid}",
+        f"Group={contract.gid}",
         "ReadOnly=true",
         "ReadOnlyTmpfs=false",
         "DropCapability=all",
@@ -79,12 +85,12 @@ def service(restart: str = "on-failure") -> str:
     return section("Service", lines)
 
 
-def tmpfs(destination: str, size: str, mode: str, *, noexec: bool = True) -> str:
-    options = (
-        f"Mount=type=tmpfs,destination={destination},tmpfs-size={size},"
-        f"tmpfs-mode={mode},U=true,nosuid=true,nodev=true"
-    )
-    return options + (",noexec=true" if noexec else "")
+def network_lines(instance: str, role: str) -> list[str]:
+    prefix = f"secpal-int-{instance}"
+    return [
+        "Network=none" if name == "none" else f"Network={prefix}-{name}.network"
+        for name in role_spec(role).networks
+    ]
 
 
 def api_environment(port: int) -> list[str]:
@@ -131,7 +137,6 @@ def api_container(
     fixture_root: Path,
     role: str,
     command: str,
-    networks: list[str],
     *,
     oneshot: bool = False,
     health: bool = False,
@@ -141,7 +146,7 @@ def api_container(
         f"{prefix}-postgres.service",
         f"{prefix}-valkey.service",
     ]
-    lines = common_container(instance, role, API_IMAGE, 10001, 10001)
+    lines = common_container(instance, role, API_IMAGE)
     lines.extend(api_environment(port))
     entrypoint = (
         '["/bin/sh","/run/secpal/quadlet-oneshot-entrypoint.sh"]'
@@ -159,23 +164,14 @@ def api_container(
             f"Mount=type=bind,source={fixture_root}/assets/phase-b-runtime-probe.php,target=/run/secpal/phase-b-runtime-probe.php,ro=true",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
             f"Volume={prefix}-private-storage.volume:/app/storage/app/private",
-            tmpfs("/tmp", "32m", "0700"),
-            tmpfs("/config", "16m", "0700"),
-            tmpfs("/data", "16m", "0700"),
-            tmpfs("/app/storage/app/public", "32m", "0750", noexec=False),
-            tmpfs("/app/storage/framework/cache/data", "32m", "0750"),
-            tmpfs("/app/storage/framework/sessions", "32m", "0750"),
-            tmpfs("/app/storage/framework/views", "32m", "0750"),
-            tmpfs("/app/storage/logs", "32m", "0750"),
-            tmpfs("/app/bootstrap/cache", "16m", "0750"),
+            *tmpfs_mounts(role),
         )
     )
     if oneshot:
         lines.append(
             f"Mount=type=bind,source={fixture_root}/assets/quadlet-oneshot-entrypoint.sh,target=/run/secpal/quadlet-oneshot-entrypoint.sh,ro=true"
         )
-    for network in networks:
-        lines.append(f"Network={prefix}-{network}.network")
+    lines.extend(network_lines(instance, role))
     lines.append(f"NetworkAlias={role}")
     if health:
         lines.extend(
@@ -257,8 +253,6 @@ def build_units(
     instance: str, port: int, fixture_root: Path, failure_case: str | None = None
 ) -> dict[str, str]:
     prefix = f"secpal-int-{instance}"
-    app_network = f"{prefix}-application.network"
-    edge_network = f"{prefix}-edge.network"
     labels = [
         "Label=org.secpal.integration=true",
         f"Label=org.secpal.integration.instance={instance}",
@@ -266,13 +260,13 @@ def build_units(
     units: dict[str, str] = {}
 
     for name, internal in (("application", True), ("edge", True)):
-        network_lines = [f"NetworkName={prefix}-{name}", *labels]
+        network_section = [f"NetworkName={prefix}-{name}", *labels]
         if internal:
-            network_lines.append("Internal=true")
+            network_section.append("Internal=true")
         units[f"{prefix}-{name}.network"] = unit_description(
             f"SecPal integration {name} network ({instance})",
             part_of=f"{prefix}.target",
-        ) + section("Network", network_lines)
+        ) + section("Network", network_section)
 
     for name in ("secrets", "private-storage", "postgres"):
         units[f"{prefix}-{name}.volume"] = unit_description(
@@ -281,7 +275,7 @@ def build_units(
         ) + section("Volume", [f"VolumeName={prefix}-{name}", *labels])
 
     secret_dependencies: list[str] = []
-    secret_lines = common_container(instance, "secrets-init", API_IMAGE, 0, 0)
+    secret_lines = common_container(instance, "secrets-init", API_IMAGE)
     secret_lines.extend(
         (
             "AddCapability=CHOWN FOWNER",
@@ -299,8 +293,8 @@ def build_units(
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets",
             f"Volume={prefix}-postgres.volume:/var/lib/postgresql/data",
             f"Volume={prefix}-private-storage.volume:/mnt/secpal-private-storage",
-            tmpfs("/tmp", "16m", "0700"),
-            "Network=none",
+            *tmpfs_mounts("secrets-init"),
+            *network_lines(instance, "secrets-init"),
         )
     )
     units[f"{prefix}-secrets-init.container"] = (
@@ -313,7 +307,7 @@ def build_units(
         + section("Service", ["Type=oneshot", "RemainAfterExit=yes", "Restart=no", "TimeoutStartSec=60"])
     )
 
-    postgres_lines = common_container(instance, "postgres", POSTGRES_IMAGE, 999, 999)
+    postgres_lines = common_container(instance, "postgres", POSTGRES_IMAGE)
     postgres_lines.extend(
         (
             "Environment=POSTGRES_DB=secpal_local",
@@ -321,9 +315,8 @@ def build_units(
             "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secrets/postgres-password",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
             f"Volume={prefix}-postgres.volume:/var/lib/postgresql/data",
-            tmpfs("/tmp", "32m", "0700"),
-            tmpfs("/run/postgresql", "16m", "0750"),
-            f"Network={app_network}",
+            *tmpfs_mounts("postgres"),
+            *network_lines(instance, "postgres"),
             "NetworkAlias=postgres",
             "HealthCmd=pg_isready -U secpal_local -d secpal_local",
             "HealthInterval=5s",
@@ -345,15 +338,14 @@ def build_units(
         + service()
     )
 
-    valkey_lines = common_container(instance, "valkey", VALKEY_IMAGE, 10002, 10002)
+    valkey_lines = common_container(instance, "valkey", VALKEY_IMAGE)
     valkey_lines.extend(
         (
             'Entrypoint=["/bin/sh","/run/secpal/valkey-entrypoint.sh"]',
             f"Mount=type=bind,source={fixture_root}/assets/valkey-entrypoint.sh,target=/run/secpal/valkey-entrypoint.sh,ro=true",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
-            tmpfs("/tmp", "16m", "0700"),
-            tmpfs("/data", "32m", "0700"),
-            f"Network={app_network}",
+            *tmpfs_mounts("valkey"),
+            *network_lines(instance, "valkey"),
             "NetworkAlias=valkey",
             "HealthCmd=VALKEYCLI_AUTH=$(cat /run/secpal-secrets/valkey-password) valkey-cli ping | grep -qx PONG",
             "HealthInterval=5s",
@@ -381,7 +373,6 @@ def build_units(
         fixture_root,
         "migrate",
         "php artisan migrate --force",
-        ["application"],
         oneshot=True,
     )
     units[f"{prefix}-api.container"] = api_container(
@@ -390,7 +381,6 @@ def build_units(
         fixture_root,
         "api",
         "frankenphp run --config /etc/frankenphp/Caddyfile",
-        ["application", "edge"],
         health=True,
     )
     units[f"{prefix}-worker-general.container"] = api_container(
@@ -399,7 +389,6 @@ def build_units(
         fixture_root,
         "worker-general",
         "php artisan queue:work --queue=merkle,opentimestamp,default --sleep=1 --tries=3 --timeout=90",
-        ["application"],
     )
     units[f"{prefix}-worker-hash-chain.container"] = api_container(
         instance,
@@ -407,7 +396,6 @@ def build_units(
         fixture_root,
         "worker-hash-chain",
         "php artisan queue:work --queue=activity-hash-chain --sleep=1 --tries=3 --timeout=90",
-        ["application"],
     )
     units[f"{prefix}-scheduler.container"] = api_container(
         instance,
@@ -415,15 +403,14 @@ def build_units(
         fixture_root,
         "scheduler",
         "php artisan schedule:work",
-        ["application"],
     )
 
-    frontend_lines = common_container(instance, "frontend", FRONTEND_IMAGE, 101, 101)
+    frontend_lines = common_container(instance, "frontend", FRONTEND_IMAGE)
     frontend_lines.extend(
         (
             f"Environment=SECPAL_API_URL=https://api.secpal.example.invalid:{port}",
-            tmpfs("/tmp", "32m", "0700"),
-            f"Network={edge_network}",
+            *tmpfs_mounts("frontend"),
+            *network_lines(instance, "frontend"),
             "NetworkAlias=frontend",
             "HealthCmd=curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/health/live",
             "HealthInterval=10s",
@@ -445,17 +432,15 @@ def build_units(
     )
 
     gateway_image = f"localhost/secpal-integration-gateway-{instance}:2.10.2"
-    gateway_lines = common_container(instance, "gateway", gateway_image, 10003, 10003)
+    gateway_lines = common_container(instance, "gateway", gateway_image)
     gateway_lines.extend(
         (
             "Environment=HOME=/config",
             "Environment=XDG_CONFIG_HOME=/config",
             "Environment=XDG_DATA_HOME=/data",
             f"Mount=type=bind,source={fixture_root}/assets/Caddyfile,target=/etc/caddy/Caddyfile,ro=true",
-            tmpfs("/tmp", "16m", "0700"),
-            tmpfs("/config", "16m", "0700"),
-            tmpfs("/data", "32m", "0700"),
-            f"Network={edge_network}",
+            *tmpfs_mounts("gateway"),
+            *network_lines(instance, "gateway"),
             "NetworkAlias=gateway",
             f"PublishPort=127.0.0.1:{port}:8443",
             "AddHost=app.secpal.example.invalid:127.0.0.1",
