@@ -182,7 +182,10 @@ filesystem cannot safely represent fail admission.
 Known API private and public storage requires container identity
 `10001:10001`; the inventory deliberately records null host UID/GID for those
 bind paths. Rootless namespace mapping means the container identity is not the
-same host identity. D.2 owns safe host-side ownership materialization. Runtime
+same host identity. A null owner delegates selection; it does not permit the
+path to alias the service-account UID while claiming that the account cannot
+write. Host facts must keep effective access consistent with UID/GID and mode.
+D.2 owns safe host-side ownership materialization. Runtime
 secret, PostgreSQL, edge, ACME, and CrowdSec identities remain explicitly
 delegated rather than guessed. Podman graphroot is service-account-owned and
 reconstructable; authoritative business data must remain outside it.
@@ -259,7 +262,8 @@ Validation consists of:
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state
 paths, invalid UID/GID or modes, secret material, image overrides, canonical or
-non-canonical loopback values, collapsed origins, premature or contradictory
+non-canonical loopback values, IANA special-purpose public addresses,
+special-use public DNS names, collapsed origins, premature or contradictory
 features, recursive aliases, excessive input depth, and mismatched facts all
 fail closed.
 

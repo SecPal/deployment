@@ -76,6 +76,16 @@ class ProductionContractRegressionTests(unittest.TestCase):
         if expected_message is not None:
             self.assertIn(expected_message, str(context.exception))
 
+    def assert_closed_keyset(
+        self,
+        expected: set[str],
+        document: dict[str, object],
+        schema: dict[str, object],
+    ) -> None:
+        self.assertEqual(expected, set(document))
+        self.assertEqual(expected, set(schema["required"]))
+        self.assertEqual(expected, set(schema["properties"]))
+
     def validate_synthetic_inventory(self, inventory: dict[str, object]) -> None:
         self.validator.validate_inventory(inventory, synthetic=True)
 
@@ -201,6 +211,22 @@ class ProductionContractRegressionTests(unittest.TestCase):
             lambda: self.validate_synthetic_inventory(inventory)
         )
 
+    def test_non_public_special_purpose_ipv6_addresses_are_rejected(self) -> None:
+        host = copy.deepcopy(nested_mapping(self.inventory, "host"))
+        for address in (
+            "2001:20::1",  # ORCHIDv2
+            "2001:30::1",  # Drone Remote ID Protocol Entity Tags
+            "2002::1",  # deprecated 6to4
+            "2620:4f:8000::1",  # AS112 direct delegation
+            "5f00::1",  # Segment Routing SIDs
+        ):
+            with self.subTest(address=address):
+                host["public_address"] = address
+                self.assert_contract_violation(
+                    lambda: self.validator.validate_addresses(host, synthetic=False),
+                    "not an eligible global-unicast host address",
+                )
+
     def test_ipv4_mapped_ipv6_public_addresses_are_rejected(self) -> None:
         inventory = copy.deepcopy(self.inventory)
         host = nested_mapping(inventory, "host")
@@ -214,6 +240,13 @@ class ProductionContractRegressionTests(unittest.TestCase):
             lambda: self.validator.validate_inventory(self.inventory)
         )
         self.validator.validate_inventory(self.inventory, synthetic=True)
+        host = copy.deepcopy(nested_mapping(self.inventory, "host"))
+        host["public_address"] = "3fff::10"
+        self.assert_contract_violation(
+            lambda: self.validator.validate_addresses(host, synthetic=False),
+            "explicit synthetic mode",
+        )
+        self.validator.validate_addresses(host, synthetic=True)
 
     def test_documentation_origins_require_synthetic_mode(self) -> None:
         origin = "https://app.example.invalid"
@@ -226,6 +259,27 @@ class ProductionContractRegressionTests(unittest.TestCase):
         self.validator.validate_origin(
             origin, "inventory.origins.frontend", synthetic=True
         )
+
+    def test_non_documentation_special_use_origins_are_rejected(self) -> None:
+        for hostname in (
+            "app.internal.alt",
+            "app.home.arpa",
+            "app.local",
+            "service.onion",
+        ):
+            with self.subTest(hostname=hostname):
+                for synthetic in (False, True):
+                    with self.subTest(synthetic=synthetic):
+                        self.assert_contract_violation(
+                            lambda hostname=hostname, synthetic=synthetic: (
+                                self.validator.validate_origin(
+                                    f"https://{hostname}",
+                                    "inventory.origins.frontend",
+                                    synthetic=synthetic,
+                                )
+                            ),
+                            "special-use DNS name",
+                        )
 
     def test_scoped_ipv6_addresses_are_rejected(self) -> None:
         for address in ("2001:db8::1%eth0", "fd00::1%2"):
@@ -1064,7 +1118,6 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 )
 
     def test_every_managed_path_enforces_service_account_write_policy(self) -> None:
-        writable_owner_roles = {"service-account", "rootless-container-storage"}
         filesystems = nested_mapping(self.host_facts, "filesystems")
         paths = nested_mapping(self.inventory, "paths")
         for path_name, filesystem in filesystems.items():
@@ -1074,7 +1127,9 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 path_contract = paths[path_name]
                 if not isinstance(path_contract, dict):
                     raise AssertionError("path contract must be a mapping")
-                expected_write = path_contract["owner_role"] in writable_owner_roles
+                expected_write = self.validator.OWNER_ROLE_SERVICE_ACCOUNT_WRITE[
+                    path_contract["owner_role"]
+                ]
                 self.assertIs(filesystem["service_account_can_write"], expected_write)
                 facts = copy.deepcopy(self.host_facts)
                 nested_mapping(facts, "filesystems", path_name)[
@@ -1086,6 +1141,87 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     ),
                     "effective path access",
                 )
+
+    def test_delegated_paths_cannot_claim_service_account_ownership(self) -> None:
+        paths = nested_mapping(self.inventory, "paths")
+        filesystems = nested_mapping(self.host_facts, "filesystems")
+        service_uid = nested_mapping(self.inventory, "service_account")["uid"]
+        for path_name in filesystems:
+            path_contract = paths[path_name]
+            if not isinstance(path_contract, dict):
+                raise AssertionError("path contract must be a mapping")
+            if path_contract["uid"] is not None:
+                continue
+            with self.subTest(path_name=path_name):
+                facts = copy.deepcopy(self.host_facts)
+                filesystem = nested_mapping(facts, "filesystems", path_name)
+                filesystem["uid"] = service_uid
+                filesystem["service_account_can_write"] = False
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    ),
+                    "contradicts ownership",
+                )
+
+    def test_policy_keysets_are_closed_across_schema_fixtures_and_validator(self) -> None:
+        inventory_schema = self.validator.read_schema(
+            self.validator.INVENTORY_SCHEMA_PATH, "inventory"
+        )
+        host_schema = self.validator.read_schema(
+            self.validator.HOST_FACTS_SCHEMA_PATH, "host-facts"
+        )
+
+        canonical_paths = set(self.validator.CANONICAL_PATHS)
+        inventory_paths = nested_mapping(self.inventory, "paths")
+        inventory_path_schema = nested_mapping(
+            inventory_schema, "properties", "paths"
+        )
+        self.assert_closed_keyset(
+            canonical_paths, inventory_paths, inventory_path_schema
+        )
+        canonical_owner_roles = {
+            contract["owner_role"]
+            for contract in self.validator.CANONICAL_PATHS.values()
+        }
+        self.assertEqual(
+            canonical_owner_roles,
+            set(self.validator.OWNER_ROLE_SERVICE_ACCOUNT_WRITE),
+        )
+
+        resolved_path_keys = canonical_paths | {
+            "service_account_home",
+            "systemd_runtime_directory",
+            "podman_runroot",
+        }
+        fact_resolved_paths = nested_mapping(self.host_facts, "resolved_paths")
+        resolved_path_schema = nested_mapping(
+            host_schema, "properties", "resolved_paths"
+        )
+        self.assert_closed_keyset(
+            resolved_path_keys, fact_resolved_paths, resolved_path_schema
+        )
+
+        filesystem_paths = set(self.validator.FILESYSTEM_PATH_KEYS)
+        fact_filesystems = nested_mapping(self.host_facts, "filesystems")
+        filesystem_schema = nested_mapping(host_schema, "properties", "filesystems")
+        self.assert_closed_keyset(
+            filesystem_paths, fact_filesystems, filesystem_schema
+        )
+
+        headroom_paths = set(self.validator.HEADROOM_MINIMUMS)
+        inventory_storage = nested_mapping(self.inventory, "resources", "storage")
+        fact_storage = nested_mapping(self.host_facts, "resources", "storage")
+        inventory_storage_schema = nested_mapping(
+            inventory_schema, "properties", "resources", "properties", "storage"
+        )
+        fact_storage_schema = nested_mapping(
+            host_schema, "properties", "resources", "properties", "storage"
+        )
+        self.assert_closed_keyset(
+            headroom_paths, inventory_storage, inventory_storage_schema
+        )
+        self.assert_closed_keyset(headroom_paths, fact_storage, fact_storage_schema)
 
     def test_release_candidate_kernel_is_rejected_at_stable_floor(self) -> None:
         facts = copy.deepcopy(self.host_facts)

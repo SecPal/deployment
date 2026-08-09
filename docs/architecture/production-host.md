@@ -359,12 +359,15 @@ represented path reports its effective
 numeric UID, GID, and directory mode. D.1 compares fixed owners for
 configuration, deployment state, logs, backup staging, and Podman graphroot;
 owners delegated to later state or edge contracts are observed but not selected
-here. Every baseline mode is fixed and enforced, including for delegated-owner
-paths. Effective access facts additionally prove that the service account can
-write only its fixed service-owned paths and cannot replace any represented
-path through a writable ancestor. The collector must evaluate ACLs and all
-other effective permission sources rather than infer access from mode bits
-alone. Every represented mount must explicitly
+here. A delegated path cannot report the service-account UID because every
+delegated baseline mode grants its owner write access; such a fact would
+contradict the required effective-access denial. Every baseline mode is fixed
+and enforced, including for delegated-owner paths. Effective access facts must
+be consistent with numeric ownership and mode and additionally prove that the
+service account can write only its fixed service-owned paths and cannot replace
+any represented path through a writable ancestor. The collector must evaluate
+ACLs and all other effective permission sources in addition to the mandatory
+UID/GID/mode consistency check. Every represented mount must explicitly
 report `mount_read_only: false`; omission and a read-only mount both fail
 closed. A future collector must derive this from the effective mount covering
 the path and obtain ownership/mode with a non-following stat after canonical
@@ -372,13 +375,20 @@ path validation rather than infer either from the filesystem type.
 
 ## Network and clock assumptions
 
-Inventory records one globally routable public address fact and at least one
+Inventory records one public-unicast-eligible address fact and at least one
 non-loopback private address fact. Reserved documentation networks are accepted
 only when the validator is invoked with the explicit `--synthetic` fixture
-flag; reserved documentation DNS origins are gated by the same flag. The normal
-production-validation path rejects both. Carrier-grade NAT and
-other non-global address ranges fail admission. IANA-reserved IPv6 space also
-fails even when the local language runtime classifies it as global. Private
+flag; reserved documentation DNS origins are gated by the same flag. Other
+IANA special-use origin suffixes, including `.alt`, `.arpa`, `.local`, and
+`.onion`, are never production origins and remain rejected in synthetic mode.
+The normal production-validation path rejects all reserved inputs. IPv6
+schema version 1 admits only `2000::/3` Global Unicast addresses outside the
+reviewed IANA special-purpose prefixes; this explicit policy also rejects
+ORCHID, protocol-assignment, AS112, deprecated 6to4, documentation, and
+segment-routing identifiers even where the local language runtime reports
+them as global. This classification is an admission prerequisite, not proof of
+DNS publication, BGP routing, or reachability; D.4 owns that later evidence.
+Carrier-grade NAT and other non-global address ranges fail admission. Private
 addresses are exactly RFC 1918 IPv4 or IPv6 ULA;
 documentation and benchmarking ranges are not private-use substitutes.
 IPv4-mapped IPv6 values are representations of IPv4 rather than accepted IPv6
@@ -596,5 +606,7 @@ remain with #10 through #18 according to the parent epic.
 - [Podman API service security](https://docs.podman.io/en/v5.4.2/markdown/podman-system-service.1.html)
 - [Containers registry configuration](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md)
 - [systemd lingering user managers](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html#enable-linger%20USER%E2%80%A6)
+- [IANA IPv6 Special-Purpose Address Registry](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml)
+- [IANA Special-Use Domain Names Registry](https://www.iana.org/assignments/special-use-domain-names/special-use-domain-names.xhtml)
 - [`docs/api-image-consumption.md`](../api-image-consumption.md)
 - [`docs/frontend-image-consumption.md`](../frontend-image-consumption.md)

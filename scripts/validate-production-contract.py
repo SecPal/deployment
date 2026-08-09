@@ -55,9 +55,15 @@ DEFAULT_MANAGED_PATH_ROOT = PurePosixPath("/srv/secpal")
 QUADLET_DEFINITION_ROOT = PurePosixPath("/etc/containers/systemd/users")
 MAX_SYSTEM_ID = 4294967294
 SUBORDINATE_ID_COUNT = 65536
-SERVICE_ACCOUNT_WRITABLE_OWNER_ROLES = frozenset(
-    {"service-account", "rootless-container-storage"}
-)
+OWNER_ROLE_SERVICE_ACCOUNT_WRITE = {
+    "operator-root": False,
+    "state-contract": False,
+    "edge-contract": False,
+    "tls-contract": False,
+    "crowdsec-contract": False,
+    "service-account": True,
+    "rootless-container-storage": True,
+}
 
 SECRET_FIELD_NAMES = {
     "password",
@@ -108,12 +114,19 @@ DOCUMENTATION_NETWORKS = (
     ipaddress.ip_network("198.51.100.0/24"),
     ipaddress.ip_network("203.0.113.0/24"),
     ipaddress.ip_network("2001:db8::/32"),
+    ipaddress.ip_network("3fff::/20"),
 )
 PRIVATE_USE_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("fc00::/7"),
+)
+IPV6_GLOBAL_UNICAST_NETWORK = ipaddress.ip_network("2000::/3")
+IPV6_SPECIAL_PURPOSE_NETWORKS = (
+    ipaddress.ip_network("2001::/23"),
+    ipaddress.ip_network("2002::/16"),
+    ipaddress.ip_network("2620:4f:8000::/48"),
 )
 DOCUMENTATION_DNS_SUFFIXES = (
     "invalid",
@@ -122,6 +135,13 @@ DOCUMENTATION_DNS_SUFFIXES = (
     "example.com",
     "example.net",
     "example.org",
+)
+NON_DOCUMENTATION_SPECIAL_USE_DNS_SUFFIXES = (
+    "alt",
+    "arpa",
+    "local",
+    "localhost",
+    "onion",
 )
 
 
@@ -465,6 +485,12 @@ def is_documentation_address(address: ipaddress.IPv4Address | ipaddress.IPv6Addr
     return any(address in network for network in DOCUMENTATION_NETWORKS)
 
 
+def is_non_public_special_purpose_ipv6(address: ipaddress.IPv6Address) -> bool:
+    return address not in IPV6_GLOBAL_UNICAST_NETWORK or any(
+        address in network for network in IPV6_SPECIAL_PURPOSE_NETWORKS
+    )
+
+
 def parse_address(raw: Any, location: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     if not isinstance(raw, str):
         raise ContractViolation(f"IP address must be a string at {location}")
@@ -510,8 +536,14 @@ def validate_addresses(host: dict[str, Any], *, synthetic: bool) -> None:
         or deprecated_site_local
         or public.is_reserved
         or not public.is_global
+        or (
+            isinstance(public, ipaddress.IPv6Address)
+            and is_non_public_special_purpose_ipv6(public)
+        )
     ):
-        raise ContractViolation("public address is not globally routable")
+        raise ContractViolation(
+            "public address is not an eligible global-unicast host address"
+        )
 
     private_addresses = parse_unique_addresses(
         host["private_addresses"], "inventory.host.private_addresses"
@@ -550,12 +582,16 @@ def validate_hostname(hostname: Any, location: str) -> str:
     return normalized
 
 
-def is_documentation_hostname(hostname: str) -> bool:
+def hostname_has_suffix(hostname: str, suffixes: Sequence[str]) -> bool:
     normalized = hostname.lower()
     return any(
         normalized == suffix or normalized.endswith(f".{suffix}")
-        for suffix in DOCUMENTATION_DNS_SUFFIXES
+        for suffix in suffixes
     )
+
+
+def is_documentation_hostname(hostname: str) -> bool:
+    return hostname_has_suffix(hostname, DOCUMENTATION_DNS_SUFFIXES)
 
 
 def validate_origin(origin: Any, location: str, *, synthetic: bool = False) -> str:
@@ -606,6 +642,10 @@ def validate_origin(origin: Any, location: str, *, synthetic: bool = False) -> s
         raise ContractViolation(
             f"reserved DNS name requires explicit synthetic mode at {location}"
         )
+    if hostname_has_suffix(
+        normalized_hostname, NON_DOCUMENTATION_SPECIAL_USE_DNS_SUFFIXES
+    ):
+        raise ContractViolation(f"special-use DNS name is forbidden at {location}")
     return normalized_hostname
 
 
@@ -937,6 +977,17 @@ def validate_tool_facts(tools: list[str]) -> None:
         raise ContractViolation(f"required host tool is missing: {missing_tools[0]}")
 
 
+def posix_mode_grants_service_account_write(
+    filesystem: dict[str, Any], service_account: dict[str, Any]
+) -> bool:
+    mode = int(filesystem["mode"], 8)
+    return (
+        filesystem["uid"] == service_account["uid"] and bool(mode & 0o200)
+    ) or (
+        filesystem["gid"] == service_account["gid"] and bool(mode & 0o020)
+    ) or bool(mode & 0o002)
+
+
 def validate_filesystem_fact(
     inventory: dict[str, Any],
     name: str,
@@ -962,9 +1013,17 @@ def validate_filesystem_fact(
         raise ContractViolation(
             f"effective path mode does not match inventory at {name}"
         )
-    expected_service_write = (
-        path_contract["owner_role"] in SERVICE_ACCOUNT_WRITABLE_OWNER_ROLES
-    )
+    owner_role = path_contract["owner_role"]
+    try:
+        expected_service_write = OWNER_ROLE_SERVICE_ACCOUNT_WRITE[owner_role]
+    except KeyError as exc:
+        raise ContractViolation(f"unsupported path owner role at {name}") from exc
+    if posix_mode_grants_service_account_write(
+        filesystem, inventory["service_account"]
+    ) and not filesystem["service_account_can_write"]:
+        raise ContractViolation(
+            f"effective path access contradicts ownership or mode at {name}"
+        )
     if filesystem["service_account_can_write"] is not expected_service_write:
         raise ContractViolation(
             f"effective path access does not match inventory at {name}"
