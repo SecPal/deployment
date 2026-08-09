@@ -537,7 +537,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "SecurityOpt": ["no-new-privileges"],
                 "Binds": [],
                 "Tmpfs": {
-                    "/tmp": "size=16m,mode=0700,U,nosuid,nodev,noexec,rw,rprivate,tmpcopyup"
+                    "/tmp": "size=16m,mode=0700,uid=10001,gid=10001,nosuid,nodev,noexec,rw,rprivate,tmpcopyup"
                 },
             },
             "Mounts": [
@@ -565,6 +565,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             expected_tmpfs={
                 "/tmp": self.module.TmpfsSpec(size=16 * 1024 * 1024, mode=0o700)
             },
+            expected_tmpfs_identity=(10001, 10001),
         )
         for label, path, value in (
             ("privileged", ("HostConfig", "Privileged"), True),
@@ -597,6 +598,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                                 size=16 * 1024 * 1024, mode=0o700
                             )
                         },
+                        expected_tmpfs_identity=(10001, 10001),
                     )
 
         for label, mutation in (
@@ -645,6 +647,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                                 size=16 * 1024 * 1024, mode=0o700
                             )
                         },
+                        expected_tmpfs_identity=(10001, 10001),
                     )
 
         candidate = json.loads(json.dumps(valid))
@@ -668,14 +671,18 @@ class QuadletLifecycleContract(unittest.TestCase):
                         size=16 * 1024 * 1024, mode=0o700
                     )
                 },
+                expected_tmpfs_identity=(10001, 10001),
             )
 
         for label, options in (
-            ("size", "rw,noexec,nosuid,nodev,size=8m,mode=0700,U,rprivate,tmpcopyup"),
-            ("mode", "rw,noexec,nosuid,nodev,size=16m,mode=0755,U,rprivate,tmpcopyup"),
-            ("nosuid", "rw,noexec,nodev,size=16m,mode=0700,U,rprivate,tmpcopyup"),
-            ("nodev", "rw,noexec,nosuid,size=16m,mode=0700,U,rprivate,tmpcopyup"),
-            ("noexec", "rw,nosuid,nodev,size=16m,mode=0700,U,rprivate,tmpcopyup"),
+            ("size", "rw,noexec,nosuid,nodev,size=8m,mode=0700,uid=10001,gid=10001,rprivate,tmpcopyup"),
+            ("mode", "rw,noexec,nosuid,nodev,size=16m,mode=0755,uid=10001,gid=10001,rprivate,tmpcopyup"),
+            ("nosuid", "rw,noexec,nodev,size=16m,mode=0700,uid=10001,gid=10001,rprivate,tmpcopyup"),
+            ("nodev", "rw,noexec,nosuid,size=16m,mode=0700,uid=10001,gid=10001,rprivate,tmpcopyup"),
+            ("noexec", "rw,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001,rprivate,tmpcopyup"),
+            ("uid", "rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10002,gid=10001,rprivate,tmpcopyup"),
+            ("gid", "rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10002,rprivate,tmpcopyup"),
+            ("unresolved-ownership", "rw,noexec,nosuid,nodev,size=16m,mode=0700,U,rprivate,tmpcopyup"),
         ):
             with self.subTest(tmpfs_option=label):
                 candidate = json.loads(json.dumps(valid))
@@ -698,6 +705,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                                 size=16 * 1024 * 1024, mode=0o700
                             )
                         },
+                        expected_tmpfs_identity=(10001, 10001),
                     )
 
     def test_user_writable_runtime_configuration_is_rejected(self) -> None:

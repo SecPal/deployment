@@ -386,7 +386,11 @@ def parse_tmpfs_size(value: str) -> int:
     return int(match.group(1)) * multipliers[match.group(2)]
 
 
-def validate_tmpfs_options(options: object, expected: TmpfsSpec) -> None:
+def validate_tmpfs_options(
+    options: object,
+    expected: TmpfsSpec,
+    expected_identity: tuple[int, int],
+) -> None:
     if not isinstance(options, str):
         raise IntegrationError("effective runtime tmpfs options are malformed")
     flags: set[str] = set()
@@ -398,7 +402,11 @@ def validate_tmpfs_options(options: object, expected: TmpfsSpec) -> None:
         if "=" in option:
             name, value = option.split("=", 1)
             name = name.lower()
-            if name in values or name not in {"size", "mode"} or not value:
+            if (
+                name in values
+                or name not in {"size", "mode", "uid", "gid"}
+                or not value
+            ):
                 raise IntegrationError("effective runtime tmpfs options are malformed")
             values[name] = value
         else:
@@ -406,16 +414,22 @@ def validate_tmpfs_options(options: object, expected: TmpfsSpec) -> None:
             if flag in flags:
                 raise IntegrationError("effective runtime tmpfs options are malformed")
             flags.add(flag)
-    required_flags = {"rw", "rprivate", "tmpcopyup", "u", "nosuid", "nodev"}
+    required_flags = {"rw", "rprivate", "tmpcopyup", "nosuid", "nodev"}
     if expected.noexec:
         required_flags.add("noexec")
-    if flags != required_flags or set(values) != {"size", "mode"}:
+    if flags != required_flags or set(values) != {"size", "mode", "uid", "gid"}:
         raise IntegrationError("effective runtime tmpfs options differ from the reviewed contract")
     try:
         mode = int(values["mode"], 8)
+        uid = int(values["uid"], 10)
+        gid = int(values["gid"], 10)
     except ValueError as error:
         raise IntegrationError("effective runtime tmpfs options are malformed") from error
-    if parse_tmpfs_size(values["size"]) != expected.size or mode != expected.mode:
+    if (
+        parse_tmpfs_size(values["size"]) != expected.size
+        or mode != expected.mode
+        or (uid, gid) != expected_identity
+    ):
         raise IntegrationError("effective runtime tmpfs options differ from the reviewed contract")
 
 
@@ -425,6 +439,7 @@ def validate_container_security(
     allowed_capabilities: frozenset[str] = frozenset(),
     expected_mounts: Mapping[str, tuple[str, str, bool]] | None = None,
     expected_tmpfs: Mapping[str, TmpfsSpec] | None = None,
+    expected_tmpfs_identity: tuple[int, int] | None = None,
 ) -> None:
     host = nested(inspect, "HostConfig")
     if host.get("Privileged") is not False:
@@ -474,6 +489,8 @@ def validate_container_security(
         if observed_mounts != dict(expected_mounts):
             raise IntegrationError("effective runtime mounts differ from the reviewed contract")
     if expected_tmpfs is not None:
+        if expected_tmpfs_identity is None:
+            raise IntegrationError("effective runtime tmpfs identity contract is missing")
         tmpfs = host.get("Tmpfs") or {}
         if not isinstance(tmpfs, Mapping) or set(tmpfs) != set(expected_tmpfs):
             observed_tmpfs = sorted(tmpfs) if isinstance(tmpfs, Mapping) else ["<invalid>"]
@@ -482,7 +499,9 @@ def validate_container_security(
                 f"expected {sorted(expected_tmpfs)}, observed {observed_tmpfs}"
             )
         for destination, expected in expected_tmpfs.items():
-            validate_tmpfs_options(tmpfs[destination], expected)
+            validate_tmpfs_options(
+                tmpfs[destination], expected, expected_tmpfs_identity
+            )
 
 
 def validate_oneshot_state(properties: str) -> tuple[str, str]:
@@ -1739,6 +1758,7 @@ class IntegrationLifecycle:
             allowed,
             self._expected_mounts(role),
             self._expected_tmpfs(role),
+            (contract.uid, contract.gid),
         )
         user = str(nested(details, "Config", "User"))
         if user != (expected_user or f"{contract.uid}:{contract.gid}"):
