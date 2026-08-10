@@ -1953,10 +1953,11 @@ class IntegrationLifecycle:
             raise IntegrationError(f"network isolation mismatch for {role}")
 
     def _expected_networks(self, role: str) -> set[str]:
+        # Podman inspect preserves disabled networking as the special "none"
+        # entry; only named Quadlet networks receive the instance prefix.
         return {
-            f"{self.resources.prefix}-{name}"
+            "none" if name == "none" else f"{self.resources.prefix}-{name}"
             for name in role_spec(role).networks
-            if name != "none"
         }
 
     def _expected_mounts(self, role: str) -> dict[str, tuple[str, str, bool]]:

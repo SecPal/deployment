@@ -1749,7 +1749,7 @@ class QuadletLifecycleContract(unittest.TestCase):
         self.assertEqual(self.module.parse_du_size("12345\t/path/to/volume\n"), 12345)
         self.assertIsNone(self.module.parse_du_size("permission denied\n"))
 
-    def test_effective_network_contract_includes_both_one_shots(self) -> None:
+    def test_effective_network_contract_accepts_podman_none_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             lifecycle = self.module.IntegrationLifecycle(
                 root=ROOT,
@@ -1759,7 +1759,19 @@ class QuadletLifecycleContract(unittest.TestCase):
                 output=Path(directory) / "quadlets",
                 runner=FakeRunner(),
             )
-            self.assertEqual(lifecycle._expected_networks("secrets-init"), set())
+            details = {
+                "Config": {
+                    "User": "0:0",
+                    "Labels": {
+                        "org.secpal.integration": "true",
+                        "org.secpal.integration.instance": "contract01",
+                        "org.secpal.role": "secrets-init",
+                    },
+                },
+                "NetworkSettings": {"Networks": {"none": {}}},
+            }
+            with mock.patch.object(self.module, "validate_container_security"):
+                lifecycle._validate_effective_container("secrets-init", details)
             self.assertEqual(
                 lifecycle._expected_networks("migrate"),
                 {"secpal-int-contract01-application"},
