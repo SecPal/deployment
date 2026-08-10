@@ -72,6 +72,18 @@ EXPECTED_GH_VERSION = "2.97.0"
 INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+FORBIDDEN_RUNTIME_ENVIRONMENT = (
+    "CONTAINER_HOST",
+    "CONTAINER_CONNECTION",
+    "DOCKER_HOST",
+    "CONTAINERS_CONF",
+    "CONTAINERS_CONF_OVERRIDE",
+    "CONTAINERS_CONF_MODULES",
+    "CONTAINERS_REGISTRIES_CONF",
+    "CONTAINERS_REGISTRIES_CONF_DIR",
+    "CONTAINERS_STORAGE_CONF",
+    "CONTAINERS_POLICY",
+)
 
 
 class IntegrationError(RuntimeError):
@@ -332,18 +344,9 @@ def validate_runtime_info(
 ) -> tuple[Path, Path]:
     if uid == 0:
         raise IntegrationError("rootful Podman is forbidden")
-    for variable in (
-        "CONTAINER_HOST",
-        "CONTAINER_CONNECTION",
-        "DOCKER_HOST",
-        "CONTAINERS_CONF",
-        "CONTAINERS_REGISTRIES_CONF",
-        "CONTAINERS_REGISTRIES_CONF_DIR",
-        "CONTAINERS_STORAGE_CONF",
-        "CONTAINERS_POLICY",
-    ):
+    for variable in FORBIDDEN_RUNTIME_ENVIRONMENT:
         if environment.get(variable):
-            raise IntegrationError(f"remote runtime selection is forbidden: {variable}")
+            raise IntegrationError(f"runtime override is forbidden: {variable}")
     version = version_tuple(nested(info, "version", "Version"))
     if version < (5, 4, 2) or version >= (6, 0, 0):
         raise IntegrationError("Podman >=5.4.2,<6.0.0 is required")
@@ -558,6 +561,36 @@ def validate_oneshot_state(properties: str) -> tuple[str, str]:
     if not re.fullmatch(r"[a-f0-9]{32}", invocation) or not started.isdecimal() or int(started) <= 0:
         raise IntegrationError("one-shot systemd invocation identity is missing")
     return invocation, started
+
+
+def validate_removed_systemd_unit_state(properties: str) -> None:
+    values: dict[str, str] = {}
+    for line in properties.splitlines():
+        if "=" not in line:
+            raise IntegrationError("removed systemd unit state is malformed")
+        name, value = line.split("=", 1)
+        if name in values:
+            raise IntegrationError("removed systemd unit state is malformed")
+        values[name] = value
+    if values != {"LoadState": "not-found", "ActiveState": "inactive"}:
+        raise IntegrationError("removed systemd unit remains loaded or active")
+
+
+def validate_effective_systemd_unit(properties: str, expected_fragment: Path) -> None:
+    values: dict[str, str] = {}
+    for line in properties.splitlines():
+        if "=" not in line:
+            raise IntegrationError("effective systemd unit identity is malformed")
+        name, value = line.split("=", 1)
+        if name in values:
+            raise IntegrationError("effective systemd unit identity is malformed")
+        values[name] = value
+    expected = {
+        "FragmentPath": os.fspath(expected_fragment),
+        "DropInPaths": "",
+    }
+    if values != expected:
+        raise IntegrationError("effective systemd unit is overridden or has drop-ins")
 
 
 def validate_registry_documents(documents: Sequence[Mapping]) -> None:
@@ -777,11 +810,24 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
     commands.append(
         ["systemctl", "--user", "reset-failed", resources.target, *generated_services]
     )
+    reload_failed = False
+    reload_command = ["systemctl", "--user", "daemon-reload"]
     for command in commands:
         try:
-            runner.run(command, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            result = runner.run(
+                command,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except OSError:
+            if command == reload_command:
+                reload_failed = True
             continue
+        if command == reload_command and result.returncode != 0:
+            reload_failed = True
+    if reload_failed:
+        raise IntegrationError("systemd user daemon reload failed during cleanup")
 
 
 def render_and_start_with_port_retries(lifecycle, start, port_allocator=None) -> None:
@@ -1157,9 +1203,7 @@ class IntegrationLifecycle:
             Path(environment.get("HOME", os.fspath(Path.home()))) / ".local" / "share"
         )
         for name in (
-            "CONTAINER_HOST",
-            "CONTAINER_CONNECTION",
-            "DOCKER_HOST",
+            *FORBIDDEN_RUNTIME_ENVIRONMENT,
             "DOCKER_CONFIG",
             "DOCKER_AUTH_CONFIG",
             "REGISTRY_AUTH_FILE",
@@ -1168,11 +1212,6 @@ class IntegrationLifecycle:
             "GH_ENTERPRISE_TOKEN",
             "GITHUB_ENTERPRISE_TOKEN",
             "GH_HOST",
-            "CONTAINERS_CONF",
-            "CONTAINERS_REGISTRIES_CONF",
-            "CONTAINERS_REGISTRIES_CONF_DIR",
-            "CONTAINERS_STORAGE_CONF",
-            "CONTAINERS_POLICY",
         ):
             environment.pop(name, None)
         if auth_file is not None:
@@ -1428,6 +1467,7 @@ class IntegrationLifecycle:
         )
         validate_active_root(self.active_root)
         validate_active_root(self.resources.systemd_target_file.parent)
+        validate_active_quadlet_inputs(self.active_root)
         self.command(
             [
                 "python3",
@@ -1453,8 +1493,26 @@ class IntegrationLifecycle:
             != target_source.read_text(encoding="utf-8")
         ):
             raise IntegrationError("active systemd target differs from the reviewed contract")
-        for role in ("postgres", "valkey", "migrate", "api", "frontend", "gateway"):
-            self.command(["systemctl", "--user", "cat", f"{self.resources.prefix}-{role}.service"], capture=True)
+        generator_root = Path(f"/run/user/{self.uid}/systemd/generator")
+        effective_units = [
+            (self.resources.target, self.resources.systemd_target_file),
+            *(
+                (service, generator_root / service)
+                for service in generated_service_names(self.resources)
+            ),
+        ]
+        for unit, expected_fragment in effective_units:
+            properties = self.captured(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    unit,
+                    "--property=FragmentPath",
+                    "--property=DropInPaths",
+                ]
+            )
+            validate_effective_systemd_unit(properties, expected_fragment)
 
     def start_target(self) -> None:
         if not self.inspected_oneshots:
@@ -1638,29 +1696,6 @@ class IntegrationLifecycle:
                     if has_injected_health_failure(details):
                         self.injected_health_failure_observed = True
                         return
-                    unhealthy = self.command(
-                        [
-                            "podman",
-                            "wait",
-                            "--condition",
-                            "unhealthy",
-                            "--interval",
-                            "50ms",
-                            name,
-                        ],
-                        capture=True,
-                        check=False,
-                    )
-                    if unhealthy.returncode == 0:
-                        self.injected_health_failure_observed = True
-                        return
-                    if self._gateway_port_collision():
-                        raise PortCollisionError(
-                            "gateway loopback port is already allocated"
-                        )
-                    raise IntegrationError(
-                        "gateway stopped before the injected health check became unhealthy"
-                    )
             state = self.command(
                 [
                     "systemctl",
@@ -1919,8 +1954,9 @@ class IntegrationLifecycle:
 
     def _expected_networks(self, role: str) -> set[str]:
         return {
-            "none" if name == "none" else f"{self.resources.prefix}-{name}"
+            f"{self.resources.prefix}-{name}"
             for name in role_spec(role).networks
+            if name != "none"
         }
 
     def _expected_mounts(self, role: str) -> dict[str, tuple[str, str, bool]]:
@@ -2341,9 +2377,8 @@ class IntegrationLifecycle:
                     cleanup_resources(self.runner, self.resources)
                 except IntegrationError as error:
                     errors.append(str(error))
-                else:
-                    errors.extend(self._owned_resource_errors())
-                    self._verify_unrelated_resources(errors)
+                errors.extend(self._owned_resource_errors())
+                self._verify_unrelated_resources(errors)
             if self.fixture_root.exists():
                 try:
                     shutil.rmtree(self.fixture_root)
@@ -2385,25 +2420,31 @@ class IntegrationLifecycle:
                 errors.append(f"active unit remained: {path.name}")
         if self.resources.systemd_target_file.exists() or self.resources.systemd_target_file.is_symlink():
             errors.append(f"active systemd target remained: {self.resources.target}")
-        target = self.command(
-            ["systemctl", "--user", "is-active", self.resources.target],
-            capture=True,
-            check=False,
+        units = [("target", self.resources.target)]
+        units.extend(
+            ("generated service", service)
+            for service in generated_service_names(self.resources)
         )
-        if target.returncode == 0:
-            errors.append(f"target remained active: {self.resources.target}")
-        elif target.returncode not in {3, 4}:
-            errors.append(f"unable to verify target state: {self.resources.target}")
-        for service in generated_service_names(self.resources):
+        for description, unit in units:
             result = self.command(
-                ["systemctl", "--user", "is-active", service],
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    unit,
+                    "--property=LoadState",
+                    "--property=ActiveState",
+                ],
                 capture=True,
                 check=False,
             )
-            if result.returncode == 0:
-                errors.append(f"generated service remained active: {service}")
-            elif result.returncode not in {3, 4}:
-                errors.append(f"unable to verify generated service state: {service}")
+            if result.returncode != 0:
+                errors.append(f"unable to verify {description} unload state: {unit}")
+                continue
+            try:
+                validate_removed_systemd_unit_state(result.stdout or "")
+            except IntegrationError:
+                errors.append(f"{description} remained loaded or active: {unit}")
         return errors
 
     def _verify_unrelated_resources(self, errors: list[str]) -> None:
@@ -2435,6 +2476,38 @@ def validate_active_root(path: Path) -> None:
         if current == current.parent:
             break
         current = current.parent
+
+
+def validate_active_quadlet_inputs(path: Path) -> None:
+    def raise_walk_error(error: OSError) -> None:
+        raise error
+
+    try:
+        for root, directories, files in os.walk(
+            path, topdown=True, followlinks=False, onerror=raise_walk_error
+        ):
+            root_path = Path(root)
+            for name in directories + files:
+                metadata = (root_path / name).lstat()
+                expected_directory = name in directories
+                expected_type = (
+                    stat.S_ISDIR(metadata.st_mode)
+                    if expected_directory
+                    else stat.S_ISREG(metadata.st_mode)
+                )
+                if (
+                    not expected_type
+                    or metadata.st_uid != 0
+                    or metadata.st_gid != 0
+                    or metadata.st_mode & 0o022
+                ):
+                    raise IntegrationError(
+                        "active Quadlet input is writable, non-root-owned, or not a regular path"
+                    )
+    except IntegrationError:
+        raise
+    except OSError as error:
+        raise IntegrationError("active Quadlet inputs could not be inspected safely") from error
 
 
 def directory_size(path: Path) -> int:
@@ -2514,8 +2587,25 @@ def main() -> int:
     created_fixture = False
     if arguments.fixture_root is None:
         fixture_root = Path(tempfile.mkdtemp(prefix="secpal-quadlet."))
-        fixture_root.chmod(0o700)
         created_fixture = True
+        if (
+            not SAFE_PATH_PATTERN.fullmatch(os.fspath(fixture_root))
+            or not fixture_root.is_absolute()
+        ):
+            try:
+                shutil.rmtree(fixture_root)
+            except OSError:
+                print(
+                    "ERROR: unable to remove invalid generated fixture root.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(
+                "ERROR: fixture root must be a new safe ASCII path without whitespace or Quadlet delimiters.",
+                file=sys.stderr,
+            )
+            return 1
+        fixture_root.chmod(0o700)
     else:
         fixture_root = arguments.fixture_root
         if (

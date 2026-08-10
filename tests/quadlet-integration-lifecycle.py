@@ -224,6 +224,8 @@ class CollidingResourceRunner:
                     }
                 ]
             )
+        elif argv == ("systemctl", "--user", "daemon-reload"):
+            returncode = 0
         return subprocess.CompletedProcess(argv, returncode, stdout, "")
 
 
@@ -346,6 +348,8 @@ class QuadletLifecycleContract(unittest.TestCase):
             "CONTAINER_CONNECTION",
             "DOCKER_HOST",
             "CONTAINERS_CONF",
+            "CONTAINERS_CONF_OVERRIDE",
+            "CONTAINERS_CONF_MODULES",
             "CONTAINERS_REGISTRIES_CONF",
             "CONTAINERS_REGISTRIES_CONF_DIR",
             "CONTAINERS_STORAGE_CONF",
@@ -476,6 +480,8 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "XDG_DATA_HOME": "/srv/podman-data",
                 "DOCKER_CONFIG": "/home/caller/docker",
                 "REGISTRY_AUTH_FILE": "/home/caller/auth.json",
+                "CONTAINERS_CONF_OVERRIDE": "/home/caller/override.conf",
+                "CONTAINERS_CONF_MODULES": "unreviewed-module",
             }
             with mock.patch.dict(self.module.os.environ, inherited, clear=True):
                 environment = lifecycle.anonymous_environment(
@@ -491,6 +497,8 @@ class QuadletLifecycleContract(unittest.TestCase):
                 environment["DOCKER_CONFIG"], os.fspath(auth_root / "docker-config")
             )
             self.assertEqual(environment["XDG_DATA_HOME"], "/srv/podman-data")
+            self.assertNotIn("CONTAINERS_CONF_OVERRIDE", environment)
+            self.assertNotIn("CONTAINERS_CONF_MODULES", environment)
             for name in ("home", "xdg-config", "docker-config", "certs"):
                 path = auth_root / name
                 self.assertTrue(path.is_dir())
@@ -786,6 +794,74 @@ class QuadletLifecycleContract(unittest.TestCase):
                     {"XDG_CONFIG_HOME": os.fspath(alternate)},
                 )
 
+    def test_active_quadlet_inputs_require_trusted_recursive_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            active_root = Path(directory)
+            drop_in = active_root / "unrelated.container.d"
+            drop_in.mkdir()
+            override = drop_in / "10-unrelated.conf"
+            override.write_text("[Service]\n", encoding="utf-8")
+
+            def metadata_for(target, override_metadata=None):
+                if target == override and override_metadata is not None:
+                    return override_metadata
+                mode = (
+                    self.module.stat.S_IFDIR | 0o755
+                    if target == drop_in
+                    else self.module.stat.S_IFREG | 0o644
+                )
+                return mock.Mock(st_uid=0, st_gid=0, st_mode=mode)
+
+            with mock.patch.object(
+                Path, "lstat", autospec=True, side_effect=metadata_for
+            ):
+                self.module.validate_active_quadlet_inputs(active_root)
+
+            invalid_metadata = (
+                (
+                    "user-owned",
+                    mock.Mock(
+                        st_uid=1000,
+                        st_gid=0,
+                        st_mode=self.module.stat.S_IFREG | 0o644,
+                    ),
+                ),
+                (
+                    "group-writable",
+                    mock.Mock(
+                        st_uid=0,
+                        st_gid=0,
+                        st_mode=self.module.stat.S_IFREG | 0o664,
+                    ),
+                ),
+                (
+                    "symlink",
+                    mock.Mock(
+                        st_uid=0,
+                        st_gid=0,
+                        st_mode=self.module.stat.S_IFLNK | 0o777,
+                    ),
+                ),
+                (
+                    "special",
+                    mock.Mock(
+                        st_uid=0,
+                        st_gid=0,
+                        st_mode=self.module.stat.S_IFIFO | 0o600,
+                    ),
+                ),
+            )
+            for label, metadata in invalid_metadata:
+                with self.subTest(label=label), mock.patch.object(
+                    Path,
+                    "lstat",
+                    autospec=True,
+                    side_effect=lambda target, value=metadata: metadata_for(
+                        target, value
+                    ),
+                ), self.assertRaises(self.module.IntegrationError):
+                    self.module.validate_active_quadlet_inputs(active_root)
+
     def test_oneshot_state_requires_one_successful_retained_systemd_invocation(self) -> None:
         valid = "\n".join(
             (
@@ -968,48 +1044,48 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 lifecycle._wait_for_injected_health_failure()
 
-    def test_health_failure_wait_uses_podmans_unhealthy_condition(self) -> None:
+    def test_health_failure_wait_polls_without_an_unbounded_podman_wait(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             lifecycle = self.failure_lifecycle(directory, "health")
-            starting = json.dumps(
-                [
-                    {
-                        "Config": {
-                            "Healthcheck": {"Test": ["CMD-SHELL", "/bin/false"]}
-                        },
-                        "State": {
-                            "Running": True,
-                            "Status": "running",
-                            "Health": {
-                                "Status": "starting",
-                                "FailingStreak": 0,
-                                "Log": [],
-                            }
-                        },
-                    }
-                ]
-            )
-            inspected = subprocess.CompletedProcess((), 0, starting, "")
-            unhealthy = subprocess.CompletedProcess((), 0, "-1\n", "")
+            starting_details = {
+                "Config": {"Healthcheck": {"Test": ["CMD-SHELL", "/bin/false"]}},
+                "State": {
+                    "Running": True,
+                    "Status": "running",
+                    "Health": {"Status": "starting", "FailingStreak": 0, "Log": []},
+                },
+            }
+            unhealthy_details = json.loads(json.dumps(starting_details))
+            unhealthy_details["State"]["Health"] = {
+                "Status": "unhealthy",
+                "FailingStreak": 1,
+                "Log": [{"ExitCode": 1, "Output": ""}],
+            }
             with mock.patch.object(
-                lifecycle, "command", side_effect=(inspected, unhealthy)
+                lifecycle,
+                "command",
+                side_effect=(
+                    subprocess.CompletedProcess(
+                        (), 0, json.dumps([starting_details]), ""
+                    ),
+                    subprocess.CompletedProcess(
+                        (), 0, "ActiveState=active\nResult=success\n", ""
+                    ),
+                    subprocess.CompletedProcess(
+                        (), 0, json.dumps([unhealthy_details]), ""
+                    ),
+                ),
             ) as command, mock.patch.object(
                 lifecycle, "_validate_effective_container"
-            ):
+            ), mock.patch.object(self.module.time, "sleep"):
                 lifecycle._wait_for_injected_health_failure()
 
             self.assertTrue(lifecycle.injected_health_failure_observed)
-            self.assertEqual(
-                command.call_args_list[1].args[0],
-                [
-                    "podman",
-                    "wait",
-                    "--condition",
-                    "unhealthy",
-                    "--interval",
-                    "50ms",
-                    "secpal-int-contract01-gateway",
-                ],
+            self.assertFalse(
+                any(
+                    call.args[0][:2] == ["podman", "wait"]
+                    for call in command.call_args_list
+                )
             )
 
     def test_health_failure_inspection_waits_until_the_container_is_running(self) -> None:
@@ -1041,17 +1117,34 @@ class QuadletLifecycleContract(unittest.TestCase):
             running = subprocess.CompletedProcess(
                 (), 0, json.dumps([running_details]), ""
             )
-            unhealthy = subprocess.CompletedProcess((), 0, "-1\n", "")
+            unhealthy_details = json.loads(json.dumps(running_details))
+            unhealthy_details["State"]["Health"] = {
+                "Status": "unhealthy",
+                "FailingStreak": 1,
+                "Log": [{"ExitCode": 1, "Output": ""}],
+            }
+            active = subprocess.CompletedProcess(
+                (), 0, "ActiveState=active\nResult=success\n", ""
+            )
+            unhealthy = subprocess.CompletedProcess(
+                (), 0, json.dumps([unhealthy_details]), ""
+            )
             with mock.patch.object(
                 lifecycle,
                 "command",
-                side_effect=(created, activating, running, unhealthy),
+                side_effect=(created, activating, running, active, unhealthy),
             ), mock.patch.object(
                 lifecycle, "_validate_effective_container"
             ) as validate, mock.patch.object(self.module.time, "sleep"):
                 lifecycle._wait_for_injected_health_failure()
 
-            validate.assert_called_once_with("gateway", running_details)
+            self.assertEqual(
+                validate.call_args_list,
+                [
+                    mock.call("gateway", running_details),
+                    mock.call("gateway", unhealthy_details),
+                ],
+            )
 
     def test_port_retry_preserves_data_roles_and_completed_migration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1226,6 +1319,61 @@ class QuadletLifecycleContract(unittest.TestCase):
                 )
             )
 
+    def test_cleanup_rejects_a_failed_systemd_daemon_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = FakeRunner()
+            original_run = runner.run
+
+            def fail_reload(command, **kwargs):
+                result = original_run(command, **kwargs)
+                if tuple(command) == ("systemctl", "--user", "daemon-reload"):
+                    return subprocess.CompletedProcess(command, 1, "", "reload failed")
+                return result
+
+            runner.run = fail_reload
+            resources = self.module.Resources.for_instance(
+                "contract01", uid=1000, active_root=Path(directory)
+            )
+            with self.assertRaisesRegex(
+                self.module.IntegrationError, "systemd user daemon reload failed"
+            ):
+                self.module.cleanup_resources(runner, resources)
+            self.assertTrue(any("reset-failed" in command for command in runner.commands))
+
+    def test_removed_systemd_units_must_be_unloaded(self) -> None:
+        self.module.validate_removed_systemd_unit_state(
+            "LoadState=not-found\nActiveState=inactive\n"
+        )
+        for properties in (
+            "LoadState=loaded\nActiveState=inactive\n",
+            "LoadState=not-found\nActiveState=active\n",
+            "LoadState=not-found\n",
+            "LoadState=not-found\nLoadState=loaded\nActiveState=inactive\n",
+        ):
+            with self.subTest(properties=properties), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.validate_removed_systemd_unit_state(properties)
+
+    def test_effective_systemd_units_reject_override_fragments_and_dropins(self) -> None:
+        fragment = "/run/user/1000/systemd/generator/secpal-int-contract01-api.service"
+        self.module.validate_effective_systemd_unit(
+            f"FragmentPath={fragment}\nDropInPaths=\n", Path(fragment)
+        )
+        for properties in (
+            "FragmentPath=/home/user/.config/systemd/user/"
+            "secpal-int-contract01-api.service\nDropInPaths=\n",
+            f"FragmentPath={fragment}\nDropInPaths=/home/user/.config/systemd/user/"
+            "secpal-int-contract01-api.service.d/override.conf\n",
+            f"FragmentPath={fragment}\n",
+        ):
+            with self.subTest(properties=properties), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.validate_effective_systemd_unit(
+                    properties, Path(fragment)
+                )
+
     def test_cleanup_refuses_same_named_resources_without_ownership_labels(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             resources = self.module.Resources.for_instance(
@@ -1356,26 +1504,14 @@ class QuadletLifecycleContract(unittest.TestCase):
                             "exists",
                             "secpal-int-contract01-api",
                         ): 125,
-                        (
-                            "systemctl",
-                            "--user",
-                            "is-active",
-                            "secpal-int-contract01-application-network.service",
-                        ): 0,
-                        (
-                            "systemctl",
-                            "--user",
-                            "is-active",
-                            "secpal-int-contract01.target",
-                        ): 0,
                     }
                 ),
             )
             errors = lifecycle._owned_resource_errors()
             self.assertIn("gateway image remained", "\n".join(errors))
             self.assertIn("unable to verify container", "\n".join(errors))
-            self.assertIn("generated service remained", "\n".join(errors))
-            self.assertIn("target remained active", "\n".join(errors))
+            self.assertIn("unable to verify generated service unload", "\n".join(errors))
+            self.assertIn("unable to verify target unload", "\n".join(errors))
 
     def test_active_runtime_uses_the_reviewed_phase_b_probe_namespace(self) -> None:
         self.assertEqual(
@@ -1623,7 +1759,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                 output=Path(directory) / "quadlets",
                 runner=FakeRunner(),
             )
-            self.assertEqual(lifecycle._expected_networks("secrets-init"), {"none"})
+            self.assertEqual(lifecycle._expected_networks("secrets-init"), set())
             self.assertEqual(
                 lifecycle._expected_networks("migrate"),
                 {"secpal-int-contract01-application"},
@@ -1730,6 +1866,24 @@ class QuadletLifecycleContract(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("safe ASCII path", result.stderr)
             self.assertFalse(fixture.exists())
+
+    def test_generated_fixture_rejects_an_unsafe_temporary_base_before_admission(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_base = Path(directory) / "unsafe temporary base"
+            temporary_base.mkdir()
+            environment = dict(os.environ)
+            environment["TMPDIR"] = os.fspath(temporary_base)
+            result = subprocess.run(
+                ["python3", os.fspath(HARNESS)],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("new safe ASCII path", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(list(temporary_base.iterdir()), [])
 
     def test_explicit_empty_instance_and_port_zero_are_not_defaulted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
