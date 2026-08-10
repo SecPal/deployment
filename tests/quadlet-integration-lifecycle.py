@@ -317,6 +317,27 @@ class QuadletLifecycleContract(unittest.TestCase):
             },
         }
 
+    def test_runner_keeps_sudo_in_session_and_terminates_it_directly(self) -> None:
+        process = mock.Mock(pid=4321, returncode=0)
+        process.communicate.return_value = ("", "")
+        process.poll.return_value = 0
+        runner = self.module.Runner()
+        with mock.patch.object(
+            self.module.subprocess, "Popen", return_value=process
+        ) as popen:
+            runner.run(["sudo", "-n", "true"], start_new_session=False)
+        popen.assert_called_once_with(
+            ["sudo", "-n", "true"],
+            start_new_session=False,
+            text=True,
+        )
+
+        process.poll.return_value = None
+        runner.active = process
+        runner.active_process_group = False
+        runner.terminate_active()
+        process.terminate.assert_called_once_with()
+
     def test_runtime_admission_accepts_only_the_d1_runtime(self) -> None:
         self.assertEqual(
             self.module.validate_runtime_info(self.valid_info(), uid=1000, environment={}),
@@ -602,6 +623,8 @@ class QuadletLifecycleContract(unittest.TestCase):
 
             generator.assert_called_once_with(self.module.QUADLET_USER_GENERATOR)
             registry.assert_not_called()
+            self.assertIn(("sudo", "-S", "-v"), lifecycle.runner.commands)
+            self.assertNotIn(("sudo", "-n", "true"), lifecycle.runner.commands)
 
     def test_api_origin_rejects_the_frontend_spa_shell(self) -> None:
         self.module.validate_api_origin_root('{"status":"not found"}')
@@ -2178,6 +2201,107 @@ class QuadletLifecycleContract(unittest.TestCase):
                 lifecycle._expected_networks("migrate"),
                 {"secpal-int-contract01-application"},
             )
+
+    def test_effective_network_contract_requires_both_internal_networks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=Path(directory),
+                output=Path(directory) / "quadlets",
+                runner=FakeRunner(),
+            )
+            dns = [
+                subprocess.CompletedProcess((), status, "", "")
+                for status in (0, 2, 2)
+            ]
+            with mock.patch.object(
+                lifecycle, "captured", side_effect=("true", "true")
+            ) as inspect, mock.patch.object(
+                lifecycle, "command", side_effect=dns
+            ):
+                lifecycle._validate_network_boundary()
+            self.assertEqual(
+                [call.args[0][-1] for call in inspect.call_args_list],
+                [
+                    "secpal-int-contract01-application",
+                    "secpal-int-contract01-edge",
+                ],
+            )
+
+            for observed in (("false",), ("true", "false")):
+                with self.subTest(observed=observed), mock.patch.object(
+                    lifecycle, "captured", side_effect=observed
+                ):
+                    with self.assertRaisesRegex(
+                        self.module.IntegrationError, "network is not internal"
+                    ):
+                        lifecycle._validate_network_boundary()
+
+    def test_effective_container_contract_owns_the_exact_port_policy(self) -> None:
+        valid = {"8443/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18443"}]}
+        self.module.validate_port_publication("gateway", valid, 18443)
+        self.module.validate_port_publication("api", {}, 18443)
+        for role, bindings in (
+            ("gateway", {"9443/tcp": valid["8443/tcp"]}),
+            ("api", {"8080/tcp": valid["8443/tcp"]}),
+            ("frontend", []),
+        ):
+            with self.subTest(role=role), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.validate_port_publication(role, bindings, 18443)
+
+    def test_private_storage_probe_preserves_historical_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=Path(directory),
+                output=Path(directory) / "quadlets",
+                runner=FakeRunner(),
+            )
+            lifecycle.migration_invocation = ("invocation", "1")
+            storage_name = "quadlet-storage-contract01"
+            storage_path = f"/app/storage/app/private/{storage_name}"
+            calls: list[tuple[str, ...]] = []
+            metadata = "10001:10001:640\n"
+
+            def podman_exec(role, *arguments, capture=False):
+                calls.append((role, *arguments))
+                output = ""
+                if arguments[0] == "cat":
+                    output = storage_name + "\n"
+                elif arguments[0] == "stat":
+                    output = metadata
+                return subprocess.CompletedProcess(arguments, 0, output, "")
+
+            with mock.patch.object(lifecycle, "podman_exec", side_effect=podman_exec), mock.patch.object(
+                lifecycle, "restart_application"
+            ), mock.patch.object(
+                lifecycle, "oneshot_invocation", return_value=("invocation", "1")
+            ):
+                lifecycle._validate_private_storage_and_restart()
+
+            self.assertIn(
+                (
+                    "worker-hash-chain",
+                    "stat",
+                    "-c",
+                    "%u:%g:%a",
+                    storage_path,
+                ),
+                calls,
+            )
+            metadata = "10001:10001:644\n"
+            with mock.patch.object(
+                lifecycle, "podman_exec", side_effect=podman_exec
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError, "unexpected metadata"
+            ):
+                lifecycle._validate_private_storage_and_restart()
 
     def test_effective_health_contract_rejects_every_runtime_delta(self) -> None:
         contract = self.module.role_spec("api").health

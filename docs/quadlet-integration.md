@@ -60,8 +60,9 @@ All containers have read-only root filesystems, explicit writable paths, all
 capabilities dropped, `no-new-privileges`, no host networking, no privileged
 mode, and no runtime socket. Secret initialization alone receives `CHOWN` and
 `FOWNER` inside the rootless user namespace. Runtime inspection rechecks these
-properties, exact identities, `crun`, network membership, loopback-only gateway
-publication, and the effective AppArmor profile when AppArmor is available.
+properties, exact identities, `crun`, both networks' effective internal state,
+network membership, the gateway's exact `127.0.0.1:<port>:8443` publication,
+and the effective AppArmor profile when AppArmor is available.
 
 ## Supply-chain order
 
@@ -93,7 +94,9 @@ The same API health, separate browser origins, exact credentialed CORS,
 Sanctum/secure-cookie, CSP, service-worker, Valkey cache and queue, worker
 ownership, and private-storage probes used by the completed integration are
 run against the Quadlet services. An API restart must preserve the disposable
-private-storage fixture without creating a new migration container.
+private-storage fixture without creating a new migration container. The shared
+file must retain the historical `10001:10001:640` owner, group, and mode when
+observed from the hash-chain worker.
 Every HTTP transfer has a ten-second maximum, and the readiness probes reduce
 that maximum to the remaining lifecycle deadline. Negative HTTP evidence
 accepts curl's HTTP-error exit only; DNS, connection, and TLS failures remain
@@ -160,6 +163,13 @@ Quadlet directory:
 ```text
 QUADLET_UNIT_DIRS=/etc/containers/systemd/users/<uid>
 ```
+
+The harness requests one standard sudo credential refresh over stdin
+(`sudo -S -v`) before doing any runtime or registry work. The password is not a
+command-line value. Unit installation and cleanup then use only non-interactive
+`sudo -n`, so a failure or signal cannot block on a password prompt. Hosted
+runners may satisfy the same gate through their existing passwordless operator
+policy; no SecPal-specific broad sudoers rule is needed.
 
 After the policy is imported into the user manager, run:
 

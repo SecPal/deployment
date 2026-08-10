@@ -21,6 +21,9 @@ FRONTEND_SOURCE_COMMIT = "b755ca0d0ee5a85eca5ad5688d457241f070b1b4"
 POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
 VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
+INTERNAL_NETWORKS = ("application", "edge")
+VOLUME_NAMES = ("secrets", "private-storage", "postgres")
+PRIVATE_STORAGE_MODE = 0o640
 
 
 @dataclass(frozen=True)
@@ -265,6 +268,7 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
     }
 )
 
+CONTAINER_ROLES = tuple(ROLE_SPECS)
 REQUIRED_CONTAINER_UIDS = frozenset(spec.uid for spec in ROLE_SPECS.values())
 REQUIRED_CONTAINER_GIDS = frozenset(spec.gid for spec in ROLE_SPECS.values())
 

@@ -21,8 +21,10 @@ from integration_runtime_contract import (
     API_IMAGE,
     FRONTEND_IMAGE,
     GATEWAY_HEALTH_FAILURE_SPEC,
+    INTERNAL_NETWORKS,
     POSTGRES_IMAGE,
     VALKEY_IMAGE,
+    VOLUME_NAMES,
     health_lines,
     role_spec,
     tmpfs_mounts,
@@ -200,16 +202,15 @@ def build_units(
     ]
     units: dict[str, str] = {}
 
-    for name, internal in (("application", True), ("edge", True)):
+    for name in INTERNAL_NETWORKS:
         network_section = [f"NetworkName={prefix}-{name}", *labels]
-        if internal:
-            network_section.append("Internal=true")
+        network_section.append("Internal=true")
         units[f"{prefix}-{name}.network"] = unit_description(
             f"SecPal integration {name} network ({instance})",
             part_of=f"{prefix}.target",
         ) + section("Network", network_section)
 
-    for name in ("secrets", "private-storage", "postgres"):
+    for name in VOLUME_NAMES:
         units[f"{prefix}-{name}.volume"] = unit_description(
             f"SecPal integration {name} volume ({instance})",
             part_of=f"{prefix}.target",

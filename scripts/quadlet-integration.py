@@ -34,36 +34,25 @@ from integration_runtime_contract import (
     API_IMAGE,
     API_SOURCE_COMMIT,
     CADDY_IMAGE,
+    CONTAINER_ROLES,
     FRONTEND_DIGEST,
     FRONTEND_IMAGE,
     FRONTEND_SOURCE_COMMIT,
     GATEWAY_HEALTH_FAILURE_SPEC,
     HealthSpec,
+    INTERNAL_NETWORKS,
     POSTGRES_IMAGE,
+    PRIVATE_STORAGE_MODE,
     REQUIRED_CONTAINER_GIDS,
     REQUIRED_CONTAINER_UIDS,
     TmpfsSpec,
     VALKEY_IMAGE,
+    VOLUME_NAMES,
     podman_version_supported,
     podman_versions_compatible,
     role_spec,
 )
 
-
-CONTAINER_ROLES = (
-    "secrets-init",
-    "postgres",
-    "valkey",
-    "migrate",
-    "api",
-    "worker-general",
-    "worker-hash-chain",
-    "scheduler",
-    "frontend",
-    "gateway",
-)
-NETWORK_NAMES = ("application", "edge")
-VOLUME_NAMES = ("secrets", "private-storage", "postgres")
 ONESHOT_SYSTEMD_PROPERTIES = (
     "ActiveState",
     "SubState",
@@ -120,22 +109,28 @@ class Runner:
 
     def __init__(self) -> None:
         self.active: subprocess.Popen[str] | None = None
+        self.active_process_group = False
 
     def run(self, command: Sequence[str], **kwargs) -> subprocess.CompletedProcess[str]:
         defaults = {"check": True, "text": True}
         defaults.update(kwargs)
         check = defaults.pop("check")
         capture_output = defaults.pop("capture_output", False)
+        start_new_session = defaults.pop("start_new_session", True)
         if capture_output:
             defaults["stdout"] = subprocess.PIPE
             defaults["stderr"] = subprocess.PIPE
-        process = subprocess.Popen(list(command), start_new_session=True, **defaults)
+        process = subprocess.Popen(
+            list(command), start_new_session=start_new_session, **defaults
+        )
         self.active = process
+        self.active_process_group = start_new_session
         try:
             stdout, stderr = process.communicate()
         finally:
             if process.poll() is not None:
                 self.active = None
+                self.active_process_group = False
         completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         if check and process.returncode:
             raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
@@ -146,7 +141,10 @@ class Runner:
         if process is None or process.poll() is not None:
             return
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            if self.active_process_group:
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
         except ProcessLookupError:
             return
 
@@ -158,12 +156,16 @@ class Runner:
             process.communicate(timeout=10)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                if self.active_process_group:
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
             except ProcessLookupError:
                 pass
             process.communicate()
         finally:
             self.active = None
+            self.active_process_group = False
 
 
 @dataclass(frozen=True)
@@ -184,7 +186,7 @@ class Resources:
     def for_instance(cls, instance: str, uid: int, active_root: Path) -> "Resources":
         prefix = f"secpal-int-{instance}"
         unit_names = [f"{prefix}-{role}.container" for role in CONTAINER_ROLES]
-        unit_names.extend(f"{prefix}-{name}.network" for name in NETWORK_NAMES)
+        unit_names.extend(f"{prefix}-{name}.network" for name in INTERNAL_NETWORKS)
         unit_names.extend(f"{prefix}-{name}.volume" for name in VOLUME_NAMES)
         unit_names.append(f"{prefix}.target")
         return cls(
@@ -194,7 +196,7 @@ class Resources:
             prefix=prefix,
             target=f"{prefix}.target",
             containers=tuple(f"{prefix}-{role}" for role in CONTAINER_ROLES),
-            networks=tuple(f"{prefix}-{name}" for name in NETWORK_NAMES),
+            networks=tuple(f"{prefix}-{name}" for name in INTERNAL_NETWORKS),
             volumes=tuple(f"{prefix}-{name}" for name in VOLUME_NAMES),
             gateway_image=f"localhost/secpal-integration-gateway-{instance}:2.10.2",
             unit_files=tuple(active_root / name for name in sorted(unit_names)),
@@ -773,6 +775,22 @@ def validate_dns_isolation_result(returncode: int, service: str) -> None:
         raise IntegrationError(f"unable to verify frontend DNS isolation for {service}")
 
 
+def validate_port_publication(
+    role: str, bindings: object, port: int | None
+) -> None:
+    if not isinstance(bindings, Mapping):
+        raise IntegrationError(f"invalid host port publication for {role}")
+    if role != "gateway":
+        if bindings:
+            raise IntegrationError(f"unexpected host port publication for {role}")
+        return
+    expected = {
+        "8443/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(port)}]
+    }
+    if bindings != expected:
+        raise IntegrationError("gateway loopback publication is not exact")
+
+
 def user_container_configuration_root(
     home: Path, environment: Mapping[str, str]
 ) -> Path:
@@ -958,6 +976,7 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=command[0] != "sudo",
             )
         except OSError:
             if command == reload_command:
@@ -1125,6 +1144,7 @@ class IntegrationLifecycle:
         check: bool = True,
         environment: Mapping[str, str] | None = None,
         cwd: Path | None = None,
+        start_new_session: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         try:
             return self.runner.run(
@@ -1133,6 +1153,7 @@ class IntegrationLifecycle:
                 capture_output=capture,
                 env=dict(environment) if environment is not None else None,
                 cwd=os.fspath(cwd) if cwd is not None else None,
+                start_new_session=start_new_session,
             )
         except subprocess.CalledProcessError as error:
             detail = ""
@@ -1144,6 +1165,12 @@ class IntegrationLifecycle:
 
     def captured(self, argv: Sequence[str], **kwargs) -> str:
         return (self.command(argv, capture=True, **kwargs).stdout or "").strip()
+
+    def sudo(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return self.command(
+            ["sudo", *arguments],
+            start_new_session=False,
+        )
 
     def validate_repository_and_runtime(self) -> None:
         required = (
@@ -1177,7 +1204,10 @@ class IntegrationLifecycle:
         validate_gh_version_line(version_line)
         self.command(["gh", "attestation", "verify", "--help"], capture=True)
         self.command(playwright_admission_command(), capture=True)
-        self.command(["sudo", "-n", "true"], capture=True)
+        # Authenticate once while the operator is present. Every later install
+        # and cleanup command remains non-interactive so failure paths cannot
+        # hang on a password prompt.
+        self.sudo("-S", "-v")
 
         info = parse_json_mapping(
             self.captured(["podman", "info", "--format", "json"]),
@@ -1583,29 +1613,20 @@ class IntegrationLifecycle:
             base.extend(("--failure-case", self.failure_case))
         self.command(["python3", os.fspath(renderer), "render", *base, "--output", os.fspath(self.output)])
         self.command(["python3", os.fspath(renderer), "validate", *base, "--input", os.fspath(self.output)])
-        self.command(
-            ["sudo", "-n", "install", "-d", "-o", "root", "-g", "root", "-m", "0755", os.fspath(self.active_root)]
+        self.sudo(
+            "-n",
+            "install",
+            "-d",
+            "-o",
+            "root",
+            "-g",
+            "root",
+            "-m",
+            "0755",
+            os.fspath(self.active_root),
         )
         for source in sorted(self.output.iterdir()):
-            self.command(
-                [
-                    "sudo",
-                    "-n",
-                    "install",
-                    "-o",
-                    "root",
-                    "-g",
-                    "root",
-                    "-m",
-                    "0644",
-                    os.fspath(source),
-                    os.fspath(self.active_root / source.name),
-                ]
-            )
-        target_source = self.output / self.resources.target
-        self.command(
-            [
-                "sudo",
+            self.sudo(
                 "-n",
                 "install",
                 "-o",
@@ -1614,9 +1635,21 @@ class IntegrationLifecycle:
                 "root",
                 "-m",
                 "0644",
-                os.fspath(target_source),
-                os.fspath(self.resources.systemd_target_file),
-            ]
+                os.fspath(source),
+                os.fspath(self.active_root / source.name),
+            )
+        target_source = self.output / self.resources.target
+        self.sudo(
+            "-n",
+            "install",
+            "-o",
+            "root",
+            "-g",
+            "root",
+            "-m",
+            "0644",
+            os.fspath(target_source),
+            os.fspath(self.resources.systemd_target_file),
         )
         validate_active_root(self.active_root)
         validate_active_root(self.resources.systemd_target_file.parent)
@@ -2099,7 +2132,7 @@ class IntegrationLifecycle:
             self._validate_effective_container(
                 role, details, f"{contract.uid}:{contract.gid}"
             )
-        self._validate_network_membership()
+        self._validate_network_boundary()
         self._validate_external_behavior()
         self._validate_runtime_probes_and_restart()
         self._validate_long_running_roles()
@@ -2173,6 +2206,8 @@ class IntegrationLifecycle:
         )
         if observed_networks != self._expected_networks(role):
             raise IntegrationError(f"network isolation mismatch for {role}")
+        bindings = (details.get("HostConfig") or {}).get("PortBindings") or {}
+        validate_port_publication(role, bindings, self.port)
 
     def _expected_networks(self, role: str) -> set[str]:
         # Podman inspect preserves disabled networking as the special "none"
@@ -2271,35 +2306,21 @@ class IntegrationLifecycle:
         )
         return validate_oneshot_state(properties)
 
-    def _validate_network_membership(self) -> None:
-        for role in (
-            "postgres",
-            "valkey",
-            "api",
-            "worker-general",
-            "worker-hash-chain",
-            "scheduler",
-            "frontend",
-            "gateway",
-        ):
-            details = parse_single_json_object(
-                self.captured(
-                    [
-                        "podman",
-                        "container",
-                        "inspect",
-                        f"{self.resources.prefix}-{role}",
-                    ]
-                ),
-                f"network inspection for {role}",
+    def _validate_network_boundary(self) -> None:
+        for network in INTERNAL_NETWORKS:
+            name = f"{self.resources.prefix}-{network}"
+            internal = self.captured(
+                [
+                    "podman",
+                    "network",
+                    "inspect",
+                    "--format",
+                    "{{.Internal}}",
+                    name,
+                ]
             )
-            bindings = (nested(details, "HostConfig").get("PortBindings") or {})
-            if role == "gateway":
-                flattened = [binding for values in bindings.values() for binding in values]
-                if len(flattened) != 1 or flattened[0].get("HostIp") != "127.0.0.1" or flattened[0].get("HostPort") != str(self.port):
-                    raise IntegrationError("gateway loopback publication is not exact")
-            elif bindings:
-                raise IntegrationError(f"unexpected host port publication for {role}")
+            if internal != "true":
+                raise IntegrationError(f"network is not internal: {name}")
         resolver = self.command(
             [
                 "podman",
@@ -2526,12 +2547,36 @@ class IntegrationLifecycle:
                 raise IntegrationError(f"{role} did not process its isolated queue probe")
             self.podman_exec("api", *entrypoint, "cache-forget", queue_key)
         self.podman_exec("api", *entrypoint, "cache-forget", cache_key)
+        self._validate_private_storage_and_restart()
+
+    def _validate_private_storage_and_restart(self) -> None:
         storage_name = f"quadlet-storage-{self.instance}"
         storage_path = f"/app/storage/app/private/{storage_name}"
-        self.podman_exec("api", "/bin/sh", "-eu", "-c", 'umask 027; printf "%s" "$2" >"$1"; chmod 0640 "$1"', "sh", storage_path, storage_name)
+        self.podman_exec(
+            "api",
+            "/bin/sh",
+            "-eu",
+            "-c",
+            f'umask 027; printf "%s" "$2" >"$1"; chmod {PRIVATE_STORAGE_MODE:04o} "$1"',
+            "sh",
+            storage_path,
+            storage_name,
+        )
         observed_storage = self.podman_exec("worker-general", "cat", storage_path, capture=True).stdout
         if (observed_storage or "").strip() != storage_name:
             raise IntegrationError("private-storage fixture is not shared")
+        metadata = self.podman_exec(
+            "worker-hash-chain",
+            "stat",
+            "-c",
+            "%u:%g:%a",
+            storage_path,
+            capture=True,
+        ).stdout
+        api = role_spec("api")
+        expected_metadata = f"{api.uid}:{api.gid}:{PRIVATE_STORAGE_MODE:o}"
+        if (metadata or "").strip() != expected_metadata:
+            raise IntegrationError("private-storage fixture has unexpected metadata")
         if self.migration_invocation is None:
             raise IntegrationError("migration invocation identity was not recorded")
         self.restart_application()
@@ -2792,7 +2837,7 @@ def directory_size(path: Path) -> int:
 def is_integration_resource_name(kind: str, name: str) -> bool:
     suffixes = {
         "container": CONTAINER_ROLES,
-        "network": NETWORK_NAMES,
+        "network": INTERNAL_NETWORKS,
         "volume": VOLUME_NAMES,
     }.get(kind)
     if suffixes is None or not name.startswith("secpal-int-"):
@@ -2809,7 +2854,9 @@ def is_integration_resource_name(kind: str, name: str) -> bool:
 
 def generated_service_names(resources: Resources) -> list[str]:
     services = [f"{resources.prefix}-{role}.service" for role in CONTAINER_ROLES]
-    services.extend(f"{resources.prefix}-{name}-network.service" for name in NETWORK_NAMES)
+    services.extend(
+        f"{resources.prefix}-{name}-network.service" for name in INTERNAL_NETWORKS
+    )
     services.extend(f"{resources.prefix}-{name}-volume.service" for name in VOLUME_NAMES)
     return services
 

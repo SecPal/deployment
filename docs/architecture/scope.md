@@ -74,11 +74,11 @@ The architecture separates the following trust zones:
   deployment trust domain.
 
 The API, frontend, workers, scheduler, PostgreSQL, and Valkey publish no ports.
-In the active D.1a runtime only the gateway joins the internal edge network and
-publishes the controlled loopback fixture port; the application and edge
-networks remain separate and internal. The retained Compose evidence used its
-historical host-access bridge. Production traffic and public exposure are not
-implemented.
+In the active D.1a runtime the API, frontend, and gateway share the internal
+edge network, but only the gateway publishes the controlled loopback fixture
+port. The application and edge networks remain separate and internal. The
+retained Compose evidence used its historical host-access bridge. Production
+traffic and public exposure are not implemented.
 
 ## Singleton invariants
 

@@ -219,6 +219,9 @@ class QuadletContract(unittest.TestCase):
         application = f"secpal-int-{INSTANCE}-application.network"
         edge = f"secpal-int-{INSTANCE}-edge.network"
 
+        for network in (application, edge):
+            self.assertIn("Internal=true", units[network])
+
         for role in ("postgres", "valkey", "migrate", "worker-general", "worker-hash-chain", "scheduler"):
             self.assertIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-{role}.container"])
             self.assertNotIn(f"Network={edge}", units[f"secpal-int-{INSTANCE}-{role}.container"])
