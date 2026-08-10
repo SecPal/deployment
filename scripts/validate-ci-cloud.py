@@ -196,6 +196,10 @@ def validate_conformance_workflow(root: Path) -> None:
     require("cancel-in-progress: false" in text, "cloud cleanup must not be cancelled by concurrency")
     require(text.count("ref: ${{ github.sha }}") == 4, "trusted checkout must stay on the workflow commit")
     require(text.count("persist-credentials: false") == 4, "checkout credentials must not persist")
+    require(
+        text.count("if-no-files-found: error") == 2,
+        "missing provider evidence must fail the upload step",
+    )
 
     jobs = document.get("jobs")
     assert isinstance(jobs, dict)
@@ -534,6 +538,14 @@ def validate(root: Path) -> None:
         "/tmp/secpal-target-conformance.log" not in remote
         and ") >/dev/null 2>&1" in remote,
         "target output must not use a shared temporary path",
+    )
+    require(
+        'bootstrap_stage="host-key"' in remote
+        and "scripts/ci-cloud/write-bootstrap-failure.py" in remote
+        and "cloud-init status --long" in remote
+        and "head -c 8192" in remote
+        and "cloud-init-output.log" not in remote,
+        "early remote failures need bounded structured evidence and diagnostics",
     )
 
 

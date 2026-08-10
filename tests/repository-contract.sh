@@ -72,17 +72,20 @@ required_files=(
   scripts/ci-cloud/run-remote-conformance.sh
   scripts/ci-cloud/target-conformance.sh
   scripts/ci-cloud/validate-evidence.py
+  scripts/ci-cloud/write-bootstrap-failure.py
   scripts/reject-sensitive-paths.sh
   scripts/validate-ci-cloud.py
   scripts/validate-production-contract.py
   scripts/validate-origin.sh
   scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
+  tests/ci-cloud-bootstrap-failure.py
   tests/ci-cloud-contract.py
   tests/ci-cloud-collector.py
   tests/ci-cloud-evidence.py
   tests/ci-cloud-gcp-janitor.py
   tests/ci-cloud-janitor.py
+  tests/ci-cloud-remote-bootstrap.sh
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
   tests/production-contract-regressions.py
