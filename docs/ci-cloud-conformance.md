@@ -155,13 +155,23 @@ requires repository `SecPal/deployment`, owner `SecPal`, ref
 principal receives only `roles/iam.workloadIdentityUser` on the dedicated
 service account. Never create a service-account JSON key.
 
-Enable the Compute API once as a project administrator. Then create the
-project custom role from
+Link the non-production project to an active billing account, then enable the
+Compute API and the IAM, Resource Manager, Service Account Credentials, and
+Security Token Service APIs required by service-account-backed WIF. These are
+one-time project-administrator operations. Then create the project custom role from
 [`iam-role.yaml`](../infra/ci-cloud/gcp/iam-role.yaml) and bind only that role
 to the dedicated service account:
 
 ```bash
-gcloud services enable compute.googleapis.com --project=secpal-dev
+gcloud billing projects describe secpal-dev \
+  --format="yaml(billingAccountName,billingEnabled)"
+gcloud services enable \
+  compute.googleapis.com \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com \
+  sts.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  --project=secpal-dev
 gcloud iam roles create secpalCloudConformanceOperator \
   --project=secpal-dev \
   --file=infra/ci-cloud/gcp/iam-role.yaml
@@ -169,6 +179,12 @@ gcloud projects add-iam-policy-binding secpal-dev \
   --member=serviceAccount:gcp-service-account@secpal-dev.iam.gserviceaccount.com \
   --role=projects/secpal-dev/roles/secpalCloudConformanceOperator
 ```
+
+The billing check must report `billingEnabled: true`. Enabling billing applies
+to the whole project, not only to these CI fixtures; `secpal-dev` must remain a
+non-production project with no customer data. Never grant the CI service
+account Owner, Editor, Compute Admin, IAM administration, or
+`iam.serviceAccounts.actAs` to bypass a denied operation.
 
 The role contains only the concrete instance, disk, VPC, firewall, operation
 polling, image-read, label, and service-use permissions required by the root
