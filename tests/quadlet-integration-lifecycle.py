@@ -969,6 +969,9 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "CapAdd": [],
                 "CapDrop": ["CAP_ALL"],
                 "SecurityOpt": ["no-new-privileges"],
+                "PidsLimit": 512,
+                "Init": True,
+                "LogConfig": {"Type": "journald"},
                 "Binds": [],
                 "Tmpfs": {
                     "/tmp": "size=16m,mode=0700,uid=10001,gid=10001,nosuid,nodev,noexec,rw,rprivate,tmpcopyup"
@@ -985,6 +988,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             "AppArmorProfile": "containers-default-1.0.0",
             "EffectiveCaps": [],
             "BoundingCaps": [],
+            "Config": {"StopTimeout": 30},
         }
         self.module.validate_container_security(
             valid,
@@ -1007,6 +1011,10 @@ class QuadletLifecycleContract(unittest.TestCase):
             ("host-network", ("HostConfig", "NetworkMode"), "host"),
             ("socket", ("HostConfig", "Binds"), ["/run/podman/podman.sock:/run/podman/podman.sock"]),
             ("capability", ("HostConfig", "CapAdd"), ["CAP_SYS_ADMIN"]),
+            ("process-limit", ("HostConfig", "PidsLimit"), 0),
+            ("missing-init", ("HostConfig", "Init"), False),
+            ("wrong-log-driver", ("HostConfig", "LogConfig"), {"Type": "k8s-file"}),
+            ("wrong-stop-timeout", ("Config", "StopTimeout"), 10),
             ("seccomp-unconfined", ("HostConfig", "SecurityOpt"), ["no-new-privileges", "seccomp=unconfined"]),
             ("unconfined", ("AppArmorProfile",), "unconfined"),
         ):
@@ -2349,6 +2357,11 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "Config": {
                     "Env": ["PATH=/usr/bin", "container=podman"],
                     "User": "0:0",
+                    "Entrypoint": [
+                        "/bin/sh",
+                        "/run/secpal/quadlet-oneshot-entrypoint.sh",
+                    ],
+                    "Cmd": ["/bin/bash", "/run/secpal/init-local-secrets.sh"],
                     "Labels": {
                         "org.secpal.integration": "true",
                         "org.secpal.integration.instance": "contract01",
@@ -2506,6 +2519,76 @@ class QuadletLifecycleContract(unittest.TestCase):
 
         with self.assertRaisesRegex(self.module.IntegrationError, "health contract"):
             self.module.validate_container_health({"Config": {}}, contract)
+
+    def test_effective_scheduler_execution_is_exact(self) -> None:
+        contract = self.module.role_execution_spec("scheduler")
+        valid = {
+            "Config": {
+                "Entrypoint": [
+                    "/bin/bash",
+                    "/run/secpal/container-entrypoint.sh",
+                ],
+                "Cmd": ["php", "artisan", "schedule:work"],
+            }
+        }
+        self.module.validate_container_execution(valid, contract)
+        for label, field, value in (
+            ("default-entrypoint", "Entrypoint", None),
+            ("wrong-entrypoint", "Entrypoint", ["/bin/sh"]),
+            ("default-command", "Cmd", None),
+            ("wrong-command", "Cmd", ["php", "artisan", "queue:work"]),
+        ):
+            with self.subTest(label=label):
+                candidate = json.loads(json.dumps(valid))
+                candidate["Config"][field] = value
+                with self.assertRaisesRegex(
+                    self.module.IntegrationError,
+                    "execution contract",
+                ):
+                    self.module.validate_container_execution(candidate, contract)
+
+    def test_effective_container_validation_checks_explicit_process_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=Path(directory),
+                output=Path(directory) / "quadlets",
+                runner=FakeRunner(),
+            )
+            details = {
+                "Config": {
+                    "Env": ["PATH=/usr/bin"],
+                    "User": "10001:10001",
+                    "Entrypoint": [
+                        "/bin/bash",
+                        "/run/secpal/container-entrypoint.sh",
+                    ],
+                    "Cmd": ["php", "artisan", "schedule:work"],
+                    "Labels": {
+                        "org.secpal.integration": "true",
+                        "org.secpal.integration.instance": "contract01",
+                        "org.secpal.role": "scheduler",
+                    },
+                },
+                "HostConfig": {"PortBindings": {}},
+                "NetworkSettings": {
+                    "Networks": {"secpal-int-contract01-application": {}}
+                },
+            }
+            with mock.patch.object(
+                self.module, "validate_container_security"
+            ), mock.patch.object(
+                self.module,
+                "validate_container_execution",
+                wraps=self.module.validate_container_execution,
+            ) as execution:
+                lifecycle._validate_effective_container("scheduler", details)
+            execution.assert_called_once_with(
+                details,
+                self.module.role_execution_spec("scheduler"),
+            )
 
     def test_effective_health_service_requires_notify_readiness(self) -> None:
         self.module.validate_effective_health_service(

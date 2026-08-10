@@ -34,7 +34,11 @@ from integration_runtime_contract import (
     API_IMAGE,
     API_SOURCE_COMMIT,
     CADDY_IMAGE,
+    CONTAINER_LOG_DRIVER,
+    CONTAINER_PIDS_LIMIT,
     CONTAINER_ROLES,
+    CONTAINER_STOP_TIMEOUT,
+    ExecutionSpec,
     FRONTEND_DIGEST,
     FRONTEND_IMAGE,
     FRONTEND_SOURCE_COMMIT,
@@ -51,6 +55,7 @@ from integration_runtime_contract import (
     VOLUME_NAMES,
     podman_version_supported,
     podman_versions_compatible,
+    role_execution_spec,
     role_spec,
 )
 
@@ -542,6 +547,24 @@ def validate_container_security(
         raise IntegrationError("a runtime container is privileged")
     if host.get("ReadonlyRootfs") is not True:
         raise IntegrationError("a runtime container root filesystem is writable")
+    if host.get("PidsLimit") != CONTAINER_PIDS_LIMIT:
+        raise IntegrationError(
+            "effective runtime process limit differs from the reviewed contract"
+        )
+    if host.get("Init") is not True:
+        raise IntegrationError("effective runtime init differs from the reviewed contract")
+    log_config = host.get("LogConfig")
+    if (
+        not isinstance(log_config, Mapping)
+        or log_config.get("Type") != CONTAINER_LOG_DRIVER
+    ):
+        raise IntegrationError(
+            "effective runtime log driver differs from the reviewed contract"
+        )
+    if nested(inspect, "Config", "StopTimeout") != CONTAINER_STOP_TIMEOUT:
+        raise IntegrationError(
+            "effective runtime stop timeout differs from the reviewed contract"
+        )
     if str(host.get("NetworkMode", "")).lower() == "host":
         raise IntegrationError("a runtime container uses host networking")
     bindings = host.get("Binds") or []
@@ -618,6 +641,24 @@ def validate_container_environment(inspect: Mapping) -> None:
         names.add(name)
     if names & PROXY_ENVIRONMENT_NAMES:
         raise IntegrationError("automatic proxy environment inheritance is forbidden")
+
+
+def validate_container_execution(inspect: Mapping, expected: ExecutionSpec) -> None:
+    config = inspect.get("Config")
+    if (
+        not isinstance(config, Mapping)
+        or (
+            expected.entrypoint is not None
+            and config.get("Entrypoint") != list(expected.entrypoint)
+        )
+        or (
+            expected.command is not None
+            and config.get("Cmd") != list(expected.command)
+        )
+    ):
+        raise IntegrationError(
+            "effective execution contract differs from the reviewed contract"
+        )
 
 
 def validate_container_health(inspect: Mapping, expected: HealthSpec) -> None:
@@ -2258,6 +2299,9 @@ class IntegrationLifecycle:
         contract = role_spec(role)
         allowed = frozenset({"CHOWN", "FOWNER"}) if role == "secrets-init" else frozenset()
         validate_container_environment(details)
+        execution = role_execution_spec(role, self.failure_case)
+        if execution is not None:
+            validate_container_execution(details, execution)
         validate_container_security(
             details,
             self.apparmor_available,

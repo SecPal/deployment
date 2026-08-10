@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.fspath(ROOT / "scripts"))
 
 from integration_runtime_contract import (
+    API_IMAGE,
     podman_version_supported as quadlet_generator_version_supported,
 )
 
@@ -171,6 +172,7 @@ class QuadletContract(unittest.TestCase):
                 self.assertIn("NoNewPrivileges=true", text)
                 self.assertIn("DropCapability=all", text)
                 self.assertIn("ReadOnly=true", text)
+                self.assertIn("PidsLimit=512", text)
                 self.assertNotIn("Privileged=true", text)
                 self.assertIn("Pull=never", text)
 
@@ -300,6 +302,26 @@ class QuadletContract(unittest.TestCase):
         )
         self.assertEqual(sum("schedule:work" in text for text in units.values()), 1)
         self.assertEqual(sum("artisan migrate --force" in text for text in units.values()), 1)
+        expected_processes = {
+            "api": "frankenphp run --config /etc/frankenphp/Caddyfile",
+            "worker-general": (
+                "php artisan queue:work --queue=merkle,opentimestamp,default "
+                "--sleep=1 --tries=3 --timeout=90"
+            ),
+            "worker-hash-chain": (
+                "php artisan queue:work --queue=activity-hash-chain "
+                "--sleep=1 --tries=3 --timeout=90"
+            ),
+            "scheduler": "php artisan schedule:work",
+        }
+        for role, command in expected_processes.items():
+            with self.subTest(execution_role=role):
+                text = units[f"secpal-int-{INSTANCE}-{role}.container"]
+                self.assertIn(
+                    'Entrypoint=["/bin/bash","/run/secpal/container-entrypoint.sh"]',
+                    text,
+                )
+                self.assertIn(f"Exec={command}", text)
         self.assertIn("Type=oneshot", units[f"secpal-int-{INSTANCE}-migrate.container"])
         self.assertIn("Notify=healthy", units[f"secpal-int-{INSTANCE}-postgres.container"])
         self.assertIn(
@@ -609,6 +631,26 @@ class QuadletContract(unittest.TestCase):
         self.assertEqual(len(container_starts), 10)
         self.assertTrue(
             all(" --http-proxy=false " in line for line in container_starts)
+        )
+        for option in (
+            " --init ",
+            " --log-driver journald ",
+            " --pids-limit 512 ",
+            " --stop-timeout 30 ",
+        ):
+            with self.subTest(translated_option=option.strip()):
+                self.assertTrue(all(option in line for line in container_starts))
+        scheduler = generated.split(
+            f"---secpal-int-{INSTANCE}-scheduler.service---", 1
+        )[1].split("\n---", 1)[0]
+        self.assertIn(
+            '--entrypoint "[\\"/bin/bash\\",'
+            '\\"/run/secpal/container-entrypoint.sh\\"]"',
+            scheduler,
+        )
+        self.assertIn(
+            f"{API_IMAGE} php artisan schedule:work",
+            scheduler,
         )
         self.assertEqual(len(units), len(EXPECTED_FILES))
 

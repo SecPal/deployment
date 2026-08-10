@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 from types import MappingProxyType
 from typing import Mapping
@@ -24,6 +25,9 @@ CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec
 INTERNAL_NETWORKS = ("application", "edge")
 VOLUME_NAMES = ("secrets", "private-storage", "postgres")
 PRIVATE_STORAGE_MODE = 0o640
+CONTAINER_PIDS_LIMIT = 512
+CONTAINER_STOP_TIMEOUT = 30
+CONTAINER_LOG_DRIVER = "journald"
 CONTAINER_PODMAN_ARGS = ("--http-proxy=false",)
 PROXY_ENVIRONMENT_NAMES = frozenset(
     {
@@ -173,6 +177,98 @@ GATEWAY_HEALTH_FAILURE_SPEC = HealthSpec("/bin/false", 1, 5, 1, 5)
 
 
 @dataclass(frozen=True)
+class ExecutionSpec:
+    """Exact process override; omitted fields retain the verified image default."""
+
+    entrypoint: tuple[str, ...] | None
+    command: tuple[str, ...] | None
+
+    def __post_init__(self) -> None:
+        tokens = (*(self.entrypoint or ()), *(self.command or ()))
+        if (
+            not tokens
+            or any(
+                not isinstance(token, str)
+                or re.fullmatch(r"[A-Za-z0-9_./,:=-]+", token) is None
+                for token in tokens
+            )
+        ):
+            raise ValueError("invalid immutable execution contract")
+
+    def quadlet_lines(self) -> tuple[str, ...]:
+        lines: list[str] = []
+        if self.entrypoint is not None:
+            encoded = json.dumps(self.entrypoint, separators=(",", ":"))
+            lines.append(f"Entrypoint={encoded}")
+        if self.command is not None:
+            lines.append(f"Exec={' '.join(self.command)}")
+        return tuple(lines)
+
+
+_api_entrypoint = ("/bin/bash", "/run/secpal/container-entrypoint.sh")
+ROLE_EXECUTION_SPECS: Mapping[str, ExecutionSpec] = MappingProxyType(
+    {
+        "secrets-init": ExecutionSpec(
+            ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
+            ("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+        ),
+        "valkey": ExecutionSpec(
+            ("/bin/sh", "/run/secpal/valkey-entrypoint.sh"),
+            None,
+        ),
+        "migrate": ExecutionSpec(
+            ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
+            (
+                "/bin/bash",
+                "/run/secpal/container-entrypoint.sh",
+                "php",
+                "artisan",
+                "migrate",
+                "--force",
+            ),
+        ),
+        "api": ExecutionSpec(
+            _api_entrypoint,
+            ("frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"),
+        ),
+        "worker-general": ExecutionSpec(
+            _api_entrypoint,
+            (
+                "php",
+                "artisan",
+                "queue:work",
+                "--queue=merkle,opentimestamp,default",
+                "--sleep=1",
+                "--tries=3",
+                "--timeout=90",
+            ),
+        ),
+        "worker-hash-chain": ExecutionSpec(
+            _api_entrypoint,
+            (
+                "php",
+                "artisan",
+                "queue:work",
+                "--queue=activity-hash-chain",
+                "--sleep=1",
+                "--tries=3",
+                "--timeout=90",
+            ),
+        ),
+        "scheduler": ExecutionSpec(
+            _api_entrypoint,
+            ("php", "artisan", "schedule:work"),
+        ),
+    }
+)
+MIGRATION_FAILURE_EXECUTION_SPEC = ExecutionSpec(
+    ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
+    ("/bin/false",),
+)
+DEPENDENCY_FAILURE_EXECUTION_SPEC = ExecutionSpec(None, ("/bin/false",))
+
+
+@dataclass(frozen=True)
 class RoleSpec:
     uid: int
     gid: int
@@ -293,6 +389,18 @@ def role_spec(role: str) -> RoleSpec:
         return ROLE_SPECS[role]
     except KeyError as error:
         raise ValueError(f"unknown integration role: {role}") from error
+
+
+def role_execution_spec(
+    role: str, failure_case: str | None = None
+) -> ExecutionSpec | None:
+    """Return only repository-defined overrides, never copied image defaults."""
+
+    if role == "migrate" and failure_case == "migration":
+        return MIGRATION_FAILURE_EXECUTION_SPEC
+    if role == "postgres" and failure_case == "dependency":
+        return DEPENDENCY_FAILURE_EXECUTION_SPEC
+    return ROLE_EXECUTION_SPECS.get(role)
 
 
 def tmpfs_mounts(role: str) -> list[str]:

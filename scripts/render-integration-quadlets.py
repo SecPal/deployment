@@ -19,7 +19,10 @@ sys.dont_write_bytecode = True
 
 from integration_runtime_contract import (
     API_IMAGE,
+    CONTAINER_LOG_DRIVER,
+    CONTAINER_PIDS_LIMIT,
     CONTAINER_PODMAN_ARGS,
+    CONTAINER_STOP_TIMEOUT,
     FRONTEND_IMAGE,
     GATEWAY_HEALTH_FAILURE_SPEC,
     INTERNAL_NETWORKS,
@@ -28,6 +31,7 @@ from integration_runtime_contract import (
     VOLUME_NAMES,
     health_lines,
     role_spec,
+    role_execution_spec,
     tmpfs_mounts,
 )
 
@@ -74,9 +78,9 @@ def common_container(instance: str, role: str, image: str) -> list[str]:
         "DropCapability=all",
         "NoNewPrivileges=true",
         "RunInit=true",
-        "StopTimeout=30",
-        "LogDriver=journald",
-        "PidsLimit=512",
+        f"StopTimeout={CONTAINER_STOP_TIMEOUT}",
+        f"LogDriver={CONTAINER_LOG_DRIVER}",
+        f"PidsLimit={CONTAINER_PIDS_LIMIT}",
         *(f"PodmanArgs={argument}" for argument in CONTAINER_PODMAN_ARGS),
         "Label=org.secpal.integration=true",
         f"Label=org.secpal.integration.instance={instance}",
@@ -142,9 +146,7 @@ def api_container(
     port: int,
     fixture_root: Path,
     role: str,
-    command: str,
-    *,
-    oneshot: bool = False,
+    failure_case: str | None = None,
 ) -> str:
     prefix = f"secpal-int-{instance}"
     dependencies = [f"{prefix}-migrate.service"] if role != "migrate" else [
@@ -153,15 +155,13 @@ def api_container(
     ]
     lines = common_container(instance, role, API_IMAGE)
     lines.extend(api_environment(port))
-    entrypoint = (
-        '["/bin/sh","/run/secpal/quadlet-oneshot-entrypoint.sh"]'
-        if oneshot
-        else '["/bin/bash","/run/secpal/container-entrypoint.sh"]'
-    )
+    execution = role_execution_spec(role, failure_case)
+    if execution is None:
+        raise ContractError("API role execution contract is missing")
+    oneshot = role == "migrate"
     lines.extend(
         (
-            f"Entrypoint={entrypoint}",
-            f"Exec={command}",
+            *execution.quadlet_lines(),
             f"Mount=type=bind,source={fixture_root}/assets/container-entrypoint.sh,target=/run/secpal/container-entrypoint.sh,ro=true",
             f"Mount=type=bind,source={fixture_root}/assets/phase-b-runtime-probe.php,target=/run/secpal/phase-b-runtime-probe.php,ro=true",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
@@ -220,11 +220,13 @@ def build_units(
 
     secret_dependencies: list[str] = []
     secret_lines = common_container(instance, "secrets-init", API_IMAGE)
+    secret_execution = role_execution_spec("secrets-init")
+    if secret_execution is None:
+        raise ContractError("secret initialization execution contract is missing")
     secret_lines.extend(
         (
             "AddCapability=CHOWN FOWNER",
-            'Entrypoint=["/bin/sh","/run/secpal/quadlet-oneshot-entrypoint.sh"]',
-            "Exec=/bin/bash /run/secpal/init-local-secrets.sh",
+            *secret_execution.quadlet_lines(),
             "Environment=SECPAL_API_UID=10001",
             "Environment=SECPAL_API_GID=10001",
             "Environment=SECPAL_POSTGRES_UID=999",
@@ -266,7 +268,10 @@ def build_units(
         )
     )
     if failure_case == "dependency":
-        postgres_lines.append("Exec=/bin/false")
+        dependency_execution = role_execution_spec("postgres", failure_case)
+        if dependency_execution is None:
+            raise ContractError("dependency failure execution contract is missing")
+        postgres_lines.extend(dependency_execution.quadlet_lines())
     units[f"{prefix}-postgres.container"] = (
         unit_description(
             f"SecPal integration PostgreSQL ({instance})",
@@ -279,9 +284,12 @@ def build_units(
     )
 
     valkey_lines = common_container(instance, "valkey", VALKEY_IMAGE)
+    valkey_execution = role_execution_spec("valkey")
+    if valkey_execution is None:
+        raise ContractError("Valkey execution contract is missing")
     valkey_lines.extend(
         (
-            'Entrypoint=["/bin/sh","/run/secpal/valkey-entrypoint.sh"]',
+            *valkey_execution.quadlet_lines(),
             f"Mount=type=bind,source={fixture_root}/assets/valkey-entrypoint.sh,target=/run/secpal/valkey-entrypoint.sh,ro=true",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
             *tmpfs_mounts("valkey"),
@@ -306,38 +314,31 @@ def build_units(
         port,
         fixture_root,
         "migrate",
-        "/bin/false"
-        if failure_case == "migration"
-        else "/bin/bash /run/secpal/container-entrypoint.sh php artisan migrate --force",
-        oneshot=True,
+        failure_case,
     )
     units[f"{prefix}-api.container"] = api_container(
         instance,
         port,
         fixture_root,
         "api",
-        "frankenphp run --config /etc/frankenphp/Caddyfile",
     )
     units[f"{prefix}-worker-general.container"] = api_container(
         instance,
         port,
         fixture_root,
         "worker-general",
-        "php artisan queue:work --queue=merkle,opentimestamp,default --sleep=1 --tries=3 --timeout=90",
     )
     units[f"{prefix}-worker-hash-chain.container"] = api_container(
         instance,
         port,
         fixture_root,
         "worker-hash-chain",
-        "php artisan queue:work --queue=activity-hash-chain --sleep=1 --tries=3 --timeout=90",
     )
     units[f"{prefix}-scheduler.container"] = api_container(
         instance,
         port,
         fixture_root,
         "scheduler",
-        "php artisan schedule:work",
     )
 
     frontend_lines = common_container(instance, "frontend", FRONTEND_IMAGE)
