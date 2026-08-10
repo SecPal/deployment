@@ -64,6 +64,14 @@ class CloudCIContractTests(unittest.TestCase):
         result = self.run_validator()
         self.assertEqual(0, result.returncode, result.stdout)
 
+    def test_preflight_prunes_generated_opentofu_cache(self) -> None:
+        preflight = (ROOT / "scripts" / "preflight.sh").read_text(encoding="utf-8")
+        self.assertEqual(
+            3,
+            preflight.count("-name .terraform"),
+            "Markdown, YAML, and Prettier discovery must prune OpenTofu caches",
+        )
+
     def test_rejects_non_full_target_sha_validation(self) -> None:
         self.assert_mutation_rejected(
             ".github/workflows/cloud-conformance.yml",
