@@ -459,6 +459,155 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 self.module.load_registry_document(malformed)
 
+    def test_registry_configuration_directories_require_trusted_ancestry(self) -> None:
+        path = Path("/etc/containers/registries.conf.d")
+        trusted = mock.Mock(
+            st_uid=0,
+            st_gid=0,
+            st_mode=self.module.stat.S_IFDIR | 0o755,
+        )
+        with mock.patch.object(Path, "lstat", autospec=True, return_value=trusted):
+            self.module.validate_trusted_directory(path, "system registry configuration")
+
+        unsafe = Path("/etc/containers")
+        for label, mode, uid, gid in (
+            ("symlink", self.module.stat.S_IFLNK | 0o777, 0, 0),
+            ("user-owned", self.module.stat.S_IFDIR | 0o755, 1000, 0),
+            ("group-writable", self.module.stat.S_IFDIR | 0o775, 0, 0),
+        ):
+            with self.subTest(label=label):
+                def metadata_for(target, mode=mode, uid=uid, gid=gid):
+                    if target == unsafe:
+                        return mock.Mock(st_uid=uid, st_gid=gid, st_mode=mode)
+                    return trusted
+
+                with mock.patch.object(
+                    Path, "lstat", autospec=True, side_effect=metadata_for
+                ), self.assertRaisesRegex(
+                    self.module.IntegrationError,
+                    "system registry configuration directory",
+                ):
+                    self.module.validate_trusted_directory(
+                        path, "system registry configuration"
+                    )
+
+    def test_quadlet_generator_admission_requires_a_usable_binary(self) -> None:
+        with self.assertRaisesRegex(
+            self.module.IntegrationError, "native Quadlet user generator"
+        ):
+            self.module.validate_quadlet_generator(
+                Path("/secpal-missing-quadlet-generator")
+            )
+
+    def test_quadlet_search_path_policy_requires_trusted_ancestry(self) -> None:
+        policy = Path("/etc/environment.d/90-secpal-quadlet.conf")
+        expected = "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/1000\n"
+        directory_metadata = mock.Mock(
+            st_uid=0,
+            st_gid=0,
+            st_mode=self.module.stat.S_IFDIR | 0o755,
+        )
+        file_metadata = mock.Mock(
+            st_uid=0,
+            st_gid=0,
+            st_mode=self.module.stat.S_IFREG | 0o644,
+        )
+
+        def metadata_for(target):
+            return file_metadata if target == policy else directory_metadata
+
+        with mock.patch.object(
+            Path, "lstat", autospec=True, side_effect=metadata_for
+        ), mock.patch.object(Path, "read_text", autospec=True, return_value=expected):
+            self.module.validate_quadlet_search_path_policy(policy, expected)
+
+        unsafe = Path("/etc/environment.d")
+
+        def unsafe_metadata_for(target):
+            if target == unsafe:
+                return mock.Mock(
+                    st_uid=0,
+                    st_gid=0,
+                    st_mode=self.module.stat.S_IFLNK | 0o777,
+                )
+            return metadata_for(target)
+
+        with mock.patch.object(
+            Path, "lstat", autospec=True, side_effect=unsafe_metadata_for
+        ), self.assertRaisesRegex(
+            self.module.IntegrationError, "root-owned Quadlet search-path policy"
+        ):
+            self.module.validate_quadlet_search_path_policy(policy, expected)
+
+    def test_admission_checks_the_generator_before_registry_or_image_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+
+            def captured(argv, **_kwargs):
+                if tuple(argv) == ("gh", "version"):
+                    return "gh version 2.97.0\n"
+                if tuple(argv) == ("podman", "info", "--format", "json"):
+                    return json.dumps(self.valid_info())
+                self.fail(f"unexpected captured command: {argv}")
+
+            with mock.patch.object(
+                self.module.shutil, "which", return_value="/usr/bin/true"
+            ), mock.patch.object(lifecycle, "captured", side_effect=captured), mock.patch.object(
+                self.module,
+                "validate_quadlet_generator",
+                side_effect=self.module.IntegrationError("native Quadlet user generator is unavailable"),
+            ) as generator, mock.patch.object(
+                lifecycle, "_validate_registry_files"
+            ) as registry, self.assertRaisesRegex(
+                self.module.IntegrationError, "native Quadlet user generator"
+            ):
+                lifecycle.validate_repository_and_runtime()
+
+            generator.assert_called_once_with(self.module.QUADLET_USER_GENERATOR)
+            registry.assert_not_called()
+
+    def test_api_origin_rejects_the_frontend_spa_shell(self) -> None:
+        self.module.validate_api_origin_root('{"status":"not found"}')
+        with self.assertRaisesRegex(
+            self.module.IntegrationError, "API origin returned the frontend SPA shell"
+        ):
+            self.module.validate_api_origin_root("<!doctype html><html></html>")
+
+    def test_external_behavior_rejects_the_spa_shell_from_the_api_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+
+            def curl(origin, path, *extra, check=True):
+                result = {
+                    ("api", "/health/live"): (0, '{"status":"alive"}'),
+                    ("app", "/health/live"): (0, "alive\n"),
+                    ("api", "/"): (0, "<!doctype html><html></html>"),
+                }.get((origin, path))
+                if result is None:
+                    self.fail(f"unexpected external probe: {origin} {path} {extra} {check}")
+                return subprocess.CompletedProcess((), result[0], result[1], "")
+
+            with mock.patch.object(lifecycle, "curl", side_effect=curl), self.assertRaisesRegex(
+                self.module.IntegrationError, "API origin returned the frontend SPA shell"
+            ):
+                lifecycle._validate_external_behavior()
+
     def test_anonymous_pull_environment_isolates_all_fallback_authentication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
@@ -772,15 +921,22 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "mounts.conf",
                 "policy.json",
                 "storage.conf",
+                "registries.conf.d",
                 "containers.conf.d/override.conf",
             ):
                 with self.subTest(relative=relative):
                     path = containers / relative
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text("unsafe\n", encoding="utf-8")
+                    if relative.endswith(".d"):
+                        path.mkdir(parents=True, exist_ok=True)
+                    else:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text("unsafe\n", encoding="utf-8")
                     with self.assertRaises(self.module.IntegrationError):
                         self.module.validate_user_container_configuration(home)
-                    path.unlink()
+                    if path.is_dir():
+                        path.rmdir()
+                    else:
+                        path.unlink()
 
             alternate = home / "alternate-config"
             alternate_containers = alternate / "containers"
@@ -861,6 +1017,29 @@ class QuadletLifecycleContract(unittest.TestCase):
                     ),
                 ), self.assertRaises(self.module.IntegrationError):
                     self.module.validate_active_quadlet_inputs(active_root)
+
+    def test_active_quadlet_root_rejects_a_symlinked_ancestor(self) -> None:
+        active_root = Path("/etc/containers/systemd/users/1000")
+        trusted = mock.Mock(
+            st_uid=0,
+            st_gid=0,
+            st_mode=self.module.stat.S_IFDIR | 0o755,
+        )
+        symlinked_ancestor = Path("/etc/containers")
+
+        def lstat_for(target):
+            if target == symlinked_ancestor:
+                return mock.Mock(
+                    st_uid=0,
+                    st_gid=0,
+                    st_mode=self.module.stat.S_IFLNK | 0o777,
+                )
+            return trusted
+
+        with mock.patch.object(
+            Path, "lstat", autospec=True, side_effect=lstat_for
+        ), self.assertRaisesRegex(self.module.IntegrationError, "active Quadlet root"):
+            self.module.validate_active_root(active_root)
 
     def test_oneshot_state_requires_one_successful_retained_systemd_invocation(self) -> None:
         valid = "\n".join(

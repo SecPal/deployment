@@ -132,9 +132,10 @@ floors.
 
 The runtime requires a non-root user, Podman `>=5.4.2,<6`, `crun`, `catatonit`,
 Netavark, Aardvark, `pasta`, subordinate-ID helpers, an active systemd user
-manager, and the D.1 root-owned Quadlet search-path policy. GitHub CLI 2.97.0,
-Node.js, npm, Playwright Chromium, Python 3, `curl`, and GNU `du` are also
-required.
+manager, Debian's native Quadlet user generator at
+`/usr/lib/systemd/user-generators/podman-user-generator`, and the D.1
+root-owned Quadlet search-path policy. GitHub CLI 2.97.0, Node.js, npm,
+Playwright Chromium, Python 3, `curl`, and GNU `du` are also required.
 
 The administrator-owned policy must expose only the current user's root-owned
 Quadlet directory:

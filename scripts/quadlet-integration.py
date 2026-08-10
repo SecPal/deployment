@@ -71,6 +71,9 @@ ONESHOT_SYSTEMD_PROPERTIES = (
 EXPECTED_GH_VERSION = "2.97.0"
 INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
+QUADLET_USER_GENERATOR = Path(
+    "/usr/lib/systemd/user-generators/podman-user-generator"
+)
 HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 FORBIDDEN_RUNTIME_ENVIRONMENT = (
     "CONTAINER_HOST",
@@ -629,6 +632,94 @@ def load_registry_document(path: Path) -> Mapping:
         ) from error
 
 
+def validate_trusted_directory(path: Path, description: str) -> None:
+    if not path.is_absolute():
+        raise IntegrationError(f"{description} directory must be absolute")
+    try:
+        current = path
+        while True:
+            metadata = current.lstat()
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != 0
+                or metadata.st_gid != 0
+                or metadata.st_mode & 0o022
+            ):
+                raise IntegrationError(
+                    f"{description} directory or ancestry is not trusted"
+                )
+            if current == current.parent:
+                return
+            current = current.parent
+    except IntegrationError:
+        raise
+    except OSError as error:
+        raise IntegrationError(
+            f"{description} directory or ancestry could not be inspected safely"
+        ) from error
+
+
+def validate_trusted_regular_file(path: Path, description: str) -> None:
+    validate_trusted_directory(path.parent, description)
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise IntegrationError(
+            f"{description} could not be inspected safely"
+        ) from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+        or metadata.st_mode & 0o022
+    ):
+        raise IntegrationError(f"{description} is not a trusted regular file")
+
+
+def validate_quadlet_generator(path: Path) -> Path:
+    validate_trusted_directory(path.parent, "native Quadlet user generator")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise IntegrationError(
+            "native Quadlet user generator is unavailable"
+        ) from error
+    validate_trusted_regular_file(resolved, "native Quadlet user generator")
+    try:
+        metadata = resolved.lstat()
+    except OSError as error:
+        raise IntegrationError("native Quadlet user generator is unavailable") from error
+    if (metadata.st_mode & stat.S_IXOTH) == 0:
+        raise IntegrationError(
+            "native Quadlet user generator is not executable by the user manager"
+        )
+    return resolved
+
+
+def validate_quadlet_search_path_policy(path: Path, expected: str) -> None:
+    try:
+        validate_trusted_regular_file(path, "root-owned Quadlet search-path policy")
+        metadata = path.lstat()
+        if (
+            path.read_text(encoding="utf-8") != expected
+            or (metadata.st_mode & 0o7777) != 0o644
+        ):
+            raise IntegrationError(
+                "root-owned Quadlet search-path policy is not installed"
+            )
+    except IntegrationError:
+        raise
+    except (OSError, UnicodeError) as error:
+        raise IntegrationError(
+            "root-owned Quadlet search-path policy could not be inspected safely"
+        ) from error
+
+
+def validate_api_origin_root(body: str) -> None:
+    if "<!doctype html" in body.lower():
+        raise IntegrationError("API origin returned the frontend SPA shell")
+
+
 def validate_dns_isolation_result(returncode: int, service: str) -> None:
     if returncode == 0:
         raise IntegrationError(f"frontend unexpectedly resolved data service {service}")
@@ -657,6 +748,8 @@ def validate_user_container_configuration(
         root / "mounts.conf",
         root / "policy.json",
         root / "storage.conf",
+        root / "containers.conf.d",
+        root / "registries.conf.d",
         *(root / "containers.conf.d").glob("*.conf"),
     ]
     if any(path.exists() or path.is_symlink() for path in paths):
@@ -1044,8 +1137,21 @@ class IntegrationLifecycle:
             self.captured(["podman", "info", "--format", "json"]),
             "Podman runtime information",
         )
-        self.graph_root, self.run_root = validate_runtime_info(info, self.uid, os.environ)
-        self.apparmor_available = bool(nested(info, "host", "security", "apparmorEnabled"))
+        self.graph_root, self.run_root = validate_runtime_info(
+            info, self.uid, os.environ
+        )
+        generator = validate_quadlet_generator(QUADLET_USER_GENERATOR)
+        generator_version = version_tuple(
+            required_first_line(
+                self.captured([os.fspath(generator), "--version"]),
+                "native Quadlet user generator",
+            )
+        )
+        if generator_version != version_tuple(nested(info, "version", "Version")):
+            raise IntegrationError("native Quadlet user generator does not match Podman")
+        self.apparmor_available = bool(
+            nested(info, "host", "security", "apparmorEnabled")
+        )
         self._validate_disabled_user_unit("podman.socket")
         self._validate_disabled_user_unit("podman-auto-update.timer")
         connections_text = self.captured(
@@ -1060,15 +1166,7 @@ class IntegrationLifecycle:
         self._validate_registry_files()
         policy = Path("/etc/environment.d/90-secpal-quadlet.conf")
         expected_policy = f"QUADLET_UNIT_DIRS={self.active_root}\n"
-        if (
-            policy.is_symlink()
-            or not policy.is_file()
-            or policy.read_text(encoding="utf-8") != expected_policy
-            or policy.stat().st_uid != 0
-            or policy.stat().st_gid != 0
-            or stat_mode(policy) != 0o644
-        ):
-            raise IntegrationError("root-owned Quadlet search-path policy is not installed")
+        validate_quadlet_search_path_policy(policy, expected_policy)
         environment = self.captured(["systemctl", "--user", "show-environment"])
         values = [line for line in environment.splitlines() if line.startswith("QUADLET_UNIT_DIRS=")]
         if values != [expected_policy.strip()]:
@@ -1085,29 +1183,38 @@ class IntegrationLifecycle:
         user_root = user_container_configuration_root(Path.home(), os.environ)
         user_paths = [
             user_root / "registries.conf",
+            user_root / "registries.conf.d",
             *(user_root / "registries.conf.d").glob("*.conf"),
         ]
         if any(path.exists() or path.is_symlink() for path in user_paths):
             raise IntegrationError("user-writable registry configuration is forbidden")
+        system_root = Path("/etc/containers")
+        dropin_root = system_root / "registries.conf.d"
+        try:
+            if system_root.exists() or system_root.is_symlink():
+                validate_trusted_directory(
+                    system_root, "system registry configuration"
+                )
+            if dropin_root.exists() or dropin_root.is_symlink():
+                validate_trusted_directory(
+                    dropin_root, "system registry configuration"
+                )
+        except IntegrationError:
+            raise
+        except OSError as error:
+            raise IntegrationError(
+                "system registry configuration could not be inspected safely"
+            ) from error
         system_paths = [
-            Path("/etc/containers/registries.conf"),
-            *Path("/etc/containers/registries.conf.d").glob("*.conf"),
+            system_root / "registries.conf",
+            *dropin_root.glob("*.conf"),
         ]
         documents = []
         for path in system_paths:
-            if not path.exists():
+            if not (path.exists() or path.is_symlink()):
                 continue
             try:
-                metadata = path.stat()
-                if (
-                    path.is_symlink()
-                    or metadata.st_uid != 0
-                    or metadata.st_gid != 0
-                    or metadata.st_mode & 0o022
-                ):
-                    raise IntegrationError(
-                        "system registry configuration is not trusted"
-                    )
+                validate_trusted_regular_file(path, "system registry configuration")
                 documents.append(load_registry_document(path))
             except IntegrationError:
                 raise
@@ -2140,6 +2247,10 @@ class IntegrationLifecycle:
             time.sleep(1)
         if '"status":"alive"' not in api or not frontend:
             raise IntegrationError("real API/frontend health evidence did not become ready")
+        api_root = self.curl(
+            "api", "/", "--header", "Accept: application/json", check=False
+        ).stdout or ""
+        validate_api_origin_root(api_root)
         page = self.curl("app", "/").stdout or ""
         runtime_config = self.curl("app", "/runtime-config.js").stdout or ""
         if "<!doctype html" not in page.lower() or f'https://api.secpal.example.invalid:{self.port}' not in runtime_config:
@@ -2467,16 +2578,10 @@ def stat_mode(path: Path) -> int:
 
 
 def validate_active_root(path: Path) -> None:
-    if path.is_symlink() or not path.is_dir():
-        raise IntegrationError("active Quadlet root is not a real directory")
-    current = path
-    while True:
-        metadata = current.stat()
-        if metadata.st_uid != 0 or metadata.st_gid != 0 or metadata.st_mode & 0o022:
-            raise IntegrationError("active Quadlet path has writable or non-root-owned ancestry")
-        if current == current.parent:
-            break
-        current = current.parent
+    try:
+        validate_trusted_directory(path, "active Quadlet path")
+    except IntegrationError as error:
+        raise IntegrationError("active Quadlet root is not a trusted real directory") from error
 
 
 def validate_active_quadlet_inputs(path: Path) -> None:
