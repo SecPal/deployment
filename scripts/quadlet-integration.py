@@ -442,10 +442,16 @@ def validate_tmpfs_options(
             if flag in flags:
                 raise IntegrationError("effective runtime tmpfs options are malformed")
             flags.add(flag)
-    required_flags = {"rw", "rprivate", "tmpcopyup", "nosuid", "nodev"}
+    required_flags = {"rprivate", "tmpcopyup", "nosuid", "nodev"}
     if expected.noexec:
         required_flags.add("noexec")
-    if flags != required_flags or set(values) != {"size", "mode", "uid", "gid"}:
+    # Podman 5.4 materializes the implicit read-write default; 5.7 omits it.
+    if flags not in (required_flags, required_flags | {"rw"}) or set(values) != {
+        "size",
+        "mode",
+        "uid",
+        "gid",
+    }:
         raise IntegrationError("effective runtime tmpfs options differ from the reviewed contract")
     try:
         mode = int(values["mode"], 8)

@@ -549,6 +549,27 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 lifecycle.anonymous_pull("api", "ghcr.io/secpal/api@sha256:abc")
 
+    def test_tmpfs_validation_accepts_podman_54_and_57_rw_forms(self) -> None:
+        expected = self.module.TmpfsSpec(
+            size=16 * 1024 * 1024, mode=0o700, noexec=True
+        )
+        for podman_version, options in (
+            (
+                "5.4",
+                "size=16m,mode=0700,uid=10001,gid=10001,nosuid,nodev,"
+                "noexec,rw,rprivate,tmpcopyup",
+            ),
+            (
+                "5.7",
+                "size=16m,mode=0700,uid=10001,gid=10001,nosuid,nodev,"
+                "noexec,rprivate,tmpcopyup",
+            ),
+        ):
+            with self.subTest(podman_version=podman_version):
+                self.module.validate_tmpfs_options(
+                    options, expected, (10001, 10001)
+                )
+
     def test_effective_container_security_rejects_expansion(self) -> None:
         valid = {
             "HostConfig": {
@@ -703,6 +724,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             ("nosuid", "rw,noexec,nodev,size=16m,mode=0700,uid=10001,gid=10001,rprivate,tmpcopyup"),
             ("nodev", "rw,noexec,nosuid,size=16m,mode=0700,uid=10001,gid=10001,rprivate,tmpcopyup"),
             ("noexec", "rw,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001,rprivate,tmpcopyup"),
+            ("read-only", "ro,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10001,rprivate,tmpcopyup"),
             ("uid", "rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10002,gid=10001,rprivate,tmpcopyup"),
             ("gid", "rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=10001,gid=10002,rprivate,tmpcopyup"),
             ("unresolved-ownership", "rw,noexec,nosuid,nodev,size=16m,mode=0700,U,rprivate,tmpcopyup"),
