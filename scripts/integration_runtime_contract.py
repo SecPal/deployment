@@ -24,6 +24,21 @@ CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec
 INTERNAL_NETWORKS = ("application", "edge")
 VOLUME_NAMES = ("secrets", "private-storage", "postgres")
 PRIVATE_STORAGE_MODE = 0o640
+CONTAINER_PODMAN_ARGS = ("--http-proxy=false",)
+PROXY_ENVIRONMENT_NAMES = frozenset(
+    {
+        "ALL_PROXY",
+        "FTP_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "all_proxy",
+        "ftp_proxy",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    }
+)
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -150,7 +151,6 @@ class QuadletContract(unittest.TestCase):
         self.assertNotIn("docker-compose", combined.lower())
         self.assertNotIn("podman compose", combined.lower())
         self.assertNotIn("podman-compose", combined.lower())
-        self.assertNotIn("PodmanArgs=", combined)
         self.assertNotIn("GlobalArgs=", combined)
         self.assertNotIn("AutoUpdate=", combined)
         self.assertNotIn("Network=host", combined)
@@ -159,6 +159,11 @@ class QuadletContract(unittest.TestCase):
         self.assertNotRegex(combined, r"(?i)(podman|docker)\.sock|tcp://")
 
         containers = {name: text for name, text in units.items() if name.endswith(".container")}
+        self.assertEqual(
+            combined.count("PodmanArgs=--http-proxy=false"),
+            len(containers),
+        )
+        self.assertEqual(combined.count("PodmanArgs="), len(containers))
         for name, text in containers.items():
             with self.subTest(name=name):
                 self.assertIn(f"PartOf=secpal-int-{INSTANCE}.target", text)
@@ -212,6 +217,65 @@ class QuadletContract(unittest.TestCase):
         for name, text in containers.items():
             if name != f"secpal-int-{INSTANCE}-gateway.container":
                 self.assertNotIn("PublishPort=", text)
+
+    def test_playwright_output_is_scoped_to_the_integration_instance(self) -> None:
+        observed = []
+        for instance in ("parallel01", "parallel02"):
+            environment = dict(os.environ)
+            environment.update(
+                {
+                    "APP_ORIGIN": "https://app.secpal.example.invalid:18443",
+                    "API_ORIGIN": "https://api.secpal.example.invalid:18443",
+                    "SECPAL_INTEGRATION_INSTANCE": instance,
+                }
+            )
+            result = subprocess.run(
+                [
+                    "node",
+                    "-e",
+                    "const config=require('./playwright.integration.config.js');"
+                    "process.stdout.write(JSON.stringify(config.outputDir));",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            output = Path(json.loads(result.stdout))
+            self.assertTrue(output.is_absolute())
+            self.assertEqual(
+                output,
+                ROOT / "test-results" / f"secpal-int-{instance}",
+            )
+            observed.append(output)
+        self.assertNotEqual(*observed)
+
+        historical_environment = dict(os.environ)
+        historical_environment.update(
+            {
+                "APP_ORIGIN": "https://app.secpal.example.invalid:18443",
+                "API_ORIGIN": "https://api.secpal.example.invalid:18443",
+            }
+        )
+        historical_environment.pop("SECPAL_INTEGRATION_INSTANCE", None)
+        result = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const config=require('./playwright.integration.config.js');"
+                "process.stdout.write(JSON.stringify(config.outputDir));",
+            ],
+            cwd=ROOT,
+            env=historical_environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(
+            Path(json.loads(result.stdout)),
+            ROOT / "test-results" / "secpal-int-phasebcompose",
+        )
 
     def test_roles_networks_dependencies_and_singletons_are_exact(self) -> None:
         units = self.render()
@@ -537,6 +601,15 @@ class QuadletContract(unittest.TestCase):
         self.assertNotIn("--pull always", generated)
         self.assertNotIn("--network host", generated)
         self.assertNotIn("podman.sock", generated)
+        container_starts = [
+            line
+            for line in generated.splitlines()
+            if line.startswith("ExecStart=/usr/bin/podman run ")
+        ]
+        self.assertEqual(len(container_starts), 10)
+        self.assertTrue(
+            all(" --http-proxy=false " in line for line in container_starts)
+        )
         self.assertEqual(len(units), len(EXPECTED_FILES))
 
         analyzer = shutil.which("systemd-analyze")

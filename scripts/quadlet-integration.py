@@ -43,6 +43,7 @@ from integration_runtime_contract import (
     INTERNAL_NETWORKS,
     POSTGRES_IMAGE,
     PRIVATE_STORAGE_MODE,
+    PROXY_ENVIRONMENT_NAMES,
     REQUIRED_CONTAINER_GIDS,
     REQUIRED_CONTAINER_UIDS,
     TmpfsSpec,
@@ -358,10 +359,41 @@ def validate_runtime_info(
         raise IntegrationError("effective Podman must be rootless")
     if nested(info, "host", "ociRuntime", "name") != "crun":
         raise IntegrationError("effective OCI runtime must be crun")
+    if nested(info, "host", "cgroupVersion") != "v2":
+        raise IntegrationError("unified cgroup v2 is required")
     if nested(info, "host", "networkBackend") != "netavark":
         raise IntegrationError("effective Podman network backend must be Netavark")
+    network = nested(info, "host", "networkBackendInfo")
+    if not isinstance(network, Mapping) or network.get("backend") != "netavark":
+        raise IntegrationError("effective Netavark runtime information is required")
+    netavark_version = network.get("version")
+    if (
+        not isinstance(netavark_version, str)
+        or re.fullmatch(
+            r"netavark [1-9][0-9]*\.[0-9]+\.[0-9]+(?:[-+~][0-9A-Za-z.+~-]+)?",
+            netavark_version,
+        )
+        is None
+    ):
+        raise IntegrationError("effective Netavark runtime information is required")
+    dns = network.get("dns")
+    if not isinstance(dns, Mapping):
+        raise IntegrationError("effective Aardvark DNS is required")
+    aardvark_path = Path(str(dns.get("path", "")))
+    aardvark_version = dns.get("version")
+    if (
+        not aardvark_path.is_absolute()
+        or not isinstance(aardvark_version, str)
+        or re.fullmatch(
+            r"aardvark-dns [1-9][0-9]*\.[0-9]+\.[0-9]+(?:[-+~][0-9A-Za-z.+~-]+)?",
+            aardvark_version,
+        )
+        is None
+    ):
+        raise IntegrationError("effective Aardvark DNS is required")
     if nested(info, "host", "rootlessNetworkCmd") != "pasta":
         raise IntegrationError("effective rootless network transport must be pasta")
+    runtime_component_paths(info)
     if nested(info, "host", "security", "seccompEnabled") is not True:
         raise IntegrationError("seccomp must be effective for Podman")
     mappings = nested(info, "host", "idMappings")
@@ -376,6 +408,31 @@ def validate_runtime_info(
     if not graph_root.is_absolute() or not run_root.is_absolute():
         raise IntegrationError("Podman storage roots must be absolute")
     return graph_root, run_root
+
+
+def runtime_component_paths(info: Mapping) -> tuple[tuple[Path, str], ...]:
+    components = (
+        (
+            nested(info, "host", "ociRuntime", "path"),
+            "effective crun executable",
+        ),
+        (
+            nested(info, "host", "networkBackendInfo", "path"),
+            "effective Netavark executable",
+        ),
+        (
+            nested(info, "host", "networkBackendInfo", "dns", "path"),
+            "effective Aardvark DNS executable",
+        ),
+        (
+            nested(info, "host", "pasta", "executable"),
+            "effective pasta executable",
+        ),
+    )
+    paths = tuple((Path(str(value)), description) for value, description in components)
+    if any(not path.is_absolute() for path, _description in paths):
+        raise IntegrationError("effective runtime executable path is not absolute")
+    return paths
 
 
 def validate_id_mapping(
@@ -541,6 +598,26 @@ def validate_container_security(
             validate_tmpfs_options(
                 tmpfs[destination], expected, expected_tmpfs_identity
             )
+
+
+def validate_container_environment(inspect: Mapping) -> None:
+    config = inspect.get("Config")
+    environment = config.get("Env") if isinstance(config, Mapping) else None
+    if not isinstance(environment, list):
+        raise IntegrationError("effective runtime environment is malformed")
+    names: set[str] = set()
+    for entry in environment:
+        if not isinstance(entry, str) or "=" not in entry:
+            raise IntegrationError("effective runtime environment is malformed")
+        name, _value = entry.split("=", 1)
+        if (
+            re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
+            or name in names
+        ):
+            raise IntegrationError("effective runtime environment is malformed")
+        names.add(name)
+    if names & PROXY_ENVIRONMENT_NAMES:
+        raise IntegrationError("automatic proxy environment inheritance is forbidden")
 
 
 def validate_container_health(inspect: Mapping, expected: HealthSpec) -> None:
@@ -717,6 +794,16 @@ def validate_trusted_regular_file(path: Path, description: str) -> None:
         raise IntegrationError(f"{description} is not a trusted regular file")
 
 
+def validate_trusted_executable(path: Path, description: str) -> None:
+    validate_trusted_regular_file(path, description)
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise IntegrationError(f"{description} is unavailable") from error
+    if metadata.st_mode & stat.S_IXOTH == 0:
+        raise IntegrationError(f"{description} is not executable")
+
+
 def validate_quadlet_generator(path: Path) -> Path:
     validate_trusted_directory(path.parent, "native Quadlet user generator")
     try:
@@ -725,15 +812,7 @@ def validate_quadlet_generator(path: Path) -> Path:
         raise IntegrationError(
             "native Quadlet user generator is unavailable"
         ) from error
-    validate_trusted_regular_file(resolved, "native Quadlet user generator")
-    try:
-        metadata = resolved.lstat()
-    except OSError as error:
-        raise IntegrationError("native Quadlet user generator is unavailable") from error
-    if (metadata.st_mode & stat.S_IXOTH) == 0:
-        raise IntegrationError(
-            "native Quadlet user generator is not executable by the user manager"
-        )
+    validate_trusted_executable(resolved, "native Quadlet user generator")
     return resolved
 
 
@@ -1216,6 +1295,8 @@ class IntegrationLifecycle:
         self.graph_root, self.run_root = validate_runtime_info(
             info, self.uid, os.environ
         )
+        for path, description in runtime_component_paths(info):
+            validate_trusted_executable(path, description)
         generator = validate_quadlet_generator(QUADLET_USER_GENERATOR)
         generator_version = required_first_line(
             self.captured([os.fspath(generator), "--version"]),
@@ -2176,6 +2257,7 @@ class IntegrationLifecycle:
     ) -> None:
         contract = role_spec(role)
         allowed = frozenset({"CHOWN", "FOWNER"}) if role == "secrets-init" else frozenset()
+        validate_container_environment(details)
         validate_container_security(
             details,
             self.apparmor_available,
@@ -2387,6 +2469,20 @@ class IntegrationLifecycle:
             raise IntegrationError("curl HTTP probe had a transport failure")
         return result
 
+    def browser_environment(self) -> dict[str, str]:
+        if self.port is None:
+            raise IntegrationError("integration port was not selected before browser testing")
+        environment = dict(os.environ)
+        environment.pop("PLAYWRIGHT_LAST_RUN_OUTPUT_FILE", None)
+        environment.update(
+            {
+                "APP_ORIGIN": f"https://app.secpal.example.invalid:{self.port}",
+                "API_ORIGIN": f"https://api.secpal.example.invalid:{self.port}",
+                "SECPAL_INTEGRATION_INSTANCE": self.instance,
+            }
+        )
+        return environment
+
     def _validate_external_behavior(self) -> None:
         deadline = time.monotonic() + 90
         api = frontend = ""
@@ -2483,14 +2579,11 @@ class IntegrationLifecycle:
             )
             if (status.stdout or "").strip() != "404":
                 raise IntegrationError(f"frontend origin exposed forbidden route {path}")
-        environment = dict(os.environ)
-        environment.update(
-            {
-                "APP_ORIGIN": f"https://app.secpal.example.invalid:{self.port}",
-                "API_ORIGIN": f"https://api.secpal.example.invalid:{self.port}",
-            }
+        self.command(
+            ["npm", "run", "test:integration:browser"],
+            environment=self.browser_environment(),
+            cwd=self.root,
         )
-        self.command(["npm", "run", "test:integration:browser"], environment=environment, cwd=self.root)
 
     def podman_exec(self, role: str, *arguments: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
         return self.command(
@@ -2687,10 +2780,16 @@ class IntegrationLifecycle:
             if self.runtime_admitted:
                 try:
                     cleanup_resources(self.runner, self.resources)
-                except IntegrationError as error:
-                    errors.append(str(error))
-                errors.extend(self._owned_resource_errors())
-                self._verify_unrelated_resources(errors)
+                except Exception:
+                    errors.append("resource cleanup failed")
+                try:
+                    errors.extend(self._owned_resource_errors())
+                except Exception:
+                    errors.append("owned-resource verification failed")
+                try:
+                    self._verify_unrelated_resources(errors)
+                except Exception:
+                    errors.append("unrelated-resource verification failed")
             if self.fixture_root.exists():
                 try:
                     shutil.rmtree(self.fixture_root)

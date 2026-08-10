@@ -130,7 +130,8 @@ gateway image, then verifies the resources and generated service states are
 absent. It never prunes images, volumes, networks, or unrelated containers.
 Pre-existing unrelated resource names outside the reserved integration
 namespace are snapshotted and must still exist afterward. The published SecPal
-images are not cleanup artifacts.
+images are not cleanup artifacts. A failed resource-state query is reported as
+an incomplete cleanup, but cannot skip the independent fixture-root removal.
 
 Hosted runtime evidence gives the complete pre-gateway lifecycle a bounded
 600-second readiness deadline, waits until the gateway service is active,
@@ -156,6 +157,11 @@ Playwright Chromium, Python 3, `curl`, and GNU `du` are also required.
 Podman prereleases sort below their corresponding stable release. The runtime
 and generator compatibility check compares the normalized release and
 prerelease while ignoring non-precedence distro build metadata.
+Admission also requires unified cgroup v2, effective Aardvark DNS, and trusted
+root-owned executable paths for `crun`, Netavark, Aardvark, and `pasta` before
+any image is staged. Generated containers disable Podman's default host-proxy
+environment inheritance, and runtime inspection rejects any effective proxy
+variable.
 
 The administrator-owned policy must expose only the current user's root-owned
 Quadlet directory:
@@ -196,6 +202,12 @@ python3 scripts/quadlet-integration.py \
   --port 18443 \
   --fixture-root /absolute/new/private/path
 ```
+
+The identifier also scopes Playwright output and last-run state beneath
+`test-results/secpal-int-<instance>`, so concurrent browser proofs never share
+worker artifacts or trace paths. The retained historical Compose harness uses
+the fixed `secpal-int-phasebcompose` output directory when no Quadlet instance
+identifier is present.
 
 ## Hosted evidence and production admission
 

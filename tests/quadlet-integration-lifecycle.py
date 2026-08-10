@@ -302,9 +302,20 @@ class QuadletLifecycleContract(unittest.TestCase):
                     ],
                 },
                 "serviceIsRemote": False,
+                "cgroupVersion": "v2",
                 "networkBackend": "netavark",
+                "networkBackendInfo": {
+                    "backend": "netavark",
+                    "path": "/usr/lib/podman/netavark",
+                    "version": "netavark 1.14.0",
+                    "dns": {
+                        "path": "/usr/lib/podman/aardvark-dns",
+                        "version": "aardvark-dns 1.14.0",
+                    },
+                },
                 "rootlessNetworkCmd": "pasta",
-                "ociRuntime": {"name": "crun"},
+                "ociRuntime": {"name": "crun", "path": "/usr/bin/crun"},
+                "pasta": {"executable": "/usr/bin/pasta"},
                 "security": {
                     "rootless": True,
                     "apparmorEnabled": True,
@@ -347,8 +358,29 @@ class QuadletLifecycleContract(unittest.TestCase):
             "rootful": ("host.security.rootless", False),
             "remote": ("host.serviceIsRemote", True),
             "wrong-runtime": ("host.ociRuntime.name", "runc"),
+            "wrong-cgroup": ("host.cgroupVersion", "v1"),
             "wrong-network": ("host.networkBackend", "cni"),
+            "wrong-network-info": ("host.networkBackendInfo.backend", "cni"),
+            "wrong-netavark-version": (
+                "host.networkBackendInfo.version",
+                "cni 1.0.0",
+            ),
+            "missing-aardvark": ("host.networkBackendInfo.dns", None),
+            "wrong-aardvark": (
+                "host.networkBackendInfo.dns.version",
+                "dnsmasq 2.91",
+            ),
+            "relative-aardvark": (
+                "host.networkBackendInfo.dns.path",
+                "aardvark-dns",
+            ),
+            "relative-netavark": (
+                "host.networkBackendInfo.path",
+                "netavark",
+            ),
             "wrong-transport": ("host.rootlessNetworkCmd", "slirp4netns"),
+            "relative-pasta": ("host.pasta.executable", "pasta"),
+            "relative-crun": ("host.ociRuntime.path", "crun"),
             "too-old": ("version.Version", "5.4.1"),
             "future-major": ("version.Version", "6.0.0"),
             "no-seccomp": ("host.security.seccompEnabled", False),
@@ -424,6 +456,25 @@ class QuadletLifecycleContract(unittest.TestCase):
                     f"usable subordinate {mapping_name.removesuffix('map')} mapping",
                 ):
                     self.module.validate_runtime_info(info, uid=1000, environment={})
+
+    def test_effective_environment_rejects_automatic_proxy_inheritance(self) -> None:
+        self.module.validate_container_environment(
+            {"Config": {"Env": ["PATH=/usr/bin", "container=podman"]}}
+        )
+        for environment in (
+            None,
+            "PATH=/usr/bin",
+            ["PATH=/usr/bin", "HTTP_PROXY=https://proxy.invalid/credential"],
+            ["PATH=/usr/bin", "no_proxy=localhost"],
+            ["PATH=/usr/bin", "malformed"],
+            ["PATH=/usr/bin", "PATH=/unreviewed"],
+        ):
+            with self.subTest(environment=environment):
+                with self.assertRaises(self.module.IntegrationError) as raised:
+                    self.module.validate_container_environment(
+                        {"Config": {"Env": environment}}
+                    )
+                self.assertNotIn("credential", str(raised.exception))
 
     def test_required_command_output_parsers_fail_closed(self) -> None:
         self.assertEqual(
@@ -611,6 +662,8 @@ class QuadletLifecycleContract(unittest.TestCase):
             with mock.patch.object(
                 self.module.shutil, "which", return_value="/usr/bin/true"
             ), mock.patch.object(lifecycle, "captured", side_effect=captured), mock.patch.object(
+                self.module, "validate_trusted_executable"
+            ) as executable, mock.patch.object(
                 self.module,
                 "validate_quadlet_generator",
                 side_effect=self.module.IntegrationError("native Quadlet user generator is unavailable"),
@@ -621,6 +674,21 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 lifecycle.validate_repository_and_runtime()
 
+            self.assertEqual(
+                executable.call_args_list,
+                [
+                    mock.call(Path("/usr/bin/crun"), "effective crun executable"),
+                    mock.call(
+                        Path("/usr/lib/podman/netavark"),
+                        "effective Netavark executable",
+                    ),
+                    mock.call(
+                        Path("/usr/lib/podman/aardvark-dns"),
+                        "effective Aardvark DNS executable",
+                    ),
+                    mock.call(Path("/usr/bin/pasta"), "effective pasta executable"),
+                ],
+            )
             generator.assert_called_once_with(self.module.QUADLET_USER_GENERATOR)
             registry.assert_not_called()
             self.assertIn(("sudo", "-S", "-v"), lifecycle.runner.commands)
@@ -1661,6 +1729,99 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 lifecycle.cleanup()
 
+    def test_fixture_is_removed_when_cleanup_verification_raises(self) -> None:
+        phases = ("resource-cleanup", "owned-verification", "unrelated-verification")
+        for phase in phases:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory) / "fixture"
+                fixture.mkdir(mode=0o700)
+                (fixture / "sentinel").write_text(
+                    "must be removed\n", encoding="utf-8"
+                )
+                lifecycle = self.module.IntegrationLifecycle(
+                    root=ROOT,
+                    instance="contract01",
+                    port=18443,
+                    fixture_root=fixture,
+                    output=fixture / "quadlets",
+                    runner=FakeRunner(),
+                )
+                lifecycle.runtime_admitted = True
+
+                def resource_cleanup(*_arguments):
+                    if phase == "resource-cleanup":
+                        raise self.module.IntegrationError(
+                            "resource cleanup query failed"
+                        )
+
+                def owned_verification():
+                    if phase == "owned-verification":
+                        raise self.module.IntegrationError(
+                            "owned verification query failed"
+                        )
+                    return []
+
+                def unrelated_verification(_errors):
+                    if phase == "unrelated-verification":
+                        raise self.module.IntegrationError(
+                            "unrelated verification query failed"
+                        )
+
+                with mock.patch.object(
+                    self.module,
+                    "cleanup_resources",
+                    side_effect=resource_cleanup,
+                ), mock.patch.object(
+                    lifecycle,
+                    "_owned_resource_errors",
+                    side_effect=owned_verification,
+                ), mock.patch.object(
+                    lifecycle,
+                    "_verify_unrelated_resources",
+                    side_effect=unrelated_verification,
+                ), self.assertRaisesRegex(
+                    self.module.IntegrationError,
+                    "incomplete exact cleanup",
+                ):
+                    lifecycle.cleanup()
+                self.assertFalse(fixture.exists())
+
+    def test_browser_environment_is_scoped_to_the_integration_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="parallel01",
+                port=18443,
+                fixture_root=Path(directory) / "first",
+                output=Path(directory) / "first" / "quadlets",
+                runner=FakeRunner(),
+            )
+            second = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="parallel02",
+                port=18444,
+                fixture_root=Path(directory) / "second",
+                output=Path(directory) / "second" / "quadlets",
+                runner=FakeRunner(),
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"PLAYWRIGHT_LAST_RUN_OUTPUT_FILE": "/tmp/shared-last-run.json"},
+                clear=False,
+            ):
+                first_environment = first.browser_environment()
+                second_environment = second.browser_environment()
+
+            self.assertEqual(
+                first_environment["SECPAL_INTEGRATION_INSTANCE"], "parallel01"
+            )
+            self.assertEqual(
+                second_environment["SECPAL_INTEGRATION_INSTANCE"], "parallel02"
+            )
+            self.assertNotIn("PLAYWRIGHT_LAST_RUN_OUTPUT_FILE", first_environment)
+            self.assertNotIn("PLAYWRIGHT_LAST_RUN_OUTPUT_FILE", second_environment)
+
     def test_signal_cleanup_returns_conventional_status(self) -> None:
         lifecycle = SignalDuringStartLifecycle(self.module)
         with mock.patch.object(self.module.signal, "signal") as set_handler:
@@ -2186,6 +2347,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             )
             details = {
                 "Config": {
+                    "Env": ["PATH=/usr/bin", "container=podman"],
                     "User": "0:0",
                     "Labels": {
                         "org.secpal.integration": "true",

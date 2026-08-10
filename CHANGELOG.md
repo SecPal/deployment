@@ -38,6 +38,12 @@ SPDX-License-Identifier: CC0-1.0
 - The active required integration workflow uses explicit Ubuntu 26.04 amd64
   and arm64 hosted evidence for Podman 5 and native Quadlet. The completed
   Compose workflow and stack remain historical evidence.
+- Parallel Quadlet fixtures isolate Playwright output and last-run state by
+  instance, and cleanup still removes the private fixture root when runtime
+  resource verification itself fails.
+- Runtime admission now requires effective cgroup v2, Aardvark DNS, and trusted
+  runtime-component paths, while every generated container disables Podman's
+  automatic host-proxy inheritance.
 
 ### Not included
 

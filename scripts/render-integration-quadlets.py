@@ -19,6 +19,7 @@ sys.dont_write_bytecode = True
 
 from integration_runtime_contract import (
     API_IMAGE,
+    CONTAINER_PODMAN_ARGS,
     FRONTEND_IMAGE,
     GATEWAY_HEALTH_FAILURE_SPEC,
     INTERNAL_NETWORKS,
@@ -76,6 +77,7 @@ def common_container(instance: str, role: str, image: str) -> list[str]:
         "StopTimeout=30",
         "LogDriver=journald",
         "PidsLimit=512",
+        *(f"PodmanArgs={argument}" for argument in CONTAINER_PODMAN_ARGS),
         "Label=org.secpal.integration=true",
         f"Label=org.secpal.integration.instance={instance}",
         f"Label=org.secpal.role={role}",
