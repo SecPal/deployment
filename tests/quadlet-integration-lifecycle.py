@@ -317,27 +317,6 @@ class QuadletLifecycleContract(unittest.TestCase):
             },
         }
 
-    def test_runner_timeout_kills_and_reaps_the_process_group(self) -> None:
-        process = mock.Mock()
-        process.pid = 4321
-        process.communicate.side_effect = (
-            subprocess.TimeoutExpired(["podman", "wait"], 1),
-            ("", ""),
-        )
-        process.poll.return_value = -signal.SIGKILL
-        runner = self.module.Runner()
-
-        with mock.patch.object(
-            self.module.subprocess, "Popen", return_value=process
-        ), mock.patch.object(self.module.os, "killpg") as killpg, self.assertRaises(
-            subprocess.TimeoutExpired
-        ):
-            runner.run(["podman", "wait"], timeout=1)
-
-        killpg.assert_called_once_with(4321, signal.SIGKILL)
-        self.assertEqual(process.communicate.call_count, 2)
-        self.assertIsNone(runner.active)
-
     def test_runtime_admission_accepts_only_the_d1_runtime(self) -> None:
         self.assertEqual(
             self.module.validate_runtime_info(self.valid_info(), uid=1000, environment={}),
@@ -1386,10 +1365,11 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 lifecycle._wait_for_injected_health_failure()
 
-    def test_health_failure_wait_uses_a_bounded_native_podman_condition(self) -> None:
+    def test_health_failure_uses_the_retained_podman_event_after_removal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             lifecycle = self.failure_lifecycle(directory, "health")
             starting_details = {
+                "Id": "a" * 64,
                 "Config": {"Healthcheck": {"Test": ["CMD-SHELL", "/bin/false"]}},
                 "State": {
                     "Running": True,
@@ -1404,30 +1384,73 @@ class QuadletLifecycleContract(unittest.TestCase):
                     subprocess.CompletedProcess(
                         (), 0, json.dumps([starting_details]), ""
                     ),
-                    subprocess.CompletedProcess((), 0, "137\n", ""),
+                    subprocess.CompletedProcess(
+                        (), 0, "ActiveState=active\nResult=success\n", ""
+                    ),
+                    subprocess.CompletedProcess((), 125, "", "container removed"),
+                    subprocess.CompletedProcess(
+                        (), 0, "ActiveState=failed\nResult=exit-code\n", ""
+                    ),
+                    subprocess.CompletedProcess((), 0, "unhealthy\n", ""),
                 ),
             ) as command, mock.patch.object(
                 lifecycle, "_validate_effective_container"
-            ) as validate:
+            ) as validate, mock.patch.object(self.module.time, "sleep"):
                 lifecycle._wait_for_injected_health_failure()
 
             self.assertTrue(lifecycle.injected_health_failure_observed)
             validate.assert_called_once_with("gateway", starting_details)
-            wait_call = command.call_args_list[1]
+            event_call = command.call_args_list[4]
             self.assertEqual(
-                wait_call.args[0],
+                event_call.args[0],
                 [
                     "podman",
-                    "wait",
-                    "--condition=unhealthy",
-                    "--interval=100ms",
-                    "secpal-int-contract01-gateway",
+                    "events",
+                    "--stream=false",
+                    "--since=10m",
+                    "--filter=type=container",
+                    f"--filter=container={'a' * 64}",
+                    "--filter=event=health_status",
+                    "--format={{.HealthStatus}}",
                 ],
             )
-            self.assertTrue(wait_call.kwargs["capture"])
-            self.assertFalse(wait_call.kwargs["check"])
-            self.assertGreater(wait_call.kwargs["timeout_seconds"], 0)
-            self.assertLessEqual(wait_call.kwargs["timeout_seconds"], 180)
+            self.assertTrue(event_call.kwargs["capture"])
+            self.assertFalse(event_call.kwargs["check"])
+
+    def test_retained_health_event_evidence_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.failure_lifecycle(directory, "health")
+            container_id = "a" * 64
+
+            with mock.patch.object(
+                lifecycle,
+                "command",
+                return_value=subprocess.CompletedProcess(
+                    (), 0, "starting\nunhealthy\n", ""
+                ),
+            ):
+                self.assertTrue(lifecycle._has_injected_unhealthy_event(container_id))
+
+            with mock.patch.object(
+                lifecycle,
+                "command",
+                return_value=subprocess.CompletedProcess((), 0, "healthy\n", ""),
+            ):
+                self.assertFalse(lifecycle._has_injected_unhealthy_event(container_id))
+
+            for result, message in (
+                (subprocess.CompletedProcess((), 125, "", "query failed"), "query"),
+                (subprocess.CompletedProcess((), 0, "unknown\n", ""), "unexpected"),
+            ):
+                with self.subTest(message=message), mock.patch.object(
+                    lifecycle, "command", return_value=result
+                ), self.assertRaisesRegex(self.module.IntegrationError, message):
+                    lifecycle._has_injected_unhealthy_event(container_id)
+
+            with self.assertRaisesRegex(
+                self.module.IntegrationError, "container identity"
+            ):
+                lifecycle._has_injected_unhealthy_event("not-an-id")
 
     def test_health_failure_inspection_waits_until_the_container_is_running(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1442,6 +1465,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                 (), 0, "ActiveState=activating\nResult=success\n", ""
             )
             running_details = {
+                "Id": "a" * 64,
                 "Config": {
                     "Healthcheck": {"Test": ["CMD-SHELL", "/bin/false"]}
                 },
@@ -1458,17 +1482,38 @@ class QuadletLifecycleContract(unittest.TestCase):
             running = subprocess.CompletedProcess(
                 (), 0, json.dumps([running_details]), ""
             )
-            unhealthy = subprocess.CompletedProcess((), 0, "137\n", "")
+            active = subprocess.CompletedProcess(
+                (), 0, "ActiveState=active\nResult=success\n", ""
+            )
+            unhealthy_details = json.loads(json.dumps(running_details))
+            unhealthy_details["State"] = {
+                "Running": False,
+                "Status": "exited",
+                "Health": {
+                    "Status": "unhealthy",
+                    "FailingStreak": 1,
+                    "Log": [{"ExitCode": 1, "Output": ""}],
+                },
+            }
+            unhealthy = subprocess.CompletedProcess(
+                (), 0, json.dumps([unhealthy_details]), ""
+            )
             with mock.patch.object(
                 lifecycle,
                 "command",
-                side_effect=(created, activating, running, unhealthy),
+                side_effect=(created, activating, running, active, unhealthy),
             ), mock.patch.object(
                 lifecycle, "_validate_effective_container"
             ) as validate, mock.patch.object(self.module.time, "sleep"):
                 lifecycle._wait_for_injected_health_failure()
 
-            validate.assert_called_once_with("gateway", running_details)
+            self.assertEqual(
+                validate.call_args_list,
+                [
+                    mock.call("gateway", running_details),
+                    mock.call("gateway", unhealthy_details),
+                ],
+            )
 
     def test_health_failure_wait_accepts_evidence_after_health_kill(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -126,21 +126,13 @@ class Runner:
         defaults.update(kwargs)
         check = defaults.pop("check")
         capture_output = defaults.pop("capture_output", False)
-        timeout = defaults.pop("timeout", None)
         if capture_output:
             defaults["stdout"] = subprocess.PIPE
             defaults["stderr"] = subprocess.PIPE
         process = subprocess.Popen(list(command), start_new_session=True, **defaults)
         self.active = process
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.communicate()
-            raise
+            stdout, stderr = process.communicate()
         finally:
             if process.poll() is not None:
                 self.active = None
@@ -1133,12 +1125,7 @@ class IntegrationLifecycle:
         check: bool = True,
         environment: Mapping[str, str] | None = None,
         cwd: Path | None = None,
-        timeout_seconds: int | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        if timeout_seconds is not None and (
-            type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 180
-        ):
-            raise IntegrationError("command timeout is outside the closed contract")
         try:
             return self.runner.run(
                 argv,
@@ -1146,15 +1133,12 @@ class IntegrationLifecycle:
                 capture_output=capture,
                 env=dict(environment) if environment is not None else None,
                 cwd=os.fspath(cwd) if cwd is not None else None,
-                timeout=timeout_seconds,
             )
         except subprocess.CalledProcessError as error:
             detail = ""
             if capture and error.stderr:
                 detail = f": {str(error.stderr).strip()[:400]}"
             raise IntegrationError(f"command failed ({argv[0]}){detail}") from error
-        except subprocess.TimeoutExpired as error:
-            raise IntegrationError(f"command timed out ({argv[0]})") from error
         except OSError as error:
             raise IntegrationError(f"unable to execute required command: {argv[0]}") from error
 
@@ -1866,6 +1850,7 @@ class IntegrationLifecycle:
         name = f"{self.resources.prefix}-{role}"
         service = f"{name}.service"
         deadline = time.monotonic() + 180
+        container_id: str | None = None
         while time.monotonic() < deadline:
             inspected = self.command(
                 ["podman", "container", "inspect", name], capture=True, check=False
@@ -1877,27 +1862,18 @@ class IntegrationLifecycle:
                 running = nested(details, "State", "Running")
                 if running is True:
                     self._validate_effective_container(role, details)
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    waited = self.command(
-                        [
-                            "podman",
-                            "wait",
-                            "--condition=unhealthy",
-                            "--interval=100ms",
-                            name,
-                        ],
-                        capture=True,
-                        check=False,
-                        timeout_seconds=max(1, math.ceil(remaining)),
-                    )
-                    if waited.returncode != 0:
+                    candidate_id = details.get("Id")
+                    if not isinstance(candidate_id, str) or not re.fullmatch(
+                        r"[0-9a-f]{64}", candidate_id
+                    ):
                         raise IntegrationError(
-                            "unable to observe the injected gateway health condition"
+                            "gateway inspection has no exact container identity"
                         )
-                    self.injected_health_failure_observed = True
-                    return
+                    if container_id is not None and candidate_id != container_id:
+                        raise IntegrationError(
+                            "gateway container identity changed during health proof"
+                        )
+                    container_id = candidate_id
                 state = details.get("State")
                 health = state.get("Health") if isinstance(state, Mapping) else None
                 if isinstance(health, Mapping):
@@ -1928,6 +1904,11 @@ class IntegrationLifecycle:
                 "",
                 "success",
             }:
+                if container_id is not None and self._has_injected_unhealthy_event(
+                    container_id
+                ):
+                    self.injected_health_failure_observed = True
+                    return
                 if self._gateway_port_collision():
                     raise PortCollisionError("gateway loopback port is already allocated")
                 raise IntegrationError(
@@ -1935,6 +1916,30 @@ class IntegrationLifecycle:
                 )
             time.sleep(0.1)
         raise IntegrationError("injected gateway health check was not observed")
+
+    def _has_injected_unhealthy_event(self, container_id: str) -> bool:
+        if not re.fullmatch(r"[0-9a-f]{64}", container_id):
+            raise IntegrationError("invalid gateway container identity for health evidence")
+        events = self.command(
+            [
+                "podman",
+                "events",
+                "--stream=false",
+                "--since=10m",
+                "--filter=type=container",
+                f"--filter=container={container_id}",
+                "--filter=event=health_status",
+                "--format={{.HealthStatus}}",
+            ],
+            capture=True,
+            check=False,
+        )
+        if events.returncode != 0:
+            raise IntegrationError("unable to query retained Podman health evidence")
+        statuses = [line.strip() for line in (events.stdout or "").splitlines() if line.strip()]
+        if any(status not in {"starting", "healthy", "unhealthy"} for status in statuses):
+            raise IntegrationError("retained Podman health evidence was unexpected")
+        return "unhealthy" in statuses
 
     def _wait_for_oneshot_success(self, role: str) -> tuple[str, str]:
         deadline = time.monotonic() + 180

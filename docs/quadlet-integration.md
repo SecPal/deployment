@@ -105,9 +105,10 @@ starts migration or its dependents, and a gateway health failure cannot leave
 the integration target active. The profiles are evidence fixtures only; they
 cannot accept arbitrary commands or Quadlet text. Migration and dependency
 evidence requires the exact `/bin/false` exit result. Health evidence requires
-Podman's effective `CMD-SHELL /bin/false` configuration, a bounded native
-`podman wait --condition=unhealthy`, and the resulting systemd exit after
-Podman applies the reviewed `HealthOnFailure=kill` policy; an
+Podman's effective `CMD-SHELL /bin/false` configuration, the retained
+`health_status=unhealthy` event bound to that exact container identity, and the
+resulting systemd exit after Podman applies the reviewed
+`HealthOnFailure=kill` policy; an
 unrelated gateway failure is not accepted as health-failure evidence.
 
 An automatically selected loopback port is chosen only after image verification
