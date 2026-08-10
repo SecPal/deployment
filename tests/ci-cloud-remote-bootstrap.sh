@@ -32,6 +32,7 @@ EOF
 
 cat >"$FAKE_BIN/sleep" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
 exit 0
 EOF
 

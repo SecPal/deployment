@@ -121,9 +121,11 @@ set +e
 cloud_init_diagnostic="$(
   timeout --signal=TERM --kill-after=15s 12m \
     ssh "${ssh_options[@]}" "secpal-ci@$address" /bin/bash -s <<'REMOTE'
-set -u
+set -euo pipefail
+set +e
 cloud-init status --wait >/dev/null
 status=$?
+set -e
 if [[ "$status" -ne 0 ]]; then
   printf 'cloud-init bootstrap failed:\n'
   cloud-init status --long 2>&1 | head -c 8192 || true

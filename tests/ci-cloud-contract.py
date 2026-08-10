@@ -185,6 +185,21 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("head -c 8192", remote)
         self.assertNotIn("cloud-init-output.log", remote)
 
+    def test_remote_bash_programs_use_strict_mode(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        fixture = (
+            ROOT / "tests/ci-cloud-remote-bootstrap.sh"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(2, remote.count("<<'REMOTE'\nset -euo pipefail\n"))
+        self.assertIn(
+            "cat >\"$FAKE_BIN/sleep\" <<'EOF'\n"
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n",
+            fixture,
+        )
+
     def test_missing_provider_evidence_is_a_hard_upload_failure(self) -> None:
         workflow = (
             ROOT / ".github/workflows/cloud-conformance.yml"
