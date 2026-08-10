@@ -111,11 +111,13 @@ attachment.
 ## DigitalOcean environment configuration
 
 Create a protected GitHub Environment named `ci-cloud-digitalocean`. Restrict
-deployments to `main`, require intentional reviewer approval, and add one
-secret named `DIGITALOCEAN_ACCESS_TOKEN`. Create a second main-only environment
-named `ci-cloud-digitalocean-cleanup` with the same dedicated secret but no
-reviewer wait; exact cleanup and the TTL janitor must never wait for a second
-human approval after resources exist. Both environments must reject other
+deployments to `main` and add one secret named `DIGITALOCEAN_ACCESS_TOKEN`.
+Do not require an environment reviewer: the explicit manual
+`workflow_dispatch` from `main`, its closed inputs, and repository write access
+are the intentional authorization for a run. Create a second main-only
+environment named `ci-cloud-digitalocean-cleanup` with the same dedicated
+secret and no reviewer wait; exact cleanup and the TTL janitor must never wait
+for human approval after resources exist. Both environments must reject other
 branches. The token must be dedicated to this repository's CI and use
 DigitalOcean custom scopes rather than `api:read` or `api:write`:
 
@@ -129,15 +131,15 @@ DigitalOcean custom scopes rather than `api:read` or `api:write`:
 
 Do not grant database, registry, domain, project, block-storage, Kubernetes,
 Spaces, monitoring, or account-wide alias scopes. A missing environment,
-secret, approval, or required scope fails closed.
+secret, main-branch authorization, or required scope fails closed.
 
 ## Google Cloud environment and IAM configuration
 
 Create main-only GitHub Environments named `ci-cloud-gcp` and
-`ci-cloud-gcp-cleanup`. The first may require an intentional reviewer. The
-cleanup environment must not require a reviewer because exact cleanup and the
-TTL janitor must not wait after resources exist. Add these Environment
-variables, not secrets, to both:
+`ci-cloud-gcp-cleanup`. Neither environment requires a reviewer: the explicit
+manual `workflow_dispatch` from `main` is the intentional authorization for
+provisioning, while exact cleanup and the TTL janitor must never wait after
+resources exist. Add these Environment variables, not secrets, to both:
 
 ```text
 GCP_PROJECT_ID=secpal-dev
@@ -340,8 +342,7 @@ they do not prove that all hardware is compatible.
    credential model are ready.
 2. Open **Actions → Debian 13 Cloud Conformance → Run workflow** on `main`.
 3. Paste the full commit SHA and choose exactly one provider profile.
-4. Review the environment approval, then inspect the bounded evidence artifact
-   and the independent cleanup job.
+4. Inspect the bounded evidence artifact and the independent cleanup job.
 5. Treat any named invariant, missing evidence, cleanup failure, or janitor
    ambiguity as a failure.
 
