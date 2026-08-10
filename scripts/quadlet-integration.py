@@ -1856,9 +1856,15 @@ class IntegrationLifecycle:
                 details = parse_single_json_object(
                     inspected.stdout or "", "injected gateway health inspection"
                 )
-                if nested(details, "State", "Running") is True:
+                running = nested(details, "State", "Running")
+                if running is True:
                     self._validate_effective_container(role, details)
+                state = details.get("State")
+                health = state.get("Health") if isinstance(state, Mapping) else None
+                if isinstance(health, Mapping):
                     if has_injected_health_failure(details):
+                        if running is not True:
+                            self._validate_effective_container(role, details)
                         self.injected_health_failure_observed = True
                         return
             state = self.command(

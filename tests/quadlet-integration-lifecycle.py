@@ -1326,6 +1326,39 @@ class QuadletLifecycleContract(unittest.TestCase):
                 ],
             )
 
+    def test_health_failure_wait_accepts_evidence_after_health_kill(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.failure_lifecycle(directory, "health")
+            stopped_details = {
+                "Config": {
+                    "Healthcheck": {"Test": ["CMD-SHELL", "/bin/false"]}
+                },
+                "State": {
+                    "Running": False,
+                    "Status": "exited",
+                    "Health": {
+                        "Status": "unhealthy",
+                        "FailingStreak": 1,
+                        "Log": [{"ExitCode": 1, "Output": ""}],
+                    },
+                },
+            }
+            stopped = subprocess.CompletedProcess(
+                (), 0, json.dumps([stopped_details]), ""
+            )
+            failed = subprocess.CompletedProcess(
+                (), 0, "ActiveState=failed\nResult=exit-code\n", ""
+            )
+            with mock.patch.object(
+                lifecycle, "command", side_effect=(stopped, failed)
+            ), mock.patch.object(
+                lifecycle, "_validate_effective_container"
+            ) as validate:
+                lifecycle._wait_for_injected_health_failure()
+
+            self.assertTrue(lifecycle.injected_health_failure_observed)
+            validate.assert_called_once_with("gateway", stopped_details)
+
     def test_port_retry_preserves_data_roles_and_completed_migration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
