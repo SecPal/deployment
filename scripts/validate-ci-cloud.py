@@ -391,8 +391,8 @@ def validate_opentofu(root: Path) -> None:
     )
     curl_commands = subprocess_literal_arguments(collector, "cloud_identity_facts")
     require(
-        len(curl_commands) == 1
-        and curl_commands[0][:2] == ["curl", "--disable"],
+        len(curl_commands) == 2
+        and all(command[:2] == ["curl", "--disable"] for command in curl_commands),
         "cloud identity probe must ignore target-owned curl configuration",
     )
     forbidden = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
@@ -409,6 +409,10 @@ def validate_opentofu(root: Path) -> None:
     require('required_version = "= 1.12.5"' in gcp_versions, "GCP OpenTofu version must be exact")
     require('version = "= 7.40.0"' in gcp_versions, "Google provider version must be exact")
     require("~>" not in gcp_versions and ">=" not in gcp_versions, "mutable Google provider constraints are forbidden")
+    require(
+        "add_terraform_attribution_label = false" in gcp_versions,
+        "GCP provider attribution labels must be disabled for exact janitor ownership",
+    )
     require(gcp_main.count('resource "google_compute_instance"') == 1, "exactly one GCP instance is allowed")
     require(gcp_main.count('resource "google_compute_disk"') == 1, "exactly one GCP disk is allowed")
     require(gcp_main.count('resource "google_compute_network"') == 1, "exactly one GCP network is allowed")
@@ -513,6 +517,10 @@ def validate(root: Path) -> None:
         and 'provider_image_id="${11}"' in remote
         and '"$root_ssh_denied" "$provider_image_slug" "$provider_image_id"' in remote,
         "resolved provider image ID must reach the trusted evidence collector",
+    )
+    require(
+        "debian-13-trixie-arm64-v[0-9]{8}" in remote,
+        "GCP evidence must admit only the official codename-bearing image name",
     )
     require(
         "/usr/bin/env -i" in remote

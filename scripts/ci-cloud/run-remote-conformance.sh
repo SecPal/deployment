@@ -31,7 +31,7 @@ case "$provider/$region/$profile/$provider_image_slug/$machine_type" in
     [[ "$provider_image_id" =~ ^[1-9][0-9]{0,19}$ ]]
     ;;
   gcp/europe-west3-a/axion/debian-cloud/debian-13-arm64/c4a-standard-4)
-    [[ "$provider_image_id" =~ ^https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-arm64-v[0-9]{8}$ ]]
+    [[ "$provider_image_id" =~ ^https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-trixie-arm64-v[0-9]{8}$ ]]
     ;;
   *)
     printf 'ERROR: remote provider selection is outside the closed allowlist.\n' >&2

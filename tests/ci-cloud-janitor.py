@@ -9,7 +9,9 @@ from __future__ import annotations
 import importlib.util
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,6 +105,25 @@ class DigitalOceanJanitorTests(unittest.TestCase):
     def test_name_must_exactly_match_owned_run(self) -> None:
         client = FakeClient([{"id": 77, "name": "spci-99999-1", "tags": self.tags()}])
         self.assertEqual([], self.janitor.cleanup_expired(client, now=1_700_002_000, apply=True))
+
+    def test_network_failures_are_reported_as_controlled_errors(self) -> None:
+        client = self.janitor.DigitalOceanClient("bounded-test-token")
+        for error in (urllib.error.URLError("offline"), TimeoutError("timed out")):
+            with self.subTest(error=type(error).__name__), mock.patch.object(
+                self.janitor.urllib.request, "urlopen", side_effect=error
+            ):
+                with self.assertRaisesRegex(RuntimeError, "DigitalOcean API request failed"):
+                    client.request("/v2/droplets?per_page=200&page=1")
+
+    def test_invalid_utf8_response_is_reported_as_a_controlled_error(self) -> None:
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b"\xff"
+        client = self.janitor.DigitalOceanClient("bounded-test-token")
+        with mock.patch.object(
+            self.janitor.urllib.request, "urlopen", return_value=response
+        ):
+            with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
+                client.request("/v2/droplets?per_page=200&page=1")
 
 
 if __name__ == "__main__":

@@ -52,8 +52,12 @@ The independent GCP root is
 only `c4a-standard-4` in `europe-west3-a`, with one 120-GiB
 `hyperdisk-balanced` boot disk. C4A is the reviewed Google Axion machine
 series; the collector additionally requires effective `arm64` architecture
-and an Axion/Neoverse CPU model. OpenTofu `1.12.5` and Google provider
-`7.40.0` are exact constraints with a committed dependency lock file.
+and an Axion/Neoverse CPU model. The resolved image name must match Google's
+codename-bearing `debian-13-trixie-arm64-vYYYYMMDD` form. OpenTofu `1.12.5`
+and Google provider `7.40.0` are exact constraints with a committed dependency
+lock file. The provider's automatic Terraform-attribution label is explicitly
+disabled so the instance and disk retain the exact seven-label janitor
+ownership contract.
 
 Only one provider profile can run at a time. The workflow has a 70-minute
 provision/test limit, cleanup has a separate 20-minute limit, and ownership
@@ -327,7 +331,9 @@ Evidence includes:
   virtualization, CPU/memory/disk facts, root filesystem and OverlayFS facts,
   required tools, clock synchronization, and effective root-SSH denial;
 - root-owned authenticated APT `InRelease` origins/suites, archive-keyring
-  presence, installed kernel package ownership/architecture/origin/suite,
+  presence, and each selected kernel/runtime/bootstrap package's actual
+  `apt-cache policy` Release origin and codename rather than a global suite
+  inference;
   every cloud-init bootstrap and runtime package's exact installed version,
   architecture, origin, and suite, forbidden package absence, and effective
   security-only unattended-update/reboot and runtime-package exclusion policy;

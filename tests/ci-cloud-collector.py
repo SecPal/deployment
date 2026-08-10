@@ -203,11 +203,16 @@ class CloudHostAdmissionTests(unittest.TestCase):
         cls.collector = load_collector()
 
     def test_gcp_metadata_probe_records_only_bounded_identity_booleans(self) -> None:
-        completed = self.collector.subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
+        probe = self.collector.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="200", stderr=""
+        )
+        absent_identity = self.collector.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="404", stderr=""
         )
         with mock.patch.object(
-            self.collector.subprocess, "run", return_value=completed
+            self.collector.subprocess,
+            "run",
+            side_effect=[probe, absent_identity],
         ) as run:
             self.assertEqual(
                 {
@@ -218,6 +223,112 @@ class CloudHostAdmissionTests(unittest.TestCase):
                 self.collector.cloud_identity_facts("gcp"),
             )
         self.assertEqual(["curl", "--disable"], run.call_args.args[0][:2])
+        self.assertEqual(2, run.call_count)
+
+    def test_package_origin_is_bound_to_the_selected_policy_entry(self) -> None:
+        policy = """podman:
+  Installed: 1.0-1
+  Candidate: 1.0-1
+  Version table:
+ *** 1.0-1 500
+        500 https://packages.example.invalid/debian trixie/main amd64 Packages
+           release o=Example,n=trixie,l=Example,c=main,b=amd64
+        100 /var/lib/dpkg/status
+"""
+
+        def checked_output(arguments: list[str], timeout: int = 15) -> str:
+            del timeout
+            if arguments[:3] == ["dpkg-query", "-W", "-f"]:
+                return "amd64"
+            if arguments == ["apt-cache", "policy", "podman"]:
+                return policy
+            return ""
+
+        with (
+            mock.patch.object(self.collector, "package_version", return_value="1.0-1"),
+            mock.patch.object(self.collector, "checked_output", side_effect=checked_output),
+        ):
+            self.assertEqual(
+                {
+                    "version": "1.0-1",
+                    "architecture": "amd64",
+                    "origin": "",
+                    "suite": "trixie",
+                },
+                self.collector.package_metadata("podman", "amd64", {"trixie"}),
+            )
+
+    def test_package_origin_accepts_the_selected_debian_release(self) -> None:
+        policy = """podman:
+  Installed: 1.0-1
+  Candidate: 1.0-1
+  Version table:
+ *** 1.0-1 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+           release o=Debian,n=trixie,l=Debian,c=main,b=amd64
+        100 /var/lib/dpkg/status
+"""
+        with mock.patch.object(
+            self.collector, "checked_output", return_value=policy
+        ):
+            self.assertEqual(
+                ("Debian", "trixie"),
+                self.collector.package_policy_provenance("podman", "1.0-1"),
+            )
+
+    def test_gcp_metadata_probe_detects_an_attached_identity(self) -> None:
+        responses = [
+            self.collector.subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="200", stderr=""
+            ),
+            self.collector.subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="200", stderr=""
+            ),
+        ]
+        with mock.patch.object(
+            self.collector.subprocess, "run", side_effect=responses
+        ):
+            self.assertEqual(
+                {
+                    "probe_supported": True,
+                    "probe_succeeded": True,
+                    "identity_present": True,
+                },
+                self.collector.cloud_identity_facts("gcp"),
+            )
+
+    def test_registry_wildcard_matching_ghcr_is_admitted_as_effective(self) -> None:
+        self.assertTrue(
+            self.collector.registry_prefix_matches("*.io", "ghcr.io/secpal/api")
+        )
+        self.assertFalse(
+            self.collector.registry_prefix_matches(
+                "*.example.com", "ghcr.io/secpal/api"
+            )
+        )
+
+    def test_registry_facts_detect_matching_wildcard_override(self) -> None:
+        document = """
+[[registry]]
+prefix = "*.io"
+location = "mirror.example.invalid"
+insecure = true
+[[registry.mirror]]
+location = "backup.example.invalid"
+"""
+        with (
+            mock.patch.object(Path, "is_file", return_value=True),
+            mock.patch.object(self.collector, "read_text", return_value=document),
+            mock.patch.object(self.collector.glob, "glob", return_value=[]),
+        ):
+            self.assertEqual(
+                {
+                    "ghcr_insecure": True,
+                    "secpal_mirrors": ["backup.example.invalid"],
+                    "secpal_location_rewrite": True,
+                },
+                self.collector.registry_facts(),
+            )
 
     def test_arm_cpu_model_uses_effective_lscpu_facts(self) -> None:
         lscpu = {

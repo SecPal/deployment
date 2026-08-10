@@ -333,7 +333,7 @@ def validate_document(document: object) -> dict[str, object]:
         test["provider"] == "gcp"
         and re.fullmatch(
             r"https://www\.googleapis\.com/compute/v1/projects/debian-cloud/"
-            r"global/images/debian-13-arm64-v[0-9]{8}",
+            r"global/images/debian-13-trixie-arm64-v[0-9]{8}",
             provider_image_id,
         )
         is None

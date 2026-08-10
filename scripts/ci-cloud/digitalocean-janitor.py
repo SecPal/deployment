@@ -66,11 +66,16 @@ class DigitalOceanClient:
                 payload = response.read(1_048_577)
         except urllib.error.HTTPError as error:
             raise RuntimeError(f"DigitalOcean API returned HTTP {error.code}") from None
+        except (urllib.error.URLError, TimeoutError):
+            raise RuntimeError("DigitalOcean API request failed") from None
         if method == "DELETE":
             return {}
         if len(payload) > 1_048_576:
             raise RuntimeError("DigitalOcean API response exceeded the safety bound")
-        document = json.loads(payload)
+        try:
+            document = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise RuntimeError("DigitalOcean API returned invalid JSON") from None
         if not isinstance(document, dict):
             raise RuntimeError("DigitalOcean API response was not an object")
         return document

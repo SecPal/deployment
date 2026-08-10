@@ -13,7 +13,8 @@ terraform {
 }
 
 provider "google" {
-  project = var.project_id
-  region  = "europe-west3"
-  zone    = var.zone
+  project                         = var.project_id
+  region                          = "europe-west3"
+  zone                            = var.zone
+  add_terraform_attribution_label = false
 }

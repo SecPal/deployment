@@ -217,23 +217,43 @@ def package_version(package: str) -> str:
     return checked_output(["dpkg-query", "-W", "-f", "${Version}", package])
 
 
-def package_suite(package: str, version: str) -> str:
+def package_policy_provenance(package: str, version: str) -> tuple[str, str]:
     if not version:
-        return ""
+        return "", ""
     policy = checked_output(["apt-cache", "policy", package], timeout=30)
     selected = False
+    pending_release = False
+    origins: set[str] = set()
+    suites: set[str] = set()
     for line in policy.splitlines():
         if line.strip().startswith(f"*** {version} "):
             selected = True
             continue
-        if selected and line.lstrip().startswith(("*** ", "Candidate:")):
+        if selected and re.fullmatch(r"\s+\S+\s+[0-9]+\s*", line):
             break
-        if not selected or not line.rstrip().endswith(" Packages"):
+        if not selected:
             continue
-        fields = line.split()
-        if len(fields) >= 4 and "/" in fields[-3]:
-            return fields[-3].split("/", 1)[0]
-    return ""
+        if line.rstrip().endswith(" Packages"):
+            pending_release = True
+            continue
+        if not pending_release or not line.strip().startswith("release "):
+            continue
+        fields = {
+            key: value
+            for item in line.strip().removeprefix("release ").split(",")
+            if "=" in item
+            for key, value in (item.strip().split("=", 1),)
+        }
+        origin = fields.get("o", "")
+        suite = fields.get("n", "")
+        if origin:
+            origins.add(origin)
+        if suite:
+            suites.add(suite)
+        pending_release = False
+    origin = origins.pop() if len(origins) == 1 else ""
+    suite = suites.pop() if len(suites) == 1 else ""
+    return origin, suite
 
 
 def verified_releases() -> tuple[list[str], list[str], bool]:
@@ -264,11 +284,11 @@ def package_metadata(package: str, architecture: str, verified_suites: set[str])
     package_architecture = checked_output(
         ["dpkg-query", "-W", "-f", "${Architecture}", package]
     )
-    suite = package_suite(package, version)
+    origin, suite = package_policy_provenance(package, version)
     return {
         "version": version,
         "architecture": package_architecture,
-        "origin": "Debian" if suite in verified_suites else "",
+        "origin": "Debian" if origin == "Debian" and suite in verified_suites else "",
         "suite": suite,
     }
 
@@ -698,11 +718,19 @@ def podman_update_facts() -> dict[str, bool]:
     }
 
 
+def registry_prefix_matches(prefix: str, reference: str) -> bool:
+    host = reference.split("/", 1)[0]
+    if prefix.startswith("*."):
+        suffix = prefix[2:]
+        return bool(suffix) and host.endswith(f".{suffix}")
+    return reference == prefix or reference.startswith(f"{prefix}/")
+
+
 def registry_facts() -> dict[str, object]:
     paths = [Path("/usr/share/containers/registries.conf"), Path("/etc/containers/registries.conf")]
     paths.extend(Path(path) for path in glob.glob("/etc/containers/registries.conf.d/*.conf"))
     paths.append(Path(command_environment()["HOME"]) / ".config/containers/registries.conf")
-    mirrors: list[str] = []
+    mirrors: set[str] = set()
     insecure = False
     rewrite = False
     for path in paths:
@@ -720,12 +748,15 @@ def registry_facts() -> dict[str, object]:
                 continue
             prefix = str(registry.get("prefix", registry.get("location", "")))
             location = str(registry.get("location", prefix))
-            if prefix == "ghcr.io" or prefix.startswith("ghcr.io/secpal"):
+            if any(
+                registry_prefix_matches(prefix, reference)
+                for reference in ("ghcr.io/secpal/api", "ghcr.io/secpal/frontend")
+            ):
                 insecure = insecure or registry.get("insecure") is True
                 rewrite = rewrite or location != prefix
                 raw_mirrors = registry.get("mirror", [])
                 if isinstance(raw_mirrors, list):
-                    mirrors.extend(
+                    mirrors.update(
                         str(item.get("location", ""))
                         for item in raw_mirrors
                         if isinstance(item, dict)
@@ -798,7 +829,7 @@ def cloud_identity_facts(provider: str) -> dict[str, bool]:
             "identity_present": False,
         }
     try:
-        completed = subprocess.run(
+        probe = subprocess.run(
             [
                 "curl",
                 "--disable",
@@ -809,6 +840,34 @@ def cloud_identity_facts(provider: str) -> dict[str, bool]:
                 "--show-error",
                 "--max-time",
                 "5",
+                "--output",
+                "/dev/null",
+                "--write-out",
+                "%{http_code}",
+                "--header",
+                "Metadata-Flavor: Google",
+                "http://metadata.google.internal/computeMetadata/v1/instance/id",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=8,
+        )
+        identity = subprocess.run(
+            [
+                "curl",
+                "--disable",
+                "--noproxy",
+                "*",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "5",
+                "--output",
+                "/dev/null",
+                "--write-out",
+                "%{http_code}",
                 "--header",
                 "Metadata-Flavor: Google",
                 "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/",
@@ -825,10 +884,16 @@ def cloud_identity_facts(provider: str) -> dict[str, bool]:
             "probe_succeeded": False,
             "identity_present": False,
         }
+    probe_succeeded = (
+        probe.returncode == 0
+        and probe.stdout.strip() == "200"
+        and identity.returncode == 0
+        and identity.stdout.strip() in {"200", "404"}
+    )
     return {
         "probe_supported": True,
-        "probe_succeeded": completed.returncode == 0,
-        "identity_present": completed.returncode == 0 and bool(completed.stdout.strip()),
+        "probe_succeeded": probe_succeeded,
+        "identity_present": probe_succeeded and identity.stdout.strip() == "200",
     }
 
 
@@ -1085,7 +1150,7 @@ def main() -> int:
     elif selection == gcp_selection:
         if re.fullmatch(
             r"https://www\.googleapis\.com/compute/v1/projects/debian-cloud/global/images/"
-            r"debian-13-arm64-v[0-9]{8}",
+            r"debian-13-trixie-arm64-v[0-9]{8}",
             arguments.provider_image_id,
         ) is None:
             parser.error("GCP image ID must be an exact official Debian 13 arm64 self-link")

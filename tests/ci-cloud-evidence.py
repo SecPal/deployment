@@ -262,7 +262,7 @@ class EvidenceContractTests(unittest.TestCase):
                 "machine_type": "c4a-standard-4",
                 "provider_image": {
                     "slug": "debian-cloud/debian-13-arm64",
-                    "id": "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-arm64-v20260801",
+                    "id": "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-trixie-arm64-v20260801",
                 },
             }
         )
@@ -296,7 +296,7 @@ class EvidenceContractTests(unittest.TestCase):
                 "machine_type": "c4a-standard-4",
                 "provider_image": {
                     "slug": "debian-cloud/debian-13-arm64",
-                    "id": "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-arm64-v20260801",
+                    "id": "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-trixie-arm64-v20260801",
                 },
             }
         )
@@ -366,7 +366,7 @@ class EvidenceContractTests(unittest.TestCase):
         document = valid_document()
         document["test"]["provider_image"]["id"] = (
             "https://www.googleapis.com/compute/v1/projects/debian-cloud/"
-            "global/images/debian-13-arm64-v20260801"
+            "global/images/debian-13-trixie-arm64-v20260801"
         )
         with self.assertRaisesRegex(ValueError, "provider image identity"):
             self.validator.validate_document(document)
@@ -375,7 +375,7 @@ class EvidenceContractTests(unittest.TestCase):
         document = valid_document()
         document["test"]["provider_image"]["id"] = (
             "https://www.googleapis.com/compute/v1/projects/debian-cloud/"
-            "global/images/debian-13-arm64-v20260801"
+            "global/images/debian-13-trixie-arm64-v20260801"
         )
         schema = json.loads(
             (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
@@ -384,6 +384,15 @@ class EvidenceContractTests(unittest.TestCase):
         )
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.Draft202012Validator(schema).validate(document)
+
+    def test_gcp_image_without_codename_is_rejected(self) -> None:
+        document = valid_document()
+        document["test"]["provider_image"]["id"] = (
+            "https://www.googleapis.com/compute/v1/projects/debian-cloud/"
+            "global/images/debian-13-arm64-v20260801"
+        )
+        with self.assertRaisesRegex(ValueError, "provider image identity"):
+            self.validator.validate_document(document)
 
     def test_declared_schema_binds_the_complete_provider_selection(self) -> None:
         document = valid_document()

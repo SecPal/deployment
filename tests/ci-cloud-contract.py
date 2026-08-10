@@ -77,6 +77,30 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertIn("python3 tests/ci-cloud-gcp-janitor.py", preflight)
 
+    def test_repository_contract_requires_every_cloud_provider_root_and_janitor(self) -> None:
+        repository_contract = (ROOT / "tests" / "repository-contract.sh").read_text(
+            encoding="utf-8"
+        )
+        for relative in (
+            "infra/ci-cloud/gcp/.terraform.lock.hcl",
+            "infra/ci-cloud/gcp/cloud-init.tftpl",
+            "infra/ci-cloud/gcp/iam-role.yaml",
+            "infra/ci-cloud/gcp/main.tf",
+            "infra/ci-cloud/gcp/outputs.tf",
+            "infra/ci-cloud/gcp/variables.tf",
+            "infra/ci-cloud/gcp/versions.tf",
+            "scripts/ci-cloud/gcp-janitor.py",
+            "tests/ci-cloud-gcp-janitor.py",
+        ):
+            with self.subTest(relative=relative):
+                self.assertIn(relative, repository_contract)
+
+    def test_gcp_provider_disables_automatic_attribution_label(self) -> None:
+        versions = (ROOT / "infra/ci-cloud/gcp/versions.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("add_terraform_attribution_label = false", versions)
+
     def test_workflow_bash_uses_explicit_strict_mode(self) -> None:
         strict_shell = "shell: bash --noprofile --norc -euo pipefail {0}"
         for relative in (

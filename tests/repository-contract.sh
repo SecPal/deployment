@@ -52,6 +52,13 @@ required_files=(
   infra/ci-cloud/digitalocean/outputs.tf
   infra/ci-cloud/digitalocean/variables.tf
   infra/ci-cloud/digitalocean/versions.tf
+  infra/ci-cloud/gcp/.terraform.lock.hcl
+  infra/ci-cloud/gcp/cloud-init.tftpl
+  infra/ci-cloud/gcp/iam-role.yaml
+  infra/ci-cloud/gcp/main.tf
+  infra/ci-cloud/gcp/outputs.tf
+  infra/ci-cloud/gcp/variables.tf
+  infra/ci-cloud/gcp/versions.tf
   schemas/ci-cloud-evidence.schema.json
   config/production/inventory.example.yaml
   schemas/production-host-facts.schema.json
@@ -61,6 +68,7 @@ required_files=(
   scripts/ci-cloud/collect-host-evidence.py
   scripts/ci-cloud/configure-conformance-host.sh
   scripts/ci-cloud/digitalocean-janitor.py
+  scripts/ci-cloud/gcp-janitor.py
   scripts/ci-cloud/run-remote-conformance.sh
   scripts/ci-cloud/target-conformance.sh
   scripts/ci-cloud/validate-evidence.py
@@ -73,6 +81,7 @@ required_files=(
   tests/ci-cloud-contract.py
   tests/ci-cloud-collector.py
   tests/ci-cloud-evidence.py
+  tests/ci-cloud-gcp-janitor.py
   tests/ci-cloud-janitor.py
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
