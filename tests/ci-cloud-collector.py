@@ -361,6 +361,16 @@ class CloudHostAdmissionTests(unittest.TestCase):
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["unix_listener"])
 
+    def test_treats_inaccessible_known_podman_socket_as_present(self) -> None:
+        with (
+            mock.patch.object(self.collector, "command_result", return_value=(1, "inactive")),
+            mock.patch.object(self.collector, "output", return_value=""),
+            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+            mock.patch.object(Path, "is_socket", side_effect=PermissionError("denied")),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertTrue(facts["unix_listener"])
+
     def test_rejects_missing_effective_root_ssh_denial(self) -> None:
         self.assert_failure(("host", "ssh", "root_login_denied"), False, "D1_ROOT_SSH_DISABLED")
 

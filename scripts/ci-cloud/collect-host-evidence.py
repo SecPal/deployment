@@ -611,6 +611,13 @@ def podman_service_process_facts() -> tuple[bool, bool]:
     return service_process, process_scan_incomplete
 
 
+def socket_present_or_unverifiable(path: Path) -> bool:
+    try:
+        return path.is_socket()
+    except OSError:
+        return True
+
+
 def podman_api_facts() -> dict[str, bool]:
     system_service_active = command_result(
         ["systemctl", "is-active", "podman.service"]
@@ -657,7 +664,7 @@ def podman_api_facts() -> dict[str, bool]:
         "user_socket_enabled": user_socket_enabled,
         "tcp_listener": "podman" in tcp_listeners.lower(),
         "unix_listener": "podman" in unix_listeners.lower()
-        or any(path.is_socket() for path in known_api_sockets),
+        or any(socket_present_or_unverifiable(path) for path in known_api_sockets),
         "service_process": service_process,
         "process_scan_incomplete": process_scan_incomplete,
         "remote_connection": bool(connections),
