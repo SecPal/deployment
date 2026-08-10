@@ -46,11 +46,50 @@ class TmpfsSpec:
 
 
 @dataclass(frozen=True)
+class HealthSpec:
+    """Closed health and systemd-readiness contract for one runtime role."""
+
+    command: str
+    interval_seconds: int
+    timeout_seconds: int
+    retries: int
+    start_period_seconds: int
+
+    def __post_init__(self) -> None:
+        if (
+            not self.command
+            or min(
+                self.interval_seconds,
+                self.timeout_seconds,
+                self.retries,
+                self.start_period_seconds,
+            )
+            <= 0
+        ):
+            raise ValueError("invalid immutable health contract")
+
+    def quadlet_lines(self) -> tuple[str, ...]:
+        return (
+            f"HealthCmd={self.command}",
+            f"HealthInterval={self.interval_seconds}s",
+            f"HealthTimeout={self.timeout_seconds}s",
+            f"HealthRetries={self.retries}",
+            f"HealthStartPeriod={self.start_period_seconds}s",
+            "HealthOnFailure=kill",
+            "Notify=healthy",
+        )
+
+
+GATEWAY_HEALTH_FAILURE_SPEC = HealthSpec("/bin/false", 1, 5, 1, 5)
+
+
+@dataclass(frozen=True)
 class RoleSpec:
     uid: int
     gid: int
     networks: tuple[str, ...]
     tmpfs: Mapping[str, TmpfsSpec]
+    health: HealthSpec | None = None
 
 
 def _tmpfs(
@@ -89,22 +128,50 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
                 ("/tmp", 32, 0o700, True),
                 ("/run/postgresql", 16, 0o750, True),
             ),
+            HealthSpec(
+                "pg_isready -U secpal_local -d secpal_local", 5, 3, 20, 10
+            ),
         ),
         "valkey": RoleSpec(
             10002,
             10002,
             ("application",),
             _tmpfs(("/tmp", 16, 0o700, True), ("/data", 32, 0o700, True)),
+            HealthSpec(
+                "VALKEYCLI_AUTH=$(cat /run/secpal-secrets/valkey-password) "
+                "valkey-cli ping | grep -qx PONG",
+                5,
+                3,
+                20,
+                5,
+            ),
         ),
         "migrate": RoleSpec(10001, 10001, ("application",), _api_tmpfs),
-        "api": RoleSpec(10001, 10001, ("application", "edge"), _api_tmpfs),
+        "api": RoleSpec(
+            10001,
+            10001,
+            ("application", "edge"),
+            _api_tmpfs,
+            HealthSpec("/usr/local/bin/secpal-http-live", 10, 5, 12, 15),
+        ),
         "worker-general": RoleSpec(10001, 10001, ("application",), _api_tmpfs),
         "worker-hash-chain": RoleSpec(
             10001, 10001, ("application",), _api_tmpfs
         ),
         "scheduler": RoleSpec(10001, 10001, ("application",), _api_tmpfs),
         "frontend": RoleSpec(
-            101, 101, ("edge",), _tmpfs(("/tmp", 32, 0o700, True))
+            101,
+            101,
+            ("edge",),
+            _tmpfs(("/tmp", 32, 0o700, True)),
+            HealthSpec(
+                "curl --fail --silent --show-error --max-time 3 "
+                "http://127.0.0.1:8080/health/live",
+                10,
+                5,
+                12,
+                5,
+            ),
         ),
         "gateway": RoleSpec(
             10003,
@@ -114,6 +181,14 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
                 ("/tmp", 16, 0o700, True),
                 ("/config", 16, 0o700, True),
                 ("/data", 32, 0o700, True),
+            ),
+            HealthSpec(
+                "wget --no-check-certificate -q -T 3 -O /dev/null "
+                "https://app.secpal.example.invalid:8443/health/live",
+                10,
+                5,
+                12,
+                5,
             ),
         ),
     }
@@ -135,3 +210,10 @@ def tmpfs_mounts(role: str) -> list[str]:
         spec.quadlet_mount(destination)
         for destination, spec in role_spec(role).tmpfs.items()
     ]
+
+
+def health_lines(role: str) -> tuple[str, ...]:
+    health = role_spec(role).health
+    if health is None:
+        raise ValueError(f"role has no health contract: {role}")
+    return health.quadlet_lines()

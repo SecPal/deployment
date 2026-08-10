@@ -36,6 +36,8 @@ from integration_runtime_contract import (
     FRONTEND_DIGEST,
     FRONTEND_IMAGE,
     FRONTEND_SOURCE_COMMIT,
+    GATEWAY_HEALTH_FAILURE_SPEC,
+    HealthSpec,
     POSTGRES_IMAGE,
     REQUIRED_CONTAINER_GIDS,
     REQUIRED_CONTAINER_UIDS,
@@ -544,6 +546,33 @@ def validate_container_security(
             )
 
 
+def validate_container_health(inspect: Mapping, expected: HealthSpec) -> None:
+    config = inspect.get("Config")
+    if not isinstance(config, Mapping):
+        raise IntegrationError("effective health contract is missing")
+    health = config.get("Healthcheck")
+    expected_health = {
+        "Test": ["CMD-SHELL", expected.command],
+        "Interval": expected.interval_seconds * 1_000_000_000,
+        "Timeout": expected.timeout_seconds * 1_000_000_000,
+        "Retries": expected.retries,
+        "StartPeriod": expected.start_period_seconds * 1_000_000_000,
+    }
+    if (
+        not isinstance(health, Mapping)
+        or dict(health) != expected_health
+        or any(
+            type(health.get(name)) is not int
+            for name in ("Interval", "Timeout", "Retries", "StartPeriod")
+        )
+        or config.get("HealthcheckOnFailureAction") != "kill"
+        or config.get("sdNotifyMode") != "healthy"
+    ):
+        raise IntegrationError(
+            "effective health contract differs from the reviewed contract"
+        )
+
+
 def validate_oneshot_state(properties: str) -> tuple[str, str]:
     values = dict(
         line.split("=", 1)
@@ -594,6 +623,21 @@ def validate_effective_systemd_unit(properties: str, expected_fragment: Path) ->
     }
     if values != expected:
         raise IntegrationError("effective systemd unit is overridden or has drop-ins")
+
+
+def validate_effective_health_service(properties: str) -> None:
+    values: dict[str, str] = {}
+    for line in properties.splitlines():
+        if "=" not in line:
+            raise IntegrationError("effective systemd health readiness is malformed")
+        name, value = line.split("=", 1)
+        if name in values:
+            raise IntegrationError("effective systemd health readiness is malformed")
+        values[name] = value
+    if values != {"Type": "notify", "NotifyAccess": "all"}:
+        raise IntegrationError(
+            "effective systemd health readiness differs from the reviewed contract"
+        )
 
 
 def validate_registry_documents(documents: Sequence[Mapping]) -> None:
@@ -1620,6 +1664,20 @@ class IntegrationLifecycle:
                 ]
             )
             validate_effective_systemd_unit(properties, expected_fragment)
+        for role in (
+            item for item in CONTAINER_ROLES if role_spec(item).health is not None
+        ):
+            properties = self.captured(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    f"{self.resources.prefix}-{role}.service",
+                    "--property=Type",
+                    "--property=NotifyAccess",
+                ]
+            )
+            validate_effective_health_service(properties)
 
     def start_target(self) -> None:
         if not self.inspected_oneshots:
@@ -2043,6 +2101,13 @@ class IntegrationLifecycle:
             self._expected_tmpfs(role),
             (contract.uid, contract.gid),
         )
+        expected_health = (
+            GATEWAY_HEALTH_FAILURE_SPEC
+            if role == "gateway" and self.failure_case == "health"
+            else contract.health
+        )
+        if expected_health is not None:
+            validate_container_health(details, expected_health)
         user = str(nested(details, "Config", "User"))
         if user != (expected_user or f"{contract.uid}:{contract.gid}"):
             raise IntegrationError(f"unexpected container identity for {role}")
@@ -2672,7 +2737,6 @@ def parse_arguments(argv: Sequence[str] | None = None):
     parser.add_argument("--instance")
     parser.add_argument("--port", type=int)
     parser.add_argument("--fixture-root", type=Path)
-    parser.add_argument("--quadlet-output", type=Path)
     parser.add_argument("--failure-case", choices=("migration", "dependency", "health"))
     return parser.parse_args(argv)
 
@@ -2690,10 +2754,8 @@ def main() -> int:
     if port is not None and not 1024 <= port <= 65535:
         print("ERROR: integration port must be from 1024 through 65535.", file=sys.stderr)
         return 1
-    created_fixture = False
     if arguments.fixture_root is None:
         fixture_root = Path(tempfile.mkdtemp(prefix="secpal-quadlet."))
-        created_fixture = True
         if (
             not SAFE_PATH_PATTERN.fullmatch(os.fspath(fixture_root))
             or not fixture_root.is_absolute()
@@ -2729,25 +2791,7 @@ def main() -> int:
         except OSError:
             print("ERROR: unable to create private fixture root.", file=sys.stderr)
             return 1
-        created_fixture = True
-    output = arguments.quadlet_output or fixture_root / "quadlets"
-    if (
-        not output.is_absolute()
-        or output.exists()
-        or output.resolve(strict=False) != output
-        or fixture_root not in output.parents
-    ):
-        if created_fixture:
-            try:
-                shutil.rmtree(fixture_root)
-            except OSError:
-                print(
-                    "ERROR: unable to remove invalid fixture root.",
-                    file=sys.stderr,
-                )
-                return 1
-        print("ERROR: Quadlet output must be a canonical new path inside the fixture root.", file=sys.stderr)
-        return 1
+    output = fixture_root / "quadlets"
     lifecycle = IntegrationLifecycle(
         root=root,
         instance=instance,

@@ -125,6 +125,45 @@ jobs:
             python3 scripts/quadlet-integration.py --failure-case "$failure_case"
           done
 
+      - name: Prove handled SIGTERM cleanup
+        run: |
+          signal_instance=signal01
+          signal_fixture="$RUNNER_TEMP/secpal-quadlet-$signal_instance"
+          signal_log="$RUNNER_TEMP/secpal-quadlet-$signal_instance.log"
+          signal_ready=false
+          signal_status=0
+          python3 scripts/quadlet-integration.py \
+            --instance "$signal_instance" \
+            --fixture-root "$signal_fixture" \
+            >"$signal_log" 2>&1 &
+          signal_pid=$!
+          for _attempt in {1..600}; do
+            if systemctl --user is-active --quiet \
+              "secpal-int-$signal_instance-gateway.service"; then
+              signal_ready=true
+              break
+            fi
+            if ! kill -0 "$signal_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$signal_ready" != true ]; then
+            kill -TERM "$signal_pid" 2>/dev/null || true
+            wait "$signal_pid" || true
+            cat "$signal_log"
+            exit 1
+          fi
+          if ! kill -TERM "$signal_pid"; then
+            wait "$signal_pid" || true
+            cat "$signal_log"
+            exit 1
+          fi
+          wait "$signal_pid" || signal_status=$?
+          cat "$signal_log"
+          test "$signal_status" -eq 143
+          test ! -e "$signal_fixture"
+
       - name: Prove parallel fixture isolation
         run: |
           first_status=0

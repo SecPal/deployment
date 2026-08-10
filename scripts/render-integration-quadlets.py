@@ -20,8 +20,10 @@ sys.dont_write_bytecode = True
 from integration_runtime_contract import (
     API_IMAGE,
     FRONTEND_IMAGE,
+    GATEWAY_HEALTH_FAILURE_SPEC,
     POSTGRES_IMAGE,
     VALKEY_IMAGE,
+    health_lines,
     role_spec,
     tmpfs_mounts,
 )
@@ -139,7 +141,6 @@ def api_container(
     command: str,
     *,
     oneshot: bool = False,
-    health: bool = False,
 ) -> str:
     prefix = f"secpal-int-{instance}"
     dependencies = [f"{prefix}-migrate.service"] if role != "migrate" else [
@@ -153,13 +154,10 @@ def api_container(
         if oneshot
         else '["/bin/bash","/run/secpal/container-entrypoint.sh"]'
     )
-    execution = (
-        f"/bin/bash /run/secpal/container-entrypoint.sh {command}" if oneshot else command
-    )
     lines.extend(
         (
             f"Entrypoint={entrypoint}",
-            f"Exec={execution}",
+            f"Exec={command}",
             f"Mount=type=bind,source={fixture_root}/assets/container-entrypoint.sh,target=/run/secpal/container-entrypoint.sh,ro=true",
             f"Mount=type=bind,source={fixture_root}/assets/phase-b-runtime-probe.php,target=/run/secpal/phase-b-runtime-probe.php,ro=true",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
@@ -173,18 +171,8 @@ def api_container(
         )
     lines.extend(network_lines(instance, role))
     lines.append(f"NetworkAlias={role}")
-    if health:
-        lines.extend(
-            (
-                "HealthCmd=/usr/local/bin/secpal-http-live",
-                "HealthInterval=10s",
-                "HealthTimeout=5s",
-                "HealthRetries=12",
-                "HealthStartPeriod=15s",
-                "HealthOnFailure=kill",
-                "Notify=healthy",
-            )
-        )
+    if role_spec(role).health is not None:
+        lines.extend(health_lines(role))
     service_lines = ["Restart=no", "TimeoutStartSec=180"] if oneshot else [
         "Restart=on-failure",
         "RestartSec=2",
@@ -200,57 +188,11 @@ def api_container(
     ) + section("Container", lines) + section("Service", service_lines)
 
 
-def replace_once(content: str, old: str, new: str) -> str:
-    if content.count(old) != 1:
-        raise ContractError("fixed failure profile no longer matches its reviewed unit")
-    return content.replace(old, new, 1)
-
-
-def apply_failure_profile(
-    units: dict[str, str], instance: str, failure_case: str | None
-) -> dict[str, str]:
-    """Apply one closed integration-only fault with no caller-controlled text."""
-
-    if failure_case is None:
-        return units
-    prefix = f"secpal-int-{instance}"
-    if failure_case == "migration":
-        name = f"{prefix}-migrate.container"
-        units[name] = replace_once(
-            units[name],
-            "Exec=/bin/bash /run/secpal/container-entrypoint.sh php artisan migrate --force",
-            "Exec=/bin/false",
-        )
-    elif failure_case == "dependency":
-        name = f"{prefix}-postgres.container"
-        units[name] = replace_once(
-            units[name],
-            "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secrets/postgres-password",
-            "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secrets/postgres-password\nExec=/bin/false",
-        )
-        units[name] = replace_once(
-            units[name], "Restart=on-failure\nTimeoutStartSec=180\nRestartSec=2", "Restart=no\nTimeoutStartSec=180"
-        )
-    elif failure_case == "health":
-        name = f"{prefix}-gateway.container"
-        units[name] = replace_once(
-            units[name],
-            "HealthCmd=wget --no-check-certificate -q -T 3 -O /dev/null https://app.secpal.example.invalid:8443/health/live",
-            "HealthCmd=/bin/false",
-        )
-        units[name] = replace_once(units[name], "HealthInterval=10s", "HealthInterval=1s")
-        units[name] = replace_once(units[name], "HealthRetries=12", "HealthRetries=1")
-        units[name] = replace_once(
-            units[name], "Restart=on-failure\nTimeoutStartSec=180\nRestartSec=2", "Restart=no\nTimeoutStartSec=180"
-        )
-    else:
-        raise ContractError("unsupported failure profile")
-    return units
-
-
 def build_units(
     instance: str, port: int, fixture_root: Path, failure_case: str | None = None
 ) -> dict[str, str]:
+    if failure_case is not None and failure_case not in FAILURE_CASES:
+        raise ContractError("unsupported failure profile")
     prefix = f"secpal-int-{instance}"
     labels = [
         "Label=org.secpal.integration=true",
@@ -317,15 +259,11 @@ def build_units(
             *tmpfs_mounts("postgres"),
             *network_lines(instance, "postgres"),
             "NetworkAlias=postgres",
-            "HealthCmd=pg_isready -U secpal_local -d secpal_local",
-            "HealthInterval=5s",
-            "HealthTimeout=3s",
-            "HealthRetries=20",
-            "HealthStartPeriod=10s",
-            "HealthOnFailure=kill",
-            "Notify=healthy",
+            *health_lines("postgres"),
         )
     )
+    if failure_case == "dependency":
+        postgres_lines.append("Exec=/bin/false")
     units[f"{prefix}-postgres.container"] = (
         unit_description(
             f"SecPal integration PostgreSQL ({instance})",
@@ -334,7 +272,7 @@ def build_units(
             True,
         )
         + section("Container", postgres_lines)
-        + service()
+        + service("no" if failure_case == "dependency" else "on-failure")
     )
 
     valkey_lines = common_container(instance, "valkey", VALKEY_IMAGE)
@@ -346,13 +284,7 @@ def build_units(
             *tmpfs_mounts("valkey"),
             *network_lines(instance, "valkey"),
             "NetworkAlias=valkey",
-            "HealthCmd=VALKEYCLI_AUTH=$(cat /run/secpal-secrets/valkey-password) valkey-cli ping | grep -qx PONG",
-            "HealthInterval=5s",
-            "HealthTimeout=3s",
-            "HealthRetries=20",
-            "HealthStartPeriod=5s",
-            "HealthOnFailure=kill",
-            "Notify=healthy",
+            *health_lines("valkey"),
         )
     )
     units[f"{prefix}-valkey.container"] = (
@@ -371,7 +303,9 @@ def build_units(
         port,
         fixture_root,
         "migrate",
-        "php artisan migrate --force",
+        "/bin/false"
+        if failure_case == "migration"
+        else "/bin/bash /run/secpal/container-entrypoint.sh php artisan migrate --force",
         oneshot=True,
     )
     units[f"{prefix}-api.container"] = api_container(
@@ -380,7 +314,6 @@ def build_units(
         fixture_root,
         "api",
         "frankenphp run --config /etc/frankenphp/Caddyfile",
-        health=True,
     )
     units[f"{prefix}-worker-general.container"] = api_container(
         instance,
@@ -411,13 +344,7 @@ def build_units(
             *tmpfs_mounts("frontend"),
             *network_lines(instance, "frontend"),
             "NetworkAlias=frontend",
-            "HealthCmd=curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/health/live",
-            "HealthInterval=10s",
-            "HealthTimeout=5s",
-            "HealthRetries=12",
-            "HealthStartPeriod=5s",
-            "HealthOnFailure=kill",
-            "Notify=healthy",
+            *health_lines("frontend"),
         )
     )
     units[f"{prefix}-frontend.container"] = (
@@ -431,6 +358,13 @@ def build_units(
     )
 
     gateway_image = f"localhost/secpal-integration-gateway-{instance}:2.10.2"
+    gateway_health = (
+        GATEWAY_HEALTH_FAILURE_SPEC
+        if failure_case == "health"
+        else role_spec("gateway").health
+    )
+    if gateway_health is None:
+        raise ContractError("gateway health contract is missing")
     gateway_lines = common_container(instance, "gateway", gateway_image)
     gateway_lines.extend(
         (
@@ -443,13 +377,7 @@ def build_units(
             "NetworkAlias=gateway",
             f"PublishPort=127.0.0.1:{port}:8443",
             "AddHost=app.secpal.example.invalid:127.0.0.1",
-            "HealthCmd=wget --no-check-certificate -q -T 3 -O /dev/null https://app.secpal.example.invalid:8443/health/live",
-            "HealthInterval=10s",
-            "HealthTimeout=5s",
-            "HealthRetries=12",
-            "HealthStartPeriod=5s",
-            "HealthOnFailure=kill",
-            "Notify=healthy",
+            *gateway_health.quadlet_lines(),
         )
     )
     units[f"{prefix}-gateway.container"] = (
@@ -460,7 +388,7 @@ def build_units(
             True,
         )
         + section("Container", gateway_lines)
-        + service()
+        + service("no" if failure_case == "health" else "on-failure")
     )
 
     target_dependencies = [
@@ -473,7 +401,7 @@ def build_units(
         f"SecPal rootless Podman integration fixture ({instance})",
         target_dependencies,
     ) + section("Install", ["WantedBy=default.target"])
-    return apply_failure_profile(units, instance, failure_case)
+    return units
 
 
 def validate_instance(value: str) -> str:

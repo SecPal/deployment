@@ -48,7 +48,10 @@ so parallel runs do not collide.
 
 There is exactly one `activity-hash-chain` worker, one scheduler, and one
 explicit migration container. Migration remains a `Type=oneshot` service and
-is never called by an entrypoint, health check, worker, or scheduler.
+its reviewed `Exec=` is the only place that selects `php artisan migrate`.
+The shared API runtime-preparation wrapper loads file-backed fixture secrets
+and prepares writable directories, but never decides to run a migration.
+Health checks, workers, and the scheduler never invoke migration.
 PostgreSQL, Valkey, API, frontend, and gateway use Podman health notifications
 as systemd readiness. Failed health or migration therefore prevents the
 dependent target from becoming active.
@@ -120,6 +123,10 @@ absent. It never prunes images, volumes, networks, or unrelated containers.
 Pre-existing unrelated resource names outside the reserved integration
 namespace are snapshotted and must still exist afterward. The published SecPal
 images are not cleanup artifacts.
+
+Hosted runtime evidence waits until the gateway service is active, sends an
+external `SIGTERM` to the integration harness, requires exit status `143`, and
+requires the fixture root to be absent after the harness's exact cleanup.
 
 The runner emits bounded non-secret container statistics, systemd memory
 current/peak and CPU observations, unpacked image sizes, disposable volume

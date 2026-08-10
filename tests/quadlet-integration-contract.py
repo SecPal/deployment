@@ -129,6 +129,8 @@ class QuadletContract(unittest.TestCase):
         self.assertIn("for failure_case in migration dependency health", workflow)
         self.assertIn("--instance parallel01", workflow)
         self.assertIn("--instance parallel02", workflow)
+        self.assertIn("Prove handled SIGTERM cleanup", workflow)
+        self.assertIn('test "$signal_status" -eq 143', workflow)
         self.assertIn("runner: ubuntu-26.04", workflow)
         self.assertIn("runner: ubuntu-26.04-arm", workflow)
         self.assertIn("gh_arch: amd64", workflow)
@@ -277,6 +279,11 @@ class QuadletContract(unittest.TestCase):
             self.assertNotIn("StartLimitBurst=", service_section)
 
         migrate = units[f"secpal-int-{INSTANCE}-migrate.container"]
+        self.assertIn(
+            "Exec=/bin/bash /run/secpal/container-entrypoint.sh "
+            "php artisan migrate --force",
+            migrate,
+        )
         self.assertIn(
             f"Requires=secpal-int-{INSTANCE}-postgres.service secpal-int-{INSTANCE}-valkey.service",
             migrate,
@@ -518,6 +525,14 @@ class QuadletContract(unittest.TestCase):
             elif name.endswith(".volume"):
                 service += "-volume"
             self.assertIn(f"---{service}.service---", generated, name)
+        for role in ("postgres", "valkey", "api", "frontend", "gateway"):
+            marker = f"---secpal-int-{INSTANCE}-{role}.service---"
+            translated_service = generated.split(marker, 1)[1].split("\n---", 1)[0]
+            with self.subTest(health_service=role):
+                self.assertIn("Type=notify", translated_service)
+                self.assertIn("NotifyAccess=all", translated_service)
+                self.assertIn("--sdnotify=healthy", translated_service)
+                self.assertIn("--health-on-failure kill", translated_service)
         self.assertNotIn("--pull always", generated)
         self.assertNotIn("--network host", generated)
         self.assertNotIn("podman.sock", generated)

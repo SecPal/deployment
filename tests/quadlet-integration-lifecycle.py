@@ -542,14 +542,15 @@ class QuadletLifecycleContract(unittest.TestCase):
     def test_admission_checks_the_generator_before_registry_or_image_work(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
-            lifecycle = self.module.IntegrationLifecycle(
-                root=ROOT,
-                instance="contract01",
-                port=18443,
-                fixture_root=fixture,
-                output=fixture / "quadlets",
-                runner=FakeRunner(),
-            )
+            with mock.patch.object(self.module.os, "getuid", return_value=1000):
+                lifecycle = self.module.IntegrationLifecycle(
+                    root=ROOT,
+                    instance="contract01",
+                    port=18443,
+                    fixture_root=fixture,
+                    output=fixture / "quadlets",
+                    runner=FakeRunner(),
+                )
 
             def captured(argv, **_kwargs):
                 if tuple(argv) == ("gh", "version"):
@@ -1956,6 +1957,63 @@ class QuadletLifecycleContract(unittest.TestCase):
                 {"secpal-int-contract01-application"},
             )
 
+    def test_effective_health_contract_rejects_every_runtime_delta(self) -> None:
+        contract = self.module.role_spec("api").health
+        self.assertIsNotNone(contract)
+        valid = {
+            "Config": {
+                "Healthcheck": {
+                    "Test": ["CMD-SHELL", "/usr/local/bin/secpal-http-live"],
+                    "Interval": 10_000_000_000,
+                    "Timeout": 5_000_000_000,
+                    "Retries": 12,
+                    "StartPeriod": 15_000_000_000,
+                },
+                "HealthcheckOnFailureAction": "kill",
+                "sdNotifyMode": "healthy",
+            }
+        }
+        self.module.validate_container_health(valid, contract)
+        mutations = (
+            ("command", ("Healthcheck", "Test"), ["CMD-SHELL", "/bin/true"]),
+            ("interval", ("Healthcheck", "Interval"), 1),
+            ("timeout", ("Healthcheck", "Timeout"), 1),
+            ("retries", ("Healthcheck", "Retries"), 1),
+            ("start-period", ("Healthcheck", "StartPeriod"), 1),
+            ("on-failure", ("HealthcheckOnFailureAction",), "none"),
+            ("notify", ("sdNotifyMode",), "conmon"),
+        )
+        for label, path, value in mutations:
+            with self.subTest(label=label):
+                candidate = json.loads(json.dumps(valid))
+                target = candidate["Config"]
+                for part in path[:-1]:
+                    target = target[part]
+                target[path[-1]] = value
+                with self.assertRaisesRegex(
+                    self.module.IntegrationError,
+                    "health contract",
+                ):
+                    self.module.validate_container_health(candidate, contract)
+
+        with self.assertRaisesRegex(self.module.IntegrationError, "health contract"):
+            self.module.validate_container_health({"Config": {}}, contract)
+
+    def test_effective_health_service_requires_notify_readiness(self) -> None:
+        self.module.validate_effective_health_service(
+            "Type=notify\nNotifyAccess=all\n"
+        )
+        for properties in (
+            "Type=simple\nNotifyAccess=all\n",
+            "Type=notify\nNotifyAccess=none\n",
+            "Type=notify\n",
+        ):
+            with self.subTest(properties=properties), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "health readiness",
+            ):
+                self.module.validate_effective_health_service(properties)
+
     def test_frontend_dns_isolation_rejects_probe_errors(self) -> None:
         self.module.validate_dns_isolation_result(2, "postgres")
         with self.assertRaisesRegex(
@@ -1992,53 +2050,14 @@ class QuadletLifecycleContract(unittest.TestCase):
                 runner.commands,
             )
 
-    def test_invalid_quadlet_output_removes_the_new_fixture_root(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            fixture = Path(directory) / "new-fixture"
-            result = subprocess.run(
-                [
-                    "python3",
-                    os.fspath(HARNESS),
-                    "--fixture-root",
-                    os.fspath(fixture),
-                    "--quadlet-output",
-                    os.fspath(Path(directory) / "outside"),
-                ],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
+    def test_harness_rejects_a_redundant_quadlet_output_override(self) -> None:
+        with mock.patch.object(
+            self.module.sys, "stderr", io.StringIO()
+        ), self.assertRaises(SystemExit) as raised:
+            self.module.parse_arguments(
+                ["--quadlet-output", "/tmp/unreviewed-quadlet-output"]
             )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(fixture.exists())
-
-    def test_invalid_output_fixture_rollback_errors_are_controlled(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            fixture = root / "new-fixture"
-            arguments = self.module.parse_arguments(
-                [
-                    "--fixture-root",
-                    os.fspath(fixture),
-                    "--quadlet-output",
-                    os.fspath(root / "outside"),
-                ]
-            )
-            stderr = io.StringIO()
-            with mock.patch.object(
-                self.module,
-                "parse_arguments",
-                return_value=arguments,
-            ), mock.patch.object(
-                self.module.shutil,
-                "rmtree",
-                side_effect=PermissionError("fixture is not removable"),
-            ), mock.patch.object(
-                self.module.sys,
-                "stderr",
-                stderr,
-            ):
-                self.assertEqual(self.module.main(), 1)
-            self.assertIn("unable to remove invalid fixture root", stderr.getvalue())
+        self.assertEqual(raised.exception.code, 2)
 
     def test_unsafe_fixture_path_is_rejected_before_runtime_admission(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2092,8 +2111,6 @@ class QuadletLifecycleContract(unittest.TestCase):
                             *arguments,
                             "--fixture-root",
                             os.fspath(fixture),
-                            "--quadlet-output",
-                            os.fspath(root / "outside"),
                         ],
                         cwd=ROOT,
                         text=True,

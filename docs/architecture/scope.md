@@ -96,7 +96,8 @@ parallel canonical runs remain isolated. The
 `worker-hash-chain` singleton consumes only `activity-hash-chain`.
 `worker-general` consumes `merkle`, `opentimestamp`, and `default` and has no
 singleton label. In D.1a migration is an explicit one-shot systemd dependency
-and runs exactly once, never from an entrypoint or health check.
+and runs exactly once. Only that unit selects the migration command; the shared
+runtime-preparation wrapper and every health check never initiate migration.
 
 ## Step A bootstrap contract
 
