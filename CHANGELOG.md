@@ -9,6 +9,16 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- A manual, protected Debian 13 cloud-conformance workflow for an immutable
+  full target SHA with separate credentialed apply, uncredentialed remote test,
+  bounded evidence, and independent exact cleanup phases.
+- A locked DigitalOcean OpenTofu root for one allowlisted Intel or AMD host,
+  per-run Ed25519 access, deterministic ownership/TTL tags, and restricted
+  ingress from the active runner.
+- A fail-closed scheduled TTL janitor for expired, completely revalidated
+  owned Droplets plus static mutation tests for credential, input, provider,
+  SSH-state, metadata, cleanup, action-pin, and evidence boundaries.
+
 - A provider-neutral production host and inventory contract.
 - A versioned, non-secret production inventory schema, a closed synthetic
   host-facts schema, and examples for both supported architectures.

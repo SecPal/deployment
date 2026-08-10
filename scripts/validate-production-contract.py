@@ -1133,29 +1133,35 @@ def validate_headroom_fact(
 ) -> None:
     requirement = inventory["resources"]["storage"][name]
     checks = (
-        ("free_bytes", "minimum_free_bytes"),
-        ("free_percent", "minimum_free_percent"),
-        ("free_inodes", "minimum_free_inodes"),
-        ("free_inode_percent", "minimum_free_inode_percent"),
+        ("free_bytes", "minimum_free_bytes", "filesystem_total_bytes", "storage_total_bytes"),
+        ("free_percent", "minimum_free_percent", None, None),
+        ("free_inodes", "minimum_free_inodes", "filesystem_total_inodes", "total_inodes"),
+        ("free_inode_percent", "minimum_free_inode_percent", None, None),
     )
-    for fact_name, requirement_name in checks:
+    for fact_name, requirement_name, filesystem_total_name, host_total_name in checks:
         actual = headroom[fact_name]
-        if fact_name == "free_bytes" and actual > resource_totals["storage_total_bytes"]:
-            raise ContractViolation(f"storage free bytes exceed host total at {name}")
-        if fact_name == "free_inodes" and actual > resource_totals["total_inodes"]:
-            raise ContractViolation(f"storage free inodes exceed host total at {name}")
+        if filesystem_total_name is not None and host_total_name is not None:
+            filesystem_total = headroom[filesystem_total_name]
+            if filesystem_total > resource_totals[host_total_name]:
+                raise ContractViolation(
+                    f"storage filesystem total exceeds host total at {name}"
+                )
+            if actual > filesystem_total:
+                raise ContractViolation(
+                    f"storage free capacity exceeds filesystem total at {name}"
+                )
         if actual < requirement[requirement_name]:
             raise ContractViolation(f"storage headroom is insufficient at {name}.{fact_name}")
 
     consistency_checks = (
-        ("free_bytes", "free_percent", "storage_total_bytes"),
-        ("free_inodes", "free_inode_percent", "total_inodes"),
+        ("free_bytes", "free_percent", "filesystem_total_bytes"),
+        ("free_inodes", "free_inode_percent", "filesystem_total_inodes"),
     )
     for absolute_name, percentage_name, total_name in consistency_checks:
         free = headroom[absolute_name]
         percentage = headroom[percentage_name]
-        total = resource_totals[total_name]
-        if free * 100 >= total * (percentage + 1):
+        total = headroom[total_name]
+        if not total * percentage <= free * 100 < total * (percentage + 1):
             raise ContractViolation(
                 f"storage absolute and percentage facts conflict at {name}"
             )

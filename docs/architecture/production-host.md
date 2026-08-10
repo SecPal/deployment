@@ -338,9 +338,10 @@ reviewed migration note changes schema version 1.
 Each area fails if either its absolute reserve or 20% free-space and free-inode
 reserve is breached. Sharing a backing device does not make the checks
 additive; operators must evaluate every reported path and the device-wide total.
-Percentage observations are whole-number floors. An absolute free value and its
-percentage must imply a possible backing-device total no larger than the
-reported aggregate host total; contradictory evidence fails admission.
+Each path reports its backing filesystem's byte and inode totals. Percentage
+observations must be the whole-number floor derived from those totals, and no
+backing-filesystem total may exceed the corresponding aggregate host total.
+Contradictory evidence fails admission in either direction.
 
 | Area                        | Absolute free bytes | Free inodes | Notes                                                                                  |
 | --------------------------- | ------------------: | ----------: | -------------------------------------------------------------------------------------- |

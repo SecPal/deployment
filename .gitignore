@@ -16,14 +16,19 @@
 *.asc
 *.tfstate
 *.tfstate.*
+**/.terraform/
+**/run.auto.tfvars.json
 secrets/
 private/
 credentials/
+gha-creds-*.json
 
 # Temporary and generated output
 tmp/
 .cache/
 coverage/
+__pycache__/
+*.pyc
 node_modules/
 playwright-report/
 test-results/

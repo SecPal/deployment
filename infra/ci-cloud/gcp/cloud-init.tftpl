@@ -1,0 +1,89 @@
+#cloud-config
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - aardvark-dns
+  - apparmor
+  - apparmor-utils
+  - crun
+  - curl
+  - dbus-user-session
+  - git
+  - gh
+  - jq
+  - netavark
+  - passt
+  - podman
+  - python3
+  - python3-jsonschema
+  - python3-yaml
+  - uidmap
+  - unattended-upgrades
+
+users:
+  - name: secpal-ci
+    gecos: SecPal disposable conformance operator
+    groups: []
+    uid: 20000
+    lock_passwd: true
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+disable_root: true
+ssh_pwauth: false
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/90-secpal-ci.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+      PubkeyAuthentication yes
+      AllowUsers secpal-ci
+  - path: /etc/apt/apt.conf.d/20secpal-ci-periodic
+    owner: root:root
+    permissions: "0644"
+    content: |
+      APT::Periodic::Enable "1";
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  - path: /etc/apt/apt.conf.d/99secpal-ci-unattended-upgrades
+    owner: root:root
+    permissions: "0644"
+    content: |
+      #clear Unattended-Upgrade::Origins-Pattern;
+      Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=$${distro_codename}-security,label=Debian-Security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "false";
+      #clear Unattended-Upgrade::Package-Blacklist;
+      Unattended-Upgrade::Package-Blacklist {
+        "podman";
+        "conmon";
+        "crun";
+        "netavark";
+        "aardvark-dns";
+        "passt";
+        "uidmap";
+        "dbus-user-session";
+      };
+  - path: /etc/environment.d/90-secpal-ci-quadlet.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000
+  - path: /usr/local/sbin/secpal-ci-configure-conformance-host
+    owner: root:root
+    permissions: "0700"
+    content: |
+      ${host_setup_script}
+
+runcmd:
+  - [/usr/local/sbin/secpal-ci-configure-conformance-host]

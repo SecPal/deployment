@@ -53,6 +53,11 @@ bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
 php -l scripts/phase-b-runtime-probe.php
 python3 tests/oci-attestation-bundle-contract.py
+python3 tests/ci-cloud-contract.py
+python3 tests/ci-cloud-collector.py
+python3 tests/ci-cloud-evidence.py
+python3 tests/ci-cloud-gcp-janitor.py
+python3 tests/ci-cloud-janitor.py
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
 bash tests/repository-contract.sh
@@ -65,17 +70,18 @@ bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh
 bash tests/sensitive-path-contract.sh
 bash tests/workflow-action-pin-contract.sh
+python3 scripts/validate-ci-cloud.py
 
-mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -name '*.md' -print0 | sort -z)
+mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context -o -name .terraform -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"
 
-mapfile -d '' yaml_files < <(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
+mapfile -d '' yaml_files < <(find . \( -path ./.git -o -path ./.context -o -name .terraform -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
 yamllint -c .yamllint.yml "${yaml_files[@]}"
 
 mapfile -d '' workflow_files < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
 actionlint "${workflow_files[@]}"
 
-mapfile -d '' formatted_files < <(find . \( -path ./.git -o -path ./.context -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f \( \
+mapfile -d '' formatted_files < <(find . \( -path ./.git -o -path ./.context -o -name .terraform -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f \( \
   -name '*.md' -o -name '*.yml' -o -name '*.yaml' -o -name '*.json' \
 \) -print0 | sort -z)
 prettier --check "${formatted_files[@]}"

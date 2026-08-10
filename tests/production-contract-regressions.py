@@ -466,6 +466,19 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_storage_percentage_cannot_overstate_absolute_headroom(self) -> None:
+        facts = copy.deepcopy(self.host_facts)
+        resources = nested_mapping(facts, "resources")
+        runtime_storage = nested_mapping(
+            resources, "storage", "podman_graph_root"
+        )
+        runtime_storage["free_bytes"] = 20 * 1024**3
+        runtime_storage["free_percent"] = 100
+        self.assert_contract_violation(
+            lambda: self.validator.validate_host_facts(self.inventory, facts),
+            "storage absolute and percentage facts conflict",
+        )
+
     def test_private_address_fact_order_is_not_significant(self) -> None:
         inventory = copy.deepcopy(self.inventory)
         host = inventory["host"]

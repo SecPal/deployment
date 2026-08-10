@@ -46,7 +46,11 @@ Never print secret values to logs.
 - Use secure temporary files and directories with restrictive permissions.
 - Never evaluate untrusted input with `eval` or `source`.
 - Never expose secrets in logs.
-- Pin versions and image digests exactly in future deployment pull requests.
+- Pin versions and image digests exactly in production deployment paths.
+- A non-production conformance workflow may resolve one closed official OS slug
+  and current Debian packages only when it is isolated from production, records
+  the resolved provider image ID and exact installed package versions in closed
+  schema-validated evidence, and re-admits their expected Debian provenance.
 
 ## Future deployment invariants
 
