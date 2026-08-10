@@ -240,7 +240,6 @@ def apply_failure_profile(
         )
         units[name] = replace_once(units[name], "HealthInterval=10s", "HealthInterval=1s")
         units[name] = replace_once(units[name], "HealthRetries=12", "HealthRetries=1")
-        units[name] = replace_once(units[name], "HealthStartPeriod=5s", "HealthStartPeriod=1s")
         units[name] = replace_once(
             units[name], "Restart=on-failure\nTimeoutStartSec=180\nRestartSec=2", "Restart=no\nTimeoutStartSec=180"
         )

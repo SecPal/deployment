@@ -248,6 +248,34 @@ def parse_single_json_object(output: str, source: str) -> Mapping:
     return payload[0]
 
 
+def has_injected_health_failure(details: Mapping) -> bool:
+    """Recognize the closed health-failure fixture from Podman's own state."""
+
+    test = nested(details, "Config", "Healthcheck", "Test")
+    if test != ["CMD-SHELL", "/bin/false"]:
+        raise IntegrationError("gateway does not use the injected health check")
+    health = nested(details, "State", "Health")
+    status = nested(health, "Status")
+    if status in {"", "starting"}:
+        return False
+    if status != "unhealthy":
+        raise IntegrationError("injected gateway health check did not become unhealthy")
+    failing_streak = nested(health, "FailingStreak")
+    if (
+        isinstance(failing_streak, bool)
+        or not isinstance(failing_streak, int)
+        or failing_streak < 1
+    ):
+        raise IntegrationError("injected gateway health check has no failing streak")
+    log = nested(health, "Log")
+    if not isinstance(log, list) or not log or not isinstance(log[-1], Mapping):
+        raise IntegrationError("injected gateway health check has no failure log")
+    exit_code = log[-1].get("ExitCode")
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int) or exit_code == 0:
+        raise IntegrationError("injected gateway health check did not record a failure")
+    return True
+
+
 def runtime_probe_contract(instance: str) -> dict[str, object]:
     """Map a bounded instance to the immutable Phase B probe namespace."""
 
@@ -750,31 +778,38 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
             continue
 
 
+def render_and_start_with_port_retries(lifecycle, start, port_allocator=None) -> None:
+    automatic_port = getattr(lifecycle, "port", 1) is None
+    allocator = port_allocator or allocate_port
+    previous_port: int | None = None
+    for attempt in range(3):
+        if automatic_port:
+            selected = allocate_distinct_port(allocator, previous_port)
+            lifecycle.select_port(selected)
+            previous_port = selected
+        lifecycle.render_validate_and_install_units()
+        try:
+            start()
+            return
+        except PortCollisionError as error:
+            if not automatic_port:
+                raise
+            if attempt == 2:
+                raise IntegrationError(
+                    "an isolated loopback port could not be allocated after three attempts"
+                ) from error
+            lifecycle.prepare_port_retry()
+    raise IntegrationError("unreachable port retry state")
+
+
 def execute_lifecycle(lifecycle, port_allocator=None) -> None:
     failure: BaseException | None = None
     try:
         lifecycle.validate_repository_and_runtime()
         lifecycle.retrieve_verify_and_stage_images()
-        automatic_port = getattr(lifecycle, "port", 1) is None
-        allocator = port_allocator or allocate_port
-        previous_port: int | None = None
-        for attempt in range(3):
-            if automatic_port:
-                selected = allocate_distinct_port(allocator, previous_port)
-                lifecycle.select_port(selected)
-                previous_port = selected
-            lifecycle.render_validate_and_install_units()
-            try:
-                lifecycle.start_target()
-                break
-            except PortCollisionError as error:
-                if not automatic_port:
-                    raise
-                if attempt == 2:
-                    raise IntegrationError(
-                        "an isolated loopback port could not be allocated after three attempts"
-                    ) from error
-                lifecycle.prepare_port_retry()
+        render_and_start_with_port_retries(
+            lifecycle, lifecycle.start_target, port_allocator
+        )
         lifecycle.prove_runtime()
         lifecycle.collect_resource_evidence()
     except BaseException as error:
@@ -791,15 +826,14 @@ def execute_lifecycle(lifecycle, port_allocator=None) -> None:
         raise failure
 
 
-def execute_expected_failure_lifecycle(lifecycle) -> None:
+def execute_expected_failure_lifecycle(lifecycle, port_allocator=None) -> None:
     failure: BaseException | None = None
     try:
         lifecycle.validate_repository_and_runtime()
         lifecycle.retrieve_verify_and_stage_images()
-        if getattr(lifecycle, "port", 1) is None:
-            lifecycle.select_port(allocate_port())
-        lifecycle.render_validate_and_install_units()
-        lifecycle.start_expected_failure()
+        render_and_start_with_port_retries(
+            lifecycle, lifecycle.start_expected_failure, port_allocator
+        )
         lifecycle.prove_expected_failure()
     except BaseException as error:
         failure = error
@@ -885,6 +919,7 @@ class IntegrationLifecycle:
         self.inspected_oneshots: set[str] = set()
         self.preexisting_resources: dict[str, set[str]] = {}
         self.expected_failure_observed = False
+        self.injected_health_failure_observed = False
 
     def select_port(self, port: int) -> None:
         if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
@@ -1530,6 +1565,8 @@ class IntegrationLifecycle:
                 raise IntegrationError(
                     "previous Quadlet attempt could not be removed"
                 ) from error
+        self.expected_failure_observed = False
+        self.injected_health_failure_observed = False
         self.port = None
 
     def start_expected_failure(self) -> None:
@@ -1542,8 +1579,8 @@ class IntegrationLifecycle:
         )
         if queued.returncode != 0:
             raise IntegrationError("expected-failure systemd target could not be queued")
-        release_roles = ["secrets-init"]
-        if self.failure_case != "dependency":
+        release_roles = [] if self.inspected_oneshots else ["secrets-init"]
+        if release_roles and self.failure_case != "dependency":
             release_roles.append("migrate")
         for role in release_roles:
             details = self._wait_for_oneshot_container(role)
@@ -1560,7 +1597,14 @@ class IntegrationLifecycle:
                 ]
             )
         if self.failure_case == "health":
-            self.migration_invocation = self._wait_for_oneshot_success("migrate")
+            migration_invocation = self._wait_for_oneshot_success("migrate")
+            if (
+                self.migration_invocation is not None
+                and self.migration_invocation != migration_invocation
+            ):
+                raise IntegrationError("migration executed more than once")
+            self.migration_invocation = migration_invocation
+            self._wait_for_injected_health_failure()
         result = self.command(
             ["systemctl", "--user", "start", self.resources.target],
             capture=True,
@@ -1569,6 +1613,77 @@ class IntegrationLifecycle:
         if result.returncode == 0:
             raise IntegrationError(f"{self.failure_case} failure profile returned a green target")
         self.expected_failure_observed = True
+
+    def _wait_for_injected_health_failure(self) -> None:
+        role = "gateway"
+        name = f"{self.resources.prefix}-{role}"
+        service = f"{name}.service"
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            inspected = self.command(
+                ["podman", "container", "inspect", name], capture=True, check=False
+            )
+            if inspected.returncode == 0:
+                details = parse_single_json_object(
+                    inspected.stdout or "", "injected gateway health inspection"
+                )
+                if nested(details, "State", "Running") is True:
+                    self._validate_effective_container(role, details)
+                    if has_injected_health_failure(details):
+                        self.injected_health_failure_observed = True
+                        return
+                    unhealthy = self.command(
+                        [
+                            "podman",
+                            "wait",
+                            "--condition",
+                            "unhealthy",
+                            "--interval",
+                            "50ms",
+                            name,
+                        ],
+                        capture=True,
+                        check=False,
+                    )
+                    if unhealthy.returncode == 0:
+                        self.injected_health_failure_observed = True
+                        return
+                    if self._gateway_port_collision():
+                        raise PortCollisionError(
+                            "gateway loopback port is already allocated"
+                        )
+                    raise IntegrationError(
+                        "gateway stopped before the injected health check became unhealthy"
+                    )
+            state = self.command(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    service,
+                    "--property=ActiveState",
+                    "--property=Result",
+                ],
+                capture=True,
+                check=False,
+            )
+            values = dict(
+                line.split("=", 1)
+                for line in (state.stdout or "").splitlines()
+                if "=" in line
+            )
+            if values.get("ActiveState") == "failed" or values.get("Result") not in {
+                None,
+                "",
+                "success",
+            }:
+                if self._gateway_port_collision():
+                    raise PortCollisionError("gateway loopback port is already allocated")
+                raise IntegrationError(
+                    "gateway failed before the injected health check was observed"
+                )
+            time.sleep(0.1)
+        raise IntegrationError("injected gateway health check was not observed")
 
     def _wait_for_oneshot_success(self, role: str) -> tuple[str, str]:
         deadline = time.monotonic() + 180
@@ -1617,7 +1732,20 @@ class IntegrationLifecycle:
         if (
             properties.get("ActiveState") not in {"failed", "inactive"}
             or properties.get("Result") in {None, "", "success"}
-            or properties.get("ExecMainStatus") in {None, "", "0"}
+            or (
+                self.failure_case in {"migration", "dependency"}
+                and (
+                    properties.get("Result") != "exit-code"
+                    or properties.get("ExecMainStatus") != "1"
+                )
+            )
+            or (
+                self.failure_case == "health"
+                and (
+                    properties.get("Result") != "exit-code"
+                    or properties.get("ExecMainStatus") != "137"
+                )
+            )
         ):
             raise IntegrationError(f"{self.failure_case} failure profile was not fail-closed")
         target_state = self.captured(
@@ -1646,8 +1774,13 @@ class IntegrationLifecycle:
                     raise IntegrationError(
                         f"unable to verify blocked role absence: {role}"
                     )
-        if self.failure_case == "health" and self.migration_invocation is None:
-            raise IntegrationError("health failure occurred without one successful migration")
+        if self.failure_case == "health":
+            if self.migration_invocation is None:
+                raise IntegrationError("health failure occurred without one successful migration")
+            if not self.injected_health_failure_observed:
+                raise IntegrationError(
+                    "health failure occurred without observing the injected health check"
+                )
 
     def _wait_for_oneshot_container(self, role: str) -> Mapping:
         name = f"{self.resources.prefix}-{role}"
@@ -1657,9 +1790,11 @@ class IntegrationLifecycle:
                 ["podman", "container", "inspect", name], capture=True, check=False
             )
             if result.returncode == 0:
-                return parse_single_json_object(
+                details = parse_single_json_object(
                     result.stdout or "", f"one-shot container inspection for {role}"
                 )
+                if nested(details, "State", "Running") is True:
+                    return details
             state = self.command(
                 [
                     "systemctl",

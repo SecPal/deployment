@@ -108,6 +108,17 @@ class PortRetryLifecycle(RecordingLifecycle):
         self.events.append("retry-cleanup")
 
 
+class ExpectedFailurePortRetryLifecycle(PortRetryLifecycle):
+    def start_expected_failure(self) -> None:
+        self._phase("failure-start")
+        if self.collisions:
+            self.collisions -= 1
+            raise self.module.PortCollisionError("loopback port is already allocated")
+
+    def prove_expected_failure(self) -> None:
+        self._phase("failure-prove")
+
+
 class TerminatingRunner:
     def __init__(self):
         self.termination_requests = 0
@@ -261,6 +272,18 @@ class QuadletLifecycleContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.module = load_harness()
+
+    def failure_lifecycle(self, directory: str, failure_case: str):
+        fixture = Path(directory)
+        return self.module.IntegrationLifecycle(
+            root=ROOT,
+            instance="contract01",
+            port=18443,
+            fixture_root=fixture,
+            output=fixture / "quadlets",
+            failure_case=failure_case,
+            runner=FakeRunner(),
+        )
 
     def valid_info(self) -> dict:
         return {
@@ -776,6 +799,29 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 self.module.validate_oneshot_state(candidate)
 
+    def test_oneshot_inspection_waits_for_the_effective_running_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.failure_lifecycle(directory, "migration")
+            created = subprocess.CompletedProcess(
+                (),
+                0,
+                json.dumps([{"State": {"Running": False, "Status": "created"}}]),
+                "",
+            )
+            activating = subprocess.CompletedProcess(
+                (), 0, "ActiveState=activating\nResult=success\n", ""
+            )
+            running_details = {"State": {"Running": True, "Status": "running"}}
+            running = subprocess.CompletedProcess(
+                (), 0, json.dumps([running_details]), ""
+            )
+            with mock.patch.object(
+                lifecycle, "command", side_effect=(created, activating, running)
+            ), mock.patch.object(self.module.time, "sleep"):
+                observed = lifecycle._wait_for_oneshot_container("migrate")
+
+            self.assertEqual(observed, running_details)
+
     def test_lifecycle_order_and_every_failure_path_cleanup(self) -> None:
         expected = ["admission", "verify-stage", "quadlets", "start", "prove", "observe", "cleanup"]
         successful = RecordingLifecycle(self.module)
@@ -804,6 +850,23 @@ class QuadletLifecycleContract(unittest.TestCase):
         self.assertEqual(lifecycle.events.count("verify-stage"), 1)
         self.assertEqual(lifecycle.events.count("quadlets"), 3)
         self.assertEqual(lifecycle.events.count("start"), 3)
+        self.assertEqual(lifecycle.cleanup_calls, 1)
+
+    def test_expected_health_failure_retries_verified_automatic_port_collisions(self) -> None:
+        lifecycle = ExpectedFailurePortRetryLifecycle(self.module, collisions=2)
+        allocated = iter((18445, 18446, 18447))
+
+        self.module.execute_expected_failure_lifecycle(
+            lifecycle, port_allocator=lambda: next(allocated)
+        )
+
+        self.assertEqual(lifecycle.port_attempts, [18445, 18446, 18447])
+        self.assertEqual(lifecycle.retry_cleanups, 2)
+        self.assertEqual(lifecycle.events.count("admission"), 1)
+        self.assertEqual(lifecycle.events.count("verify-stage"), 1)
+        self.assertEqual(lifecycle.events.count("quadlets"), 3)
+        self.assertEqual(lifecycle.events.count("failure-start"), 3)
+        self.assertEqual(lifecycle.events.count("failure-prove"), 1)
         self.assertEqual(lifecycle.cleanup_calls, 1)
 
     def test_only_verified_gateway_bind_errors_are_retryable(self) -> None:
@@ -858,6 +921,115 @@ class QuadletLifecycleContract(unittest.TestCase):
             ) as command:
                 self.assertFalse(lifecycle._gateway_port_collision())
                 command.assert_called_once()
+
+    def test_health_failure_wait_retries_only_a_verified_gateway_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.failure_lifecycle(directory, "health")
+            absent = subprocess.CompletedProcess((), 125, "", "not found")
+            failed = subprocess.CompletedProcess(
+                (), 0, "ActiveState=failed\nResult=exit-code\n", ""
+            )
+            with mock.patch.object(
+                lifecycle, "command", side_effect=(absent, failed)
+            ), mock.patch.object(
+                lifecycle, "_gateway_port_collision", return_value=True
+            ), self.assertRaises(self.module.PortCollisionError):
+                lifecycle._wait_for_injected_health_failure()
+
+            with mock.patch.object(
+                lifecycle, "command", side_effect=(absent, failed)
+            ), mock.patch.object(
+                lifecycle, "_gateway_port_collision", return_value=False
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "before the injected health check",
+            ):
+                lifecycle._wait_for_injected_health_failure()
+
+    def test_health_failure_wait_uses_podmans_unhealthy_condition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.failure_lifecycle(directory, "health")
+            starting = json.dumps(
+                [
+                    {
+                        "Config": {
+                            "Healthcheck": {"Test": ["CMD-SHELL", "/bin/false"]}
+                        },
+                        "State": {
+                            "Running": True,
+                            "Status": "running",
+                            "Health": {
+                                "Status": "starting",
+                                "FailingStreak": 0,
+                                "Log": [],
+                            }
+                        },
+                    }
+                ]
+            )
+            inspected = subprocess.CompletedProcess((), 0, starting, "")
+            unhealthy = subprocess.CompletedProcess((), 0, "-1\n", "")
+            with mock.patch.object(
+                lifecycle, "command", side_effect=(inspected, unhealthy)
+            ) as command, mock.patch.object(
+                lifecycle, "_validate_effective_container"
+            ):
+                lifecycle._wait_for_injected_health_failure()
+
+            self.assertTrue(lifecycle.injected_health_failure_observed)
+            self.assertEqual(
+                command.call_args_list[1].args[0],
+                [
+                    "podman",
+                    "wait",
+                    "--condition",
+                    "unhealthy",
+                    "--interval",
+                    "50ms",
+                    "secpal-int-contract01-gateway",
+                ],
+            )
+
+    def test_health_failure_inspection_waits_until_the_container_is_running(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.failure_lifecycle(directory, "health")
+            created = subprocess.CompletedProcess(
+                (),
+                0,
+                json.dumps([{"State": {"Running": False, "Status": "created"}}]),
+                "",
+            )
+            activating = subprocess.CompletedProcess(
+                (), 0, "ActiveState=activating\nResult=success\n", ""
+            )
+            running_details = {
+                "Config": {
+                    "Healthcheck": {"Test": ["CMD-SHELL", "/bin/false"]}
+                },
+                "State": {
+                    "Running": True,
+                    "Status": "running",
+                    "Health": {
+                        "Status": "starting",
+                        "FailingStreak": 0,
+                        "Log": [],
+                    },
+                },
+            }
+            running = subprocess.CompletedProcess(
+                (), 0, json.dumps([running_details]), ""
+            )
+            unhealthy = subprocess.CompletedProcess((), 0, "-1\n", "")
+            with mock.patch.object(
+                lifecycle,
+                "command",
+                side_effect=(created, activating, running, unhealthy),
+            ), mock.patch.object(
+                lifecycle, "_validate_effective_container"
+            ) as validate, mock.patch.object(self.module.time, "sleep"):
+                lifecycle._wait_for_injected_health_failure()
+
+            validate.assert_called_once_with("gateway", running_details)
 
     def test_port_retry_preserves_data_roles_and_completed_migration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1289,6 +1461,104 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "unable to verify blocked role absence",
             ):
                 lifecycle.prove_expected_failure()
+
+    def test_injected_health_failure_requires_podman_health_evidence(self) -> None:
+        evidence = {
+            "Config": {
+                "Healthcheck": {"Test": ["CMD-SHELL", "/bin/false"]},
+            },
+            "State": {
+                "Health": {
+                    "Status": "unhealthy",
+                    "FailingStreak": 1,
+                    "Log": [{"ExitCode": 1, "Output": ""}],
+                }
+            },
+        }
+        self.assertTrue(self.module.has_injected_health_failure(evidence))
+
+        pending = json.loads(json.dumps(evidence))
+        pending["State"]["Health"] = {
+            "Status": "starting",
+            "FailingStreak": 0,
+            "Log": [],
+        }
+        self.assertFalse(self.module.has_injected_health_failure(pending))
+        pending["State"]["Health"] = {
+            "Status": "",
+            "FailingStreak": 0,
+            "Log": None,
+        }
+        self.assertFalse(self.module.has_injected_health_failure(pending))
+
+        mutations = (
+            ("Config.Healthcheck.Test", ["CMD-SHELL", "wget example.invalid"]),
+            ("State.Health.Status", "healthy"),
+            ("State.Health.FailingStreak", 0),
+            ("State.Health.Log", [{"ExitCode": 0, "Output": ""}]),
+            ("State.Health.Log", []),
+        )
+        for path, value in mutations:
+            with self.subTest(path=path, value=value):
+                candidate = json.loads(json.dumps(evidence))
+                target = candidate
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    target = target[part]
+                target[parts[-1]] = value
+                with self.assertRaises(self.module.IntegrationError):
+                    self.module.has_injected_health_failure(candidate)
+
+    def test_fixed_process_failures_reject_an_unrelated_service_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for failure_case in ("migration", "dependency"):
+                lifecycle = self.failure_lifecycle(directory, failure_case)
+                lifecycle.expected_failure_observed = True
+                failed = "ActiveState=failed\nResult=timeout\nExecMainStatus=143\n"
+                with self.subTest(failure_case=failure_case), mock.patch.object(
+                    lifecycle, "captured", return_value=failed
+                ), self.assertRaisesRegex(
+                    self.module.IntegrationError, "failure profile was not fail-closed"
+                ):
+                    lifecycle.prove_expected_failure()
+
+    def test_health_failure_proof_requires_podman_evidence_and_the_kill_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.failure_lifecycle(directory, "health")
+            lifecycle.expected_failure_observed = True
+            lifecycle.migration_invocation = ("a" * 32, "1234")
+            failed = "ActiveState=failed\nResult=exit-code\nExecMainStatus=137\n"
+            target = "ActiveState=failed\n"
+            with mock.patch.object(
+                lifecycle, "captured", side_effect=(failed, target)
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "injected health check",
+            ):
+                lifecycle.prove_expected_failure()
+            lifecycle.injected_health_failure_observed = True
+            with mock.patch.object(
+                lifecycle, "captured", side_effect=(failed, target)
+            ):
+                lifecycle.prove_expected_failure()
+
+    def test_health_port_retry_cannot_hide_a_second_migration_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = self.failure_lifecycle(directory, "health")
+            lifecycle.inspected_oneshots = {"secrets-init", "migrate"}
+            lifecycle.migration_invocation = ("a" * 32, "1234")
+            with mock.patch.object(
+                lifecycle,
+                "_wait_for_oneshot_success",
+                return_value=("b" * 32, "5678"),
+            ), mock.patch.object(
+                lifecycle, "_wait_for_injected_health_failure"
+            ) as wait_for_health, self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "migration executed more than once",
+            ):
+                lifecycle.start_expected_failure()
+            wait_for_health.assert_not_called()
 
     def test_final_liveness_rejects_an_inactive_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

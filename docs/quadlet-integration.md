@@ -96,11 +96,17 @@ Three closed real-runtime profiles also prove that a failed migration never
 starts its dependent application roles, a failed PostgreSQL dependency never
 starts migration or its dependents, and a gateway health failure cannot leave
 the integration target active. The profiles are evidence fixtures only; they
-cannot accept arbitrary commands or Quadlet text.
+cannot accept arbitrary commands or Quadlet text. Migration and dependency
+evidence requires the exact `/bin/false` exit result. Health evidence requires
+Podman's effective `CMD-SHELL /bin/false` configuration, an unhealthy state,
+a nonzero health result, and the resulting systemd exit after Podman applies
+the reviewed `HealthOnFailure=kill` policy; an
+unrelated gateway failure is not accepted as health-failure evidence.
 
 An automatically selected loopback port is chosen only after image verification
 and staging. A current-invocation gateway bind collision triggers at most two
-new selections. The retry preserves PostgreSQL, Valkey, both completed
+new selections, including during the health-failure profile. The retry
+preserves PostgreSQL, Valkey, both completed
 one-shots, and the migration invocation; it replaces only the long-running
 application roles whose origin configuration contains the port. An explicitly
 provided port is never silently replaced.

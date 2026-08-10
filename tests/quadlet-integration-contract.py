@@ -433,6 +433,10 @@ class QuadletContract(unittest.TestCase):
                     {changed_name},
                 )
                 self.assertIn(marker, fault[changed_name])
+                if failure_case == "health":
+                    self.assertIn("HealthOnFailure=kill", fault[changed_name])
+                    self.assertIn("HealthStartPeriod=5s", fault[changed_name])
+                    self.assertIn("TimeoutStartSec=180", fault[changed_name])
 
     def test_validation_rejects_policy_mutations_and_incomplete_output(self) -> None:
         self.render()
