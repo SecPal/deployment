@@ -61,7 +61,7 @@ def valid_document() -> dict[str, object]:
             "provider": "digitalocean",
             "region": "fra1",
             "profile": "amd",
-            "machine_type": "s-8vcpu-16gb-amd",
+            "machine_type": "s-4vcpu-8gb-amd",
             "provider_image": {
                 "slug": "debian-13-x64",
                 "id": "123456789",

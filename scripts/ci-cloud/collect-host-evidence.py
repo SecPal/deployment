@@ -1068,8 +1068,8 @@ def main() -> int:
         arguments.machine_type,
     )
     digitalocean_selections = {
-        ("digitalocean", "fra1", "intel", "debian-13-x64", "s-8vcpu-16gb-intel"),
-        ("digitalocean", "fra1", "amd", "debian-13-x64", "s-8vcpu-16gb-amd"),
+        ("digitalocean", "fra1", "intel", "debian-13-x64", "s-4vcpu-8gb-intel"),
+        ("digitalocean", "fra1", "amd", "debian-13-x64", "s-4vcpu-8gb-amd"),
     }
     gcp_selection = (
         "gcp",

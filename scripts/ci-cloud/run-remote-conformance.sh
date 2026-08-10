@@ -26,8 +26,8 @@ machine_type="${12}"
 [[ "$run_id" =~ ^[1-9][0-9]{0,19}$ ]]
 [[ "$run_attempt" =~ ^[1-9][0-9]{0,2}$ ]]
 case "$provider/$region/$profile/$provider_image_slug/$machine_type" in
-  digitalocean/fra1/intel/debian-13-x64/s-8vcpu-16gb-intel | \
-    digitalocean/fra1/amd/debian-13-x64/s-8vcpu-16gb-amd)
+  digitalocean/fra1/intel/debian-13-x64/s-4vcpu-8gb-intel | \
+    digitalocean/fra1/amd/debian-13-x64/s-4vcpu-8gb-amd)
     [[ "$provider_image_id" =~ ^[1-9][0-9]{0,19}$ ]]
     ;;
   gcp/europe-west3-a/axion/debian-cloud/debian-13-arm64/c4a-standard-4)

@@ -292,8 +292,8 @@ def validate_opentofu(root: Path) -> None:
         and "value       = data.digitalocean_image.debian_13.id" in outputs,
         "exact resolved provider image ID must be exported",
     )
-    require('intel = "s-8vcpu-16gb-intel"' in main, "Intel size allowlist changed")
-    require('amd   = "s-8vcpu-16gb-amd"' in main, "AMD size allowlist changed")
+    require('intel = "s-4vcpu-8gb-intel"' in main, "Intel size allowlist changed")
+    require('amd   = "s-4vcpu-8gb-amd"' in main, "AMD size allowlist changed")
     require("local.owner_tag," in main, "SecPal CI owner metadata is missing")
     require("local.repo_tag," in main, "repository metadata is missing")
     require("local.sha_tag," in main, "target SHA metadata is missing")

@@ -305,14 +305,14 @@ def validate_document(document: object) -> dict[str, object]:
             "digitalocean",
             "fra1",
             "intel",
-            "s-8vcpu-16gb-intel",
+            "s-4vcpu-8gb-intel",
             "debian-13-x64",
         ),
         (
             "digitalocean",
             "fra1",
             "amd",
-            "s-8vcpu-16gb-amd",
+            "s-4vcpu-8gb-amd",
             "debian-13-x64",
         ),
         (

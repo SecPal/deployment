@@ -33,10 +33,12 @@ credentials. Every host and all of its state are disposable test fixtures.
 
 The DigitalOcean root is
 [`infra/ci-cloud/digitalocean`](../infra/ci-cloud/digitalocean). It uses the
-fixed `fra1` region and one fixed 8-vCPU/16-GB/320-GB premium size for each CPU
-vendor. The larger-than-minimum memory tier avoids treating guest-visible
-memory lost to platform overhead as an 8-GiB D.1 pass. Image, region, size,
-count, and TTL are not workflow inputs. The non-production conformance root
+fixed `fra1` region and one fixed 4-vCPU/8-GB/160-GB premium size for each CPU
+vendor. This deliberately measures whether DigitalOcean exposes the nominal
+8-GB tier as at least 8 GiB of guest-visible `MemTotal`; the admission check is
+not relaxed, so provider overhead below that boundary fails explicitly with
+`D1_MINIMUM_MEMORY_8_GIB`. Image, region, size, count, and TTL are not workflow
+inputs. The non-production conformance root
 accepts exactly the official `debian-13-x64` slug, resolves it once through the
 provider, provisions that numeric image ID, and records the resolved ID in the
 closed evidence document. This deliberately exercises the current Debian 13

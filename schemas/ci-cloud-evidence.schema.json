@@ -46,7 +46,7 @@
         "region": { "enum": ["fra1", "europe-west3-a"] },
         "profile": { "enum": ["intel", "amd", "axion"] },
         "machine_type": {
-          "enum": ["s-8vcpu-16gb-intel", "s-8vcpu-16gb-amd", "c4a-standard-4"]
+          "enum": ["s-4vcpu-8gb-intel", "s-4vcpu-8gb-amd", "c4a-standard-4"]
         },
         "provider_image": {
           "type": "object",

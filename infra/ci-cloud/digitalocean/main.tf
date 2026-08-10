@@ -5,8 +5,8 @@ locals {
   run_suffix    = "${var.run_id}-${var.run_attempt}"
   resource_name = "spci-${local.run_suffix}"
   size_by_cpu = {
-    intel = "s-8vcpu-16gb-intel"
-    amd   = "s-8vcpu-16gb-amd"
+    intel = "s-4vcpu-8gb-intel"
+    amd   = "s-4vcpu-8gb-amd"
   }
 
   owner_tag   = "spci-owner-${local.run_suffix}"
