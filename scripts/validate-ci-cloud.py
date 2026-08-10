@@ -7,11 +7,14 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import sys
 from pathlib import Path
 
 import yaml
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 
 PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
@@ -512,7 +515,16 @@ def validate(root: Path) -> None:
     validate_gcp_iam_role(root)
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
+    failure_writer = read(root, "scripts/ci-cloud/write-bootstrap-failure.py")
+    failure_schema_text = read(
+        root, "schemas/ci-cloud-bootstrap-failure.schema.json"
+    )
     workflow = read(root, ".github/workflows/cloud-conformance.yml")
+    try:
+        failure_schema = json.loads(failure_schema_text)
+        Draft202012Validator.check_schema(failure_schema)
+    except (json.JSONDecodeError, SchemaError):
+        raise ContractError("bootstrap failure evidence schema is invalid") from None
     require(
         "root_ssh_denied=true" in remote
         and 'grep -qi \'permission denied\'' in remote,
@@ -541,11 +553,21 @@ def validate(root: Path) -> None:
     )
     require(
         'bootstrap_stage="host-key"' in remote
+        and 'orchestration_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"'
+        in remote
+        and '"$orchestration_started_at"' in remote
         and "scripts/ci-cloud/write-bootstrap-failure.py" in remote
         and "cloud-init status --long" in remote
         and "head -c 8192" in remote
         and "cloud-init-output.log" not in remote,
         "early remote failures need bounded structured evidence and diagnostics",
+    )
+    require(
+        "ci-cloud-bootstrap-failure.schema.json" in failure_writer
+        and "validate_declared_schema(document)" in failure_writer
+        and "write_bundle(" in failure_writer
+        and "os.link(" in failure_writer,
+        "bootstrap failure evidence must be schema-validated and failure-atomic",
     )
 
 

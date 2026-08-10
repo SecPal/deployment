@@ -9,42 +9,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import SchemaError
 
-SHA = re.compile(r"^[0-9a-f]{40}$")
-RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
-RUN_ATTEMPT = re.compile(r"^[1-9][0-9]{0,2}$")
-DIGITALOCEAN_IMAGE_ID = re.compile(r"^[1-9][0-9]{0,19}$")
-GCP_IMAGE_ID = re.compile(
-    r"^https://www\.googleapis\.com/compute/v1/projects/debian-cloud/"
-    r"global/images/debian-13-trixie-arm64-v[0-9]{8}$"
+
+SCHEMA_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "schemas"
+    / "ci-cloud-bootstrap-failure.schema.json"
 )
-ALLOWED_IDENTITIES = {
-    (
-        "digitalocean",
-        "fra1",
-        "intel",
-        "debian-13-x64",
-        "s-4vcpu-8gb-intel",
-    ),
-    (
-        "digitalocean",
-        "fra1",
-        "amd",
-        "debian-13-x64",
-        "s-4vcpu-8gb-amd",
-    ),
-    (
-        "gcp",
-        "europe-west3-a",
-        "axion",
-        "debian-cloud/debian-13-arm64",
-        "c4a-standard-4",
-    ),
-}
 FAILURE_STAGES = (
     "host-key",
     "cloud-init",
@@ -53,51 +31,87 @@ FAILURE_STAGES = (
     "collector",
     "validation",
 )
+OUTPUT_NAMES = frozenset(("bootstrap-failure.json", "summary.md"))
 
 
 def fail(message: str) -> None:
     raise ValueError(message)
 
 
-def write_new(path: Path, content: str) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        output.write(content)
+def parse_timestamp(value: str) -> datetime:
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        fail("orchestration start time is invalid")
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        fail("orchestration start time must include a timezone")
+    return timestamp
 
 
-def validate(arguments: argparse.Namespace) -> None:
-    identity = (
-        arguments.provider,
-        arguments.region,
-        arguments.profile,
-        arguments.provider_image_slug,
-        arguments.machine_type,
+def validate_declared_schema(document: object) -> None:
+    try:
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        Draft202012Validator.check_schema(schema)
+        errors = list(
+            Draft202012Validator(
+                schema,
+                format_checker=FormatChecker(),
+            ).iter_errors(document)
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, SchemaError):
+        fail("declared bootstrap failure schema is unavailable or invalid")
+    if errors:
+        first = min(errors, key=lambda error: tuple(str(item) for item in error.path))
+        location = "$" + "".join(f"[{item!r}]" for item in first.path)
+        fail(f"document violates declared bootstrap failure schema at {location}")
+
+
+def stage_file(output_dir: Path, name: str, content: str) -> Path:
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=output_dir,
+        prefix=f".{name}.",
     )
-    if identity not in ALLOWED_IDENTITIES:
-        fail("provider identity is outside the closed allowlist")
-    if SHA.fullmatch(arguments.target_sha) is None:
-        fail("target SHA is invalid")
-    if RUN_ID.fullmatch(arguments.run_id) is None:
-        fail("run ID is invalid")
-    if RUN_ATTEMPT.fullmatch(arguments.run_attempt) is None:
-        fail("run attempt is invalid")
-    if not 1 <= arguments.exit_status <= 255:
-        fail("orchestration exit status is invalid")
-    if (
-        arguments.provider == "digitalocean"
-        and DIGITALOCEAN_IMAGE_ID.fullmatch(arguments.provider_image_id) is None
-    ) or (
-        arguments.provider == "gcp"
-        and GCP_IMAGE_ID.fullmatch(arguments.provider_image_id) is None
-    ):
-        fail("provider image identity is invalid")
-    if (
-        not arguments.output_dir.is_dir()
-        or arguments.output_dir.is_symlink()
-    ):
+    temporary_path = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        output = os.fdopen(descriptor, "w", encoding="utf-8")
+        descriptor = -1
+        with output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary_path.unlink(missing_ok=True)
+        raise
+    return temporary_path
+
+
+def write_bundle(output_dir: Path, contents: dict[str, str]) -> None:
+    if set(contents) != OUTPUT_NAMES:
+        fail("bootstrap failure bundle has unexpected files")
+
+    staged: dict[str, Path] = {}
+    published: list[Path] = []
+    try:
+        for name in sorted(contents):
+            staged[name] = stage_file(output_dir, name, contents[name])
+        for name in sorted(contents):
+            destination = output_dir / name
+            os.link(staged[name], destination, follow_symlinks=False)
+            published.append(destination)
+    except BaseException:
+        for path in published:
+            path.unlink(missing_ok=True)
+        raise
+    finally:
+        for path in staged.values():
+            path.unlink(missing_ok=True)
+
+
+def validate_output_dir(output_dir: Path) -> None:
+    if not output_dir.is_dir() or output_dir.is_symlink():
         fail("output directory must be an existing regular directory")
 
 
@@ -113,11 +127,17 @@ def main() -> int:
     parser.add_argument("provider_image_slug")
     parser.add_argument("provider_image_id")
     parser.add_argument("machine_type")
+    parser.add_argument("started_at")
     parser.add_argument("failure_stage", choices=FAILURE_STAGES)
     parser.add_argument("exit_status", type=int)
     arguments = parser.parse_args()
     try:
-        validate(arguments)
+        validate_output_dir(arguments.output_dir)
+        started_at = parse_timestamp(arguments.started_at)
+        ended_at = datetime.now(timezone.utc).replace(microsecond=0)
+        if started_at > ended_at:
+            fail("orchestration start time is after the end time")
+        ended_at_text = ended_at.isoformat().replace("+00:00", "Z")
         document = {
             "schema_version": 1,
             "workflow": {
@@ -135,12 +155,15 @@ def main() -> int:
                     "slug": arguments.provider_image_slug,
                     "id": arguments.provider_image_id,
                 },
+                "started_at": arguments.started_at,
+                "ended_at": ended_at_text,
                 "failure_stage": arguments.failure_stage,
                 "orchestration_exit_status": arguments.exit_status,
                 "result": "failed",
                 "failed_admission_invariants": ["CI_CLOUD_REMOTE_ORCHESTRATION"],
             },
         }
+        validate_declared_schema(document)
         summary = "\n".join(
             (
                 "# Debian 13 cloud bootstrap failure",
@@ -148,27 +171,23 @@ def main() -> int:
                 "- Result: `failed`",
                 f"- Target SHA: `{arguments.target_sha}`",
                 f"- Provider/profile: `{arguments.provider}/{arguments.profile}` in `{arguments.region}`",
+                f"- Started at: `{arguments.started_at}`",
+                f"- Ended at: `{ended_at_text}`",
                 f"- Failure stage: `{arguments.failure_stage}`",
                 f"- Orchestration exit status: `{arguments.exit_status}`",
                 "- Failed admission invariant: `CI_CLOUD_REMOTE_ORCHESTRATION`",
                 "",
             )
         )
-        evidence_path = arguments.output_dir / "bootstrap-failure.json"
-        summary_path = arguments.output_dir / "summary.md"
-        created: list[Path] = []
-        try:
-            write_new(
-                evidence_path,
-                json.dumps(document, indent=2, sort_keys=True) + "\n",
-            )
-            created.append(evidence_path)
-            write_new(summary_path, summary)
-            created.append(summary_path)
-        except OSError:
-            for path in created:
-                path.unlink(missing_ok=True)
-            raise
+        write_bundle(
+            arguments.output_dir,
+            {
+                "bootstrap-failure.json": (
+                    json.dumps(document, indent=2, sort_keys=True) + "\n"
+                ),
+                "summary.md": summary,
+            },
+        )
     except (OSError, UnicodeError, ValueError) as error:
         print(
             f"ERROR: unable to write bootstrap failure evidence: {error}",

@@ -59,6 +59,7 @@ required_files=(
   infra/ci-cloud/gcp/outputs.tf
   infra/ci-cloud/gcp/variables.tf
   infra/ci-cloud/gcp/versions.tf
+  schemas/ci-cloud-bootstrap-failure.schema.json
   schemas/ci-cloud-evidence.schema.json
   config/production/inventory.example.yaml
   schemas/production-host-facts.schema.json

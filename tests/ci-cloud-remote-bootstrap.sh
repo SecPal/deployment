@@ -48,10 +48,26 @@ EOF
 cat >"$FAKE_BIN/ssh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-cat >/dev/null
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -i | -o) shift 2 ;;
+    *) shift; break ;;
+  esac
+done
 printf 'ssh\n' >>"${SECPAL_TEST_SSH_LOG:?}"
-printf 'cloud-init bootstrap failed:\nstatus: error\ndetail: fixture failure\n'
-exit 2
+exec "$@"
+EOF
+
+cat >"$FAKE_BIN/cloud-init" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "status --wait") exit 2 ;;
+  "status --long")
+    head -c 20000 /dev/zero | tr '\0' x
+    ;;
+  *) exit 1 ;;
+esac
 EOF
 
 chmod 0755 "$FAKE_BIN"/*
@@ -86,7 +102,12 @@ jq -e '
   .test.result == "failed" and
   .test.failed_admission_invariants == ["CI_CLOUD_REMOTE_ORCHESTRATION"]
 ' "$EVIDENCE_DIR/bootstrap-failure.json" >/dev/null
-grep -Fq 'detail: fixture failure' "$TEMP_DIR/output.log"
+diagnostic_bytes="$(awk '/^x+$/{print length; exit}' "$TEMP_DIR/output.log")"
+if [[ "$diagnostic_bytes" -ne 8192 ]]; then
+  printf 'FAIL: cloud-init diagnostic was not capped at 8192 bytes (got %s)\n' \
+    "$diagnostic_bytes" >&2
+  exit 1
+fi
 grep -Fq 'Failure stage:' "$EVIDENCE_DIR/summary.md"
 grep -Fq 'cloud-init' "$EVIDENCE_DIR/summary.md"
 

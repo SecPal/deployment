@@ -50,6 +50,7 @@ if address.version != 4 or not address.is_global:
 PY
 
 install -d -m 0700 "$evidence_dir"
+orchestration_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 known_hosts="$(dirname "$evidence_dir")/known_hosts"
 evidence_json="$evidence_dir/evidence.json"
 evidence_summary="$evidence_dir/summary.md"
@@ -69,7 +70,8 @@ record_remote_failure() {
     if ! python3 scripts/ci-cloud/write-bootstrap-failure.py \
       "$evidence_dir" "$provider" "$region" "$profile" "$target_sha" \
       "$run_id" "$run_attempt" "$provider_image_slug" \
-      "$provider_image_id" "$machine_type" "$bootstrap_stage" "$status"; then
+      "$provider_image_id" "$machine_type" "$orchestration_started_at" \
+      "$bootstrap_stage" "$status"; then
       printf 'ERROR: unable to preserve bounded remote failure evidence.\n' >&2
     fi
   fi

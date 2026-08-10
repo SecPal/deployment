@@ -18,7 +18,8 @@ SPDX-License-Identifier: CC0-1.0
 - A fail-closed scheduled TTL janitor for expired, completely revalidated
   owned Droplets plus static mutation tests for credential, input, provider,
   SSH-state, metadata, cleanup, action-pin, and evidence boundaries.
-- Closed bootstrap-failure evidence and bounded cloud-init diagnostics when a
+- Schema-validated, failure-atomically published bootstrap-failure evidence
+  with orchestration timestamps and bounded cloud-init diagnostics when a
   disposable host fails before the full conformance collector can run.
 
 - A provider-neutral production host and inventory contract.

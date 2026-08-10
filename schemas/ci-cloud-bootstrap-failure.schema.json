@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secpal.app/schemas/ci-cloud-bootstrap-failure.schema.json",
+  "title": "SecPal ephemeral cloud bootstrap failure evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workflow", "test"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "run_id", "run_attempt", "target_sha"],
+      "properties": {
+        "repository": { "const": "SecPal/deployment" },
+        "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+        "run_attempt": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,2}$"
+        },
+        "target_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "region",
+        "profile",
+        "machine_type",
+        "provider_image",
+        "started_at",
+        "ended_at",
+        "failure_stage",
+        "orchestration_exit_status",
+        "result",
+        "failed_admission_invariants"
+      ],
+      "properties": {
+        "provider": { "enum": ["digitalocean", "gcp"] },
+        "region": { "enum": ["fra1", "europe-west3-a"] },
+        "profile": { "enum": ["intel", "amd", "axion"] },
+        "machine_type": {
+          "enum": ["s-4vcpu-8gb-intel", "s-4vcpu-8gb-amd", "c4a-standard-4"]
+        },
+        "provider_image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["slug", "id"],
+          "properties": {
+            "slug": {
+              "enum": ["debian-13-x64", "debian-cloud/debian-13-arm64"]
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^([1-9][0-9]{0,19}|https://www\\.googleapis\\.com/compute/v1/projects/debian-cloud/global/images/debian-13-trixie-arm64-v[0-9]{8})$"
+            }
+          }
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "ended_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "failure_stage": {
+          "enum": [
+            "host-key",
+            "cloud-init",
+            "root-ssh",
+            "target",
+            "collector",
+            "validation"
+          ]
+        },
+        "orchestration_exit_status": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
+        },
+        "result": { "const": "failed" },
+        "failed_admission_invariants": {
+          "const": ["CI_CLOUD_REMOTE_ORCHESTRATION"]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "provider": { "const": "digitalocean" },
+            "region": { "const": "fra1" },
+            "profile": { "const": "intel" },
+            "machine_type": { "const": "s-4vcpu-8gb-intel" },
+            "provider_image": {
+              "properties": {
+                "slug": { "const": "debian-13-x64" },
+                "id": { "pattern": "^[1-9][0-9]{0,19}$" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": { "const": "digitalocean" },
+            "region": { "const": "fra1" },
+            "profile": { "const": "amd" },
+            "machine_type": { "const": "s-4vcpu-8gb-amd" },
+            "provider_image": {
+              "properties": {
+                "slug": { "const": "debian-13-x64" },
+                "id": { "pattern": "^[1-9][0-9]{0,19}$" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": { "const": "gcp" },
+            "region": { "const": "europe-west3-a" },
+            "profile": { "const": "axion" },
+            "machine_type": { "const": "c4a-standard-4" },
+            "provider_image": {
+              "properties": {
+                "slug": { "const": "debian-cloud/debian-13-arm64" },
+                "id": {
+                  "pattern": "^https://www\\.googleapis\\.com/compute/v1/projects/debian-cloud/global/images/debian-13-trixie-arm64-v[0-9]{8}$"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

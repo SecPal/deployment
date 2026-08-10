@@ -41,6 +41,7 @@ class CloudCIContractTests(unittest.TestCase):
             ".github/workflows/cloud-janitor.yml",
             "infra/ci-cloud/digitalocean",
             "infra/ci-cloud/gcp",
+            "schemas",
             "scripts/ci-cloud",
         ):
             source = ROOT / path
@@ -90,6 +91,7 @@ class CloudCIContractTests(unittest.TestCase):
             "infra/ci-cloud/gcp/outputs.tf",
             "infra/ci-cloud/gcp/variables.tf",
             "infra/ci-cloud/gcp/versions.tf",
+            "schemas/ci-cloud-bootstrap-failure.schema.json",
             "scripts/ci-cloud/gcp-janitor.py",
             "tests/ci-cloud-gcp-janitor.py",
         ):
@@ -177,6 +179,7 @@ class CloudCIContractTests(unittest.TestCase):
             ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
         ).read_text(encoding="utf-8")
         self.assertIn('bootstrap_stage="host-key"', remote)
+        self.assertIn("orchestration_started_at", remote)
         self.assertIn("write-bootstrap-failure.py", remote)
         self.assertIn("cloud-init status --long", remote)
         self.assertIn("head -c 8192", remote)
@@ -215,6 +218,13 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/run-remote-conformance.sh",
             "scripts/ci-cloud/write-bootstrap-failure.py",
             "scripts/ci-cloud/missing-bootstrap-failure-writer.py",
+        )
+
+    def test_static_contract_rejects_unvalidated_bootstrap_failure_evidence(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/write-bootstrap-failure.py",
+            "        validate_declared_schema(document)\n",
+            "",
         )
 
     def test_static_contract_rejects_curl_user_configuration(self) -> None:
