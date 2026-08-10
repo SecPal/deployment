@@ -130,6 +130,7 @@ jobs:
           signal_instance=signal01
           signal_fixture="$RUNNER_TEMP/secpal-quadlet-$signal_instance"
           signal_log="$RUNNER_TEMP/secpal-quadlet-$signal_instance.log"
+          signal_deadline=$((SECONDS + 600))
           signal_ready=false
           signal_status=0
           python3 scripts/quadlet-integration.py \
@@ -137,7 +138,7 @@ jobs:
             --fixture-root "$signal_fixture" \
             >"$signal_log" 2>&1 &
           signal_pid=$!
-          for _attempt in {1..600}; do
+          while [ "$SECONDS" -lt "$signal_deadline" ]; do
             if systemctl --user is-active --quiet \
               "secpal-int-$signal_instance-gateway.service"; then
               signal_ready=true
@@ -146,7 +147,7 @@ jobs:
             if ! kill -0 "$signal_pid" 2>/dev/null; then
               break
             fi
-            sleep 0.1
+            sleep 1
           done
           if [ "$signal_ready" != true ]; then
             kill -TERM "$signal_pid" 2>/dev/null || true

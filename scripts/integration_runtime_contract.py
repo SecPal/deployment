@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from types import MappingProxyType
 from typing import Mapping
 
@@ -20,6 +21,76 @@ FRONTEND_SOURCE_COMMIT = "b755ca0d0ee5a85eca5ad5688d457241f070b1b4"
 POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
 VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
+
+
+@dataclass(frozen=True)
+class PodmanVersion:
+    """Normalized Podman release with SemVer-compatible prerelease ordering."""
+
+    release: tuple[int, int, int]
+    prerelease: tuple[tuple[int, int | str], ...] | None
+
+    def ordering_key(
+        self,
+    ) -> tuple[int, int, int, int, tuple[tuple[int, int | str], ...]]:
+        return (
+            *self.release,
+            1 if self.prerelease is None else 0,
+            self.prerelease or (),
+        )
+
+
+def parse_podman_version(value: object) -> PodmanVersion:
+    """Parse release/prerelease identity while ignoring build metadata."""
+
+    match = re.fullmatch(
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+        r"(?:(?:-|~)([0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*))?"
+        r"(?:\+([0-9A-Za-z]+(?:[.+-][0-9A-Za-z]+)*))?",
+        str(value),
+    )
+    if match is None:
+        raise ValueError("malformed Podman version")
+    prerelease_text = match.group(4)
+    prerelease = None
+    if prerelease_text is not None:
+        fragments = re.findall(r"[A-Za-z]+|[0-9]+", prerelease_text)
+        if (
+            not fragments
+            or "".join(fragments) != re.sub(r"[.-]", "", prerelease_text)
+        ):
+            raise ValueError("malformed Podman prerelease")
+        prerelease = tuple(
+            (0, int(fragment)) if fragment.isdecimal() else (1, fragment.lower())
+            for fragment in fragments
+        )
+    return PodmanVersion(
+        tuple(int(match.group(index)) for index in (1, 2, 3)),
+        prerelease,
+    )
+
+
+MINIMUM_PODMAN_VERSION = PodmanVersion((5, 4, 2), None)
+MAXIMUM_PODMAN_VERSION = PodmanVersion((6, 0, 0), None)
+
+
+def podman_version_supported(value: object) -> bool:
+    try:
+        version = parse_podman_version(value)
+    except ValueError:
+        return False
+    return (
+        MINIMUM_PODMAN_VERSION.ordering_key()
+        <= version.ordering_key()
+        < MAXIMUM_PODMAN_VERSION.ordering_key()
+    )
+
+
+def podman_versions_compatible(left: object, right: object) -> bool:
+    try:
+        return parse_podman_version(left) == parse_podman_version(right)
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)

@@ -10,12 +10,20 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, os.fspath(ROOT / "scripts"))
+
+from integration_runtime_contract import (
+    podman_version_supported as quadlet_generator_version_supported,
+)
+
+
 RENDERER = ROOT / "scripts" / "render-integration-quadlets.py"
 GATEWAY_CONFIG = ROOT / "config" / "quadlet" / "Caddyfile"
 ONESHOT_WRAPPER = ROOT / "scripts" / "quadlet-oneshot-entrypoint.sh"
@@ -23,18 +31,6 @@ HARNESS = ROOT / "scripts" / "quadlet-integration.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "local-integration.yml"
 INSTANCE = "contract01"
 PORT = "18443"
-MINIMUM_PODMAN_VERSION = (5, 4, 2)
-MAXIMUM_PODMAN_VERSION = (6, 0, 0)
-
-
-def quadlet_generator_version_supported(value: str) -> bool:
-    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", value)
-    if match is None:
-        return False
-    version = tuple(int(part) for part in match.groups())
-    return MINIMUM_PODMAN_VERSION <= version < MAXIMUM_PODMAN_VERSION
-
-
 EXPECTED_FILES = {
     f"secpal-int-{INSTANCE}-api.container",
     f"secpal-int-{INSTANCE}-application.network",
@@ -131,6 +127,8 @@ class QuadletContract(unittest.TestCase):
         self.assertIn("--instance parallel02", workflow)
         self.assertIn("Prove handled SIGTERM cleanup", workflow)
         self.assertIn('test "$signal_status" -eq 143', workflow)
+        self.assertIn("signal_deadline=$((SECONDS + 600))", workflow)
+        self.assertNotIn("for _attempt in {1..600}", workflow)
         self.assertIn("runner: ubuntu-26.04", workflow)
         self.assertIn("runner: ubuntu-26.04-arm", workflow)
         self.assertIn("gh_arch: amd64", workflow)
@@ -576,7 +574,11 @@ class QuadletContract(unittest.TestCase):
 
     def test_quadlet_generator_version_gate_matches_runtime_contract(self) -> None:
         self.assertFalse(quadlet_generator_version_supported("4.9.3"))
+        self.assertFalse(quadlet_generator_version_supported("5.4.2-rc1"))
+        self.assertFalse(quadlet_generator_version_supported("5.4.2~rc1"))
+        self.assertFalse(quadlet_generator_version_supported("05.4.2"))
         self.assertTrue(quadlet_generator_version_supported("5.4.2"))
+        self.assertTrue(quadlet_generator_version_supported("5.4.2+ds1-1+b1"))
         self.assertTrue(quadlet_generator_version_supported("5.7.0"))
         self.assertFalse(quadlet_generator_version_supported("6.0.0"))
         self.assertFalse(quadlet_generator_version_supported("not-a-version"))

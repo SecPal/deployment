@@ -94,6 +94,10 @@ Sanctum/secure-cookie, CSP, service-worker, Valkey cache and queue, worker
 ownership, and private-storage probes used by the completed integration are
 run against the Quadlet services. An API restart must preserve the disposable
 private-storage fixture without creating a new migration container.
+Every HTTP transfer has a ten-second maximum, and the readiness probes reduce
+that maximum to the remaining lifecycle deadline. Negative HTTP evidence
+accepts curl's HTTP-error exit only; DNS, connection, and TLS failures remain
+transport failures rather than valid application rejection evidence.
 
 Three closed real-runtime profiles also prove that a failed migration never
 starts its dependent application roles, a failed PostgreSQL dependency never
@@ -101,9 +105,9 @@ starts migration or its dependents, and a gateway health failure cannot leave
 the integration target active. The profiles are evidence fixtures only; they
 cannot accept arbitrary commands or Quadlet text. Migration and dependency
 evidence requires the exact `/bin/false` exit result. Health evidence requires
-Podman's effective `CMD-SHELL /bin/false` configuration, an unhealthy state,
-a nonzero health result, and the resulting systemd exit after Podman applies
-the reviewed `HealthOnFailure=kill` policy; an
+Podman's effective `CMD-SHELL /bin/false` configuration, a bounded native
+`podman wait --condition=unhealthy`, and the resulting systemd exit after
+Podman applies the reviewed `HealthOnFailure=kill` policy; an
 unrelated gateway failure is not accepted as health-failure evidence.
 
 An automatically selected loopback port is chosen only after image verification
@@ -124,9 +128,11 @@ Pre-existing unrelated resource names outside the reserved integration
 namespace are snapshotted and must still exist afterward. The published SecPal
 images are not cleanup artifacts.
 
-Hosted runtime evidence waits until the gateway service is active, sends an
-external `SIGTERM` to the integration harness, requires exit status `143`, and
-requires the fixture root to be absent after the harness's exact cleanup.
+Hosted runtime evidence gives the complete pre-gateway lifecycle a bounded
+600-second readiness deadline, waits until the gateway service is active,
+sends an external `SIGTERM` to the integration harness, requires exit status
+`143`, and requires the fixture root to be absent after the harness's exact
+cleanup.
 
 The runner emits bounded non-secret container statistics, systemd memory
 current/peak and CPU observations, unpacked image sizes, disposable volume
@@ -143,6 +149,9 @@ manager, Debian's native Quadlet user generator at
 `/usr/lib/systemd/user-generators/podman-user-generator`, and the D.1
 root-owned Quadlet search-path policy. GitHub CLI 2.97.0, Node.js, npm,
 Playwright Chromium, Python 3, `curl`, and GNU `du` are also required.
+Podman prereleases sort below their corresponding stable release. The runtime
+and generator compatibility check compares the normalized release and
+prerelease while ignoring non-precedence distro build metadata.
 
 The administrator-owned policy must expose only the current user's root-owned
 Quadlet directory:

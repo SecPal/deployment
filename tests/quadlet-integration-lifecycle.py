@@ -317,6 +317,27 @@ class QuadletLifecycleContract(unittest.TestCase):
             },
         }
 
+    def test_runner_timeout_kills_and_reaps_the_process_group(self) -> None:
+        process = mock.Mock()
+        process.pid = 4321
+        process.communicate.side_effect = (
+            subprocess.TimeoutExpired(["podman", "wait"], 1),
+            ("", ""),
+        )
+        process.poll.return_value = -signal.SIGKILL
+        runner = self.module.Runner()
+
+        with mock.patch.object(
+            self.module.subprocess, "Popen", return_value=process
+        ), mock.patch.object(self.module.os, "killpg") as killpg, self.assertRaises(
+            subprocess.TimeoutExpired
+        ):
+            runner.run(["podman", "wait"], timeout=1)
+
+        killpg.assert_called_once_with(4321, signal.SIGKILL)
+        self.assertEqual(process.communicate.call_count, 2)
+        self.assertIsNone(runner.active)
+
     def test_runtime_admission_accepts_only_the_d1_runtime(self) -> None:
         self.assertEqual(
             self.module.validate_runtime_info(self.valid_info(), uid=1000, environment={}),
@@ -362,6 +383,34 @@ class QuadletLifecycleContract(unittest.TestCase):
 
         with self.assertRaises(self.module.IntegrationError):
             self.module.validate_runtime_info(self.valid_info(), uid=0, environment={})
+
+    def test_podman_versions_preserve_prerelease_and_build_semantics(self) -> None:
+        self.assertFalse(self.module.podman_version_supported("5.4.2-rc1"))
+        self.assertFalse(self.module.podman_version_supported("5.4.2~rc1"))
+        self.assertFalse(self.module.podman_version_supported("05.4.2"))
+        self.assertFalse(self.module.podman_version_supported("５.４.２"))
+        self.assertFalse(self.module.podman_version_supported("5.4.2-rc..1"))
+        self.assertFalse(self.module.podman_version_supported("5.4.2+ds1++b1"))
+        self.assertTrue(self.module.podman_version_supported("5.4.2"))
+        self.assertTrue(self.module.podman_version_supported("5.4.2+ds1-1+b1"))
+        self.assertFalse(self.module.podman_version_supported("6.0.0"))
+        self.assertTrue(
+            self.module.podman_versions_compatible(
+                "5.4.2", "5.4.2+ds1-1+b1"
+            )
+        )
+        self.assertTrue(
+            self.module.podman_versions_compatible("5.4.2-rc1", "5.4.2~rc.1")
+        )
+        self.assertFalse(
+            self.module.podman_versions_compatible("5.4.2", "5.4.2-rc1")
+        )
+        self.assertFalse(
+            self.module.podman_versions_compatible("5.4.2-rc1", "5.4.2-rc2")
+        )
+        self.assertFalse(
+            self.module.podman_versions_compatible("5.4.2-rc..1", "5.4.2-rc1")
+        )
 
     def test_runtime_admission_requires_every_configured_container_identity_mapping(self) -> None:
         for mapping_name in ("uidmap", "gidmap"):
@@ -582,6 +631,111 @@ class QuadletLifecycleContract(unittest.TestCase):
         ):
             self.module.validate_api_origin_root("<!doctype html><html></html>")
 
+    def test_transfer_timeout_is_bounded_by_the_remaining_deadline(self) -> None:
+        self.assertEqual(self.module.transfer_timeout_seconds(130.0, 100.0), 10)
+        self.assertEqual(self.module.transfer_timeout_seconds(106.2, 100.0), 7)
+        self.assertEqual(self.module.transfer_timeout_seconds(100.2, 100.0), 1)
+        with self.assertRaisesRegex(self.module.IntegrationError, "deadline expired"):
+            self.module.transfer_timeout_seconds(100.0, 100.0)
+
+    def test_runtime_curl_bounds_transfers_and_distinguishes_http_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+            accepted = subprocess.CompletedProcess(
+                (), 22, "HTTP/1.1 404 Not Found\r\n", ""
+            )
+            transport_failure = subprocess.CompletedProcess(
+                (), 7, "", "connection failed"
+            )
+            with mock.patch.object(
+                lifecycle,
+                "command",
+                side_effect=(accepted, transport_failure),
+            ) as run:
+                self.assertIs(
+                    lifecycle.curl(
+                        "api",
+                        "/",
+                        timeout_seconds=7,
+                        allow_http_error=True,
+                    ),
+                    accepted,
+                )
+                with self.assertRaisesRegex(
+                    self.module.IntegrationError, "transport failure"
+                ):
+                    lifecycle.curl(
+                        "api", "/", allow_http_error=True
+                    )
+
+            command = run.call_args_list[0].args[0]
+            timeout_index = command.index("--max-time")
+            self.assertEqual(command[timeout_index + 1], "7")
+            self.assertFalse(run.call_args_list[0].kwargs["check"])
+
+    def test_foreign_origin_probe_explicitly_allows_http_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+
+            class ForeignProbeObserved(Exception):
+                pass
+
+            responses = iter(
+                (
+                    subprocess.CompletedProcess((), 0, '{"status":"alive"}', ""),
+                    subprocess.CompletedProcess((), 0, "alive\n", ""),
+                    subprocess.CompletedProcess((), 22, '{"message":"not found"}', ""),
+                    subprocess.CompletedProcess((), 0, "<!doctype html>", ""),
+                    subprocess.CompletedProcess(
+                        (), 0, "https://api.secpal.example.invalid:18443", ""
+                    ),
+                    subprocess.CompletedProcess(
+                        (),
+                        0,
+                        "access-control-allow-origin: https://app.secpal.example.invalid:18443\r\n"
+                        "access-control-allow-credentials: true\r\n",
+                        "",
+                    ),
+                )
+            )
+
+            def curl(
+                origin,
+                path,
+                *extra,
+                check=True,
+                timeout_seconds=10,
+                allow_http_error=False,
+            ):
+                del check, timeout_seconds
+                if "Origin: https://foreign.example.org" in extra:
+                    self.assertTrue(allow_http_error)
+                    raise ForeignProbeObserved
+                if (origin, path) == ("api", "/"):
+                    self.assertTrue(allow_http_error)
+                return next(responses)
+
+            with mock.patch.object(
+                lifecycle, "curl", side_effect=curl
+            ), self.assertRaises(ForeignProbeObserved):
+                lifecycle._validate_external_behavior()
+
     def test_external_behavior_rejects_the_spa_shell_from_the_api_origin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
@@ -594,7 +748,15 @@ class QuadletLifecycleContract(unittest.TestCase):
                 runner=FakeRunner(),
             )
 
-            def curl(origin, path, *extra, check=True):
+            def curl(
+                origin,
+                path,
+                *extra,
+                check=True,
+                timeout_seconds=10,
+                allow_http_error=False,
+            ):
+                del timeout_seconds, allow_http_error
                 result = {
                     ("api", "/health/live"): (0, '{"status":"alive"}'),
                     ("app", "/health/live"): (0, "alive\n"),
@@ -1224,7 +1386,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 lifecycle._wait_for_injected_health_failure()
 
-    def test_health_failure_wait_polls_without_an_unbounded_podman_wait(self) -> None:
+    def test_health_failure_wait_uses_a_bounded_native_podman_condition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             lifecycle = self.failure_lifecycle(directory, "health")
             starting_details = {
@@ -1235,12 +1397,6 @@ class QuadletLifecycleContract(unittest.TestCase):
                     "Health": {"Status": "starting", "FailingStreak": 0, "Log": []},
                 },
             }
-            unhealthy_details = json.loads(json.dumps(starting_details))
-            unhealthy_details["State"]["Health"] = {
-                "Status": "unhealthy",
-                "FailingStreak": 1,
-                "Log": [{"ExitCode": 1, "Output": ""}],
-            }
             with mock.patch.object(
                 lifecycle,
                 "command",
@@ -1248,25 +1404,30 @@ class QuadletLifecycleContract(unittest.TestCase):
                     subprocess.CompletedProcess(
                         (), 0, json.dumps([starting_details]), ""
                     ),
-                    subprocess.CompletedProcess(
-                        (), 0, "ActiveState=active\nResult=success\n", ""
-                    ),
-                    subprocess.CompletedProcess(
-                        (), 0, json.dumps([unhealthy_details]), ""
-                    ),
+                    subprocess.CompletedProcess((), 0, "137\n", ""),
                 ),
             ) as command, mock.patch.object(
                 lifecycle, "_validate_effective_container"
-            ), mock.patch.object(self.module.time, "sleep"):
+            ) as validate:
                 lifecycle._wait_for_injected_health_failure()
 
             self.assertTrue(lifecycle.injected_health_failure_observed)
-            self.assertFalse(
-                any(
-                    call.args[0][:2] == ["podman", "wait"]
-                    for call in command.call_args_list
-                )
+            validate.assert_called_once_with("gateway", starting_details)
+            wait_call = command.call_args_list[1]
+            self.assertEqual(
+                wait_call.args[0],
+                [
+                    "podman",
+                    "wait",
+                    "--condition=unhealthy",
+                    "--interval=100ms",
+                    "secpal-int-contract01-gateway",
+                ],
             )
+            self.assertTrue(wait_call.kwargs["capture"])
+            self.assertFalse(wait_call.kwargs["check"])
+            self.assertGreater(wait_call.kwargs["timeout_seconds"], 0)
+            self.assertLessEqual(wait_call.kwargs["timeout_seconds"], 180)
 
     def test_health_failure_inspection_waits_until_the_container_is_running(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1297,34 +1458,17 @@ class QuadletLifecycleContract(unittest.TestCase):
             running = subprocess.CompletedProcess(
                 (), 0, json.dumps([running_details]), ""
             )
-            unhealthy_details = json.loads(json.dumps(running_details))
-            unhealthy_details["State"]["Health"] = {
-                "Status": "unhealthy",
-                "FailingStreak": 1,
-                "Log": [{"ExitCode": 1, "Output": ""}],
-            }
-            active = subprocess.CompletedProcess(
-                (), 0, "ActiveState=active\nResult=success\n", ""
-            )
-            unhealthy = subprocess.CompletedProcess(
-                (), 0, json.dumps([unhealthy_details]), ""
-            )
+            unhealthy = subprocess.CompletedProcess((), 0, "137\n", "")
             with mock.patch.object(
                 lifecycle,
                 "command",
-                side_effect=(created, activating, running, active, unhealthy),
+                side_effect=(created, activating, running, unhealthy),
             ), mock.patch.object(
                 lifecycle, "_validate_effective_container"
             ) as validate, mock.patch.object(self.module.time, "sleep"):
                 lifecycle._wait_for_injected_health_failure()
 
-            self.assertEqual(
-                validate.call_args_list,
-                [
-                    mock.call("gateway", running_details),
-                    mock.call("gateway", unhealthy_details),
-                ],
-            )
+            validate.assert_called_once_with("gateway", running_details)
 
     def test_health_failure_wait_accepts_evidence_after_health_kill(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

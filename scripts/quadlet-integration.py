@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -43,6 +44,8 @@ from integration_runtime_contract import (
     REQUIRED_CONTAINER_UIDS,
     TmpfsSpec,
     VALKEY_IMAGE,
+    podman_version_supported,
+    podman_versions_compatible,
     role_spec,
 )
 
@@ -123,13 +126,21 @@ class Runner:
         defaults.update(kwargs)
         check = defaults.pop("check")
         capture_output = defaults.pop("capture_output", False)
+        timeout = defaults.pop("timeout", None)
         if capture_output:
             defaults["stdout"] = subprocess.PIPE
             defaults["stderr"] = subprocess.PIPE
         process = subprocess.Popen(list(command), start_new_session=True, **defaults)
         self.active = process
         try:
-            stdout, stderr = process.communicate()
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+            raise
         finally:
             if process.poll() is not None:
                 self.active = None
@@ -206,13 +217,6 @@ def nested(mapping: Mapping, *path: str):
             raise IntegrationError(f"Podman runtime fact is missing: {'.'.join(path)}")
         current = current[key]
     return current
-
-
-def version_tuple(value: object) -> tuple[int, int, int]:
-    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+~].*)?", str(value))
-    if not match:
-        raise IntegrationError("Podman reported a malformed version")
-    return tuple(int(component) for component in match.groups())
 
 
 def required_first_line(output: str, source: str) -> str:
@@ -352,8 +356,7 @@ def validate_runtime_info(
     for variable in FORBIDDEN_RUNTIME_ENVIRONMENT:
         if environment.get(variable):
             raise IntegrationError(f"runtime override is forbidden: {variable}")
-    version = version_tuple(nested(info, "version", "Version"))
-    if version < (5, 4, 2) or version >= (6, 0, 0):
+    if not podman_version_supported(nested(info, "version", "Version")):
         raise IntegrationError("Podman >=5.4.2,<6.0.0 is required")
     if nested(info, "host", "serviceIsRemote") is not False:
         raise IntegrationError("the Podman service must be local and daemonless")
@@ -764,6 +767,13 @@ def validate_api_origin_root(body: str) -> None:
         raise IntegrationError("API origin returned the frontend SPA shell")
 
 
+def transfer_timeout_seconds(deadline: float, current: float) -> int:
+    remaining = deadline - current
+    if remaining <= 0:
+        raise IntegrationError("external readiness deadline expired")
+    return min(10, max(1, math.ceil(remaining)))
+
+
 def validate_dns_isolation_result(returncode: int, service: str) -> None:
     if returncode == 0:
         raise IntegrationError(f"frontend unexpectedly resolved data service {service}")
@@ -1123,7 +1133,12 @@ class IntegrationLifecycle:
         check: bool = True,
         environment: Mapping[str, str] | None = None,
         cwd: Path | None = None,
+        timeout_seconds: int | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        if timeout_seconds is not None and (
+            type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 180
+        ):
+            raise IntegrationError("command timeout is outside the closed contract")
         try:
             return self.runner.run(
                 argv,
@@ -1131,12 +1146,15 @@ class IntegrationLifecycle:
                 capture_output=capture,
                 env=dict(environment) if environment is not None else None,
                 cwd=os.fspath(cwd) if cwd is not None else None,
+                timeout=timeout_seconds,
             )
         except subprocess.CalledProcessError as error:
             detail = ""
             if capture and error.stderr:
                 detail = f": {str(error.stderr).strip()[:400]}"
             raise IntegrationError(f"command failed ({argv[0]}){detail}") from error
+        except subprocess.TimeoutExpired as error:
+            raise IntegrationError(f"command timed out ({argv[0]})") from error
         except OSError as error:
             raise IntegrationError(f"unable to execute required command: {argv[0]}") from error
 
@@ -1185,13 +1203,13 @@ class IntegrationLifecycle:
             info, self.uid, os.environ
         )
         generator = validate_quadlet_generator(QUADLET_USER_GENERATOR)
-        generator_version = version_tuple(
-            required_first_line(
-                self.captured([os.fspath(generator), "--version"]),
-                "native Quadlet user generator",
-            )
+        generator_version = required_first_line(
+            self.captured([os.fspath(generator), "--version"]),
+            "native Quadlet user generator",
         )
-        if generator_version != version_tuple(nested(info, "version", "Version")):
+        if not podman_versions_compatible(
+            generator_version, nested(info, "version", "Version")
+        ):
             raise IntegrationError("native Quadlet user generator does not match Podman")
         self.apparmor_available = bool(
             nested(info, "host", "security", "apparmorEnabled")
@@ -1859,6 +1877,27 @@ class IntegrationLifecycle:
                 running = nested(details, "State", "Running")
                 if running is True:
                     self._validate_effective_container(role, details)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    waited = self.command(
+                        [
+                            "podman",
+                            "wait",
+                            "--condition=unhealthy",
+                            "--interval=100ms",
+                            name,
+                        ],
+                        capture=True,
+                        check=False,
+                        timeout_seconds=max(1, math.ceil(remaining)),
+                    )
+                    if waited.returncode != 0:
+                        raise IntegrationError(
+                            "unable to observe the injected gateway health condition"
+                        )
+                    self.injected_health_failure_observed = True
+                    return
                 state = details.get("State")
                 health = state.get("Health") if isinstance(state, Mapping) else None
                 if isinstance(health, Mapping):
@@ -2285,14 +2324,28 @@ class IntegrationLifecycle:
             )
             validate_dns_isolation_result(probe.returncode, forbidden)
 
-    def curl(self, origin: str, path: str, *extra: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def curl(
+        self,
+        origin: str,
+        path: str,
+        *extra: str,
+        check: bool = True,
+        timeout_seconds: int = 10,
+        allow_http_error: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 10:
+            raise IntegrationError("curl transfer timeout is outside the closed contract")
+        if type(allow_http_error) is not bool:
+            raise IntegrationError("curl HTTP-error policy is outside the closed contract")
         host = "app.secpal.example.invalid" if origin == "app" else "api.secpal.example.invalid"
-        return self.command(
+        result = self.command(
             [
                 "curl",
                 "--fail",
                 "--silent",
                 "--show-error",
+                "--max-time",
+                str(timeout_seconds),
                 "--insecure",
                 "--noproxy",
                 host,
@@ -2302,25 +2355,49 @@ class IntegrationLifecycle:
                 f"https://{host}:{self.port}{path}",
             ],
             capture=True,
-            check=check,
+            check=False if allow_http_error else check,
         )
+        if allow_http_error and result.returncode not in {0, 22}:
+            raise IntegrationError("curl HTTP probe had a transport failure")
+        return result
 
     def _validate_external_behavior(self) -> None:
         deadline = time.monotonic() + 90
         api = frontend = ""
         while time.monotonic() < deadline:
-            api_result = self.curl("api", "/health/live", check=False)
-            frontend_result = self.curl("app", "/health/live", check=False)
+            api_result = self.curl(
+                "api",
+                "/health/live",
+                check=False,
+                timeout_seconds=transfer_timeout_seconds(
+                    deadline, time.monotonic()
+                ),
+            )
             api = api_result.stdout or ""
+            if time.monotonic() >= deadline:
+                break
+            frontend_result = self.curl(
+                "app",
+                "/health/live",
+                check=False,
+                timeout_seconds=transfer_timeout_seconds(
+                    deadline, time.monotonic()
+                ),
+            )
             frontend = frontend_result.stdout or ""
             if api_result.returncode == 0 and frontend_result.returncode == 0:
                 break
             time.sleep(1)
         if '"status":"alive"' not in api or not frontend:
             raise IntegrationError("real API/frontend health evidence did not become ready")
-        api_root = self.curl(
-            "api", "/", "--header", "Accept: application/json", check=False
-        ).stdout or ""
+        api_root_result = self.curl(
+            "api",
+            "/",
+            "--header",
+            "Accept: application/json",
+            allow_http_error=True,
+        )
+        api_root = api_root_result.stdout or ""
         validate_api_origin_root(api_root)
         page = self.curl("app", "/").stdout or ""
         runtime_config = self.curl("app", "/runtime-config.js").stdout or ""
@@ -2350,7 +2427,7 @@ class IntegrationLifecycle:
             or "access-control-allow-origin: *" in lowered
         ):
             raise IntegrationError("credentialed CORS did not preserve the exact frontend origin")
-        foreign = self.curl(
+        foreign_result = self.curl(
             "api",
             "/v1/auth/login",
             "--dump-header",
@@ -2363,7 +2440,9 @@ class IntegrationLifecycle:
             "Origin: https://foreign.example.org",
             "--header",
             "Access-Control-Request-Method: POST",
-        ).stdout or ""
+            allow_http_error=True,
+        )
+        foreign = foreign_result.stdout or ""
         if "access-control-allow-credentials: true" in foreign.lower():
             raise IntegrationError("a foreign origin received credentialed CORS approval")
         for path in ("/v1/quadlet-not-an-api-route", "/sanctum/csrf-cookie", "/health/ready"):
@@ -2374,7 +2453,7 @@ class IntegrationLifecycle:
                 "/dev/null",
                 "--write-out",
                 "%{http_code}",
-                check=False,
+                allow_http_error=True,
             )
             if (status.stdout or "").strip() != "404":
                 raise IntegrationError(f"frontend origin exposed forbidden route {path}")
