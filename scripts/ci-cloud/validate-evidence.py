@@ -15,9 +15,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
 
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import SchemaError
+
 
 MAX_EVIDENCE_BYTES = 262_144
 COLLECTOR_PATH = Path(__file__).with_name("collect-host-evidence.py")
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "ci-cloud-evidence.schema.json"
+RUNTIME_PACKAGE_NAMES = {
+    "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
+    "uidmap", "dbus-user-session",
+}
+BOOTSTRAP_PACKAGE_NAMES = {
+    "aardvark-dns", "apparmor", "apparmor-utils", "crun", "curl",
+    "dbus-user-session", "git", "gh", "jq", "netavark", "passt", "podman",
+    "python3", "python3-jsonschema", "python3-yaml", "uidmap",
+    "unattended-upgrades",
+}
 FORBIDDEN_KEY = re.compile(r"(?:authorization|credential|password|private.?key|secret|token)", re.IGNORECASE)
 FORBIDDEN_VALUE = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|"
@@ -49,6 +63,24 @@ def reject_sensitive(value: object, path: str = "$") -> None:
             reject_sensitive(child, f"{path}[{index}]")
     elif isinstance(value, str) and FORBIDDEN_VALUE.search(value):
         fail(f"credential-like value is forbidden at {path}")
+
+
+def validate_declared_schema(document: object) -> None:
+    try:
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        Draft202012Validator.check_schema(schema)
+        errors = list(
+            Draft202012Validator(
+                schema,
+                format_checker=FormatChecker(),
+            ).iter_errors(document)
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, SchemaError):
+        fail("declared evidence schema is unavailable or invalid")
+    if errors:
+        first = min(errors, key=lambda error: tuple(str(item) for item in error.path))
+        location = "$" + "".join(f"[{item!r}]" for item in first.path)
+        fail(f"document violates declared schema at {location}")
 
 
 def recompute_admission(document: dict[str, object]) -> list[str]:
@@ -83,7 +115,17 @@ def validate_document(document: object) -> dict[str, object]:
     workflow = exact_keys(root["workflow"], {"repository", "run_id", "run_attempt", "target_sha"}, "$.workflow")
     test = exact_keys(
         root["test"],
-        {"provider", "region", "profile", "started_at", "ended_at", "target_exit_status", "result", "failed_admission_invariants"},
+        {
+            "provider",
+            "region",
+            "profile",
+            "provider_image",
+            "started_at",
+            "ended_at",
+            "target_exit_status",
+            "result",
+            "failed_admission_invariants",
+        },
         "$.test",
     )
     platform = exact_keys(
@@ -102,6 +144,7 @@ def validate_document(document: object) -> dict[str, object]:
             "release_signatures_verified",
             "debian_archive_keyring_version",
             "runtime_packages",
+            "bootstrap_packages",
             "forbidden_packages_present",
         },
         "$.apt",
@@ -143,6 +186,7 @@ def validate_document(document: object) -> dict[str, object]:
     )
     exact_keys(platform["os_release"], {"ID", "VERSION_ID", "VERSION_CODENAME", "PRETTY_NAME"}, "$.platform.os_release")
     exact_keys(platform["cpu"], {"vendor", "model"}, "$.platform.cpu")
+    exact_keys(test["provider_image"], {"slug", "id"}, "$.test.provider_image")
     podman = exact_keys(runtime["podman"], {"version", "rootless", "seccomp_enabled", "apparmor_enabled", "oci_runtime", "network_backend", "rootless_network_command", "cgroup_version"}, "$.runtime.podman")
     uidmap = exact_keys(
         runtime["uidmap"],
@@ -186,7 +230,21 @@ def validate_document(document: object) -> dict[str, object]:
     exact_keys(runtime["storage"], {"driver", "graphroot", "runroot"}, "$.runtime.storage")
     exact_keys(
         runtime["api"],
-        {"service_active", "socket_active", "socket_enabled", "tcp_listener", "remote_connection"},
+        {
+            "system_service_active",
+            "system_service_enabled",
+            "system_socket_active",
+            "system_socket_enabled",
+            "user_service_active",
+            "user_service_enabled",
+            "user_socket_active",
+            "user_socket_enabled",
+            "tcp_listener",
+            "unix_listener",
+            "service_process",
+            "process_scan_incomplete",
+            "remote_connection",
+        },
         "$.runtime.api",
     )
     exact_keys(
@@ -245,18 +303,22 @@ def validate_document(document: object) -> dict[str, object]:
     expected_result = "passed" if not failures and test["target_exit_status"] == 0 else "failed"
     if test["result"] != expected_result:
         fail("result contradicts target status or admission failures")
-    if not isinstance(apt["runtime_packages"], dict) or set(apt["runtime_packages"]) != {
-        "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt", "uidmap", "dbus-user-session"
-    }:
-        fail("runtime package provenance is incomplete")
-    for name, package in apt["runtime_packages"].items():
-        exact_keys(
-            package,
-            {"version", "architecture", "origin", "suite"},
-            f"$.apt.runtime_packages.{name}",
-        )
+    for field, expected_names in (
+        ("runtime_packages", RUNTIME_PACKAGE_NAMES),
+        ("bootstrap_packages", BOOTSTRAP_PACKAGE_NAMES),
+    ):
+        package_facts = apt[field]
+        if not isinstance(package_facts, dict) or set(package_facts) != expected_names:
+            fail(f"{field.replace('_', ' ')} provenance is incomplete")
+        for name, package in package_facts.items():
+            exact_keys(
+                package,
+                {"version", "architecture", "origin", "suite"},
+                f"$.apt.{field}.{name}",
+            )
     if [str(item) for item in failures] != recompute_admission(root):
         fail("admission failures do not match effective facts")
+    validate_declared_schema(root)
     if podman["apparmor_enabled"] is not None and not isinstance(podman["apparmor_enabled"], bool):
         fail("Podman AppArmor capability must remain distinct boolean evidence")
     return root
@@ -274,7 +336,9 @@ def write_summary(document: dict[str, object], path: Path) -> None:
     assert isinstance(apt, dict) and isinstance(host, dict)
     podman = runtime["podman"]
     apparmor = runtime["apparmor_host"]
+    provider_image = test["provider_image"]
     assert isinstance(podman, dict) and isinstance(apparmor, dict)
+    assert isinstance(provider_image, dict)
     failures = test["failed_admission_invariants"]
     assert isinstance(failures, list)
     lines = [
@@ -283,6 +347,7 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         f"- Result: `{test['result']}`",
         f"- Target SHA: `{workflow['target_sha']}`",
         f"- Provider/profile: `{test['provider']}/{test['profile']}` in `{test['region']}`",
+        f"- Provider image: `{provider_image['slug']}` resolved to `{provider_image['id']}`",
         f"- Platform: `{platform['architecture']}` / `{platform['kernel']}`",
         f"- Kernel package: `{host['kernel_package']['name']}` from `{host['kernel_package']['origin']}/{host['kernel_package']['suite']}`",
         f"- APT releases: `{', '.join(apt['verified_release_suites'])}`; signatures `{apt['release_signatures_verified']}`",

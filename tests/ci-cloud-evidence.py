@@ -29,6 +29,16 @@ def load_validator():
 
 
 def valid_document() -> dict[str, object]:
+    runtime_package_names = {
+        "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
+        "uidmap", "dbus-user-session",
+    }
+    bootstrap_package_names = {
+        "aardvark-dns", "apparmor", "apparmor-utils", "crun", "curl",
+        "dbus-user-session", "git", "gh", "jq", "netavark", "passt", "podman",
+        "python3", "python3-jsonschema", "python3-yaml", "uidmap",
+        "unattended-upgrades",
+    }
     packages = {
         name: {
             "version": "1.0-1",
@@ -36,16 +46,7 @@ def valid_document() -> dict[str, object]:
             "origin": "Debian",
             "suite": "trixie",
         }
-        for name in (
-            "podman",
-            "conmon",
-            "crun",
-            "netavark",
-            "aardvark-dns",
-            "passt",
-            "uidmap",
-            "dbus-user-session",
-        )
+        for name in runtime_package_names | bootstrap_package_names
     }
     packages["dbus-user-session"]["architecture"] = "all"
     return {
@@ -60,6 +61,10 @@ def valid_document() -> dict[str, object]:
             "provider": "digitalocean",
             "region": "fra1",
             "profile": "amd",
+            "provider_image": {
+                "slug": "debian-13-x64",
+                "id": "123456789",
+            },
             "started_at": "2026-08-09T12:00:00Z",
             "ended_at": "2026-08-09T12:10:00Z",
             "target_exit_status": 0,
@@ -90,7 +95,12 @@ def valid_document() -> dict[str, object]:
             "verified_release_suites": ["trixie", "trixie-security", "trixie-updates"],
             "release_signatures_verified": True,
             "debian_archive_keyring_version": "2025.1",
-            "runtime_packages": packages,
+            "runtime_packages": {
+                name: copy.deepcopy(packages[name]) for name in runtime_package_names
+            },
+            "bootstrap_packages": {
+                name: copy.deepcopy(packages[name]) for name in bootstrap_package_names
+            },
             "forbidden_packages_present": [],
         },
         "host": {
@@ -194,10 +204,18 @@ def valid_document() -> dict[str, object]:
                 "runroot": "/run/user/20000/containers",
             },
             "api": {
-                "service_active": False,
-                "socket_active": False,
-                "socket_enabled": False,
+                "system_service_active": False,
+                "system_service_enabled": False,
+                "system_socket_active": False,
+                "system_socket_enabled": False,
+                "user_service_active": False,
+                "user_service_enabled": False,
+                "user_socket_active": False,
+                "user_socket_enabled": False,
                 "tcp_listener": False,
+                "unix_listener": False,
+                "service_process": False,
+                "process_scan_incomplete": False,
                 "remote_connection": False,
             },
             "updates": {
@@ -268,6 +286,18 @@ class EvidenceContractTests(unittest.TestCase):
         document = copy.deepcopy(valid_document())
         document["runtime"]["podman"]["cloud_identity"] = "none"
         with self.assertRaisesRegex(ValueError, "unknown"):
+            self.validator.validate_document(document)
+
+    def test_declared_schema_rejects_invalid_run_identity(self) -> None:
+        document = valid_document()
+        document["workflow"]["run_id"] = "0"
+        with self.assertRaisesRegex(ValueError, "declared schema"):
+            self.validator.validate_document(document)
+
+    def test_declared_schema_rejects_duplicate_array_values(self) -> None:
+        document = valid_document()
+        document["apt"]["source_files"] = ["/etc/apt/sources.list"] * 2
+        with self.assertRaisesRegex(ValueError, "declared schema"):
             self.validator.validate_document(document)
 
 

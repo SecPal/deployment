@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts" / "validate-ci-cloud.py"
@@ -72,6 +74,89 @@ class CloudCIContractTests(unittest.TestCase):
             "Markdown, YAML, and Prettier discovery must prune OpenTofu caches",
         )
 
+    def test_workflow_bash_uses_explicit_strict_mode(self) -> None:
+        strict_shell = "shell: bash --noprofile --norc -euo pipefail {0}"
+        for relative in (
+            ".github/workflows/cloud-conformance.yml",
+            ".github/workflows/cloud-janitor.yml",
+        ):
+            with self.subTest(relative=relative):
+                self.assertIn(
+                    strict_shell,
+                    (ROOT / relative).read_text(encoding="utf-8"),
+                )
+
+    def test_cloud_init_uses_shellchecked_host_setup(self) -> None:
+        cloud_init = (
+            ROOT / "infra/ci-cloud/digitalocean/cloud-init.tftpl"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("set -euo pipefail", host_setup)
+        self.assertNotIn("[bash, -c", cloud_init)
+        self.assertIn("/run/secpal-ci-evidence/apparmor-status", host_setup)
+        self.assertIn(
+            "systemctl disable --now podman.socket podman.service", host_setup
+        )
+
+    def test_rendered_cloud_init_embeds_valid_host_setup(self) -> None:
+        template = (
+            ROOT / "infra/ci-cloud/digitalocean/cloud-init.tftpl"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8").strip()
+        setup_lines = host_setup.splitlines()
+        indented_setup = setup_lines[0] + "\n" + "\n".join(
+            f"      {line}" for line in setup_lines[1:]
+        )
+        rendered = template.replace(
+            "${ssh_public_key}",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISynthetic fixture@example",
+        ).replace("${host_setup_script}", indented_setup)
+        document = yaml.safe_load(rendered)
+        files = {entry["path"]: entry for entry in document["write_files"]}
+        self.assertEqual(
+            host_setup,
+            files["/usr/local/sbin/secpal-ci-configure-conformance-host"][
+                "content"
+            ].strip(),
+        )
+
+    def test_runtime_validator_enforces_declared_evidence_schema(self) -> None:
+        validator = (
+            ROOT / "scripts/ci-cloud/validate-evidence.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Draft202012Validator", validator)
+        self.assertIn("ci-cloud-evidence.schema.json", validator)
+
+    def test_dynamic_conformance_records_exact_resolved_inputs(self) -> None:
+        main = (
+            ROOT / "infra/ci-cloud/digitalocean/main.tf"
+        ).read_text(encoding="utf-8")
+        outputs = (
+            ROOT / "infra/ci-cloud/digitalocean/outputs.tf"
+        ).read_text(encoding="utf-8")
+        workflow = (
+            ROOT / ".github/workflows/cloud-conformance.yml"
+        ).read_text(encoding="utf-8")
+        collector = (
+            ROOT / "scripts/ci-cloud/collect-host-evidence.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('data "digitalocean_image" "debian_13"', main)
+        self.assertIn('slug = "debian-13-x64"', main)
+        self.assertIn("image             = data.digitalocean_image.debian_13.id", main)
+        self.assertIn('output "image_id"', outputs)
+        self.assertIn("tofu output -raw image_id", workflow)
+        self.assertIn("BOOTSTRAP_PACKAGES", collector)
+
+    def test_governance_exception_is_bounded_to_nonproduction_conformance(self) -> None:
+        instructions = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("non-production conformance", instructions)
+        self.assertIn("resolved provider image ID", instructions)
+        self.assertIn("exact installed package versions", instructions)
+
     def test_rejects_non_full_target_sha_validation(self) -> None:
         self.assert_mutation_rejected(
             ".github/workflows/cloud-conformance.yml",
@@ -129,8 +214,8 @@ class CloudCIContractTests(unittest.TestCase):
     def test_rejects_arbitrary_cloud_image(self) -> None:
         self.assert_mutation_rejected(
             "infra/ci-cloud/digitalocean/main.tf",
-            'image             = "debian-13-x64"',
-            "image             = var.image",
+            'slug = "debian-13-x64"',
+            "slug = var.image",
         )
 
     def test_rejects_firewall_created_after_the_droplet(self) -> None:

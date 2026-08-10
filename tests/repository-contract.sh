@@ -59,6 +59,7 @@ required_files=(
   scripts/preflight.sh
   scripts/fetch-oci-attestation.py
   scripts/ci-cloud/collect-host-evidence.py
+  scripts/ci-cloud/configure-conformance-host.sh
   scripts/ci-cloud/digitalocean-janitor.py
   scripts/ci-cloud/run-remote-conformance.sh
   scripts/ci-cloud/target-conformance.sh

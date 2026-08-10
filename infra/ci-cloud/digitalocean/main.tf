@@ -24,6 +24,10 @@ locals {
   ]
 }
 
+data "digitalocean_image" "debian_13" {
+  slug = "debian-13-x64"
+}
+
 resource "digitalocean_tag" "ownership" {
   for_each = toset(local.ownership_tags)
   name     = each.value
@@ -36,7 +40,7 @@ resource "digitalocean_ssh_key" "ephemeral" {
 
 resource "digitalocean_droplet" "conformance" {
   name              = local.resource_name
-  image             = "debian-13-x64"
+  image             = data.digitalocean_image.debian_13.id
   region            = var.region
   size              = local.size_by_cpu[var.cpu_profile]
   backups           = false
@@ -48,7 +52,8 @@ resource "digitalocean_droplet" "conformance" {
   tags              = [for tag in digitalocean_tag.ownership : tag.name]
   depends_on        = [digitalocean_firewall.conformance]
   user_data = templatefile("${path.module}/cloud-init.tftpl", {
-    ssh_public_key = trimspace(var.ssh_public_key)
+    ssh_public_key    = trimspace(var.ssh_public_key)
+    host_setup_script = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/configure-conformance-host.sh")))
   })
 }
 

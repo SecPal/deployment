@@ -79,14 +79,11 @@ write_files:
     permissions: "0644"
     content: |
       QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000
+  - path: /usr/local/sbin/secpal-ci-configure-conformance-host
+    owner: root:root
+    permissions: "0700"
+    content: |
+      ${host_setup_script}
 
 runcmd:
-  - [install, -d, -o, root, -g, root, -m, "0755", /etc/containers/systemd/users/20000]
-  - [install, -d, -o, secpal-ci, -g, secpal-ci, -m, "0700", /srv/secpal-ci]
-  - [bash, -c, "grep -q '^secpal-ci:' /etc/subuid || usermod --add-subuids 200000-265535 secpal-ci"]
-  - [bash, -c, "grep -q '^secpal-ci:' /etc/subgid || usermod --add-subgids 200000-265535 secpal-ci"]
-  - [bash, -c, "systemctl --global disable podman.socket podman.service podman-auto-update.timer || true"]
-  - [loginctl, enable-linger, secpal-ci]
-  - [systemctl, enable, --now, apparmor.service]
-  - [sshd, -t]
-  - [systemctl, restart, ssh.service]
+  - [/usr/local/sbin/secpal-ci-configure-conformance-host]

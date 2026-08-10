@@ -23,6 +23,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
 concurrency:
   group: debian13-cloud-conformance
   cancel-in-progress: false
@@ -130,6 +134,7 @@ jobs:
           tofu apply --auto-approve --input=false
           unset DIGITALOCEAN_TOKEN
           tofu output -raw ipv4_address > "$RUNNER_TEMP/ci-cloud/ipv4_address"
+          tofu output -raw image_id > "$RUNNER_TEMP/ci-cloud/image_id"
 
       - name: Preserve exact run state for independent cleanup
         if: ${{ always() }}
@@ -156,7 +161,8 @@ jobs:
             "$GITHUB_RUN_ID" \
             "$GITHUB_RUN_ATTEMPT" \
             "$RUNNER_TEMP/ci-cloud/id_ed25519" \
-            "$RUNNER_TEMP/ci-cloud/evidence"
+            "$RUNNER_TEMP/ci-cloud/evidence" \
+            "$(cat "$RUNNER_TEMP/ci-cloud/image_id")"
 
       - name: Upload bounded non-secret evidence
         if: ${{ always() && steps.apply.outcome == 'success' }}

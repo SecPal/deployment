@@ -33,6 +33,7 @@
         "provider",
         "region",
         "profile",
+        "provider_image",
         "started_at",
         "ended_at",
         "target_exit_status",
@@ -43,6 +44,15 @@
         "provider": { "const": "digitalocean" },
         "region": { "const": "fra1" },
         "profile": { "enum": ["intel", "amd"] },
+        "provider_image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["slug", "id"],
+          "properties": {
+            "slug": { "const": "debian-13-x64" },
+            "id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" }
+          }
+        },
         "started_at": { "type": "string", "format": "date-time" },
         "ended_at": { "type": "string", "format": "date-time" },
         "target_exit_status": {
@@ -114,6 +124,7 @@
         "release_signatures_verified",
         "debian_archive_keyring_version",
         "runtime_packages",
+        "bootstrap_packages",
         "forbidden_packages_present"
       ],
       "properties": {
@@ -146,6 +157,48 @@
             "passt": { "$ref": "#/$defs/packageFact" },
             "uidmap": { "$ref": "#/$defs/packageFact" },
             "dbus-user-session": { "$ref": "#/$defs/packageFact" }
+          }
+        },
+        "bootstrap_packages": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "aardvark-dns",
+            "apparmor",
+            "apparmor-utils",
+            "crun",
+            "curl",
+            "dbus-user-session",
+            "git",
+            "gh",
+            "jq",
+            "netavark",
+            "passt",
+            "podman",
+            "python3",
+            "python3-jsonschema",
+            "python3-yaml",
+            "uidmap",
+            "unattended-upgrades"
+          ],
+          "properties": {
+            "aardvark-dns": { "$ref": "#/$defs/packageFact" },
+            "apparmor": { "$ref": "#/$defs/packageFact" },
+            "apparmor-utils": { "$ref": "#/$defs/packageFact" },
+            "crun": { "$ref": "#/$defs/packageFact" },
+            "curl": { "$ref": "#/$defs/packageFact" },
+            "dbus-user-session": { "$ref": "#/$defs/packageFact" },
+            "git": { "$ref": "#/$defs/packageFact" },
+            "gh": { "$ref": "#/$defs/packageFact" },
+            "jq": { "$ref": "#/$defs/packageFact" },
+            "netavark": { "$ref": "#/$defs/packageFact" },
+            "passt": { "$ref": "#/$defs/packageFact" },
+            "podman": { "$ref": "#/$defs/packageFact" },
+            "python3": { "$ref": "#/$defs/packageFact" },
+            "python3-jsonschema": { "$ref": "#/$defs/packageFact" },
+            "python3-yaml": { "$ref": "#/$defs/packageFact" },
+            "uidmap": { "$ref": "#/$defs/packageFact" },
+            "unattended-upgrades": { "$ref": "#/$defs/packageFact" }
           }
         },
         "forbidden_packages_present": { "$ref": "#/$defs/stringArray" }
@@ -367,17 +420,33 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "service_active",
-            "socket_active",
-            "socket_enabled",
+            "system_service_active",
+            "system_service_enabled",
+            "system_socket_active",
+            "system_socket_enabled",
+            "user_service_active",
+            "user_service_enabled",
+            "user_socket_active",
+            "user_socket_enabled",
             "tcp_listener",
+            "unix_listener",
+            "service_process",
+            "process_scan_incomplete",
             "remote_connection"
           ],
           "properties": {
-            "service_active": { "type": "boolean" },
-            "socket_active": { "type": "boolean" },
-            "socket_enabled": { "type": "boolean" },
+            "system_service_active": { "type": "boolean" },
+            "system_service_enabled": { "type": "boolean" },
+            "system_socket_active": { "type": "boolean" },
+            "system_socket_enabled": { "type": "boolean" },
+            "user_service_active": { "type": "boolean" },
+            "user_service_enabled": { "type": "boolean" },
+            "user_socket_active": { "type": "boolean" },
+            "user_socket_enabled": { "type": "boolean" },
             "tcp_listener": { "type": "boolean" },
+            "unix_listener": { "type": "boolean" },
+            "service_process": { "type": "boolean" },
+            "process_scan_incomplete": { "type": "boolean" },
             "remote_connection": { "type": "boolean" }
           }
         },

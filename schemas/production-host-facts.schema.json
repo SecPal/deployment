@@ -890,12 +890,17 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "filesystem_total_bytes",
         "free_bytes",
         "free_percent",
+        "filesystem_total_inodes",
         "free_inodes",
         "free_inode_percent"
       ],
       "properties": {
+        "filesystem_total_bytes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
         "free_bytes": {
           "$ref": "#/$defs/nonNegativeInteger"
         },
@@ -903,6 +908,9 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 100
+        },
+        "filesystem_total_inodes": {
+          "$ref": "#/$defs/nonNegativeInteger"
         },
         "free_inodes": {
           "$ref": "#/$defs/nonNegativeInteger"

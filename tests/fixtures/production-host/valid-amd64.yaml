@@ -364,47 +364,65 @@ resources:
   total_inodes: 2000000
   storage:
     podman_graph_root:
+      filesystem_total_bytes: 229064922453
       free_bytes: 68719476736
       free_percent: 30
+      filesystem_total_inodes: 1333333
       free_inodes: 400000
       free_inode_percent: 30
     postgresql_data:
+      filesystem_total_bytes: 229064922453
       free_bytes: 68719476736
       free_percent: 30
+      filesystem_total_inodes: 1333333
       free_inodes: 400000
       free_inode_percent: 30
     private_application_storage:
+      filesystem_total_bytes: 114532461226
       free_bytes: 34359738368
       free_percent: 30
+      filesystem_total_inodes: 666666
       free_inodes: 200000
       free_inode_percent: 30
     public_application_storage:
+      filesystem_total_bytes: 28633115306
       free_bytes: 8589934592
       free_percent: 30
+      filesystem_total_inodes: 333333
       free_inodes: 100000
       free_inode_percent: 30
     logs:
+      filesystem_total_bytes: 57266230613
       free_bytes: 17179869184
       free_percent: 30
+      filesystem_total_inodes: 333333
       free_inodes: 100000
       free_inode_percent: 30
     edge_state:
+      filesystem_total_bytes: 28633115306
       free_bytes: 8589934592
       free_percent: 30
+      filesystem_total_inodes: 333333
       free_inodes: 100000
       free_inode_percent: 30
     acme_state:
+      filesystem_total_bytes: 14316557653
       free_bytes: 4294967296
       free_percent: 30
+      filesystem_total_inodes: 333333
       free_inodes: 100000
       free_inode_percent: 30
     crowdsec_state:
+      filesystem_total_bytes: 28633115306
       free_bytes: 8589934592
       free_percent: 30
+      filesystem_total_inodes: 333333
       free_inodes: 100000
       free_inode_percent: 30
     backup_staging:
+      filesystem_total_bytes: 114532461226
       free_bytes: 34359738368
       free_percent: 30
+      filesystem_total_inodes: 333333
       free_inodes: 100000
       free_inode_percent: 30

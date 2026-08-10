@@ -6,6 +6,11 @@ output "ipv4_address" {
   value       = digitalocean_droplet.conformance.ipv4_address
 }
 
+output "image_id" {
+  description = "Exact provider image ID resolved from the closed Debian 13 slug."
+  value       = data.digitalocean_image.debian_13.id
+}
+
 output "droplet_id" {
   description = "Exact provider resource ID for run evidence."
   value       = digitalocean_droplet.conformance.id

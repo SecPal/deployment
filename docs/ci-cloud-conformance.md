@@ -36,9 +36,13 @@ The DigitalOcean root is
 fixed `fra1` region and one fixed 8-vCPU/16-GB/320-GB premium size for each CPU
 vendor. The larger-than-minimum memory tier avoids treating guest-visible
 memory lost to platform overhead as an 8-GiB D.1 pass. Image, region, size,
-count, and TTL are not workflow inputs. OpenTofu `1.12.5` and the
-DigitalOcean provider `2.99.1` are exact constraints; the provider lock file
-is reviewed and committed.
+count, and TTL are not workflow inputs. The non-production conformance root
+accepts exactly the official `debian-13-x64` slug, resolves it once through the
+provider, provisions that numeric image ID, and records the resolved ID in the
+closed evidence document. This deliberately exercises the current Debian 13
+image rather than pretending the moving provider catalog is a production
+deployment pin. OpenTofu `1.12.5` and the DigitalOcean provider `2.99.1` are
+exact constraints; the provider lock file is reviewed and committed.
 
 Only one provider profile can run at a time. The workflow has a 70-minute
 provision/test limit, cleanup has a separate 20-minute limit, and ownership
@@ -109,7 +113,7 @@ Do not grant database, registry, domain, project, block-storage, Kubernetes,
 Spaces, monitoring, or account-wide alias scopes. A missing environment,
 secret, approval, or required scope fails closed.
 
-## Immutable selection and remote execution
+## Closed selection and remote execution
 
 The manual workflow accepts exactly two inputs:
 
@@ -119,6 +123,9 @@ The manual workflow accepts exactly two inputs:
 The workflow rejects other refs and normalizes a valid SHA to lowercase before
 it reaches OpenTofu or SSH. It accepts no branch, repository URL, shell text,
 provider variable, count, image, size, or region. The trusted remote runner
+reads the exact numeric image ID selected by OpenTofu state and passes it to
+the trusted collector; the closed schema admits only the fixed Debian 13 slug
+and a positive numeric provider ID. The trusted remote runner then
 initializes a new public checkout, fetches only the selected commit, verifies
 `HEAD` byte-for-byte against the SHA, and invokes the single fixed target path
 under a 40-minute timeout. The bootstrap target entrypoint runs the production
@@ -198,37 +205,50 @@ silently weakening orphan protection.
 
 ## Evidence and interpretation
 
-Each reachable host produces closed-schema JSON plus a concise Markdown
-summary. Incomplete, oversized, unknown, credential-shaped, or internally
-contradictory evidence fails. Evidence includes:
+Each reachable host produces JSON validated against the committed closed schema
+plus a concise Markdown summary. Incomplete, schema-invalid, oversized,
+unknown, credential-shaped, or internally contradictory evidence fails.
+Evidence includes:
 
 - workflow/run identity, exact target SHA, provider, region, profile, time,
-  exit status, result, and named failed invariants;
+  resolved provider image slug and numeric ID, exit status, result, and named
+  failed invariants;
 - `/etc/os-release`, `uname`, architecture, kernel, CPU vendor/model,
   virtualization, CPU/memory/disk facts, root filesystem and OverlayFS facts,
   required tools, clock synchronization, and effective root-SSH denial;
 - root-owned authenticated APT `InRelease` origins/suites, archive-keyring
   presence, installed kernel package ownership/architecture/origin/suite,
-  every runtime package's installed architecture/origin/suite, forbidden
-  package absence, and effective security-only unattended-update/reboot and
-  runtime-package exclusion policy;
+  every cloud-init bootstrap and runtime package's exact installed version,
+  architecture, origin, and suite, forbidden package absence, and effective
+  security-only unattended-update/reboot and runtime-package exclusion policy;
 - Podman, crun features, Netavark, Aardvark, pasta/passt, uidmap, cgroup,
   systemd, effective OCI runtime, effective network backend, and rootless
   network command, including an effective subordinate-ID mapping probe;
 - linger/user-manager/DBus state, the root-owned restricted Quadlet search
-  path, Podman storage driver, disabled API/socket and auto-update state, and
-  effective SecPal/GHCR mirror, rewrite, and insecure-transport facts; and
+  path, Podman storage driver, disabled system- and user-scope API services,
+  socket activation, TCP/Unix listeners, manual `podman system service`
+  processes, complete process visibility, auto-update state, and effective
+  SecPal/GHCR mirror, rewrite, and insecure-transport facts; and
 - host AppArmor state, rootless Podman `apparmorEnabled`, and Podman
   `seccompEnabled` as three independent facts.
 
-`podman apparmorEnabled=false` does not mean host AppArmor is disabled. The
-collector fails D.1 host admission when kernel AppArmor or enforcing profiles
-are absent, while recording rootless container AppArmor capability separately.
+The trusted root-only host setup records loaded and enforcing AppArmor policy
+counts in a root-owned, non-writable `/run` snapshot. The unprivileged collector
+validates that file's parent and file ownership, type, mode, size, and closed
+contents before using it. `podman apparmorEnabled=false` does not mean host
+AppArmor is disabled. The collector fails D.1 host admission when kernel
+AppArmor or enforcing profiles are absent, while recording rootless container
+AppArmor capability separately.
 It does not claim a per-container profile unless later workload evidence
 actually observes one. Seccomp is a separate hard runtime fact.
 
 Evidence proves reproducibility of the reviewed Debian 13, rootless Podman,
 and Quadlet host-capability contract on the exact representative VM that ran.
+It binds a run to the resolved provider image ID and exact installed package
+versions while requiring those packages to come from the authenticated Debian
+13 suites. It does not make the provider slug or Debian package repositories
+immutable across separate conformance runs; that variability is intentional
+only for this isolated, non-production compatibility probe.
 The empty root-owned definition tree does not prove PR #22 units, workload
 AppArmor confinement, production service-account paths, or product lifecycle
 behavior. Evidence also does not prove production readiness, customer workload

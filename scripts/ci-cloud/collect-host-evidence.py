@@ -25,7 +25,27 @@ from urllib.parse import urlsplit
 
 MAX_COMMAND_OUTPUT = 8_192
 CI_OPERATOR_UID = 20000
+APPARMOR_STATUS_PATH = Path("/run/secpal-ci-evidence/apparmor-status")
 EXPECTED_SUITES = {"trixie", "trixie-security", "trixie-updates"}
+BOOTSTRAP_PACKAGES = (
+    "aardvark-dns",
+    "apparmor",
+    "apparmor-utils",
+    "crun",
+    "curl",
+    "dbus-user-session",
+    "git",
+    "gh",
+    "jq",
+    "netavark",
+    "passt",
+    "podman",
+    "python3",
+    "python3-jsonschema",
+    "python3-yaml",
+    "uidmap",
+    "unattended-upgrades",
+)
 RUNTIME_PACKAGES = (
     "podman",
     "conmon",
@@ -296,6 +316,10 @@ def apt_sources(architecture: str) -> dict[str, object]:
             package: package_metadata(package, architecture, verified_suite_set)
             for package in RUNTIME_PACKAGES
         },
+        "bootstrap_packages": {
+            package: package_metadata(package, architecture, verified_suite_set)
+            for package in BOOTSTRAP_PACKAGES
+        },
         "forbidden_packages_present": forbidden,
     }
 
@@ -335,15 +359,49 @@ def podman_facts() -> tuple[dict[str, object], dict[str, Any]]:
     return facts, store
 
 
+def parse_apparmor_snapshot(content: str) -> dict[str, int | None]:
+    values: dict[str, int] = {}
+    for line in content.splitlines():
+        if "=" not in line:
+            return {"loaded_profiles": None, "enforcing_profiles": None}
+        name, raw_value = line.split("=", 1)
+        if name in values or name not in {"loaded_profiles", "enforcing_profiles"}:
+            return {"loaded_profiles": None, "enforcing_profiles": None}
+        if re.fullmatch(r"[0-9]+", raw_value) is None:
+            return {"loaded_profiles": None, "enforcing_profiles": None}
+        values[name] = int(raw_value)
+    if set(values) != {"loaded_profiles", "enforcing_profiles"}:
+        return {"loaded_profiles": None, "enforcing_profiles": None}
+    return values
+
+
+def read_root_snapshot(path: Path, limit: int = 1024) -> str:
+    try:
+        parent = path.parent.lstat()
+        metadata = path.lstat()
+        if (
+            not stat_module.S_ISDIR(parent.st_mode)
+            or parent.st_uid != 0
+            or parent.st_gid != 0
+            or stat_module.S_IMODE(parent.st_mode) != 0o755
+            or not stat_module.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != 0
+            or metadata.st_gid != 0
+            or stat_module.S_IMODE(metadata.st_mode) != 0o644
+            or metadata.st_size > limit
+        ):
+            return ""
+        return path.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeError):
+        return ""
+
+
 def apparmor_facts() -> dict[str, object]:
     parameter = read_text(Path("/sys/module/apparmor/parameters/enabled"), 16).strip()
-    status = output(["aa-status"])
-    loaded_match = re.search(r"([0-9]+) profiles are loaded", status)
-    enforcing_match = re.search(r"([0-9]+) profiles are in enforce mode", status)
+    snapshot = parse_apparmor_snapshot(read_root_snapshot(APPARMOR_STATUS_PATH))
     return {
         "kernel_enabled": parameter.lower() in {"y", "yes", "1"},
-        "loaded_profiles": int(loaded_match.group(1)) if loaded_match else None,
-        "enforcing_profiles": int(enforcing_match.group(1)) if enforcing_match else None,
+        **snapshot,
     }
 
 
@@ -520,19 +578,88 @@ def quadlet_facts(user_environment: str) -> dict[str, object]:
     }
 
 
+def is_podman_service_command(arguments: list[str]) -> bool:
+    return bool(arguments) and Path(arguments[0]).name == "podman" and any(
+        arguments[index : index + 2] == ["system", "service"]
+        for index in range(1, len(arguments) - 1)
+    )
+
+
+def podman_service_process_facts() -> tuple[bool, bool]:
+    service_process = False
+    process_scan_incomplete = False
+    try:
+        processes = list(Path("/proc").iterdir())
+    except OSError:
+        return False, True
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        try:
+            raw_arguments = (process / "cmdline").read_bytes()[:MAX_COMMAND_OUTPUT]
+        except PermissionError:
+            process_scan_incomplete = True
+            continue
+        except OSError:
+            continue
+        arguments = [
+            value.decode("utf-8", errors="replace")
+            for value in raw_arguments.split(b"\0")
+            if value
+        ]
+        service_process = service_process or is_podman_service_command(arguments)
+    return service_process, process_scan_incomplete
+
+
 def podman_api_facts() -> dict[str, bool]:
-    service_active = command_result(["systemctl", "--user", "is-active", "podman.service"])[0] == 0
-    socket_active = command_result(["systemctl", "--user", "is-active", "podman.socket"])[0] == 0
-    socket_enabled = command_result(["systemctl", "--user", "is-enabled", "podman.socket"])[0] == 0
-    listeners = output(["ss", "-ltnp"])
+    system_service_active = command_result(
+        ["systemctl", "is-active", "podman.service"]
+    )[0] == 0
+    system_service_enabled = command_result(
+        ["systemctl", "is-enabled", "podman.service"]
+    )[0] == 0
+    system_socket_active = command_result(
+        ["systemctl", "is-active", "podman.socket"]
+    )[0] == 0
+    system_socket_enabled = command_result(
+        ["systemctl", "is-enabled", "podman.socket"]
+    )[0] == 0
+    user_service_active = command_result(
+        ["systemctl", "--user", "is-active", "podman.service"]
+    )[0] == 0
+    user_service_enabled = command_result(
+        ["systemctl", "--user", "is-enabled", "podman.service"]
+    )[0] == 0
+    user_socket_active = command_result(
+        ["systemctl", "--user", "is-active", "podman.socket"]
+    )[0] == 0
+    user_socket_enabled = command_result(
+        ["systemctl", "--user", "is-enabled", "podman.socket"]
+    )[0] == 0
+    tcp_listeners = output(["ss", "-ltnp"])
+    unix_listeners = output(["ss", "-lxnp"])
+    known_api_sockets = (
+        Path("/run/podman/podman.sock"),
+        Path(f"/run/user/{CI_OPERATOR_UID}/podman/podman.sock"),
+    )
     connections = json_array_output(
         ["podman", "system", "connection", "list", "--format", "json"]
     )
+    service_process, process_scan_incomplete = podman_service_process_facts()
     return {
-        "service_active": service_active,
-        "socket_active": socket_active,
-        "socket_enabled": socket_enabled,
-        "tcp_listener": "podman" in listeners.lower(),
+        "system_service_active": system_service_active,
+        "system_service_enabled": system_service_enabled,
+        "system_socket_active": system_socket_active,
+        "system_socket_enabled": system_socket_enabled,
+        "user_service_active": user_service_active,
+        "user_service_enabled": user_service_enabled,
+        "user_socket_active": user_socket_active,
+        "user_socket_enabled": user_socket_enabled,
+        "tcp_listener": "podman" in tcp_listeners.lower(),
+        "unix_listener": "podman" in unix_listeners.lower()
+        or any(path.is_socket() for path in known_api_sockets),
+        "service_process": service_process,
+        "process_scan_incomplete": process_scan_incomplete,
         "remote_connection": bool(connections),
     }
 
@@ -701,6 +828,18 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         ),
         "D1_RUNTIME_PACKAGE_PROVENANCE",
     )
+    bootstrap_package_facts = apt["bootstrap_packages"]
+    reject(
+        set(bootstrap_package_facts) != set(BOOTSTRAP_PACKAGES)
+        or any(
+            not package["version"]
+            or package["architecture"] not in {platform["architecture"], "all"}
+            or package["origin"] != "Debian"
+            or package["suite"] not in {"trixie", "trixie-security"}
+            for package in bootstrap_package_facts.values()
+        ),
+        "D1_BOOTSTRAP_PACKAGE_PROVENANCE",
+    )
     security_updates = host["security_updates"]
     reject(
         security_updates != {
@@ -829,9 +968,12 @@ def main() -> int:
     parser.add_argument("ended_at")
     parser.add_argument("target_status", type=int)
     parser.add_argument("root_ssh_denied", choices=["true", "false"])
+    parser.add_argument("provider_image_id")
     arguments = parser.parse_args()
     if re.fullmatch(r"[0-9a-f]{40}", arguments.target_sha) is None:
         parser.error("target_sha must be a full lowercase SHA")
+    if re.fullmatch(r"[1-9][0-9]{0,19}", arguments.provider_image_id) is None:
+        parser.error("provider_image_id must be a positive numeric provider ID")
 
     os_facts = os_release()
     architecture = checked_output(["dpkg", "--print-architecture"])
@@ -916,6 +1058,10 @@ def main() -> int:
             "provider": arguments.provider,
             "region": arguments.region,
             "profile": arguments.profile,
+            "provider_image": {
+                "slug": "debian-13-x64",
+                "id": arguments.provider_image_id,
+            },
             "started_at": arguments.started_at,
             "ended_at": arguments.ended_at,
             "target_exit_status": arguments.target_status,

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -32,6 +33,25 @@ def read(root: Path, relative: str) -> str:
     path = root / relative
     require(path.is_file(), f"required cloud CI file is missing: {relative}")
     return path.read_text(encoding="utf-8")
+
+
+def string_collection_constant(text: str, name: str) -> set[str]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        raise ContractError(f"trusted Python source containing {name} is invalid") from None
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+        ):
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError):
+                break
+            if isinstance(value, (list, tuple, set)) and all(isinstance(item, str) for item in value):
+                return set(value)
+    raise ContractError(f"{name} must be a literal string collection")
 
 
 def load_workflow(root: Path, relative: str) -> tuple[dict[str, object], str]:
@@ -156,14 +176,27 @@ def validate_opentofu(root: Path) -> None:
     main = read(root, "infra/ci-cloud/digitalocean/main.tf")
     versions = read(root, "infra/ci-cloud/digitalocean/versions.tf")
     variables = read(root, "infra/ci-cloud/digitalocean/variables.tf")
+    outputs = read(root, "infra/ci-cloud/digitalocean/outputs.tf")
     cloud_init = read(root, "infra/ci-cloud/digitalocean/cloud-init.tftpl")
+    host_setup = read(root, "scripts/ci-cloud/configure-conformance-host.sh")
+    collector = read(root, "scripts/ci-cloud/collect-host-evidence.py")
     read(root, "infra/ci-cloud/digitalocean/.terraform.lock.hcl")
     require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
     require('version = "= 2.99.1"' in versions, "DigitalOcean provider version must be exact")
     require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
     require(main.count('resource "digitalocean_droplet"') == 1, "exactly one droplet resource is allowed")
     require("count" not in main, "resource count abstraction is forbidden")
-    require('image             = "debian-13-x64"' in main, "cloud image must be the fixed Debian 13 slug")
+    require(
+        main.count('data "digitalocean_image" "debian_13"') == 1
+        and 'slug = "debian-13-x64"' in main
+        and "image             = data.digitalocean_image.debian_13.id" in main,
+        "cloud image must resolve the closed Debian 13 slug to one exact provider ID",
+    )
+    require(
+        'output "image_id"' in outputs
+        and "value       = data.digitalocean_image.debian_13.id" in outputs,
+        "exact resolved provider image ID must be exported",
+    )
     require('intel = "s-8vcpu-16gb-intel"' in main, "Intel size allowlist changed")
     require('amd   = "s-8vcpu-16gb-amd"' in main, "AMD size allowlist changed")
     require("local.owner_tag," in main, "SecPal CI owner metadata is missing")
@@ -188,8 +221,30 @@ def validate_opentofu(root: Path) -> None:
         "#clear Unattended-Upgrade::Package-Blacklist;",
         "Unattended-Upgrade::Automatic-Reboot \"false\";",
         "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000",
+        "secpal-ci-configure-conformance-host",
     ):
         require(required in cloud_init, "cloud-init omitted required D.1 host policy")
+    require("set -euo pipefail" in host_setup, "host setup must use strict Bash mode")
+    require(
+        "/run/secpal-ci-evidence/apparmor-status" in host_setup,
+        "host setup must capture root-owned AppArmor policy counts",
+    )
+    require(
+        "systemctl disable --now podman.socket podman.service" in host_setup,
+        "host setup must disable system-scope Podman API units",
+    )
+    try:
+        cloud_config = yaml.load(cloud_init, Loader=yaml.BaseLoader)
+    except yaml.YAMLError as error:
+        raise ContractError(f"cloud-init template is invalid YAML: {error}") from None
+    require(isinstance(cloud_config, dict), "cloud-init template must be a YAML mapping")
+    packages = cloud_config.get("packages")
+    require(
+        isinstance(packages, list)
+        and all(isinstance(package, str) for package in packages)
+        and set(packages) == string_collection_constant(collector, "BOOTSTRAP_PACKAGES"),
+        "collector bootstrap package evidence must exactly match cloud-init packages",
+    )
     forbidden = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
     require(not any(value in (main + variables) for value in forbidden), "OpenTofu accepted a forbidden control or private key")
     require('condition     = var.region == "fra1"' in variables, "region allowlist changed")
@@ -210,10 +265,17 @@ def validate(root: Path) -> None:
     validate_opentofu(root)
     validate_janitor_script(root)
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
+    workflow = read(root, ".github/workflows/cloud-conformance.yml")
     require(
         "root_ssh_denied=true" in remote
         and 'grep -qi \'permission denied\'' in remote,
         "remote orchestration must prove effective root SSH denial",
+    )
+    require(
+        "tofu output -raw image_id" in workflow
+        and 'provider_image_id="${10}"' in remote
+        and '"$root_ssh_denied" "$provider_image_id"' in remote,
+        "resolved provider image ID must reach the trusted evidence collector",
     )
 
 

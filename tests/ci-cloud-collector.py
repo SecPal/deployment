@@ -10,6 +10,7 @@ import copy
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,12 @@ REQUIRED_TOOLS = {
 RUNTIME_PACKAGES = {
     "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
     "uidmap", "dbus-user-session",
+}
+BOOTSTRAP_PACKAGES = {
+    "aardvark-dns", "apparmor", "apparmor-utils", "crun", "curl",
+    "dbus-user-session", "git", "gh", "jq", "netavark", "passt", "podman",
+    "python3", "python3-jsonschema", "python3-yaml", "uidmap",
+    "unattended-upgrades",
 }
 
 
@@ -44,7 +51,7 @@ def valid_facts() -> dict[str, object]:
             "origin": "Debian",
             "suite": "trixie",
         }
-        for name in RUNTIME_PACKAGES
+        for name in RUNTIME_PACKAGES | BOOTSTRAP_PACKAGES
     }
     packages["dbus-user-session"]["architecture"] = "all"
     return {
@@ -70,7 +77,12 @@ def valid_facts() -> dict[str, object]:
             "verified_release_suites": ["trixie", "trixie-security", "trixie-updates"],
             "release_signatures_verified": True,
             "debian_archive_keyring_version": "2025.1",
-            "runtime_packages": packages,
+            "runtime_packages": {
+                name: copy.deepcopy(packages[name]) for name in RUNTIME_PACKAGES
+            },
+            "bootstrap_packages": {
+                name: copy.deepcopy(packages[name]) for name in BOOTSTRAP_PACKAGES
+            },
             "forbidden_packages_present": [],
         },
         "host": {
@@ -153,10 +165,18 @@ def valid_facts() -> dict[str, object]:
                 "runroot": "/run/user/20000/containers",
             },
             "api": {
-                "service_active": False,
-                "socket_active": False,
-                "socket_enabled": False,
+                "system_service_active": False,
+                "system_service_enabled": False,
+                "system_socket_active": False,
+                "system_socket_enabled": False,
+                "user_service_active": False,
+                "user_service_enabled": False,
+                "user_socket_active": False,
+                "user_socket_enabled": False,
                 "tcp_listener": False,
+                "unix_listener": False,
+                "service_process": False,
+                "process_scan_incomplete": False,
                 "remote_connection": False,
             },
             "updates": {
@@ -222,6 +242,14 @@ class CloudHostAdmissionTests(unittest.TestCase):
         facts["apt"]["runtime_packages"]["podman"]["suite"] = "trixie-backports"
         self.assertIn("D1_RUNTIME_PACKAGE_PROVENANCE", self.collector.admission_failures(facts, "intel"))
 
+    def test_rejects_bootstrap_package_without_debian_provenance(self) -> None:
+        facts = valid_facts()
+        facts["apt"]["bootstrap_packages"]["apparmor"]["origin"] = ""
+        self.assertIn(
+            "D1_BOOTSTRAP_PACKAGE_PROVENANCE",
+            self.collector.admission_failures(facts, "intel"),
+        )
+
     def test_rejects_incomplete_security_update_policy(self) -> None:
         self.assert_failure(("host", "security_updates", "automatic"), False, "D1_SECURITY_UPDATE_POLICY")
 
@@ -247,7 +275,91 @@ class CloudHostAdmissionTests(unittest.TestCase):
         self.assert_failure(("runtime", "systemd_user", "runtime_directory_mode"), "0755", "D1_SYSTEMD_USER_MANAGER")
 
     def test_rejects_active_podman_api_socket(self) -> None:
-        self.assert_failure(("runtime", "api", "socket_active"), True, "D1_PODMAN_API_DISABLED")
+        self.assert_failure(
+            ("runtime", "api", "system_socket_active"),
+            True,
+            "D1_PODMAN_API_DISABLED",
+        )
+
+    def test_rejects_manually_launched_podman_api_process(self) -> None:
+        self.assert_failure(
+            ("runtime", "api", "service_process"),
+            True,
+            "D1_PODMAN_API_DISABLED",
+        )
+
+    def test_recognizes_podman_system_service_command(self) -> None:
+        self.assertTrue(
+            self.collector.is_podman_service_command(
+                ["/usr/bin/podman", "system", "service", "unix:///tmp/api.sock"]
+            )
+        )
+        self.assertFalse(
+            self.collector.is_podman_service_command(
+                ["/usr/bin/podman", "system", "connection", "list"]
+            )
+        )
+
+    def test_parses_root_owned_app_armor_snapshot(self) -> None:
+        self.assertEqual(
+            {"loaded_profiles": 10, "enforcing_profiles": 4},
+            self.collector.parse_apparmor_snapshot(
+                "loaded_profiles=10\nenforcing_profiles=4\n"
+            ),
+        )
+
+    def test_rejects_malformed_app_armor_snapshot(self) -> None:
+        self.assertEqual(
+            {"loaded_profiles": None, "enforcing_profiles": None},
+            self.collector.parse_apparmor_snapshot(
+                "loaded_profiles=ten\nenforcing_profiles=4\n"
+            ),
+        )
+
+    def test_detects_system_scope_podman_api_socket(self) -> None:
+        def command_result(arguments: list[str], timeout: int = 15) -> tuple[int, str]:
+            del timeout
+            if arguments == ["systemctl", "is-active", "podman.socket"]:
+                return 0, "active"
+            return 1, "inactive"
+
+        with (
+            mock.patch.object(self.collector, "command_result", side_effect=command_result),
+            mock.patch.object(self.collector, "output", return_value=""),
+            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertTrue(facts["system_socket_active"])
+
+    def test_detects_enabled_system_scope_podman_api_service(self) -> None:
+        def command_result(arguments: list[str], timeout: int = 15) -> tuple[int, str]:
+            del timeout
+            if arguments == ["systemctl", "is-enabled", "podman.service"]:
+                return 0, "enabled"
+            return 1, "disabled"
+
+        with (
+            mock.patch.object(self.collector, "command_result", side_effect=command_result),
+            mock.patch.object(self.collector, "output", return_value=""),
+            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertTrue(facts["system_service_enabled"])
+
+    def test_detects_manually_launched_unix_podman_api(self) -> None:
+        def output(arguments: list[str], timeout: int = 15) -> str:
+            del timeout
+            if arguments == ["ss", "-lxnp"]:
+                return 'u_str LISTEN 0 4096 /tmp/fixture.sock users:(("podman",pid=42,fd=3))'
+            return ""
+
+        with (
+            mock.patch.object(self.collector, "command_result", return_value=(1, "inactive")),
+            mock.patch.object(self.collector, "output", side_effect=output),
+            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertTrue(facts["unix_listener"])
 
     def test_rejects_missing_effective_root_ssh_denial(self) -> None:
         self.assert_failure(("host", "ssh", "root_login_denied"), False, "D1_ROOT_SSH_DISABLED")

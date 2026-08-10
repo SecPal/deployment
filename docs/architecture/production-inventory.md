@@ -201,8 +201,10 @@ reconstructable; authoritative business data must remain outside it.
 The inventory declares admission requirements, never lower limits than the
 schema contract. CPU, memory, total storage, and total inode values are
 compared with supplied facts. `resources.storage` contains only byte and inode
-headroom observations. Each absolute/percentage pair must be mutually possible
-within the corresponding aggregate host total, allowing whole-number flooring.
+headroom observations plus the backing filesystem's byte and inode totals.
+Each absolute/percentage pair must exactly match those per-filesystem totals,
+allowing whole-number flooring, and each filesystem total must fit within the
+corresponding aggregate host total.
 The separate closed `filesystems` fact group contains a shared `access` fact
 for canonical path, ownership, mode, locality, and effective account access,
 plus filesystem type, effective read-only mount state, `d_type`, and XFS
