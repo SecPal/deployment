@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 SecPal Contributors
 // SPDX-License-Identifier: MIT
 
-const { defineConfig } = require("@playwright/test");
 const path = require("node:path");
 
 const appOrigin = process.env.APP_ORIGIN;
@@ -27,7 +26,7 @@ const outputDir = path.join(
   `secpal-int-${integrationInstance}`,
 );
 
-module.exports = defineConfig({
+module.exports = {
   testDir: "./tests/e2e",
   outputDir,
   fullyParallel: false,
@@ -49,4 +48,4 @@ module.exports = defineConfig({
       ],
     },
   },
-});
+};
