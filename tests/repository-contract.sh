@@ -70,6 +70,7 @@ required_files=(
   scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
   tests/ci-cloud-contract.py
+  tests/ci-cloud-collector.py
   tests/ci-cloud-evidence.py
   tests/ci-cloud-janitor.py
   tests/phase-b-contract.sh

@@ -82,6 +82,18 @@ timeout --signal=TERM --kill-after=15s 12m \
   ssh "${ssh_options[@]}" "secpal-ci@$address" \
   'cloud-init status --wait >/dev/null && test "$(id -u)" -ne 0'
 
+root_probe="$(mktemp "$evidence_dir/.root-ssh-probe.XXXXXX")"
+set +e
+timeout --signal=TERM --kill-after=5s 20s \
+  ssh "${ssh_options[@]}" "root@$address" true >"$root_probe" 2>&1
+root_probe_status=$?
+set -e
+root_ssh_denied=false
+if [[ "$root_probe_status" -eq 255 ]] && grep -qi 'permission denied' "$root_probe"; then
+  root_ssh_denied=true
+fi
+rm -f -- "$root_probe"
+
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 set +e
 timeout --signal=TERM --kill-after=30s 42m \
@@ -131,6 +143,7 @@ evidence_json="$evidence_dir/evidence.json"
 ssh "${ssh_options[@]}" "secpal-ci@$address" \
   python3 - "$provider" "$region" "$profile" "$target_sha" \
   "$run_id" "$run_attempt" "$started_at" "$ended_at" "$target_status" \
+  "$root_ssh_denied" \
   < scripts/ci-cloud/collect-host-evidence.py > "$evidence_json"
 
 python3 scripts/ci-cloud/validate-evidence.py \

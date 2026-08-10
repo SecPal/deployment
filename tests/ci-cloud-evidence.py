@@ -30,7 +30,12 @@ def load_validator():
 
 def valid_document() -> dict[str, object]:
     packages = {
-        name: "1.0-1"
+        name: {
+            "version": "1.0-1",
+            "architecture": "amd64",
+            "origin": "Debian",
+            "suite": "trixie",
+        }
         for name in (
             "podman",
             "conmon",
@@ -42,6 +47,7 @@ def valid_document() -> dict[str, object]:
             "dbus-user-session",
         )
     }
+    packages["dbus-user-session"]["architecture"] = "all"
     return {
         "schema_version": 1,
         "workflow": {
@@ -80,8 +86,51 @@ def valid_document() -> dict[str, object]:
             "source_files": ["/etc/apt/sources.list.d/debian.sources"],
             "source_hosts": ["deb.debian.org", "security.debian.org"],
             "configured_suites": ["trixie", "trixie-security", "trixie-updates"],
+            "release_origins": ["Debian"],
+            "verified_release_suites": ["trixie", "trixie-security", "trixie-updates"],
+            "release_signatures_verified": True,
             "debian_archive_keyring_version": "2025.1",
             "runtime_packages": packages,
+            "forbidden_packages_present": [],
+        },
+        "host": {
+            "kernel_package": {
+                "name": "linux-image-6.12.0-amd64",
+                "version": "6.12.0-1",
+                "architecture": "amd64",
+                "origin": "Debian",
+                "suite": "trixie-security",
+                "owned": True,
+            },
+            "filesystem": {
+                "type": "ext4",
+                "read_only": False,
+                "overlayfs_supported": True,
+                "d_type": True,
+            },
+            "security_updates": {
+                "mechanism": "unattended-upgrades",
+                "automatic": True,
+                "timer_enabled": True,
+                "security_suite": "trixie-security",
+                "normal_updates_automatic": False,
+                "major_release_upgrades_automatic": False,
+                "automatic_reboot": False,
+                "runtime_packages_excluded": True,
+            },
+            "required_tools": {
+                "present": [
+                    "aa-status", "apt-cache", "apt-config", "bash", "curl",
+                    "df", "dpkg", "dpkg-query", "findmnt", "getent", "gh",
+                    "git", "id", "install", "jq", "loginctl", "mktemp",
+                    "newgidmap", "newuidmap", "podman", "python3", "realpath",
+                    "sha256sum", "ss", "stat", "systemd-detect-virt",
+                    "systemctl", "timedatectl", "uname",
+                ],
+                "missing": [],
+            },
+            "clock": {"synchronized": True},
+            "ssh": {"root_login_denied": True},
         },
         "runtime": {
             "podman": {
@@ -100,10 +149,66 @@ def valid_document() -> dict[str, object]:
             "aardvark_version": "aardvark-dns 1.14",
             "pasta_version": "pasta 0.0",
             "passt_version": "passt 0.0",
-            "uidmap": {"newuidmap": "/usr/bin/newuidmap", "newgidmap": "/usr/bin/newgidmap"},
+            "uidmap": {
+                "newuidmap": "/usr/bin/newuidmap",
+                "newgidmap": "/usr/bin/newgidmap",
+                "subuid": {
+                    "start": 200000,
+                    "count": 65536,
+                    "entry_count": 1,
+                    "overlap": False,
+                },
+                "subgid": {
+                    "start": 200000,
+                    "count": 65536,
+                    "entry_count": 1,
+                    "overlap": False,
+                },
+                "mapping_effective": True,
+            },
             "cgroup_version": "v2",
             "systemd_version": "systemd 257",
             "apparmor_host": {"kernel_enabled": True, "loaded_profiles": 10, "enforcing_profiles": 4},
+            "systemd_user": {
+                "manager_available": True,
+                "starts_at_boot": True,
+                "linger_enabled": True,
+                "dbus_session_available": True,
+                "runtime_directory": "/run/user/20000",
+                "runtime_directory_uid": 20000,
+                "runtime_directory_gid": 20000,
+                "runtime_directory_mode": "0700",
+            },
+            "quadlet": {
+                "generator_path": "/usr/lib/systemd/user-generators/podman-user-generator",
+                "effective_search_paths": ["/etc/containers/systemd/users/20000"],
+                "definitions_uid": 0,
+                "definitions_gid": 0,
+                "definitions_mode": "0755",
+                "tree_symlinks_present": False,
+                "service_account_can_write": False,
+            },
+            "storage": {
+                "driver": "overlay",
+                "graphroot": "/home/secpal-ci/.local/share/containers/storage",
+                "runroot": "/run/user/20000/containers",
+            },
+            "api": {
+                "service_active": False,
+                "socket_active": False,
+                "socket_enabled": False,
+                "tcp_listener": False,
+                "remote_connection": False,
+            },
+            "updates": {
+                "auto_update_timer_enabled": False,
+                "auto_update_timer_active": False,
+            },
+            "registries": {
+                "ghcr_insecure": False,
+                "secpal_mirrors": [],
+                "secpal_location_rewrite": False,
+            },
         },
     }
 
@@ -145,6 +250,18 @@ class EvidenceContractTests(unittest.TestCase):
         document = valid_document()
         document["test"]["failed_admission_invariants"] = ["D1_HOST_APPARMOR"]
         with self.assertRaisesRegex(ValueError, "contradicts"):
+            self.validator.validate_document(document)
+
+    def test_result_cannot_hide_nonconforming_effective_fact(self) -> None:
+        document = valid_document()
+        document["apt"]["release_signatures_verified"] = False
+        with self.assertRaisesRegex(ValueError, "effective facts"):
+            self.validator.validate_document(document)
+
+    def test_malformed_effective_fact_fails_closed(self) -> None:
+        document = valid_document()
+        document["platform"]["logical_cpu"] = "eight"
+        with self.assertRaisesRegex(ValueError, "malformed"):
             self.validator.validate_document(document)
 
     def test_unknown_nested_field_is_rejected(self) -> None:

@@ -156,7 +156,7 @@ def validate_opentofu(root: Path) -> None:
     main = read(root, "infra/ci-cloud/digitalocean/main.tf")
     versions = read(root, "infra/ci-cloud/digitalocean/versions.tf")
     variables = read(root, "infra/ci-cloud/digitalocean/variables.tf")
-    read(root, "infra/ci-cloud/digitalocean/cloud-init.tftpl")
+    cloud_init = read(root, "infra/ci-cloud/digitalocean/cloud-init.tftpl")
     read(root, "infra/ci-cloud/digitalocean/.terraform.lock.hcl")
     require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
     require('version = "= 2.99.1"' in versions, "DigitalOcean provider version must be exact")
@@ -171,6 +171,25 @@ def validate_opentofu(root: Path) -> None:
     require("local.sha_tag," in main, "target SHA metadata is missing")
     require("local.created_tag," in main, "creation metadata is missing")
     require("local.expires_tag," in main, "expiration metadata is missing")
+    require(
+        "tags = [digitalocean_tag.ownership[local.owner_tag].name]" in main
+        and "droplet_ids = [digitalocean_droplet.conformance.id]" not in main,
+        "firewall must target the unique ownership tag before Droplet creation",
+    )
+    require(
+        "depends_on        = [digitalocean_firewall.conformance]" in main,
+        "Droplet must wait for its tag-targeted firewall",
+    )
+    for required in (
+        "  - gh\n",
+        "  - unattended-upgrades\n",
+        "APT::Periodic::Unattended-Upgrade \"1\";",
+        "#clear Unattended-Upgrade::Origins-Pattern;",
+        "#clear Unattended-Upgrade::Package-Blacklist;",
+        "Unattended-Upgrade::Automatic-Reboot \"false\";",
+        "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000",
+    ):
+        require(required in cloud_init, "cloud-init omitted required D.1 host policy")
     forbidden = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
     require(not any(value in (main + variables) for value in forbidden), "OpenTofu accepted a forbidden control or private key")
     require('condition     = var.region == "fra1"' in variables, "region allowlist changed")
@@ -190,6 +209,12 @@ def validate(root: Path) -> None:
     validate_janitor_workflow(root)
     validate_opentofu(root)
     validate_janitor_script(root)
+    remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
+    require(
+        "root_ssh_denied=true" in remote
+        and 'grep -qi \'permission denied\'' in remote,
+        "remote orchestration must prove effective root SSH denial",
+    )
 
 
 def main(arguments: list[str]) -> int:

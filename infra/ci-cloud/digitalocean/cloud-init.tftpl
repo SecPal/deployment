@@ -13,6 +13,7 @@ packages:
   - curl
   - dbus-user-session
   - git
+  - gh
   - jq
   - netavark
   - passt
@@ -21,11 +22,13 @@ packages:
   - python3-jsonschema
   - python3-yaml
   - uidmap
+  - unattended-upgrades
 
 users:
   - name: secpal-ci
     gecos: SecPal disposable conformance operator
     groups: []
+    uid: 20000
     lock_passwd: true
     shell: /bin/bash
     ssh_authorized_keys:
@@ -44,10 +47,46 @@ write_files:
       PermitRootLogin no
       PubkeyAuthentication yes
       AllowUsers secpal-ci
+  - path: /etc/apt/apt.conf.d/20secpal-ci-periodic
+    owner: root:root
+    permissions: "0644"
+    content: |
+      APT::Periodic::Enable "1";
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  - path: /etc/apt/apt.conf.d/99secpal-ci-unattended-upgrades
+    owner: root:root
+    permissions: "0644"
+    content: |
+      #clear Unattended-Upgrade::Origins-Pattern;
+      Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=$${distro_codename}-security,label=Debian-Security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "false";
+      #clear Unattended-Upgrade::Package-Blacklist;
+      Unattended-Upgrade::Package-Blacklist {
+        "podman";
+        "conmon";
+        "crun";
+        "netavark";
+        "aardvark-dns";
+        "passt";
+        "uidmap";
+        "dbus-user-session";
+      };
+  - path: /etc/environment.d/90-secpal-ci-quadlet.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000
 
 runcmd:
+  - [install, -d, -o, root, -g, root, -m, "0755", /etc/containers/systemd/users/20000]
+  - [install, -d, -o, secpal-ci, -g, secpal-ci, -m, "0700", /srv/secpal-ci]
   - [bash, -c, "grep -q '^secpal-ci:' /etc/subuid || usermod --add-subuids 200000-265535 secpal-ci"]
   - [bash, -c, "grep -q '^secpal-ci:' /etc/subgid || usermod --add-subgids 200000-265535 secpal-ci"]
+  - [bash, -c, "systemctl --global disable podman.socket podman.service podman-auto-update.timer || true"]
   - [loginctl, enable-linger, secpal-ci]
   - [systemctl, enable, --now, apparmor.service]
+  - [sshd, -t]
   - [systemctl, restart, ssh.service]

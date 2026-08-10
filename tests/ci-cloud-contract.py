@@ -125,6 +125,41 @@ class CloudCIContractTests(unittest.TestCase):
             "image             = var.image",
         )
 
+    def test_rejects_firewall_created_after_the_droplet(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/main.tf",
+            "  tags = [digitalocean_tag.ownership[local.owner_tag].name]\n",
+            "  droplet_ids = [digitalocean_droplet.conformance.id]\n",
+        )
+
+    def test_rejects_droplet_without_precreated_firewall_dependency(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/main.tf",
+            "  depends_on        = [digitalocean_firewall.conformance]\n",
+            "",
+        )
+
+    def test_rejects_missing_effective_root_ssh_denial_probe(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "root_ssh_denied=true\n",
+            "root_ssh_denied=false\n",
+        )
+
+    def test_rejects_incomplete_cloud_host_admission_policy(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "  - unattended-upgrades\n",
+            "",
+        )
+
+    def test_rejects_appended_unattended_upgrade_origins(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "      #clear Unattended-Upgrade::Origins-Pattern;\n",
+            "",
+        )
+
     def test_rejects_cloud_credential_in_remote_test_step(self) -> None:
         self.assert_mutation_rejected(
             ".github/workflows/cloud-conformance.yml",

@@ -81,6 +81,11 @@ The DigitalOcean token appears only in the trusted `tofu apply`, exact
 OpenTofu variables, state, outputs, artifacts, VM user data, or evidence.
 `actions/checkout` disables credential persistence.
 
+The unique per-run ownership tag is attached to a Cloud Firewall before the
+Droplet can be created. The Droplet depends on that tag-targeted firewall, so
+the runner `/32` restriction does not wait for a post-creation Droplet-ID
+attachment.
+
 ## DigitalOcean environment configuration
 
 Create a protected GitHub Environment named `ci-cloud-digitalocean`. Restrict
@@ -121,13 +126,33 @@ host contract and negative validators. A later D.1a-compatible commit can
 extend that same narrow entrypoint with the reviewed real rootless
 Podman/Quadlet lifecycle.
 
+Cloud-init establishes the root-owned, empty Quadlet definition directory and
+restricts the effective generator search path to it. The target account cannot
+populate that directory. Before PR #22 can run its real units, a follow-up must
+add one trusted, root-owned, main-controlled fixture installer to cloud-init.
+That installer must be a one-shot service triggered only by a fixed staging
+path; accept an explicit allowlist of regular Quadlet filenames from the
+already SHA-verified checkout; reject symlinks, path traversal, unknown files,
+and oversized content; copy only those files as root-owned mode `0644` into the
+fixed definition directory; never source or execute target content; and disable
+its trigger before the unprivileged lifecycle begins. The collector must then
+prove the complete tree ownership, restricted search path, generated units,
+and effective workload behavior. Merely extending the unprivileged target
+script cannot create the required root-owned trust boundary.
+
 ## Ephemeral SSH and initial host identity
 
 Every run creates a new Ed25519 keypair on the GitHub runner. Only the public
 key enters OpenTofu and DigitalOcean. The private key is mode `0600`, is never
 an output, state value, artifact, or repository file, and is removed before
-the provisioning/test job ends. Password and root SSH are disabled. Only the
-runner's validated public IPv4 `/32` can reach TCP 22.
+the provisioning/test job ends. DigitalOcean initially embeds that public key
+in the image's root account as part of Droplet creation; cloud-init sets
+`PermitRootLogin no`, creates the dedicated `secpal-ci` account, and restarts a
+validated SSH configuration. Before target code runs, the trusted runner uses
+the same key and strict known-host entry to require an explicit root
+`Permission denied` result and records that effective denial in evidence.
+Password SSH is disabled. Only the runner's validated public IPv4 `/32` can
+reach TCP 22, through the pre-created tag-targeted firewall.
 
 DigitalOcean does not provide the new guest's SSH host key over a separate
 authenticated provisioning API. The runner therefore performs a bounded
@@ -180,11 +205,19 @@ contradictory evidence fails. Evidence includes:
 - workflow/run identity, exact target SHA, provider, region, profile, time,
   exit status, result, and named failed invariants;
 - `/etc/os-release`, `uname`, architecture, kernel, CPU vendor/model,
-  virtualization, CPU/memory/disk facts, APT source hosts/suites, archive
-  keyring version, and installed runtime package versions;
+  virtualization, CPU/memory/disk facts, root filesystem and OverlayFS facts,
+  required tools, clock synchronization, and effective root-SSH denial;
+- root-owned authenticated APT `InRelease` origins/suites, archive-keyring
+  presence, installed kernel package ownership/architecture/origin/suite,
+  every runtime package's installed architecture/origin/suite, forbidden
+  package absence, and effective security-only unattended-update/reboot and
+  runtime-package exclusion policy;
 - Podman, crun features, Netavark, Aardvark, pasta/passt, uidmap, cgroup,
   systemd, effective OCI runtime, effective network backend, and rootless
-  network command; and
+  network command, including an effective subordinate-ID mapping probe;
+- linger/user-manager/DBus state, the root-owned restricted Quadlet search
+  path, Podman storage driver, disabled API/socket and auto-update state, and
+  effective SecPal/GHCR mirror, rewrite, and insecure-transport facts; and
 - host AppArmor state, rootless Podman `apparmorEnabled`, and Podman
   `seccompEnabled` as three independent facts.
 
@@ -195,9 +228,12 @@ It does not claim a per-container profile unless later workload evidence
 actually observes one. Seccomp is a separate hard runtime fact.
 
 Evidence proves reproducibility of the reviewed Debian 13, rootless Podman,
-and later Quadlet contract on the exact representative VM that ran. It does
-not prove production readiness, customer workload capacity, backup/restore,
-public networking, every provider image, or universal hardware compatibility.
+and Quadlet host-capability contract on the exact representative VM that ran.
+The empty root-owned definition tree does not prove PR #22 units, workload
+AppArmor confinement, production service-account paths, or product lifecycle
+behavior. Evidence also does not prove production readiness, customer workload
+capacity, backup/restore, public networking, every provider image, or universal
+hardware compatibility.
 Three successful representative hosts demonstrate independent reproducibility;
 they do not prove that all hardware is compatible.
 

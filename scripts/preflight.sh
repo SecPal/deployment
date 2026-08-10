@@ -54,6 +54,7 @@ shellcheck "${shell_files[@]}"
 php -l scripts/phase-b-runtime-probe.php
 python3 tests/oci-attestation-bundle-contract.py
 python3 tests/ci-cloud-contract.py
+python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py
 python3 tests/ci-cloud-janitor.py
 python3 tests/production-contract-regressions.py

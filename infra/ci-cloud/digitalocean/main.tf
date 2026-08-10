@@ -46,14 +46,15 @@ resource "digitalocean_droplet" "conformance" {
   graceful_shutdown = false
   ssh_keys          = [digitalocean_ssh_key.ephemeral.fingerprint]
   tags              = [for tag in digitalocean_tag.ownership : tag.name]
+  depends_on        = [digitalocean_firewall.conformance]
   user_data = templatefile("${path.module}/cloud-init.tftpl", {
     ssh_public_key = trimspace(var.ssh_public_key)
   })
 }
 
 resource "digitalocean_firewall" "conformance" {
-  name        = local.resource_name
-  droplet_ids = [digitalocean_droplet.conformance.id]
+  name = local.resource_name
+  tags = [digitalocean_tag.ownership[local.owner_tag].name]
 
   inbound_rule {
     protocol         = "tcp"
