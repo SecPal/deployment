@@ -96,6 +96,22 @@ REQUIRED_TOOLS = {
     "timedatectl",
     "uname",
 }
+SYSTEMD_ENABLED_UNIT_FILE_STATES = frozenset({"enabled", "enabled-runtime"})
+SYSTEMD_NOT_ENABLED_UNIT_FILE_STATES = frozenset(
+    {
+        "alias",
+        "disabled",
+        "generated",
+        "indirect",
+        "linked",
+        "linked-runtime",
+        "masked",
+        "masked-runtime",
+        "not-found",
+        "static",
+        "transient",
+    }
+)
 
 
 def command_environment() -> dict[str, str]:
@@ -123,6 +139,23 @@ def command_result(arguments: list[str], timeout: int = 15) -> tuple[int, str]:
     except (OSError, subprocess.TimeoutExpired):
         return 255, ""
     return completed.returncode, completed.stdout[:MAX_COMMAND_OUTPUT].strip()
+
+
+def systemd_unit_enabled(arguments: list[str], *, fail_closed: bool) -> bool:
+    """Interpret the unit-file state printed by ``systemctl is-enabled``.
+
+    Several non-enabled states intentionally return status zero, including
+    ``static``. Unknown output or an inconsistent enabled result is unsafe for
+    negative assertions and unproven for positive assertions, so callers choose
+    the conservative value appropriate to their admission invariant.
+    """
+    status, state = command_result(arguments)
+    state = state.strip()
+    if state in SYSTEMD_ENABLED_UNIT_FILE_STATES:
+        return status == 0 or fail_closed
+    if state in SYSTEMD_NOT_ENABLED_UNIT_FILE_STATES:
+        return False
+    return fail_closed
 
 
 def output(arguments: list[str], timeout: int = 15) -> str:
@@ -477,7 +510,10 @@ def security_update_facts() -> dict[str, object]:
             re.search(r'^APT::Periodic::Enable\s+"1";', config, re.MULTILINE)
             and re.search(r'^APT::Periodic::Unattended-Upgrade\s+"1";', config, re.MULTILINE)
         ),
-        "timer_enabled": command_result(["systemctl", "is-enabled", "apt-daily-upgrade.timer"])[0] == 0,
+        "timer_enabled": systemd_unit_enabled(
+            ["systemctl", "is-enabled", "apt-daily-upgrade.timer"],
+            fail_closed=False,
+        ),
         "security_suite": "trixie-security" if security_only else "",
         "normal_updates_automatic": not security_only,
         "major_release_upgrades_automatic": not security_only,
@@ -658,27 +694,27 @@ def podman_api_facts() -> dict[str, bool]:
     system_service_active = command_result(
         ["systemctl", "is-active", "podman.service"]
     )[0] == 0
-    system_service_enabled = command_result(
-        ["systemctl", "is-enabled", "podman.service"]
-    )[0] == 0
+    system_service_enabled = systemd_unit_enabled(
+        ["systemctl", "is-enabled", "podman.service"], fail_closed=True
+    )
     system_socket_active = command_result(
         ["systemctl", "is-active", "podman.socket"]
     )[0] == 0
-    system_socket_enabled = command_result(
-        ["systemctl", "is-enabled", "podman.socket"]
-    )[0] == 0
+    system_socket_enabled = systemd_unit_enabled(
+        ["systemctl", "is-enabled", "podman.socket"], fail_closed=True
+    )
     user_service_active = command_result(
         ["systemctl", "--user", "is-active", "podman.service"]
     )[0] == 0
-    user_service_enabled = command_result(
-        ["systemctl", "--user", "is-enabled", "podman.service"]
-    )[0] == 0
+    user_service_enabled = systemd_unit_enabled(
+        ["systemctl", "--user", "is-enabled", "podman.service"], fail_closed=True
+    )
     user_socket_active = command_result(
         ["systemctl", "--user", "is-active", "podman.socket"]
     )[0] == 0
-    user_socket_enabled = command_result(
-        ["systemctl", "--user", "is-enabled", "podman.socket"]
-    )[0] == 0
+    user_socket_enabled = systemd_unit_enabled(
+        ["systemctl", "--user", "is-enabled", "podman.socket"], fail_closed=True
+    )
     tcp_listeners = output(["ss", "-ltnp"])
     unix_listeners = output(["ss", "-lxnp"])
     known_api_sockets = (
@@ -709,9 +745,10 @@ def podman_api_facts() -> dict[str, bool]:
 
 def podman_update_facts() -> dict[str, bool]:
     return {
-        "auto_update_timer_enabled": command_result(
-            ["systemctl", "--user", "is-enabled", "podman-auto-update.timer"]
-        )[0] == 0,
+        "auto_update_timer_enabled": systemd_unit_enabled(
+            ["systemctl", "--user", "is-enabled", "podman-auto-update.timer"],
+            fail_closed=True,
+        ),
         "auto_update_timer_active": command_result(
             ["systemctl", "--user", "is-active", "podman-auto-update.timer"]
         )[0] == 0,

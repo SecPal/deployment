@@ -499,6 +499,78 @@ location = "backup.example.invalid"
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["system_service_enabled"])
 
+    def test_static_system_scope_podman_service_is_not_enabled(self) -> None:
+        def command_result(arguments: list[str], timeout: int = 15) -> tuple[int, str]:
+            del timeout
+            if arguments == ["systemctl", "is-enabled", "podman.service"]:
+                return 0, "static"
+            if "is-enabled" in arguments:
+                return 1, "disabled"
+            return 1, "inactive"
+
+        with (
+            mock.patch.object(self.collector, "command_result", side_effect=command_result),
+            mock.patch.object(self.collector, "output", return_value=""),
+            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertFalse(facts["system_service_enabled"])
+
+    def test_unknown_podman_service_enablement_fails_closed(self) -> None:
+        def command_result(arguments: list[str], timeout: int = 15) -> tuple[int, str]:
+            del timeout
+            if arguments == ["systemctl", "is-enabled", "podman.service"]:
+                return 1, "unexpected state"
+            if "is-enabled" in arguments:
+                return 1, "disabled"
+            return 1, "inactive"
+
+        with (
+            mock.patch.object(self.collector, "command_result", side_effect=command_result),
+            mock.patch.object(self.collector, "output", return_value=""),
+            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertTrue(facts["system_service_enabled"])
+
+    def test_static_podman_auto_update_timer_is_not_enabled(self) -> None:
+        def command_result(arguments: list[str], timeout: int = 15) -> tuple[int, str]:
+            del timeout
+            if arguments == [
+                "systemctl", "--user", "is-enabled", "podman-auto-update.timer"
+            ]:
+                return 0, "static"
+            return 1, "inactive"
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ):
+            facts = self.collector.podman_update_facts()
+        self.assertFalse(facts["auto_update_timer_enabled"])
+
+    def test_unknown_podman_auto_update_enablement_fails_closed(self) -> None:
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            return_value=(1, "unexpected state"),
+        ):
+            facts = self.collector.podman_update_facts()
+        self.assertTrue(facts["auto_update_timer_enabled"])
+
+    def test_static_security_upgrade_timer_is_not_enabled(self) -> None:
+        config = '''APT::Periodic::Enable "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Origins-Pattern:: "origin=Debian,codename=trixie-security";
+Unattended-Upgrade::Automatic-Reboot "false";
+'''
+        with (
+            mock.patch.object(self.collector, "checked_output", return_value=config),
+            mock.patch.object(self.collector, "package_version", return_value="1.0-1"),
+            mock.patch.object(self.collector, "command_result", return_value=(0, "static")),
+        ):
+            facts = self.collector.security_update_facts()
+        self.assertFalse(facts["timer_enabled"])
+
     def test_detects_manually_launched_unix_podman_api(self) -> None:
         def output(arguments: list[str], timeout: int = 15) -> str:
             del timeout
