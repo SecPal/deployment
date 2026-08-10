@@ -41,6 +41,7 @@ class CloudCIContractTests(unittest.TestCase):
             ".github/workflows/cloud-janitor.yml",
             "infra/ci-cloud/digitalocean",
             "infra/ci-cloud/gcp",
+            "schemas",
             "scripts/ci-cloud",
         ):
             source = ROOT / path
@@ -76,6 +77,7 @@ class CloudCIContractTests(unittest.TestCase):
             "Markdown, YAML, and Prettier discovery must prune OpenTofu caches",
         )
         self.assertIn("python3 tests/ci-cloud-gcp-janitor.py", preflight)
+        self.assertIn("python3 tests/ci-cloud-bootstrap-failure.py", preflight)
 
     def test_repository_contract_requires_every_cloud_provider_root_and_janitor(self) -> None:
         repository_contract = (ROOT / "tests" / "repository-contract.sh").read_text(
@@ -89,6 +91,7 @@ class CloudCIContractTests(unittest.TestCase):
             "infra/ci-cloud/gcp/outputs.tf",
             "infra/ci-cloud/gcp/variables.tf",
             "infra/ci-cloud/gcp/versions.tf",
+            "schemas/ci-cloud-bootstrap-failure.schema.json",
             "scripts/ci-cloud/gcp-janitor.py",
             "tests/ci-cloud-gcp-janitor.py",
         ):
@@ -171,6 +174,39 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertNotIn("/tmp/secpal-target-conformance.log", remote)
         self.assertIn(") >/dev/null 2>&1", remote)
 
+    def test_early_remote_failure_writes_bounded_structured_evidence(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('bootstrap_stage="host-key"', remote)
+        self.assertIn("orchestration_started_at", remote)
+        self.assertIn("write-bootstrap-failure.py", remote)
+        self.assertIn("cloud-init status --long", remote)
+        self.assertIn("head -c 8192", remote)
+        self.assertNotIn("cloud-init-output.log", remote)
+
+    def test_remote_bash_programs_use_strict_mode(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        fixture = (
+            ROOT / "tests/ci-cloud-remote-bootstrap.sh"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(2, remote.count("<<'REMOTE'\nset -euo pipefail\n"))
+        self.assertIn(
+            "cat >\"$FAKE_BIN/sleep\" <<'EOF'\n"
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n",
+            fixture,
+        )
+
+    def test_missing_provider_evidence_is_a_hard_upload_failure(self) -> None:
+        workflow = (
+            ROOT / ".github/workflows/cloud-conformance.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(2, workflow.count("if-no-files-found: error"))
+        self.assertEqual(2, workflow.count("if-no-files-found: warn"))
+
     def test_static_contract_rejects_nonisolated_collector_python(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/run-remote-conformance.sh",
@@ -183,6 +219,27 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/run-remote-conformance.sh",
             ") >/dev/null 2>&1",
             ") >/tmp/secpal-target-conformance.log 2>&1",
+        )
+
+    def test_static_contract_rejects_warning_only_evidence_upload(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            "if-no-files-found: error",
+            "if-no-files-found: warn",
+        )
+
+    def test_static_contract_rejects_missing_bootstrap_failure_writer(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "scripts/ci-cloud/write-bootstrap-failure.py",
+            "scripts/ci-cloud/missing-bootstrap-failure-writer.py",
+        )
+
+    def test_static_contract_rejects_unvalidated_bootstrap_failure_evidence(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/write-bootstrap-failure.py",
+            "        validate_declared_schema(document)\n",
+            "",
         )
 
     def test_static_contract_rejects_curl_user_configuration(self) -> None:

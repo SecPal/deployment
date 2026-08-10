@@ -186,7 +186,7 @@ jobs:
         with:
           name: cloud-evidence-digitalocean-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-cloud/evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Remove ephemeral DigitalOcean SSH private key
@@ -405,7 +405,7 @@ jobs:
         with:
           name: cloud-evidence-gcp-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-cloud/evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Remove ephemeral GCP SSH private key

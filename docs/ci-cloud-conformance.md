@@ -338,6 +338,20 @@ covered now; the remaining limitation is explicit.
 Each reachable host produces JSON validated against the committed closed schema
 plus a concise Markdown summary. Incomplete, schema-invalid, oversized,
 unknown, credential-shaped, or internally contradictory evidence fails.
+If orchestration fails before the full collector can complete, the trusted
+runner instead failure-atomically publishes a separate
+`bootstrap-failure.json` and concise summary. The JSON is validated against the
+committed closed bootstrap-failure schema, and both files are completely staged
+before either final path is published. They contain only the validated
+run/provider identity, orchestration start/end times, fixed failure stage, exit
+status, and `CI_CLOUD_REMOTE_ORCHESTRATION` invariant. A failed write leaves
+neither new artifact behind. The fallback never
+copies target output, environments, cloud credentials, or raw cloud-init logs
+into that artifact. The workflow prints at most 8 KiB of `cloud-init status
+--long` output for diagnosis, and a missing provider evidence directory is a
+hard upload failure rather than a warning. Target code cannot run until
+cloud-init has completed successfully.
+
 Evidence includes:
 
 - workflow/run identity, exact target SHA, provider, location, profile, fixed

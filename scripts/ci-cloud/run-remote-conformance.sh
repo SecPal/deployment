@@ -50,10 +50,37 @@ if address.version != 4 or not address.is_global:
 PY
 
 install -d -m 0700 "$evidence_dir"
+orchestration_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 known_hosts="$(dirname "$evidence_dir")/known_hosts"
+evidence_json="$evidence_dir/evidence.json"
+evidence_summary="$evidence_dir/summary.md"
+bootstrap_stage="host-key"
+first_scan=""
+second_scan=""
+
+record_remote_failure() {
+  local status=$?
+  trap - EXIT
+  set +e
+  [[ -z "$first_scan" ]] || rm -f -- "$first_scan"
+  [[ -z "$second_scan" ]] || rm -f -- "$second_scan"
+  if [[ "$status" -ne 0 &&
+    (! -s "$evidence_json" || ! -s "$evidence_summary") ]]; then
+    rm -f -- "$evidence_json" "$evidence_summary"
+    if ! python3 scripts/ci-cloud/write-bootstrap-failure.py \
+      "$evidence_dir" "$provider" "$region" "$profile" "$target_sha" \
+      "$run_id" "$run_attempt" "$provider_image_slug" \
+      "$provider_image_id" "$machine_type" "$orchestration_started_at" \
+      "$bootstrap_stage" "$status"; then
+      printf 'ERROR: unable to preserve bounded remote failure evidence.\n' >&2
+    fi
+  fi
+  exit "$status"
+}
+
+trap record_remote_failure EXIT
 first_scan="$(mktemp "$evidence_dir/.host-key-first.XXXXXX")"
 second_scan="$(mktemp "$evidence_dir/.host-key-second.XXXXXX")"
-trap 'rm -f -- "$first_scan" "$second_scan"' EXIT
 
 host_key_ready=false
 for _ in {1..30}; do
@@ -72,7 +99,7 @@ if [[ "$host_key_ready" != true ]]; then
   exit 1
 fi
 install -m 0600 "$first_scan" "$known_hosts"
-ssh-keygen -H -f "$known_hosts" >/dev/null
+ssh-keygen -H -f "$known_hosts" >/dev/null 2>&1
 rm -f -- "$known_hosts.old"
 ssh-keygen -lf "$known_hosts"
 
@@ -89,12 +116,37 @@ ssh_options=(
   -o ServerAliveCountMax=3
 )
 
-# Expansion intentionally occurs on the disposable remote host.
-# shellcheck disable=SC2016
-timeout --signal=TERM --kill-after=15s 12m \
-  ssh "${ssh_options[@]}" "secpal-ci@$address" \
-  'cloud-init status --wait >/dev/null && test "$(id -u)" -ne 0'
+bootstrap_stage="cloud-init"
+set +e
+cloud_init_diagnostic="$(
+  timeout --signal=TERM --kill-after=15s 12m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" /bin/bash -s <<'REMOTE'
+set -euo pipefail
+set +e
+cloud-init status --wait >/dev/null
+status=$?
+set -e
+if [[ "$status" -ne 0 ]]; then
+  printf 'cloud-init bootstrap failed:\n'
+  cloud-init status --long 2>&1 | head -c 8192 || true
+elif [[ "$(id -u)" -eq 0 ]]; then
+  printf 'remote operator unexpectedly has UID 0\n'
+  status=1
+fi
+exit "$status"
+REMOTE
+)"
+cloud_init_status=$?
+set -e
+if [[ "$cloud_init_status" -ne 0 ]]; then
+  printf 'ERROR: remote cloud-init bootstrap did not complete successfully.\n' >&2
+  if [[ -n "$cloud_init_diagnostic" ]]; then
+    printf '%s\n' "$cloud_init_diagnostic" >&2
+  fi
+  exit "$cloud_init_status"
+fi
 
+bootstrap_stage="root-ssh"
 root_probe="$(mktemp "$evidence_dir/.root-ssh-probe.XXXXXX")"
 set +e
 timeout --signal=TERM --kill-after=5s 20s \
@@ -108,6 +160,7 @@ fi
 rm -f -- "$root_probe"
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+bootstrap_stage="target"
 set +e
 timeout --signal=TERM --kill-after=30s 42m \
   ssh "${ssh_options[@]}" "secpal-ci@$address" /bin/bash -s -- "$target_sha" <<'REMOTE'
@@ -152,7 +205,7 @@ target_status=$?
 set -e
 ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-evidence_json="$evidence_dir/evidence.json"
+bootstrap_stage="collector"
 ssh "${ssh_options[@]}" "secpal-ci@$address" \
   /usr/bin/env -i \
   HOME=/home/secpal-ci \
@@ -165,5 +218,6 @@ ssh "${ssh_options[@]}" "secpal-ci@$address" \
   "$machine_type" \
   < scripts/ci-cloud/collect-host-evidence.py > "$evidence_json"
 
+bootstrap_stage="validation"
 python3 scripts/ci-cloud/validate-evidence.py \
-  "$evidence_json" "$evidence_dir/summary.md" --require-passed
+  "$evidence_json" "$evidence_summary" --require-passed
