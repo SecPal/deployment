@@ -101,6 +101,18 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertIn("add_terraform_attribution_label = false", versions)
 
+    def test_gcp_custom_role_can_attach_network_bound_resources(self) -> None:
+        role = yaml.safe_load(
+            (ROOT / "infra/ci-cloud/gcp/iam-role.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn(
+            "compute.networks.updatePolicy",
+            role["includedPermissions"],
+            "subnetwork and firewall network fields require updatePolicy",
+        )
+
     def test_workflow_bash_uses_explicit_strict_mode(self) -> None:
         strict_shell = "shell: bash --noprofile --norc -euo pipefail {0}"
         for relative in (

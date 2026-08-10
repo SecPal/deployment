@@ -184,6 +184,15 @@ gcloud projects add-iam-policy-binding secpal-dev \
   --role=projects/secpal-dev/roles/secpalCloudConformanceOperator
 ```
 
+If the custom role already exists, update it from the reviewed file instead of
+running `roles create` again:
+
+```bash
+gcloud iam roles update secpalCloudConformanceOperator \
+  --project=secpal-dev \
+  --file=infra/ci-cloud/gcp/iam-role.yaml
+```
+
 The billing check must report `billingEnabled: true`. Enabling billing applies
 to the whole project, not only to these CI fixtures; `secpal-dev` must remain a
 non-production project with no customer data. Never grant the CI service
@@ -194,8 +203,15 @@ The role contains only the concrete instance, disk, VPC, firewall, operation
 polling, image-read, label, and service-use permissions required by the root
 and the bounded janitor. It deliberately excludes Owner, Editor, Compute
 Admin, IAM administration, `iam.serviceAccounts.actAs`, and service-account
-attachment. Review the first real provider API trace and remove any permission
-that proves unused; do not add broad predefined roles to bypass a denial.
+attachment. The `network` fields used to attach the fixed subnetwork and
+firewall rules to the per-run VPC require `compute.networks.updatePolicy` in
+addition to their resource-specific create permissions; see the official
+[`subnetworks.insert`](https://cloud.google.com/compute/docs/reference/rest/v1/subnetworks/insert)
+and
+[`firewalls.insert`](https://cloud.google.com/compute/docs/reference/rest/v1/firewalls/insert)
+field-level authorization contracts. Review the first real provider API trace
+and remove any permission that proves unused; do not add broad predefined roles
+to bypass a denial.
 
 ## Closed selection and remote execution
 

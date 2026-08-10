@@ -30,6 +30,8 @@ includedPermissions:
   - compute.networks.create
   - compute.networks.delete
   - compute.networks.get
+  # Required by the network field on subnetwork and firewall insert requests.
+  - compute.networks.updatePolicy
   - compute.projects.get
   - compute.regionOperations.get
   - compute.subnetworks.create

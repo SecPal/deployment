@@ -47,6 +47,8 @@ GCP_IAM_PERMISSIONS = {
     "compute.networks.create",
     "compute.networks.delete",
     "compute.networks.get",
+    # Required by the network field on subnetworks.insert and firewalls.insert.
+    "compute.networks.updatePolicy",
     "compute.projects.get",
     "compute.regionOperations.get",
     "compute.subnetworks.create",
