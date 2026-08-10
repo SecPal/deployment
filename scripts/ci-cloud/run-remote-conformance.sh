@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-if [[ "$#" -ne 10 ]]; then
-  printf 'ERROR: expected provider region profile address SHA run ID attempt key evidence directory and image ID.\n' >&2
+if [[ "$#" -ne 12 ]]; then
+  printf 'ERROR: expected provider location profile address SHA run ID attempt key evidence directory image slug image ID and machine type.\n' >&2
   exit 1
 fi
 
@@ -18,15 +18,26 @@ run_id="$6"
 run_attempt="$7"
 private_key="$8"
 evidence_dir="$9"
-provider_image_id="${10}"
+provider_image_slug="${10}"
+provider_image_id="${11}"
+machine_type="${12}"
 
-[[ "$provider" == digitalocean ]]
-[[ "$region" == fra1 ]]
-[[ "$profile" == intel || "$profile" == amd ]]
 [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
 [[ "$run_id" =~ ^[1-9][0-9]{0,19}$ ]]
 [[ "$run_attempt" =~ ^[1-9][0-9]{0,2}$ ]]
-[[ "$provider_image_id" =~ ^[1-9][0-9]{0,19}$ ]]
+case "$provider/$region/$profile/$provider_image_slug/$machine_type" in
+  digitalocean/fra1/intel/debian-13-x64/s-8vcpu-16gb-intel | \
+    digitalocean/fra1/amd/debian-13-x64/s-8vcpu-16gb-amd)
+    [[ "$provider_image_id" =~ ^[1-9][0-9]{0,19}$ ]]
+    ;;
+  gcp/europe-west3-a/axion/debian-cloud/debian-13-arm64/c4a-standard-4)
+    [[ "$provider_image_id" =~ ^https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-arm64-v[0-9]{8}$ ]]
+    ;;
+  *)
+    printf 'ERROR: remote provider selection is outside the closed allowlist.\n' >&2
+    exit 1
+    ;;
+esac
 [[ -f "$private_key" && ! -L "$private_key" ]]
 [[ "$(stat -c '%a' "$private_key")" == 600 ]]
 python3 - "$address" <<'PY'
@@ -145,7 +156,8 @@ evidence_json="$evidence_dir/evidence.json"
 ssh "${ssh_options[@]}" "secpal-ci@$address" \
   python3 - "$provider" "$region" "$profile" "$target_sha" \
   "$run_id" "$run_attempt" "$started_at" "$ended_at" "$target_status" \
-  "$root_ssh_denied" "$provider_image_id" \
+  "$root_ssh_denied" "$provider_image_slug" "$provider_image_id" \
+  "$machine_type" \
   < scripts/ci-cloud/collect-host-evidence.py > "$evidence_json"
 
 python3 scripts/ci-cloud/validate-evidence.py \

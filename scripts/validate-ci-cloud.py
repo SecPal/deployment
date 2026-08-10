@@ -16,8 +16,48 @@ import yaml
 
 PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 REQUIRED_INPUTS = {"target_sha", "provider_profile"}
-PROFILES = {"digitalocean-intel", "digitalocean-amd"}
-CREDENTIAL_KEYS = {"DIGITALOCEAN_TOKEN", "DIGITALOCEAN_ACCESS_TOKEN"}
+PROFILES = {"digitalocean-intel", "digitalocean-amd", "gcp-axion"}
+CREDENTIAL_KEYS = {
+    "DIGITALOCEAN_TOKEN",
+    "DIGITALOCEAN_ACCESS_TOKEN",
+    "GOOGLE_OAUTH_ACCESS_TOKEN",
+}
+GCP_IAM_PERMISSIONS = {
+    "compute.disks.create",
+    "compute.disks.delete",
+    "compute.disks.get",
+    "compute.disks.list",
+    "compute.disks.setLabels",
+    "compute.disks.use",
+    "compute.firewalls.create",
+    "compute.firewalls.delete",
+    "compute.firewalls.get",
+    "compute.firewalls.update",
+    "compute.globalOperations.get",
+    "compute.images.get",
+    "compute.images.useReadOnly",
+    "compute.instances.create",
+    "compute.instances.delete",
+    "compute.instances.get",
+    "compute.instances.list",
+    "compute.instances.setLabels",
+    "compute.instances.setMetadata",
+    "compute.instances.setTags",
+    "compute.machineTypes.get",
+    "compute.networks.create",
+    "compute.networks.delete",
+    "compute.networks.get",
+    "compute.projects.get",
+    "compute.regionOperations.get",
+    "compute.subnetworks.create",
+    "compute.subnetworks.delete",
+    "compute.subnetworks.get",
+    "compute.subnetworks.use",
+    "compute.subnetworks.useExternalIp",
+    "compute.zoneOperations.get",
+    "compute.zones.get",
+    "serviceusage.services.use",
+}
 
 
 class ContractError(RuntimeError):
@@ -113,19 +153,47 @@ def validate_conformance_workflow(root: Path) -> None:
     )
     require("github.ref == 'refs/heads/main'" in text, "default-branch execution must fail closed")
     require("cancel-in-progress: false" in text, "cloud cleanup must not be cancelled by concurrency")
-    require(text.count("ref: ${{ github.sha }}") == 2, "trusted checkout must stay on the workflow commit")
-    require(text.count("persist-credentials: false") == 2, "checkout credentials must not persist")
+    require(text.count("ref: ${{ github.sha }}") == 4, "trusted checkout must stay on the workflow commit")
+    require(text.count("persist-credentials: false") == 4, "checkout credentials must not persist")
 
     jobs = document.get("jobs")
     assert isinstance(jobs, dict)
-    require(set(jobs) == {"provision_test", "cleanup"}, "unexpected cloud conformance job")
-    cleanup = jobs["cleanup"]
-    require(isinstance(cleanup, dict), "cleanup job must be a mapping")
-    require(jobs["provision_test"].get("environment") == "ci-cloud-digitalocean", "provisioning environment changed")
-    require(cleanup.get("environment") == "ci-cloud-digitalocean-cleanup", "cleanup environment changed")
-    require("always()" in str(cleanup.get("if", "")), "cleanup job must run with always()")
-    require("tofu destroy --auto-approve --input=false" in text, "cleanup must use exact tofu destroy")
+    require(
+        set(jobs)
+        == {"validate", "digitalocean", "digitalocean_cleanup", "gcp", "gcp_cleanup"},
+        "unexpected cloud conformance job",
+    )
+    require(jobs["digitalocean"].get("environment") == "ci-cloud-digitalocean", "DigitalOcean provisioning environment changed")
+    require(jobs["digitalocean_cleanup"].get("environment") == "ci-cloud-digitalocean-cleanup", "DigitalOcean cleanup environment changed")
+    require(jobs["gcp"].get("environment") == "ci-cloud-gcp", "GCP provisioning environment changed")
+    require(jobs["gcp_cleanup"].get("environment") == "ci-cloud-gcp-cleanup", "GCP cleanup environment changed")
+    for cleanup_name in ("digitalocean_cleanup", "gcp_cleanup"):
+        cleanup = jobs[cleanup_name]
+        require(isinstance(cleanup, dict), f"{cleanup_name} job must be a mapping")
+        require("always()" in str(cleanup.get("if", "")), f"{cleanup_name} must run with always()")
+    require(text.count("tofu destroy --auto-approve --input=false") == 2, "each provider cleanup must use exact tofu destroy")
     require("--tag-name" not in text and "delete --force" not in text, "broad cleanup is forbidden")
+    require("credentials_json" not in text and "service_account_key" not in text, "long-lived GCP keys are forbidden")
+    require(text.count("id-token: write") == 2, "OIDC permission must be limited to GCP apply and cleanup jobs")
+    require(text.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 2, "GCP auth action pin or scope changed")
+    require(text.count("create_credentials_file: false") == 2, "GCP auth must not create ADC files")
+    require(text.count("export_environment_variables: false") == 2, "GCP auth must not export job credentials")
+    require(
+        text.count("projects/94792370946/locations/global/workloadIdentityPools/secpal/providers/github")
+        == 2
+        and text.count("gcp-service-account@secpal-dev.iam.gserviceaccount.com") == 2,
+        "GCP apply and cleanup identities must be validated before authentication",
+    )
+    for job_name in ("validate", "digitalocean", "digitalocean_cleanup"):
+        raw_permissions = jobs[job_name].get("permissions", {})
+        require("id-token" not in raw_permissions, f"{job_name} must not receive OIDC permission")
+    for job_name in ("gcp", "gcp_cleanup"):
+        permissions = jobs[job_name].get("permissions")
+        require(
+            isinstance(permissions, dict)
+            and permissions == {"contents": "read", "id-token": "write"},
+            f"{job_name} OIDC permissions changed",
+        )
 
     secret_steps: set[str] = set()
     for job_name, raw_job in jobs.items():
@@ -145,15 +213,30 @@ def validate_conformance_workflow(root: Path) -> None:
             if credentialed:
                 secret_steps.add(name)
                 require(
-                    name in {"Apply DigitalOcean infrastructure", "Destroy exact run infrastructure"},
+                    name
+                    in {
+                        "Apply DigitalOcean infrastructure",
+                        "Destroy exact DigitalOcean run infrastructure",
+                        "Apply GCP infrastructure",
+                        "Destroy exact GCP run infrastructure",
+                    },
                     f"cloud credential reached unexpected step: {name}",
                 )
                 forbidden = ("target-conformance", "run-remote-conformance", "ssh ", "scp ", "target_sha")
                 require(not any(value in run for value in forbidden), "target code reached a credentialed step")
-            if name == "Run uncredentialed remote conformance":
+            if name in {
+                "Run uncredentialed DigitalOcean remote conformance",
+                "Run uncredentialed GCP remote conformance",
+            }:
                 require(not credentialed and not env, "remote conformance step must have no credential environment")
     require(
-        secret_steps == {"Apply DigitalOcean infrastructure", "Destroy exact run infrastructure"},
+        secret_steps
+        == {
+            "Apply DigitalOcean infrastructure",
+            "Destroy exact DigitalOcean run infrastructure",
+            "Apply GCP infrastructure",
+            "Destroy exact GCP run infrastructure",
+        },
         "cloud credentials must be scoped to apply and exact destroy only",
     )
     validate_action_pins(document, relative)
@@ -167,8 +250,20 @@ def validate_janitor_workflow(root: Path) -> None:
     require(set(trigger) == {"schedule", "workflow_dispatch"}, "janitor trigger scope changed")
     require("pull_request" not in text, "janitor must never run for pull requests")
     require("cancel-in-progress: false" in text, "janitor runs must not cancel each other")
-    require(text.count("secrets.DIGITALOCEAN_ACCESS_TOKEN") == 1, "janitor token scope changed")
-    require("ref: ${{ github.sha }}" in text and "persist-credentials: false" in text, "janitor checkout trust changed")
+    jobs = document.get("jobs")
+    require(isinstance(jobs, dict) and set(jobs) == {"digitalocean", "gcp"}, "janitor provider scope changed")
+    require(text.count("secrets.DIGITALOCEAN_ACCESS_TOKEN") == 1, "DigitalOcean janitor token scope changed")
+    require(text.count("GOOGLE_OAUTH_ACCESS_TOKEN") == 1, "GCP janitor token scope changed")
+    require(text.count("id-token: write") == 1, "janitor OIDC permission scope changed")
+    require(text.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 1, "janitor auth action pin changed")
+    require(
+        text.count("projects/94792370946/locations/global/workloadIdentityPools/secpal/providers/github")
+        == 1
+        and text.count("gcp-service-account@secpal-dev.iam.gserviceaccount.com") == 1,
+        "GCP janitor identity must be validated before authentication",
+    )
+    require(text.count("ref: ${{ github.sha }}") == 2 and text.count("persist-credentials: false") == 2, "janitor checkout trust changed")
+    require("scripts/ci-cloud/gcp-janitor.py" in text and "--zone europe-west3-a" in text, "bounded GCP janitor invocation is missing")
     validate_action_pins(document, relative)
 
 
@@ -250,6 +345,63 @@ def validate_opentofu(root: Path) -> None:
     require('condition     = var.region == "fra1"' in variables, "region allowlist changed")
     require('contains(["intel", "amd"], var.cpu_profile)' in variables, "CPU allowlist changed")
 
+    gcp_main = read(root, "infra/ci-cloud/gcp/main.tf")
+    gcp_versions = read(root, "infra/ci-cloud/gcp/versions.tf")
+    gcp_variables = read(root, "infra/ci-cloud/gcp/variables.tf")
+    gcp_outputs = read(root, "infra/ci-cloud/gcp/outputs.tf")
+    gcp_cloud_init = read(root, "infra/ci-cloud/gcp/cloud-init.tftpl")
+    read(root, "infra/ci-cloud/gcp/.terraform.lock.hcl")
+    require('required_version = "= 1.12.5"' in gcp_versions, "GCP OpenTofu version must be exact")
+    require('version = "= 7.40.0"' in gcp_versions, "Google provider version must be exact")
+    require("~>" not in gcp_versions and ">=" not in gcp_versions, "mutable Google provider constraints are forbidden")
+    require(gcp_main.count('resource "google_compute_instance"') == 1, "exactly one GCP instance is allowed")
+    require(gcp_main.count('resource "google_compute_disk"') == 1, "exactly one GCP disk is allowed")
+    require(gcp_main.count('resource "google_compute_network"') == 1, "exactly one GCP network is allowed")
+    require(gcp_main.count('resource "google_compute_subnetwork"') == 1, "exactly one GCP subnet is allowed")
+    require(gcp_main.count('resource "google_compute_firewall"') == 3, "GCP firewall count changed")
+    require("count" not in gcp_main and "for_each" not in gcp_main, "GCP resource-count abstraction is forbidden")
+    require(
+        gcp_main.count('data "google_compute_image" "debian_13"') == 1
+        and 'family  = "debian-13-arm64"' in gcp_main
+        and 'project = "debian-cloud"' in gcp_main
+        and "image  = data.google_compute_image.debian_13.self_link" in gcp_main,
+        "GCP image must resolve the official Debian 13 arm64 family",
+    )
+    require(
+        'machine_type = "c4a-standard-4"' in gcp_main
+        and 'type   = "hyperdisk-balanced"' in gcp_main
+        and "size   = 120" in gcp_main
+        and 'nic_type   = "GVNIC"' in gcp_main,
+        "GCP Axion machine or bounded disk changed",
+    )
+    require(
+        'output "image_id"' in gcp_outputs
+        and "value       = data.google_compute_image.debian_13.self_link" in gcp_outputs
+        and 'output "machine_type"' in gcp_outputs,
+        "resolved GCP inputs must be exported",
+    )
+    for label in (
+        'secpal_ci_owner    = "deployment-conformance"',
+        'repository         = "secpal-deployment"',
+        "github_run_id      = var.run_id",
+        "github_run_attempt = var.run_attempt",
+        "target_sha         = var.target_sha",
+        "created_at         = var.created_at",
+        "expires_at         = var.expires_at",
+    ):
+        require(label in gcp_main, "GCP ownership or TTL metadata is incomplete")
+    require(gcp_main.count("labels              = local.labels") == 1 and "labels = local.labels" in gcp_main, "GCP instance and disk labels must match")
+    require("service_account" not in gcp_main, "GCP test VM must not have a service account")
+    require('block-project-ssh-keys   = "true"' in gcp_main, "project SSH keys must be blocked")
+    require('disable-legacy-endpoints = "true"' in gcp_main, "legacy GCP metadata endpoints must be disabled")
+    require('enable-oslogin           = "FALSE"' in gcp_main, "unbounded OS Login identity is forbidden")
+    require('protocol = "all"' in gcp_main and "priority  = 65534" in gcp_main, "GCP residual egress must be denied")
+    require('condition     = var.project_id == "secpal-dev"' in gcp_variables, "GCP project allowlist changed")
+    require('condition     = var.zone == "europe-west3-a"' in gcp_variables, "GCP zone allowlist changed")
+    forbidden_gcp = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
+    require(not any(value in (gcp_main + gcp_variables) for value in forbidden_gcp), "GCP OpenTofu accepted a forbidden control or private key")
+    require(gcp_cloud_init == cloud_init, "provider cloud-init admission policy drifted")
+
 
 def validate_janitor_script(root: Path) -> None:
     text = read(root, "scripts/ci-cloud/digitalocean-janitor.py")
@@ -257,6 +409,34 @@ def validate_janitor_script(root: Path) -> None:
     require("tag_name=" not in text, "janitor must not delete by a tag query")
     require("len(raw_tags) != 5" in text, "janitor ownership must fail closed on ambiguous tags")
     require("current != candidate" in text, "janitor must revalidate immediately before deletion")
+    gcp = read(root, "scripts/ci-cloud/gcp-janitor.py")
+    require("client.delete_resource(candidate.kind, candidate.name)" in gcp, "GCP janitor must delete one exact revalidated name")
+    require("set(raw_labels) != LABEL_KEYS" in gcp, "GCP janitor metadata must fail closed")
+    require("current != candidate" in gcp, "GCP janitor must revalidate immediately before deletion")
+    require("RESOURCE_KINDS = (\"instances\", \"disks\")" in gcp, "GCP janitor resource scope changed")
+    require("instances.aggregatedList" not in gcp and "disks.aggregatedList" not in gcp, "broad GCP cleanup is forbidden")
+
+
+def validate_gcp_iam_role(root: Path) -> None:
+    relative = "infra/ci-cloud/gcp/iam-role.yaml"
+    text = read(root, relative)
+    try:
+        document = yaml.load(text, Loader=yaml.BaseLoader)
+    except yaml.YAMLError as error:
+        raise ContractError(f"{relative} is invalid YAML: {error}") from None
+    require(isinstance(document, dict), "GCP custom role must be a mapping")
+    require(
+        set(document) == {"title", "description", "stage", "includedPermissions"},
+        "GCP custom role fields changed",
+    )
+    require(document.get("stage") == "GA", "GCP custom role must be GA")
+    permissions = document.get("includedPermissions")
+    require(
+        isinstance(permissions, list)
+        and len(permissions) == len(GCP_IAM_PERMISSIONS)
+        and set(permissions) == GCP_IAM_PERMISSIONS,
+        "GCP custom role permissions changed",
+    )
 
 
 def validate(root: Path) -> None:
@@ -264,6 +444,8 @@ def validate(root: Path) -> None:
     validate_janitor_workflow(root)
     validate_opentofu(root)
     validate_janitor_script(root)
+    validate_gcp_iam_role(root)
+    require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
     workflow = read(root, ".github/workflows/cloud-conformance.yml")
     require(
@@ -273,8 +455,8 @@ def validate(root: Path) -> None:
     )
     require(
         "tofu output -raw image_id" in workflow
-        and 'provider_image_id="${10}"' in remote
-        and '"$root_ssh_denied" "$provider_image_id"' in remote,
+        and 'provider_image_id="${11}"' in remote
+        and '"$root_ssh_denied" "$provider_image_slug" "$provider_image_id"' in remote,
         "resolved provider image ID must reach the trusted evidence collector",
     )
 

@@ -33,6 +33,7 @@
         "provider",
         "region",
         "profile",
+        "machine_type",
         "provider_image",
         "started_at",
         "ended_at",
@@ -41,16 +42,24 @@
         "failed_admission_invariants"
       ],
       "properties": {
-        "provider": { "const": "digitalocean" },
-        "region": { "const": "fra1" },
-        "profile": { "enum": ["intel", "amd"] },
+        "provider": { "enum": ["digitalocean", "gcp"] },
+        "region": { "enum": ["fra1", "europe-west3-a"] },
+        "profile": { "enum": ["intel", "amd", "axion"] },
+        "machine_type": {
+          "enum": ["s-8vcpu-16gb-intel", "s-8vcpu-16gb-amd", "c4a-standard-4"]
+        },
         "provider_image": {
           "type": "object",
           "additionalProperties": false,
           "required": ["slug", "id"],
           "properties": {
-            "slug": { "const": "debian-13-x64" },
-            "id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" }
+            "slug": {
+              "enum": ["debian-13-x64", "debian-cloud/debian-13-arm64"]
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^([1-9][0-9]{0,19}|https://www\\.googleapis\\.com/compute/v1/projects/debian-cloud/global/images/debian-13-arm64-v[0-9]{8})$"
+            }
           }
         },
         "started_at": { "type": "string", "format": "date-time" },
@@ -213,7 +222,8 @@
         "security_updates",
         "required_tools",
         "clock",
-        "ssh"
+        "ssh",
+        "cloud_identity"
       ],
       "properties": {
         "kernel_package": {
@@ -291,6 +301,20 @@
           "additionalProperties": false,
           "required": ["root_login_denied"],
           "properties": { "root_login_denied": { "type": "boolean" } }
+        },
+        "cloud_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "probe_supported",
+            "probe_succeeded",
+            "identity_present"
+          ],
+          "properties": {
+            "probe_supported": { "type": "boolean" },
+            "probe_succeeded": { "type": "boolean" },
+            "identity_present": { "type": "boolean" }
+          }
         }
       }
     },

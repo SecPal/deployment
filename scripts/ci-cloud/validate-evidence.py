@@ -119,6 +119,7 @@ def validate_document(document: object) -> dict[str, object]:
             "provider",
             "region",
             "profile",
+            "machine_type",
             "provider_image",
             "started_at",
             "ended_at",
@@ -158,6 +159,7 @@ def validate_document(document: object) -> dict[str, object]:
             "required_tools",
             "clock",
             "ssh",
+            "cloud_identity",
         },
         "$.host",
     )
@@ -284,9 +286,44 @@ def validate_document(document: object) -> dict[str, object]:
     exact_keys(host["required_tools"], {"present", "missing"}, "$.host.required_tools")
     exact_keys(host["clock"], {"synchronized"}, "$.host.clock")
     exact_keys(host["ssh"], {"root_login_denied"}, "$.host.ssh")
+    exact_keys(
+        host["cloud_identity"],
+        {"probe_supported", "probe_succeeded", "identity_present"},
+        "$.host.cloud_identity",
+    )
     if workflow["repository"] != "SecPal/deployment" or re.fullmatch(r"[0-9a-f]{40}", str(workflow["target_sha"])) is None:
         fail("workflow identity is invalid")
-    if test["provider"] != "digitalocean" or test["region"] != "fra1" or test["profile"] not in {"intel", "amd"}:
+    provider_identity = (
+        test["provider"],
+        test["region"],
+        test["profile"],
+        test["machine_type"],
+        test["provider_image"]["slug"],
+    )
+    allowed_identities = {
+        (
+            "digitalocean",
+            "fra1",
+            "intel",
+            "s-8vcpu-16gb-intel",
+            "debian-13-x64",
+        ),
+        (
+            "digitalocean",
+            "fra1",
+            "amd",
+            "s-8vcpu-16gb-amd",
+            "debian-13-x64",
+        ),
+        (
+            "gcp",
+            "europe-west3-a",
+            "axion",
+            "c4a-standard-4",
+            "debian-cloud/debian-13-arm64",
+        ),
+    }
+    if provider_identity not in allowed_identities:
         fail("provider identity is outside the closed allowlist")
     for name in ("started_at", "ended_at"):
         try:
@@ -337,8 +374,9 @@ def write_summary(document: dict[str, object], path: Path) -> None:
     podman = runtime["podman"]
     apparmor = runtime["apparmor_host"]
     provider_image = test["provider_image"]
+    cloud_identity = host["cloud_identity"]
     assert isinstance(podman, dict) and isinstance(apparmor, dict)
-    assert isinstance(provider_image, dict)
+    assert isinstance(provider_image, dict) and isinstance(cloud_identity, dict)
     failures = test["failed_admission_invariants"]
     assert isinstance(failures, list)
     lines = [
@@ -347,6 +385,7 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         f"- Result: `{test['result']}`",
         f"- Target SHA: `{workflow['target_sha']}`",
         f"- Provider/profile: `{test['provider']}/{test['profile']}` in `{test['region']}`",
+        f"- Machine type: `{test['machine_type']}`",
         f"- Provider image: `{provider_image['slug']}` resolved to `{provider_image['id']}`",
         f"- Platform: `{platform['architecture']}` / `{platform['kernel']}`",
         f"- Kernel package: `{host['kernel_package']['name']}` from `{host['kernel_package']['origin']}/{host['kernel_package']['suite']}`",
@@ -359,6 +398,7 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         f"- Rootless Podman AppArmor capability: `{podman['apparmor_enabled']}`",
         f"- Podman seccomp: `{podman['seccomp_enabled']}`",
         f"- Root SSH denied: `{host['ssh']['root_login_denied']}`",
+        f"- VM cloud identity present: `{cloud_identity['identity_present']}`",
         f"- Failed admission invariants: `{', '.join(str(item) for item in failures) if failures else 'none'}`",
         "",
     ]

@@ -19,6 +19,7 @@ on:
         options:
           - digitalocean-intel
           - digitalocean-amd
+          - gcp-axion
 
 permissions:
   contents: read
@@ -32,18 +33,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  provision_test:
-    name: Provision and uncredentialed test
+  validate:
+    name: Validate immutable dispatch selection
     runs-on: ubuntu-latest
-    timeout-minutes: 70
-    environment: ci-cloud-digitalocean
+    timeout-minutes: 5
+    outputs:
+      target_sha: ${{ steps.inputs.outputs.target_sha }}
+      provider: ${{ steps.inputs.outputs.provider }}
+      profile: ${{ steps.inputs.outputs.profile }}
     steps:
-      - name: Checkout trusted orchestration from main
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-
       - name: Validate immutable dispatch inputs
         id: inputs
         env:
@@ -61,15 +59,33 @@ jobs:
           fi
           target_sha="$(printf '%s' "$RAW_TARGET_SHA" | tr '[:upper:]' '[:lower:]')"
           case "$RAW_PROVIDER_PROFILE" in
-            digitalocean-intel) cpu_profile=intel ;;
-            digitalocean-amd) cpu_profile=amd ;;
+            digitalocean-intel) provider=digitalocean; profile=intel ;;
+            digitalocean-amd) provider=digitalocean; profile=amd ;;
+            gcp-axion) provider=gcp; profile=axion ;;
             *)
               printf 'ERROR: provider_profile is outside the closed allowlist.\n' >&2
               exit 1
               ;;
           esac
-          printf 'target_sha=%s\n' "$target_sha" >> "$GITHUB_OUTPUT"
-          printf 'cpu_profile=%s\n' "$cpu_profile" >> "$GITHUB_OUTPUT"
+          {
+            printf 'target_sha=%s\n' "$target_sha"
+            printf 'provider=%s\n' "$provider"
+            printf 'profile=%s\n' "$profile"
+          } >> "$GITHUB_OUTPUT"
+
+  digitalocean:
+    name: Provision DigitalOcean and run uncredentialed test
+    needs: validate
+    if: ${{ needs.validate.outputs.provider == 'digitalocean' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    environment: ci-cloud-digitalocean
+    steps:
+      - name: Checkout trusted orchestration from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Set up pinned OpenTofu
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
@@ -77,10 +93,10 @@ jobs:
           tofu_version: 1.12.5
           tofu_wrapper: false
 
-      - name: Generate ephemeral SSH identity and closed run variables
+      - name: Generate ephemeral DigitalOcean SSH identity and run variables
         env:
-          TARGET_SHA: ${{ steps.inputs.outputs.target_sha }}
-          CPU_PROFILE: ${{ steps.inputs.outputs.cpu_profile }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          CPU_PROFILE: ${{ needs.validate.outputs.profile }}
         run: |
           install -d -m 0700 "$RUNNER_TEMP/ci-cloud"
           ssh-keygen -q -t ed25519 -N '' \
@@ -117,7 +133,7 @@ jobs:
               created_at: $created_at, expires_at: $expires_at}' \
             > infra/ci-cloud/digitalocean/run.auto.tfvars.json
 
-      - name: Validate locked OpenTofu root without credentials
+      - name: Validate locked DigitalOcean OpenTofu root
         working-directory: infra/ci-cloud/digitalocean
         run: |
           tofu fmt -check -diff
@@ -135,70 +151,70 @@ jobs:
           unset DIGITALOCEAN_TOKEN
           tofu output -raw ipv4_address > "$RUNNER_TEMP/ci-cloud/ipv4_address"
           tofu output -raw image_id > "$RUNNER_TEMP/ci-cloud/image_id"
+          tofu output -raw size > "$RUNNER_TEMP/ci-cloud/machine_type"
 
-      - name: Preserve exact run state for independent cleanup
+      - name: Preserve exact DigitalOcean state for independent cleanup
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cloud-state-${{ github.run_id }}-${{ github.run_attempt }}
+          name: cloud-state-digitalocean-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             infra/ci-cloud/digitalocean/terraform.tfstate
             infra/ci-cloud/digitalocean/run.auto.tfvars.json
           if-no-files-found: warn
           retention-days: 1
 
-      - name: Run uncredentialed remote conformance
+      - name: Run uncredentialed DigitalOcean remote conformance
         id: conformance
         if: ${{ steps.apply.outcome == 'success' }}
         continue-on-error: true
         run: |
           scripts/ci-cloud/run-remote-conformance.sh \
-            digitalocean \
-            fra1 \
-            "${{ steps.inputs.outputs.cpu_profile }}" \
+            digitalocean fra1 "${{ needs.validate.outputs.profile }}" \
             "$(cat "$RUNNER_TEMP/ci-cloud/ipv4_address")" \
-            "${{ steps.inputs.outputs.target_sha }}" \
-            "$GITHUB_RUN_ID" \
-            "$GITHUB_RUN_ATTEMPT" \
+            "${{ needs.validate.outputs.target_sha }}" \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
             "$RUNNER_TEMP/ci-cloud/id_ed25519" \
             "$RUNNER_TEMP/ci-cloud/evidence" \
-            "$(cat "$RUNNER_TEMP/ci-cloud/image_id")"
+            debian-13-x64 \
+            "$(cat "$RUNNER_TEMP/ci-cloud/image_id")" \
+            "$(cat "$RUNNER_TEMP/ci-cloud/machine_type")"
 
-      - name: Upload bounded non-secret evidence
+      - name: Upload bounded DigitalOcean evidence
         if: ${{ always() && steps.apply.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cloud-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: cloud-evidence-digitalocean-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-cloud/evidence
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Remove ephemeral SSH private key
+      - name: Remove ephemeral DigitalOcean SSH private key
         if: ${{ always() }}
         run: |
           rm -f -- "$RUNNER_TEMP/ci-cloud/id_ed25519" \
             "$RUNNER_TEMP/ci-cloud/id_ed25519.pub"
 
-      - name: Enforce provisioning and conformance result
+      - name: Enforce DigitalOcean provisioning and conformance result
         if: ${{ always() }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           CONFORMANCE_OUTCOME: ${{ steps.conformance.outcome }}
         run: |
           if [[ "$APPLY_OUTCOME" != success || "$CONFORMANCE_OUTCOME" != success ]]; then
-            printf 'ERROR: provisioning or remote conformance failed.\n' >&2
+            printf 'ERROR: DigitalOcean provisioning or remote conformance failed.\n' >&2
             exit 1
           fi
 
-  cleanup:
-    name: Destroy exact run infrastructure
-    needs: provision_test
-    if: ${{ always() }}
+  digitalocean_cleanup:
+    name: Destroy exact DigitalOcean run infrastructure
+    needs: [validate, digitalocean]
+    if: ${{ always() && needs.validate.outputs.provider == 'digitalocean' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: ci-cloud-digitalocean-cleanup
     steps:
-      - name: Checkout trusted cleanup from main
+      - name: Checkout trusted DigitalOcean cleanup from main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -210,22 +226,22 @@ jobs:
           tofu_version: 1.12.5
           tofu_wrapper: false
 
-      - name: Retrieve exact run state
+      - name: Retrieve exact DigitalOcean run state
         id: state
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: cloud-state-${{ github.run_id }}-${{ github.run_attempt }}
+          name: cloud-state-digitalocean-${{ github.run_id }}-${{ github.run_attempt }}
           path: infra/ci-cloud/digitalocean
 
-      - name: Initialize locked cleanup root
+      - name: Initialize locked DigitalOcean cleanup root
         id: init
         if: ${{ steps.state.outcome == 'success' }}
         continue-on-error: true
         working-directory: infra/ci-cloud/digitalocean
         run: tofu init -input=false -lockfile=readonly
 
-      - name: Destroy exact run infrastructure
+      - name: Destroy exact DigitalOcean run infrastructure
         id: destroy
         if: ${{ steps.init.outcome == 'success' }}
         continue-on-error: true
@@ -236,7 +252,7 @@ jobs:
           tofu destroy --auto-approve --input=false
           test -z "$(tofu state list)"
 
-      - name: Enforce cleanup result
+      - name: Enforce DigitalOcean cleanup result
         if: ${{ always() }}
         env:
           STATE_OUTCOME: ${{ steps.state.outcome }}
@@ -245,6 +261,252 @@ jobs:
         run: |
           if [[ "$STATE_OUTCOME" != success || "$INIT_OUTCOME" != success || \
             "$DESTROY_OUTCOME" != success ]]; then
-            printf 'ERROR: exact cleanup did not complete; TTL janitor remains the fallback.\n' >&2
+            printf 'ERROR: exact DigitalOcean cleanup failed; TTL janitor is the fallback.\n' >&2
+            exit 1
+          fi
+
+  gcp:
+    name: Provision GCP Axion and run uncredentialed test
+    needs: validate
+    if: ${{ needs.validate.outputs.provider == 'gcp' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    environment: ci-cloud-gcp
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted GCP orchestration from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up pinned OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
+      - name: Validate closed GCP identity configuration
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        run: |
+          [[ "$GCP_PROJECT_ID" == secpal-dev ]]
+          [[ "$GCP_WORKLOAD_IDENTITY_PROVIDER" == \
+            projects/94792370946/locations/global/workloadIdentityPools/secpal/providers/github ]]
+          [[ "$GCP_SERVICE_ACCOUNT" == \
+            gcp-service-account@secpal-dev.iam.gserviceaccount.com ]]
+
+      - name: Generate ephemeral GCP SSH identity and run variables
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/ci-cloud"
+          ssh-keygen -q -t ed25519 -N '' \
+            -C "secpal-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -f "$RUNNER_TEMP/ci-cloud/id_ed25519"
+          chmod 0600 "$RUNNER_TEMP/ci-cloud/id_ed25519"
+          runner_ipv4="$(curl --proto '=https' --tlsv1.2 --fail --silent \
+            --show-error --max-time 15 https://api.ipify.org)"
+          python3 - "$runner_ipv4" <<'PY'
+          import ipaddress
+          import sys
+
+          address = ipaddress.ip_address(sys.argv[1])
+          if address.version != 4 or not address.is_global:
+              raise SystemExit("runner address is not a public IPv4 address")
+          PY
+          created_at="$(date -u +%s)"
+          expires_at="$((created_at + 7200))"
+          public_key="$(cat "$RUNNER_TEMP/ci-cloud/id_ed25519.pub")"
+          jq -n \
+            --arg project_id "$GCP_PROJECT_ID" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg target_sha "$TARGET_SHA" \
+            --arg zone europe-west3-a \
+            --arg runner_ipv4 "$runner_ipv4" \
+            --arg ssh_public_key "$public_key" \
+            --arg created_at "$created_at" \
+            --arg expires_at "$expires_at" \
+            '{project_id: $project_id, run_id: $run_id,
+              run_attempt: $run_attempt, target_sha: $target_sha,
+              zone: $zone, runner_ipv4: $runner_ipv4,
+              ssh_public_key: $ssh_public_key,
+              created_at: $created_at, expires_at: $expires_at}' \
+            > infra/ci-cloud/gcp/run.auto.tfvars.json
+
+      - name: Validate locked GCP OpenTofu root without credentials
+        working-directory: infra/ci-cloud/gcp
+        run: |
+          tofu fmt -check -diff
+          tofu init -input=false -lockfile=readonly
+          tofu validate
+
+      - name: Authenticate trusted GCP apply through OIDC
+        id: gcp_apply_auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 1200s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Apply GCP infrastructure
+        id: gcp_apply
+        continue-on-error: true
+        working-directory: infra/ci-cloud/gcp
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gcp_apply_auth.outputs.access_token }}
+        run: |
+          tofu apply --auto-approve --input=false
+          unset GOOGLE_OAUTH_ACCESS_TOKEN
+          tofu output -raw ipv4_address > "$RUNNER_TEMP/ci-cloud/ipv4_address"
+          tofu output -raw image_id > "$RUNNER_TEMP/ci-cloud/image_id"
+          tofu output -raw machine_type > "$RUNNER_TEMP/ci-cloud/machine_type"
+
+      - name: Preserve exact GCP state for independent cleanup
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloud-state-gcp-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            infra/ci-cloud/gcp/terraform.tfstate
+            infra/ci-cloud/gcp/run.auto.tfvars.json
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Run uncredentialed GCP remote conformance
+        id: gcp_conformance
+        if: ${{ steps.gcp_apply.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          scripts/ci-cloud/run-remote-conformance.sh \
+            gcp europe-west3-a axion \
+            "$(cat "$RUNNER_TEMP/ci-cloud/ipv4_address")" \
+            "${{ needs.validate.outputs.target_sha }}" \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$RUNNER_TEMP/ci-cloud/id_ed25519" \
+            "$RUNNER_TEMP/ci-cloud/evidence" \
+            debian-cloud/debian-13-arm64 \
+            "$(cat "$RUNNER_TEMP/ci-cloud/image_id")" \
+            "$(cat "$RUNNER_TEMP/ci-cloud/machine_type")"
+
+      - name: Upload bounded GCP evidence
+        if: ${{ always() && steps.gcp_apply.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloud-evidence-gcp-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-cloud/evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove ephemeral GCP SSH private key
+        if: ${{ always() }}
+        run: |
+          rm -f -- "$RUNNER_TEMP/ci-cloud/id_ed25519" \
+            "$RUNNER_TEMP/ci-cloud/id_ed25519.pub"
+
+      - name: Enforce GCP provisioning and conformance result
+        if: ${{ always() }}
+        env:
+          APPLY_OUTCOME: ${{ steps.gcp_apply.outcome }}
+          CONFORMANCE_OUTCOME: ${{ steps.gcp_conformance.outcome }}
+        run: |
+          if [[ "$APPLY_OUTCOME" != success || "$CONFORMANCE_OUTCOME" != success ]]; then
+            printf 'ERROR: GCP provisioning or remote conformance failed.\n' >&2
+            exit 1
+          fi
+
+  gcp_cleanup:
+    name: Destroy exact GCP run infrastructure
+    needs: [validate, gcp]
+    if: ${{ always() && needs.validate.outputs.provider == 'gcp' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ci-cloud-gcp-cleanup
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted GCP cleanup from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up pinned OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
+      - name: Validate closed GCP cleanup identity configuration
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        run: |
+          [[ "$GCP_PROJECT_ID" == secpal-dev ]]
+          [[ "$GCP_WORKLOAD_IDENTITY_PROVIDER" == \
+            projects/94792370946/locations/global/workloadIdentityPools/secpal/providers/github ]]
+          [[ "$GCP_SERVICE_ACCOUNT" == \
+            gcp-service-account@secpal-dev.iam.gserviceaccount.com ]]
+
+      - name: Authenticate trusted GCP cleanup through OIDC
+        id: gcp_cleanup_auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 1200s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Retrieve exact GCP run state
+        id: gcp_state
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cloud-state-gcp-${{ github.run_id }}-${{ github.run_attempt }}
+          path: infra/ci-cloud/gcp
+
+      - name: Initialize locked GCP cleanup root
+        id: gcp_init
+        if: ${{ steps.gcp_state.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: infra/ci-cloud/gcp
+        run: tofu init -input=false -lockfile=readonly
+
+      - name: Destroy exact GCP run infrastructure
+        id: gcp_destroy
+        if: ${{ steps.gcp_init.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: infra/ci-cloud/gcp
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gcp_cleanup_auth.outputs.access_token }}
+        run: |
+          tofu destroy --auto-approve --input=false
+          test -z "$(tofu state list)"
+
+      - name: Enforce GCP cleanup result
+        if: ${{ always() }}
+        env:
+          STATE_OUTCOME: ${{ steps.gcp_state.outcome }}
+          INIT_OUTCOME: ${{ steps.gcp_init.outcome }}
+          DESTROY_OUTCOME: ${{ steps.gcp_destroy.outcome }}
+        run: |
+          if [[ "$STATE_OUTCOME" != success || "$INIT_OUTCOME" != success || \
+            "$DESTROY_OUTCOME" != success ]]; then
+            printf 'ERROR: exact GCP cleanup failed; TTL janitor is the fallback.\n' >&2
             exit 1
           fi

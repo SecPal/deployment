@@ -36,9 +36,11 @@ class CloudCIContractTests(unittest.TestCase):
         temporary = Path(tempfile.mkdtemp(prefix="secpal-ci-cloud-contract-"))
         self.addCleanup(shutil.rmtree, temporary)
         for path in (
+            ".gitignore",
             ".github/workflows/cloud-conformance.yml",
             ".github/workflows/cloud-janitor.yml",
             "infra/ci-cloud/digitalocean",
+            "infra/ci-cloud/gcp",
             "scripts/ci-cloud",
         ):
             source = ROOT / path
@@ -73,6 +75,7 @@ class CloudCIContractTests(unittest.TestCase):
             preflight.count("-name .terraform"),
             "Markdown, YAML, and Prettier discovery must prune OpenTofu caches",
         )
+        self.assertIn("python3 tests/ci-cloud-gcp-janitor.py", preflight)
 
     def test_workflow_bash_uses_explicit_strict_mode(self) -> None:
         strict_shell = "shell: bash --noprofile --norc -euo pipefail {0}"
@@ -151,6 +154,19 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("tofu output -raw image_id", workflow)
         self.assertIn("BOOTSTRAP_PACKAGES", collector)
 
+        gcp_main = (ROOT / "infra/ci-cloud/gcp/main.tf").read_text(encoding="utf-8")
+        gcp_outputs = (ROOT / "infra/ci-cloud/gcp/outputs.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('family  = "debian-13-arm64"', gcp_main)
+        self.assertIn('project = "debian-cloud"', gcp_main)
+        self.assertIn('machine_type = "c4a-standard-4"', gcp_main)
+        self.assertIn('type   = "hyperdisk-balanced"', gcp_main)
+        self.assertIn("size   = 120", gcp_main)
+        self.assertIn('nic_type   = "GVNIC"', gcp_main)
+        self.assertIn('output "image_id"', gcp_outputs)
+        self.assertIn('output "machine_type"', gcp_outputs)
+
     def test_governance_exception_is_bounded_to_nonproduction_conformance(self) -> None:
         instructions = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("non-production conformance", instructions)
@@ -198,6 +214,86 @@ class CloudCIContractTests(unittest.TestCase):
             ".github/workflows/cloud-conformance.yml",
             "          - digitalocean-amd\n",
             "          - digitalocean-amd\n          - arbitrary-provider\n",
+        )
+
+    def test_rejects_arbitrary_gcp_cloud_image(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            'family  = "debian-13-arm64"',
+            "family  = var.image",
+        )
+
+    def test_rejects_arbitrary_gcp_machine_type(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            'machine_type = "c4a-standard-4"',
+            "machine_type = var.machine_type",
+        )
+
+    def test_rejects_gcp_vm_service_account(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            '  deletion_protection = false\n',
+            '  deletion_protection = false\n\n  service_account {\n'
+            '    email  = "default"\n'
+            '    scopes = ["cloud-platform"]\n'
+            "  }\n",
+        )
+
+    def test_rejects_missing_gcp_ci_owner_metadata(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            '    secpal_ci_owner    = "deployment-conformance"\n',
+            "",
+        )
+
+    def test_rejects_missing_gcp_ttl_metadata(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            "    expires_at         = var.expires_at\n",
+            "",
+        )
+
+    def test_rejects_gcp_access_token_in_remote_test_step(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            "      - name: Run uncredentialed GCP remote conformance\n",
+            "      - name: Run uncredentialed GCP remote conformance\n"
+            "        env:\n"
+            "          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}\n",
+        )
+
+    def test_rejects_gcp_target_script_in_credentialed_apply_step(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            "          unset GOOGLE_OAUTH_ACCESS_TOKEN\n",
+            "          bash scripts/ci-cloud/target-conformance.sh\n"
+            "          unset GOOGLE_OAUTH_ACCESS_TOKEN\n",
+        )
+
+    def test_rejects_gcp_private_key_in_opentofu(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            'data "google_compute_image" "debian_13" {',
+            'resource "tls_private_key" "forbidden" {\n'
+            '  algorithm = "ED25519"\n'
+            '}\n\ndata "google_compute_image" "debian_13" {',
+        )
+
+    def test_rejects_broad_gcp_custom_role_permission(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/iam-role.yaml",
+            "  - serviceusage.services.use\n",
+            "  - serviceusage.services.use\n"
+            "  - resourcemanager.projects.setIamPolicy\n",
+        )
+
+    def test_rejects_gcp_service_account_attachment_permission(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/iam-role.yaml",
+            "  - serviceusage.services.use\n",
+            "  - serviceusage.services.use\n"
+            "  - iam.serviceAccounts.actAs\n",
         )
 
     def test_rejects_machine_type_input(self) -> None:
@@ -256,8 +352,8 @@ class CloudCIContractTests(unittest.TestCase):
     def test_rejects_cloud_credential_in_remote_test_step(self) -> None:
         self.assert_mutation_rejected(
             ".github/workflows/cloud-conformance.yml",
-            "      - name: Run uncredentialed remote conformance\n",
-            "      - name: Run uncredentialed remote conformance\n"
+            "      - name: Run uncredentialed DigitalOcean remote conformance\n",
+            "      - name: Run uncredentialed DigitalOcean remote conformance\n"
             "        env:\n"
             "          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}\n",
         )

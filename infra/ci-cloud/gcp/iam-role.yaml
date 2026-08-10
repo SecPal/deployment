@@ -1,0 +1,42 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+title: SecPal Cloud Conformance Operator
+description: Bounded Compute permissions for disposable Debian 13 conformance fixtures
+stage: GA
+includedPermissions:
+  - compute.disks.create
+  - compute.disks.delete
+  - compute.disks.get
+  - compute.disks.list
+  - compute.disks.setLabels
+  - compute.disks.use
+  - compute.firewalls.create
+  - compute.firewalls.delete
+  - compute.firewalls.get
+  - compute.firewalls.update
+  - compute.globalOperations.get
+  - compute.images.get
+  - compute.images.useReadOnly
+  - compute.instances.create
+  - compute.instances.delete
+  - compute.instances.get
+  - compute.instances.list
+  - compute.instances.setLabels
+  - compute.instances.setMetadata
+  - compute.instances.setTags
+  - compute.machineTypes.get
+  - compute.networks.create
+  - compute.networks.delete
+  - compute.networks.get
+  - compute.projects.get
+  - compute.regionOperations.get
+  - compute.subnetworks.create
+  - compute.subnetworks.delete
+  - compute.subnetworks.get
+  - compute.subnetworks.use
+  - compute.subnetworks.useExternalIp
+  - compute.zoneOperations.get
+  - compute.zones.get
+  - serviceusage.services.use

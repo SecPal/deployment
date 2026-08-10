@@ -56,6 +56,7 @@ python3 tests/oci-attestation-bundle-contract.py
 python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py
+python3 tests/ci-cloud-gcp-janitor.py
 python3 tests/ci-cloud-janitor.py
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py

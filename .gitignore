@@ -21,6 +21,7 @@
 secrets/
 private/
 credentials/
+gha-creds-*.json
 
 # Temporary and generated output
 tmp/

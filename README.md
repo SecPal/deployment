@@ -163,17 +163,18 @@ production credentials, or select the future production edge.
 
 The repository now contains a manual, protected
 [`Debian 13 cloud conformance`](docs/ci-cloud-conformance.md) foundation. It
-can provision one short-lived official Debian 13 DigitalOcean host with a
-closed Intel or AMD profile, run an exact 40-character deployment commit SHA
-without exposing the cloud token to that commit, collect bounded host/runtime
-evidence, and destroy the exact OpenTofu state. A metadata-gated TTL janitor
-protects against an orphaned billable Droplet.
+can provision one short-lived official Debian 13 host using a closed
+DigitalOcean Intel/AMD or Google C4A/Axion profile, run an exact 40-character
+deployment commit SHA without exposing cloud-control credentials to that
+commit, collect bounded host/runtime evidence, and destroy the exact OpenTofu
+state. Metadata-gated TTL janitors protect billable compute fixtures.
 
 This CI infrastructure is non-production. It contains no customer data,
 production inventory, DNS, certificate, backup, or service credential and is
-not part of the production installation path. Google Axion/C4A arm64 remains a
-separate Workload Identity Federation follow-up. GitHub-hosted Ubuntu
-integration evidence remains distinct from Debian 13 host admission.
+not part of the production installation path. Google authentication uses
+repository- and workflow-scoped Workload Identity Federation without a JSON
+key or useful VM identity. GitHub-hosted Ubuntu integration evidence remains
+distinct from Debian 13 host admission.
 
 Phase C is complete. API and frontend publication, token-free fail-closed
 digest consumption, pre-execution attestation verification, and hosted

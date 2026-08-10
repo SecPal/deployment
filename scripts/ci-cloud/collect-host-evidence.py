@@ -81,6 +81,7 @@ REQUIRED_TOOLS = {
     "install",
     "jq",
     "loginctl",
+    "lscpu",
     "mktemp",
     "newgidmap",
     "newuidmap",
@@ -191,9 +192,24 @@ def cpu_facts() -> dict[str, str]:
         key, value = (part.strip() for part in line.split(":", 1))
         if key in {"vendor_id", "model name", "CPU implementer", "Hardware"}:
             values.setdefault(key, value[:512])
+    lscpu = json_output(["lscpu", "--json"])
+    raw_fields = lscpu.get("lscpu", [])
+    lscpu_fields: dict[str, str] = {}
+    if isinstance(raw_fields, list):
+        for entry in raw_fields:
+            if not isinstance(entry, dict):
+                continue
+            field = entry.get("field")
+            data = entry.get("data")
+            if isinstance(field, str) and isinstance(data, str):
+                lscpu_fields[field.rstrip(":")] = data[:512]
     return {
-        "vendor": values.get("vendor_id", values.get("CPU implementer", "")),
-        "model": values.get("model name", values.get("Hardware", "")),
+        "vendor": lscpu_fields.get(
+            "Vendor ID", values.get("vendor_id", values.get("CPU implementer", ""))
+        ),
+        "model": lscpu_fields.get(
+            "Model name", values.get("model name", values.get("Hardware", ""))
+        ),
     }
 
 
@@ -774,6 +790,47 @@ def required_tool_facts() -> dict[str, list[str]]:
     return {"present": present, "missing": sorted(REQUIRED_TOOLS - set(present))}
 
 
+def cloud_identity_facts(provider: str) -> dict[str, bool]:
+    if provider != "gcp":
+        return {
+            "probe_supported": False,
+            "probe_succeeded": False,
+            "identity_present": False,
+        }
+    try:
+        completed = subprocess.run(
+            [
+                "curl",
+                "--noproxy",
+                "*",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "5",
+                "--header",
+                "Metadata-Flavor: Google",
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {
+            "probe_supported": True,
+            "probe_succeeded": False,
+            "identity_present": False,
+        }
+    return {
+        "probe_supported": True,
+        "probe_succeeded": completed.returncode == 0,
+        "identity_present": completed.returncode == 0 and bool(completed.stdout.strip()),
+    }
+
+
 def version_tuple(text: str) -> tuple[int, int, int] | None:
     match = re.search(r"([0-9]+)\.([0-9]+)\.([0-9]+)", text)
     return tuple(int(value) for value in match.groups()) if match else None
@@ -798,7 +855,11 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         != ("debian", "13", "trixie"),
         "D1_OS_DEBIAN_13_TRIXIE",
     )
-    reject(platform["architecture"] != "amd64", "D1_ARCHITECTURE_AMD64")
+    expected_architecture = "arm64" if profile_name == "axion" else "amd64"
+    reject(
+        platform["architecture"] != expected_architecture,
+        f"D1_ARCHITECTURE_{expected_architecture.upper()}",
+    )
     kernel_release = str(platform["kernel"])
     reject(
         re.fullmatch(r"6\.12\.[0-9]+(?:[-+._][A-Za-z0-9+._-]+)?", kernel_release)
@@ -954,9 +1015,27 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         or registries["secpal_location_rewrite"] is not False,
         "D1_REGISTRY_CONFIGURATION",
     )
+    cloud_identity = host["cloud_identity"]
+    reject(
+        profile_name == "axion"
+        and (
+            cloud_identity["probe_supported"] is not True
+            or cloud_identity["probe_succeeded"] is not True
+            or cloud_identity["identity_present"] is not False
+        ),
+        "PROVIDER_VM_CLOUD_IDENTITY",
+    )
+    reject(
+        profile_name != "axion" and cloud_identity["identity_present"] is not False,
+        "PROVIDER_VM_CLOUD_IDENTITY",
+    )
     combined_cpu = f"{platform['cpu']['vendor']} {platform['cpu']['model']}".lower()
     reject(profile_name == "intel" and "intel" not in combined_cpu, "PROVIDER_CPU_PROFILE_INTEL")
     reject(profile_name == "amd" and "amd" not in combined_cpu, "PROVIDER_CPU_PROFILE_AMD")
+    reject(
+        profile_name == "axion" and "neoverse" not in combined_cpu and "axion" not in combined_cpu,
+        "PROVIDER_CPU_PROFILE_AXION",
+    )
     reject(platform["logical_cpu"] < 4, "D1_MINIMUM_LOGICAL_CPU")
     reject(platform["memory_bytes"] < 8 * 1024**3, "D1_MINIMUM_MEMORY_8_GIB")
     reject(platform["root_filesystem_bytes"] < 100 * 1024**3, "D1_MINIMUM_STORAGE_100_GIB")
@@ -965,9 +1044,9 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("provider", choices=["digitalocean"])
-    parser.add_argument("region", choices=["fra1"])
-    parser.add_argument("profile", choices=["intel", "amd"])
+    parser.add_argument("provider", choices=["digitalocean", "gcp"])
+    parser.add_argument("region", choices=["fra1", "europe-west3-a"])
+    parser.add_argument("profile", choices=["intel", "amd", "axion"])
     parser.add_argument("target_sha")
     parser.add_argument("run_id")
     parser.add_argument("run_attempt")
@@ -975,12 +1054,42 @@ def main() -> int:
     parser.add_argument("ended_at")
     parser.add_argument("target_status", type=int)
     parser.add_argument("root_ssh_denied", choices=["true", "false"])
+    parser.add_argument("provider_image_slug")
     parser.add_argument("provider_image_id")
+    parser.add_argument("machine_type")
     arguments = parser.parse_args()
     if re.fullmatch(r"[0-9a-f]{40}", arguments.target_sha) is None:
         parser.error("target_sha must be a full lowercase SHA")
-    if re.fullmatch(r"[1-9][0-9]{0,19}", arguments.provider_image_id) is None:
-        parser.error("provider_image_id must be a positive numeric provider ID")
+    selection = (
+        arguments.provider,
+        arguments.region,
+        arguments.profile,
+        arguments.provider_image_slug,
+        arguments.machine_type,
+    )
+    digitalocean_selections = {
+        ("digitalocean", "fra1", "intel", "debian-13-x64", "s-8vcpu-16gb-intel"),
+        ("digitalocean", "fra1", "amd", "debian-13-x64", "s-8vcpu-16gb-amd"),
+    }
+    gcp_selection = (
+        "gcp",
+        "europe-west3-a",
+        "axion",
+        "debian-cloud/debian-13-arm64",
+        "c4a-standard-4",
+    )
+    if selection in digitalocean_selections:
+        if re.fullmatch(r"[1-9][0-9]{0,19}", arguments.provider_image_id) is None:
+            parser.error("DigitalOcean image ID must be positive and numeric")
+    elif selection == gcp_selection:
+        if re.fullmatch(
+            r"https://www\.googleapis\.com/compute/v1/projects/debian-cloud/global/images/"
+            r"debian-13-arm64-v[0-9]{8}",
+            arguments.provider_image_id,
+        ) is None:
+            parser.error("GCP image ID must be an exact official Debian 13 arm64 self-link")
+    else:
+        parser.error("provider selection is outside the closed allowlist")
 
     os_facts = os_release()
     architecture = checked_output(["dpkg", "--print-architecture"])
@@ -1025,6 +1134,7 @@ def main() -> int:
                 ) == "yes"
             },
             "ssh": {"root_login_denied": arguments.root_ssh_denied == "true"},
+            "cloud_identity": cloud_identity_facts(arguments.provider),
         },
         "runtime": {
             "podman": podman,
@@ -1065,8 +1175,9 @@ def main() -> int:
             "provider": arguments.provider,
             "region": arguments.region,
             "profile": arguments.profile,
+            "machine_type": arguments.machine_type,
             "provider_image": {
-                "slug": "debian-13-x64",
+                "slug": arguments.provider_image_slug,
                 "id": arguments.provider_image_id,
             },
             "started_at": arguments.started_at,

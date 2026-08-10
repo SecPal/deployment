@@ -61,6 +61,7 @@ def valid_document() -> dict[str, object]:
             "provider": "digitalocean",
             "region": "fra1",
             "profile": "amd",
+            "machine_type": "s-8vcpu-16gb-amd",
             "provider_image": {
                 "slug": "debian-13-x64",
                 "id": "123456789",
@@ -132,7 +133,7 @@ def valid_document() -> dict[str, object]:
                 "present": [
                     "aa-status", "apt-cache", "apt-config", "bash", "curl",
                     "df", "dpkg", "dpkg-query", "findmnt", "getent", "gh",
-                    "git", "id", "install", "jq", "loginctl", "mktemp",
+                    "git", "id", "install", "jq", "loginctl", "lscpu", "mktemp",
                     "newgidmap", "newuidmap", "podman", "python3", "realpath",
                     "sha256sum", "ss", "stat", "systemd-detect-virt",
                     "systemctl", "timedatectl", "uname",
@@ -141,6 +142,11 @@ def valid_document() -> dict[str, object]:
             },
             "clock": {"synchronized": True},
             "ssh": {"root_login_denied": True},
+            "cloud_identity": {
+                "probe_supported": False,
+                "probe_succeeded": False,
+                "identity_present": False,
+            },
         },
         "runtime": {
             "podman": {
@@ -245,6 +251,62 @@ class EvidenceContractTests(unittest.TestCase):
         )
         jsonschema.Draft202012Validator(schema).validate(document)
         self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_complete_gcp_axion_evidence_is_accepted(self) -> None:
+        document = valid_document()
+        document["test"].update(
+            {
+                "provider": "gcp",
+                "region": "europe-west3-a",
+                "profile": "axion",
+                "machine_type": "c4a-standard-4",
+                "provider_image": {
+                    "slug": "debian-cloud/debian-13-arm64",
+                    "id": "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-arm64-v20260801",
+                },
+            }
+        )
+        document["platform"].update(
+            {
+                "architecture": "arm64",
+                "uname": "Linux fixture 6.12.0-arm64 aarch64 GNU/Linux",
+                "kernel": "6.12.0-arm64",
+                "cpu": {"vendor": "ARM", "model": "Neoverse-V2"},
+            }
+        )
+        document["host"]["kernel_package"].update(
+            {"name": "linux-image-6.12.0-arm64", "architecture": "arm64"}
+        )
+        document["host"]["cloud_identity"].update(
+            {"probe_supported": True, "probe_succeeded": True}
+        )
+        for package_group in ("runtime_packages", "bootstrap_packages"):
+            for package in document["apt"][package_group].values():
+                if package["architecture"] != "all":
+                    package["architecture"] = "arm64"
+        self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_gcp_evidence_rejects_attached_cloud_identity(self) -> None:
+        document = valid_document()
+        document["test"].update(
+            {
+                "provider": "gcp",
+                "region": "europe-west3-a",
+                "profile": "axion",
+                "machine_type": "c4a-standard-4",
+                "provider_image": {
+                    "slug": "debian-cloud/debian-13-arm64",
+                    "id": "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-13-arm64-v20260801",
+                },
+            }
+        )
+        document["host"]["cloud_identity"] = {
+            "probe_supported": True,
+            "probe_succeeded": True,
+            "identity_present": True,
+        }
+        with self.assertRaisesRegex(ValueError, "effective facts"):
+            self.validator.validate_document(document)
 
     def test_incomplete_evidence_is_rejected(self) -> None:
         document = valid_document()

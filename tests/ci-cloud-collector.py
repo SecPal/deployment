@@ -18,7 +18,7 @@ COLLECTOR_PATH = ROOT / "scripts" / "ci-cloud" / "collect-host-evidence.py"
 REQUIRED_TOOLS = {
     "aa-status", "apt-cache", "apt-config", "bash", "curl", "df", "dpkg",
     "dpkg-query", "findmnt", "getent", "gh", "git", "id", "install",
-    "jq", "loginctl", "mktemp", "newgidmap", "newuidmap", "podman",
+    "jq", "loginctl", "lscpu", "mktemp", "newgidmap", "newuidmap", "podman",
     "python3", "realpath", "sha256sum", "ss", "stat",
     "systemd-detect-virt", "systemctl", "timedatectl", "uname",
 }
@@ -116,6 +116,11 @@ def valid_facts() -> dict[str, object]:
             },
             "clock": {"synchronized": True},
             "ssh": {"root_login_denied": True},
+            "cloud_identity": {
+                "probe_supported": False,
+                "probe_succeeded": False,
+                "identity_present": False,
+            },
         },
         "runtime": {
             "podman": {
@@ -196,6 +201,40 @@ class CloudHostAdmissionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.collector = load_collector()
+
+    def test_gcp_metadata_probe_records_only_bounded_identity_booleans(self) -> None:
+        completed = self.collector.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with mock.patch.object(self.collector.subprocess, "run", return_value=completed):
+            self.assertEqual(
+                {
+                    "probe_supported": True,
+                    "probe_succeeded": True,
+                    "identity_present": False,
+                },
+                self.collector.cloud_identity_facts("gcp"),
+            )
+
+    def test_arm_cpu_model_uses_effective_lscpu_facts(self) -> None:
+        lscpu = {
+            "lscpu": [
+                {"field": "Vendor ID:", "data": "ARM"},
+                {"field": "Model name:", "data": "Neoverse-V2"},
+            ]
+        }
+        with (
+            mock.patch.object(self.collector, "json_output", return_value=lscpu),
+            mock.patch.object(
+                self.collector,
+                "read_text",
+                return_value="CPU implementer\t: 0x41\nCPU part\t: 0xd4f\n",
+            ),
+        ):
+            self.assertEqual(
+                {"vendor": "ARM", "model": "Neoverse-V2"},
+                self.collector.cpu_facts(),
+            )
 
     def assert_failure(self, path: tuple[str, ...], value: object, invariant: str) -> None:
         facts = copy.deepcopy(valid_facts())
