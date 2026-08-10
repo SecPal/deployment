@@ -325,6 +325,20 @@ def validate_document(document: object) -> dict[str, object]:
     }
     if provider_identity not in allowed_identities:
         fail("provider identity is outside the closed allowlist")
+    provider_image_id = test["provider_image"]["id"]
+    if not isinstance(provider_image_id, str) or (
+        test["provider"] == "digitalocean"
+        and re.fullmatch(r"[1-9][0-9]{0,19}", provider_image_id) is None
+    ) or (
+        test["provider"] == "gcp"
+        and re.fullmatch(
+            r"https://www\.googleapis\.com/compute/v1/projects/debian-cloud/"
+            r"global/images/debian-13-arm64-v[0-9]{8}",
+            provider_image_id,
+        )
+        is None
+    ):
+        fail("provider image identity is inconsistent with the provider")
     for name in ("started_at", "ended_at"):
         try:
             datetime.fromisoformat(str(test[name]).replace("Z", "+00:00"))

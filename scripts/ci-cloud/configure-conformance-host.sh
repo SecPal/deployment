@@ -9,20 +9,87 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 install -d -o root -g root -m 0755 /etc/containers/systemd/users/20000
 install -d -o secpal-ci -g secpal-ci -m 0700 /srv/secpal-ci
 
-if ! grep -Fqx 'secpal-ci:200000:65536' /etc/subuid; then
-  if grep -q '^secpal-ci:' /etc/subuid; then
-    printf 'ERROR: secpal-ci has an unexpected subordinate UID range.\n' >&2
+normalize_subordinate_ids() {
+  local database="$1"
+  local add_option="$2"
+  local delete_option="$3"
+  local label="$4"
+  local identity_database="$5"
+  local line account start count start_value count_value end_value range
+  local identities identity_name identity identity_value
+  local -a existing_ranges=()
+
+  if [[ ! -e "$database" ]]; then
+    install -o root -g root -m 0644 /dev/null "$database"
+  elif [[ ! -f "$database" || -L "$database" ]]; then
+    printf 'ERROR: subordinate %s database is not a regular file.\n' "$label" >&2
     exit 1
   fi
-  usermod --add-subuids 200000-265535 secpal-ci
-fi
-if ! grep -Fqx 'secpal-ci:200000:65536' /etc/subgid; then
-  if grep -q '^secpal-ci:' /etc/subgid; then
-    printf 'ERROR: secpal-ci has an unexpected subordinate GID range.\n' >&2
+
+  if ! identities="$(getent "$identity_database")"; then
+    printf 'ERROR: unable to read the host %s identity database.\n' "$label" >&2
     exit 1
   fi
-  usermod --add-subgids 200000-265535 secpal-ci
-fi
+  while IFS=: read -r identity_name _ identity _; do
+    if [[ -z "$identity_name" || ! "$identity" =~ ^[0-9]{1,10}$ ]]; then
+      printf 'ERROR: host %s identity database is malformed.\n' "$label" >&2
+      exit 1
+    fi
+    identity_value=$((10#$identity))
+    if ((identity_value > 4294967295)); then
+      printf 'ERROR: host %s identity exceeds the ID space.\n' "$label" >&2
+      exit 1
+    elif ((identity_value >= 200000 && identity_value <= 265535)); then
+      printf 'ERROR: fixed secpal-ci range overlaps a host identity in %s.\n' \
+        "$label" >&2
+      exit 1
+    fi
+  done <<<"$identities"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    if [[ ! "$line" =~ ^([^:]+):([1-9][0-9]{0,9}):([1-9][0-9]{0,9})$ ]]; then
+      printf 'ERROR: subordinate %s database contains a malformed range.\n' \
+        "$label" >&2
+      exit 1
+    fi
+    account="${BASH_REMATCH[1]}"
+    start="${BASH_REMATCH[2]}"
+    count="${BASH_REMATCH[3]}"
+    start_value=$((10#$start))
+    count_value=$((10#$count))
+    if ((start_value > 4294967295 || count_value > 4294967296 - start_value)); then
+      printf 'ERROR: subordinate %s database range exceeds the ID space.\n' \
+        "$label" >&2
+      exit 1
+    fi
+    end_value=$((start_value + count_value - 1))
+    if [[ "$account" == secpal-ci ]]; then
+      existing_ranges+=("$start_value-$end_value")
+    elif ((start_value <= 265535 && end_value >= 200000)); then
+      printf 'ERROR: subordinate %s range overlaps the fixed secpal-ci range.\n' \
+        "$label" >&2
+      exit 1
+    fi
+  done <"$database"
+
+  if [[ "${#existing_ranges[@]}" -eq 1 &&
+    "${existing_ranges[0]}" == 200000-265535 ]]; then
+    return
+  fi
+  for range in "${existing_ranges[@]}"; do
+    usermod "$delete_option" "$range" secpal-ci
+  done
+  usermod "$add_option" 200000-265535 secpal-ci
+  if [[ "$(grep -Ec '^secpal-ci:' "$database" || true)" -ne 1 ]] ||
+    ! grep -Fqx 'secpal-ci:200000:65536' "$database"; then
+    printf 'ERROR: unable to normalize the subordinate %s range.\n' "$label" >&2
+    exit 1
+  fi
+}
+
+normalize_subordinate_ids /etc/subuid --add-subuids --del-subuids UID passwd
+normalize_subordinate_ids /etc/subgid --add-subgids --del-subgids GID group
 
 systemctl --global disable \
   podman.socket podman.service podman-auto-update.timer || true

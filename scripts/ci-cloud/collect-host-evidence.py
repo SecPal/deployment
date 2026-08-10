@@ -801,6 +801,7 @@ def cloud_identity_facts(provider: str) -> dict[str, bool]:
         completed = subprocess.run(
             [
                 "curl",
+                "--disable",
                 "--noproxy",
                 "*",
                 "--fail",

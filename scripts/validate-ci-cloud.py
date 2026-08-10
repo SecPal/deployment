@@ -94,6 +94,45 @@ def string_collection_constant(text: str, name: str) -> set[str]:
     raise ContractError(f"{name} must be a literal string collection")
 
 
+def subprocess_literal_arguments(text: str, function_name: str) -> list[list[str]]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        raise ContractError(
+            f"trusted Python source containing {function_name} is invalid"
+        ) from None
+    function = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
+        ),
+        None,
+    )
+    if function is None:
+        raise ContractError(f"trusted Python function {function_name} is missing")
+    commands: list[list[str]] = []
+    for node in ast.walk(function):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "subprocess"
+            and node.func.attr == "run"
+            and node.args
+        ):
+            continue
+        try:
+            arguments = ast.literal_eval(node.args[0])
+        except (ValueError, TypeError, SyntaxError):
+            continue
+        if isinstance(arguments, list) and all(
+            isinstance(argument, str) for argument in arguments
+        ):
+            commands.append(arguments)
+    return commands
+
+
 def load_workflow(root: Path, relative: str) -> tuple[dict[str, object], str]:
     text = read(root, relative)
     try:
@@ -321,6 +360,16 @@ def validate_opentofu(root: Path) -> None:
         require(required in cloud_init, "cloud-init omitted required D.1 host policy")
     require("set -euo pipefail" in host_setup, "host setup must use strict Bash mode")
     require(
+        "normalize_subordinate_ids /etc/subuid --add-subuids --del-subuids UID passwd"
+        in host_setup
+        and "normalize_subordinate_ids /etc/subgid --add-subgids --del-subgids GID group"
+        in host_setup
+        and "elif ((start_value <= 265535 && end_value >= 200000)); then"
+        in host_setup
+        and "fixed secpal-ci range overlaps a host identity" in host_setup,
+        "host setup must safely replace automatic subordinate ID ranges",
+    )
+    require(
         "/run/secpal-ci-evidence/apparmor-status" in host_setup,
         "host setup must capture root-owned AppArmor policy counts",
     )
@@ -339,6 +388,12 @@ def validate_opentofu(root: Path) -> None:
         and all(isinstance(package, str) for package in packages)
         and set(packages) == string_collection_constant(collector, "BOOTSTRAP_PACKAGES"),
         "collector bootstrap package evidence must exactly match cloud-init packages",
+    )
+    curl_commands = subprocess_literal_arguments(collector, "cloud_identity_facts")
+    require(
+        len(curl_commands) == 1
+        and curl_commands[0][:2] == ["curl", "--disable"],
+        "cloud identity probe must ignore target-owned curl configuration",
     )
     forbidden = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
     require(not any(value in (main + variables) for value in forbidden), "OpenTofu accepted a forbidden control or private key")
@@ -458,6 +513,17 @@ def validate(root: Path) -> None:
         and 'provider_image_id="${11}"' in remote
         and '"$root_ssh_denied" "$provider_image_slug" "$provider_image_id"' in remote,
         "resolved provider image ID must reach the trusted evidence collector",
+    )
+    require(
+        "/usr/bin/env -i" in remote
+        and "/usr/bin/python3 -I -" in remote
+        and '\n  python3 - "$provider"' not in remote,
+        "trusted evidence collector must ignore target-owned Python startup state",
+    )
+    require(
+        "/tmp/secpal-target-conformance.log" not in remote
+        and ") >/dev/null 2>&1" in remote,
+        "target output must not use a shared temporary path",
     )
 
 

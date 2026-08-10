@@ -362,6 +362,40 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "declared schema"):
             self.validator.validate_document(document)
 
+    def test_rejects_digitalocean_evidence_with_gcp_image_id(self) -> None:
+        document = valid_document()
+        document["test"]["provider_image"]["id"] = (
+            "https://www.googleapis.com/compute/v1/projects/debian-cloud/"
+            "global/images/debian-13-arm64-v20260801"
+        )
+        with self.assertRaisesRegex(ValueError, "provider image identity"):
+            self.validator.validate_document(document)
+
+    def test_declared_schema_binds_image_id_to_provider(self) -> None:
+        document = valid_document()
+        document["test"]["provider_image"]["id"] = (
+            "https://www.googleapis.com/compute/v1/projects/debian-cloud/"
+            "global/images/debian-13-arm64-v20260801"
+        )
+        schema = json.loads(
+            (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(schema).validate(document)
+
+    def test_declared_schema_binds_the_complete_provider_selection(self) -> None:
+        document = valid_document()
+        document["test"]["profile"] = "axion"
+        schema = json.loads(
+            (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(schema).validate(document)
+
 
 if __name__ == "__main__":
     unittest.main()

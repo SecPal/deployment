@@ -206,7 +206,9 @@ class CloudHostAdmissionTests(unittest.TestCase):
         completed = self.collector.subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=""
         )
-        with mock.patch.object(self.collector.subprocess, "run", return_value=completed):
+        with mock.patch.object(
+            self.collector.subprocess, "run", return_value=completed
+        ) as run:
             self.assertEqual(
                 {
                     "probe_supported": True,
@@ -215,6 +217,7 @@ class CloudHostAdmissionTests(unittest.TestCase):
                 },
                 self.collector.cloud_identity_facts("gcp"),
             )
+        self.assertEqual(["curl", "--disable"], run.call_args.args[0][:2])
 
     def test_arm_cpu_model_uses_effective_lscpu_facts(self) -> None:
         lscpu = {

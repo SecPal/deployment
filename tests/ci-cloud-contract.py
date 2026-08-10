@@ -103,6 +103,73 @@ class CloudCIContractTests(unittest.TestCase):
             "systemctl disable --now podman.socket podman.service", host_setup
         )
 
+    def test_cloud_init_repairs_automatic_subordinate_ids(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("--del-subuids", host_setup)
+        self.assertIn("--del-subgids", host_setup)
+        self.assertIn(
+            "normalize_subordinate_ids /etc/subuid --add-subuids --del-subuids UID passwd",
+            host_setup,
+        )
+        self.assertIn(
+            "normalize_subordinate_ids /etc/subgid --add-subgids --del-subgids GID group",
+            host_setup,
+        )
+        self.assertIn("overlaps the fixed secpal-ci range", host_setup)
+        self.assertIn("fixed secpal-ci range overlaps a host identity", host_setup)
+
+    def test_trusted_collector_ignores_target_owned_startup_configuration(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/usr/bin/env -i", remote)
+        self.assertIn("/usr/bin/python3 -I -", remote)
+        self.assertNotIn("\n  python3 - \"$provider\"", remote)
+
+    def test_target_output_does_not_use_a_shared_temporary_path(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("/tmp/secpal-target-conformance.log", remote)
+        self.assertIn(") >/dev/null 2>&1", remote)
+
+    def test_static_contract_rejects_nonisolated_collector_python(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "/usr/bin/python3 -I -",
+            "/usr/bin/python3 -",
+        )
+
+    def test_static_contract_rejects_shared_target_log(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            ") >/dev/null 2>&1",
+            ") >/tmp/secpal-target-conformance.log 2>&1",
+        )
+
+    def test_static_contract_rejects_curl_user_configuration(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-host-evidence.py",
+            '                "--disable",\n',
+            "",
+        )
+
+    def test_static_contract_rejects_missing_subordinate_id_repair(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "normalize_subordinate_ids /etc/subuid --add-subuids --del-subuids UID passwd",
+            "normalize_subordinate_ids /etc/subuid --add-subuids --add-subuids UID passwd",
+        )
+
+    def test_static_contract_rejects_missing_subordinate_overlap_guard(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "elif ((start_value <= 265535 && end_value >= 200000)); then",
+            "elif false; then",
+        )
+
     def test_rendered_cloud_init_embeds_valid_host_setup(self) -> None:
         template = (
             ROOT / "infra/ci-cloud/digitalocean/cloud-init.tftpl"

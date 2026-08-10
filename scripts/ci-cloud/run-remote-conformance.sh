@@ -143,7 +143,7 @@ set +e
     SECPAL_TARGET_SHA="$target_sha" \
     timeout --signal=TERM --kill-after=30s 40m \
     bash scripts/ci-cloud/target-conformance.sh
-) >/tmp/secpal-target-conformance.log 2>&1
+) >/dev/null 2>&1
 status=$?
 set -e
 exit "$status"
@@ -154,7 +154,12 @@ ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 evidence_json="$evidence_dir/evidence.json"
 ssh "${ssh_options[@]}" "secpal-ci@$address" \
-  python3 - "$provider" "$region" "$profile" "$target_sha" \
+  /usr/bin/env -i \
+  HOME=/home/secpal-ci \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  /usr/bin/python3 -I - "$provider" "$region" "$profile" "$target_sha" \
   "$run_id" "$run_attempt" "$started_at" "$ended_at" "$target_status" \
   "$root_ssh_denied" "$provider_image_slug" "$provider_image_id" \
   "$machine_type" \

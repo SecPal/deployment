@@ -75,7 +75,53 @@
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[A-Z0-9_]+$" }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "provider": { "const": "digitalocean" },
+            "region": { "const": "fra1" },
+            "profile": { "const": "intel" },
+            "machine_type": { "const": "s-4vcpu-8gb-intel" },
+            "provider_image": {
+              "properties": {
+                "slug": { "const": "debian-13-x64" },
+                "id": { "pattern": "^[1-9][0-9]{0,19}$" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": { "const": "digitalocean" },
+            "region": { "const": "fra1" },
+            "profile": { "const": "amd" },
+            "machine_type": { "const": "s-4vcpu-8gb-amd" },
+            "provider_image": {
+              "properties": {
+                "slug": { "const": "debian-13-x64" },
+                "id": { "pattern": "^[1-9][0-9]{0,19}$" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": { "const": "gcp" },
+            "region": { "const": "europe-west3-a" },
+            "profile": { "const": "axion" },
+            "machine_type": { "const": "c4a-standard-4" },
+            "provider_image": {
+              "properties": {
+                "slug": { "const": "debian-cloud/debian-13-arm64" },
+                "id": {
+                  "pattern": "^https://www\\.googleapis\\.com/compute/v1/projects/debian-cloud/global/images/debian-13-arm64-v[0-9]{8}$"
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "platform": {
       "type": "object",

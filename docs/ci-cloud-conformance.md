@@ -215,6 +215,21 @@ host contract and negative validators. A later D.1a-compatible commit can
 extend that same narrow entrypoint with the reviewed real rootless
 Podman/Quadlet lifecycle.
 
+After the target exits, the runner starts the main-controlled collector by
+absolute path under an empty environment and Python isolated mode. The
+collector retains only the fixed operator home needed to observe effective
+rootless Podman state; Python user-site startup hooks are disabled, and the GCP
+metadata probe disables curl configuration before any other curl option. Target
+output is discarded without creating a shared temporary file. Target-owned
+Python or curl startup configuration therefore cannot replace the collector or
+suppress cloud-identity evidence.
+
+Cloud-init may initially allocate a regular-user subordinate-ID range while it
+creates `secpal-ci`. Before SSH is admitted, the root-owned host setup removes
+every well-formed range assigned to that account and installs the single fixed
+`200000:65536` UID and GID ranges. Malformed databases or a failed exact
+postcondition stop cloud-init instead of leaving ambiguous mappings.
+
 Cloud-init establishes the root-owned, empty Quadlet definition directory and
 restricts the effective generator search path to it. The target account cannot
 populate that directory. Before PR #22 can run its real units, a follow-up must
