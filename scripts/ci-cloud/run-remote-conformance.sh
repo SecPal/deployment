@@ -56,8 +56,84 @@ evidence_json="$evidence_dir/evidence.json"
 evidence_summary="$evidence_dir/summary.md"
 bootstrap_stage="host-key"
 host_setup_failure_json="null"
+host_key_observations_json="null"
 first_scan=""
 second_scan=""
+host_key_connection_refused=0
+host_key_connection_timeout=0
+host_key_no_key=0
+host_key_multiple_keys=0
+host_key_changed_key=0
+host_key_other=0
+last_host_key_observation=""
+
+record_host_key_observation() {
+  local observation="$1"
+
+  case "$observation" in
+    connection_refused) ((host_key_connection_refused += 1)) ;;
+    connection_timeout) ((host_key_connection_timeout += 1)) ;;
+    no_key) ((host_key_no_key += 1)) ;;
+    multiple_keys) ((host_key_multiple_keys += 1)) ;;
+    changed_key) ((host_key_changed_key += 1)) ;;
+    other) ((host_key_other += 1)) ;;
+    *)
+      printf 'ERROR: internal host-key observation is outside the closed set.\n' >&2
+      return 1
+      ;;
+  esac
+  if [[ "$observation" != "$last_host_key_observation" ]]; then
+    printf 'Host-key observation: %s\n' "$observation" >&2
+    last_host_key_observation="$observation"
+  fi
+}
+
+classify_host_key_scan() {
+  local status="$1"
+  local line_count="$2"
+  local reachability="$3"
+
+  case "$reachability" in
+    connection_refused | connection_timeout | other)
+      printf '%s\n' "$reachability"
+      return 0
+      ;;
+    reachable) ;;
+    *) return 1 ;;
+  esac
+  if ((line_count > 1)); then
+    printf 'multiple_keys\n'
+  elif ((line_count == 0)); then
+    printf 'no_key\n'
+  elif ((status != 0)); then
+    printf 'other\n'
+  else
+    printf 'other\n'
+  fi
+}
+
+observe_failed_host_key_scan() {
+  local status="$1"
+  local line_count="$2"
+  local reachability
+
+  if ((line_count > 1)); then
+    printf 'multiple_keys\n'
+    return 0
+  fi
+  reachability="$(
+    python3 scripts/ci-cloud/probe-ssh-port.py "$address"
+  )" || return 1
+  classify_host_key_scan "$status" "$line_count" "$reachability"
+}
+
+render_host_key_observations() {
+  printf -v host_key_observations_json \
+    '{"changed_key":%d,"connection_refused":%d,"connection_timeout":%d,"multiple_keys":%d,"no_key":%d,"other":%d}' \
+    "$host_key_changed_key" "$host_key_connection_refused" \
+    "$host_key_connection_timeout" "$host_key_multiple_keys" \
+    "$host_key_no_key" "$host_key_other"
+}
 
 record_remote_failure() {
   local status=$?
@@ -65,6 +141,9 @@ record_remote_failure() {
   set +e
   [[ -z "$first_scan" ]] || rm -f -- "$first_scan"
   [[ -z "$second_scan" ]] || rm -f -- "$second_scan"
+  if [[ "$bootstrap_stage" == host-key ]]; then
+    render_host_key_observations
+  fi
   if [[ "$status" -ne 0 &&
     (! -s "$evidence_json" || ! -s "$evidence_summary") ]]; then
     rm -f -- "$evidence_json" "$evidence_summary"
@@ -72,7 +151,8 @@ record_remote_failure() {
       "$evidence_dir" "$provider" "$region" "$profile" "$target_sha" \
       "$run_id" "$run_attempt" "$provider_image_slug" \
       "$provider_image_id" "$machine_type" "$orchestration_started_at" \
-      "$bootstrap_stage" "$status" "$host_setup_failure_json"; then
+      "$bootstrap_stage" "$status" "$host_setup_failure_json" \
+      "$host_key_observations_json"; then
       printf 'ERROR: unable to preserve bounded remote failure evidence.\n' >&2
     fi
   fi
@@ -86,18 +166,54 @@ second_scan="$(mktemp "$evidence_dir/.host-key-second.XXXXXX")"
 host_key_ready=false
 bootstrap_deadline=$((SECONDS + 15 * 60))
 while ((SECONDS < bootstrap_deadline)); do
-  if ssh-keyscan -T 5 -t ed25519 "$address" > "$first_scan" 2>/dev/null &&
-    sleep 2 &&
-    ssh-keyscan -T 5 -t ed25519 "$address" > "$second_scan" 2>/dev/null &&
-    [[ "$(grep -cve '^$' "$first_scan")" -eq 1 ]] &&
-    cmp -s "$first_scan" "$second_scan"; then
+  : >"$first_scan"
+  set +e
+  ssh-keyscan -T 5 -t ed25519 "$address" >"$first_scan" 2>/dev/null
+  first_scan_status=$?
+  set -e
+  first_scan_lines="$(grep -cve '^$' "$first_scan" || true)"
+  if [[ "$first_scan_status" -ne 0 || "$first_scan_lines" -ne 1 ]]; then
+    if ! first_scan_observation="$(
+      observe_failed_host_key_scan \
+        "$first_scan_status" "$first_scan_lines"
+    )"; then
+      printf 'ERROR: unable to obtain closed SSH reachability evidence.\n' >&2
+      exit 1
+    fi
+    record_host_key_observation "$first_scan_observation"
+    sleep 5
+    continue
+  fi
+
+  sleep 2
+  : >"$second_scan"
+  set +e
+  ssh-keyscan -T 5 -t ed25519 "$address" >"$second_scan" 2>/dev/null
+  second_scan_status=$?
+  set -e
+  second_scan_lines="$(grep -cve '^$' "$second_scan" || true)"
+  if [[ "$second_scan_status" -ne 0 || "$second_scan_lines" -ne 1 ]]; then
+    if ! second_scan_observation="$(
+      observe_failed_host_key_scan \
+        "$second_scan_status" "$second_scan_lines"
+    )"; then
+      printf 'ERROR: unable to obtain closed SSH reachability evidence.\n' >&2
+      exit 1
+    fi
+    record_host_key_observation "$second_scan_observation"
+  elif cmp -s "$first_scan" "$second_scan"; then
     host_key_ready=true
     break
+  else
+    record_host_key_observation changed_key
   fi
   sleep 5
 done
 if [[ "$host_key_ready" != true ]]; then
-  printf 'ERROR: unable to obtain one stable Ed25519 host key.\n' >&2
+  render_host_key_observations
+  printf '%s%s\n' \
+    'ERROR: unable to obtain one stable Ed25519 host key; closed observations: ' \
+    "$host_key_observations_json" >&2
   exit 1
 fi
 install -m 0600 "$first_scan" "$known_hosts"
@@ -223,17 +339,21 @@ if [[ "$cloud_init_status" -ne 0 ]]; then
 fi
 
 bootstrap_stage="root-ssh"
-root_probe="$(mktemp "$evidence_dir/.root-ssh-probe.XXXXXX")"
 set +e
 timeout --signal=TERM --kill-after=5s 20s \
-  ssh "${ssh_options[@]}" "root@$address" true >"$root_probe" 2>&1
+  ssh "${ssh_options[@]}" "root@$address" true >/dev/null 2>&1
 root_probe_status=$?
+operator_recheck_status=1
+if [[ "$root_probe_status" -eq 255 ]]; then
+  timeout --signal=TERM --kill-after=5s 20s \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" true >/dev/null 2>&1
+  operator_recheck_status=$?
+fi
 set -e
 root_ssh_denied=false
-if [[ "$root_probe_status" -eq 255 ]] && grep -qi 'permission denied' "$root_probe"; then
+if [[ "$root_probe_status" -eq 255 && "$operator_recheck_status" -eq 0 ]]; then
   root_ssh_denied=true
 fi
-rm -f -- "$root_probe"
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 bootstrap_stage="target"

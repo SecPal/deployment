@@ -131,6 +131,39 @@ class CloudCIContractTests(unittest.TestCase):
                     (ROOT / relative).read_text(encoding="utf-8"),
                 )
 
+    def test_cloud_runs_are_serialized_without_discarding_pending_dispatches(
+        self,
+    ) -> None:
+        workflow = yaml.load(
+            (ROOT / ".github/workflows/cloud-conformance.yml").read_text(
+                encoding="utf-8"
+            ),
+            Loader=yaml.BaseLoader,
+        )
+        self.assertEqual(
+            {
+                "group": "debian13-cloud-conformance",
+                "cancel-in-progress": "false",
+                "queue": "max",
+            },
+            workflow["concurrency"],
+        )
+        for job_name, job in workflow["jobs"].items():
+            with self.subTest(job=job_name):
+                self.assertNotIn("concurrency", job)
+        actionlint = yaml.safe_load(
+            (ROOT / ".github/actionlint.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [
+                '^unexpected key "queue" for "concurrency" section\\. '
+                'expected one of "cancel-in-progress", "group"$'
+            ],
+            actionlint["paths"][
+                ".github/workflows/cloud-conformance.yml"
+            ]["ignore"],
+        )
+
     def test_cloud_init_uses_shellchecked_trusted_setup(self) -> None:
         cloud_init = (
             ROOT / "infra/ci-cloud/digitalocean/cloud-init.tftpl"
@@ -365,6 +398,24 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertLess(activation.index(marker), activation.index(restart))
         self.assertLess(activation.index(restart), activation.index(activated))
         self.assertLess(activation.index(activated), activation.index(retirement))
+        arm_timer = "arm_diagnostic_ssh_recovery"
+        stop_listener = 'systemctl stop "$diagnostic_ssh_service"'
+        verify_primary = 'systemctl is-active --quiet ssh.service'
+        self.assertIn(arm_timer, activation)
+        recovery = host_setup.split("arm_diagnostic_ssh_recovery() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        self.assertIn('systemctl start "$diagnostic_ssh_timer"', recovery)
+        self.assertIn(
+            'systemctl is-active --quiet "$diagnostic_ssh_timer"',
+            recovery,
+        )
+        self.assertIn(stop_listener, activation)
+        self.assertIn(verify_primary, activation)
+        self.assertLess(activation.index(arm_timer), activation.index(stop_listener))
+        self.assertLess(activation.index(stop_listener), activation.index(restart))
+        self.assertLess(activation.index(restart), activation.index(verify_primary))
+        self.assertLess(activation.index(verify_primary), activation.index(retirement))
 
     def test_pre_runcmd_failure_keeps_restricted_diagnostic_ssh(self) -> None:
         installer = (
@@ -464,15 +515,16 @@ class CloudCIContractTests(unittest.TestCase):
             host_setup,
         )
 
-    def test_diagnostic_fallback_is_armed_before_primary_ssh_is_masked(self) -> None:
+    def test_diagnostic_fallback_is_started_after_primary_ssh_is_masked(self) -> None:
         installer = (
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
         ).read_text(encoding="utf-8")
-        arm = "prepare_diagnostic_fallback\n"
-        mask = "if ! systemctl mask --now ssh.service ssh.socket"
         preparation_function = installer.split(
             "prepare_diagnostic_fallback() {", 1
         )[1].split("\n}\n", 1)[0]
+        start_function = installer.split("start_diagnostic_fallback() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
         for preparation in (
             "ensure_diagnostic_identity",
             "ssh-keygen -A",
@@ -481,7 +533,39 @@ class CloudCIContractTests(unittest.TestCase):
         ):
             with self.subTest(preparation=preparation):
                 self.assertIn(preparation, preparation_function)
-        self.assertLess(installer.index(arm), installer.index(mask))
+        self.assertLess(
+            start_function.index("prepare_diagnostic_fallback"),
+            start_function.index("systemctl mask --now ssh.service ssh.socket"),
+        )
+        self.assertLess(
+            start_function.index("systemctl mask --now ssh.service ssh.socket"),
+            start_function.index('systemctl restart "$diagnostic_service"'),
+        )
+        self.assertLess(
+            start_function.index('systemctl restart "$diagnostic_service"'),
+            start_function.index(
+                'systemctl is-active --quiet "$diagnostic_service"'
+            ),
+        )
+        self.assertLess(
+            start_function.index(
+                'systemctl is-active --quiet "$diagnostic_service"'
+            ),
+            start_function.index('systemctl stop "$diagnostic_timer"'),
+        )
+        self.assertIn(
+            '! systemctl is-active --quiet "$diagnostic_timer"',
+            start_function,
+        )
+        initial_transition = installer.rsplit(
+            "if completed_setup_is_valid; then", 1
+        )[1]
+        self.assertIn("if ! start_diagnostic_fallback; then", initial_transition)
+        self.assertIn(
+            "unable to establish restricted diagnostic SSH during bootstrap",
+            initial_transition,
+        )
+        self.assertNotIn("\nprepare_diagnostic_fallback\n", initial_transition)
         cleanup = installer.split("cleanup() {", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("if ! start_diagnostic_fallback; then", cleanup)
         self.assertIn(
@@ -511,6 +595,82 @@ class CloudCIContractTests(unittest.TestCase):
             '    "$diagnostic_timer_unit"',
             installer,
         )
+
+    def test_diagnostic_listener_readiness_precedes_timer_disarm(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        preparation = installer.split(
+            "prepare_diagnostic_fallback() {", 1
+        )[1].split("\n}\n", 1)[0]
+        initial_start = installer.split("start_diagnostic_fallback() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        restore = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+
+        self.assertIn("Type=notify", preparation)
+        self.assertNotIn("Type=exec", preparation)
+        self.assertLess(
+            initial_start.index('systemctl restart "$diagnostic_service"'),
+            initial_start.index(
+                'systemctl is-active --quiet "$diagnostic_service"'
+            ),
+        )
+        self.assertLess(
+            initial_start.index(
+                'systemctl is-active --quiet "$diagnostic_service"'
+            ),
+            initial_start.index('systemctl stop "$diagnostic_timer"'),
+        )
+        self.assertLess(
+            restore.index('systemctl restart "$diagnostic_ssh_service"'),
+            restore.index(
+                'systemctl is-active --quiet "$diagnostic_ssh_service"'
+            ),
+        )
+        self.assertLess(
+            restore.index(
+                'systemctl is-active --quiet "$diagnostic_ssh_service"'
+            ),
+            restore.index('systemctl stop "$diagnostic_ssh_timer"'),
+        )
+
+    def test_failed_host_key_scan_uses_closed_tcp_probe(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        classifier = remote.split("classify_host_key_scan() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        observer = remote.split("observe_failed_host_key_scan() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn(
+            "connection_refused | connection_timeout | other",
+            classifier,
+        )
+        self.assertIn("reachable", classifier)
+        self.assertIn("scripts/ci-cloud/probe-ssh-port.py", observer)
+        self.assertNotIn("grep", classifier)
+        self.assertNotIn("_scan_error", remote)
+
+    def test_root_ssh_denial_uses_transport_recheck_not_stderr(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        root_admission = remote.split('bootstrap_stage="root-ssh"', 1)[1].split(
+            'started_at="$(date -u', 1
+        )[0]
+        self.assertIn('"$root_probe_status" -eq 255', root_admission)
+        self.assertIn("operator_recheck_status", root_admission)
+        self.assertIn('"secpal-ci@$address" true', root_admission)
+        self.assertNotIn("permission denied", root_admission)
+        self.assertNotIn("root_probe=", root_admission)
 
     def test_diagnostic_fallback_staging_and_reporter_are_strict(self) -> None:
         installer = (
@@ -588,11 +748,7 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn(completed_guard, installer)
         self.assertLess(
             installer.index(completed_guard),
-            installer.rindex("prepare_diagnostic_fallback\n"),
-        )
-        self.assertLess(
-            installer.index(completed_guard),
-            installer.rindex("prepare_diagnostic_fallback\n"),
+            installer.rindex("if ! start_diagnostic_fallback; then"),
         )
         self.assertIn("stat -c '%u:%g:%a'", installer)
         self.assertIn('cmp -s -- - "$active_operator_key"', installer)
@@ -660,9 +816,100 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_masking_before_fallback_arm(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/install-diagnostic-ssh.sh",
-            "prepare_diagnostic_fallback\n"
-            "if ! systemctl mask --now ssh.service ssh.socket",
-            "if ! systemctl mask --now ssh.service ssh.socket",
+            "if ! start_diagnostic_fallback; then\n"
+            "  printf 'ERROR: unable to establish restricted diagnostic SSH "
+            "during bootstrap.\\n' >&2\n"
+            "  exit 1\n"
+            "fi\n",
+            "prepare_diagnostic_fallback\n",
+        )
+
+    def test_static_contract_rejects_disarming_before_diagnostic_readiness(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            '  systemctl restart "$diagnostic_service" >/dev/null 2>&1 || return 1\n',
+            '  systemctl stop "$diagnostic_timer" || return 1\n'
+            '  systemctl restart "$diagnostic_service" >/dev/null 2>&1 || return 1\n',
+        )
+
+    def test_static_contract_rejects_unarmed_operator_ssh_handoff(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "  if ! arm_diagnostic_ssh_recovery; then\n",
+            "  if ! true; then\n",
+        )
+
+    def test_static_contract_rejects_nonrecovering_diagnostic_daemon(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "StartLimitIntervalSec=2m\n"
+            "StartLimitBurst=5\n"
+            "\n"
+            "[Service]\n"
+            "Type=notify\n"
+            "ExecStart=/usr/sbin/sshd -D -e -f $diagnostic_config\n"
+            "Restart=on-failure\n"
+            "RestartSec=5s\n",
+            "",
+        )
+
+    def test_static_contract_rejects_process_only_diagnostic_readiness(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "Type=notify\n",
+            "Type=exec\n",
+        )
+
+    def test_static_contract_rejects_unobserved_host_key_reachability(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            '    python3 scripts/ci-cloud/probe-ssh-port.py "$address"\n',
+            "    printf 'other\\n'\n",
+        )
+
+    def test_static_contract_rejects_scanner_stderr_inference(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            '  local reachability="$3"\n',
+            '  local reachability="$3"\n'
+            "  grep -Eqi 'connection refused' /tmp/scanner-error || true\n",
+        )
+
+    def test_static_contract_rejects_root_denial_without_transport_recheck(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            'operator_recheck_status=1\n'
+            'if [[ "$root_probe_status" -eq 255 ]]; then\n'
+            '  timeout --signal=TERM --kill-after=5s 20s \\\n'
+            '    ssh "${ssh_options[@]}" "secpal-ci@$address" true '
+            '>/dev/null 2>&1\n'
+            '  operator_recheck_status=$?\n'
+            'fi\n',
+            'operator_recheck_status=0\n',
+        )
+
+    def test_static_contract_rejects_discarding_pending_cloud_dispatches(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            "  queue: max\n",
+            "",
+        )
+
+    def test_static_contract_rejects_job_level_concurrency_hidden_by_linter_ignore(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            "  validate:\n    name: Validate immutable dispatch selection\n",
+            "  validate:\n"
+            "    concurrency:\n"
+            "      group: hidden-invalid-queue\n"
+            "      queue: max\n"
+            "    name: Validate immutable dispatch selection\n",
         )
 
     def test_static_contract_rejects_discarded_preparation_failure_diagnostics(
@@ -683,9 +930,8 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/configure-conformance-host.sh",
             "  if ! publish_completion_marker; then\n"
             "    return 1\n"
-            "  fi\n"
-            "  if ! systemctl restart ssh.service; then\n",
-            "  if ! systemctl restart ssh.service; then\n",
+            "  fi\n",
+            "",
         )
 
     def test_static_contract_rejects_fixed_operator_readiness_attempts(self) -> None:
@@ -714,8 +960,8 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_unmasked_bootstrap_ssh(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/install-diagnostic-ssh.sh",
-            "if ! systemctl mask --now ssh.service ssh.socket; then",
-            "if ! true; then",
+            "  systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1\n",
+            "  true\n",
         )
 
     def test_static_contract_rejects_missing_diagnostic_ssh_timer(self) -> None:
@@ -955,6 +1201,18 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("cloud-init status --long", remote)
         self.assertIn("head -c 8192", remote)
         self.assertNotIn("cloud-init-output.log", remote)
+        self.assertIn("host_key_observations_json", remote)
+        for observation in (
+            "connection_refused",
+            "connection_timeout",
+            "no_key",
+            "multiple_keys",
+            "changed_key",
+            "other",
+        ):
+            self.assertIn(observation, remote)
+        self.assertNotIn('cat "$first_scan_error"', remote)
+        self.assertNotIn('cat "$second_scan_error"', remote)
 
     def test_remote_bash_programs_use_strict_mode(self) -> None:
         remote = (

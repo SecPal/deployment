@@ -196,7 +196,16 @@ def validate_conformance_workflow(root: Path) -> None:
         "target_sha may enter the workflow only through the validation-step environment",
     )
     require("github.ref == 'refs/heads/main'" in text, "default-branch execution must fail closed")
-    require("cancel-in-progress: false" in text, "cloud cleanup must not be cancelled by concurrency")
+    concurrency = document.get("concurrency")
+    require(
+        concurrency
+        == {
+            "group": "debian13-cloud-conformance",
+            "cancel-in-progress": "false",
+            "queue": "max",
+        },
+        "cloud runs must use the FIFO queue without cancellation",
+    )
     require(text.count("ref: ${{ github.sha }}") == 4, "trusted checkout must stay on the workflow commit")
     require(text.count("persist-credentials: false") == 4, "checkout credentials must not persist")
     require(
@@ -247,6 +256,10 @@ def validate_conformance_workflow(root: Path) -> None:
     for job_name, raw_job in jobs.items():
         assert isinstance(raw_job, dict)
         require(not any(key in raw_job for key in ("env", "secrets")), "job-level cloud credentials are forbidden")
+        require(
+            "concurrency" not in raw_job,
+            f"{job_name} must inherit the reviewed workflow-level queue",
+        )
         for raw_step in raw_job.get("steps", []):
             assert isinstance(raw_step, dict)
             name = str(raw_step.get("name", ""))
@@ -421,6 +434,21 @@ def validate_opentofu(root: Path) -> None:
     diagnostic_preparation = diagnostic_ssh.split(
         "prepare_diagnostic_fallback() {", 1
     )[1].split("\n}", 1)[0]
+    diagnostic_start = diagnostic_ssh.split(
+        "start_diagnostic_fallback() {", 1
+    )[1].split("\n}", 1)[0]
+    diagnostic_initial_transition = diagnostic_ssh.rsplit(
+        "if completed_setup_is_valid; then", 1
+    )[1]
+    operator_activation = host_setup.split(
+        "activate_operator_ssh() {", 1
+    )[1].split("\n}", 1)[0]
+    diagnostic_restore = host_setup.split(
+        "restore_diagnostic_ssh() {", 1
+    )[1].split("\n}", 1)[0]
+    diagnostic_recovery = host_setup.split(
+        "arm_diagnostic_ssh_recovery() {", 1
+    )[1].split("\n}", 1)[0]
     completed_validator = diagnostic_ssh.split(
         "completed_setup_is_valid() {", 1
     )[1].split("\n}", 1)[0]
@@ -443,6 +471,8 @@ def validate_opentofu(root: Path) -> None:
         and 'chmod 0600 "$diagnostic_config"' in diagnostic_preparation
         and 'chmod 0600 "$diagnostic_key" "$diagnostic_config"'
         not in diagnostic_preparation
+        and "Type=notify" in diagnostic_preparation
+        and "Type=exec" not in diagnostic_preparation
         and "stat -c '%u:%g:%a' -- \"$diagnostic_key\""
         in diagnostic_preparation
         and "stat -c '%u:%g:%a' -- \"$diagnostic_config\""
@@ -463,9 +493,25 @@ def validate_opentofu(root: Path) -> None:
         in diagnostic_preparation
         and '"$diagnostic_timer_unit_metadata" != 0:0:644'
         in diagnostic_preparation
-        and diagnostic_ssh.index("if completed_setup_is_valid; then")
-        < diagnostic_ssh.rindex("prepare_diagnostic_fallback\n")
-        < diagnostic_ssh.rindex("if ! systemctl mask --now ssh.service ssh.socket")
+        and diagnostic_start.index("prepare_diagnostic_fallback")
+        < diagnostic_start.index("systemctl mask --now ssh.service ssh.socket")
+        < diagnostic_start.index('systemctl restart "$diagnostic_service"')
+        < diagnostic_start.index(
+            'systemctl is-active --quiet "$diagnostic_service"'
+        )
+        < diagnostic_start.index('systemctl stop "$diagnostic_timer"')
+        and '! systemctl is-active --quiet "$diagnostic_timer"'
+        in diagnostic_start
+        and "Restart=on-failure" in diagnostic_preparation
+        and "RestartSec=5s" in diagnostic_preparation
+        and "StartLimitIntervalSec=2m" in diagnostic_preparation
+        and "StartLimitBurst=5" in diagnostic_preparation
+        and "if ! start_diagnostic_fallback; then"
+        in diagnostic_initial_transition
+        and "unable to establish restricted diagnostic SSH during bootstrap"
+        in diagnostic_initial_transition
+        and "\nprepare_diagnostic_fallback\n"
+        not in diagnostic_initial_transition
         and 'completion_marker="$active_operator_root/host-setup-complete"'
         in diagnostic_ssh
         and 'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"'
@@ -489,8 +535,39 @@ def validate_opentofu(root: Path) -> None:
         in diagnostic_cleanup
         and 'rm -f -- "$diagnostic_key" "$diagnostic_command"'
         not in diagnostic_cleanup
-        and 'systemctl start "$diagnostic_service"' in diagnostic_ssh,
-        "diagnostic fallback must be prepared and armed before primary SSH is masked",
+        and 'systemctl restart "$diagnostic_service"' in diagnostic_ssh,
+        "restricted diagnostic SSH must replace primary SSH transactionally",
+    )
+    require(
+        'systemctl start "$diagnostic_ssh_timer"' in diagnostic_recovery
+        and 'systemctl is-active --quiet "$diagnostic_ssh_timer"'
+        in diagnostic_recovery
+        and "arm_diagnostic_ssh_recovery" in operator_activation
+        and 'systemctl stop "$diagnostic_ssh_service"' in operator_activation
+        and 'systemctl restart ssh.service' in operator_activation
+        and 'systemctl is-active --quiet ssh.service' in operator_activation
+        and operator_activation.index(
+            "arm_diagnostic_ssh_recovery"
+        )
+        < operator_activation.index(
+            'systemctl stop "$diagnostic_ssh_service"'
+        )
+        < operator_activation.index("systemctl restart ssh.service")
+        < operator_activation.index("systemctl is-active --quiet ssh.service")
+        < operator_activation.index("retire_diagnostic_ssh")
+        and 'arm_diagnostic_ssh_recovery || return 1' in diagnostic_restore
+        and diagnostic_restore.index("arm_diagnostic_ssh_recovery")
+        < diagnostic_restore.index("systemctl mask --now ssh.service ssh.socket")
+        < diagnostic_restore.index(
+            'systemctl restart "$diagnostic_ssh_service"'
+        )
+        < diagnostic_restore.index(
+            'systemctl is-active --quiet "$diagnostic_ssh_service"'
+        )
+        < diagnostic_restore.index(
+            'systemctl stop "$diagnostic_ssh_timer"'
+        ),
+        "SSH handoffs must retain a verified listener or armed recovery timer",
     )
     require(
         "install-diagnostic-ssh.sh" in main
@@ -894,6 +971,7 @@ def validate(root: Path) -> None:
     validate_gcp_iam_role(root)
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
+    ssh_probe = read(root, "scripts/ci-cloud/probe-ssh-port.py")
     failure_writer = read(root, "scripts/ci-cloud/write-bootstrap-failure.py")
     failure_schema_text = read(
         root, "schemas/ci-cloud-bootstrap-failure.schema.json"
@@ -904,9 +982,17 @@ def validate(root: Path) -> None:
         Draft202012Validator.check_schema(failure_schema)
     except (json.JSONDecodeError, SchemaError):
         raise ContractError("bootstrap failure evidence schema is invalid") from None
+    root_ssh_admission = remote.split('bootstrap_stage="root-ssh"', 1)[1].split(
+        'started_at="$(date -u', 1
+    )[0]
     require(
-        "root_ssh_denied=true" in remote
-        and 'grep -qi \'permission denied\'' in remote,
+        "root_ssh_denied=true" in root_ssh_admission
+        and '"$root_probe_status" -eq 255' in root_ssh_admission
+        and "operator_recheck_status" in root_ssh_admission
+        and 'ssh "${ssh_options[@]}" "secpal-ci@$address" true'
+        in root_ssh_admission
+        and "permission denied" not in root_ssh_admission
+        and "root_probe=" not in root_ssh_admission,
         "remote orchestration must prove effective root SSH denial",
     )
     require(
@@ -932,6 +1018,15 @@ def validate(root: Path) -> None:
     )
     require(
         'bootstrap_stage="host-key"' in remote
+        and 'host_key_observations_json="null"' in remote
+        and "record_host_key_observation()" in remote
+        and "classify_host_key_scan()" in remote
+        and "observe_failed_host_key_scan()" in remote
+        and "scripts/ci-cloud/probe-ssh-port.py" in remote
+        and "connection_refused" in remote
+        and "connection_timeout" in remote
+        and "multiple_keys" in remote
+        and "changed_key" in remote
         and 'orchestration_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"'
         in remote
         and '"$orchestration_started_at"' in remote
@@ -940,6 +1035,31 @@ def validate(root: Path) -> None:
         and "head -c 8192" in remote
         and "cloud-init-output.log" not in remote,
         "early remote failures need bounded structured evidence and diagnostics",
+    )
+    host_key_classifier = remote.split("classify_host_key_scan() {", 1)[
+        1
+    ].split("\n}\n", 1)[0]
+    require(
+        "connection_refused | connection_timeout | other"
+        in host_key_classifier
+        and "reachable" in host_key_classifier
+        and "grep" not in host_key_classifier
+        and "_scan_error" not in remote,
+        "host-key reachability must use closed observations instead of scanner text",
+    )
+    require(
+        "PROBE_TIMEOUT_SECONDS = 5.0" in ssh_probe
+        and "socket.AF_INET, socket.SOCK_STREAM" in ssh_probe
+        and "connection.connect_ex((address, 22))" in ssh_probe
+        and "errno.ECONNREFUSED" in ssh_probe
+        and "errno.ETIMEDOUT" in ssh_probe
+        and 'return "connection_refused"' in ssh_probe
+        and 'return "connection_timeout"' in ssh_probe
+        and "ipaddress.ip_address(arguments.address)" in ssh_probe
+        and "not address.is_global" in ssh_probe
+        and "subprocess" not in ssh_probe
+        and "os.environ" not in ssh_probe,
+        "SSH reachability evidence must come from a bounded public-IPv4 TCP probe",
     )
     require(
         "operator_ssh_ready=false" in remote

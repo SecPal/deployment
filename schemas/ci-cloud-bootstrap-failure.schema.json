@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "workflow", "test"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -38,6 +38,7 @@
         "failure_stage",
         "orchestration_exit_status",
         "host_setup_failure",
+        "host_key_observations",
         "result",
         "failed_admission_invariants"
       ],
@@ -113,6 +114,47 @@
             }
           ]
         },
+        "host_key_observations": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "changed_key",
+                "connection_refused",
+                "connection_timeout",
+                "multiple_keys",
+                "no_key",
+                "other"
+              ],
+              "properties": {
+                "changed_key": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "connection_refused": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "connection_timeout": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "multiple_keys": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "no_key": { "type": "integer", "minimum": 0, "maximum": 1000 },
+                "other": { "type": "integer", "minimum": 0, "maximum": 1000 }
+              }
+            }
+          ]
+        },
         "result": { "const": "failed" },
         "failed_admission_invariants": {
           "const": ["CI_CLOUD_REMOTE_ORCHESTRATION"]
@@ -125,6 +167,17 @@
           },
           "else": {
             "properties": { "host_setup_failure": { "type": "null" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "failure_stage": { "const": "host-key" } }
+          },
+          "then": {
+            "properties": { "host_key_observations": { "type": "object" } }
+          },
+          "else": {
+            "properties": { "host_key_observations": { "type": "null" } }
           }
         }
       ],

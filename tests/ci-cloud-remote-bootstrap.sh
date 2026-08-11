@@ -8,11 +8,13 @@ ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
+REAL_PYTHON="$(command -v python3)"
 
 FAKE_BIN="$TEMP_DIR/bin"
 EVIDENCE_DIR="$TEMP_DIR/evidence"
 SSH_LOG="$TEMP_DIR/ssh.log"
 SSH_KEYSCAN_LOG="$TEMP_DIR/ssh-keyscan.log"
+SSH_PROBE_LOG="$TEMP_DIR/ssh-probe.log"
 PRIVATE_KEY="$TEMP_DIR/id_ed25519"
 mkdir -p "$FAKE_BIN"
 install -m 0600 /dev/null "$PRIVATE_KEY"
@@ -21,10 +23,44 @@ cat >"$FAKE_BIN/ssh-keyscan" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'ssh-keyscan\n' >>"${SECPAL_TEST_SSH_KEYSCAN_LOG:?}"
-if [[ "$(wc -l <"${SECPAL_TEST_SSH_KEYSCAN_LOG:?}")" -eq 1 ]]; then
-  exit 1
+case "$(wc -l <"${SECPAL_TEST_SSH_KEYSCAN_LOG:?}")" in
+  1)
+    exit 1
+    ;;
+  2)
+    exit 1
+    ;;
+  3) exit 0 ;;
+  4)
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKeyA\n' "${*: -1}"
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKeyB\n' "${*: -1}"
+    ;;
+  5)
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKeyA\n' "${*: -1}"
+    ;;
+  6)
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKeyB\n' "${*: -1}"
+    ;;
+  *)
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKey\n' "${*: -1}"
+    ;;
+esac
+EOF
+
+cat >"$FAKE_BIN/python3" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == scripts/ci-cloud/probe-ssh-port.py ]]; then
+  printf 'probe\n' >>"${SECPAL_TEST_SSH_PROBE_LOG:?}"
+  case "$(wc -l <"${SECPAL_TEST_SSH_PROBE_LOG:?}")" in
+    1) printf 'connection_refused\n' ;;
+    2) printf 'connection_timeout\n' ;;
+    3) printf 'reachable\n' ;;
+    *) printf 'other\n' ;;
+  esac
+  exit 0
 fi
-printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKey\n' "${*: -1}"
+exec "${SECPAL_TEST_REAL_PYTHON:?}" "$@"
 EOF
 
 cat >"$FAKE_BIN/ssh-keygen" <<'EOF'
@@ -104,6 +140,8 @@ chmod 0755 "$FAKE_BIN"/*
 set +e
 PATH="$FAKE_BIN:$PATH" SECPAL_TEST_SSH_LOG="$SSH_LOG" \
   SECPAL_TEST_SSH_KEYSCAN_LOG="$SSH_KEYSCAN_LOG" \
+  SECPAL_TEST_SSH_PROBE_LOG="$SSH_PROBE_LOG" \
+  SECPAL_TEST_REAL_PYTHON="$REAL_PYTHON" \
   scripts/ci-cloud/run-remote-conformance.sh \
   digitalocean fra1 intel 1.1.1.1 \
   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 12345 1 \
@@ -120,8 +158,12 @@ if [[ "$(wc -l <"$SSH_LOG")" -ne 5 ]]; then
   printf 'FAIL: target or collector SSH ran after failed cloud-init\n' >&2
   exit 1
 fi
-if [[ "$(wc -l <"$SSH_KEYSCAN_LOG")" -ne 3 ]]; then
+if [[ "$(wc -l <"$SSH_KEYSCAN_LOG")" -ne 8 ]]; then
   printf 'FAIL: runner did not wait for delayed SSH host-key availability\n' >&2
+  exit 1
+fi
+if [[ "$(wc -l <"$SSH_PROBE_LOG")" -ne 3 ]]; then
+  printf 'FAIL: runner did not use the closed TCP probe for failed scans\n' >&2
   exit 1
 fi
 if [[ -e "$EVIDENCE_DIR/evidence.json" ]]; then
@@ -129,7 +171,7 @@ if [[ -e "$EVIDENCE_DIR/evidence.json" ]]; then
   exit 1
 fi
 jq -e '
-  .schema_version == 1 and
+  .schema_version == 2 and
   .workflow.target_sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and
   .test.failure_stage == "cloud-init" and
   .test.orchestration_exit_status == 2 and
@@ -149,13 +191,21 @@ grep -Fq "Host setup failure: \`apparmor\` (exit \`7\`)" \
   "$EVIDENCE_DIR/summary.md"
 grep -Fq 'Trusted host setup failure: {"exit_status":7,"stage":"apparmor"}' \
   "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: connection_refused' "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: connection_timeout' "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: no_key' "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: multiple_keys' "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: changed_key' "$TEMP_DIR/output.log"
 
 DIAGNOSTIC_EVIDENCE_DIR="$TEMP_DIR/diagnostic-evidence"
 : >"$SSH_LOG"
 : >"$SSH_KEYSCAN_LOG"
+: >"$SSH_PROBE_LOG"
 set +e
 PATH="$FAKE_BIN:$PATH" SECPAL_TEST_SSH_LOG="$SSH_LOG" \
   SECPAL_TEST_SSH_KEYSCAN_LOG="$SSH_KEYSCAN_LOG" \
+  SECPAL_TEST_SSH_PROBE_LOG="$SSH_PROBE_LOG" \
+  SECPAL_TEST_REAL_PYTHON="$REAL_PYTHON" \
   SECPAL_TEST_DIAGNOSTIC_ONLY=true \
   scripts/ci-cloud/run-remote-conformance.sh \
   digitalocean fra1 intel 1.1.1.1 \

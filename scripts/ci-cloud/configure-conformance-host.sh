@@ -168,13 +168,26 @@ stop_diagnostic_ssh() {
     ! systemctl is-active --quiet "$diagnostic_ssh_service"
 }
 
+arm_diagnostic_ssh_recovery() {
+  systemctl start "$diagnostic_ssh_timer" || return 1
+  systemctl is-active --quiet "$diagnostic_ssh_timer"
+}
+
 restore_diagnostic_ssh() {
   rm -f -- "$completion_marker" "$active_ssh_authorized_keys"
   rmdir -- "$active_ssh_authorized_keys_dir" 2>/dev/null || true
   rmdir -- "$active_ssh_root" 2>/dev/null || true
   ssh_key_activated=false
+  arm_diagnostic_ssh_recovery || return 1
   systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
-  systemctl start "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
+  systemctl restart "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
+  if systemctl is-active --quiet ssh.service ||
+    systemctl is-active --quiet ssh.socket ||
+    ! systemctl is-active --quiet "$diagnostic_ssh_service"; then
+    return 1
+  fi
+  systemctl stop "$diagnostic_ssh_timer" || return 1
+  ! systemctl is-active --quiet "$diagnostic_ssh_timer"
 }
 
 retire_diagnostic_ssh() {
@@ -302,7 +315,14 @@ activate_operator_ssh() {
     printf 'ERROR: published operator SSH key has unsafe metadata.\n' >&2
     return 1
   fi
-  if ! stop_diagnostic_ssh; then
+  if ! arm_diagnostic_ssh_recovery; then
+    rm -f -- "$active_ssh_authorized_keys"
+    rmdir -- "$active_ssh_authorized_keys_dir" || true
+    printf 'ERROR: unable to arm diagnostic SSH recovery.\n' >&2
+    return 1
+  fi
+  if ! systemctl stop "$diagnostic_ssh_service" ||
+    systemctl is-active --quiet "$diagnostic_ssh_service"; then
     rm -f -- "$active_ssh_authorized_keys"
     rmdir -- "$active_ssh_authorized_keys_dir" || true
     printf 'ERROR: unable to stop restricted diagnostic SSH.\n' >&2
@@ -320,7 +340,9 @@ activate_operator_ssh() {
   if ! publish_completion_marker; then
     return 1
   fi
-  if ! systemctl restart ssh.service; then
+  if ! systemctl restart ssh.service ||
+    ! systemctl is-active --quiet ssh.service ||
+    systemctl is-active --quiet ssh.socket; then
     restore_diagnostic_ssh || true
     printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
     return 1
