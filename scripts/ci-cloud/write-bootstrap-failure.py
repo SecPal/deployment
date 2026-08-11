@@ -142,11 +142,14 @@ def main() -> int:
         ended_at_text = ended_at.isoformat().replace("+00:00", "Z")
         try:
             host_setup_failure = json.loads(arguments.host_setup_failure_json)
+        except json.JSONDecodeError:
+            fail("host-setup failure diagnostic is invalid JSON")
+        try:
             host_key_observations = json.loads(
                 arguments.host_key_observations_json
             )
         except json.JSONDecodeError:
-            fail("closed bootstrap diagnostic is invalid JSON")
+            fail("host-key observations diagnostic is invalid JSON")
         document = {
             "schema_version": 2,
             "workflow": {

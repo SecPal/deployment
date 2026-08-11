@@ -194,6 +194,18 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             self.assertNotEqual(0, completed.returncode)
             self.assertEqual([], list(output_dir.iterdir()))
 
+    def test_identifies_invalid_host_setup_failure_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(output_dir, host_setup_failure="{")
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn(
+                "host-setup failure diagnostic is invalid JSON",
+                completed.stderr,
+            )
+            self.assertNotIn("host-key observations", completed.stderr)
+            self.assertEqual([], list(output_dir.iterdir()))
+
     def test_rejects_host_setup_detail_outside_cloud_init_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary)
@@ -270,6 +282,21 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
                 ),
             )
             self.assertNotEqual(0, completed.returncode)
+            self.assertEqual([], list(output_dir.iterdir()))
+
+    def test_identifies_invalid_host_key_observations_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(
+                output_dir,
+                host_key_observations="{",
+            )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn(
+                "host-key observations diagnostic is invalid JSON",
+                completed.stderr,
+            )
+            self.assertNotIn("host-setup failure", completed.stderr)
             self.assertEqual([], list(output_dir.iterdir()))
 
     def test_staging_failure_leaves_no_partial_evidence(self) -> None:
