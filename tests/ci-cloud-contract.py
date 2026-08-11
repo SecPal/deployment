@@ -512,6 +512,63 @@ class CloudCIContractTests(unittest.TestCase):
             installer,
         )
 
+    def test_diagnostic_fallback_staging_and_reporter_are_strict(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        preparation = installer.split("prepare_diagnostic_fallback() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        reporter = preparation.split("<<'DIAGNOSTIC'\n", 1)[1].split(
+            "\nDIAGNOSTIC", 1
+        )[0]
+        self.assertTrue(
+            reporter.startswith("#!/usr/bin/env bash\nset -euo pipefail\n")
+        )
+        self.assertIn(
+            'chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp"',
+            preparation,
+        )
+        self.assertNotIn(
+            'chmod 0644 "$service_tmp" "$timer_tmp"',
+            preparation,
+        )
+        self.assertIn('chmod 0644 "$diagnostic_key"', preparation)
+        self.assertIn('chmod 0600 "$diagnostic_config"', preparation)
+        self.assertNotIn(
+            'chmod 0600 "$diagnostic_key" "$diagnostic_config"',
+            preparation,
+        )
+        for artifact, metadata in (
+            ("diagnostic_key", "0:0:644"),
+            ("diagnostic_config", "0:0:600"),
+            ("diagnostic_command", "0:0:755"),
+            ("diagnostic_service_unit", "0:0:644"),
+            ("diagnostic_timer_unit", "0:0:644"),
+        ):
+            with self.subTest(artifact=artifact):
+                self.assertIn(
+                    f'stat -c \'%u:%g:%a\' -- "${artifact}"',
+                    preparation,
+                )
+                self.assertIn(
+                    f'"${artifact}_metadata" != {metadata}',
+                    preparation,
+                )
+
+    def test_diagnostic_failure_reader_is_executable_by_forced_command(self) -> None:
+        for provider in ("digitalocean", "gcp"):
+            template = (
+                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
+            ).read_text(encoding="utf-8")
+            helper = template.split(
+                "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n",
+                1,
+            )[1].split("\n\n", 1)[0]
+            with self.subTest(provider=provider):
+                self.assertIn("    owner: root:root\n", helper)
+                self.assertIn('    permissions: "0755"\n', helper)
+
     def test_completed_setup_survives_cloud_init_bootcmd_on_reboot(self) -> None:
         installer = (
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
@@ -548,6 +605,21 @@ class CloudCIContractTests(unittest.TestCase):
             completed_validator,
         )
         self.assertIn('"$ssh_service_state" == enabled', completed_validator)
+        self.assertIn(
+            "validate_effective_sshd_config || return 1",
+            completed_validator,
+        )
+        reboot_policy = installer.split("validate_effective_sshd_config() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        self.assertIn("denyusers|denygroups|allowgroups", reboot_policy)
+        self.assertIn("pubkeyacceptedalgorithms", reboot_policy)
+        self.assertIn("ssh-ed25519", reboot_policy)
+        self.assertIn('primary_ssh_config=', installer)
+        self.assertIn(
+            '"$ssh_socket_state" == disabled',
+            completed_validator,
+        )
         self.assertNotIn("systemctl is-active", completed_validator)
 
         self.assertIn(
@@ -571,6 +643,18 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/install-diagnostic-ssh.sh",
             "if completed_setup_is_valid; then\n  exit 0\nfi\n",
             "",
+        )
+
+    def test_static_contract_rejects_incomplete_reboot_ssh_validation(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "  validate_effective_sshd_config || return 1\n",
+            "",
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "denyusers|denygroups|allowgroups",
+            "denyusers|denygroups",
         )
 
     def test_static_contract_rejects_masking_before_fallback_arm(self) -> None:
@@ -662,6 +746,17 @@ class CloudCIContractTests(unittest.TestCase):
                     new,
                 )
 
+    def test_static_contract_rejects_nonexecutable_diagnostic_reader(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n"
+            "    owner: root:root\n"
+            '    permissions: "0755"\n',
+            "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n"
+            "    owner: root:root\n"
+            '    permissions: "0700"\n',
+        )
+
     def test_static_contract_rejects_ignored_diagnostic_ssh_marker(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/run-remote-conformance.sh",
@@ -739,6 +834,46 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/configure-conformance-host.sh",
             "  validate_effective_sshd_config || return 1\n",
             "  true\n",
+        )
+
+    def test_effective_sshd_validation_rejects_additional_access_gates(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        validator = host_setup.split("validate_effective_sshd_config() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        for keyword in ("denyusers", "denygroups", "allowgroups", "setenv"):
+            with self.subTest(keyword=keyword):
+                self.assertIn(keyword, validator)
+        self.assertIn("pubkeyacceptedalgorithms", validator)
+        self.assertIn("ssh-ed25519", validator)
+        for expected in (
+            "maxsessions 1",
+            "pamservicename sshd",
+            "refuseconnection no",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, validator)
+
+    def test_static_contract_rejects_missing_additional_ssh_access_gate(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "denyusers|denygroups|allowgroups",
+            "denyusers|denygroups",
+        )
+
+    def test_primary_ssh_uses_only_service_activation(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn("systemctl disable --now ssh.socket", activation)
+        self.assertLess(
+            activation.index("systemctl disable --now ssh.socket"),
+            activation.index("systemctl enable ssh.service"),
         )
 
     def test_setup_failure_trap_precedes_fallible_initialization(self) -> None:

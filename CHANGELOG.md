@@ -57,6 +57,13 @@ SPDX-License-Identifier: CC0-1.0
 - Made diagnostic fallback preparation idempotent across partial installer
   failures, committed host readiness before opening operator SSH, and applied
   one absolute bootstrap deadline across host-key and operator readiness.
+- Kept diagnostic unit staging private, made the closed failure reader usable
+  by its forced command, and revalidated the complete effective SSH policy on
+  initial activation and reboot, including deny/group gates, Ed25519 admission,
+  and exclusive service-based activation.
+- Published the root-owned diagnostic public key read-only so the restricted
+  account can authenticate without gaining write access, and fail closed unless
+  every published diagnostic artifact retains its exact ownership and mode.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

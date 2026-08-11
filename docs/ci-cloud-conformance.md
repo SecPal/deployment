@@ -289,14 +289,20 @@ than being replaced by an unvalidated fallback. The installer creates a locked,
 home-less
 `secpal-ci-diagnostic` account that is independent of later cloud-init user
 creation. The daemon accepts only that account
-from the runner IPv4 with the ephemeral key, denies root, passwords, forwarding,
-TTYs, user startup files, alternate key/principal sources, and every command
-except a fixed `cloud-init status --long` reporter capped at 8 KiB. Its key and
-configuration remain root-only under `/run`. It neither exposes a shell nor
-can execute the selected target revision. If trusted host setup writes its
-closed failure marker, the reporter appends only that validated stage and exit
-status; it never exposes the unrestricted operator account to retrieve the
-marker.
+from the runner IPv4 with the ephemeral Ed25519 key, denies root, passwords,
+forwarding, TTYs, user startup files, revoked or alternate key/principal
+sources, and every command except a fixed `cloud-init status --long` reporter
+capped at 8 KiB. Its public key remains root-owned and read-only mode `0644`,
+while its configuration remains root-only under `/run`; temporary key,
+configuration, and unit files remain mode `0600` until atomic publication. It
+verifies that every published diagnostic artifact is a root-owned regular file
+with its exact intended mode before systemd can load or start the daemon. It
+neither exposes a shell nor can execute the selected target revision. The
+root-owned failure helper is executable but independently restricts writes to
+UID 0, allowing the diagnostic account to read only the closed non-secret
+marker. If trusted host setup writes that marker, the reporter appends only its
+validated stage and exit status; it never exposes the unrestricted operator
+account to retrieve the marker.
 
 Trusted host setup validates and
 normalizes the fixed subordinate-ID ranges, service policy, and AppArmor
@@ -307,16 +313,21 @@ directory and key remain mode
 `0700` and `0600` through the atomic rename; the published paths become `0755`
 and `0644` only immediately before SSH activation. The prioritized SSH drop-in
 uses the `%u` username token so no other account resolves to that file,
-requires public-key authentication, disables command-backed keys and trusted
-user CAs plus principal sources, disables reverse-DNS matching, and restricts
-login to `secpal-ci`. Immediately before publication, host setup validates SSH
-syntax and both operator/root configurations using the validated runner source
-IPv4, the route-selected local listener IPv4, and TCP port 22. A provider-image
-`Match Address`, `Match Host`, or `Match LocalAddress` rule and any alternate
-public-key source therefore fail admission. Only after those checks and key
-publication does host setup cancel and stop the diagnostic daemon, unmask and
-enable the main SSH service, and atomically publish a root-owned mode `0400`
-completion marker. That marker is the rollback-safe setup commit: normal
+requires an accepted Ed25519 public-key algorithm, disables command-backed
+keys, revoked keys, trusted user CAs and principal sources, user startup files,
+server-forced environments, TTYs, forwarding, forced commands, chroots, and
+connection-refusal or zero-session policy, requires strict key-file modes, and
+restricts login to `secpal-ci`. Immediately before publication, host setup
+validates SSH syntax and both operator/root configurations using the validated
+runner source IPv4, the route-selected local listener IPv4, and TCP port 22. It
+also rejects any effective `DenyUsers`, `DenyGroups`, or `AllowGroups` gate that
+could silently exclude the operator. A provider-image `Match Address`, `Match
+Host`, or `Match LocalAddress` rule, alternate public-key source, incompatible
+algorithm list, or extra access gate therefore fails admission. Only after
+those checks and key publication does host setup cancel and stop the diagnostic
+daemon, unmask the primary units, explicitly disable socket activation, enable
+the main SSH service, and atomically publish a root-owned mode `0400` completion
+marker. That marker is the rollback-safe setup commit: normal
 operator SSH is started only after it exists. If main SSH activation fails,
 the published operator key and marker are revoked, the main service is masked
 again, and the restricted diagnostic daemon is restored. After successful
@@ -349,9 +360,11 @@ closed with no SSH listener; exact workflow cleanup or the TTL janitor then
 destroys the inaccessible fixture. After successful setup, the persistent
 operator key and completion marker survive reboot. The repeated cloud-init
 `bootcmd` validates the marker, state-directory ownership and modes, exact
-run-bound public key, SSH syntax, and the persistently enabled primary service
-state before it skips diagnostic installation. It intentionally does not
-require the service to be active while boot units may still be starting.
+run-bound public key, root-owned prioritized configuration, the same effective
+operator/root SSH policy and connection contexts used by initial admission,
+the persistently enabled primary service, and disabled socket activation before
+it skips diagnostic installation. It intentionally does not require the service
+to be active while boot units may still be starting.
 Any missing, mismatched, symlinked, or malformed state revokes the persistent
 operator key and rebuilds only the restricted fallback instead of trusting a
 boolean marker. Cloud-init's one-time `runcmd` is therefore not required to

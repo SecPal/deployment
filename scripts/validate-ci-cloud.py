@@ -393,6 +393,13 @@ def validate_opentofu(root: Path) -> None:
         in diagnostic_ssh
         and "DisableForwarding yes" in diagnostic_ssh
         and "PermitRootLogin no" in diagnostic_ssh
+        and "PermitUserEnvironment no" in diagnostic_ssh
+        and "PubkeyAcceptedAlgorithms ssh-ed25519" in diagnostic_ssh
+        and "RevokedKeys none" in diagnostic_ssh
+        and "RefuseConnection no" in diagnostic_ssh
+        and "MaxSessions 1" in diagnostic_ssh
+        and "PAMServiceName sshd" in diagnostic_ssh
+        and "StrictModes yes" in diagnostic_ssh
         and "UsePAM yes" in diagnostic_ssh
         and "AllowUsers secpal-ci-diagnostic@$runner_ipv4" in diagnostic_ssh
         and "useradd --system" in diagnostic_ssh
@@ -401,6 +408,8 @@ def validate_opentofu(root: Path) -> None:
         and "/usr/local/sbin/secpal-ci-host-setup-failure read"
         in diagnostic_ssh
         and "exit 125" in diagnostic_ssh
+        and "<<'DIAGNOSTIC'\n#!/usr/bin/env bash\nset -euo pipefail\n"
+        in diagnostic_ssh
         and '"$key_comment" != "secpal-ci-$3-$4"' in diagnostic_ssh
         and "eval " not in diagnostic_ssh
         and "source " not in diagnostic_ssh,
@@ -411,6 +420,9 @@ def validate_opentofu(root: Path) -> None:
     )[0]
     diagnostic_preparation = diagnostic_ssh.split(
         "prepare_diagnostic_fallback() {", 1
+    )[1].split("\n}", 1)[0]
+    completed_validator = diagnostic_ssh.split(
+        "completed_setup_is_valid() {", 1
     )[1].split("\n}", 1)[0]
     require(
         "ensure_diagnostic_identity" in diagnostic_preparation
@@ -423,6 +435,34 @@ def validate_opentofu(root: Path) -> None:
         and "/run/systemd/system/$diagnostic_timer" in diagnostic_ssh
         and 'systemd-analyze verify "$diagnostic_service_unit"'
         in diagnostic_ssh
+        and 'chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp"'
+        in diagnostic_preparation
+        and 'chmod 0644 "$service_tmp" "$timer_tmp"'
+        not in diagnostic_preparation
+        and 'chmod 0644 "$diagnostic_key"' in diagnostic_preparation
+        and 'chmod 0600 "$diagnostic_config"' in diagnostic_preparation
+        and 'chmod 0600 "$diagnostic_key" "$diagnostic_config"'
+        not in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_key\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_config\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_command\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_service_unit\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_timer_unit\""
+        in diagnostic_preparation
+        and '"$diagnostic_key_metadata" != 0:0:644'
+        in diagnostic_preparation
+        and '"$diagnostic_config_metadata" != 0:0:600'
+        in diagnostic_preparation
+        and '"$diagnostic_command_metadata" != 0:0:755'
+        in diagnostic_preparation
+        and '"$diagnostic_service_unit_metadata" != 0:0:644'
+        in diagnostic_preparation
+        and '"$diagnostic_timer_unit_metadata" != 0:0:644'
+        in diagnostic_preparation
         and diagnostic_ssh.index("if completed_setup_is_valid; then")
         < diagnostic_ssh.rindex("prepare_diagnostic_fallback\n")
         < diagnostic_ssh.rindex("if ! systemctl mask --now ssh.service ssh.socket")
@@ -436,6 +476,14 @@ def validate_opentofu(root: Path) -> None:
         and 'cmp -s -- - "$active_operator_key"' in diagnostic_ssh
         and "systemctl is-enabled ssh.service" in diagnostic_ssh
         and '"$ssh_service_state" == enabled' in diagnostic_ssh
+        and '"$ssh_socket_state" == disabled' in completed_validator
+        and "validate_effective_sshd_config || return 1"
+        in completed_validator
+        and "denyusers|denygroups|allowgroups|setenv" in diagnostic_ssh
+        and "pubkeyacceptedalgorithms" in diagnostic_ssh
+        and "ssh-ed25519" in diagnostic_ssh
+        and 'primary_ssh_config=/etc/ssh/sshd_config.d/00-secpal-ci.conf'
+        in diagnostic_ssh
         and "if ! start_diagnostic_fallback; then" in diagnostic_cleanup
         and "unable to establish restricted diagnostic SSH after installer failure"
         in diagnostic_cleanup
@@ -490,8 +538,23 @@ def validate_opentofu(root: Path) -> None:
         and "authorizedprincipalscommand none" in host_setup
         and "authorizedprincipalsfile none" in host_setup
         and "permitrootlogin no" in host_setup
+        and "permittty no" in host_setup
+        and "permituserenvironment no" in host_setup
+        and "permituserrc no" in host_setup
+        and "forcecommand none" in host_setup
+        and "chrootdirectory none" in host_setup
+        and "disableforwarding yes" in host_setup
+        and "maxsessions 1" in host_setup
+        and "pamservicename sshd" in host_setup
+        and "refuseconnection no" in host_setup
+        and "revokedkeys none" in host_setup
+        and "strictmodes yes" in host_setup
         and "trustedusercakeys none" in host_setup
         and "usedns no" in host_setup
+        and "usepam yes" in host_setup
+        and "denyusers|denygroups|allowgroups|setenv" in host_setup
+        and "pubkeyacceptedalgorithms" in host_setup
+        and "ssh-ed25519" in host_setup
         and 'runner_ipv4="${1:-}"' in host_setup
         and 'ip -o -4 route get "$runner_ipv4"' in host_setup
         and host_setup.count(
@@ -516,6 +579,7 @@ def validate_opentofu(root: Path) -> None:
         and published_key_chmod in host_setup
         and published_directory_chmod in host_setup
         and "systemctl unmask ssh.service ssh.socket" in host_setup
+        and "systemctl disable --now ssh.socket" in host_setup
         and "systemctl enable ssh.service" in host_setup
         and "systemctl restart ssh.service" in host_setup
         and 'chmod 0755 "$authorized_keys_tmp_dir"' not in host_setup
@@ -523,6 +587,7 @@ def validate_opentofu(root: Path) -> None:
         < host_setup.index(published_key_chmod)
         < host_setup.index(published_directory_chmod)
         < host_setup.index("systemctl unmask ssh.service ssh.socket")
+        < host_setup.index("systemctl disable --now ssh.socket")
         < host_setup.index("systemctl enable ssh.service")
         < host_setup.index("systemctl restart ssh.service"),
         "operator SSH key staging must remain private until publication",
@@ -611,6 +676,17 @@ def validate_opentofu(root: Path) -> None:
         ),
         "cloud-init must stage exactly one root-owned operator public key",
     )
+    require(
+        any(
+            isinstance(entry, dict)
+            and entry.get("path")
+            == "/usr/local/sbin/secpal-ci-host-setup-failure"
+            and entry.get("owner") == "root:root"
+            and entry.get("permissions") == "0755"
+            for entry in write_files
+        ),
+        "restricted diagnostics must be able to execute the closed failure reader",
+    )
     sshd_files = [
         entry
         for entry in write_files
@@ -626,15 +702,28 @@ def validate_opentofu(root: Path) -> None:
         and sshd_files[0].get("content")
         == "PasswordAuthentication no\n"
         "KbdInteractiveAuthentication no\n"
+        "MaxSessions 1\n"
+        "PAMServiceName sshd\n"
         "PermitRootLogin no\n"
         "PubkeyAuthentication yes\n"
         "AuthenticationMethods publickey\n"
+        "PubkeyAcceptedAlgorithms +ssh-ed25519\n"
         "AuthorizedKeysCommand none\n"
         "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u\n"
         "AuthorizedPrincipalsCommand none\n"
         "AuthorizedPrincipalsFile none\n"
         "TrustedUserCAKeys none\n"
+        "RevokedKeys none\n"
+        "RefuseConnection no\n"
+        "StrictModes yes\n"
+        "ChrootDirectory none\n"
+        "ForceCommand none\n"
+        "DisableForwarding yes\n"
+        "PermitTTY no\n"
+        "PermitUserEnvironment no\n"
+        "PermitUserRC no\n"
         "UseDNS no\n"
+        "UsePAM yes\n"
         "AllowUsers secpal-ci\n",
         "cloud-init SSH policy must be exact, prioritized, and operator-scoped",
     )

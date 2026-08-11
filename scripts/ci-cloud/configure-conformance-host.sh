@@ -75,7 +75,8 @@ validate_staged_operator_key() {
 }
 
 validate_effective_sshd_config() {
-  local context effective_config expected keyword route_context local_ipv4
+  local accepted_algorithms context effective_config expected keyword
+  local route_context local_ipv4
 
   if ! route_context="$(ip -o -4 route get "$runner_ipv4")"; then
     printf 'ERROR: unable to resolve the SSH listener address.\n' >&2
@@ -101,12 +102,24 @@ validate_effective_sshd_config() {
     "authorizedkeysfile /var/lib/secpal-ci/authorized-keys/%u"
     "authorizedprincipalscommand none"
     "authorizedprincipalsfile none"
+    "chrootdirectory none"
+    "disableforwarding yes"
+    "forcecommand none"
     "kbdinteractiveauthentication no"
+    "maxsessions 1"
+    "pamservicename sshd"
     "passwordauthentication no"
     "permitrootlogin no"
+    "permittty no"
+    "permituserenvironment no"
+    "permituserrc no"
     "pubkeyauthentication yes"
+    "refuseconnection no"
+    "revokedkeys none"
+    "strictmodes yes"
     "trustedusercakeys none"
     "usedns no"
+    "usepam yes"
   )
 
   if ! sshd -t; then
@@ -127,6 +140,24 @@ validate_effective_sshd_config() {
         return 1
       fi
     done
+    if grep -Eq '^(denyusers|denygroups|allowgroups|setenv) ' \
+      <<<"$effective_config"; then
+      printf 'ERROR: effective SSH configuration adds an access gate.\n' >&2
+      return 1
+    fi
+    if [[ "$(grep -Ec '^pubkeyacceptedalgorithms ' \
+      <<<"$effective_config")" -ne 1 ]]; then
+      printf 'ERROR: effective SSH key algorithms are ambiguous.\n' >&2
+      return 1
+    fi
+    accepted_algorithms="$(
+      grep -E '^pubkeyacceptedalgorithms ' <<<"$effective_config"
+    )"
+    accepted_algorithms="${accepted_algorithms#pubkeyacceptedalgorithms }"
+    if [[ ",$accepted_algorithms," != *,ssh-ed25519,* ]]; then
+      printf 'ERROR: effective SSH policy rejects the operator key.\n' >&2
+      return 1
+    fi
   done
 }
 
@@ -278,6 +309,7 @@ activate_operator_ssh() {
     return 1
   fi
   if ! systemctl unmask ssh.service ssh.socket ||
+    ! systemctl disable --now ssh.socket ||
     ! systemctl enable ssh.service; then
     rm -f -- "$active_ssh_authorized_keys"
     rmdir -- "$active_ssh_authorized_keys_dir" || true

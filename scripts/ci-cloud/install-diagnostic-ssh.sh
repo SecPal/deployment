@@ -15,6 +15,7 @@ diagnostic_timer="${diagnostic_unit}.timer"
 diagnostic_service_unit="/run/systemd/system/$diagnostic_service"
 diagnostic_timer_unit="/run/systemd/system/$diagnostic_timer"
 diagnostic_user=secpal-ci-diagnostic
+primary_ssh_config=/etc/ssh/sshd_config.d/00-secpal-ci.conf
 active_operator_root=/var/lib/secpal-ci
 active_operator_key="$active_operator_root/authorized-keys/secpal-ci"
 completion_marker="$active_operator_root/host-setup-complete"
@@ -56,31 +57,97 @@ is_ipv4() {
   done
 }
 
-completed_setup_is_valid() {
-  local root_metadata directory_metadata key_metadata marker_metadata
-  local ssh_service_state
+validate_effective_sshd_config() {
+  local accepted_algorithms context effective_config expected keyword
+  local route_context local_ipv4
 
-  [[ -d "$active_operator_root" && ! -L "$active_operator_root" &&
+  route_context="$(ip -o -4 route get "$runner_ipv4")" || return 1
+  [[ "$route_context" =~ (^|[[:space:]])src[[:space:]]+([^[:space:]]+) ]] ||
+    return 1
+  local_ipv4="${BASH_REMATCH[2]}"
+  is_ipv4 "$local_ipv4" || return 1
+  local -a contexts=(
+    "user=secpal-ci,host=$runner_ipv4,addr=$runner_ipv4,laddr=$local_ipv4,lport=22"
+    "user=root,host=$runner_ipv4,addr=$runner_ipv4,laddr=$local_ipv4,lport=22"
+  )
+  local -a expected_settings=(
+    "allowusers secpal-ci"
+    "authenticationmethods publickey"
+    "authorizedkeyscommand none"
+    "authorizedkeysfile /var/lib/secpal-ci/authorized-keys/%u"
+    "authorizedprincipalscommand none"
+    "authorizedprincipalsfile none"
+    "chrootdirectory none"
+    "disableforwarding yes"
+    "forcecommand none"
+    "kbdinteractiveauthentication no"
+    "maxsessions 1"
+    "pamservicename sshd"
+    "passwordauthentication no"
+    "permitrootlogin no"
+    "permittty no"
+    "permituserenvironment no"
+    "permituserrc no"
+    "pubkeyauthentication yes"
+    "refuseconnection no"
+    "revokedkeys none"
+    "strictmodes yes"
+    "trustedusercakeys none"
+    "usedns no"
+    "usepam yes"
+  )
+
+  sshd -t || return 1
+  for context in "${contexts[@]}"; do
+    effective_config="$(sshd -T -C "$context")" || return 1
+    for expected in "${expected_settings[@]}"; do
+      keyword="${expected%% *}"
+      [[ "$(grep -Ec "^${keyword} " <<<"$effective_config")" -eq 1 ]] ||
+        return 1
+      grep -Fqx -- "$expected" <<<"$effective_config" || return 1
+    done
+    ! grep -Eq '^(denyusers|denygroups|allowgroups|setenv) ' \
+      <<<"$effective_config" || return 1
+    [[ "$(grep -Ec '^pubkeyacceptedalgorithms ' \
+      <<<"$effective_config")" -eq 1 ]] || return 1
+    accepted_algorithms="$(
+      grep -E '^pubkeyacceptedalgorithms ' <<<"$effective_config"
+    )"
+    accepted_algorithms="${accepted_algorithms#pubkeyacceptedalgorithms }"
+    [[ ",$accepted_algorithms," == *,ssh-ed25519,* ]] || return 1
+  done
+}
+
+completed_setup_is_valid() {
+  local config_metadata root_metadata directory_metadata key_metadata
+  local marker_metadata ssh_service_state ssh_socket_state
+
+  [[ -f "$primary_ssh_config" && ! -L "$primary_ssh_config" &&
+    -d "$active_operator_root" && ! -L "$active_operator_root" &&
     -d "$active_operator_root/authorized-keys" &&
     ! -L "$active_operator_root/authorized-keys" &&
     -f "$active_operator_key" && ! -L "$active_operator_key" &&
     -f "$completion_marker" && ! -L "$completion_marker" ]] || return 1
+  config_metadata="$(stat -c '%u:%g:%a' -- "$primary_ssh_config")" || return 1
   root_metadata="$(stat -c '%u:%g:%a' -- "$active_operator_root")" || return 1
   directory_metadata="$(
     stat -c '%u:%g:%a' -- "$active_operator_root/authorized-keys"
   )" || return 1
   key_metadata="$(stat -c '%u:%g:%a' -- "$active_operator_key")" || return 1
   marker_metadata="$(stat -c '%u:%g:%a' -- "$completion_marker")" || return 1
-  [[ "$root_metadata" == 0:0:755 && "$directory_metadata" == 0:0:755 &&
+  [[ "$config_metadata" == 0:0:644 && "$root_metadata" == 0:0:755 &&
+    "$directory_metadata" == 0:0:755 &&
     "$key_metadata" == 0:0:644 && "$marker_metadata" == 0:0:400 ]] || return 1
   [[ "$(wc -l <"$completion_marker")" -eq 1 ]] || return 1
   grep -Fqx 'SECPAL_CI_HOST_SETUP_COMPLETE' "$completion_marker" || return 1
   printf '%s\n' "$ssh_public_key" |
     cmp -s -- - "$active_operator_key" || return 1
   ssh-keygen -l -E sha256 -f "$active_operator_key" >/dev/null || return 1
-  sshd -t || return 1
+  validate_effective_sshd_config || return 1
   ssh_service_state="$(systemctl is-enabled ssh.service 2>/dev/null || true)"
-  [[ "$ssh_service_state" == enabled ]] || return 1
+  ssh_socket_state="$(systemctl is-enabled ssh.socket 2>/dev/null || true)"
+  [[ "$ssh_service_state" == enabled && "$ssh_socket_state" == disabled ]] ||
+    return 1
 }
 
 ensure_diagnostic_identity() {
@@ -108,6 +175,10 @@ ensure_diagnostic_identity() {
 }
 
 prepare_diagnostic_fallback() {
+  local diagnostic_command_metadata diagnostic_config_metadata
+  local diagnostic_key_metadata diagnostic_service_unit_metadata
+  local diagnostic_timer_unit_metadata
+
   install -d -o root -g root -m 0755 /run/sshd /run/systemd/system || return 1
   ensure_diagnostic_identity || return 1
 
@@ -116,9 +187,8 @@ prepare_diagnostic_fallback() {
   config_tmp="$(mktemp /run/.secpal-ci-diagnostic-config.XXXXXX)" || return 1
   service_tmp="$(mktemp /run/systemd/system/.secpal-ci-diagnostic-service.XXXXXX)" || return 1
   timer_tmp="$(mktemp /run/systemd/system/.secpal-ci-diagnostic-timer.XXXXXX)" || return 1
-  chmod 0600 "$key_tmp" "$config_tmp" || return 1
+  chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp" || return 1
   chmod 0700 "$command_tmp" || return 1
-  chmod 0644 "$service_tmp" "$timer_tmp" || return 1
 
   printf '%s\n' "$ssh_public_key" >"$key_tmp" || return 1
   ssh-keygen -l -E sha256 -f "$key_tmp" >/dev/null || return 1
@@ -127,7 +197,7 @@ prepare_diagnostic_fallback() {
 
   cat >"$command_tmp" <<'DIAGNOSTIC'
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
 printf 'SECPAL_CI_DIAGNOSTIC_SSH\n'
 set +e
@@ -151,20 +221,27 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 PidFile /run/secpal-ci-diagnostic-sshd.pid
 PasswordAuthentication no
 KbdInteractiveAuthentication no
+MaxSessions 1
+PAMServiceName sshd
 PermitRootLogin no
 PubkeyAuthentication yes
 AuthenticationMethods publickey
+PubkeyAcceptedAlgorithms ssh-ed25519
 AuthorizedKeysCommand none
 AuthorizedKeysFile $diagnostic_key
 AuthorizedPrincipalsCommand none
 AuthorizedPrincipalsFile none
 TrustedUserCAKeys none
+RevokedKeys none
+RefuseConnection no
+StrictModes yes
 UseDNS no
 UsePAM yes
 AllowUsers secpal-ci-diagnostic@$runner_ipv4
 ForceCommand /run/secpal-ci-cloud-init-diagnostic
 DisableForwarding yes
 PermitTTY no
+PermitUserEnvironment no
 PermitUserRC no
 EOF
 
@@ -198,9 +275,38 @@ EOF
   service_tmp=""
   mv -T -- "$timer_tmp" "$diagnostic_timer_unit" || return 1
   timer_tmp=""
-  chmod 0600 "$diagnostic_key" "$diagnostic_config" || return 1
+  chmod 0644 "$diagnostic_key" || return 1
+  chmod 0600 "$diagnostic_config" || return 1
   chmod 0755 "$diagnostic_command" || return 1
   chmod 0644 "$diagnostic_service_unit" "$diagnostic_timer_unit" || return 1
+  [[ -f "$diagnostic_key" && ! -L "$diagnostic_key" &&
+    -f "$diagnostic_config" && ! -L "$diagnostic_config" &&
+    -f "$diagnostic_command" && ! -L "$diagnostic_command" &&
+    -f "$diagnostic_service_unit" && ! -L "$diagnostic_service_unit" &&
+    -f "$diagnostic_timer_unit" && ! -L "$diagnostic_timer_unit" ]] || return 1
+  diagnostic_key_metadata="$(
+    stat -c '%u:%g:%a' -- "$diagnostic_key"
+  )" || return 1
+  diagnostic_config_metadata="$(
+    stat -c '%u:%g:%a' -- "$diagnostic_config"
+  )" || return 1
+  diagnostic_command_metadata="$(
+    stat -c '%u:%g:%a' -- "$diagnostic_command"
+  )" || return 1
+  diagnostic_service_unit_metadata="$(
+    stat -c '%u:%g:%a' -- "$diagnostic_service_unit"
+  )" || return 1
+  diagnostic_timer_unit_metadata="$(
+    stat -c '%u:%g:%a' -- "$diagnostic_timer_unit"
+  )" || return 1
+  [[ "$diagnostic_key_metadata" != 0:0:644 ||
+    "$diagnostic_config_metadata" != 0:0:600 ||
+    "$diagnostic_command_metadata" != 0:0:755 ||
+    "$diagnostic_service_unit_metadata" != 0:0:644 ||
+    "$diagnostic_timer_unit_metadata" != 0:0:644 ]] && {
+    printf 'ERROR: published diagnostic SSH artifacts have unsafe metadata.\n' >&2
+    return 1
+  }
   systemd-analyze verify "$diagnostic_service_unit" \
     "$diagnostic_timer_unit" >/dev/null || return 1
   systemctl daemon-reload || return 1

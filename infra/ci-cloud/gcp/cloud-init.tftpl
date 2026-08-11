@@ -57,15 +57,28 @@ write_files:
     content: |
       PasswordAuthentication no
       KbdInteractiveAuthentication no
+      MaxSessions 1
+      PAMServiceName sshd
       PermitRootLogin no
       PubkeyAuthentication yes
       AuthenticationMethods publickey
+      PubkeyAcceptedAlgorithms +ssh-ed25519
       AuthorizedKeysCommand none
       AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u
       AuthorizedPrincipalsCommand none
       AuthorizedPrincipalsFile none
       TrustedUserCAKeys none
+      RevokedKeys none
+      RefuseConnection no
+      StrictModes yes
+      ChrootDirectory none
+      ForceCommand none
+      DisableForwarding yes
+      PermitTTY no
+      PermitUserEnvironment no
+      PermitUserRC no
       UseDNS no
+      UsePAM yes
       AllowUsers secpal-ci
   - path: /etc/apt/apt.conf.d/20secpal-ci-periodic
     owner: root:root
@@ -106,7 +119,7 @@ write_files:
       ${host_setup_script}
   - path: /usr/local/sbin/secpal-ci-host-setup-failure
     owner: root:root
-    permissions: "0700"
+    permissions: "0755"
     content: |
       ${host_setup_failure_script}
 
