@@ -52,8 +52,9 @@ resource "digitalocean_droplet" "conformance" {
   tags              = [for tag in digitalocean_tag.ownership : tag.name]
   depends_on        = [digitalocean_firewall.conformance]
   user_data = templatefile("${path.module}/cloud-init.tftpl", {
-    ssh_public_key    = trimspace(var.ssh_public_key)
-    host_setup_script = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/configure-conformance-host.sh")))
+    ssh_public_key            = trimspace(var.ssh_public_key)
+    host_setup_script         = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/configure-conformance-host.sh")))
+    host_setup_failure_script = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/host-setup-failure.py")))
   })
 }
 

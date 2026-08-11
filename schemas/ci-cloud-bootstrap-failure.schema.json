@@ -37,6 +37,7 @@
         "ended_at",
         "failure_stage",
         "orchestration_exit_status",
+        "host_setup_failure",
         "result",
         "failed_admission_invariants"
       ],
@@ -86,11 +87,47 @@
           "minimum": 1,
           "maximum": 255
         },
+        "host_setup_failure": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["stage", "exit_status"],
+              "properties": {
+                "stage": {
+                  "enum": [
+                    "initialize",
+                    "subordinate-ids",
+                    "service-policy",
+                    "apparmor",
+                    "ssh"
+                  ]
+                },
+                "exit_status": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 255
+                }
+              }
+            }
+          ]
+        },
         "result": { "const": "failed" },
         "failed_admission_invariants": {
           "const": ["CI_CLOUD_REMOTE_ORCHESTRATION"]
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "failure_stage": { "const": "cloud-init" } }
+          },
+          "else": {
+            "properties": { "host_setup_failure": { "type": "null" } }
+          }
+        }
+      ],
       "oneOf": [
         {
           "properties": {

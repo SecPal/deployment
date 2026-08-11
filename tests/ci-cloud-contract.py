@@ -78,6 +78,9 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertIn("python3 tests/ci-cloud-gcp-janitor.py", preflight)
         self.assertIn("python3 tests/ci-cloud-bootstrap-failure.py", preflight)
+        self.assertIn("python3 tests/ci-cloud-config.py", preflight)
+        self.assertIn("python3 tests/ci-cloud-host-setup-failure.py", preflight)
+        self.assertIn("cloud-init", preflight)
 
     def test_repository_contract_requires_every_cloud_provider_root_and_janitor(self) -> None:
         repository_contract = (ROOT / "tests" / "repository-contract.sh").read_text(
@@ -141,6 +144,32 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn(
             "systemctl disable --now podman.socket podman.service", host_setup
         )
+        self.assertNotIn("groups: []", cloud_init)
+        self.assertIn("${host_setup_failure_script}", cloud_init)
+        self.assertIn(
+            '[[ "$(id -G secpal-ci)" != "$(id -g secpal-ci)" ]]',
+            host_setup,
+        )
+
+    def test_host_setup_failure_diagnostic_is_closed_and_uncredentialed(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("secpal-ci-host-setup-failure", host_setup)
+        for stage in (
+            "initialize",
+            "subordinate-ids",
+            "service-policy",
+            "apparmor",
+            "ssh",
+        ):
+            self.assertIn(f'setup_stage="{stage}"', host_setup)
+        self.assertIn("host-setup-failure.py", remote)
+        self.assertIn("Trusted host setup failure", remote)
+        self.assertNotIn("cloud-init-output.log", remote)
 
     def test_cloud_init_repairs_automatic_subordinate_ids(self) -> None:
         host_setup = (
@@ -235,6 +264,13 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/missing-bootstrap-failure-writer.py",
         )
 
+    def test_static_contract_rejects_missing_host_setup_failure_reader(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "scripts/ci-cloud/host-setup-failure.py",
+            "scripts/ci-cloud/missing-host-setup-failure.py",
+        )
+
     def test_static_contract_rejects_unvalidated_bootstrap_failure_evidence(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/write-bootstrap-failure.py",
@@ -277,7 +313,9 @@ class CloudCIContractTests(unittest.TestCase):
         rendered = template.replace(
             "${ssh_public_key}",
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISynthetic fixture@example",
-        ).replace("${host_setup_script}", indented_setup)
+        ).replace("${host_setup_script}", indented_setup).replace(
+            "${host_setup_failure_script}", "#!/usr/bin/env python3\n      pass"
+        )
         document = yaml.safe_load(rendered)
         files = {entry["path"]: entry for entry in document["write_files"]}
         self.assertEqual(

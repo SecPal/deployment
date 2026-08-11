@@ -344,13 +344,23 @@ runner instead failure-atomically publishes a separate
 committed closed bootstrap-failure schema, and both files are completely staged
 before either final path is published. They contain only the validated
 run/provider identity, orchestration start/end times, fixed failure stage, exit
-status, and `CI_CLOUD_REMOTE_ORCHESTRATION` invariant. A failed write leaves
-neither new artifact behind. The fallback never
+status, and `CI_CLOUD_REMOTE_ORCHESTRATION` invariant. When the trusted host
+setup itself fails, the evidence may additionally contain exactly one closed
+stage (`initialize`, `subordinate-ids`, `service-policy`, `apparmor`, or `ssh`)
+and its exit status. That root-owned marker is limited to 128 bytes, validated
+before use, and contains no command output. A failed write leaves neither new
+artifact behind. The fallback never
 copies target output, environments, cloud credentials, or raw cloud-init logs
 into that artifact. The workflow prints at most 8 KiB of `cloud-init status
 --long` output for diagnosis, and a missing provider evidence directory is a
 hard upload failure rather than a warning. Target code cannot run until
 cloud-init has completed successfully.
+
+Preflight renders both provider templates with the exact embedded trusted
+scripts and admits them with the locally installed `cloud-init schema` command.
+This catches invalid cloud-config such as an empty user `groups` list before a
+provider run. Runtime validation remains authoritative for the provider image's
+installed cloud-init version.
 
 Evidence includes:
 

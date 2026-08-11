@@ -55,6 +55,7 @@ known_hosts="$(dirname "$evidence_dir")/known_hosts"
 evidence_json="$evidence_dir/evidence.json"
 evidence_summary="$evidence_dir/summary.md"
 bootstrap_stage="host-key"
+host_setup_failure_json="null"
 first_scan=""
 second_scan=""
 
@@ -71,7 +72,7 @@ record_remote_failure() {
       "$evidence_dir" "$provider" "$region" "$profile" "$target_sha" \
       "$run_id" "$run_attempt" "$provider_image_slug" \
       "$provider_image_id" "$machine_type" "$orchestration_started_at" \
-      "$bootstrap_stage" "$status"; then
+      "$bootstrap_stage" "$status" "$host_setup_failure_json"; then
       printf 'ERROR: unable to preserve bounded remote failure evidence.\n' >&2
     fi
   fi
@@ -142,6 +143,20 @@ if [[ "$cloud_init_status" -ne 0 ]]; then
   printf 'ERROR: remote cloud-init bootstrap did not complete successfully.\n' >&2
   if [[ -n "$cloud_init_diagnostic" ]]; then
     printf '%s\n' "$cloud_init_diagnostic" >&2
+  fi
+  set +e
+  setup_diagnostic="$(
+    timeout --signal=TERM --kill-after=5s 20s \
+      ssh "${ssh_options[@]}" "secpal-ci@$address" \
+      /usr/bin/python3 -I - read \
+      < scripts/ci-cloud/host-setup-failure.py
+  )"
+  setup_diagnostic_status=$?
+  set -e
+  if [[ "$setup_diagnostic_status" -eq 0 && -n "$setup_diagnostic" ]]; then
+    host_setup_failure_json="$setup_diagnostic"
+    printf 'Trusted host setup failure: %s\n' \
+      "$host_setup_failure_json" >&2
   fi
   exit "$cloud_init_status"
 fi

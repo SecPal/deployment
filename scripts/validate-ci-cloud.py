@@ -322,6 +322,7 @@ def validate_opentofu(root: Path) -> None:
     outputs = read(root, "infra/ci-cloud/digitalocean/outputs.tf")
     cloud_init = read(root, "infra/ci-cloud/digitalocean/cloud-init.tftpl")
     host_setup = read(root, "scripts/ci-cloud/configure-conformance-host.sh")
+    host_setup_failure = read(root, "scripts/ci-cloud/host-setup-failure.py")
     collector = read(root, "scripts/ci-cloud/collect-host-evidence.py")
     read(root, "infra/ci-cloud/digitalocean/.terraform.lock.hcl")
     require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
@@ -365,9 +366,23 @@ def validate_opentofu(root: Path) -> None:
         "Unattended-Upgrade::Automatic-Reboot \"false\";",
         "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000",
         "secpal-ci-configure-conformance-host",
+        "secpal-ci-host-setup-failure",
+        "${host_setup_failure_script}",
     ):
         require(required in cloud_init, "cloud-init omitted required D.1 host policy")
     require("set -euo pipefail" in host_setup, "host setup must use strict Bash mode")
+    require("groups: []" not in cloud_init, "cloud-init user groups must satisfy its schema")
+    require(
+        '[[ "$(id -G secpal-ci)" != "$(id -g secpal-ci)" ]]' in host_setup,
+        "host setup must reject supplementary disposable-operator groups",
+    )
+    require(
+        string_collection_constant(host_setup_failure, "STAGES")
+        == {"initialize", "subordinate-ids", "service-policy", "apparmor", "ssh"}
+        and "/usr/local/sbin/secpal-ci-host-setup-failure" in host_setup
+        and '"$failure_writer" write "$setup_stage" "$status"' in host_setup,
+        "host setup must emit only closed failure stages and exit status",
+    )
     require(
         "normalize_subordinate_ids /etc/subuid --add-subuids --del-subuids UID passwd"
         in host_setup
@@ -561,6 +576,14 @@ def validate(root: Path) -> None:
         and "head -c 8192" in remote
         and "cloud-init-output.log" not in remote,
         "early remote failures need bounded structured evidence and diagnostics",
+    )
+    require(
+        "scripts/ci-cloud/host-setup-failure.py" in remote
+        and "/usr/bin/python3 -I - read" in remote
+        and "Trusted host setup failure" in remote
+        and '"$bootstrap_stage" "$status" "$host_setup_failure_json"'
+        in remote,
+        "remote orchestration must preserve the closed host-setup diagnostic",
     )
     require(
         "ci-cloud-bootstrap-failure.schema.json" in failure_writer
