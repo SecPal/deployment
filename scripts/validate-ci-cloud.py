@@ -196,7 +196,16 @@ def validate_conformance_workflow(root: Path) -> None:
         "target_sha may enter the workflow only through the validation-step environment",
     )
     require("github.ref == 'refs/heads/main'" in text, "default-branch execution must fail closed")
-    require("cancel-in-progress: false" in text, "cloud cleanup must not be cancelled by concurrency")
+    concurrency = document.get("concurrency")
+    require(
+        concurrency
+        == {
+            "group": "debian13-cloud-conformance",
+            "cancel-in-progress": "false",
+            "queue": "max",
+        },
+        "cloud runs must use the FIFO queue without cancellation",
+    )
     require(text.count("ref: ${{ github.sha }}") == 4, "trusted checkout must stay on the workflow commit")
     require(text.count("persist-credentials: false") == 4, "checkout credentials must not persist")
     require(
@@ -247,6 +256,10 @@ def validate_conformance_workflow(root: Path) -> None:
     for job_name, raw_job in jobs.items():
         assert isinstance(raw_job, dict)
         require(not any(key in raw_job for key in ("env", "secrets")), "job-level cloud credentials are forbidden")
+        require(
+            "concurrency" not in raw_job,
+            f"{job_name} must inherit the reviewed workflow-level queue",
+        )
         for raw_step in raw_job.get("steps", []):
             assert isinstance(raw_step, dict)
             name = str(raw_step.get("name", ""))
@@ -421,6 +434,21 @@ def validate_opentofu(root: Path) -> None:
     diagnostic_preparation = diagnostic_ssh.split(
         "prepare_diagnostic_fallback() {", 1
     )[1].split("\n}", 1)[0]
+    diagnostic_start = diagnostic_ssh.split(
+        "start_diagnostic_fallback() {", 1
+    )[1].split("\n}", 1)[0]
+    diagnostic_initial_transition = diagnostic_ssh.rsplit(
+        "if completed_setup_is_valid; then", 1
+    )[1]
+    operator_activation = host_setup.split(
+        "activate_operator_ssh() {", 1
+    )[1].split("\n}", 1)[0]
+    diagnostic_restore = host_setup.split(
+        "restore_diagnostic_ssh() {", 1
+    )[1].split("\n}", 1)[0]
+    diagnostic_recovery = host_setup.split(
+        "arm_diagnostic_ssh_recovery() {", 1
+    )[1].split("\n}", 1)[0]
     completed_validator = diagnostic_ssh.split(
         "completed_setup_is_valid() {", 1
     )[1].split("\n}", 1)[0]
@@ -463,9 +491,25 @@ def validate_opentofu(root: Path) -> None:
         in diagnostic_preparation
         and '"$diagnostic_timer_unit_metadata" != 0:0:644'
         in diagnostic_preparation
-        and diagnostic_ssh.index("if completed_setup_is_valid; then")
-        < diagnostic_ssh.rindex("prepare_diagnostic_fallback\n")
-        < diagnostic_ssh.rindex("if ! systemctl mask --now ssh.service ssh.socket")
+        and diagnostic_start.index("prepare_diagnostic_fallback")
+        < diagnostic_start.index("systemctl mask --now ssh.service ssh.socket")
+        < diagnostic_start.index('systemctl start "$diagnostic_service"')
+        < diagnostic_start.index(
+            'systemctl is-active --quiet "$diagnostic_service"'
+        )
+        < diagnostic_start.index('systemctl stop "$diagnostic_timer"')
+        and '! systemctl is-active --quiet "$diagnostic_timer"'
+        in diagnostic_start
+        and "Restart=on-failure" in diagnostic_preparation
+        and "RestartSec=5s" in diagnostic_preparation
+        and "StartLimitIntervalSec=2m" in diagnostic_preparation
+        and "StartLimitBurst=5" in diagnostic_preparation
+        and "if ! start_diagnostic_fallback; then"
+        in diagnostic_initial_transition
+        and "unable to establish restricted diagnostic SSH during bootstrap"
+        in diagnostic_initial_transition
+        and "\nprepare_diagnostic_fallback\n"
+        not in diagnostic_initial_transition
         and 'completion_marker="$active_operator_root/host-setup-complete"'
         in diagnostic_ssh
         and 'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"'
@@ -490,7 +534,38 @@ def validate_opentofu(root: Path) -> None:
         and 'rm -f -- "$diagnostic_key" "$diagnostic_command"'
         not in diagnostic_cleanup
         and 'systemctl start "$diagnostic_service"' in diagnostic_ssh,
-        "diagnostic fallback must be prepared and armed before primary SSH is masked",
+        "restricted diagnostic SSH must replace primary SSH transactionally",
+    )
+    require(
+        'systemctl start "$diagnostic_ssh_timer"' in diagnostic_recovery
+        and 'systemctl is-active --quiet "$diagnostic_ssh_timer"'
+        in diagnostic_recovery
+        and "arm_diagnostic_ssh_recovery" in operator_activation
+        and 'systemctl stop "$diagnostic_ssh_service"' in operator_activation
+        and 'systemctl restart ssh.service' in operator_activation
+        and 'systemctl is-active --quiet ssh.service' in operator_activation
+        and operator_activation.index(
+            "arm_diagnostic_ssh_recovery"
+        )
+        < operator_activation.index(
+            'systemctl stop "$diagnostic_ssh_service"'
+        )
+        < operator_activation.index("systemctl restart ssh.service")
+        < operator_activation.index("systemctl is-active --quiet ssh.service")
+        < operator_activation.index("retire_diagnostic_ssh")
+        and 'arm_diagnostic_ssh_recovery || return 1' in diagnostic_restore
+        and diagnostic_restore.index("arm_diagnostic_ssh_recovery")
+        < diagnostic_restore.index("systemctl mask --now ssh.service ssh.socket")
+        < diagnostic_restore.index(
+            'systemctl start "$diagnostic_ssh_service"'
+        )
+        < diagnostic_restore.index(
+            'systemctl is-active --quiet "$diagnostic_ssh_service"'
+        )
+        < diagnostic_restore.index(
+            'systemctl stop "$diagnostic_ssh_timer"'
+        ),
+        "SSH handoffs must retain a verified listener or armed recovery timer",
     )
     require(
         "install-diagnostic-ssh.sh" in main
@@ -932,6 +1007,13 @@ def validate(root: Path) -> None:
     )
     require(
         'bootstrap_stage="host-key"' in remote
+        and 'host_key_observations_json="null"' in remote
+        and "record_host_key_observation()" in remote
+        and "classify_host_key_scan()" in remote
+        and "connection_refused" in remote
+        and "connection_timeout" in remote
+        and "multiple_keys" in remote
+        and "changed_key" in remote
         and 'orchestration_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"'
         in remote
         and '"$orchestration_started_at"' in remote

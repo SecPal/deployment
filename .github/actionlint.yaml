@@ -1,0 +1,12 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+paths:
+  .github/workflows/cloud-conformance.yml:
+    ignore:
+      # GitHub supports concurrency.queue, pending actionlint support:
+      # https://github.com/rhysd/actionlint/pull/636
+      - >-
+        ^unexpected key "queue" for "concurrency" section\.
+        expected one of "cancel-in-progress", "group"$

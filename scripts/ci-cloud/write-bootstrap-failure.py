@@ -131,6 +131,7 @@ def main() -> int:
     parser.add_argument("failure_stage", choices=FAILURE_STAGES)
     parser.add_argument("exit_status", type=int)
     parser.add_argument("host_setup_failure_json")
+    parser.add_argument("host_key_observations_json")
     arguments = parser.parse_args()
     try:
         validate_output_dir(arguments.output_dir)
@@ -141,10 +142,13 @@ def main() -> int:
         ended_at_text = ended_at.isoformat().replace("+00:00", "Z")
         try:
             host_setup_failure = json.loads(arguments.host_setup_failure_json)
+            host_key_observations = json.loads(
+                arguments.host_key_observations_json
+            )
         except json.JSONDecodeError:
-            fail("host-setup failure diagnostic is invalid JSON")
+            fail("closed bootstrap diagnostic is invalid JSON")
         document = {
-            "schema_version": 1,
+            "schema_version": 2,
             "workflow": {
                 "repository": "SecPal/deployment",
                 "run_id": arguments.run_id,
@@ -165,6 +169,7 @@ def main() -> int:
                 "failure_stage": arguments.failure_stage,
                 "orchestration_exit_status": arguments.exit_status,
                 "host_setup_failure": host_setup_failure,
+                "host_key_observations": host_key_observations,
                 "result": "failed",
                 "failed_admission_invariants": ["CI_CLOUD_REMOTE_ORCHESTRATION"],
             },
@@ -186,6 +191,22 @@ def main() -> int:
                 "- Host setup failure: "
                 f"`{host_setup_failure.get('stage')}` "
                 f"(exit `{host_setup_failure.get('exit_status')}`)"
+            )
+        if isinstance(host_key_observations, dict):
+            summary_lines.append(
+                "- Host-key observations: `"
+                + ", ".join(
+                    f"{name}={host_key_observations[name]}"
+                    for name in (
+                        "connection_refused",
+                        "connection_timeout",
+                        "no_key",
+                        "multiple_keys",
+                        "changed_key",
+                        "other",
+                    )
+                )
+                + "`"
             )
         summary_lines.extend(
             (

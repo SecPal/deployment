@@ -62,8 +62,15 @@ ownership contract.
 Only one provider profile can run at a time. The workflow has a 70-minute
 provision/test limit, cleanup has a separate 20-minute limit, and ownership
 expires after two hours with a hard three-hour OpenTofu ceiling. Concurrency
-serializes all runs and never cancels an active run. These limits are the cost
-and abuse controls; a price assumption is not a security control.
+serializes all runs, never cancels an active run, and uses GitHub's bounded
+FIFO-by-wait-start queue so separately dispatched profiles are not silently
+replaced while another profile is active; dispatch order itself is not
+guaranteed. Because the pinned actionlint release predates this GitHub syntax,
+its exact unknown-key diagnostic is ignored only for this workflow. The trusted
+validator admits the exact top-level concurrency mapping and forbids job-level
+concurrency, so that compatibility exception cannot hide another queue block.
+These limits are the cost and abuse controls; a price assumption is not a
+security control.
 
 ## Trust phases
 
@@ -276,16 +283,23 @@ metadata entry. The key comment is bound to the exact workflow run ID and
 attempt. In an early `bootcmd`, a trusted installer from `main` validates the
 run-bound key and runner IPv4, generates the image's missing Ed25519 host key
 if necessary, fully validates a separate diagnostic `sshd`, and arms its
-ten-minute fallback timer using explicit runtime-scoped systemd service and
-timer units that are validated before systemd loads them. Preparation is
+ten-minute crash-recovery timer using explicit runtime-scoped systemd service
+and timer units that are validated before systemd loads them. It then masks the
+primary service and socket and immediately starts that restricted listener
+while the timer remains armed. Only after the listener is verified active and
+the primary units are verified inactive does it stop and verify the timer. The
+diagnostic service additionally restarts after an unexpected process failure.
+Those retries are rate-limited to five starts per two minutes. Preparation is
 idempotent: after any failure with an already
 validated run context, the EXIT handler rebuilds the locked identity and
 root-owned inputs and attempts to start the restricted daemon immediately. It
 never deletes the only diagnostic material merely because initial preparation
-was incomplete. Only after that fallback exists does the installer persistently
-mask and stop the primary SSH service and socket. If even the bounded recovery
-cannot construct a valid daemon, the primary listener is left untouched rather
-than being replaced by an unvalidated fallback. The installer creates a locked,
+was incomplete. If initial validation fails before masking, the provider
+listener remains available only under its already restrictive cloud firewall;
+if the process is interrupted after masking but before the immediate start,
+the armed timer supplies the same restricted listener after ten minutes. If
+even the bounded recovery cannot construct a valid daemon, the transition
+fails rather than opening an unvalidated fallback. The installer creates a locked,
 home-less
 `secpal-ci-diagnostic` account that is independent of later cloud-init user
 creation. The daemon accepts only that account
@@ -324,14 +338,19 @@ also rejects any effective `DenyUsers`, `DenyGroups`, or `AllowGroups` gate that
 could silently exclude the operator. A provider-image `Match Address`, `Match
 Host`, or `Match LocalAddress` rule, alternate public-key source, incompatible
 algorithm list, or extra access gate therefore fails admission. Only after
-those checks and key publication does host setup cancel and stop the diagnostic
-daemon, unmask the primary units, explicitly disable socket activation, enable
+those checks and key publication does host setup re-arm recovery and stop the
+diagnostic daemon, unmask the primary units, explicitly disable socket activation, enable
 the main SSH service, and atomically publish a root-owned mode `0400` completion
-marker. That marker is the rollback-safe setup commit: normal
-operator SSH is started only after it exists. If main SSH activation fails,
+marker. Before stopping the diagnostic daemon, it re-arms the recovery timer;
+the timer remains active until the main service is verified active and socket
+activation is verified inactive. Thus an abrupt interruption during the
+handoff restores the restricted listener without relying on an EXIT handler.
+That marker is the rollback-safe setup commit: normal operator SSH is started
+only after it exists. If main SSH activation fails,
 the published operator key and marker are revoked, the main service is masked
 again, and the restricted diagnostic daemon is restored. After successful
-activation, setup is complete; removal of the stopped diagnostic identity,
+activation, setup is complete; stopping the still-armed recovery timer and
+removing the stopped diagnostic identity,
 runtime units, key, command, and configuration is best-effort retirement and
 cannot roll a committed host back into a failed state. Any retirement residue
 remains root-owned, has no main-SSH authorization, and has no active diagnostic
@@ -349,8 +368,10 @@ diagnostic command.
 The runner recognizes its reserved exit status and records bounded
 bootstrap-failure evidence. A schema-valid terminal host-setup marker stops
 readiness probes immediately; otherwise host-key discovery and operator
-readiness share one absolute 15-minute bootstrap deadline, so the delayed
-diagnostic listener cannot accidentally start a second, shorter timeout.
+readiness share one absolute 15-minute bootstrap deadline. The restricted
+diagnostic listener is normally available immediately; the delayed timer is
+only the interruption-recovery path and cannot accidentally start a second,
+shorter timeout.
 The runner treats failed cloud-init as terminal and never
 checks out or executes target code in that case.
 
@@ -449,7 +470,10 @@ run/provider identity, orchestration start/end times, fixed failure stage, exit
 status, and `CI_CLOUD_REMOTE_ORCHESTRATION` invariant. When the trusted host
 setup itself fails, the evidence may additionally contain exactly one closed
 stage (`initialize`, `subordinate-ids`, `service-policy`, `apparmor`, or `ssh`)
-and its exit status. That root-owned marker is limited to 128 bytes, validated
+and its exit status. A host-key-stage failure instead records only counters for
+the closed categories `connection_refused`, `connection_timeout`, `no_key`,
+`multiple_keys`, `changed_key`, and `other`; raw scanner errors and observed
+key material are discarded. That root-owned marker is limited to 128 bytes, validated
 before use, and contains no command output. A failed write leaves neither new
 artifact behind. The fallback never
 copies target output, environments, cloud credentials, or raw cloud-init logs

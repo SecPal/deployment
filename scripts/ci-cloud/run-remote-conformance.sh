@@ -56,8 +56,68 @@ evidence_json="$evidence_dir/evidence.json"
 evidence_summary="$evidence_dir/summary.md"
 bootstrap_stage="host-key"
 host_setup_failure_json="null"
+host_key_observations_json="null"
 first_scan=""
 second_scan=""
+first_scan_error=""
+second_scan_error=""
+host_key_connection_refused=0
+host_key_connection_timeout=0
+host_key_no_key=0
+host_key_multiple_keys=0
+host_key_changed_key=0
+host_key_other=0
+last_host_key_observation=""
+
+record_host_key_observation() {
+  local observation="$1"
+
+  case "$observation" in
+    connection_refused) ((host_key_connection_refused += 1)) ;;
+    connection_timeout) ((host_key_connection_timeout += 1)) ;;
+    no_key) ((host_key_no_key += 1)) ;;
+    multiple_keys) ((host_key_multiple_keys += 1)) ;;
+    changed_key) ((host_key_changed_key += 1)) ;;
+    other) ((host_key_other += 1)) ;;
+    *)
+      printf 'ERROR: internal host-key observation is outside the closed set.\n' >&2
+      return 1
+      ;;
+  esac
+  if [[ "$observation" != "$last_host_key_observation" ]]; then
+    printf 'Host-key observation: %s\n' "$observation" >&2
+    last_host_key_observation="$observation"
+  fi
+}
+
+classify_host_key_scan() {
+  local status="$1"
+  local line_count="$2"
+  local error_file="$3"
+
+  if ((line_count > 1)); then
+    printf 'multiple_keys\n'
+  elif grep -Eqi 'connection refused' "$error_file"; then
+    printf 'connection_refused\n'
+  elif grep -Eqi '(connection|operation)[[:space:]]+timed out|timeout' \
+    "$error_file"; then
+    printf 'connection_timeout\n'
+  elif ((line_count == 0)); then
+    printf 'no_key\n'
+  elif ((status != 0)); then
+    printf 'other\n'
+  else
+    printf 'other\n'
+  fi
+}
+
+render_host_key_observations() {
+  printf -v host_key_observations_json \
+    '{"changed_key":%d,"connection_refused":%d,"connection_timeout":%d,"multiple_keys":%d,"no_key":%d,"other":%d}' \
+    "$host_key_changed_key" "$host_key_connection_refused" \
+    "$host_key_connection_timeout" "$host_key_multiple_keys" \
+    "$host_key_no_key" "$host_key_other"
+}
 
 record_remote_failure() {
   local status=$?
@@ -65,6 +125,11 @@ record_remote_failure() {
   set +e
   [[ -z "$first_scan" ]] || rm -f -- "$first_scan"
   [[ -z "$second_scan" ]] || rm -f -- "$second_scan"
+  [[ -z "$first_scan_error" ]] || rm -f -- "$first_scan_error"
+  [[ -z "$second_scan_error" ]] || rm -f -- "$second_scan_error"
+  if [[ "$bootstrap_stage" == host-key ]]; then
+    render_host_key_observations
+  fi
   if [[ "$status" -ne 0 &&
     (! -s "$evidence_json" || ! -s "$evidence_summary") ]]; then
     rm -f -- "$evidence_json" "$evidence_summary"
@@ -72,7 +137,8 @@ record_remote_failure() {
       "$evidence_dir" "$provider" "$region" "$profile" "$target_sha" \
       "$run_id" "$run_attempt" "$provider_image_slug" \
       "$provider_image_id" "$machine_type" "$orchestration_started_at" \
-      "$bootstrap_stage" "$status" "$host_setup_failure_json"; then
+      "$bootstrap_stage" "$status" "$host_setup_failure_json" \
+      "$host_key_observations_json"; then
       printf 'ERROR: unable to preserve bounded remote failure evidence.\n' >&2
     fi
   fi
@@ -82,22 +148,56 @@ record_remote_failure() {
 trap record_remote_failure EXIT
 first_scan="$(mktemp "$evidence_dir/.host-key-first.XXXXXX")"
 second_scan="$(mktemp "$evidence_dir/.host-key-second.XXXXXX")"
+first_scan_error="$(mktemp "$evidence_dir/.host-key-first-error.XXXXXX")"
+second_scan_error="$(mktemp "$evidence_dir/.host-key-second-error.XXXXXX")"
 
 host_key_ready=false
 bootstrap_deadline=$((SECONDS + 15 * 60))
 while ((SECONDS < bootstrap_deadline)); do
-  if ssh-keyscan -T 5 -t ed25519 "$address" > "$first_scan" 2>/dev/null &&
-    sleep 2 &&
-    ssh-keyscan -T 5 -t ed25519 "$address" > "$second_scan" 2>/dev/null &&
-    [[ "$(grep -cve '^$' "$first_scan")" -eq 1 ]] &&
-    cmp -s "$first_scan" "$second_scan"; then
+  : >"$first_scan"
+  : >"$first_scan_error"
+  set +e
+  ssh-keyscan -T 5 -t ed25519 "$address" \
+    >"$first_scan" 2>"$first_scan_error"
+  first_scan_status=$?
+  set -e
+  first_scan_lines="$(grep -cve '^$' "$first_scan" || true)"
+  if [[ "$first_scan_status" -ne 0 || "$first_scan_lines" -ne 1 ]]; then
+    record_host_key_observation "$(
+      classify_host_key_scan \
+        "$first_scan_status" "$first_scan_lines" "$first_scan_error"
+    )"
+    sleep 5
+    continue
+  fi
+
+  sleep 2
+  : >"$second_scan"
+  : >"$second_scan_error"
+  set +e
+  ssh-keyscan -T 5 -t ed25519 "$address" \
+    >"$second_scan" 2>"$second_scan_error"
+  second_scan_status=$?
+  set -e
+  second_scan_lines="$(grep -cve '^$' "$second_scan" || true)"
+  if [[ "$second_scan_status" -ne 0 || "$second_scan_lines" -ne 1 ]]; then
+    record_host_key_observation "$(
+      classify_host_key_scan \
+        "$second_scan_status" "$second_scan_lines" "$second_scan_error"
+    )"
+  elif cmp -s "$first_scan" "$second_scan"; then
     host_key_ready=true
     break
+  else
+    record_host_key_observation changed_key
   fi
   sleep 5
 done
 if [[ "$host_key_ready" != true ]]; then
-  printf 'ERROR: unable to obtain one stable Ed25519 host key.\n' >&2
+  render_host_key_observations
+  printf '%s%s\n' \
+    'ERROR: unable to obtain one stable Ed25519 host key; closed observations: ' \
+    "$host_key_observations_json" >&2
   exit 1
 fi
 install -m 0600 "$first_scan" "$known_hosts"

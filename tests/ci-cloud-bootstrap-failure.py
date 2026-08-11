@@ -46,6 +46,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
         machine_type: str = "s-4vcpu-8gb-intel",
         stage: str = "cloud-init",
         host_setup_failure: str = "null",
+        host_key_observations: str = "null",
     ) -> subprocess.CompletedProcess[str]:
         arguments = [
             "python3",
@@ -64,6 +65,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             stage,
             "1",
             host_setup_failure,
+            host_key_observations,
         ]
         return subprocess.run(arguments, check=False, capture_output=True, text=True)
 
@@ -75,6 +77,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             document = json.loads(
                 (output_dir / "bootstrap-failure.json").read_text(encoding="utf-8")
             )
+            self.assertEqual(2, document["schema_version"])
             self.assertEqual(
                 {"schema_version", "workflow", "test"}, set(document)
             )
@@ -90,6 +93,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
                     "failure_stage",
                     "orchestration_exit_status",
                     "host_setup_failure",
+                    "host_key_observations",
                     "result",
                     "failed_admission_invariants",
                 },
@@ -97,6 +101,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             )
             self.assertEqual("failed", document["test"]["result"])
             self.assertIsNone(document["test"]["host_setup_failure"])
+            self.assertIsNone(document["test"]["host_key_observations"])
             self.assertEqual(
                 "CI_CLOUD_REMOTE_ORCHESTRATION",
                 document["test"]["failed_admission_invariants"][0],
@@ -196,6 +201,73 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
                 output_dir,
                 stage="host-key",
                 host_setup_failure='{"exit_status":1,"stage":"initialize"}',
+                host_key_observations=(
+                    '{"changed_key":0,"connection_refused":1,'
+                    '"connection_timeout":0,"multiple_keys":0,'
+                    '"no_key":0,"other":0}'
+                ),
+            )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertEqual([], list(output_dir.iterdir()))
+
+    def test_records_closed_host_key_observations(self) -> None:
+        observations = {
+            "changed_key": 0,
+            "connection_refused": 3,
+            "connection_timeout": 1,
+            "multiple_keys": 0,
+            "no_key": 2,
+            "other": 0,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(
+                output_dir,
+                stage="host-key",
+                host_key_observations=json.dumps(observations),
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            document = json.loads(
+                (output_dir / "bootstrap-failure.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                observations,
+                document["test"]["host_key_observations"],
+            )
+            self.assertIn(
+                "Host-key observations: `connection_refused=3, "
+                "connection_timeout=1, no_key=2, multiple_keys=0, "
+                "changed_key=0, other=0`",
+                (output_dir / "summary.md").read_text(encoding="utf-8"),
+            )
+
+    def test_rejects_host_key_observations_outside_host_key_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(
+                output_dir,
+                host_key_observations=(
+                    '{"changed_key":0,"connection_refused":1,'
+                    '"connection_timeout":0,"multiple_keys":0,'
+                    '"no_key":0,"other":0}'
+                ),
+            )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertEqual([], list(output_dir.iterdir()))
+
+    def test_rejects_unclosed_host_key_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(
+                output_dir,
+                stage="host-key",
+                host_key_observations=(
+                    '{"changed_key":0,"connection_refused":1,'
+                    '"connection_timeout":0,"multiple_keys":0,'
+                    '"no_key":0,"other":0,"authorization":"forbidden"}'
+                ),
             )
             self.assertNotEqual(0, completed.returncode)
             self.assertEqual([], list(output_dir.iterdir()))

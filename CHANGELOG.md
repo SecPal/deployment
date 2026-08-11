@@ -64,6 +64,12 @@ SPDX-License-Identifier: CC0-1.0
 - Published the root-owned diagnostic public key read-only so the restricted
   account can authenticate without gaining write access, and fail closed unless
   every published diagnostic artifact retains its exact ownership and mode.
+- Kept manually dispatched cloud profiles in a bounded FIFO queue, opened the
+  command-restricted diagnostic listener immediately after masking bootstrap
+  SSH without disarming recovery until that listener was verified, preserved
+  the same timer invariant during the final operator-SSH handoff, and recorded
+  only closed host-key failure counters for actionable, non-secret bootstrap
+  evidence.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

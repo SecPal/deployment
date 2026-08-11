@@ -248,10 +248,14 @@ EOF
   cat >"$service_tmp" <<EOF
 [Unit]
 Description=SecPal restricted cloud-init diagnostic SSH
+StartLimitIntervalSec=2m
+StartLimitBurst=5
 
 [Service]
 Type=exec
 ExecStart=/usr/sbin/sshd -D -e -f $diagnostic_config
+Restart=on-failure
+RestartSec=5s
 EOF
   cat >"$timer_tmp" <<EOF
 [Unit]
@@ -310,7 +314,6 @@ EOF
   systemd-analyze verify "$diagnostic_service_unit" \
     "$diagnostic_timer_unit" >/dev/null || return 1
   systemctl daemon-reload || return 1
-  systemctl stop "$diagnostic_service" "$diagnostic_timer" 2>/dev/null || true
   systemctl start "$diagnostic_timer" || return 1
   systemctl is-active --quiet "$diagnostic_timer" || return 1
 }
@@ -318,11 +321,14 @@ EOF
 start_diagnostic_fallback() {
   prepare_diagnostic_fallback || return 1
   systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
-  systemctl stop "$diagnostic_timer" 2>/dev/null || true
   systemctl start "$diagnostic_service" >/dev/null 2>&1 || return 1
-  ! systemctl is-active --quiet ssh.service &&
-    ! systemctl is-active --quiet ssh.socket &&
-    systemctl is-active --quiet "$diagnostic_service"
+  if systemctl is-active --quiet ssh.service ||
+    systemctl is-active --quiet ssh.socket ||
+    ! systemctl is-active --quiet "$diagnostic_service"; then
+    return 1
+  fi
+  systemctl stop "$diagnostic_timer" || return 1
+  ! systemctl is-active --quiet "$diagnostic_timer"
 }
 
 if [[ "$#" -ne 4 ]] || ! is_ipv4 "$2" ||
@@ -348,14 +354,7 @@ if completed_setup_is_valid; then
 fi
 rm -f -- "$completion_marker" "$active_operator_key"
 
-prepare_diagnostic_fallback
-if ! systemctl mask --now ssh.service ssh.socket; then
-  printf 'ERROR: unable to mask primary SSH after arming diagnostics.\n' >&2
-  exit 1
-fi
-if systemctl is-active --quiet ssh.service ||
-  systemctl is-active --quiet ssh.socket ||
-  ! systemctl is-active --quiet "$diagnostic_timer"; then
-  printf 'ERROR: SSH fallback transition did not reach its closed state.\n' >&2
+if ! start_diagnostic_fallback; then
+  printf 'ERROR: unable to establish restricted diagnostic SSH during bootstrap.\n' >&2
   exit 1
 fi

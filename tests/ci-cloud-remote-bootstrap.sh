@@ -21,10 +21,30 @@ cat >"$FAKE_BIN/ssh-keyscan" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'ssh-keyscan\n' >>"${SECPAL_TEST_SSH_KEYSCAN_LOG:?}"
-if [[ "$(wc -l <"${SECPAL_TEST_SSH_KEYSCAN_LOG:?}")" -eq 1 ]]; then
-  exit 1
-fi
-printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKey\n' "${*: -1}"
+case "$(wc -l <"${SECPAL_TEST_SSH_KEYSCAN_LOG:?}")" in
+  1)
+    printf 'connect to host test port 22: Connection refused\n' >&2
+    exit 1
+    ;;
+  2)
+    printf 'connect to host test port 22: Connection timed out\n' >&2
+    exit 1
+    ;;
+  3) exit 0 ;;
+  4)
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKeyA\n' "${*: -1}"
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKeyB\n' "${*: -1}"
+    ;;
+  5)
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKeyA\n' "${*: -1}"
+    ;;
+  6)
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKeyB\n' "${*: -1}"
+    ;;
+  *)
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKey\n' "${*: -1}"
+    ;;
+esac
 EOF
 
 cat >"$FAKE_BIN/ssh-keygen" <<'EOF'
@@ -120,7 +140,7 @@ if [[ "$(wc -l <"$SSH_LOG")" -ne 5 ]]; then
   printf 'FAIL: target or collector SSH ran after failed cloud-init\n' >&2
   exit 1
 fi
-if [[ "$(wc -l <"$SSH_KEYSCAN_LOG")" -ne 3 ]]; then
+if [[ "$(wc -l <"$SSH_KEYSCAN_LOG")" -ne 8 ]]; then
   printf 'FAIL: runner did not wait for delayed SSH host-key availability\n' >&2
   exit 1
 fi
@@ -129,7 +149,7 @@ if [[ -e "$EVIDENCE_DIR/evidence.json" ]]; then
   exit 1
 fi
 jq -e '
-  .schema_version == 1 and
+  .schema_version == 2 and
   .workflow.target_sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and
   .test.failure_stage == "cloud-init" and
   .test.orchestration_exit_status == 2 and
@@ -149,6 +169,11 @@ grep -Fq "Host setup failure: \`apparmor\` (exit \`7\`)" \
   "$EVIDENCE_DIR/summary.md"
 grep -Fq 'Trusted host setup failure: {"exit_status":7,"stage":"apparmor"}' \
   "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: connection_refused' "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: connection_timeout' "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: no_key' "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: multiple_keys' "$TEMP_DIR/output.log"
+grep -Fq 'Host-key observation: changed_key' "$TEMP_DIR/output.log"
 
 DIAGNOSTIC_EVIDENCE_DIR="$TEMP_DIR/diagnostic-evidence"
 : >"$SSH_LOG"

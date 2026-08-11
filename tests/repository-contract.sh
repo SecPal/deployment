@@ -107,6 +107,7 @@ required_files=(
   tests/fixtures/fake-curl.sh
   tests/oci-attestation-bundle-contract.py
   .github/workflows/quality.yml
+  .github/actionlint.yaml
   .github/workflows/cloud-conformance.yml
   .github/workflows/cloud-janitor.yml
   LICENSES/AGPL-3.0-or-later.txt
