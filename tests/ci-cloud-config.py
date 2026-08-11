@@ -32,6 +32,7 @@ def render(template_path: Path) -> str:
         "${ssh_public_key}": (
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISynthetic fixture@example"
         ),
+        "${runner_ipv4}": "192.0.2.10",
         "${host_setup_script}": indent_embedded_script(HOST_SETUP),
         "${host_setup_failure_script}": indent_embedded_script(
             HOST_SETUP_FAILURE
@@ -54,6 +55,7 @@ class CloudConfigTests(unittest.TestCase):
                 ) as instance_data_file:
                     rendered = render(template)
                     self.assertNotIn("${host_setup", rendered)
+                    self.assertNotIn("${runner_ipv4}", rendered)
                     rendered_file.write(rendered)
                     rendered_file.flush()
                     instance_data_file.write("{}\n")

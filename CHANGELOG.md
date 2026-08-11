@@ -47,6 +47,11 @@ SPDX-License-Identifier: CC0-1.0
   normalization while retaining bounded diagnostic access after setup failure.
 - Fail-closed effective SSH-policy admission, a prioritized provider-independent
   drop-in, and username-scoped authorized-key publication before operator access.
+- Closed alternate OpenSSH key and certificate sources, actual runner/listener
+  `Match`-context admission, and runtime-masked bootstrap SSH until that admission
+  succeeds.
+- Restrictive `0700`/`0600` SSH-key staging through atomic publication and an
+  exact run-bound Ed25519 key-comment contract across the workflow and providers.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

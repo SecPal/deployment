@@ -11,9 +11,22 @@ failure_writer=/usr/local/sbin/secpal-ci-host-setup-failure
 staged_ssh_public_key=/run/secpal-ci-authorized-key
 active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys
 active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"
+runner_ipv4="${1:-}"
 setup_stage="initialize"
 snapshot_tmp=""
 ssh_key_activated=false
+
+is_ipv4() {
+  local value="$1" octet
+  local -a octets
+
+  IFS=. read -r -a octets <<<"$value"
+  [[ "${#octets[@]}" -eq 4 ]] || return 1
+  for octet in "${octets[@]}"; do
+    [[ "$octet" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+    ((10#$octet <= 255)) || return 1
+  done
+}
 
 validate_staged_operator_key() {
   local metadata owner_uid owner_gid file_mode file_size
@@ -52,19 +65,38 @@ validate_staged_operator_key() {
 }
 
 validate_effective_sshd_config() {
-  local context effective_config expected keyword
+  local context effective_config expected keyword route_context local_ipv4
+
+  if ! route_context="$(ip -o -4 route get "$runner_ipv4")"; then
+    printf 'ERROR: unable to resolve the SSH listener address.\n' >&2
+    return 1
+  fi
+  if [[ ! "$route_context" =~ (^|[[:space:]])src[[:space:]]+([^[:space:]]+) ]]; then
+    printf 'ERROR: SSH route omitted the listener address.\n' >&2
+    return 1
+  fi
+  local_ipv4="${BASH_REMATCH[2]}"
+  if ! is_ipv4 "$local_ipv4"; then
+    printf 'ERROR: resolved SSH listener address is invalid.\n' >&2
+    return 1
+  fi
   local -a contexts=(
-    "user=secpal-ci,host=localhost,addr=127.0.0.1"
-    "user=root,host=localhost,addr=127.0.0.1"
+    "user=secpal-ci,host=$runner_ipv4,addr=$runner_ipv4,laddr=$local_ipv4,lport=22"
+    "user=root,host=$runner_ipv4,addr=$runner_ipv4,laddr=$local_ipv4,lport=22"
   )
   local -a expected_settings=(
     "allowusers secpal-ci"
     "authenticationmethods publickey"
+    "authorizedkeyscommand none"
     "authorizedkeysfile /run/secpal-ci-authorized-keys/%u"
+    "authorizedprincipalscommand none"
+    "authorizedprincipalsfile none"
     "kbdinteractiveauthentication no"
     "passwordauthentication no"
     "permitrootlogin no"
     "pubkeyauthentication yes"
+    "trustedusercakeys none"
+    "usedns no"
   )
 
   if ! sshd -t; then
@@ -107,12 +139,7 @@ activate_operator_ssh() {
     printf 'ERROR: unable to stage the operator authorized keys.\n' >&2
     return 1
   fi
-  if ! chmod 0755 "$authorized_keys_tmp_dir"; then
-    rmdir -- "$authorized_keys_tmp_dir" || true
-    printf 'ERROR: unable to protect the operator authorized-keys directory.\n' >&2
-    return 1
-  fi
-  if ! install -o root -g root -m 0644 \
+  if ! install -o root -g root -m 0600 \
     "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"; then
     rm -f -- "$authorized_keys_tmp_dir/secpal-ci"
     rmdir -- "$authorized_keys_tmp_dir" || true
@@ -129,8 +156,8 @@ activate_operator_ssh() {
     printf 'ERROR: unable to inspect the installed operator SSH key.\n' >&2
     return 1
   fi
-  if [[ "$directory_metadata" != 0:0:755 ||
-    "$installed_metadata" != 0:0:644 ]] ||
+  if [[ "$directory_metadata" != 0:0:700 ||
+    "$installed_metadata" != 0:0:600 ]] ||
     ! cmp -s -- "$staged_ssh_public_key" \
       "$authorized_keys_tmp_dir/secpal-ci"; then
     rm -f -- "$authorized_keys_tmp_dir/secpal-ci"
@@ -145,7 +172,26 @@ activate_operator_ssh() {
     printf 'ERROR: unable to publish the operator SSH key atomically.\n' >&2
     return 1
   fi
-  if ! systemctl restart ssh.service; then
+  if ! chmod 0644 "$active_ssh_authorized_keys" ||
+    ! chmod 0755 "$active_ssh_authorized_keys_dir"; then
+    rm -f -- "$active_ssh_authorized_keys"
+    rmdir -- "$active_ssh_authorized_keys_dir" || true
+    printf 'ERROR: unable to expose the operator authorized keys safely.\n' >&2
+    return 1
+  fi
+  if ! directory_metadata="$(
+    stat -c '%u:%g:%a' -- "$active_ssh_authorized_keys_dir"
+  )" || ! installed_metadata="$(
+    stat -c '%u:%g:%a' -- "$active_ssh_authorized_keys"
+  )" || [[ "$directory_metadata" != 0:0:755 ||
+    "$installed_metadata" != 0:0:644 ]]; then
+    rm -f -- "$active_ssh_authorized_keys"
+    rmdir -- "$active_ssh_authorized_keys_dir" || true
+    printf 'ERROR: published operator SSH key has unsafe metadata.\n' >&2
+    return 1
+  fi
+  if ! systemctl unmask --runtime ssh.service ssh.socket ||
+    ! systemctl restart ssh.service; then
     rm -f -- "$active_ssh_authorized_keys"
     rmdir -- "$active_ssh_authorized_keys_dir" || true
     printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
@@ -173,6 +219,10 @@ record_setup_failure() {
 }
 
 trap record_setup_failure EXIT
+if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then
+  printf 'ERROR: trusted runner IPv4 context is invalid.\n' >&2
+  exit 1
+fi
 install -d -o root -g root -m 0755 "$diagnostic_dir"
 rm -f -- "$diagnostic_dir/host-setup-failure.json"
 install -d -o root -g root -m 0755 /etc/containers/systemd/users/20000

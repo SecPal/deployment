@@ -84,7 +84,8 @@ first_scan="$(mktemp "$evidence_dir/.host-key-first.XXXXXX")"
 second_scan="$(mktemp "$evidence_dir/.host-key-second.XXXXXX")"
 
 host_key_ready=false
-for _ in {1..30}; do
+host_key_deadline=$((SECONDS + 15 * 60))
+while ((SECONDS < host_key_deadline)); do
   if ssh-keyscan -T 5 -t ed25519 "$address" > "$first_scan" 2>/dev/null &&
     sleep 2 &&
     ssh-keyscan -T 5 -t ed25519 "$address" > "$second_scan" 2>/dev/null &&

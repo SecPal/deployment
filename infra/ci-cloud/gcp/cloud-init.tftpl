@@ -2,6 +2,9 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 
+bootcmd:
+  - [systemctl, mask, --runtime, --now, ssh.service, ssh.socket]
+
 package_update: true
 package_upgrade: false
 
@@ -49,7 +52,12 @@ write_files:
       PermitRootLogin no
       PubkeyAuthentication yes
       AuthenticationMethods publickey
+      AuthorizedKeysCommand none
       AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u
+      AuthorizedPrincipalsCommand none
+      AuthorizedPrincipalsFile none
+      TrustedUserCAKeys none
+      UseDNS no
       AllowUsers secpal-ci
   - path: /etc/apt/apt.conf.d/20secpal-ci-periodic
     owner: root:root
@@ -95,4 +103,4 @@ write_files:
       ${host_setup_failure_script}
 
 runcmd:
-  - [/usr/local/sbin/secpal-ci-configure-conformance-host]
+  - [/usr/local/sbin/secpal-ci-configure-conformance-host, "${runner_ipv4}"]

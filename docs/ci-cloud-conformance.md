@@ -272,18 +272,27 @@ an output, state value, artifact, or repository file, and is removed before
 the provisioning/test job ends. The disposable operator account is initially
 created without an authorized key. Cloud-init instead stages the public key as
 root-owned mode `0600`; GCP does not receive an instance-level `ssh-keys`
-metadata entry. Trusted host setup validates and normalizes the fixed
-subordinate-ID ranges, service policy, and AppArmor evidence before atomically
-publishing a root-owned mode `0644` `secpal-ci` key file in a root-owned
-directory under `/run` in its final SSH stage. The prioritized SSH drop-in uses
-the `%u` username token so no other account resolves to that file, requires
-public-key authentication, and restricts login to `secpal-ci`. Immediately
-before publication, host setup validates both SSH syntax and the effective
-operator/root configurations; an image drop-in cannot silently override the
-closed policy. This prevents the runner from logging in while `usermod`
-replaces provider-image
-subordinate-ID ranges and keeps key publication outside an operator-owned
-directory. The EXIT handler is active before the first fallible host-setup
+metadata entry. The key comment is bound to the exact workflow run ID and
+attempt. Cloud-init runtime-masks the SSH service and socket before the daemon
+can admit an image-provided policy, and trusted host setup validates and
+normalizes the fixed subordinate-ID ranges, service policy, and AppArmor
+evidence before atomically publishing a root-owned `secpal-ci` key file in a
+root-owned directory under `/run` in its final SSH stage. The temporary
+directory and key remain mode
+`0700` and `0600` through the atomic rename; the published paths become `0755`
+and `0644` only immediately before SSH activation. The prioritized SSH drop-in
+uses the `%u` username token so no other account resolves to that file,
+requires public-key authentication, disables command-backed keys and trusted
+user CAs plus principal sources, disables reverse-DNS matching, and restricts
+login to `secpal-ci`. Immediately before publication, host setup validates SSH
+syntax and both operator/root configurations using the validated runner source
+IPv4, the route-selected local listener IPv4, and TCP port 22. A provider-image
+`Match Address`, `Match Host`, or `Match LocalAddress` rule and any alternate
+public-key source therefore fail admission. Only after those checks and key
+publication does host setup unmask and start SSH. This prevents the runner from
+logging in while `usermod` replaces provider-image subordinate-ID ranges and
+keeps key publication outside an operator-owned directory. The EXIT handler is
+active before the first fallible host-setup
 initialization. If an earlier trusted setup stage fails, it first writes the
 closed failure marker when possible and only then enables the same bounded
 diagnostic access. The runner treats failed cloud-init as terminal and never
@@ -301,8 +310,9 @@ reach TCP 22, through the pre-created tag-targeted firewall.
 DigitalOcean does not provide the new guest's SSH host key over a separate
 authenticated provisioning API. The runner therefore performs a bounded
 trust-on-first-use bootstrap: it requires one Ed25519 key from two consecutive
-`ssh-keyscan` observations, hashes the resulting `known_hosts` entry, and then
-uses `StrictHostKeyChecking=yes` for every command. The remaining assumption
+`ssh-keyscan` observations, allows up to 15 minutes for runtime-masked SSH to be
+released after trusted host setup, hashes the resulting `known_hosts` entry,
+and then uses `StrictHostKeyChecking=yes` for every command. The remaining assumption
 is that no active network attacker substitutes both first observations. The
 per-run firewall, fresh user key, single resolved OpenTofu address, and short
 lifetime reduce that window but do not turn TOFU into provider-attested host

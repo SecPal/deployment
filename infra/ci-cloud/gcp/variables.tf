@@ -66,8 +66,8 @@ variable "ssh_public_key" {
   type        = string
 
   validation {
-    condition     = can(regex("^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( [A-Za-z0-9._@+-]+)?$", trimspace(var.ssh_public_key)))
-    error_message = "ssh_public_key must be one Ed25519 public key."
+    condition     = can(regex("^ssh-ed25519 [A-Za-z0-9+/]+={0,2} secpal-ci-${var.run_id}-${var.run_attempt}$", trimspace(var.ssh_public_key)))
+    error_message = "ssh_public_key must be the run-bound Ed25519 public key."
   }
 }
 

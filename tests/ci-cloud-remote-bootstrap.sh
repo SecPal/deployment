@@ -12,6 +12,7 @@ trap 'rm -rf -- "$TEMP_DIR"' EXIT
 FAKE_BIN="$TEMP_DIR/bin"
 EVIDENCE_DIR="$TEMP_DIR/evidence"
 SSH_LOG="$TEMP_DIR/ssh.log"
+SSH_KEYSCAN_LOG="$TEMP_DIR/ssh-keyscan.log"
 PRIVATE_KEY="$TEMP_DIR/id_ed25519"
 mkdir -p "$FAKE_BIN"
 install -m 0600 /dev/null "$PRIVATE_KEY"
@@ -19,6 +20,10 @@ install -m 0600 /dev/null "$PRIVATE_KEY"
 cat >"$FAKE_BIN/ssh-keyscan" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf 'ssh-keyscan\n' >>"${SECPAL_TEST_SSH_KEYSCAN_LOG:?}"
+if [[ "$(wc -l <"${SECPAL_TEST_SSH_KEYSCAN_LOG:?}")" -eq 1 ]]; then
+  exit 1
+fi
 printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKey\n' "${*: -1}"
 EOF
 
@@ -84,6 +89,7 @@ chmod 0755 "$FAKE_BIN"/*
 
 set +e
 PATH="$FAKE_BIN:$PATH" SECPAL_TEST_SSH_LOG="$SSH_LOG" \
+  SECPAL_TEST_SSH_KEYSCAN_LOG="$SSH_KEYSCAN_LOG" \
   scripts/ci-cloud/run-remote-conformance.sh \
   digitalocean fra1 intel 1.1.1.1 \
   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 12345 1 \
@@ -98,6 +104,10 @@ if [[ "$status" -ne 2 ]]; then
 fi
 if [[ "$(wc -l <"$SSH_LOG")" -ne 4 ]]; then
   printf 'FAIL: target or collector SSH ran after failed cloud-init\n' >&2
+  exit 1
+fi
+if [[ "$(wc -l <"$SSH_KEYSCAN_LOG")" -ne 3 ]]; then
+  printf 'FAIL: runner did not wait for delayed SSH host-key availability\n' >&2
   exit 1
 fi
 if [[ -e "$EVIDENCE_DIR/evidence.json" ]]; then

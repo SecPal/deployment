@@ -374,6 +374,9 @@ def validate_opentofu(root: Path) -> None:
     require("groups: []" not in cloud_init, "cloud-init user groups must satisfy its schema")
     require(
         "ssh_authorized_keys" not in cloud_init
+        and "bootcmd:\n"
+        "  - [systemctl, mask, --runtime, --now, ssh.service, ssh.socket]\n"
+        in cloud_init
         and "  - path: /run/secpal-ci-authorized-key\n" in cloud_init
         and '    owner: root:root\n    permissions: "0600"\n' in cloud_init
         and "  - path: /etc/ssh/sshd_config.d/00-secpal-ci.conf\n"
@@ -399,10 +402,46 @@ def validate_opentofu(root: Path) -> None:
         and "sshd -T -C" in host_setup
         and "allowusers secpal-ci" in host_setup
         and "authenticationmethods publickey" in host_setup
+        and "authorizedkeyscommand none" in host_setup
         and "authorizedkeysfile /run/secpal-ci-authorized-keys/%u"
         in host_setup
-        and "permitrootlogin no" in host_setup,
+        and "authorizedprincipalscommand none" in host_setup
+        and "authorizedprincipalsfile none" in host_setup
+        and "permitrootlogin no" in host_setup
+        and "trustedusercakeys none" in host_setup
+        and "usedns no" in host_setup
+        and 'runner_ipv4="${1:-}"' in host_setup
+        and 'ip -o -4 route get "$runner_ipv4"' in host_setup
+        and host_setup.count(
+            "host=$runner_ipv4,addr=$runner_ipv4,laddr=$local_ipv4,lport=22"
+        )
+        == 2,
         "host setup must verify the closed effective SSH policy before key release",
+    )
+    private_key_install = (
+        'install -o root -g root -m 0600 \\\n'
+        '    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"'
+    )
+    key_publish = (
+        'mv -T -- "$authorized_keys_tmp_dir" \\\n'
+        '    "$active_ssh_authorized_keys_dir"'
+    )
+    published_key_chmod = 'chmod 0644 "$active_ssh_authorized_keys"'
+    published_directory_chmod = 'chmod 0755 "$active_ssh_authorized_keys_dir"'
+    require(
+        private_key_install in host_setup
+        and key_publish in host_setup
+        and published_key_chmod in host_setup
+        and published_directory_chmod in host_setup
+        and "systemctl unmask --runtime ssh.service ssh.socket" in host_setup
+        and "systemctl restart ssh.service" in host_setup
+        and 'chmod 0755 "$authorized_keys_tmp_dir"' not in host_setup
+        and host_setup.index(private_key_install) < host_setup.index(key_publish)
+        < host_setup.index(published_key_chmod)
+        < host_setup.index(published_directory_chmod)
+        < host_setup.index("systemctl unmask --runtime ssh.service ssh.socket")
+        < host_setup.index("systemctl restart ssh.service"),
+        "operator SSH key staging must remain private until publication",
     )
     trap_anchor = "trap record_setup_failure EXIT"
     diagnostic_install = (
@@ -411,10 +450,16 @@ def validate_opentofu(root: Path) -> None:
     diagnostic_reset = (
         'rm -f -- "$diagnostic_dir/host-setup-failure.json"'
     )
+    runner_context_validation = (
+        'if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then'
+    )
     require(
         trap_anchor in host_setup
+        and runner_context_validation in host_setup
         and diagnostic_install in host_setup
         and diagnostic_reset in host_setup
+        and host_setup.index(trap_anchor)
+        < host_setup.index(runner_context_validation)
         and host_setup.index(trap_anchor) < host_setup.index(diagnostic_install)
         and host_setup.index(trap_anchor) < host_setup.index(diagnostic_reset),
         "host setup failure handling must precede fallible initialization",
@@ -492,9 +537,22 @@ def validate_opentofu(root: Path) -> None:
         "PermitRootLogin no\n"
         "PubkeyAuthentication yes\n"
         "AuthenticationMethods publickey\n"
+        "AuthorizedKeysCommand none\n"
         "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u\n"
+        "AuthorizedPrincipalsCommand none\n"
+        "AuthorizedPrincipalsFile none\n"
+        "TrustedUserCAKeys none\n"
+        "UseDNS no\n"
         "AllowUsers secpal-ci\n",
         "cloud-init SSH policy must be exact, prioritized, and operator-scoped",
+    )
+    require(
+        cloud_config.get("bootcmd")
+        == [["systemctl", "mask", "--runtime", "--now", "ssh.service", "ssh.socket"]]
+        and cloud_config.get("runcmd")
+        == [["/usr/local/sbin/secpal-ci-configure-conformance-host", "${runner_ipv4}"]]
+        and "runner_ipv4               = var.runner_ipv4" in main,
+        "host setup must receive the validated runner network context",
     )
     packages = cloud_config.get("packages")
     require(
@@ -513,6 +571,14 @@ def validate_opentofu(root: Path) -> None:
     require(not any(value in (main + variables) for value in forbidden), "OpenTofu accepted a forbidden control or private key")
     require('condition     = var.region == "fra1"' in variables, "region allowlist changed")
     require('contains(["intel", "amd"], var.cpu_profile)' in variables, "CPU allowlist changed")
+    run_bound_key_pattern = (
+        '^ssh-ed25519 [A-Za-z0-9+/]+={0,2} '
+        'secpal-ci-${var.run_id}-${var.run_attempt}$'
+    )
+    require(
+        run_bound_key_pattern in variables,
+        "DigitalOcean operator key must be bound to the workflow run",
+    )
 
     gcp_main = read(root, "infra/ci-cloud/gcp/main.tf")
     gcp_versions = read(root, "infra/ci-cloud/gcp/versions.tf")
@@ -572,9 +638,17 @@ def validate_opentofu(root: Path) -> None:
         "    ssh-keys                 =" not in gcp_main,
         "GCP metadata must not activate the operator SSH key early",
     )
+    require(
+        "runner_ipv4               = var.runner_ipv4" in gcp_main,
+        "GCP host setup must receive the validated runner network context",
+    )
     require('protocol = "all"' in gcp_main and "priority  = 65534" in gcp_main, "GCP residual egress must be denied")
     require('condition     = var.project_id == "secpal-dev"' in gcp_variables, "GCP project allowlist changed")
     require('condition     = var.zone == "europe-west3-a"' in gcp_variables, "GCP zone allowlist changed")
+    require(
+        run_bound_key_pattern in gcp_variables,
+        "GCP operator key must be bound to the workflow run",
+    )
     forbidden_gcp = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
     require(not any(value in (gcp_main + gcp_variables) for value in forbidden_gcp), "GCP OpenTofu accepted a forbidden control or private key")
     require(gcp_cloud_init == cloud_init, "provider cloud-init admission policy drifted")
@@ -676,6 +750,11 @@ def validate(root: Path) -> None:
         and "for _ in {1..30}; do" in remote
         and "operator SSH key was not activated by trusted host setup" in remote,
         "remote orchestration must wait boundedly for deferred operator SSH access",
+    )
+    require(
+        "host_key_deadline=$((SECONDS + 15 * 60))" in remote
+        and "while ((SECONDS < host_key_deadline)); do" in remote,
+        "remote orchestration must wait boundedly for runtime-masked SSH",
     )
     require(
         "scripts/ci-cloud/host-setup-failure.py" in remote

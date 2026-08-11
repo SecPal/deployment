@@ -125,6 +125,7 @@ resource "google_compute_instance" "conformance" {
     enable-oslogin           = "FALSE"
     user-data = templatefile("${path.module}/cloud-init.tftpl", {
       ssh_public_key            = trimspace(var.ssh_public_key)
+      runner_ipv4               = var.runner_ipv4
       host_setup_script         = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/configure-conformance-host.sh")))
       host_setup_failure_script = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/host-setup-failure.py")))
     })

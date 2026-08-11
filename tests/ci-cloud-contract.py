@@ -196,6 +196,9 @@ class CloudCIContractTests(unittest.TestCase):
             template = (
                 ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
             ).read_text(encoding="utf-8")
+            variables = (
+                ROOT / f"infra/ci-cloud/{provider}/variables.tf"
+            ).read_text(encoding="utf-8")
             users_block = template.split("users:\n", 1)[1].split(
                 "\ndisable_root:", 1
             )[0]
@@ -217,8 +220,27 @@ class CloudCIContractTests(unittest.TestCase):
             )
             self.assertNotIn("sshd_config.d/90-secpal-ci.conf", template)
             self.assertIn("AuthenticationMethods publickey", template)
+            self.assertIn("AuthorizedKeysCommand none", template)
+            self.assertIn("AuthorizedPrincipalsCommand none", template)
+            self.assertIn("AuthorizedPrincipalsFile none", template)
             self.assertIn("PermitRootLogin no", template)
+            self.assertIn("TrustedUserCAKeys none", template)
+            self.assertIn("UseDNS no", template)
             self.assertIn("AllowUsers secpal-ci", template)
+            self.assertIn(
+                "- [systemctl, mask, --runtime, --now, ssh.service, ssh.socket]",
+                template,
+            )
+            self.assertIn(
+                " secpal-ci-${var.run_id}-${var.run_attempt}$",
+                variables,
+            )
+            self.assertNotIn("( [A-Za-z0-9._@+-]+)?", variables)
+            self.assertIn(
+                "- [/usr/local/sbin/secpal-ci-configure-conformance-host, "
+                '"${runner_ipv4}"]',
+                template,
+            )
 
         gcp_main = (ROOT / "infra/ci-cloud/gcp/main.tf").read_text(
             encoding="utf-8"
@@ -227,7 +249,25 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("activate_operator_ssh", host_setup)
         self.assertIn("activate_operator_ssh || true", host_setup)
         self.assertIn("validate_effective_sshd_config || return 1", host_setup)
+        self.assertIn(
+            "systemctl unmask --runtime ssh.service ssh.socket",
+            host_setup,
+        )
         self.assertIn("sshd -T -C", host_setup)
+        for expected in (
+            "authorizedkeyscommand none",
+            "authorizedprincipalscommand none",
+            "authorizedprincipalsfile none",
+            "trustedusercakeys none",
+            "usedns no",
+        ):
+            self.assertIn(expected, host_setup)
+        self.assertIn('runner_ipv4="${1:-}"', host_setup)
+        self.assertIn('ip -o -4 route get "$runner_ipv4"', host_setup)
+        self.assertIn("addr=$runner_ipv4", host_setup)
+        self.assertIn("host=$runner_ipv4", host_setup)
+        self.assertIn("laddr=$local_ipv4", host_setup)
+        self.assertIn("lport=22", host_setup)
         self.assertLess(
             host_setup.index('setup_stage="apparmor"'),
             host_setup.index('setup_stage="ssh"'),
@@ -248,17 +288,59 @@ class CloudCIContractTests(unittest.TestCase):
             '    "$active_ssh_authorized_keys_dir"',
             host_setup,
         )
+        private_install = (
+            'install -o root -g root -m 0600 \\\n'
+            '    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"'
+        )
+        publish = (
+            'mv -T -- "$authorized_keys_tmp_dir" \\\n'
+            '    "$active_ssh_authorized_keys_dir"'
+        )
+        expose_file = 'chmod 0644 "$active_ssh_authorized_keys"'
+        expose_directory = 'chmod 0755 "$active_ssh_authorized_keys_dir"'
+        self.assertIn(private_install, host_setup)
+        self.assertIn(expose_file, host_setup)
+        self.assertIn(expose_directory, host_setup)
+        self.assertLess(host_setup.index(private_install), host_setup.index(publish))
+        self.assertLess(host_setup.index(publish), host_setup.index(expose_file))
+        self.assertLess(host_setup.index(expose_file), host_setup.index(expose_directory))
+        self.assertLess(
+            host_setup.index(expose_directory),
+            host_setup.index("systemctl unmask --runtime ssh.service ssh.socket"),
+        )
+        self.assertLess(
+            host_setup.index("systemctl unmask --runtime ssh.service ssh.socket"),
+            host_setup.index("systemctl restart ssh.service"),
+        )
+        self.assertNotIn('chmod 0755 "$authorized_keys_tmp_dir"', host_setup)
         remote = (
             ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
         ).read_text(encoding="utf-8")
         self.assertIn("operator_ssh_ready=false", remote)
         self.assertIn("for _ in {1..30}; do", remote)
+        self.assertIn("host_key_deadline=$((SECONDS + 15 * 60))", remote)
+        self.assertIn("while ((SECONDS < host_key_deadline)); do", remote)
+
+    def test_static_contract_rejects_short_masked_ssh_wait(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "host_key_deadline=$((SECONDS + 15 * 60))",
+            "host_key_deadline=$((SECONDS + 2 * 60))",
+        )
 
     def test_static_contract_rejects_early_operator_ssh_key_release(self) -> None:
         self.assert_mutation_rejected(
             "infra/ci-cloud/digitalocean/cloud-init.tftpl",
             "/run/secpal-ci-authorized-key",
             "/home/secpal-ci/.ssh/authorized_keys",
+        )
+
+    def test_static_contract_rejects_unmasked_bootstrap_ssh(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "bootcmd:\n"
+            "  - [systemctl, mask, --runtime, --now, ssh.service, ssh.socket]\n",
+            "",
         )
 
     def test_static_contract_rejects_global_operator_key_path(self) -> None:
@@ -296,6 +378,36 @@ class CloudCIContractTests(unittest.TestCase):
             "AuthenticationMethods any",
         )
 
+    def test_static_contract_rejects_alternate_public_key_sources(self) -> None:
+        for directive in (
+            "AuthorizedKeysCommand none\n",
+            "AuthorizedPrincipalsCommand none\n",
+            "AuthorizedPrincipalsFile none\n",
+            "TrustedUserCAKeys none\n",
+        ):
+            with self.subTest(directive=directive):
+                self.assert_mutation_rejected(
+                    "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+                    f"      {directive}",
+                    "",
+                )
+
+    def test_static_contract_rejects_synthetic_sshd_context(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "host=$runner_ipv4,addr=$runner_ipv4,laddr=$local_ipv4,lport=22",
+            "host=localhost,addr=127.0.0.1",
+        )
+
+    def test_static_contract_rejects_public_temporary_key_staging(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            'install -o root -g root -m 0600 \\\n'
+            '    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"',
+            'install -o root -g root -m 0644 \\\n'
+            '    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"',
+        )
+
     def test_static_contract_rejects_missing_effective_sshd_validation(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/configure-conformance-host.sh",
@@ -308,6 +420,12 @@ class CloudCIContractTests(unittest.TestCase):
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
         trap_index = host_setup.index("trap record_setup_failure EXIT")
+        self.assertLess(
+            trap_index,
+            host_setup.index(
+                'if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then'
+            ),
+        )
         self.assertLess(
             trap_index,
             host_setup.index(
@@ -325,10 +443,14 @@ class CloudCIContractTests(unittest.TestCase):
         self.assert_mutation_rejected(
             "scripts/ci-cloud/configure-conformance-host.sh",
             'trap record_setup_failure EXIT\n'
-            'install -d -o root -g root -m 0755 "$diagnostic_dir"\n'
-            'rm -f -- "$diagnostic_dir/host-setup-failure.json"\n',
-            'install -d -o root -g root -m 0755 "$diagnostic_dir"\n'
-            'rm -f -- "$diagnostic_dir/host-setup-failure.json"\n'
+            'if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then\n'
+            "  printf 'ERROR: trusted runner IPv4 context is invalid.\\n' >&2\n"
+            "  exit 1\n"
+            "fi\n",
+            'if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then\n'
+            "  printf 'ERROR: trusted runner IPv4 context is invalid.\\n' >&2\n"
+            "  exit 1\n"
+            "fi\n"
             'trap record_setup_failure EXIT\n',
         )
 
