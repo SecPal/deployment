@@ -318,6 +318,18 @@ class CloudCIContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("operator_ssh_ready=false", remote)
         self.assertIn("for _ in {1..30}; do", remote)
+        self.assertIn(
+            "operator SSH access did not become ready; trusted host setup",
+            remote,
+        )
+        self.assertIn(
+            "network reachability, or sshd may have failed",
+            remote,
+        )
+        self.assertNotIn(
+            "operator SSH key was not activated by trusted host setup",
+            remote,
+        )
         self.assertIn("host_key_deadline=$((SECONDS + 15 * 60))", remote)
         self.assertIn("while ((SECONDS < host_key_deadline)); do", remote)
 

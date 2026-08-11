@@ -748,7 +748,9 @@ def validate(root: Path) -> None:
     require(
         "operator_ssh_ready=false" in remote
         and "for _ in {1..30}; do" in remote
-        and "operator SSH key was not activated by trusted host setup" in remote,
+        and "operator SSH access did not become ready; trusted host setup"
+        in remote
+        and "network reachability, or sshd may have failed" in remote,
         "remote orchestration must wait boundedly for deferred operator SSH access",
     )
     require(

@@ -130,7 +130,9 @@ for _ in {1..30}; do
   sleep 5
 done
 if [[ "$operator_ssh_ready" != true ]]; then
-  printf 'ERROR: operator SSH key was not activated by trusted host setup.\n' >&2
+  printf '%s%s\n' \
+    'ERROR: operator SSH access did not become ready; trusted host setup, ' \
+    'network reachability, or sshd may have failed.' >&2
   exit 1
 fi
 
