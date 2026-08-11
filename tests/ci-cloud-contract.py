@@ -539,10 +539,10 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertLess(
             start_function.index("systemctl mask --now ssh.service ssh.socket"),
-            start_function.index('systemctl start "$diagnostic_service"'),
+            start_function.index('systemctl restart "$diagnostic_service"'),
         )
         self.assertLess(
-            start_function.index('systemctl start "$diagnostic_service"'),
+            start_function.index('systemctl restart "$diagnostic_service"'),
             start_function.index(
                 'systemctl is-active --quiet "$diagnostic_service"'
             ),
@@ -594,6 +594,70 @@ class CloudCIContractTests(unittest.TestCase):
             'systemd-analyze verify "$diagnostic_service_unit" \\\n'
             '    "$diagnostic_timer_unit"',
             installer,
+        )
+
+    def test_diagnostic_listener_readiness_precedes_timer_disarm(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        preparation = installer.split(
+            "prepare_diagnostic_fallback() {", 1
+        )[1].split("\n}\n", 1)[0]
+        initial_start = installer.split("start_diagnostic_fallback() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        restore = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+
+        self.assertIn("Type=notify", preparation)
+        self.assertNotIn("Type=exec", preparation)
+        self.assertLess(
+            initial_start.index('systemctl restart "$diagnostic_service"'),
+            initial_start.index(
+                'systemctl is-active --quiet "$diagnostic_service"'
+            ),
+        )
+        self.assertLess(
+            initial_start.index(
+                'systemctl is-active --quiet "$diagnostic_service"'
+            ),
+            initial_start.index('systemctl stop "$diagnostic_timer"'),
+        )
+        self.assertLess(
+            restore.index('systemctl restart "$diagnostic_ssh_service"'),
+            restore.index(
+                'systemctl is-active --quiet "$diagnostic_ssh_service"'
+            ),
+        )
+        self.assertLess(
+            restore.index(
+                'systemctl is-active --quiet "$diagnostic_ssh_service"'
+            ),
+            restore.index('systemctl stop "$diagnostic_ssh_timer"'),
+        )
+
+    def test_nonzero_host_key_scan_without_known_error_is_other(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        classifier = remote.split("classify_host_key_scan() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        nonzero_fallback = (
+            'elif ((status != 0)); then\n    printf \'other\\n\''
+        )
+        empty_success = (
+            'elif ((line_count == 0)); then\n    printf \'no_key\\n\''
+        )
+        self.assertIn(nonzero_fallback, classifier)
+        self.assertIn(empty_success, classifier)
+        self.assertLess(
+            classifier.index(nonzero_fallback),
+            classifier.index(empty_success),
         )
 
     def test_diagnostic_fallback_staging_and_reporter_are_strict(self) -> None:
@@ -753,9 +817,9 @@ class CloudCIContractTests(unittest.TestCase):
     ) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/install-diagnostic-ssh.sh",
-            '  systemctl start "$diagnostic_service" >/dev/null 2>&1 || return 1\n',
+            '  systemctl restart "$diagnostic_service" >/dev/null 2>&1 || return 1\n',
             '  systemctl stop "$diagnostic_timer" || return 1\n'
-            '  systemctl start "$diagnostic_service" >/dev/null 2>&1 || return 1\n',
+            '  systemctl restart "$diagnostic_service" >/dev/null 2>&1 || return 1\n',
         )
 
     def test_static_contract_rejects_unarmed_operator_ssh_handoff(self) -> None:
@@ -772,11 +836,31 @@ class CloudCIContractTests(unittest.TestCase):
             "StartLimitBurst=5\n"
             "\n"
             "[Service]\n"
-            "Type=exec\n"
+            "Type=notify\n"
             "ExecStart=/usr/sbin/sshd -D -e -f $diagnostic_config\n"
             "Restart=on-failure\n"
             "RestartSec=5s\n",
             "",
+        )
+
+    def test_static_contract_rejects_process_only_diagnostic_readiness(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "Type=notify\n",
+            "Type=exec\n",
+        )
+
+    def test_static_contract_rejects_failed_host_key_scan_as_no_key(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "  elif ((status != 0)); then\n"
+            "    printf 'other\\n'\n"
+            "  elif ((line_count == 0)); then\n"
+            "    printf 'no_key\\n'\n",
+            "  elif ((line_count == 0)); then\n"
+            "    printf 'no_key\\n'\n"
+            "  elif ((status != 0)); then\n"
+            "    printf 'other\\n'\n",
         )
 
     def test_static_contract_rejects_discarding_pending_cloud_dispatches(self) -> None:

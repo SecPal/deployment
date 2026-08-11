@@ -286,8 +286,11 @@ if necessary, fully validates a separate diagnostic `sshd`, and arms its
 ten-minute crash-recovery timer using explicit runtime-scoped systemd service
 and timer units that are validated before systemd loads them. It then masks the
 primary service and socket and immediately starts that restricted listener
-while the timer remains armed. Only after the listener is verified active and
-the primary units are verified inactive does it stop and verify the timer. The
+while the timer remains armed. The generated unit uses OpenSSH's systemd
+readiness notification, and every activation restarts the unit so `systemctl`
+does not return until the newly loaded daemon has bound its listener. Only
+after that readiness signal, an active-service check, and verification that the
+primary units are inactive does it stop and verify the timer. The
 diagnostic service additionally restarts after an unexpected process failure.
 Those retries are rate-limited to five starts per two minutes. Preparation is
 idempotent: after any failure with an already

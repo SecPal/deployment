@@ -180,7 +180,7 @@ restore_diagnostic_ssh() {
   ssh_key_activated=false
   arm_diagnostic_ssh_recovery || return 1
   systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
-  systemctl start "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
+  systemctl restart "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
   if systemctl is-active --quiet ssh.service ||
     systemctl is-active --quiet ssh.socket ||
     ! systemctl is-active --quiet "$diagnostic_ssh_service"; then

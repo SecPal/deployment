@@ -252,7 +252,7 @@ StartLimitIntervalSec=2m
 StartLimitBurst=5
 
 [Service]
-Type=exec
+Type=notify
 ExecStart=/usr/sbin/sshd -D -e -f $diagnostic_config
 Restart=on-failure
 RestartSec=5s
@@ -321,7 +321,7 @@ EOF
 start_diagnostic_fallback() {
   prepare_diagnostic_fallback || return 1
   systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
-  systemctl start "$diagnostic_service" >/dev/null 2>&1 || return 1
+  systemctl restart "$diagnostic_service" >/dev/null 2>&1 || return 1
   if systemctl is-active --quiet ssh.service ||
     systemctl is-active --quiet ssh.socket ||
     ! systemctl is-active --quiet "$diagnostic_service"; then

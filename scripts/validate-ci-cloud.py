@@ -471,6 +471,8 @@ def validate_opentofu(root: Path) -> None:
         and 'chmod 0600 "$diagnostic_config"' in diagnostic_preparation
         and 'chmod 0600 "$diagnostic_key" "$diagnostic_config"'
         not in diagnostic_preparation
+        and "Type=notify" in diagnostic_preparation
+        and "Type=exec" not in diagnostic_preparation
         and "stat -c '%u:%g:%a' -- \"$diagnostic_key\""
         in diagnostic_preparation
         and "stat -c '%u:%g:%a' -- \"$diagnostic_config\""
@@ -493,7 +495,7 @@ def validate_opentofu(root: Path) -> None:
         in diagnostic_preparation
         and diagnostic_start.index("prepare_diagnostic_fallback")
         < diagnostic_start.index("systemctl mask --now ssh.service ssh.socket")
-        < diagnostic_start.index('systemctl start "$diagnostic_service"')
+        < diagnostic_start.index('systemctl restart "$diagnostic_service"')
         < diagnostic_start.index(
             'systemctl is-active --quiet "$diagnostic_service"'
         )
@@ -533,7 +535,7 @@ def validate_opentofu(root: Path) -> None:
         in diagnostic_cleanup
         and 'rm -f -- "$diagnostic_key" "$diagnostic_command"'
         not in diagnostic_cleanup
-        and 'systemctl start "$diagnostic_service"' in diagnostic_ssh,
+        and 'systemctl restart "$diagnostic_service"' in diagnostic_ssh,
         "restricted diagnostic SSH must replace primary SSH transactionally",
     )
     require(
@@ -557,7 +559,7 @@ def validate_opentofu(root: Path) -> None:
         and diagnostic_restore.index("arm_diagnostic_ssh_recovery")
         < diagnostic_restore.index("systemctl mask --now ssh.service ssh.socket")
         < diagnostic_restore.index(
-            'systemctl start "$diagnostic_ssh_service"'
+            'systemctl restart "$diagnostic_ssh_service"'
         )
         < diagnostic_restore.index(
             'systemctl is-active --quiet "$diagnostic_ssh_service"'
@@ -1022,6 +1024,22 @@ def validate(root: Path) -> None:
         and "head -c 8192" in remote
         and "cloud-init-output.log" not in remote,
         "early remote failures need bounded structured evidence and diagnostics",
+    )
+    host_key_classifier = remote.split("classify_host_key_scan() {", 1)[
+        1
+    ].split("\n}\n", 1)[0]
+    nonzero_host_key_fallback = (
+        "elif ((status != 0)); then\n    printf 'other\\n'"
+    )
+    empty_successful_host_key_scan = (
+        "elif ((line_count == 0)); then\n    printf 'no_key\\n'"
+    )
+    require(
+        nonzero_host_key_fallback in host_key_classifier
+        and empty_successful_host_key_scan in host_key_classifier
+        and host_key_classifier.index(nonzero_host_key_fallback)
+        < host_key_classifier.index(empty_successful_host_key_scan),
+        "failed host-key scans must not be classified as successful empty scans",
     )
     require(
         "operator_ssh_ready=false" in remote

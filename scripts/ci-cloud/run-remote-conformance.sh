@@ -102,10 +102,10 @@ classify_host_key_scan() {
   elif grep -Eqi '(connection|operation)[[:space:]]+timed out|timeout' \
     "$error_file"; then
     printf 'connection_timeout\n'
-  elif ((line_count == 0)); then
-    printf 'no_key\n'
   elif ((status != 0)); then
     printf 'other\n'
+  elif ((line_count == 0)); then
+    printf 'no_key\n'
   else
     printf 'other\n'
   fi
