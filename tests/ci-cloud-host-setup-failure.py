@@ -9,9 +9,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +52,33 @@ class HostSetupFailureTests(unittest.TestCase):
                 {"exit_status": 7, "stage": "apparmor"},
                 json.loads(path.read_text(encoding="utf-8")),
             )
+
+    def test_staging_file_remains_restrictive_until_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            directory.chmod(0o755)
+            path = directory / "host-setup-failure.json"
+            staged_modes: list[int] = []
+            original_replace = self.helper.os.replace
+
+            def inspect_replace(source: Path, destination: Path) -> None:
+                staged_modes.append(stat.S_IMODE(source.stat().st_mode))
+                original_replace(source, destination)
+
+            with mock.patch.object(
+                self.helper.os,
+                "replace",
+                side_effect=inspect_replace,
+            ):
+                self.helper.write_marker(
+                    path,
+                    "apparmor",
+                    7,
+                    required_uid=os.getuid(),
+                )
+
+            self.assertEqual([0o600], staged_modes)
+            self.assertEqual(0o644, stat.S_IMODE(path.stat().st_mode))
 
     def test_rejects_unknown_stage_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

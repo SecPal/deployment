@@ -106,17 +106,22 @@ def write_marker(
         prefix=f".{path.name}.",
     )
     temporary_path = Path(temporary_name)
+    published = False
     try:
-        os.fchmod(descriptor, 0o644)
         with os.fdopen(descriptor, "wb") as output:
             descriptor = -1
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary_path, path)
+            os.replace(temporary_path, path)
+            published = True
+            os.fchmod(output.fileno(), 0o644)
+            os.fsync(output.fileno())
     except BaseException:
         if descriptor >= 0:
             os.close(descriptor)
+        if published:
+            path.unlink(missing_ok=True)
         temporary_path.unlink(missing_ok=True)
         raise
 
