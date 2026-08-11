@@ -381,7 +381,7 @@ def validate_opentofu(root: Path) -> None:
         and "  - path: /etc/ssh/sshd_config.d/00-secpal-ci.conf\n"
         in cloud_init
         and "sshd_config.d/90-secpal-ci.conf" not in cloud_init
-        and "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u"
+        and "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u"
         in cloud_init,
         "operator SSH key must remain root-only until trusted host setup finishes",
     )
@@ -414,6 +414,16 @@ def validate_opentofu(root: Path) -> None:
             "if ! systemctl mask --now ssh.service ssh.socket"
         )
         and "diagnostic_fallback_armed=true" in diagnostic_ssh
+        and 'completion_marker="$active_operator_root/host-setup-complete"'
+        in diagnostic_ssh
+        and 'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"'
+        in diagnostic_ssh
+        and "if completed_setup_is_valid; then\n  exit 0\nfi\n"
+        in diagnostic_ssh
+        and "SECPAL_CI_HOST_SETUP_COMPLETE" in diagnostic_ssh
+        and 'cmp -s -- - "$active_operator_key"' in diagnostic_ssh
+        and "systemctl is-enabled ssh.service" in diagnostic_ssh
+        and '"$ssh_service_state" == enabled' in diagnostic_ssh
         and diagnostic_ssh.index("groupadd --system")
         < diagnostic_ssh.index("diagnostic_identity_created=true")
         < diagnostic_ssh.index("useradd --system")
@@ -441,8 +451,13 @@ def validate_opentofu(root: Path) -> None:
         "activate_operator_ssh || true" not in host_setup
         and "restore_diagnostic_ssh || true" in host_setup
         and 'setup_stage="ssh"\nactivate_operator_ssh\n' in host_setup
-        and "active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys"
+        and "active_ssh_authorized_keys_dir=\"$active_ssh_root/authorized-keys\""
         in host_setup
+        and "active_ssh_root=/var/lib/secpal-ci" in host_setup
+        and 'completion_marker="$active_ssh_root/host-setup-complete"'
+        in host_setup
+        and "publish_completion_marker" in host_setup
+        and "SECPAL_CI_HOST_SETUP_COMPLETE" in host_setup
         and 'active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"'
         in host_setup
         and 'mv -T -- "$authorized_keys_tmp_dir" \\\n    "$active_ssh_authorized_keys_dir"'
@@ -455,7 +470,7 @@ def validate_opentofu(root: Path) -> None:
         and "allowusers secpal-ci" in host_setup
         and "authenticationmethods publickey" in host_setup
         and "authorizedkeyscommand none" in host_setup
-        and "authorizedkeysfile /run/secpal-ci-authorized-keys/%u"
+        and "authorizedkeysfile /var/lib/secpal-ci/authorized-keys/%u"
         in host_setup
         and "authorizedprincipalscommand none" in host_setup
         and "authorizedprincipalsfile none" in host_setup
@@ -486,14 +501,23 @@ def validate_opentofu(root: Path) -> None:
         and published_key_chmod in host_setup
         and published_directory_chmod in host_setup
         and "systemctl unmask ssh.service ssh.socket" in host_setup
+        and "systemctl enable ssh.service" in host_setup
         and "systemctl restart ssh.service" in host_setup
         and 'chmod 0755 "$authorized_keys_tmp_dir"' not in host_setup
         and host_setup.index(private_key_install) < host_setup.index(key_publish)
         < host_setup.index(published_key_chmod)
         < host_setup.index(published_directory_chmod)
         < host_setup.index("systemctl unmask ssh.service ssh.socket")
+        < host_setup.index("systemctl enable ssh.service")
         < host_setup.index("systemctl restart ssh.service"),
         "operator SSH key staging must remain private until publication",
+    )
+    require(
+        host_setup.index("systemctl restart ssh.service")
+        < host_setup.index("if ! publish_completion_marker; then")
+        < host_setup.index("ssh_key_activated=true")
+        and 'rm -f -- "$completion_marker"' in host_setup,
+        "operator SSH completion must be persistent, final, and rollback-safe",
     )
     trap_anchor = "trap record_setup_failure EXIT"
     diagnostic_install = (
@@ -590,7 +614,7 @@ def validate_opentofu(root: Path) -> None:
         "PubkeyAuthentication yes\n"
         "AuthenticationMethods publickey\n"
         "AuthorizedKeysCommand none\n"
-        "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u\n"
+        "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u\n"
         "AuthorizedPrincipalsCommand none\n"
         "AuthorizedPrincipalsFile none\n"
         "TrustedUserCAKeys none\n"

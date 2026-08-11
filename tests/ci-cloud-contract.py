@@ -216,7 +216,7 @@ class CloudCIContractTests(unittest.TestCase):
             self.assertIn('permissions: "0600"', staged_key)
             self.assertIn("${ssh_public_key}", staged_key)
             self.assertIn(
-                "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u",
+                "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u",
                 template,
             )
             self.assertIn(
@@ -284,7 +284,7 @@ class CloudCIContractTests(unittest.TestCase):
         ssh_stage = host_setup.split('setup_stage="ssh"', 1)[1]
         self.assertIn("activate_operator_ssh", ssh_stage)
         self.assertIn(
-            "active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys",
+            'active_ssh_authorized_keys_dir="$active_ssh_root/authorized-keys"',
             host_setup,
         )
         self.assertIn(
@@ -394,11 +394,13 @@ class CloudCIContractTests(unittest.TestCase):
             "\n}\n", 1
         )[0]
         self.assertIn(
-            'rm -f -- "$active_ssh_authorized_keys"',
+            'rm -f -- "$completion_marker" "$active_ssh_authorized_keys"',
             restore_handler,
         )
         self.assertLess(
-            restore_handler.index('rm -f -- "$active_ssh_authorized_keys"'),
+            restore_handler.index(
+                'rm -f -- "$completion_marker" "$active_ssh_authorized_keys"'
+            ),
             restore_handler.index("systemctl mask --now ssh.service ssh.socket"),
         )
         stop_handler = host_setup.split("stop_diagnostic_ssh() {", 1)[1].split(
@@ -480,6 +482,67 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertNotIn("primary_ssh_masked", cleanup)
 
+    def test_completed_setup_survives_cloud_init_bootcmd_on_reboot(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'completion_marker="$active_operator_root/host-setup-complete"',
+            installer,
+        )
+        self.assertIn(
+            'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"',
+            installer,
+        )
+        completed_guard = "if completed_setup_is_valid; then"
+        self.assertIn(completed_guard, installer)
+        self.assertLess(
+            installer.index(completed_guard),
+            installer.index('groupadd --system "$diagnostic_user"'),
+        )
+        self.assertLess(
+            installer.index(completed_guard),
+            installer.index("if ! systemd-run --quiet"),
+        )
+        self.assertIn("stat -c '%u:%g:%a'", installer)
+        self.assertIn('cmp -s -- - "$active_operator_key"', installer)
+        self.assertIn("SECPAL_CI_HOST_SETUP_COMPLETE", installer)
+        completed_validator = installer.split("completed_setup_is_valid() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        self.assertIn(
+            'systemctl is-enabled ssh.service',
+            completed_validator,
+        )
+        self.assertIn('"$ssh_service_state" == enabled', completed_validator)
+        self.assertNotIn("systemctl is-active", completed_validator)
+
+        self.assertIn(
+            'completion_marker="$active_ssh_root/host-setup-complete"',
+            host_setup,
+        )
+        self.assertIn("publish_completion_marker", host_setup)
+        self.assertLess(
+            host_setup.index('systemctl restart ssh.service'),
+            host_setup.index("if ! publish_completion_marker; then"),
+        )
+        self.assertLess(
+            host_setup.index("systemctl enable ssh.service"),
+            host_setup.index("systemctl restart ssh.service"),
+        )
+        self.assertIn('rm -f -- "$completion_marker"', host_setup)
+        self.assertNotIn("/run/secpal-ci-authorized-keys", host_setup)
+
+    def test_static_contract_rejects_missing_completed_setup_reboot_guard(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "if completed_setup_is_valid; then\n  exit 0\nfi\n",
+            "",
+        )
+
     def test_static_contract_rejects_masking_before_fallback_arm(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/install-diagnostic-ssh.sh",
@@ -547,8 +610,8 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_global_operator_key_path(self) -> None:
         self.assert_mutation_rejected(
             "infra/ci-cloud/digitalocean/cloud-init.tftpl",
-            "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u",
-            "AuthorizedKeysFile /run/secpal-ci-authorized-keys/key",
+            "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u",
+            "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/key",
         )
 
     def test_static_contract_rejects_late_ssh_dropin(self) -> None:

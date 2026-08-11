@@ -12,6 +12,9 @@ diagnostic_config=/run/secpal-ci-diagnostic-sshd.conf
 diagnostic_unit=secpal-ci-diagnostic-sshd
 diagnostic_service="${diagnostic_unit}.service"
 diagnostic_user=secpal-ci-diagnostic
+active_operator_root=/var/lib/secpal-ci
+active_operator_key="$active_operator_root/authorized-keys/secpal-ci"
+completion_marker="$active_operator_root/host-setup-complete"
 key_tmp=""
 command_tmp=""
 config_tmp=""
@@ -56,6 +59,33 @@ is_ipv4() {
   done
 }
 
+completed_setup_is_valid() {
+  local root_metadata directory_metadata key_metadata marker_metadata
+  local ssh_service_state
+
+  [[ -d "$active_operator_root" && ! -L "$active_operator_root" &&
+    -d "$active_operator_root/authorized-keys" &&
+    ! -L "$active_operator_root/authorized-keys" &&
+    -f "$active_operator_key" && ! -L "$active_operator_key" &&
+    -f "$completion_marker" && ! -L "$completion_marker" ]] || return 1
+  root_metadata="$(stat -c '%u:%g:%a' -- "$active_operator_root")" || return 1
+  directory_metadata="$(
+    stat -c '%u:%g:%a' -- "$active_operator_root/authorized-keys"
+  )" || return 1
+  key_metadata="$(stat -c '%u:%g:%a' -- "$active_operator_key")" || return 1
+  marker_metadata="$(stat -c '%u:%g:%a' -- "$completion_marker")" || return 1
+  [[ "$root_metadata" == 0:0:755 && "$directory_metadata" == 0:0:755 &&
+    "$key_metadata" == 0:0:644 && "$marker_metadata" == 0:0:400 ]] || return 1
+  [[ "$(wc -l <"$completion_marker")" -eq 1 ]] || return 1
+  grep -Fqx 'SECPAL_CI_HOST_SETUP_COMPLETE' "$completion_marker" || return 1
+  printf '%s\n' "$ssh_public_key" |
+    cmp -s -- - "$active_operator_key" || return 1
+  ssh-keygen -l -E sha256 -f "$active_operator_key" >/dev/null || return 1
+  sshd -t || return 1
+  ssh_service_state="$(systemctl is-enabled ssh.service 2>/dev/null || true)"
+  [[ "$ssh_service_state" == enabled ]] || return 1
+}
+
 if [[ "$#" -ne 4 ]] || ! is_ipv4 "$2" ||
   [[ ! "$3" =~ ^[1-9][0-9]{0,19}$ ||
     ! "$4" =~ ^[1-9][0-9]{0,2}$ ]]; then
@@ -72,6 +102,11 @@ if [[ "$key_type" != ssh-ed25519 ||
   printf 'ERROR: diagnostic SSH key is outside the closed format.\n' >&2
   exit 1
 fi
+
+if completed_setup_is_valid; then
+  exit 0
+fi
+rm -f -- "$completion_marker" "$active_operator_key"
 
 install -d -o root -g root -m 0755 /run/sshd
 if getent passwd "$diagnostic_user" >/dev/null ||

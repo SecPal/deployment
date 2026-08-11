@@ -9,8 +9,10 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 diagnostic_dir=/run/secpal-ci-evidence
 failure_writer=/usr/local/sbin/secpal-ci-host-setup-failure
 staged_ssh_public_key=/run/secpal-ci-authorized-key
-active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys
+active_ssh_root=/var/lib/secpal-ci
+active_ssh_authorized_keys_dir="$active_ssh_root/authorized-keys"
 active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"
+completion_marker="$active_ssh_root/host-setup-complete"
 diagnostic_ssh_timer=secpal-ci-diagnostic-sshd.timer
 diagnostic_ssh_service=secpal-ci-diagnostic-sshd.service
 diagnostic_ssh_key=/run/secpal-ci-diagnostic-authorized-key
@@ -94,7 +96,7 @@ validate_effective_sshd_config() {
     "allowusers secpal-ci"
     "authenticationmethods publickey"
     "authorizedkeyscommand none"
-    "authorizedkeysfile /run/secpal-ci-authorized-keys/%u"
+    "authorizedkeysfile /var/lib/secpal-ci/authorized-keys/%u"
     "authorizedprincipalscommand none"
     "authorizedprincipalsfile none"
     "kbdinteractiveauthentication no"
@@ -134,11 +136,41 @@ stop_diagnostic_ssh() {
 }
 
 restore_diagnostic_ssh() {
-  rm -f -- "$active_ssh_authorized_keys"
+  rm -f -- "$completion_marker" "$active_ssh_authorized_keys"
   rmdir -- "$active_ssh_authorized_keys_dir" 2>/dev/null || true
+  rmdir -- "$active_ssh_root" 2>/dev/null || true
   ssh_key_activated=false
   systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
   systemctl start "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
+}
+
+publish_completion_marker() {
+  local marker_tmp root_metadata marker_metadata
+
+  if [[ -e "$completion_marker" || -L "$completion_marker" ]]; then
+    printf 'ERROR: host-setup completion marker already exists.\n' >&2
+    return 1
+  fi
+  if ! marker_tmp="$(mktemp "$active_ssh_root/.host-setup-complete.XXXXXX")"; then
+    printf 'ERROR: unable to stage the host-setup completion marker.\n' >&2
+    return 1
+  fi
+  if ! chmod 0400 "$marker_tmp" ||
+    ! printf 'SECPAL_CI_HOST_SETUP_COMPLETE\n' >"$marker_tmp" ||
+    ! mv -T -- "$marker_tmp" "$completion_marker"; then
+    rm -f -- "$marker_tmp" "$completion_marker"
+    printf 'ERROR: unable to publish the host-setup completion marker.\n' >&2
+    return 1
+  fi
+  if ! root_metadata="$(stat -c '%u:%g:%a' -- "$active_ssh_root")" ||
+    ! marker_metadata="$(stat -c '%u:%g:%a' -- "$completion_marker")" ||
+    [[ "$root_metadata" != 0:0:755 || "$marker_metadata" != 0:0:400 ]] ||
+    ! grep -Fqx 'SECPAL_CI_HOST_SETUP_COMPLETE' "$completion_marker" ||
+    [[ "$(wc -l <"$completion_marker")" -ne 1 ]]; then
+    rm -f -- "$completion_marker"
+    printf 'ERROR: host-setup completion marker failed verification.\n' >&2
+    return 1
+  fi
 }
 
 activate_operator_ssh() {
@@ -149,13 +181,21 @@ activate_operator_ssh() {
   fi
   validate_staged_operator_key || return 1
   validate_effective_sshd_config || return 1
+  if [[ -e "$active_ssh_root" || -L "$active_ssh_root" ]]; then
+    printf 'ERROR: operator SSH state root already exists.\n' >&2
+    return 1
+  fi
+  if ! install -d -o root -g root -m 0755 "$active_ssh_root"; then
+    printf 'ERROR: unable to create the operator SSH state root.\n' >&2
+    return 1
+  fi
   if [[ -e "$active_ssh_authorized_keys_dir" ||
     -L "$active_ssh_authorized_keys_dir" ]]; then
     printf 'ERROR: operator authorized-keys path already exists.\n' >&2
     return 1
   fi
   if ! authorized_keys_tmp_dir="$(
-    mktemp -d /run/.secpal-ci-authorized-keys.XXXXXX
+    mktemp -d "$active_ssh_root/.authorized-keys.XXXXXX"
   )"; then
     printf 'ERROR: unable to stage the operator authorized keys.\n' >&2
     return 1
@@ -218,6 +258,7 @@ activate_operator_ssh() {
     return 1
   fi
   if ! systemctl unmask ssh.service ssh.socket ||
+    ! systemctl enable ssh.service ||
     ! systemctl restart ssh.service; then
     rm -f -- "$active_ssh_authorized_keys"
     rmdir -- "$active_ssh_authorized_keys_dir" || true
@@ -236,6 +277,9 @@ activate_operator_ssh() {
       printf 'ERROR: unable to remove the diagnostic SSH group.\n' >&2
       return 1
     fi
+  fi
+  if ! publish_completion_marker; then
+    return 1
   fi
   ssh_key_activated=true
 }

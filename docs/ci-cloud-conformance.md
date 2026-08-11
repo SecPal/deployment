@@ -295,7 +295,8 @@ marker.
 Trusted host setup validates and
 normalizes the fixed subordinate-ID ranges, service policy, and AppArmor
 evidence before atomically publishing a root-owned `secpal-ci` key file in a
-root-owned directory under `/run` in its final SSH stage. The temporary
+root-owned persistent directory under `/var/lib/secpal-ci` in its final SSH
+stage. The temporary
 directory and key remain mode
 `0700` and `0600` through the atomic rename; the published paths become `0755`
 and `0644` only immediately before SSH activation. The prioritized SSH drop-in
@@ -311,8 +312,9 @@ publication does host setup cancel and stop the diagnostic daemon, unmask the
 main SSH service, and start normal operator SSH. If main SSH activation fails,
 the published operator key is revoked, the main service is masked again, and
 the restricted diagnostic daemon is restored. After successful activation,
-host setup removes the diagnostic
-identity, unit inputs, key, command, and configuration. This prevents the runner from
+host setup removes the diagnostic identity, unit inputs, key, command, and
+configuration, then atomically publishes a root-owned mode `0400` completion
+marker as its final state transition. This prevents the runner from
 logging in while `usermod` replaces provider-image subordinate-ID ranges and
 keeps key publication outside an operator-owned directory. The EXIT handler is
 active before the first fallible host-setup
@@ -331,7 +333,16 @@ checks out or executes target code in that case.
 The persistent mask also survives an unexpected reboot before trusted setup.
 Because the diagnostic timer is intentionally transient, such a reboot fails
 closed with no SSH listener; exact workflow cleanup or the TTL janitor then
-destroys the inaccessible fixture.
+destroys the inaccessible fixture. After successful setup, the persistent
+operator key and completion marker survive reboot. The repeated cloud-init
+`bootcmd` validates the marker, state-directory ownership and modes, exact
+run-bound public key, SSH syntax, and the persistently enabled primary service
+state before it skips diagnostic installation. It intentionally does not
+require the service to be active while boot units may still be starting.
+Any missing, mismatched, symlinked, or malformed state revokes the persistent
+operator key and rebuilds only the restricted fallback instead of trusting a
+boolean marker. Cloud-init's one-time `runcmd` is therefore not required to
+restore normal SSH after an admitted reboot.
 
 DigitalOcean initially embeds that public key
 in the image's root account as part of Droplet creation; cloud-init sets
