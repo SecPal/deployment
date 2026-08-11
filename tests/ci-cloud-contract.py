@@ -640,25 +640,37 @@ class CloudCIContractTests(unittest.TestCase):
             restore.index('systemctl stop "$diagnostic_ssh_timer"'),
         )
 
-    def test_nonzero_host_key_scan_without_known_error_is_other(self) -> None:
+    def test_failed_host_key_scan_uses_closed_tcp_probe(self) -> None:
         remote = (
             ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
         ).read_text(encoding="utf-8")
         classifier = remote.split("classify_host_key_scan() {", 1)[1].split(
             "\n}\n", 1
         )[0]
-        nonzero_fallback = (
-            'elif ((status != 0)); then\n    printf \'other\\n\''
+        observer = remote.split("observe_failed_host_key_scan() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn(
+            "connection_refused | connection_timeout | other",
+            classifier,
         )
-        empty_success = (
-            'elif ((line_count == 0)); then\n    printf \'no_key\\n\''
-        )
-        self.assertIn(nonzero_fallback, classifier)
-        self.assertIn(empty_success, classifier)
-        self.assertLess(
-            classifier.index(nonzero_fallback),
-            classifier.index(empty_success),
-        )
+        self.assertIn("reachable", classifier)
+        self.assertIn("scripts/ci-cloud/probe-ssh-port.py", observer)
+        self.assertNotIn("grep", classifier)
+        self.assertNotIn("_scan_error", remote)
+
+    def test_root_ssh_denial_uses_transport_recheck_not_stderr(self) -> None:
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        root_admission = remote.split('bootstrap_stage="root-ssh"', 1)[1].split(
+            'started_at="$(date -u', 1
+        )[0]
+        self.assertIn('"$root_probe_status" -eq 255', root_admission)
+        self.assertIn("operator_recheck_status", root_admission)
+        self.assertIn('"secpal-ci@$address" true', root_admission)
+        self.assertNotIn("permission denied", root_admission)
+        self.assertNotIn("root_probe=", root_admission)
 
     def test_diagnostic_fallback_staging_and_reporter_are_strict(self) -> None:
         installer = (
@@ -850,17 +862,34 @@ class CloudCIContractTests(unittest.TestCase):
             "Type=exec\n",
         )
 
-    def test_static_contract_rejects_failed_host_key_scan_as_no_key(self) -> None:
+    def test_static_contract_rejects_unobserved_host_key_reachability(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/run-remote-conformance.sh",
-            "  elif ((status != 0)); then\n"
-            "    printf 'other\\n'\n"
-            "  elif ((line_count == 0)); then\n"
-            "    printf 'no_key\\n'\n",
-            "  elif ((line_count == 0)); then\n"
-            "    printf 'no_key\\n'\n"
-            "  elif ((status != 0)); then\n"
+            '    python3 scripts/ci-cloud/probe-ssh-port.py "$address"\n',
             "    printf 'other\\n'\n",
+        )
+
+    def test_static_contract_rejects_scanner_stderr_inference(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            '  local reachability="$3"\n',
+            '  local reachability="$3"\n'
+            "  grep -Eqi 'connection refused' /tmp/scanner-error || true\n",
+        )
+
+    def test_static_contract_rejects_root_denial_without_transport_recheck(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            'operator_recheck_status=1\n'
+            'if [[ "$root_probe_status" -eq 255 ]]; then\n'
+            '  timeout --signal=TERM --kill-after=5s 20s \\\n'
+            '    ssh "${ssh_options[@]}" "secpal-ci@$address" true '
+            '>/dev/null 2>&1\n'
+            '  operator_recheck_status=$?\n'
+            'fi\n',
+            'operator_recheck_status=0\n',
         )
 
     def test_static_contract_rejects_discarding_pending_cloud_dispatches(self) -> None:

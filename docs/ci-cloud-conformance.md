@@ -398,8 +398,11 @@ DigitalOcean initially embeds that public key
 in the image's root account as part of Droplet creation; cloud-init sets
 `PermitRootLogin no`, creates the dedicated `secpal-ci` account, and restarts a
 validated SSH configuration. Before target code runs, the trusted runner uses
-the same key and strict known-host entry to require an explicit root
-`Permission denied` result and records that effective denial in evidence.
+the same key and strict known-host entry to require the root public-key attempt
+to fail, then immediately rechecks the disposable operator account over the
+same transport. It records effective root denial only when the root attempt
+fails with SSH's authentication/connection status while that operator recheck
+succeeds; it does not depend on localized SSH diagnostic text.
 Password SSH is disabled. Only the runner's validated public IPv4 `/32` can
 reach TCP 22, through the pre-created tag-targeted firewall.
 
@@ -475,8 +478,10 @@ setup itself fails, the evidence may additionally contain exactly one closed
 stage (`initialize`, `subordinate-ids`, `service-policy`, `apparmor`, or `ssh`)
 and its exit status. A host-key-stage failure instead records only counters for
 the closed categories `connection_refused`, `connection_timeout`, `no_key`,
-`multiple_keys`, `changed_key`, and `other`; raw scanner errors and observed
-key material are discarded. That root-owned marker is limited to 128 bytes, validated
+`multiple_keys`, `changed_key`, and `other`. Refused and timed-out connections
+come from a bounded IPv4 TCP probe and stable operating-system error codes,
+not locale- or version-dependent `ssh-keyscan` text; raw scanner errors and
+observed key material are discarded. That root-owned marker is limited to 128 bytes, validated
 before use, and contains no command output. A failed write leaves neither new
 artifact behind. The fallback never
 copies target output, environments, cloud credentials, or raw cloud-init logs

@@ -69,8 +69,11 @@ SPDX-License-Identifier: CC0-1.0
   SSH without disarming recovery until systemd received OpenSSH's listener
   readiness notification, restarted the unit to load every refreshed runtime
   configuration, preserved the same timer invariant during the final
-  operator-SSH handoff, and recorded only accurately classified closed host-key
-  failure counters for actionable, non-secret bootstrap evidence.
+  operator-SSH handoff, and derived closed host-key reachability counters from
+  bounded TCP error codes instead of unstable scanner diagnostics for
+  actionable, non-secret bootstrap evidence. Root-SSH denial now requires a
+  successful operator transport recheck instead of parsing localized SSH
+  error text.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

@@ -72,6 +72,7 @@ required_files=(
   scripts/ci-cloud/digitalocean-janitor.py
   scripts/ci-cloud/gcp-janitor.py
   scripts/ci-cloud/host-setup-failure.py
+  scripts/ci-cloud/probe-ssh-port.py
   scripts/ci-cloud/run-remote-conformance.sh
   scripts/ci-cloud/target-conformance.sh
   scripts/ci-cloud/validate-evidence.py
@@ -90,6 +91,7 @@ required_files=(
   tests/ci-cloud-gcp-janitor.py
   tests/ci-cloud-host-setup-failure.py
   tests/ci-cloud-janitor.py
+  tests/ci-cloud-ssh-port-probe.py
   tests/ci-cloud-remote-bootstrap.sh
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh

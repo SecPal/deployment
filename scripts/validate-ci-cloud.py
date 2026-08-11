@@ -971,6 +971,7 @@ def validate(root: Path) -> None:
     validate_gcp_iam_role(root)
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
+    ssh_probe = read(root, "scripts/ci-cloud/probe-ssh-port.py")
     failure_writer = read(root, "scripts/ci-cloud/write-bootstrap-failure.py")
     failure_schema_text = read(
         root, "schemas/ci-cloud-bootstrap-failure.schema.json"
@@ -981,9 +982,17 @@ def validate(root: Path) -> None:
         Draft202012Validator.check_schema(failure_schema)
     except (json.JSONDecodeError, SchemaError):
         raise ContractError("bootstrap failure evidence schema is invalid") from None
+    root_ssh_admission = remote.split('bootstrap_stage="root-ssh"', 1)[1].split(
+        'started_at="$(date -u', 1
+    )[0]
     require(
-        "root_ssh_denied=true" in remote
-        and 'grep -qi \'permission denied\'' in remote,
+        "root_ssh_denied=true" in root_ssh_admission
+        and '"$root_probe_status" -eq 255' in root_ssh_admission
+        and "operator_recheck_status" in root_ssh_admission
+        and 'ssh "${ssh_options[@]}" "secpal-ci@$address" true'
+        in root_ssh_admission
+        and "permission denied" not in root_ssh_admission
+        and "root_probe=" not in root_ssh_admission,
         "remote orchestration must prove effective root SSH denial",
     )
     require(
@@ -1012,6 +1021,8 @@ def validate(root: Path) -> None:
         and 'host_key_observations_json="null"' in remote
         and "record_host_key_observation()" in remote
         and "classify_host_key_scan()" in remote
+        and "observe_failed_host_key_scan()" in remote
+        and "scripts/ci-cloud/probe-ssh-port.py" in remote
         and "connection_refused" in remote
         and "connection_timeout" in remote
         and "multiple_keys" in remote
@@ -1028,18 +1039,27 @@ def validate(root: Path) -> None:
     host_key_classifier = remote.split("classify_host_key_scan() {", 1)[
         1
     ].split("\n}\n", 1)[0]
-    nonzero_host_key_fallback = (
-        "elif ((status != 0)); then\n    printf 'other\\n'"
-    )
-    empty_successful_host_key_scan = (
-        "elif ((line_count == 0)); then\n    printf 'no_key\\n'"
+    require(
+        "connection_refused | connection_timeout | other"
+        in host_key_classifier
+        and "reachable" in host_key_classifier
+        and "grep" not in host_key_classifier
+        and "_scan_error" not in remote,
+        "host-key reachability must use closed observations instead of scanner text",
     )
     require(
-        nonzero_host_key_fallback in host_key_classifier
-        and empty_successful_host_key_scan in host_key_classifier
-        and host_key_classifier.index(nonzero_host_key_fallback)
-        < host_key_classifier.index(empty_successful_host_key_scan),
-        "failed host-key scans must not be classified as successful empty scans",
+        "PROBE_TIMEOUT_SECONDS = 5.0" in ssh_probe
+        and "socket.AF_INET, socket.SOCK_STREAM" in ssh_probe
+        and "connection.connect_ex((address, 22))" in ssh_probe
+        and "errno.ECONNREFUSED" in ssh_probe
+        and "errno.ETIMEDOUT" in ssh_probe
+        and 'return "connection_refused"' in ssh_probe
+        and 'return "connection_timeout"' in ssh_probe
+        and "ipaddress.ip_address(arguments.address)" in ssh_probe
+        and "not address.is_global" in ssh_probe
+        and "subprocess" not in ssh_probe
+        and "os.environ" not in ssh_probe,
+        "SSH reachability evidence must come from a bounded public-IPv4 TCP probe",
     )
     require(
         "operator_ssh_ready=false" in remote
