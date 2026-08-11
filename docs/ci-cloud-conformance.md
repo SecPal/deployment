@@ -269,7 +269,27 @@ script cannot create the required root-owned trust boundary.
 Every run creates a new Ed25519 keypair on the GitHub runner. Only the public
 key enters OpenTofu and the selected provider. The private key is mode `0600`, is never
 an output, state value, artifact, or repository file, and is removed before
-the provisioning/test job ends. DigitalOcean initially embeds that public key
+the provisioning/test job ends. The disposable operator account is initially
+created without an authorized key. Cloud-init instead stages the public key as
+root-owned mode `0600`; GCP does not receive an instance-level `ssh-keys`
+metadata entry. Trusted host setup validates and normalizes the fixed
+subordinate-ID ranges, service policy, and AppArmor evidence before atomically
+publishing a root-owned mode `0644` `secpal-ci` key file in a root-owned
+directory under `/run` in its final SSH stage. The prioritized SSH drop-in uses
+the `%u` username token so no other account resolves to that file, requires
+public-key authentication, and restricts login to `secpal-ci`. Immediately
+before publication, host setup validates both SSH syntax and the effective
+operator/root configurations; an image drop-in cannot silently override the
+closed policy. This prevents the runner from logging in while `usermod`
+replaces provider-image
+subordinate-ID ranges and keeps key publication outside an operator-owned
+directory. The EXIT handler is active before the first fallible host-setup
+initialization. If an earlier trusted setup stage fails, it first writes the
+closed failure marker when possible and only then enables the same bounded
+diagnostic access. The runner treats failed cloud-init as terminal and never
+checks out or executes target code in that case.
+
+DigitalOcean initially embeds that public key
 in the image's root account as part of Droplet creation; cloud-init sets
 `PermitRootLogin no`, creates the dedicated `secpal-ci` account, and restarts a
 validated SSH configuration. Before target code runs, the trusted runner uses
@@ -291,9 +311,9 @@ should replace this bootstrap.
 
 The VM has no attached provider credential. The GCP instance has no service
 account block, disables legacy metadata endpoints through the current official
-image defaults, blocks project SSH keys, and exposes no cloud API scope or
-identity token. Provider metadata may expose ordinary instance facts, but it
-is not a source of cloud-control authority.
+image defaults, blocks project SSH keys, carries no instance SSH key, and
+exposes no cloud API scope or identity token. Provider metadata may expose
+ordinary instance facts, but it is not a source of cloud-control authority.
 
 ## Ownership, cleanup, and orphan protection
 

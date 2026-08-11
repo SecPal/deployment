@@ -40,6 +40,14 @@ SPDX-License-Identifier: CC0-1.0
 - Shared path-access admission for host policy and rootless runtime paths, explicit AppArmor
   enforcement evidence, and distinct host-name versus public-origin rules.
 
+### Fixed
+
+- Deferred disposable-operator SSH-key activation until trusted host setup has
+  finished, preventing remote bootstrap observation from racing subordinate-ID
+  normalization while retaining bounded diagnostic access after setup failure.
+- Fail-closed effective SSH-policy admission, a prioritized provider-independent
+  drop-in, and username-scoped authorized-key publication before operator access.
+
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 
 ### Added

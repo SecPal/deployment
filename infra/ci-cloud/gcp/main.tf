@@ -123,7 +123,6 @@ resource "google_compute_instance" "conformance" {
     block-project-ssh-keys   = "true"
     disable-legacy-endpoints = "true"
     enable-oslogin           = "FALSE"
-    ssh-keys                 = "secpal-ci:${trimspace(var.ssh_public_key)}"
     user-data = templatefile("${path.module}/cloud-init.tftpl", {
       ssh_public_key            = trimspace(var.ssh_public_key)
       host_setup_script         = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/configure-conformance-host.sh")))

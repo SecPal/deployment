@@ -373,6 +373,53 @@ def validate_opentofu(root: Path) -> None:
     require("set -euo pipefail" in host_setup, "host setup must use strict Bash mode")
     require("groups: []" not in cloud_init, "cloud-init user groups must satisfy its schema")
     require(
+        "ssh_authorized_keys" not in cloud_init
+        and "  - path: /run/secpal-ci-authorized-key\n" in cloud_init
+        and '    owner: root:root\n    permissions: "0600"\n' in cloud_init
+        and "  - path: /etc/ssh/sshd_config.d/00-secpal-ci.conf\n"
+        in cloud_init
+        and "sshd_config.d/90-secpal-ci.conf" not in cloud_init
+        and "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u"
+        in cloud_init,
+        "operator SSH key must remain root-only until trusted host setup finishes",
+    )
+    require(
+        "activate_operator_ssh || true" in host_setup
+        and 'setup_stage="ssh"\nactivate_operator_ssh\n' in host_setup
+        and "active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys"
+        in host_setup
+        and 'active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"'
+        in host_setup
+        and 'mv -T -- "$authorized_keys_tmp_dir" \\\n    "$active_ssh_authorized_keys_dir"'
+        in host_setup,
+        "host setup must defer operator SSH access and preserve failure diagnostics",
+    )
+    require(
+        "validate_effective_sshd_config || return 1" in host_setup
+        and "sshd -T -C" in host_setup
+        and "allowusers secpal-ci" in host_setup
+        and "authenticationmethods publickey" in host_setup
+        and "authorizedkeysfile /run/secpal-ci-authorized-keys/%u"
+        in host_setup
+        and "permitrootlogin no" in host_setup,
+        "host setup must verify the closed effective SSH policy before key release",
+    )
+    trap_anchor = "trap record_setup_failure EXIT"
+    diagnostic_install = (
+        'install -d -o root -g root -m 0755 "$diagnostic_dir"'
+    )
+    diagnostic_reset = (
+        'rm -f -- "$diagnostic_dir/host-setup-failure.json"'
+    )
+    require(
+        trap_anchor in host_setup
+        and diagnostic_install in host_setup
+        and diagnostic_reset in host_setup
+        and host_setup.index(trap_anchor) < host_setup.index(diagnostic_install)
+        and host_setup.index(trap_anchor) < host_setup.index(diagnostic_reset),
+        "host setup failure handling must precede fallible initialization",
+    )
+    require(
         '[[ "$(id -G secpal-ci)" != "$(id -g secpal-ci)" ]]' in host_setup,
         "host setup must reject supplementary disposable-operator groups",
     )
@@ -406,6 +453,49 @@ def validate_opentofu(root: Path) -> None:
     except yaml.YAMLError as error:
         raise ContractError(f"cloud-init template is invalid YAML: {error}") from None
     require(isinstance(cloud_config, dict), "cloud-init template must be a YAML mapping")
+    users = cloud_config.get("users")
+    require(
+        isinstance(users, list)
+        and len(users) == 1
+        and isinstance(users[0], dict)
+        and "ssh_authorized_keys" not in users[0],
+        "cloud-init must not activate the operator key during user creation",
+    )
+    write_files = cloud_config.get("write_files")
+    require(
+        isinstance(write_files, list)
+        and any(
+            isinstance(entry, dict)
+            and entry.get("path") == "/run/secpal-ci-authorized-key"
+            and entry.get("owner") == "root:root"
+            and entry.get("permissions") == "0600"
+            and entry.get("content") == "${ssh_public_key}\n"
+            for entry in write_files
+        ),
+        "cloud-init must stage exactly one root-owned operator public key",
+    )
+    sshd_files = [
+        entry
+        for entry in write_files
+        if isinstance(entry, dict)
+        and str(entry.get("path", "")).startswith("/etc/ssh/sshd_config.d/")
+    ]
+    require(
+        len(sshd_files) == 1
+        and sshd_files[0].get("path")
+        == "/etc/ssh/sshd_config.d/00-secpal-ci.conf"
+        and sshd_files[0].get("owner") == "root:root"
+        and sshd_files[0].get("permissions") == "0644"
+        and sshd_files[0].get("content")
+        == "PasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\n"
+        "PermitRootLogin no\n"
+        "PubkeyAuthentication yes\n"
+        "AuthenticationMethods publickey\n"
+        "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u\n"
+        "AllowUsers secpal-ci\n",
+        "cloud-init SSH policy must be exact, prioritized, and operator-scoped",
+    )
     packages = cloud_config.get("packages")
     require(
         isinstance(packages, list)
@@ -478,6 +568,10 @@ def validate_opentofu(root: Path) -> None:
     require('block-project-ssh-keys   = "true"' in gcp_main, "project SSH keys must be blocked")
     require('disable-legacy-endpoints = "true"' in gcp_main, "legacy GCP metadata endpoints must be disabled")
     require('enable-oslogin           = "FALSE"' in gcp_main, "unbounded OS Login identity is forbidden")
+    require(
+        "    ssh-keys                 =" not in gcp_main,
+        "GCP metadata must not activate the operator SSH key early",
+    )
     require('protocol = "all"' in gcp_main and "priority  = 65534" in gcp_main, "GCP residual egress must be denied")
     require('condition     = var.project_id == "secpal-dev"' in gcp_variables, "GCP project allowlist changed")
     require('condition     = var.zone == "europe-west3-a"' in gcp_variables, "GCP zone allowlist changed")
@@ -576,6 +670,12 @@ def validate(root: Path) -> None:
         and "head -c 8192" in remote
         and "cloud-init-output.log" not in remote,
         "early remote failures need bounded structured evidence and diagnostics",
+    )
+    require(
+        "operator_ssh_ready=false" in remote
+        and "for _ in {1..30}; do" in remote
+        and "operator SSH key was not activated by trusted host setup" in remote,
+        "remote orchestration must wait boundedly for deferred operator SSH access",
     )
     require(
         "scripts/ci-cloud/host-setup-failure.py" in remote

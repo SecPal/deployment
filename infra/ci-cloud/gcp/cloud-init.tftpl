@@ -30,14 +30,17 @@ users:
     uid: 20000
     lock_passwd: true
     shell: /bin/bash
-    ssh_authorized_keys:
-      - ${ssh_public_key}
 
 disable_root: true
 ssh_pwauth: false
 
 write_files:
-  - path: /etc/ssh/sshd_config.d/90-secpal-ci.conf
+  - path: /run/secpal-ci-authorized-key
+    owner: root:root
+    permissions: "0600"
+    content: |
+      ${ssh_public_key}
+  - path: /etc/ssh/sshd_config.d/00-secpal-ci.conf
     owner: root:root
     permissions: "0644"
     content: |
@@ -45,6 +48,8 @@ write_files:
       KbdInteractiveAuthentication no
       PermitRootLogin no
       PubkeyAuthentication yes
+      AuthenticationMethods publickey
+      AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u
       AllowUsers secpal-ci
   - path: /etc/apt/apt.conf.d/20secpal-ci-periodic
     owner: root:root

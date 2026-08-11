@@ -56,6 +56,10 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 printf 'ssh\n' >>"${SECPAL_TEST_SSH_LOG:?}"
+ssh_call="$(wc -l <"${SECPAL_TEST_SSH_LOG:?}")"
+if [[ "${1:-}" == true && "$ssh_call" -eq 1 ]]; then
+  exit 255
+fi
 if [[ "${1:-}" == /usr/bin/python3 ]]; then
   cat >/dev/null
   printf '{"exit_status":7,"stage":"apparmor"}\n'
@@ -92,7 +96,7 @@ if [[ "$status" -ne 2 ]]; then
   printf 'FAIL: expected remote bootstrap status 2, got %s\n' "$status" >&2
   exit 1
 fi
-if [[ "$(wc -l <"$SSH_LOG")" -ne 2 ]]; then
+if [[ "$(wc -l <"$SSH_LOG")" -ne 4 ]]; then
   printf 'FAIL: target or collector SSH ran after failed cloud-init\n' >&2
   exit 1
 fi

@@ -118,6 +118,21 @@ ssh_options=(
 )
 
 bootstrap_stage="cloud-init"
+operator_ssh_ready=false
+for _ in {1..30}; do
+  if timeout --signal=TERM --kill-after=5s 20s \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" true \
+    >/dev/null 2>&1; then
+    operator_ssh_ready=true
+    break
+  fi
+  sleep 5
+done
+if [[ "$operator_ssh_ready" != true ]]; then
+  printf 'ERROR: operator SSH key was not activated by trusted host setup.\n' >&2
+  exit 1
+fi
+
 set +e
 cloud_init_diagnostic="$(
   timeout --signal=TERM --kill-after=15s 12m \

@@ -8,10 +8,157 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 diagnostic_dir=/run/secpal-ci-evidence
 failure_writer=/usr/local/sbin/secpal-ci-host-setup-failure
+staged_ssh_public_key=/run/secpal-ci-authorized-key
+active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys
+active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"
 setup_stage="initialize"
 snapshot_tmp=""
-install -d -o root -g root -m 0755 "$diagnostic_dir"
-rm -f -- "$diagnostic_dir/host-setup-failure.json"
+ssh_key_activated=false
+
+validate_staged_operator_key() {
+  local metadata owner_uid owner_gid file_mode file_size
+  local key_type key_data key_comment key_extra
+
+  if [[ ! -f "$staged_ssh_public_key" || -L "$staged_ssh_public_key" ]]; then
+    printf 'ERROR: staged operator SSH key is not a regular file.\n' >&2
+    return 1
+  fi
+  if ! metadata="$(stat -c '%u:%g:%a:%s' -- "$staged_ssh_public_key")"; then
+    printf 'ERROR: unable to inspect staged operator SSH key.\n' >&2
+    return 1
+  fi
+  IFS=: read -r owner_uid owner_gid file_mode file_size <<<"$metadata"
+  if [[ "$owner_uid" != 0 || "$owner_gid" != 0 || "$file_mode" != 600 ||
+    ! "$file_size" =~ ^[1-9][0-9]{0,2}$ ]] || ((file_size > 512)); then
+    printf 'ERROR: staged operator SSH key has unsafe metadata.\n' >&2
+    return 1
+  fi
+  if [[ "$(wc -l <"$staged_ssh_public_key")" -ne 1 ]]; then
+    printf 'ERROR: staged operator SSH key must contain exactly one line.\n' >&2
+    return 1
+  fi
+  IFS=' ' read -r key_type key_data key_comment key_extra \
+    <"$staged_ssh_public_key"
+  if [[ "$key_type" != ssh-ed25519 ||
+    ! "$key_data" =~ ^[A-Za-z0-9+/]+={0,2}$ ||
+    -z "$key_comment" || -n "$key_extra" ]]; then
+    printf 'ERROR: staged operator SSH key is outside the closed format.\n' >&2
+    return 1
+  fi
+  if ! ssh-keygen -l -E sha256 -f "$staged_ssh_public_key" >/dev/null; then
+    printf 'ERROR: staged operator SSH key is invalid.\n' >&2
+    return 1
+  fi
+}
+
+validate_effective_sshd_config() {
+  local context effective_config expected keyword
+  local -a contexts=(
+    "user=secpal-ci,host=localhost,addr=127.0.0.1"
+    "user=root,host=localhost,addr=127.0.0.1"
+  )
+  local -a expected_settings=(
+    "allowusers secpal-ci"
+    "authenticationmethods publickey"
+    "authorizedkeysfile /run/secpal-ci-authorized-keys/%u"
+    "kbdinteractiveauthentication no"
+    "passwordauthentication no"
+    "permitrootlogin no"
+    "pubkeyauthentication yes"
+  )
+
+  if ! sshd -t; then
+    printf 'ERROR: refusing to activate SSH with invalid daemon configuration.\n' >&2
+    return 1
+  fi
+  for context in "${contexts[@]}"; do
+    if ! effective_config="$(sshd -T -C "$context")"; then
+      printf 'ERROR: unable to inspect the effective SSH configuration.\n' >&2
+      return 1
+    fi
+    for expected in "${expected_settings[@]}"; do
+      keyword="${expected%% *}"
+      if [[ "$(grep -Ec "^${keyword} " <<<"$effective_config")" -ne 1 ]] ||
+        ! grep -Fqx -- "$expected" <<<"$effective_config"; then
+        printf 'ERROR: effective SSH configuration violates %s.\n' \
+          "$keyword" >&2
+        return 1
+      fi
+    done
+  done
+}
+
+activate_operator_ssh() {
+  local authorized_keys_tmp_dir directory_metadata installed_metadata
+
+  if [[ "$ssh_key_activated" == true ]]; then
+    return 0
+  fi
+  validate_staged_operator_key || return 1
+  validate_effective_sshd_config || return 1
+  if [[ -e "$active_ssh_authorized_keys_dir" ||
+    -L "$active_ssh_authorized_keys_dir" ]]; then
+    printf 'ERROR: operator authorized-keys path already exists.\n' >&2
+    return 1
+  fi
+  if ! authorized_keys_tmp_dir="$(
+    mktemp -d /run/.secpal-ci-authorized-keys.XXXXXX
+  )"; then
+    printf 'ERROR: unable to stage the operator authorized keys.\n' >&2
+    return 1
+  fi
+  if ! chmod 0755 "$authorized_keys_tmp_dir"; then
+    rmdir -- "$authorized_keys_tmp_dir" || true
+    printf 'ERROR: unable to protect the operator authorized-keys directory.\n' >&2
+    return 1
+  fi
+  if ! install -o root -g root -m 0644 \
+    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"; then
+    rm -f -- "$authorized_keys_tmp_dir/secpal-ci"
+    rmdir -- "$authorized_keys_tmp_dir" || true
+    printf 'ERROR: unable to install the operator SSH key.\n' >&2
+    return 1
+  fi
+  if ! directory_metadata="$(
+    stat -c '%u:%g:%a' -- "$authorized_keys_tmp_dir"
+  )" || ! installed_metadata="$(
+    stat -c '%u:%g:%a' -- "$authorized_keys_tmp_dir/secpal-ci"
+  )"; then
+    rm -f -- "$authorized_keys_tmp_dir/secpal-ci"
+    rmdir -- "$authorized_keys_tmp_dir" || true
+    printf 'ERROR: unable to inspect the installed operator SSH key.\n' >&2
+    return 1
+  fi
+  if [[ "$directory_metadata" != 0:0:755 ||
+    "$installed_metadata" != 0:0:644 ]] ||
+    ! cmp -s -- "$staged_ssh_public_key" \
+      "$authorized_keys_tmp_dir/secpal-ci"; then
+    rm -f -- "$authorized_keys_tmp_dir/secpal-ci"
+    rmdir -- "$authorized_keys_tmp_dir" || true
+    printf 'ERROR: installed operator SSH key failed verification.\n' >&2
+    return 1
+  fi
+  if ! mv -T -- "$authorized_keys_tmp_dir" \
+    "$active_ssh_authorized_keys_dir"; then
+    rm -f -- "$authorized_keys_tmp_dir/secpal-ci"
+    rmdir -- "$authorized_keys_tmp_dir" || true
+    printf 'ERROR: unable to publish the operator SSH key atomically.\n' >&2
+    return 1
+  fi
+  if ! systemctl restart ssh.service; then
+    rm -f -- "$active_ssh_authorized_keys"
+    rmdir -- "$active_ssh_authorized_keys_dir" || true
+    printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
+    return 1
+  fi
+  if ! rm -f -- "$staged_ssh_public_key"; then
+    rm -f -- "$active_ssh_authorized_keys"
+    rmdir -- "$active_ssh_authorized_keys_dir" || true
+    printf 'ERROR: unable to remove the staged operator SSH key.\n' >&2
+    return 1
+  fi
+  ssh_key_activated=true
+}
 
 record_setup_failure() {
   local status=$?
@@ -20,11 +167,14 @@ record_setup_failure() {
   [[ -z "$snapshot_tmp" ]] || rm -f -- "$snapshot_tmp"
   if [[ "$status" -ne 0 ]]; then
     "$failure_writer" write "$setup_stage" "$status" || true
+    activate_operator_ssh || true
   fi
   exit "$status"
 }
 
 trap record_setup_failure EXIT
+install -d -o root -g root -m 0755 "$diagnostic_dir"
+rm -f -- "$diagnostic_dir/host-setup-failure.json"
 install -d -o root -g root -m 0755 /etc/containers/systemd/users/20000
 install -d -o secpal-ci -g secpal-ci -m 0700 /srv/secpal-ci
 if [[ "$(id -G secpal-ci)" != "$(id -g secpal-ci)" ]]; then
@@ -142,6 +292,5 @@ rm -f -- "$snapshot_tmp"
 snapshot_tmp=""
 
 setup_stage="ssh"
-sshd -t
-systemctl restart ssh.service
+activate_operator_ssh
 trap - EXIT

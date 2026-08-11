@@ -188,6 +188,165 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("overlaps the fixed secpal-ci range", host_setup)
         self.assertIn("fixed secpal-ci range overlaps a host identity", host_setup)
 
+    def test_operator_ssh_key_is_deferred_until_host_setup_finishes(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        for provider in ("digitalocean", "gcp"):
+            template = (
+                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
+            ).read_text(encoding="utf-8")
+            users_block = template.split("users:\n", 1)[1].split(
+                "\ndisable_root:", 1
+            )[0]
+            self.assertNotIn("ssh_authorized_keys", users_block)
+            self.assertIn("- path: /run/secpal-ci-authorized-key", template)
+            staged_key = template.split(
+                "- path: /run/secpal-ci-authorized-key", 1
+            )[1].split("  - path:", 1)[0]
+            self.assertIn("owner: root:root", staged_key)
+            self.assertIn('permissions: "0600"', staged_key)
+            self.assertIn("${ssh_public_key}", staged_key)
+            self.assertIn(
+                "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u",
+                template,
+            )
+            self.assertIn(
+                "- path: /etc/ssh/sshd_config.d/00-secpal-ci.conf",
+                template,
+            )
+            self.assertNotIn("sshd_config.d/90-secpal-ci.conf", template)
+            self.assertIn("AuthenticationMethods publickey", template)
+            self.assertIn("PermitRootLogin no", template)
+            self.assertIn("AllowUsers secpal-ci", template)
+
+        gcp_main = (ROOT / "infra/ci-cloud/gcp/main.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("    ssh-keys                 =", gcp_main)
+        self.assertIn("activate_operator_ssh", host_setup)
+        self.assertIn("activate_operator_ssh || true", host_setup)
+        self.assertIn("validate_effective_sshd_config || return 1", host_setup)
+        self.assertIn("sshd -T -C", host_setup)
+        self.assertLess(
+            host_setup.index('setup_stage="apparmor"'),
+            host_setup.index('setup_stage="ssh"'),
+        )
+        ssh_stage = host_setup.split('setup_stage="ssh"', 1)[1]
+        self.assertIn("activate_operator_ssh", ssh_stage)
+        self.assertIn(
+            "active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys",
+            host_setup,
+        )
+        self.assertIn(
+            'active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"',
+            host_setup,
+        )
+        self.assertNotIn("/home/secpal-ci/.ssh/authorized_keys", host_setup)
+        self.assertIn(
+            'mv -T -- "$authorized_keys_tmp_dir" \\\n'
+            '    "$active_ssh_authorized_keys_dir"',
+            host_setup,
+        )
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("operator_ssh_ready=false", remote)
+        self.assertIn("for _ in {1..30}; do", remote)
+
+    def test_static_contract_rejects_early_operator_ssh_key_release(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "/run/secpal-ci-authorized-key",
+            "/home/secpal-ci/.ssh/authorized_keys",
+        )
+
+    def test_static_contract_rejects_global_operator_key_path(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "AuthorizedKeysFile /run/secpal-ci-authorized-keys/%u",
+            "AuthorizedKeysFile /run/secpal-ci-authorized-keys/key",
+        )
+
+    def test_static_contract_rejects_late_ssh_dropin(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "sshd_config.d/00-secpal-ci.conf",
+            "sshd_config.d/90-secpal-ci.conf",
+        )
+
+    def test_static_contract_rejects_broadened_ssh_users(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "AllowUsers secpal-ci",
+            "AllowUsers root secpal-ci",
+        )
+
+    def test_static_contract_rejects_root_key_login(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "PermitRootLogin no",
+            "PermitRootLogin prohibit-password",
+        )
+
+    def test_static_contract_rejects_alternate_authentication_methods(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "AuthenticationMethods publickey",
+            "AuthenticationMethods any",
+        )
+
+    def test_static_contract_rejects_missing_effective_sshd_validation(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "  validate_effective_sshd_config || return 1\n",
+            "  true\n",
+        )
+
+    def test_setup_failure_trap_precedes_fallible_initialization(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        trap_index = host_setup.index("trap record_setup_failure EXIT")
+        self.assertLess(
+            trap_index,
+            host_setup.index(
+                'install -d -o root -g root -m 0755 "$diagnostic_dir"'
+            ),
+        )
+        self.assertLess(
+            trap_index,
+            host_setup.index(
+                'rm -f -- "$diagnostic_dir/host-setup-failure.json"'
+            ),
+        )
+
+    def test_static_contract_rejects_late_setup_failure_trap(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            'trap record_setup_failure EXIT\n'
+            'install -d -o root -g root -m 0755 "$diagnostic_dir"\n'
+            'rm -f -- "$diagnostic_dir/host-setup-failure.json"\n',
+            'install -d -o root -g root -m 0755 "$diagnostic_dir"\n'
+            'rm -f -- "$diagnostic_dir/host-setup-failure.json"\n'
+            'trap record_setup_failure EXIT\n',
+        )
+
+    def test_static_contract_rejects_gcp_metadata_ssh_key_injection(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            '    enable-oslogin           = "FALSE"\n',
+            '    enable-oslogin           = "FALSE"\n'
+            '    ssh-keys                 = "secpal-ci:${trimspace(var.ssh_public_key)}"\n',
+        )
+
+    def test_static_contract_rejects_lost_setup_failure_access(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "    activate_operator_ssh || true\n",
+            "    true\n",
+        )
+
     def test_trusted_collector_ignores_target_owned_startup_configuration(self) -> None:
         remote = (
             ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
