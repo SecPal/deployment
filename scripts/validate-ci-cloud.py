@@ -322,6 +322,7 @@ def validate_opentofu(root: Path) -> None:
     outputs = read(root, "infra/ci-cloud/digitalocean/outputs.tf")
     cloud_init = read(root, "infra/ci-cloud/digitalocean/cloud-init.tftpl")
     host_setup = read(root, "scripts/ci-cloud/configure-conformance-host.sh")
+    diagnostic_ssh = read(root, "scripts/ci-cloud/install-diagnostic-ssh.sh")
     host_setup_failure = read(root, "scripts/ci-cloud/host-setup-failure.py")
     collector = read(root, "scripts/ci-cloud/collect-host-evidence.py")
     read(root, "infra/ci-cloud/digitalocean/.terraform.lock.hcl")
@@ -373,6 +374,254 @@ def validate_opentofu(root: Path) -> None:
     require("set -euo pipefail" in host_setup, "host setup must use strict Bash mode")
     require("groups: []" not in cloud_init, "cloud-init user groups must satisfy its schema")
     require(
+        "ssh_authorized_keys" not in cloud_init
+        and "${diagnostic_ssh_installer}" in cloud_init
+        and "  - path: /run/secpal-ci-authorized-key\n" in cloud_init
+        and '    owner: root:root\n    permissions: "0600"\n' in cloud_init
+        and "  - path: /etc/ssh/sshd_config.d/00-secpal-ci.conf\n"
+        in cloud_init
+        and "sshd_config.d/90-secpal-ci.conf" not in cloud_init
+        and "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u"
+        in cloud_init,
+        "operator SSH key must remain root-only until trusted host setup finishes",
+    )
+    require(
+        "systemctl mask --now ssh.service ssh.socket"
+        in diagnostic_ssh
+        and "OnActiveSec=10m" in diagnostic_ssh
+        and "ForceCommand /run/secpal-ci-cloud-init-diagnostic"
+        in diagnostic_ssh
+        and "DisableForwarding yes" in diagnostic_ssh
+        and "PermitRootLogin no" in diagnostic_ssh
+        and "PermitUserEnvironment no" in diagnostic_ssh
+        and "PubkeyAcceptedAlgorithms ssh-ed25519" in diagnostic_ssh
+        and "RevokedKeys none" in diagnostic_ssh
+        and "RefuseConnection no" in diagnostic_ssh
+        and "MaxSessions 1" in diagnostic_ssh
+        and "PAMServiceName sshd" in diagnostic_ssh
+        and "StrictModes yes" in diagnostic_ssh
+        and "UsePAM yes" in diagnostic_ssh
+        and "AllowUsers secpal-ci-diagnostic@$runner_ipv4" in diagnostic_ssh
+        and "useradd --system" in diagnostic_ssh
+        and "SECPAL_CI_DIAGNOSTIC_SSH" in diagnostic_ssh
+        and "SECPAL_CI_HOST_SETUP_FAILURE" in diagnostic_ssh
+        and "/usr/local/sbin/secpal-ci-host-setup-failure read"
+        in diagnostic_ssh
+        and "exit 125" in diagnostic_ssh
+        and "<<'DIAGNOSTIC'\n#!/usr/bin/env bash\nset -euo pipefail\n"
+        in diagnostic_ssh
+        and '"$key_comment" != "secpal-ci-$3-$4"' in diagnostic_ssh
+        and "eval " not in diagnostic_ssh
+        and "source " not in diagnostic_ssh,
+        "pre-runcmd failures need independent restricted diagnostic SSH",
+    )
+    diagnostic_cleanup = diagnostic_ssh.split("cleanup() {", 1)[1].split(
+        "\n}", 1
+    )[0]
+    diagnostic_preparation = diagnostic_ssh.split(
+        "prepare_diagnostic_fallback() {", 1
+    )[1].split("\n}", 1)[0]
+    completed_validator = diagnostic_ssh.split(
+        "completed_setup_is_valid() {", 1
+    )[1].split("\n}", 1)[0]
+    require(
+        "ensure_diagnostic_identity" in diagnostic_preparation
+        and '[[ "$(id -G "$diagnostic_user")" == "$group_gid" ]]'
+        in diagnostic_ssh
+        and "ssh-keygen -A" in diagnostic_preparation
+        and 'sshd -t -f "$config_tmp"' in diagnostic_preparation
+        and "OnActiveSec=10m" in diagnostic_preparation
+        and "/run/systemd/system/$diagnostic_service" in diagnostic_ssh
+        and "/run/systemd/system/$diagnostic_timer" in diagnostic_ssh
+        and 'systemd-analyze verify "$diagnostic_service_unit"'
+        in diagnostic_ssh
+        and 'chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp"'
+        in diagnostic_preparation
+        and 'chmod 0644 "$service_tmp" "$timer_tmp"'
+        not in diagnostic_preparation
+        and 'chmod 0644 "$diagnostic_key"' in diagnostic_preparation
+        and 'chmod 0600 "$diagnostic_config"' in diagnostic_preparation
+        and 'chmod 0600 "$diagnostic_key" "$diagnostic_config"'
+        not in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_key\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_config\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_command\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_service_unit\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_timer_unit\""
+        in diagnostic_preparation
+        and '"$diagnostic_key_metadata" != 0:0:644'
+        in diagnostic_preparation
+        and '"$diagnostic_config_metadata" != 0:0:600'
+        in diagnostic_preparation
+        and '"$diagnostic_command_metadata" != 0:0:755'
+        in diagnostic_preparation
+        and '"$diagnostic_service_unit_metadata" != 0:0:644'
+        in diagnostic_preparation
+        and '"$diagnostic_timer_unit_metadata" != 0:0:644'
+        in diagnostic_preparation
+        and diagnostic_ssh.index("if completed_setup_is_valid; then")
+        < diagnostic_ssh.rindex("prepare_diagnostic_fallback\n")
+        < diagnostic_ssh.rindex("if ! systemctl mask --now ssh.service ssh.socket")
+        and 'completion_marker="$active_operator_root/host-setup-complete"'
+        in diagnostic_ssh
+        and 'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"'
+        in diagnostic_ssh
+        and "if completed_setup_is_valid; then\n  exit 0\nfi\n"
+        in diagnostic_ssh
+        and "SECPAL_CI_HOST_SETUP_COMPLETE" in diagnostic_ssh
+        and 'cmp -s -- - "$active_operator_key"' in diagnostic_ssh
+        and "systemctl is-enabled ssh.service" in diagnostic_ssh
+        and '"$ssh_service_state" == enabled' in diagnostic_ssh
+        and '"$ssh_socket_state" == disabled' in completed_validator
+        and "validate_effective_sshd_config || return 1"
+        in completed_validator
+        and "denyusers|denygroups|allowgroups|setenv" in diagnostic_ssh
+        and "pubkeyacceptedalgorithms" in diagnostic_ssh
+        and "ssh-ed25519" in diagnostic_ssh
+        and 'primary_ssh_config=/etc/ssh/sshd_config.d/00-secpal-ci.conf'
+        in diagnostic_ssh
+        and "if ! start_diagnostic_fallback; then" in diagnostic_cleanup
+        and "unable to establish restricted diagnostic SSH after installer failure"
+        in diagnostic_cleanup
+        and 'rm -f -- "$diagnostic_key" "$diagnostic_command"'
+        not in diagnostic_cleanup
+        and 'systemctl start "$diagnostic_service"' in diagnostic_ssh,
+        "diagnostic fallback must be prepared and armed before primary SSH is masked",
+    )
+    require(
+        "install-diagnostic-ssh.sh" in main
+        and "secpal-ci-diagnostic-sshd.timer" in host_setup
+        and "secpal-ci-diagnostic-sshd.service" in host_setup
+        and "stop_diagnostic_ssh" in host_setup
+        and "restore_diagnostic_ssh" in host_setup
+        and "retire_diagnostic_ssh" in host_setup
+        and 'rm -f -- "$active_ssh_authorized_keys"' in host_setup
+        and '! systemctl is-active --quiet "$diagnostic_ssh_timer"'
+        in host_setup
+        and '! systemctl is-active --quiet "$diagnostic_ssh_service"'
+        in host_setup
+        and 'userdel "$diagnostic_ssh_user"' in host_setup
+        and 'if getent group "$diagnostic_ssh_user" >/dev/null; then'
+        in host_setup
+        and 'groupdel "$diagnostic_ssh_user"' in host_setup,
+        "trusted SSH activation must retire or restore diagnostic SSH atomically",
+    )
+    require(
+        "activate_operator_ssh || true" not in host_setup
+        and "restore_diagnostic_ssh || true" in host_setup
+        and 'setup_stage="ssh"\nactivate_operator_ssh\n' in host_setup
+        and "active_ssh_authorized_keys_dir=\"$active_ssh_root/authorized-keys\""
+        in host_setup
+        and "active_ssh_root=/var/lib/secpal-ci" in host_setup
+        and 'completion_marker="$active_ssh_root/host-setup-complete"'
+        in host_setup
+        and "publish_completion_marker" in host_setup
+        and "SECPAL_CI_HOST_SETUP_COMPLETE" in host_setup
+        and 'active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"'
+        in host_setup
+        and 'mv -T -- "$authorized_keys_tmp_dir" \\\n    "$active_ssh_authorized_keys_dir"'
+        in host_setup,
+        "host setup failures must retain restricted diagnostics without releasing operator SSH",
+    )
+    require(
+        "validate_effective_sshd_config || return 1" in host_setup
+        and "sshd -T -C" in host_setup
+        and "allowusers secpal-ci" in host_setup
+        and "authenticationmethods publickey" in host_setup
+        and "authorizedkeyscommand none" in host_setup
+        and "authorizedkeysfile /var/lib/secpal-ci/authorized-keys/%u"
+        in host_setup
+        and "authorizedprincipalscommand none" in host_setup
+        and "authorizedprincipalsfile none" in host_setup
+        and "permitrootlogin no" in host_setup
+        and "permittty no" in host_setup
+        and "permituserenvironment no" in host_setup
+        and "permituserrc no" in host_setup
+        and "forcecommand none" in host_setup
+        and "chrootdirectory none" in host_setup
+        and "disableforwarding yes" in host_setup
+        and "maxsessions 1" in host_setup
+        and "pamservicename sshd" in host_setup
+        and "refuseconnection no" in host_setup
+        and "revokedkeys none" in host_setup
+        and "strictmodes yes" in host_setup
+        and "trustedusercakeys none" in host_setup
+        and "usedns no" in host_setup
+        and "usepam yes" in host_setup
+        and "denyusers|denygroups|allowgroups|setenv" in host_setup
+        and "pubkeyacceptedalgorithms" in host_setup
+        and "ssh-ed25519" in host_setup
+        and 'runner_ipv4="${1:-}"' in host_setup
+        and 'ip -o -4 route get "$runner_ipv4"' in host_setup
+        and host_setup.count(
+            "host=$runner_ipv4,addr=$runner_ipv4,laddr=$local_ipv4,lport=22"
+        )
+        == 2,
+        "host setup must verify the closed effective SSH policy before key release",
+    )
+    private_key_install = (
+        'install -o root -g root -m 0600 \\\n'
+        '    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"'
+    )
+    key_publish = (
+        'mv -T -- "$authorized_keys_tmp_dir" \\\n'
+        '    "$active_ssh_authorized_keys_dir"'
+    )
+    published_key_chmod = 'chmod 0644 "$active_ssh_authorized_keys"'
+    published_directory_chmod = 'chmod 0755 "$active_ssh_authorized_keys_dir"'
+    require(
+        private_key_install in host_setup
+        and key_publish in host_setup
+        and published_key_chmod in host_setup
+        and published_directory_chmod in host_setup
+        and "systemctl unmask ssh.service ssh.socket" in host_setup
+        and "systemctl disable --now ssh.socket" in host_setup
+        and "systemctl enable ssh.service" in host_setup
+        and "systemctl restart ssh.service" in host_setup
+        and 'chmod 0755 "$authorized_keys_tmp_dir"' not in host_setup
+        and host_setup.index(private_key_install) < host_setup.index(key_publish)
+        < host_setup.index(published_key_chmod)
+        < host_setup.index(published_directory_chmod)
+        < host_setup.index("systemctl unmask ssh.service ssh.socket")
+        < host_setup.index("systemctl disable --now ssh.socket")
+        < host_setup.index("systemctl enable ssh.service")
+        < host_setup.index("systemctl restart ssh.service"),
+        "operator SSH key staging must remain private until publication",
+    )
+    require(
+        host_setup.index("if ! publish_completion_marker; then")
+        < host_setup.index("systemctl restart ssh.service")
+        < host_setup.index("ssh_key_activated=true")
+        < host_setup.index("if ! retire_diagnostic_ssh; then")
+        and 'rm -f -- "$completion_marker"' in host_setup,
+        "operator SSH completion must be persistent, final, and rollback-safe",
+    )
+    trap_anchor = "trap record_setup_failure EXIT"
+    diagnostic_install = (
+        'install -d -o root -g root -m 0755 "$diagnostic_dir"'
+    )
+    diagnostic_reset = (
+        'rm -f -- "$diagnostic_dir/host-setup-failure.json"'
+    )
+    runner_context_validation = (
+        'if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then'
+    )
+    require(
+        trap_anchor in host_setup
+        and runner_context_validation in host_setup
+        and diagnostic_install in host_setup
+        and diagnostic_reset in host_setup
+        and host_setup.index(trap_anchor)
+        < host_setup.index(runner_context_validation)
+        and host_setup.index(trap_anchor) < host_setup.index(diagnostic_install)
+        and host_setup.index(trap_anchor) < host_setup.index(diagnostic_reset),
+        "host setup failure handling must precede fallible initialization",
+    )
+    require(
         '[[ "$(id -G secpal-ci)" != "$(id -g secpal-ci)" ]]' in host_setup,
         "host setup must reject supplementary disposable-operator groups",
     )
@@ -406,6 +655,97 @@ def validate_opentofu(root: Path) -> None:
     except yaml.YAMLError as error:
         raise ContractError(f"cloud-init template is invalid YAML: {error}") from None
     require(isinstance(cloud_config, dict), "cloud-init template must be a YAML mapping")
+    users = cloud_config.get("users")
+    require(
+        isinstance(users, list)
+        and len(users) == 1
+        and isinstance(users[0], dict)
+        and "ssh_authorized_keys" not in users[0],
+        "cloud-init must not activate the operator key during user creation",
+    )
+    write_files = cloud_config.get("write_files")
+    require(
+        isinstance(write_files, list)
+        and any(
+            isinstance(entry, dict)
+            and entry.get("path") == "/run/secpal-ci-authorized-key"
+            and entry.get("owner") == "root:root"
+            and entry.get("permissions") == "0600"
+            and entry.get("content") == "${ssh_public_key}\n"
+            for entry in write_files
+        ),
+        "cloud-init must stage exactly one root-owned operator public key",
+    )
+    require(
+        any(
+            isinstance(entry, dict)
+            and entry.get("path")
+            == "/usr/local/sbin/secpal-ci-host-setup-failure"
+            and entry.get("owner") == "root:root"
+            and entry.get("permissions") == "0755"
+            for entry in write_files
+        ),
+        "restricted diagnostics must be able to execute the closed failure reader",
+    )
+    sshd_files = [
+        entry
+        for entry in write_files
+        if isinstance(entry, dict)
+        and str(entry.get("path", "")).startswith("/etc/ssh/sshd_config.d/")
+    ]
+    require(
+        len(sshd_files) == 1
+        and sshd_files[0].get("path")
+        == "/etc/ssh/sshd_config.d/00-secpal-ci.conf"
+        and sshd_files[0].get("owner") == "root:root"
+        and sshd_files[0].get("permissions") == "0644"
+        and sshd_files[0].get("content")
+        == "PasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\n"
+        "MaxSessions 1\n"
+        "PAMServiceName sshd\n"
+        "PermitRootLogin no\n"
+        "PubkeyAuthentication yes\n"
+        "AuthenticationMethods publickey\n"
+        "PubkeyAcceptedAlgorithms +ssh-ed25519\n"
+        "AuthorizedKeysCommand none\n"
+        "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u\n"
+        "AuthorizedPrincipalsCommand none\n"
+        "AuthorizedPrincipalsFile none\n"
+        "TrustedUserCAKeys none\n"
+        "RevokedKeys none\n"
+        "RefuseConnection no\n"
+        "StrictModes yes\n"
+        "ChrootDirectory none\n"
+        "ForceCommand none\n"
+        "DisableForwarding yes\n"
+        "PermitTTY no\n"
+        "PermitUserEnvironment no\n"
+        "PermitUserRC no\n"
+        "UseDNS no\n"
+        "UsePAM yes\n"
+        "AllowUsers secpal-ci\n",
+        "cloud-init SSH policy must be exact, prioritized, and operator-scoped",
+    )
+    require(
+        cloud_config.get("bootcmd")
+        == [
+            [
+                "/bin/bash",
+                "-c",
+                "${diagnostic_ssh_installer}\n",
+                "secpal-ci-install-diagnostic-ssh",
+                "${ssh_public_key}",
+                "${runner_ipv4}",
+                "${run_id}",
+                "${run_attempt}",
+            ]
+        ]
+        and cloud_config.get("runcmd")
+        == [["/usr/local/sbin/secpal-ci-configure-conformance-host", "${runner_ipv4}"]]
+        and "runner_ipv4               = var.runner_ipv4" in main,
+        "host setup must receive the validated runner network context",
+    )
     packages = cloud_config.get("packages")
     require(
         isinstance(packages, list)
@@ -423,6 +763,14 @@ def validate_opentofu(root: Path) -> None:
     require(not any(value in (main + variables) for value in forbidden), "OpenTofu accepted a forbidden control or private key")
     require('condition     = var.region == "fra1"' in variables, "region allowlist changed")
     require('contains(["intel", "amd"], var.cpu_profile)' in variables, "CPU allowlist changed")
+    run_bound_key_pattern = (
+        '^ssh-ed25519 [A-Za-z0-9+/]+={0,2} '
+        'secpal-ci-${var.run_id}-${var.run_attempt}$'
+    )
+    require(
+        run_bound_key_pattern in variables,
+        "DigitalOcean operator key must be bound to the workflow run",
+    )
 
     gcp_main = read(root, "infra/ci-cloud/gcp/main.tf")
     gcp_versions = read(root, "infra/ci-cloud/gcp/versions.tf")
@@ -478,9 +826,25 @@ def validate_opentofu(root: Path) -> None:
     require('block-project-ssh-keys   = "true"' in gcp_main, "project SSH keys must be blocked")
     require('disable-legacy-endpoints = "true"' in gcp_main, "legacy GCP metadata endpoints must be disabled")
     require('enable-oslogin           = "FALSE"' in gcp_main, "unbounded OS Login identity is forbidden")
+    require(
+        "    ssh-keys                 =" not in gcp_main,
+        "GCP metadata must not activate the operator SSH key early",
+    )
+    require(
+        "runner_ipv4               = var.runner_ipv4" in gcp_main,
+        "GCP host setup must receive the validated runner network context",
+    )
+    require(
+        "install-diagnostic-ssh.sh" in gcp_main,
+        "GCP cloud-init must embed the trusted diagnostic SSH installer",
+    )
     require('protocol = "all"' in gcp_main and "priority  = 65534" in gcp_main, "GCP residual egress must be denied")
     require('condition     = var.project_id == "secpal-dev"' in gcp_variables, "GCP project allowlist changed")
     require('condition     = var.zone == "europe-west3-a"' in gcp_variables, "GCP zone allowlist changed")
+    require(
+        run_bound_key_pattern in gcp_variables,
+        "GCP operator key must be bound to the workflow run",
+    )
     forbidden_gcp = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
     require(not any(value in (gcp_main + gcp_variables) for value in forbidden_gcp), "GCP OpenTofu accepted a forbidden control or private key")
     require(gcp_cloud_init == cloud_init, "provider cloud-init admission policy drifted")
@@ -576,6 +940,30 @@ def validate(root: Path) -> None:
         and "head -c 8192" in remote
         and "cloud-init-output.log" not in remote,
         "early remote failures need bounded structured evidence and diagnostics",
+    )
+    require(
+        "operator_ssh_ready=false" in remote
+        and "for _ in {1..30}; do" not in remote
+        and remote.count("while ((SECONDS < bootstrap_deadline)); do") == 2
+        and "operator SSH access did not become ready; trusted host setup"
+        in remote
+        and "network reachability, or sshd may have failed" in remote,
+        "remote orchestration must wait boundedly for deferred operator SSH access",
+    )
+    require(
+        "diagnostic_ssh_seen=false" in remote
+        and "SECPAL_CI_DIAGNOSTIC_SSH" in remote
+        and "SECPAL_CI_HOST_SETUP_FAILURE" in remote
+        and "scripts/ci-cloud/host-setup-failure.py validate" in remote
+        and '"$diagnostic_probe_status" -eq 125' in remote
+        and '"secpal-ci-diagnostic@$address"' in remote
+        and "cloud-init did not reach trusted host setup" in remote,
+        "remote orchestration must recognize bounded restricted diagnostics",
+    )
+    require(
+        "bootstrap_deadline=$((SECONDS + 15 * 60))" in remote
+        and "host_key_deadline" not in remote,
+        "remote orchestration must wait boundedly for masked SSH",
     )
     require(
         "scripts/ci-cloud/host-setup-failure.py" in remote

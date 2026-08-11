@@ -149,6 +149,21 @@ def main(arguments: list[str]) -> int:
         if arguments == ["read"]:
             document = read_marker(MARKER_PATH)
             print(json.dumps(document, separators=(",", ":"), sort_keys=True))
+        elif arguments == ["validate"]:
+            content = sys.stdin.buffer.read(MAX_MARKER_BYTES + 1)
+            if len(content) > MAX_MARKER_BYTES:
+                fail("host-setup failure marker is oversized")
+            try:
+                document = json.loads(content.decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError):
+                fail("host-setup failure marker is invalid JSON")
+            print(
+                json.dumps(
+                    validate_document(document),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
         elif len(arguments) == 3 and arguments[0] == "write":
             if os.geteuid() != 0:
                 fail("only root may write the host-setup failure marker")
@@ -158,7 +173,7 @@ def main(arguments: list[str]) -> int:
                 fail("host-setup failure status is invalid")
             write_marker(MARKER_PATH, arguments[1], exit_status)
         else:
-            fail("expected read or write with a closed stage and exit status")
+            fail("expected read, validate, or write with a closed stage and exit status")
     except (OSError, UnicodeError, ValueError) as error:
         print(f"ERROR: host-setup failure marker: {error}", file=sys.stderr)
         return 1

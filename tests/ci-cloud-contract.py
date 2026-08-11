@@ -131,15 +131,20 @@ class CloudCIContractTests(unittest.TestCase):
                     (ROOT / relative).read_text(encoding="utf-8"),
                 )
 
-    def test_cloud_init_uses_shellchecked_host_setup(self) -> None:
+    def test_cloud_init_uses_shellchecked_trusted_setup(self) -> None:
         cloud_init = (
             ROOT / "infra/ci-cloud/digitalocean/cloud-init.tftpl"
         ).read_text(encoding="utf-8")
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
+        diagnostic_installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", host_setup)
-        self.assertNotIn("[bash, -c", cloud_init)
+        self.assertIn("set -euo pipefail", diagnostic_installer)
+        self.assertEqual(1, cloud_init.count("- /bin/bash\n    - -c\n"))
+        self.assertIn("${diagnostic_ssh_installer}", cloud_init)
         self.assertIn("/run/secpal-ci-evidence/apparmor-status", host_setup)
         self.assertIn(
             "systemctl disable --now podman.socket podman.service", host_setup
@@ -187,6 +192,743 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertIn("overlaps the fixed secpal-ci range", host_setup)
         self.assertIn("fixed secpal-ci range overlaps a host identity", host_setup)
+
+    def test_operator_ssh_key_is_deferred_until_host_setup_finishes(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        for provider in ("digitalocean", "gcp"):
+            template = (
+                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
+            ).read_text(encoding="utf-8")
+            variables = (
+                ROOT / f"infra/ci-cloud/{provider}/variables.tf"
+            ).read_text(encoding="utf-8")
+            users_block = template.split("users:\n", 1)[1].split(
+                "\ndisable_root:", 1
+            )[0]
+            self.assertNotIn("ssh_authorized_keys", users_block)
+            self.assertIn("- path: /run/secpal-ci-authorized-key", template)
+            staged_key = template.split(
+                "- path: /run/secpal-ci-authorized-key", 1
+            )[1].split("  - path:", 1)[0]
+            self.assertIn("owner: root:root", staged_key)
+            self.assertIn('permissions: "0600"', staged_key)
+            self.assertIn("${ssh_public_key}", staged_key)
+            self.assertIn(
+                "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u",
+                template,
+            )
+            self.assertIn(
+                "- path: /etc/ssh/sshd_config.d/00-secpal-ci.conf",
+                template,
+            )
+            self.assertNotIn("sshd_config.d/90-secpal-ci.conf", template)
+            self.assertIn("AuthenticationMethods publickey", template)
+            self.assertIn("AuthorizedKeysCommand none", template)
+            self.assertIn("AuthorizedPrincipalsCommand none", template)
+            self.assertIn("AuthorizedPrincipalsFile none", template)
+            self.assertIn("PermitRootLogin no", template)
+            self.assertIn("TrustedUserCAKeys none", template)
+            self.assertIn("UseDNS no", template)
+            self.assertIn("AllowUsers secpal-ci", template)
+            self.assertIn(
+                "${diagnostic_ssh_installer}",
+                template,
+            )
+            self.assertIn(
+                " secpal-ci-${var.run_id}-${var.run_attempt}$",
+                variables,
+            )
+            self.assertNotIn("( [A-Za-z0-9._@+-]+)?", variables)
+            self.assertIn(
+                "- [/usr/local/sbin/secpal-ci-configure-conformance-host, "
+                '"${runner_ipv4}"]',
+                template,
+            )
+
+        gcp_main = (ROOT / "infra/ci-cloud/gcp/main.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("    ssh-keys                 =", gcp_main)
+        self.assertIn("activate_operator_ssh", host_setup)
+        failure_handler = host_setup.split("record_setup_failure() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn("restore_diagnostic_ssh || true", failure_handler)
+        self.assertNotIn("activate_operator_ssh", failure_handler)
+        self.assertIn("validate_effective_sshd_config || return 1", host_setup)
+        self.assertIn(
+            "systemctl unmask ssh.service ssh.socket",
+            host_setup,
+        )
+        self.assertIn("sshd -T -C", host_setup)
+        for expected in (
+            "authorizedkeyscommand none",
+            "authorizedprincipalscommand none",
+            "authorizedprincipalsfile none",
+            "trustedusercakeys none",
+            "usedns no",
+        ):
+            self.assertIn(expected, host_setup)
+        self.assertIn('runner_ipv4="${1:-}"', host_setup)
+        self.assertIn('ip -o -4 route get "$runner_ipv4"', host_setup)
+        self.assertIn("addr=$runner_ipv4", host_setup)
+        self.assertIn("host=$runner_ipv4", host_setup)
+        self.assertIn("laddr=$local_ipv4", host_setup)
+        self.assertIn("lport=22", host_setup)
+        self.assertLess(
+            host_setup.index('setup_stage="apparmor"'),
+            host_setup.index('setup_stage="ssh"'),
+        )
+        ssh_stage = host_setup.split('setup_stage="ssh"', 1)[1]
+        self.assertIn("activate_operator_ssh", ssh_stage)
+        self.assertIn(
+            'active_ssh_authorized_keys_dir="$active_ssh_root/authorized-keys"',
+            host_setup,
+        )
+        self.assertIn(
+            'active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"',
+            host_setup,
+        )
+        self.assertNotIn("/home/secpal-ci/.ssh/authorized_keys", host_setup)
+        self.assertIn(
+            'mv -T -- "$authorized_keys_tmp_dir" \\\n'
+            '    "$active_ssh_authorized_keys_dir"',
+            host_setup,
+        )
+        private_install = (
+            'install -o root -g root -m 0600 \\\n'
+            '    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"'
+        )
+        publish = (
+            'mv -T -- "$authorized_keys_tmp_dir" \\\n'
+            '    "$active_ssh_authorized_keys_dir"'
+        )
+        expose_file = 'chmod 0644 "$active_ssh_authorized_keys"'
+        expose_directory = 'chmod 0755 "$active_ssh_authorized_keys_dir"'
+        self.assertIn(private_install, host_setup)
+        self.assertIn(expose_file, host_setup)
+        self.assertIn(expose_directory, host_setup)
+        self.assertLess(host_setup.index(private_install), host_setup.index(publish))
+        self.assertLess(host_setup.index(publish), host_setup.index(expose_file))
+        self.assertLess(host_setup.index(expose_file), host_setup.index(expose_directory))
+        self.assertLess(
+            host_setup.index(expose_directory),
+            host_setup.index("systemctl unmask ssh.service ssh.socket"),
+        )
+        self.assertLess(
+            host_setup.index("systemctl unmask ssh.service ssh.socket"),
+            host_setup.index("systemctl restart ssh.service"),
+        )
+        self.assertNotIn('chmod 0755 "$authorized_keys_tmp_dir"', host_setup)
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("operator_ssh_ready=false", remote)
+        self.assertNotIn("for _ in {1..30}; do", remote)
+        self.assertIn("bootstrap_deadline=$((SECONDS + 15 * 60))", remote)
+        self.assertEqual(
+            2,
+            remote.count("while ((SECONDS < bootstrap_deadline)); do"),
+        )
+        self.assertIn(
+            "operator SSH access did not become ready; trusted host setup",
+            remote,
+        )
+        self.assertIn(
+            "network reachability, or sshd may have failed",
+            remote,
+        )
+        self.assertNotIn(
+            "operator SSH key was not activated by trusted host setup",
+            remote,
+        )
+        self.assertNotIn("host_key_deadline", remote)
+
+    def test_operator_ssh_starts_only_after_setup_is_committed(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+
+        marker = "if ! publish_completion_marker; then"
+        restart = "systemctl restart ssh.service"
+        activated = "ssh_key_activated=true"
+        retirement = "retire_diagnostic_ssh"
+        self.assertIn(marker, activation)
+        self.assertIn(restart, activation)
+        self.assertIn(activated, activation)
+        self.assertIn(retirement, activation)
+        self.assertLess(activation.index(marker), activation.index(restart))
+        self.assertLess(activation.index(restart), activation.index(activated))
+        self.assertLess(activation.index(activated), activation.index(retirement))
+
+    def test_pre_runcmd_failure_keeps_restricted_diagnostic_ssh(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+
+        for provider in ("digitalocean", "gcp"):
+            template = (
+                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
+            ).read_text(encoding="utf-8")
+            main = (ROOT / f"infra/ci-cloud/{provider}/main.tf").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("${diagnostic_ssh_installer}", template)
+            self.assertIn('"${ssh_public_key}"', template)
+            self.assertIn('"${runner_ipv4}"', template)
+            self.assertIn('"${run_id}"', template)
+            self.assertIn('"${run_attempt}"', template)
+            self.assertIn(
+                'file("${path.module}/../../../scripts/ci-cloud/'
+                'install-diagnostic-ssh.sh")',
+                main,
+            )
+
+        for required in (
+            "systemctl mask --now ssh.service ssh.socket",
+            "secpal-ci-diagnostic-sshd",
+            "OnActiveSec=10m",
+            "ForceCommand /run/secpal-ci-cloud-init-diagnostic",
+            "DisableForwarding yes",
+            "PermitRootLogin no",
+            "UsePAM yes",
+            "AllowUsers secpal-ci-diagnostic@",
+            "useradd --system",
+            "SECPAL_CI_DIAGNOSTIC_SSH",
+            "exit 125",
+            '"$key_comment" != "secpal-ci-$3-$4"',
+        ):
+            self.assertIn(required, installer)
+        self.assertNotIn("eval ", installer)
+        self.assertNotIn("source ", installer)
+        self.assertIn("secpal-ci-diagnostic-sshd.timer", host_setup)
+        self.assertIn("secpal-ci-diagnostic-sshd.service", host_setup)
+        restore_handler = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn(
+            'rm -f -- "$completion_marker" "$active_ssh_authorized_keys"',
+            restore_handler,
+        )
+        self.assertLess(
+            restore_handler.index(
+                'rm -f -- "$completion_marker" "$active_ssh_authorized_keys"'
+            ),
+            restore_handler.index("systemctl mask --now ssh.service ssh.socket"),
+        )
+        stop_handler = host_setup.split("stop_diagnostic_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn(
+            '! systemctl is-active --quiet "$diagnostic_ssh_timer"',
+            stop_handler,
+        )
+        self.assertIn(
+            '! systemctl is-active --quiet "$diagnostic_ssh_service"',
+            stop_handler,
+        )
+        self.assertIn(
+            "SECPAL_CI_HOST_SETUP_FAILURE",
+            installer,
+        )
+        self.assertIn(
+            "/usr/local/sbin/secpal-ci-host-setup-failure read",
+            installer,
+        )
+        self.assertIn("SECPAL_CI_HOST_SETUP_FAILURE", remote)
+        self.assertIn("SECPAL_CI_DIAGNOSTIC_SSH", remote)
+        self.assertIn("diagnostic_ssh_seen", remote)
+
+    def test_diagnostic_identity_cleanup_is_idempotent(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'if getent group "$diagnostic_ssh_user" >/dev/null; then',
+            host_setup,
+        )
+        self.assertNotIn(
+            '! userdel "$diagnostic_ssh_user" ||\n'
+            '    ! groupdel "$diagnostic_ssh_user"',
+            host_setup,
+        )
+
+    def test_diagnostic_fallback_is_armed_before_primary_ssh_is_masked(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        arm = "prepare_diagnostic_fallback\n"
+        mask = "if ! systemctl mask --now ssh.service ssh.socket"
+        preparation_function = installer.split(
+            "prepare_diagnostic_fallback() {", 1
+        )[1].split("\n}\n", 1)[0]
+        for preparation in (
+            "ensure_diagnostic_identity",
+            "ssh-keygen -A",
+            'sshd -t -f "$config_tmp"',
+            'chmod 0755 "$diagnostic_command"',
+        ):
+            with self.subTest(preparation=preparation):
+                self.assertIn(preparation, preparation_function)
+        self.assertLess(installer.index(arm), installer.index(mask))
+        cleanup = installer.split("cleanup() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("if ! start_diagnostic_fallback; then", cleanup)
+        self.assertIn(
+            "unable to establish restricted diagnostic SSH after installer failure",
+            cleanup,
+        )
+        self.assertNotIn(
+            'rm -f -- "$diagnostic_key" "$diagnostic_command" '
+            '"$diagnostic_config"',
+            cleanup,
+        )
+        self.assertIn("prepare_diagnostic_fallback", installer)
+        self.assertIn(
+            '[[ "$(id -G "$diagnostic_user")" == "$group_gid" ]]',
+            installer,
+        )
+        self.assertIn(
+            'diagnostic_service_unit="/run/systemd/system/$diagnostic_service"',
+            installer,
+        )
+        self.assertIn(
+            'diagnostic_timer_unit="/run/systemd/system/$diagnostic_timer"',
+            installer,
+        )
+        self.assertIn(
+            'systemd-analyze verify "$diagnostic_service_unit" \\\n'
+            '    "$diagnostic_timer_unit"',
+            installer,
+        )
+
+    def test_diagnostic_fallback_staging_and_reporter_are_strict(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        preparation = installer.split("prepare_diagnostic_fallback() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        reporter = preparation.split("<<'DIAGNOSTIC'\n", 1)[1].split(
+            "\nDIAGNOSTIC", 1
+        )[0]
+        self.assertTrue(
+            reporter.startswith("#!/usr/bin/env bash\nset -euo pipefail\n")
+        )
+        self.assertIn(
+            'chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp"',
+            preparation,
+        )
+        self.assertNotIn(
+            'chmod 0644 "$service_tmp" "$timer_tmp"',
+            preparation,
+        )
+        self.assertIn('chmod 0644 "$diagnostic_key"', preparation)
+        self.assertIn('chmod 0600 "$diagnostic_config"', preparation)
+        self.assertNotIn(
+            'chmod 0600 "$diagnostic_key" "$diagnostic_config"',
+            preparation,
+        )
+        for artifact, metadata in (
+            ("diagnostic_key", "0:0:644"),
+            ("diagnostic_config", "0:0:600"),
+            ("diagnostic_command", "0:0:755"),
+            ("diagnostic_service_unit", "0:0:644"),
+            ("diagnostic_timer_unit", "0:0:644"),
+        ):
+            with self.subTest(artifact=artifact):
+                self.assertIn(
+                    f'stat -c \'%u:%g:%a\' -- "${artifact}"',
+                    preparation,
+                )
+                self.assertIn(
+                    f'"${artifact}_metadata" != {metadata}',
+                    preparation,
+                )
+
+    def test_diagnostic_failure_reader_is_executable_by_forced_command(self) -> None:
+        for provider in ("digitalocean", "gcp"):
+            template = (
+                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
+            ).read_text(encoding="utf-8")
+            helper = template.split(
+                "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n",
+                1,
+            )[1].split("\n\n", 1)[0]
+            with self.subTest(provider=provider):
+                self.assertIn("    owner: root:root\n", helper)
+                self.assertIn('    permissions: "0755"\n', helper)
+
+    def test_completed_setup_survives_cloud_init_bootcmd_on_reboot(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'completion_marker="$active_operator_root/host-setup-complete"',
+            installer,
+        )
+        self.assertIn(
+            'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"',
+            installer,
+        )
+        completed_guard = "if completed_setup_is_valid; then"
+        self.assertIn(completed_guard, installer)
+        self.assertLess(
+            installer.index(completed_guard),
+            installer.rindex("prepare_diagnostic_fallback\n"),
+        )
+        self.assertLess(
+            installer.index(completed_guard),
+            installer.rindex("prepare_diagnostic_fallback\n"),
+        )
+        self.assertIn("stat -c '%u:%g:%a'", installer)
+        self.assertIn('cmp -s -- - "$active_operator_key"', installer)
+        self.assertIn("SECPAL_CI_HOST_SETUP_COMPLETE", installer)
+        completed_validator = installer.split("completed_setup_is_valid() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        self.assertIn(
+            'systemctl is-enabled ssh.service',
+            completed_validator,
+        )
+        self.assertIn('"$ssh_service_state" == enabled', completed_validator)
+        self.assertIn(
+            "validate_effective_sshd_config || return 1",
+            completed_validator,
+        )
+        reboot_policy = installer.split("validate_effective_sshd_config() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        self.assertIn("denyusers|denygroups|allowgroups", reboot_policy)
+        self.assertIn("pubkeyacceptedalgorithms", reboot_policy)
+        self.assertIn("ssh-ed25519", reboot_policy)
+        self.assertIn('primary_ssh_config=', installer)
+        self.assertIn(
+            '"$ssh_socket_state" == disabled',
+            completed_validator,
+        )
+        self.assertNotIn("systemctl is-active", completed_validator)
+
+        self.assertIn(
+            'completion_marker="$active_ssh_root/host-setup-complete"',
+            host_setup,
+        )
+        self.assertIn("publish_completion_marker", host_setup)
+        self.assertLess(
+            host_setup.index("if ! publish_completion_marker; then"),
+            host_setup.index('systemctl restart ssh.service'),
+        )
+        self.assertLess(
+            host_setup.index("systemctl enable ssh.service"),
+            host_setup.index("systemctl restart ssh.service"),
+        )
+        self.assertIn('rm -f -- "$completion_marker"', host_setup)
+        self.assertNotIn("/run/secpal-ci-authorized-keys", host_setup)
+
+    def test_static_contract_rejects_missing_completed_setup_reboot_guard(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "if completed_setup_is_valid; then\n  exit 0\nfi\n",
+            "",
+        )
+
+    def test_static_contract_rejects_incomplete_reboot_ssh_validation(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "  validate_effective_sshd_config || return 1\n",
+            "",
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "denyusers|denygroups|allowgroups",
+            "denyusers|denygroups",
+        )
+
+    def test_static_contract_rejects_masking_before_fallback_arm(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "prepare_diagnostic_fallback\n"
+            "if ! systemctl mask --now ssh.service ssh.socket",
+            "if ! systemctl mask --now ssh.service ssh.socket",
+        )
+
+    def test_static_contract_rejects_discarded_preparation_failure_diagnostics(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "    if ! start_diagnostic_fallback; then\n"
+            "      printf 'ERROR: unable to establish restricted diagnostic SSH "
+            "after installer failure.\\n' >&2\n"
+            "    fi\n",
+            '    rm -f -- "$diagnostic_key" "$diagnostic_command" '
+            '"$diagnostic_config"\n',
+        )
+
+    def test_static_contract_rejects_operator_start_before_setup_commit(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "  if ! publish_completion_marker; then\n"
+            "    return 1\n"
+            "  fi\n"
+            "  if ! systemctl restart ssh.service; then\n",
+            "  if ! systemctl restart ssh.service; then\n",
+        )
+
+    def test_static_contract_rejects_fixed_operator_readiness_attempts(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            'diagnostic_setup_failure=""\n'
+            "while ((SECONDS < bootstrap_deadline)); do\n",
+            'diagnostic_setup_failure=""\n'
+            "for _ in {1..30}; do\n",
+        )
+
+    def test_static_contract_rejects_short_masked_ssh_wait(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "bootstrap_deadline=$((SECONDS + 15 * 60))",
+            "bootstrap_deadline=$((SECONDS + 2 * 60))",
+        )
+
+    def test_static_contract_rejects_early_operator_ssh_key_release(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "/run/secpal-ci-authorized-key",
+            "/home/secpal-ci/.ssh/authorized_keys",
+        )
+
+    def test_static_contract_rejects_unmasked_bootstrap_ssh(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "if ! systemctl mask --now ssh.service ssh.socket; then",
+            "if ! true; then",
+        )
+
+    def test_static_contract_rejects_missing_diagnostic_ssh_timer(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "OnActiveSec=10m\n",
+            "",
+        )
+
+    def test_static_contract_rejects_unrestricted_diagnostic_ssh(self) -> None:
+        for old, new in (
+            (
+                "ForceCommand /run/secpal-ci-cloud-init-diagnostic",
+                "ForceCommand internal-sftp",
+            ),
+            ("PermitRootLogin no", "PermitRootLogin yes"),
+            ("DisableForwarding yes", "DisableForwarding no"),
+            ("UsePAM yes", "UsePAM no"),
+            (
+                "AllowUsers secpal-ci-diagnostic@$runner_ipv4",
+                "AllowUsers secpal-ci-diagnostic",
+            ),
+        ):
+            with self.subTest(old=old):
+                self.assert_mutation_rejected(
+                    "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                    old,
+                    new,
+                )
+
+    def test_static_contract_rejects_nonexecutable_diagnostic_reader(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n"
+            "    owner: root:root\n"
+            '    permissions: "0755"\n',
+            "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n"
+            "    owner: root:root\n"
+            '    permissions: "0700"\n',
+        )
+
+    def test_static_contract_rejects_ignored_diagnostic_ssh_marker(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "SECPAL_CI_DIAGNOSTIC_SSH",
+            "UNRECOGNIZED_DIAGNOSTIC_SSH",
+        )
+
+    def test_static_contract_rejects_global_operator_key_path(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u",
+            "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/key",
+        )
+
+    def test_static_contract_rejects_late_ssh_dropin(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "sshd_config.d/00-secpal-ci.conf",
+            "sshd_config.d/90-secpal-ci.conf",
+        )
+
+    def test_static_contract_rejects_broadened_ssh_users(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "AllowUsers secpal-ci",
+            "AllowUsers root secpal-ci",
+        )
+
+    def test_static_contract_rejects_root_key_login(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "PermitRootLogin no",
+            "PermitRootLogin prohibit-password",
+        )
+
+    def test_static_contract_rejects_alternate_authentication_methods(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "AuthenticationMethods publickey",
+            "AuthenticationMethods any",
+        )
+
+    def test_static_contract_rejects_alternate_public_key_sources(self) -> None:
+        for directive in (
+            "AuthorizedKeysCommand none\n",
+            "AuthorizedPrincipalsCommand none\n",
+            "AuthorizedPrincipalsFile none\n",
+            "TrustedUserCAKeys none\n",
+        ):
+            with self.subTest(directive=directive):
+                self.assert_mutation_rejected(
+                    "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+                    f"      {directive}",
+                    "",
+                )
+
+    def test_static_contract_rejects_synthetic_sshd_context(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "host=$runner_ipv4,addr=$runner_ipv4,laddr=$local_ipv4,lport=22",
+            "host=localhost,addr=127.0.0.1",
+        )
+
+    def test_static_contract_rejects_public_temporary_key_staging(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            'install -o root -g root -m 0600 \\\n'
+            '    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"',
+            'install -o root -g root -m 0644 \\\n'
+            '    "$staged_ssh_public_key" "$authorized_keys_tmp_dir/secpal-ci"',
+        )
+
+    def test_static_contract_rejects_missing_effective_sshd_validation(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "  validate_effective_sshd_config || return 1\n",
+            "  true\n",
+        )
+
+    def test_effective_sshd_validation_rejects_additional_access_gates(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        validator = host_setup.split("validate_effective_sshd_config() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
+        for keyword in ("denyusers", "denygroups", "allowgroups", "setenv"):
+            with self.subTest(keyword=keyword):
+                self.assertIn(keyword, validator)
+        self.assertIn("pubkeyacceptedalgorithms", validator)
+        self.assertIn("ssh-ed25519", validator)
+        for expected in (
+            "maxsessions 1",
+            "pamservicename sshd",
+            "refuseconnection no",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, validator)
+
+    def test_static_contract_rejects_missing_additional_ssh_access_gate(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "denyusers|denygroups|allowgroups",
+            "denyusers|denygroups",
+        )
+
+    def test_primary_ssh_uses_only_service_activation(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn("systemctl disable --now ssh.socket", activation)
+        self.assertLess(
+            activation.index("systemctl disable --now ssh.socket"),
+            activation.index("systemctl enable ssh.service"),
+        )
+
+    def test_setup_failure_trap_precedes_fallible_initialization(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        trap_index = host_setup.index("trap record_setup_failure EXIT")
+        self.assertLess(
+            trap_index,
+            host_setup.index(
+                'if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then'
+            ),
+        )
+        self.assertLess(
+            trap_index,
+            host_setup.index(
+                'install -d -o root -g root -m 0755 "$diagnostic_dir"'
+            ),
+        )
+        self.assertLess(
+            trap_index,
+            host_setup.index(
+                'rm -f -- "$diagnostic_dir/host-setup-failure.json"'
+            ),
+        )
+
+    def test_static_contract_rejects_late_setup_failure_trap(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            'trap record_setup_failure EXIT\n'
+            'if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then\n'
+            "  printf 'ERROR: trusted runner IPv4 context is invalid.\\n' >&2\n"
+            "  exit 1\n"
+            "fi\n",
+            'if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then\n'
+            "  printf 'ERROR: trusted runner IPv4 context is invalid.\\n' >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            'trap record_setup_failure EXIT\n',
+        )
+
+    def test_static_contract_rejects_gcp_metadata_ssh_key_injection(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            '    enable-oslogin           = "FALSE"\n',
+            '    enable-oslogin           = "FALSE"\n'
+            '    ssh-keys                 = "secpal-ci:${trimspace(var.ssh_public_key)}"\n',
+        )
+
+    def test_static_contract_rejects_unrestricted_setup_failure_access(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/configure-conformance-host.sh",
+            "    restore_diagnostic_ssh || true\n",
+            "    activate_operator_ssh || true\n",
+        )
 
     def test_trusted_collector_ignores_target_owned_startup_configuration(self) -> None:
         remote = (

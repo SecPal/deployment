@@ -84,7 +84,8 @@ first_scan="$(mktemp "$evidence_dir/.host-key-first.XXXXXX")"
 second_scan="$(mktemp "$evidence_dir/.host-key-second.XXXXXX")"
 
 host_key_ready=false
-for _ in {1..30}; do
+bootstrap_deadline=$((SECONDS + 15 * 60))
+while ((SECONDS < bootstrap_deadline)); do
   if ssh-keyscan -T 5 -t ed25519 "$address" > "$first_scan" 2>/dev/null &&
     sleep 2 &&
     ssh-keyscan -T 5 -t ed25519 "$address" > "$second_scan" 2>/dev/null &&
@@ -118,6 +119,66 @@ ssh_options=(
 )
 
 bootstrap_stage="cloud-init"
+operator_ssh_ready=false
+diagnostic_ssh_seen=false
+diagnostic_ssh_output=""
+diagnostic_setup_failure=""
+while ((SECONDS < bootstrap_deadline)); do
+  if timeout --signal=TERM --kill-after=5s 20s \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" true \
+    >/dev/null 2>&1; then
+    operator_ssh_ready=true
+    break
+  fi
+  set +e
+  diagnostic_probe_output="$(
+    timeout --signal=TERM --kill-after=5s 20s \
+      ssh "${ssh_options[@]}" "secpal-ci-diagnostic@$address" true 2>&1
+  )"
+  diagnostic_probe_status=$?
+  set -e
+  diagnostic_probe_first_line="${diagnostic_probe_output%%$'\n'*}"
+  if [[ "$diagnostic_probe_status" -eq 125 &&
+    "$diagnostic_probe_first_line" == SECPAL_CI_DIAGNOSTIC_SSH ]]; then
+    diagnostic_ssh_seen=true
+    diagnostic_ssh_output="${diagnostic_probe_output#*$'\n'}"
+    diagnostic_setup_failure_count="$(
+      grep -c '^SECPAL_CI_HOST_SETUP_FAILURE ' \
+        <<<"$diagnostic_ssh_output" || true
+    )"
+    if [[ "$diagnostic_setup_failure_count" -eq 1 ]]; then
+      diagnostic_setup_failure="$(
+        grep -m1 '^SECPAL_CI_HOST_SETUP_FAILURE ' \
+          <<<"$diagnostic_ssh_output"
+      )"
+      diagnostic_setup_failure="${diagnostic_setup_failure#SECPAL_CI_HOST_SETUP_FAILURE }"
+      set +e
+      validated_setup_failure="$(
+        printf '%s\n' "$diagnostic_setup_failure" |
+          python3 scripts/ci-cloud/host-setup-failure.py validate
+      )"
+      validated_setup_failure_status=$?
+      set -e
+      if [[ "$validated_setup_failure_status" -eq 0 ]]; then
+        host_setup_failure_json="$validated_setup_failure"
+        break
+      fi
+    fi
+  fi
+  sleep 5
+done
+if [[ "$operator_ssh_ready" != true ]]; then
+  if [[ "$diagnostic_ssh_seen" == true ]]; then
+    printf 'ERROR: cloud-init did not reach trusted host setup.\n' >&2
+    printf '%s\n' "$diagnostic_ssh_output" >&2
+  else
+    printf '%s%s\n' \
+      'ERROR: operator SSH access did not become ready; trusted host setup, ' \
+      'network reachability, or sshd may have failed.' >&2
+  fi
+  exit 1
+fi
+
 set +e
 cloud_init_diagnostic="$(
   timeout --signal=TERM --kill-after=15s 12m \

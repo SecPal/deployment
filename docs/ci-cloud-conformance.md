@@ -269,7 +269,108 @@ script cannot create the required root-owned trust boundary.
 Every run creates a new Ed25519 keypair on the GitHub runner. Only the public
 key enters OpenTofu and the selected provider. The private key is mode `0600`, is never
 an output, state value, artifact, or repository file, and is removed before
-the provisioning/test job ends. DigitalOcean initially embeds that public key
+the provisioning/test job ends. The disposable operator account is initially
+created without an authorized key. Cloud-init instead stages the public key as
+root-owned mode `0600`; GCP does not receive an instance-level `ssh-keys`
+metadata entry. The key comment is bound to the exact workflow run ID and
+attempt. In an early `bootcmd`, a trusted installer from `main` validates the
+run-bound key and runner IPv4, generates the image's missing Ed25519 host key
+if necessary, fully validates a separate diagnostic `sshd`, and arms its
+ten-minute fallback timer using explicit runtime-scoped systemd service and
+timer units that are validated before systemd loads them. Preparation is
+idempotent: after any failure with an already
+validated run context, the EXIT handler rebuilds the locked identity and
+root-owned inputs and attempts to start the restricted daemon immediately. It
+never deletes the only diagnostic material merely because initial preparation
+was incomplete. Only after that fallback exists does the installer persistently
+mask and stop the primary SSH service and socket. If even the bounded recovery
+cannot construct a valid daemon, the primary listener is left untouched rather
+than being replaced by an unvalidated fallback. The installer creates a locked,
+home-less
+`secpal-ci-diagnostic` account that is independent of later cloud-init user
+creation. The daemon accepts only that account
+from the runner IPv4 with the ephemeral Ed25519 key, denies root, passwords,
+forwarding, TTYs, user startup files, revoked or alternate key/principal
+sources, and every command except a fixed `cloud-init status --long` reporter
+capped at 8 KiB. Its public key remains root-owned and read-only mode `0644`,
+while its configuration remains root-only under `/run`; temporary key,
+configuration, and unit files remain mode `0600` until atomic publication. It
+verifies that every published diagnostic artifact is a root-owned regular file
+with its exact intended mode before systemd can load or start the daemon. It
+neither exposes a shell nor can execute the selected target revision. The
+root-owned failure helper is executable but independently restricts writes to
+UID 0, allowing the diagnostic account to read only the closed non-secret
+marker. If trusted host setup writes that marker, the reporter appends only its
+validated stage and exit status; it never exposes the unrestricted operator
+account to retrieve the marker.
+
+Trusted host setup validates and
+normalizes the fixed subordinate-ID ranges, service policy, and AppArmor
+evidence before atomically publishing a root-owned `secpal-ci` key file in a
+root-owned persistent directory under `/var/lib/secpal-ci` in its final SSH
+stage. The temporary
+directory and key remain mode
+`0700` and `0600` through the atomic rename; the published paths become `0755`
+and `0644` only immediately before SSH activation. The prioritized SSH drop-in
+uses the `%u` username token so no other account resolves to that file,
+requires an accepted Ed25519 public-key algorithm, disables command-backed
+keys, revoked keys, trusted user CAs and principal sources, user startup files,
+server-forced environments, TTYs, forwarding, forced commands, chroots, and
+connection-refusal or zero-session policy, requires strict key-file modes, and
+restricts login to `secpal-ci`. Immediately before publication, host setup
+validates SSH syntax and both operator/root configurations using the validated
+runner source IPv4, the route-selected local listener IPv4, and TCP port 22. It
+also rejects any effective `DenyUsers`, `DenyGroups`, or `AllowGroups` gate that
+could silently exclude the operator. A provider-image `Match Address`, `Match
+Host`, or `Match LocalAddress` rule, alternate public-key source, incompatible
+algorithm list, or extra access gate therefore fails admission. Only after
+those checks and key publication does host setup cancel and stop the diagnostic
+daemon, unmask the primary units, explicitly disable socket activation, enable
+the main SSH service, and atomically publish a root-owned mode `0400` completion
+marker. That marker is the rollback-safe setup commit: normal
+operator SSH is started only after it exists. If main SSH activation fails,
+the published operator key and marker are revoked, the main service is masked
+again, and the restricted diagnostic daemon is restored. After successful
+activation, setup is complete; removal of the stopped diagnostic identity,
+runtime units, key, command, and configuration is best-effort retirement and
+cannot roll a committed host back into a failed state. Any retirement residue
+remains root-owned, has no main-SSH authorization, and has no active diagnostic
+listener. This prevents the runner from
+logging in while `usermod` replaces provider-image subordinate-ID ranges and
+keeps key publication outside an operator-owned directory. The EXIT handler is
+active before the first fallible host-setup
+initialization. If an earlier trusted setup stage fails, it first writes the
+closed failure marker when possible, revokes any partially published operator
+key, and only then enables the same bounded diagnostic access. It never starts
+normal operator SSH on a failed setup path. If cloud-init fails after the
+installer has armed the fallback but before the trusted setup script or
+`write_files` can run, the independent timer still exposes only the forced
+diagnostic command.
+The runner recognizes its reserved exit status and records bounded
+bootstrap-failure evidence. A schema-valid terminal host-setup marker stops
+readiness probes immediately; otherwise host-key discovery and operator
+readiness share one absolute 15-minute bootstrap deadline, so the delayed
+diagnostic listener cannot accidentally start a second, shorter timeout.
+The runner treats failed cloud-init as terminal and never
+checks out or executes target code in that case.
+
+The persistent mask also survives an unexpected reboot before trusted setup.
+Because the diagnostic timer is intentionally transient, such a reboot fails
+closed with no SSH listener; exact workflow cleanup or the TTL janitor then
+destroys the inaccessible fixture. After successful setup, the persistent
+operator key and completion marker survive reboot. The repeated cloud-init
+`bootcmd` validates the marker, state-directory ownership and modes, exact
+run-bound public key, root-owned prioritized configuration, the same effective
+operator/root SSH policy and connection contexts used by initial admission,
+the persistently enabled primary service, and disabled socket activation before
+it skips diagnostic installation. It intentionally does not require the service
+to be active while boot units may still be starting.
+Any missing, mismatched, symlinked, or malformed state revokes the persistent
+operator key and rebuilds only the restricted fallback instead of trusting a
+boolean marker. Cloud-init's one-time `runcmd` is therefore not required to
+restore normal SSH after an admitted reboot.
+
+DigitalOcean initially embeds that public key
 in the image's root account as part of Droplet creation; cloud-init sets
 `PermitRootLogin no`, creates the dedicated `secpal-ci` account, and restarts a
 validated SSH configuration. Before target code runs, the trusted runner uses
@@ -281,8 +382,9 @@ reach TCP 22, through the pre-created tag-targeted firewall.
 DigitalOcean does not provide the new guest's SSH host key over a separate
 authenticated provisioning API. The runner therefore performs a bounded
 trust-on-first-use bootstrap: it requires one Ed25519 key from two consecutive
-`ssh-keyscan` observations, hashes the resulting `known_hosts` entry, and then
-uses `StrictHostKeyChecking=yes` for every command. The remaining assumption
+`ssh-keyscan` observations, allows up to 15 minutes for masked SSH to be
+released by trusted host setup or the restricted fail-safe, hashes the resulting `known_hosts` entry,
+and then uses `StrictHostKeyChecking=yes` for every command. The remaining assumption
 is that no active network attacker substitutes both first observations. The
 per-run firewall, fresh user key, single resolved OpenTofu address, and short
 lifetime reduce that window but do not turn TOFU into provider-attested host
@@ -291,9 +393,9 @@ should replace this bootstrap.
 
 The VM has no attached provider credential. The GCP instance has no service
 account block, disables legacy metadata endpoints through the current official
-image defaults, blocks project SSH keys, and exposes no cloud API scope or
-identity token. Provider metadata may expose ordinary instance facts, but it
-is not a source of cloud-control authority.
+image defaults, blocks project SSH keys, carries no instance SSH key, and
+exposes no cloud API scope or identity token. Provider metadata may expose
+ordinary instance facts, but it is not a source of cloud-control authority.
 
 ## Ownership, cleanup, and orphan protection
 

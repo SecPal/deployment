@@ -2,6 +2,17 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 
+bootcmd:
+  - - /bin/bash
+    - -c
+    - |
+        ${diagnostic_ssh_installer}
+    - secpal-ci-install-diagnostic-ssh
+    - "${ssh_public_key}"
+    - "${runner_ipv4}"
+    - "${run_id}"
+    - "${run_attempt}"
+
 package_update: true
 package_upgrade: false
 
@@ -30,21 +41,44 @@ users:
     uid: 20000
     lock_passwd: true
     shell: /bin/bash
-    ssh_authorized_keys:
-      - ${ssh_public_key}
 
 disable_root: true
 ssh_pwauth: false
 
 write_files:
-  - path: /etc/ssh/sshd_config.d/90-secpal-ci.conf
+  - path: /run/secpal-ci-authorized-key
+    owner: root:root
+    permissions: "0600"
+    content: |
+      ${ssh_public_key}
+  - path: /etc/ssh/sshd_config.d/00-secpal-ci.conf
     owner: root:root
     permissions: "0644"
     content: |
       PasswordAuthentication no
       KbdInteractiveAuthentication no
+      MaxSessions 1
+      PAMServiceName sshd
       PermitRootLogin no
       PubkeyAuthentication yes
+      AuthenticationMethods publickey
+      PubkeyAcceptedAlgorithms +ssh-ed25519
+      AuthorizedKeysCommand none
+      AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u
+      AuthorizedPrincipalsCommand none
+      AuthorizedPrincipalsFile none
+      TrustedUserCAKeys none
+      RevokedKeys none
+      RefuseConnection no
+      StrictModes yes
+      ChrootDirectory none
+      ForceCommand none
+      DisableForwarding yes
+      PermitTTY no
+      PermitUserEnvironment no
+      PermitUserRC no
+      UseDNS no
+      UsePAM yes
       AllowUsers secpal-ci
   - path: /etc/apt/apt.conf.d/20secpal-ci-periodic
     owner: root:root
@@ -85,9 +119,9 @@ write_files:
       ${host_setup_script}
   - path: /usr/local/sbin/secpal-ci-host-setup-failure
     owner: root:root
-    permissions: "0700"
+    permissions: "0755"
     content: |
       ${host_setup_failure_script}
 
 runcmd:
-  - [/usr/local/sbin/secpal-ci-configure-conformance-host]
+  - [/usr/local/sbin/secpal-ci-configure-conformance-host, "${runner_ipv4}"]

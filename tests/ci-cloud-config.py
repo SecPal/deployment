@@ -15,15 +15,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HOST_SETUP = ROOT / "scripts" / "ci-cloud" / "configure-conformance-host.sh"
 HOST_SETUP_FAILURE = ROOT / "scripts" / "ci-cloud" / "host-setup-failure.py"
+DIAGNOSTIC_SSH_INSTALLER = (
+    ROOT / "scripts" / "ci-cloud" / "install-diagnostic-ssh.sh"
+)
 TEMPLATES = (
     ROOT / "infra" / "ci-cloud" / "digitalocean" / "cloud-init.tftpl",
     ROOT / "infra" / "ci-cloud" / "gcp" / "cloud-init.tftpl",
 )
 
 
-def indent_embedded_script(path: Path) -> str:
+def indent_embedded_script(path: Path, spaces: int = 6) -> str:
     lines = path.read_text(encoding="utf-8").strip().splitlines()
-    return lines[0] + "\n" + "\n".join(f"      {line}" for line in lines[1:])
+    indentation = " " * spaces
+    return lines[0] + "\n" + "\n".join(
+        f"{indentation}{line}" for line in lines[1:]
+    )
 
 
 def render(template_path: Path) -> str:
@@ -31,6 +37,12 @@ def render(template_path: Path) -> str:
     replacements = {
         "${ssh_public_key}": (
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISynthetic fixture@example"
+        ),
+        "${runner_ipv4}": "192.0.2.10",
+        "${run_id}": "12345",
+        "${run_attempt}": "1",
+        "${diagnostic_ssh_installer}": indent_embedded_script(
+            DIAGNOSTIC_SSH_INSTALLER, 8
         ),
         "${host_setup_script}": indent_embedded_script(HOST_SETUP),
         "${host_setup_failure_script}": indent_embedded_script(
@@ -54,6 +66,8 @@ class CloudConfigTests(unittest.TestCase):
                 ) as instance_data_file:
                     rendered = render(template)
                     self.assertNotIn("${host_setup", rendered)
+                    self.assertNotIn("${diagnostic_ssh_installer}", rendered)
+                    self.assertNotIn("${runner_ipv4}", rendered)
                     rendered_file.write(rendered)
                     rendered_file.flush()
                     instance_data_file.write("{}\n")

@@ -40,6 +40,31 @@ SPDX-License-Identifier: CC0-1.0
 - Shared path-access admission for host policy and rootless runtime paths, explicit AppArmor
   enforcement evidence, and distinct host-name versus public-origin rules.
 
+### Fixed
+
+- Added an independent, delayed, command-restricted SSH diagnostic path for
+  cloud-init failures before `runcmd`, without exposing root or target execution.
+- Deferred disposable-operator SSH-key activation until trusted host setup has
+  finished, preventing remote bootstrap observation from racing subordinate-ID
+  normalization while retaining bounded diagnostic access after setup failure.
+- Fail-closed effective SSH-policy admission, a prioritized provider-independent
+  drop-in, and username-scoped authorized-key publication before operator access.
+- Closed alternate OpenSSH key and certificate sources, actual runner/listener
+  `Match`-context admission, and persistently masked bootstrap SSH until that admission
+  succeeds.
+- Restrictive `0700`/`0600` SSH-key staging through atomic publication and an
+  exact run-bound Ed25519 key-comment contract across the workflow and providers.
+- Made diagnostic fallback preparation idempotent across partial installer
+  failures, committed host readiness before opening operator SSH, and applied
+  one absolute bootstrap deadline across host-key and operator readiness.
+- Kept diagnostic unit staging private, made the closed failure reader usable
+  by its forced command, and revalidated the complete effective SSH policy on
+  initial activation and reboot, including deny/group gates, Ed25519 admission,
+  and exclusive service-based activation.
+- Published the root-owned diagnostic public key read-only so the restricted
+  account can authenticate without gaining write access, and fail closed unless
+  every published diagnostic artifact retains its exact ownership and mode.
+
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 
 ### Added
