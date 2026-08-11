@@ -449,7 +449,11 @@ AllowUsers secpal-ci"""
         and "/etc/ssh/sshd_config.d/00-secpal-ci.conf" in bootstrap
         and "sshd_config.d/90-secpal-ci.conf" not in bootstrap
         and "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u"
-        in bootstrap,
+        in bootstrap
+        and "usermod --password '*NP*' secpal-ci" in bootstrap
+        and "operator_shadow_entry=\"$(getent shadow secpal-ci)\"" in bootstrap
+        and '[[ "$operator_password_marker" == \'*NP*\' ]]' in bootstrap
+        and "usermod --lock" not in bootstrap,
         "operator SSH key must remain root-only until trusted host setup finishes",
     )
     require(
@@ -470,6 +474,13 @@ AllowUsers secpal-ci"""
         and "UsePAM yes" in diagnostic_ssh
         and "AllowUsers secpal-ci-diagnostic@$runner_ipv4" in diagnostic_ssh
         and "useradd --system" in diagnostic_ssh
+        and "usermod --password '*NP*' \"$diagnostic_user\""
+        in diagnostic_ssh
+        and 'shadow_entry="$(getent shadow "$diagnostic_user")"'
+        in diagnostic_ssh
+        and '[[ "$password_marker" == \'*NP*\' ]] || return 1'
+        in diagnostic_ssh
+        and "usermod --lock" not in diagnostic_ssh
         and "diagnostic_home=/run/secpal-ci-diagnostic-home" in diagnostic_ssh
         and 'install -d -o root -g root -m 0755 "$diagnostic_home"'
         in diagnostic_ssh
@@ -508,6 +519,9 @@ AllowUsers secpal-ci"""
     )[1].split("\n}", 1)[0]
     completed_validator = diagnostic_ssh.split(
         "completed_setup_is_valid() {", 1
+    )[1].split("\n}", 1)[0]
+    operator_identity_validator = diagnostic_ssh.split(
+        "validate_operator_identity() {", 1
     )[1].split("\n}", 1)[0]
     require(
         "ensure_diagnostic_identity" in diagnostic_preparation
@@ -582,6 +596,10 @@ AllowUsers secpal-ci"""
         and '"$ssh_socket_state" == disabled' in completed_validator
         and "validate_effective_sshd_config || return 1"
         in completed_validator
+        and "validate_operator_identity || return 1" in completed_validator
+        and "getent shadow secpal-ci" in operator_identity_validator
+        and '"$password_marker" == \'*NP*\'' in operator_identity_validator
+        and '"$(id -G secpal-ci)" == 20000' in operator_identity_validator
         and "denyusers|denygroups|allowgroups|setenv" in diagnostic_ssh
         and "pubkeyacceptedalgorithms" in diagnostic_ssh
         and "ssh-ed25519" in diagnostic_ssh

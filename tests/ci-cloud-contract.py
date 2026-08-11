@@ -597,6 +597,117 @@ class CloudCIContractTests(unittest.TestCase):
             host_setup,
         )
 
+    def test_ssh_identities_are_pubkey_only_without_locked_accounts(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+
+        for document in (bootstrap, installer):
+            self.assertNotIn("usermod --lock", document)
+            self.assertIn("usermod --password '*NP*'", document)
+            self.assertIn("getent shadow", document)
+            self.assertIn("== '*NP*'", document)
+
+        self.assertLess(
+            installer.index("usermod --password '*NP*'"),
+            installer.index("prepare_diagnostic_fallback()"),
+        )
+        self.assertLess(
+            bootstrap.index("usermod --password '*NP*'"),
+            bootstrap.rindex("/usr/local/sbin/secpal-ci-configure-conformance-host"),
+        )
+
+    def test_static_contract_rejects_locked_ssh_accounts(self) -> None:
+        for relative in (
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+        ):
+            with self.subTest(relative=relative):
+                self.assert_mutation_rejected(
+                    relative,
+                    "usermod --password '*NP*'",
+                    "usermod --lock",
+                )
+
+    def test_static_contract_rejects_unverified_pubkey_only_account_marker(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            '[[ "$operator_password_marker" == \'*NP*\' ]]\n',
+            "",
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            '  [[ "$password_marker" == \'*NP*\' ]] || return 1\n',
+            "",
+        )
+
+    def test_completed_setup_revalidates_operator_ssh_identity(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        validator = installer.split("validate_operator_identity() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        completed = installer.split("completed_setup_is_valid() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+
+        for expected in (
+            'getent passwd secpal-ci',
+            'getent group secpal-ci',
+            'getent shadow secpal-ci',
+            '"$user_uid" == 20000',
+            '"$user_gid" == 20000',
+            '"$user_home" == /home/secpal-ci',
+            '"$user_shell" == /bin/bash',
+            '"$password_marker" == \'*NP*\'',
+            '"$(id -G secpal-ci)" == 20000',
+        ):
+            self.assertIn(expected, validator)
+        self.assertIn("validate_operator_identity || return 1", completed)
+
+    def test_static_contract_rejects_incomplete_reboot_identity_validation(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "  validate_operator_identity || return 1\n",
+            "",
+        )
+
+    def test_quality_runs_real_openssh_account_admission_smoke(self) -> None:
+        quality = (ROOT / ".github/workflows/quality.yml").read_text(
+            encoding="utf-8"
+        )
+        repository_contract = (ROOT / "tests/repository-contract.sh").read_text(
+            encoding="utf-8"
+        )
+        smoke = ROOT / "tests/ci-cloud-openssh-account.sh"
+
+        self.assertTrue(smoke.is_file())
+        self.assertIn("sudo bash tests/ci-cloud-openssh-account.sh", quality)
+        self.assertIn("openssh-server", quality)
+        self.assertIn("tests/ci-cloud-openssh-account.sh", repository_contract)
+        document = smoke.read_text(encoding="utf-8")
+        for required in (
+            "unshare",
+            "mount --bind",
+            "/usr/sbin/sshd",
+            "AuthenticationMethods publickey",
+            "PasswordAuthentication no",
+            "KbdInteractiveAuthentication no",
+            "UsePAM no",
+            "UsePAM yes",
+            "*NP*",
+            "!",
+        ):
+            self.assertIn(required, document)
+
     def test_diagnostic_fallback_is_started_after_primary_ssh_is_masked(self) -> None:
         installer = (
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"

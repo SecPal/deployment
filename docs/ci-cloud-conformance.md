@@ -311,7 +311,7 @@ primary units are inactive does it stop and verify the timer. The
 diagnostic service additionally restarts after an unexpected process failure.
 Those retries are rate-limited to five starts per two minutes. Preparation is
 idempotent: after any failure with an already
-validated run context, the EXIT handler rebuilds the locked identity and
+validated run context, the EXIT handler rebuilds the password-disabled identity and
 root-owned inputs and attempts to start the restricted daemon immediately. It
 never deletes the only diagnostic material merely because initial preparation
 was incomplete. If initial validation fails before masking, the provider
@@ -320,7 +320,7 @@ if the process is interrupted after masking but before the immediate start,
 the armed timer supplies the same restricted listener after ten minutes. If
 even the bounded recovery cannot construct a valid daemon, the transition
 fails rather than opening an unvalidated fallback. The installer creates a
-locked `secpal-ci-diagnostic` account with a root-owned runtime home that is
+password-disabled `secpal-ci-diagnostic` account with a root-owned runtime home that is
 independent of later operator-user creation. The daemon accepts only that
 account from the runner IPv4 with the ephemeral Ed25519 key, denies root, passwords,
 forwarding, TTYs, user startup files, revoked or alternate key/principal
@@ -337,6 +337,20 @@ UID 0, allowing the diagnostic account to read only the closed non-secret
 marker. If trusted host setup writes that marker, the reporter appends only its
 validated stage and exit status; it never exposes the unrestricted operator
 account to retrieve the marker.
+
+Both disposable SSH identities use the literal, impossible `*NP*` password
+marker and verify that exact effective `/etc/shadow` field before admitting a
+listener. They are deliberately not locked with a leading `!`: Debian
+OpenSSH documents that its portable account-accessibility check rejects such a
+locked Linux account before public-key authentication. PAM-enabled behavior is
+stack-dependent, so the design does not treat an account lock as its password
+security boundary. Password and keyboard-interactive authentication remain
+disabled by the effective daemon policies, so `*NP*` does not create a
+password login path. Reboot
+admission revalidates the operator name, UID/GID, primary group, home, shell,
+supplementary groups, and password marker before trusting the persistent setup
+marker. See Debian's
+[`sshd(8)` account-accessibility contract](https://manpages.debian.org/trixie/openssh-server/sshd.8.en.html#AUTHENTICATION).
 
 Trusted host setup validates and
 normalizes the fixed subordinate-ID ranges, service policy, and AppArmor
@@ -508,8 +522,15 @@ closed operator identity and SSH policy.
 
 Preflight renders the common provider payload with the exact embedded trusted
 scripts, checks it as strict Bash, and statically admits both provider-native
-transport bindings and the exact SSH policy. Runtime validation remains
-authoritative for the provider image and guest-agent behavior.
+transport bindings and the exact SSH policy. Mutation tests reject Linux
+account-lock commands, missing `*NP*` postconditions, and a reboot guard that
+does not revalidate the complete operator identity. A separate quality job
+starts a real OpenSSH daemon against a namespace-isolated password database. It
+proves `*NP*` public-key admission, portable leading-`!` rejection without PAM,
+and production-like `UsePAM yes` plus `*NP*` admission while all password
+methods remain disabled. This targeted smoke does not simulate the provider's
+guest agent or systemd handoff. Runtime validation remains authoritative for
+the provider image and complete bootstrap behavior.
 
 Evidence includes:
 

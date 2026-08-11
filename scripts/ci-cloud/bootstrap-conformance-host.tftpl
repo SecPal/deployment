@@ -89,7 +89,16 @@ else
   useradd --uid 20000 --gid 20000 --create-home \
     --home-dir /home/secpal-ci --shell /bin/bash secpal-ci
 fi
-usermod --lock secpal-ci
+# OpenSSH's portable account check can reject a leading "!" lock before
+# public-key authentication, while PAM stacks may differ. Keep the password
+# unusable without relying on either behavior; password and keyboard-interactive
+# authentication remain disabled in the effective daemon policy below.
+usermod --password '*NP*' secpal-ci
+operator_shadow_entry="$(getent shadow secpal-ci)"
+IFS=: read -r operator_shadow_name operator_password_marker _ \
+  <<<"$operator_shadow_entry"
+[[ "$operator_shadow_name" == secpal-ci ]]
+[[ "$operator_password_marker" == '*NP*' ]]
 
 install -o root -g root -m 0600 /dev/null /run/secpal-ci-authorized-key
 printf '%s\n' "$ssh_public_key" > /run/secpal-ci-authorized-key

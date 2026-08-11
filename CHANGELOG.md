@@ -74,6 +74,10 @@ SPDX-License-Identifier: CC0-1.0
   actionable, non-secret bootstrap evidence. Root-SSH denial now requires a
   successful operator transport recheck instead of parsing localized SSH
   error text.
+- Kept both disposable SSH identities public-key-accessible by replacing Linux
+  account locks with a verified impossible password marker, and made reboot
+  admission revalidate the complete operator identity before trusting its
+  persistent setup marker.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

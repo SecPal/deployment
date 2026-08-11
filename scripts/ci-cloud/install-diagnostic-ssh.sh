@@ -119,6 +119,26 @@ validate_effective_sshd_config() {
   done
 }
 
+validate_operator_identity() {
+  local group_entry group_gid group_members group_name password_marker
+  local shadow_entry shadow_name user_entry user_gid user_home user_name
+  local user_shell user_uid
+
+  user_entry="$(getent passwd secpal-ci)" || return 1
+  group_entry="$(getent group secpal-ci)" || return 1
+  shadow_entry="$(getent shadow secpal-ci)" || return 1
+  IFS=: read -r user_name _ user_uid user_gid _ user_home user_shell \
+    <<<"$user_entry"
+  IFS=: read -r group_name _ group_gid group_members <<<"$group_entry"
+  IFS=: read -r shadow_name password_marker _ <<<"$shadow_entry"
+  [[ "$user_name" == secpal-ci && "$group_name" == secpal-ci &&
+    "$shadow_name" == secpal-ci && "$user_uid" == 20000 &&
+    "$user_gid" == 20000 && "$group_gid" == 20000 &&
+    "$user_home" == /home/secpal-ci && "$user_shell" == /bin/bash &&
+    -z "$group_members" && "$password_marker" == '*NP*' ]] || return 1
+  [[ "$(id -G secpal-ci)" == 20000 ]]
+}
+
 completed_setup_is_valid() {
   local config_metadata root_metadata directory_metadata key_metadata
   local marker_metadata ssh_service_state ssh_socket_state
@@ -144,6 +164,7 @@ completed_setup_is_valid() {
   printf '%s\n' "$ssh_public_key" |
     cmp -s -- - "$active_operator_key" || return 1
   ssh-keygen -l -E sha256 -f "$active_operator_key" >/dev/null || return 1
+  validate_operator_identity || return 1
   validate_effective_sshd_config || return 1
   ssh_service_state="$(systemctl is-enabled ssh.service 2>/dev/null || true)"
   ssh_socket_state="$(systemctl is-enabled ssh.socket 2>/dev/null || true)"
@@ -152,7 +173,8 @@ completed_setup_is_valid() {
 }
 
 ensure_diagnostic_identity() {
-  local group_entry group_gid user_entry user_gid user_home user_shell
+  local group_entry group_gid password_marker shadow_entry shadow_name
+  local user_entry user_gid user_home user_shell
 
   install -d -o root -g root -m 0755 "$diagnostic_home" || return 1
   group_entry="$(getent group "$diagnostic_user" || true)"
@@ -173,7 +195,14 @@ ensure_diagnostic_identity() {
   [[ "$user_gid" == "$group_gid" && "$user_home" == "$diagnostic_home" &&
     "$user_shell" == /bin/sh ]] || return 1
   [[ "$(id -G "$diagnostic_user")" == "$group_gid" ]] || return 1
-  usermod --lock "$diagnostic_user" || return 1
+  # OpenSSH's portable account check can reject a leading "!" lock before
+  # public-key authentication, while PAM stacks may differ. *NP* remains an
+  # impossible password without making the restricted identity inaccessible.
+  usermod --password '*NP*' "$diagnostic_user" || return 1
+  shadow_entry="$(getent shadow "$diagnostic_user")" || return 1
+  IFS=: read -r shadow_name password_marker _ <<<"$shadow_entry"
+  [[ "$shadow_name" == "$diagnostic_user" ]] || return 1
+  [[ "$password_marker" == '*NP*' ]] || return 1
 }
 
 prepare_diagnostic_fallback() {

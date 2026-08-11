@@ -76,6 +76,7 @@ required_files=(
   scripts/ci-cloud/target-conformance.sh
   scripts/ci-cloud/validate-evidence.py
   scripts/ci-cloud/write-bootstrap-failure.py
+  tests/ci-cloud-openssh-account.sh
   scripts/reject-sensitive-paths.sh
   scripts/validate-ci-cloud.py
   scripts/validate-production-contract.py
