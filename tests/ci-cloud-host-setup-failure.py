@@ -43,8 +43,13 @@ class HostSetupFailureTests(unittest.TestCase):
                 "apparmor",
                 7,
                 required_uid=os.getuid(),
+                required_gid=os.getgid(),
             )
-            document = self.helper.read_marker(path, required_uid=os.getuid())
+            document = self.helper.read_marker(
+                path,
+                required_uid=os.getuid(),
+                required_gid=os.getgid(),
+            )
             self.assertEqual({"stage": "apparmor", "exit_status": 7}, document)
             self.assertEqual(0o644, path.stat().st_mode & 0o777)
             self.assertLessEqual(path.stat().st_size, 128)
@@ -75,6 +80,7 @@ class HostSetupFailureTests(unittest.TestCase):
                     "apparmor",
                     7,
                     required_uid=os.getuid(),
+                    required_gid=os.getgid(),
                 )
 
             self.assertEqual([0o600], staged_modes)
@@ -91,6 +97,7 @@ class HostSetupFailureTests(unittest.TestCase):
                     "arbitrary-shell-text",
                     1,
                     required_uid=os.getuid(),
+                    required_gid=os.getgid(),
                 )
             self.assertFalse(path.exists())
 
@@ -107,11 +114,19 @@ class HostSetupFailureTests(unittest.TestCase):
             link = directory / "host-setup-failure.json"
             link.symlink_to(target)
             with self.assertRaises((OSError, ValueError)):
-                self.helper.read_marker(link, required_uid=os.getuid())
+                self.helper.read_marker(
+                    link,
+                    required_uid=os.getuid(),
+                    required_gid=os.getgid(),
+                )
             link.unlink()
             target.rename(link)
             with self.assertRaises(ValueError):
-                self.helper.read_marker(link, required_uid=os.getuid())
+                self.helper.read_marker(
+                    link,
+                    required_uid=os.getuid(),
+                    required_gid=os.getgid(),
+                )
 
     def test_rejects_oversized_or_wrong_mode_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -121,13 +136,39 @@ class HostSetupFailureTests(unittest.TestCase):
             path.write_bytes(b"x" * 129)
             path.chmod(0o644)
             with self.assertRaises(ValueError):
-                self.helper.read_marker(path, required_uid=os.getuid())
+                self.helper.read_marker(
+                    path,
+                    required_uid=os.getuid(),
+                    required_gid=os.getgid(),
+                )
             path.write_text(
                 '{"exit_status":1,"stage":"ssh"}\n', encoding="utf-8"
             )
             path.chmod(0o600)
             with self.assertRaises(ValueError):
-                self.helper.read_marker(path, required_uid=os.getuid())
+                self.helper.read_marker(
+                    path,
+                    required_uid=os.getuid(),
+                    required_gid=os.getgid(),
+                )
+
+    def test_uid_and_gid_are_validated_independently(self) -> None:
+        directory_metadata = os.stat_result(
+            (stat.S_IFDIR | 0o755, 0, 0, 1, 1001, 2002, 0, 0, 0, 0)
+        )
+        marker_metadata = os.stat_result(
+            (stat.S_IFREG | 0o644, 0, 0, 1, 1001, 2002, 32, 0, 0, 0)
+        )
+        directory = mock.Mock(spec=Path)
+        directory.stat.return_value = directory_metadata
+
+        self.helper.validate_directory(directory, 1001, 2002)
+        self.helper.validate_file_metadata(marker_metadata, 1001, 2002)
+
+        with self.assertRaises(ValueError):
+            self.helper.validate_directory(directory, 1001, 1001)
+        with self.assertRaises(ValueError):
+            self.helper.validate_file_metadata(marker_metadata, 1001, 1001)
 
 
 if __name__ == "__main__":

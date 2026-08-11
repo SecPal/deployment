@@ -29,12 +29,18 @@ def fail(message: str) -> None:
     raise ValueError(message)
 
 
-def validate_directory(path: Path, required_uid: int) -> None:
+def validate_directory(
+    path: Path,
+    required_uid: int,
+    required_gid: int | None = None,
+) -> None:
+    if required_gid is None:
+        required_gid = required_uid
     metadata = path.stat(follow_symlinks=False)
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid != required_uid
-        or metadata.st_gid != required_uid
+        or metadata.st_gid != required_gid
         or stat.S_IMODE(metadata.st_mode) != 0o755
     ):
         fail("host-setup diagnostic directory has unsafe ownership or mode")
@@ -52,25 +58,36 @@ def validate_document(document: object) -> dict[str, object]:
     return document
 
 
-def validate_file_metadata(metadata: os.stat_result, required_uid: int) -> None:
+def validate_file_metadata(
+    metadata: os.stat_result,
+    required_uid: int,
+    required_gid: int | None = None,
+) -> None:
+    if required_gid is None:
+        required_gid = required_uid
     if (
         not stat.S_ISREG(metadata.st_mode)
         or metadata.st_uid != required_uid
-        or metadata.st_gid != required_uid
+        or metadata.st_gid != required_gid
         or stat.S_IMODE(metadata.st_mode) != 0o644
         or not 1 <= metadata.st_size <= MAX_MARKER_BYTES
     ):
         fail("host-setup failure marker has unsafe metadata")
 
 
-def read_marker(path: Path, *, required_uid: int = 0) -> dict[str, object]:
-    validate_directory(path.parent, required_uid)
+def read_marker(
+    path: Path,
+    *,
+    required_uid: int = 0,
+    required_gid: int | None = None,
+) -> dict[str, object]:
+    validate_directory(path.parent, required_uid, required_gid)
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     descriptor = os.open(path, flags)
     try:
-        validate_file_metadata(os.fstat(descriptor), required_uid)
+        validate_file_metadata(os.fstat(descriptor), required_uid, required_gid)
         content = os.read(descriptor, MAX_MARKER_BYTES + 1)
     finally:
         os.close(descriptor)
@@ -89,12 +106,13 @@ def write_marker(
     exit_status: int,
     *,
     required_uid: int = 0,
+    required_gid: int | None = None,
 ) -> None:
     document = validate_document({"stage": stage, "exit_status": exit_status})
-    validate_directory(path.parent, required_uid)
+    validate_directory(path.parent, required_uid, required_gid)
     if path.exists() or path.is_symlink():
         metadata = path.stat(follow_symlinks=False)
-        validate_file_metadata(metadata, required_uid)
+        validate_file_metadata(metadata, required_uid, required_gid)
     content = (json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n").encode(
         "utf-8"
     )
