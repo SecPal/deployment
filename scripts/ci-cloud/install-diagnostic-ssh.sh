@@ -10,20 +10,36 @@ diagnostic_key=/run/secpal-ci-diagnostic-authorized-key
 diagnostic_command=/run/secpal-ci-cloud-init-diagnostic
 diagnostic_config=/run/secpal-ci-diagnostic-sshd.conf
 diagnostic_unit=secpal-ci-diagnostic-sshd
+diagnostic_service="${diagnostic_unit}.service"
 diagnostic_user=secpal-ci-diagnostic
 key_tmp=""
 command_tmp=""
 config_tmp=""
 diagnostic_identity_created=false
+diagnostic_fallback_armed=false
 
 cleanup() {
+  local status=$?
+  trap - EXIT
+  set +e
   [[ -z "$key_tmp" ]] || rm -f -- "$key_tmp"
   [[ -z "$command_tmp" ]] || rm -f -- "$command_tmp"
   [[ -z "$config_tmp" ]] || rm -f -- "$config_tmp"
-  if [[ "$diagnostic_identity_created" == true ]]; then
-    userdel "$diagnostic_user" 2>/dev/null || true
-    groupdel "$diagnostic_user" 2>/dev/null || true
+  if [[ "$status" -ne 0 ]]; then
+    if [[ "$diagnostic_fallback_armed" == true ]]; then
+      systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || true
+      systemctl start "$diagnostic_service" >/dev/null 2>&1 || true
+    else
+      rm -f -- "$diagnostic_key" "$diagnostic_command" "$diagnostic_config"
+      if [[ "$diagnostic_identity_created" == true ]]; then
+        userdel "$diagnostic_user" 2>/dev/null || true
+        if getent group "$diagnostic_user" >/dev/null; then
+          groupdel "$diagnostic_user" 2>/dev/null || true
+        fi
+      fi
+    fi
   fi
+  exit "$status"
 }
 
 trap cleanup EXIT
@@ -57,7 +73,6 @@ if [[ "$key_type" != ssh-ed25519 ||
   exit 1
 fi
 
-systemctl mask --now ssh.service ssh.socket
 install -d -o root -g root -m 0755 /run/sshd
 if getent passwd "$diagnostic_user" >/dev/null ||
   getent group "$diagnostic_user" >/dev/null; then
@@ -65,10 +80,10 @@ if getent passwd "$diagnostic_user" >/dev/null ||
   exit 1
 fi
 groupadd --system "$diagnostic_user"
+diagnostic_identity_created=true
 useradd --system --gid "$diagnostic_user" --no-create-home \
   --home-dir /nonexistent --shell /bin/sh "$diagnostic_user"
 usermod --lock "$diagnostic_user"
-diagnostic_identity_created=true
 
 key_tmp="$(mktemp /run/.secpal-ci-diagnostic-key.XXXXXX)"
 command_tmp="$(mktemp /run/.secpal-ci-diagnostic-command.XXXXXX)"
@@ -142,6 +157,17 @@ if ! systemd-run --quiet \
   --service-type=exec \
   /usr/sbin/sshd -D -e -f "$diagnostic_config"; then
   rm -f -- "$diagnostic_key" "$diagnostic_command" "$diagnostic_config"
+  exit 1
+fi
+diagnostic_fallback_armed=true
+if ! systemctl mask --now ssh.service ssh.socket; then
+  printf 'ERROR: unable to mask primary SSH after arming diagnostics.\n' >&2
+  exit 1
+fi
+if systemctl is-active --quiet ssh.service ||
+  systemctl is-active --quiet ssh.socket ||
+  ! systemctl is-active --quiet "${diagnostic_unit}.timer"; then
+  printf 'ERROR: SSH fallback transition did not reach its closed state.\n' >&2
   exit 1
 fi
 diagnostic_identity_created=false

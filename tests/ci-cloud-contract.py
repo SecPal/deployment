@@ -438,6 +438,56 @@ class CloudCIContractTests(unittest.TestCase):
             host_setup,
         )
 
+    def test_diagnostic_fallback_is_armed_before_primary_ssh_is_masked(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        arm = "if ! systemd-run --quiet"
+        mask = (
+            "diagnostic_fallback_armed=true\n"
+            "if ! systemctl mask --now ssh.service ssh.socket"
+        )
+        for preparation in (
+            'if getent passwd "$diagnostic_user"',
+            "ssh-keygen -A",
+            'sshd -t -f "$config_tmp"',
+            'chmod 0755 "$diagnostic_command"',
+        ):
+            with self.subTest(preparation=preparation):
+                self.assertLess(installer.index(preparation), installer.index(arm))
+        self.assertLess(
+            installer.index("groupadd --system"),
+            installer.index("diagnostic_identity_created=true"),
+        )
+        self.assertLess(
+            installer.index("diagnostic_identity_created=true"),
+            installer.index("useradd --system"),
+        )
+        self.assertLess(installer.index(arm), installer.index(mask))
+        self.assertIn("diagnostic_fallback_armed=true", installer)
+        cleanup = installer.split("cleanup() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn(
+            'if [[ "$diagnostic_fallback_armed" == true ]]; then',
+            cleanup,
+        )
+        self.assertIn(
+            'systemctl start "$diagnostic_service"',
+            cleanup,
+        )
+        self.assertIn(
+            "systemctl mask --now ssh.service ssh.socket",
+            cleanup,
+        )
+        self.assertNotIn("primary_ssh_masked", cleanup)
+
+    def test_static_contract_rejects_masking_before_fallback_arm(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "diagnostic_fallback_armed=true\n"
+            "if ! systemctl mask --now ssh.service ssh.socket",
+            "if ! systemctl mask --now ssh.service ssh.socket",
+        )
+
     def test_static_contract_rejects_short_masked_ssh_wait(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/run-remote-conformance.sh",
@@ -455,8 +505,8 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_unmasked_bootstrap_ssh(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/install-diagnostic-ssh.sh",
-            "systemctl mask --now ssh.service ssh.socket",
-            "true",
+            "if ! systemctl mask --now ssh.service ssh.socket; then",
+            "if ! true; then",
         )
 
     def test_static_contract_rejects_missing_diagnostic_ssh_timer(self) -> None:

@@ -407,6 +407,20 @@ def validate_opentofu(root: Path) -> None:
         "pre-runcmd failures need independent restricted diagnostic SSH",
     )
     require(
+        diagnostic_ssh.index("ssh-keygen -A")
+        < diagnostic_ssh.index("if ! systemd-run --quiet")
+        < diagnostic_ssh.index(
+            "diagnostic_fallback_armed=true\n"
+            "if ! systemctl mask --now ssh.service ssh.socket"
+        )
+        and "diagnostic_fallback_armed=true" in diagnostic_ssh
+        and diagnostic_ssh.index("groupadd --system")
+        < diagnostic_ssh.index("diagnostic_identity_created=true")
+        < diagnostic_ssh.index("useradd --system")
+        and 'systemctl start "$diagnostic_service"' in diagnostic_ssh,
+        "diagnostic fallback must be prepared and armed before primary SSH is masked",
+    )
+    require(
         "install-diagnostic-ssh.sh" in main
         and "secpal-ci-diagnostic-sshd.timer" in host_setup
         and "secpal-ci-diagnostic-sshd.service" in host_setup

@@ -273,11 +273,14 @@ the provisioning/test job ends. The disposable operator account is initially
 created without an authorized key. Cloud-init instead stages the public key as
 root-owned mode `0600`; GCP does not receive an instance-level `ssh-keys`
 metadata entry. The key comment is bound to the exact workflow run ID and
-attempt. Cloud-init persistently masks the SSH service and socket before the daemon
-can admit an image-provided policy. In that same early `bootcmd`, a trusted
-installer from `main` validates the run-bound key and runner IPv4, generates
-the image's missing Ed25519 host key if necessary, and schedules a separate
-diagnostic `sshd` for ten minutes later. It creates a locked, home-less
+attempt. In an early `bootcmd`, a trusted installer from `main` validates the
+run-bound key and runner IPv4, generates the image's missing Ed25519 host key
+if necessary, fully validates a separate diagnostic `sshd`, and arms its
+ten-minute fallback timer. Only after that fallback exists does the installer
+persistently mask and stop the primary SSH service and socket. A failure after
+the fallback is armed retries that mask and starts the restricted daemon
+immediately; a preparation failure leaves the primary host-key listener
+untouched. The installer creates a locked, home-less
 `secpal-ci-diagnostic` account that is independent of later cloud-init user
 creation. The daemon accepts only that account
 from the runner IPv4 with the ephemeral key, denies root, passwords, forwarding,
@@ -316,9 +319,10 @@ active before the first fallible host-setup
 initialization. If an earlier trusted setup stage fails, it first writes the
 closed failure marker when possible, revokes any partially published operator
 key, and only then enables the same bounded diagnostic access. It never starts
-normal operator SSH on a failed setup path. If cloud-init fails before the
-trusted script or `write_files`
-can run, the independent timer still exposes only the forced diagnostic command.
+normal operator SSH on a failed setup path. If cloud-init fails after the
+installer has armed the fallback but before the trusted setup script or
+`write_files` can run, the independent timer still exposes only the forced
+diagnostic command.
 The runner recognizes its reserved exit status, records bounded bootstrap-failure
 evidence, and continues waiting briefly in case normal host setup completes.
 The runner treats failed cloud-init as terminal and never
