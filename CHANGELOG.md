@@ -54,6 +54,9 @@ SPDX-License-Identifier: CC0-1.0
   succeeds.
 - Restrictive `0700`/`0600` SSH-key staging through atomic publication and an
   exact run-bound Ed25519 key-comment contract across the workflow and providers.
+- Made diagnostic fallback preparation idempotent across partial installer
+  failures, committed host readiness before opening operator SSH, and applied
+  one absolute bootstrap deadline across host-key and operator readiness.
 
 ## 2026-08-08 - Consume Verified Frontend Image Digest
 

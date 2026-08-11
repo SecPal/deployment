@@ -11,6 +11,9 @@ diagnostic_command=/run/secpal-ci-cloud-init-diagnostic
 diagnostic_config=/run/secpal-ci-diagnostic-sshd.conf
 diagnostic_unit=secpal-ci-diagnostic-sshd
 diagnostic_service="${diagnostic_unit}.service"
+diagnostic_timer="${diagnostic_unit}.timer"
+diagnostic_service_unit="/run/systemd/system/$diagnostic_service"
+diagnostic_timer_unit="/run/systemd/system/$diagnostic_timer"
 diagnostic_user=secpal-ci-diagnostic
 active_operator_root=/var/lib/secpal-ci
 active_operator_key="$active_operator_root/authorized-keys/secpal-ci"
@@ -18,8 +21,9 @@ completion_marker="$active_operator_root/host-setup-complete"
 key_tmp=""
 command_tmp=""
 config_tmp=""
-diagnostic_identity_created=false
-diagnostic_fallback_armed=false
+service_tmp=""
+timer_tmp=""
+validated_context=false
 
 cleanup() {
   local status=$?
@@ -28,18 +32,11 @@ cleanup() {
   [[ -z "$key_tmp" ]] || rm -f -- "$key_tmp"
   [[ -z "$command_tmp" ]] || rm -f -- "$command_tmp"
   [[ -z "$config_tmp" ]] || rm -f -- "$config_tmp"
-  if [[ "$status" -ne 0 ]]; then
-    if [[ "$diagnostic_fallback_armed" == true ]]; then
-      systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || true
-      systemctl start "$diagnostic_service" >/dev/null 2>&1 || true
-    else
-      rm -f -- "$diagnostic_key" "$diagnostic_command" "$diagnostic_config"
-      if [[ "$diagnostic_identity_created" == true ]]; then
-        userdel "$diagnostic_user" 2>/dev/null || true
-        if getent group "$diagnostic_user" >/dev/null; then
-          groupdel "$diagnostic_user" 2>/dev/null || true
-        fi
-      fi
+  [[ -z "$service_tmp" ]] || rm -f -- "$service_tmp"
+  [[ -z "$timer_tmp" ]] || rm -f -- "$timer_tmp"
+  if [[ "$status" -ne 0 && "$validated_context" == true ]]; then
+    if ! start_diagnostic_fallback; then
+      printf 'ERROR: unable to establish restricted diagnostic SSH after installer failure.\n' >&2
     fi
   fi
   exit "$status"
@@ -86,52 +83,49 @@ completed_setup_is_valid() {
   [[ "$ssh_service_state" == enabled ]] || return 1
 }
 
-if [[ "$#" -ne 4 ]] || ! is_ipv4 "$2" ||
-  [[ ! "$3" =~ ^[1-9][0-9]{0,19}$ ||
-    ! "$4" =~ ^[1-9][0-9]{0,2}$ ]]; then
-  printf 'ERROR: diagnostic SSH context is outside the closed format.\n' >&2
-  exit 1
-fi
+ensure_diagnostic_identity() {
+  local group_entry group_gid user_entry user_gid user_home user_shell
 
-ssh_public_key="$1"
-runner_ipv4="$2"
-read -r key_type key_data key_comment key_extra <<<"$ssh_public_key"
-if [[ "$key_type" != ssh-ed25519 ||
-  ! "$key_data" =~ ^[A-Za-z0-9+/]+={0,2}$ ||
-  "$key_comment" != "secpal-ci-$3-$4" || -n "${key_extra:-}" ]]; then
-  printf 'ERROR: diagnostic SSH key is outside the closed format.\n' >&2
-  exit 1
-fi
+  group_entry="$(getent group "$diagnostic_user" || true)"
+  user_entry="$(getent passwd "$diagnostic_user" || true)"
+  if [[ -z "$group_entry" ]]; then
+    [[ -z "$user_entry" ]] || return 1
+    groupadd --system "$diagnostic_user" || return 1
+    group_entry="$(getent group "$diagnostic_user")" || return 1
+  fi
+  IFS=: read -r _ _ group_gid _ <<<"$group_entry"
+  [[ "$group_gid" =~ ^[1-9][0-9]*$ ]] || return 1
+  if [[ -z "$user_entry" ]]; then
+    useradd --system --gid "$diagnostic_user" --no-create-home \
+      --home-dir /nonexistent --shell /bin/sh "$diagnostic_user" || return 1
+    user_entry="$(getent passwd "$diagnostic_user")" || return 1
+  fi
+  IFS=: read -r _ _ _ user_gid _ user_home user_shell <<<"$user_entry"
+  [[ "$user_gid" == "$group_gid" && "$user_home" == /nonexistent &&
+    "$user_shell" == /bin/sh ]] || return 1
+  [[ "$(id -G "$diagnostic_user")" == "$group_gid" ]] || return 1
+  usermod --lock "$diagnostic_user" || return 1
+}
 
-if completed_setup_is_valid; then
-  exit 0
-fi
-rm -f -- "$completion_marker" "$active_operator_key"
+prepare_diagnostic_fallback() {
+  install -d -o root -g root -m 0755 /run/sshd /run/systemd/system || return 1
+  ensure_diagnostic_identity || return 1
 
-install -d -o root -g root -m 0755 /run/sshd
-if getent passwd "$diagnostic_user" >/dev/null ||
-  getent group "$diagnostic_user" >/dev/null; then
-  printf 'ERROR: diagnostic SSH identity already exists.\n' >&2
-  exit 1
-fi
-groupadd --system "$diagnostic_user"
-diagnostic_identity_created=true
-useradd --system --gid "$diagnostic_user" --no-create-home \
-  --home-dir /nonexistent --shell /bin/sh "$diagnostic_user"
-usermod --lock "$diagnostic_user"
+  key_tmp="$(mktemp /run/.secpal-ci-diagnostic-key.XXXXXX)" || return 1
+  command_tmp="$(mktemp /run/.secpal-ci-diagnostic-command.XXXXXX)" || return 1
+  config_tmp="$(mktemp /run/.secpal-ci-diagnostic-config.XXXXXX)" || return 1
+  service_tmp="$(mktemp /run/systemd/system/.secpal-ci-diagnostic-service.XXXXXX)" || return 1
+  timer_tmp="$(mktemp /run/systemd/system/.secpal-ci-diagnostic-timer.XXXXXX)" || return 1
+  chmod 0600 "$key_tmp" "$config_tmp" || return 1
+  chmod 0700 "$command_tmp" || return 1
+  chmod 0644 "$service_tmp" "$timer_tmp" || return 1
 
-key_tmp="$(mktemp /run/.secpal-ci-diagnostic-key.XXXXXX)"
-command_tmp="$(mktemp /run/.secpal-ci-diagnostic-command.XXXXXX)"
-config_tmp="$(mktemp /run/.secpal-ci-diagnostic-config.XXXXXX)"
-chmod 0600 "$key_tmp" "$config_tmp"
-chmod 0700 "$command_tmp"
+  printf '%s\n' "$ssh_public_key" >"$key_tmp" || return 1
+  ssh-keygen -l -E sha256 -f "$key_tmp" >/dev/null || return 1
+  printf 'restrict,command="%s" %s\n' \
+    "$diagnostic_command" "$ssh_public_key" >"$key_tmp" || return 1
 
-printf '%s\n' "$ssh_public_key" >"$key_tmp"
-ssh-keygen -l -E sha256 -f "$key_tmp" >/dev/null
-printf 'restrict,command="%s" %s\n' \
-  "$diagnostic_command" "$ssh_public_key" >"$key_tmp"
-
-cat >"$command_tmp" <<'DIAGNOSTIC'
+  cat >"$command_tmp" <<'DIAGNOSTIC'
 #!/usr/bin/env bash
 set -uo pipefail
 
@@ -149,7 +143,7 @@ fi
 exit 125
 DIAGNOSTIC
 
-cat >"$config_tmp" <<EOF
+  cat >"$config_tmp" <<EOF
 Port 22
 AddressFamily inet
 ListenAddress 0.0.0.0
@@ -174,35 +168,88 @@ PermitTTY no
 PermitUserRC no
 EOF
 
-ssh-keygen -A
-sshd -t -f "$config_tmp"
-mv -T -- "$key_tmp" "$diagnostic_key"
-key_tmp=""
-mv -T -- "$command_tmp" "$diagnostic_command"
-command_tmp=""
-mv -T -- "$config_tmp" "$diagnostic_config"
-config_tmp=""
-chmod 0600 "$diagnostic_key" "$diagnostic_config"
-chmod 0755 "$diagnostic_command"
+  cat >"$service_tmp" <<EOF
+[Unit]
+Description=SecPal restricted cloud-init diagnostic SSH
 
-if ! systemd-run --quiet \
-  --unit="$diagnostic_unit" \
-  --on-active=10m \
-  --timer-property=AccuracySec=1s \
-  --service-type=exec \
-  /usr/sbin/sshd -D -e -f "$diagnostic_config"; then
-  rm -f -- "$diagnostic_key" "$diagnostic_command" "$diagnostic_config"
+[Service]
+Type=exec
+ExecStart=/usr/sbin/sshd -D -e -f $diagnostic_config
+EOF
+  cat >"$timer_tmp" <<EOF
+[Unit]
+Description=Delay SecPal restricted cloud-init diagnostic SSH
+
+[Timer]
+OnActiveSec=10m
+AccuracySec=1s
+Unit=$diagnostic_service
+EOF
+
+  ssh-keygen -A || return 1
+  sshd -t -f "$config_tmp" || return 1
+  mv -T -- "$key_tmp" "$diagnostic_key" || return 1
+  key_tmp=""
+  mv -T -- "$command_tmp" "$diagnostic_command" || return 1
+  command_tmp=""
+  mv -T -- "$config_tmp" "$diagnostic_config" || return 1
+  config_tmp=""
+  mv -T -- "$service_tmp" "$diagnostic_service_unit" || return 1
+  service_tmp=""
+  mv -T -- "$timer_tmp" "$diagnostic_timer_unit" || return 1
+  timer_tmp=""
+  chmod 0600 "$diagnostic_key" "$diagnostic_config" || return 1
+  chmod 0755 "$diagnostic_command" || return 1
+  chmod 0644 "$diagnostic_service_unit" "$diagnostic_timer_unit" || return 1
+  systemd-analyze verify "$diagnostic_service_unit" \
+    "$diagnostic_timer_unit" >/dev/null || return 1
+  systemctl daemon-reload || return 1
+  systemctl stop "$diagnostic_service" "$diagnostic_timer" 2>/dev/null || true
+  systemctl start "$diagnostic_timer" || return 1
+  systemctl is-active --quiet "$diagnostic_timer" || return 1
+}
+
+start_diagnostic_fallback() {
+  prepare_diagnostic_fallback || return 1
+  systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
+  systemctl stop "$diagnostic_timer" 2>/dev/null || true
+  systemctl start "$diagnostic_service" >/dev/null 2>&1 || return 1
+  ! systemctl is-active --quiet ssh.service &&
+    ! systemctl is-active --quiet ssh.socket &&
+    systemctl is-active --quiet "$diagnostic_service"
+}
+
+if [[ "$#" -ne 4 ]] || ! is_ipv4 "$2" ||
+  [[ ! "$3" =~ ^[1-9][0-9]{0,19}$ ||
+    ! "$4" =~ ^[1-9][0-9]{0,2}$ ]]; then
+  printf 'ERROR: diagnostic SSH context is outside the closed format.\n' >&2
   exit 1
 fi
-diagnostic_fallback_armed=true
+
+ssh_public_key="$1"
+runner_ipv4="$2"
+read -r key_type key_data key_comment key_extra <<<"$ssh_public_key"
+if [[ "$key_type" != ssh-ed25519 ||
+  ! "$key_data" =~ ^[A-Za-z0-9+/]+={0,2}$ ||
+  "$key_comment" != "secpal-ci-$3-$4" || -n "${key_extra:-}" ]]; then
+  printf 'ERROR: diagnostic SSH key is outside the closed format.\n' >&2
+  exit 1
+fi
+validated_context=true
+
+if completed_setup_is_valid; then
+  exit 0
+fi
+rm -f -- "$completion_marker" "$active_operator_key"
+
+prepare_diagnostic_fallback
 if ! systemctl mask --now ssh.service ssh.socket; then
   printf 'ERROR: unable to mask primary SSH after arming diagnostics.\n' >&2
   exit 1
 fi
 if systemctl is-active --quiet ssh.service ||
   systemctl is-active --quiet ssh.socket ||
-  ! systemctl is-active --quiet "${diagnostic_unit}.timer"; then
+  ! systemctl is-active --quiet "$diagnostic_timer"; then
   printf 'ERROR: SSH fallback transition did not reach its closed state.\n' >&2
   exit 1
 fi
-diagnostic_identity_created=false

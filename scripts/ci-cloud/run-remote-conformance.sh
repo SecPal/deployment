@@ -84,8 +84,8 @@ first_scan="$(mktemp "$evidence_dir/.host-key-first.XXXXXX")"
 second_scan="$(mktemp "$evidence_dir/.host-key-second.XXXXXX")"
 
 host_key_ready=false
-host_key_deadline=$((SECONDS + 15 * 60))
-while ((SECONDS < host_key_deadline)); do
+bootstrap_deadline=$((SECONDS + 15 * 60))
+while ((SECONDS < bootstrap_deadline)); do
   if ssh-keyscan -T 5 -t ed25519 "$address" > "$first_scan" 2>/dev/null &&
     sleep 2 &&
     ssh-keyscan -T 5 -t ed25519 "$address" > "$second_scan" 2>/dev/null &&
@@ -123,7 +123,7 @@ operator_ssh_ready=false
 diagnostic_ssh_seen=false
 diagnostic_ssh_output=""
 diagnostic_setup_failure=""
-for _ in {1..30}; do
+while ((SECONDS < bootstrap_deadline)); do
   if timeout --signal=TERM --kill-after=5s 20s \
     ssh "${ssh_options[@]}" "secpal-ci@$address" true \
     >/dev/null 2>&1; then
@@ -161,6 +161,7 @@ for _ in {1..30}; do
       set -e
       if [[ "$validated_setup_failure_status" -eq 0 ]]; then
         host_setup_failure_json="$validated_setup_failure"
+        break
       fi
     fi
   fi

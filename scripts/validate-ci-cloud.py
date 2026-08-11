@@ -388,7 +388,7 @@ def validate_opentofu(root: Path) -> None:
     require(
         "systemctl mask --now ssh.service ssh.socket"
         in diagnostic_ssh
-        and "--on-active=10m" in diagnostic_ssh
+        and "OnActiveSec=10m" in diagnostic_ssh
         and "ForceCommand /run/secpal-ci-cloud-init-diagnostic"
         in diagnostic_ssh
         and "DisableForwarding yes" in diagnostic_ssh
@@ -406,14 +406,26 @@ def validate_opentofu(root: Path) -> None:
         and "source " not in diagnostic_ssh,
         "pre-runcmd failures need independent restricted diagnostic SSH",
     )
+    diagnostic_cleanup = diagnostic_ssh.split("cleanup() {", 1)[1].split(
+        "\n}", 1
+    )[0]
+    diagnostic_preparation = diagnostic_ssh.split(
+        "prepare_diagnostic_fallback() {", 1
+    )[1].split("\n}", 1)[0]
     require(
-        diagnostic_ssh.index("ssh-keygen -A")
-        < diagnostic_ssh.index("if ! systemd-run --quiet")
-        < diagnostic_ssh.index(
-            "diagnostic_fallback_armed=true\n"
-            "if ! systemctl mask --now ssh.service ssh.socket"
-        )
-        and "diagnostic_fallback_armed=true" in diagnostic_ssh
+        "ensure_diagnostic_identity" in diagnostic_preparation
+        and '[[ "$(id -G "$diagnostic_user")" == "$group_gid" ]]'
+        in diagnostic_ssh
+        and "ssh-keygen -A" in diagnostic_preparation
+        and 'sshd -t -f "$config_tmp"' in diagnostic_preparation
+        and "OnActiveSec=10m" in diagnostic_preparation
+        and "/run/systemd/system/$diagnostic_service" in diagnostic_ssh
+        and "/run/systemd/system/$diagnostic_timer" in diagnostic_ssh
+        and 'systemd-analyze verify "$diagnostic_service_unit"'
+        in diagnostic_ssh
+        and diagnostic_ssh.index("if completed_setup_is_valid; then")
+        < diagnostic_ssh.rindex("prepare_diagnostic_fallback\n")
+        < diagnostic_ssh.rindex("if ! systemctl mask --now ssh.service ssh.socket")
         and 'completion_marker="$active_operator_root/host-setup-complete"'
         in diagnostic_ssh
         and 'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"'
@@ -424,9 +436,11 @@ def validate_opentofu(root: Path) -> None:
         and 'cmp -s -- - "$active_operator_key"' in diagnostic_ssh
         and "systemctl is-enabled ssh.service" in diagnostic_ssh
         and '"$ssh_service_state" == enabled' in diagnostic_ssh
-        and diagnostic_ssh.index("groupadd --system")
-        < diagnostic_ssh.index("diagnostic_identity_created=true")
-        < diagnostic_ssh.index("useradd --system")
+        and "if ! start_diagnostic_fallback; then" in diagnostic_cleanup
+        and "unable to establish restricted diagnostic SSH after installer failure"
+        in diagnostic_cleanup
+        and 'rm -f -- "$diagnostic_key" "$diagnostic_command"'
+        not in diagnostic_cleanup
         and 'systemctl start "$diagnostic_service"' in diagnostic_ssh,
         "diagnostic fallback must be prepared and armed before primary SSH is masked",
     )
@@ -436,6 +450,7 @@ def validate_opentofu(root: Path) -> None:
         and "secpal-ci-diagnostic-sshd.service" in host_setup
         and "stop_diagnostic_ssh" in host_setup
         and "restore_diagnostic_ssh" in host_setup
+        and "retire_diagnostic_ssh" in host_setup
         and 'rm -f -- "$active_ssh_authorized_keys"' in host_setup
         and '! systemctl is-active --quiet "$diagnostic_ssh_timer"'
         in host_setup
@@ -513,9 +528,10 @@ def validate_opentofu(root: Path) -> None:
         "operator SSH key staging must remain private until publication",
     )
     require(
-        host_setup.index("systemctl restart ssh.service")
-        < host_setup.index("if ! publish_completion_marker; then")
+        host_setup.index("if ! publish_completion_marker; then")
+        < host_setup.index("systemctl restart ssh.service")
         < host_setup.index("ssh_key_activated=true")
+        < host_setup.index("if ! retire_diagnostic_ssh; then")
         and 'rm -f -- "$completion_marker"' in host_setup,
         "operator SSH completion must be persistent, final, and rollback-safe",
     )
@@ -838,7 +854,8 @@ def validate(root: Path) -> None:
     )
     require(
         "operator_ssh_ready=false" in remote
-        and "for _ in {1..30}; do" in remote
+        and "for _ in {1..30}; do" not in remote
+        and remote.count("while ((SECONDS < bootstrap_deadline)); do") == 2
         and "operator SSH access did not become ready; trusted host setup"
         in remote
         and "network reachability, or sshd may have failed" in remote,
@@ -855,8 +872,8 @@ def validate(root: Path) -> None:
         "remote orchestration must recognize bounded restricted diagnostics",
     )
     require(
-        "host_key_deadline=$((SECONDS + 15 * 60))" in remote
-        and "while ((SECONDS < host_key_deadline)); do" in remote,
+        "bootstrap_deadline=$((SECONDS + 15 * 60))" in remote
+        and "host_key_deadline" not in remote,
         "remote orchestration must wait boundedly for masked SSH",
     )
     require(

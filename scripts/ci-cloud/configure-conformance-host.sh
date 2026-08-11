@@ -19,6 +19,8 @@ diagnostic_ssh_key=/run/secpal-ci-diagnostic-authorized-key
 diagnostic_ssh_command=/run/secpal-ci-cloud-init-diagnostic
 diagnostic_ssh_config=/run/secpal-ci-diagnostic-sshd.conf
 diagnostic_ssh_user=secpal-ci-diagnostic
+diagnostic_ssh_service_unit=/run/systemd/system/secpal-ci-diagnostic-sshd.service
+diagnostic_ssh_timer_unit=/run/systemd/system/secpal-ci-diagnostic-sshd.timer
 runner_ipv4="${1:-}"
 setup_stage="initialize"
 snapshot_tmp=""
@@ -144,6 +146,24 @@ restore_diagnostic_ssh() {
   systemctl start "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
 }
 
+retire_diagnostic_ssh() {
+  local cleanup_failed=false
+
+  stop_diagnostic_ssh || cleanup_failed=true
+  rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_key" \
+    "$diagnostic_ssh_command" "$diagnostic_ssh_config" \
+    "$diagnostic_ssh_service_unit" "$diagnostic_ssh_timer_unit" || \
+    cleanup_failed=true
+  if getent passwd "$diagnostic_ssh_user" >/dev/null; then
+    userdel "$diagnostic_ssh_user" || cleanup_failed=true
+  fi
+  if getent group "$diagnostic_ssh_user" >/dev/null; then
+    groupdel "$diagnostic_ssh_user" || cleanup_failed=true
+  fi
+  systemctl daemon-reload || cleanup_failed=true
+  [[ "$cleanup_failed" == false ]]
+}
+
 publish_completion_marker() {
   local marker_tmp root_metadata marker_metadata
 
@@ -258,30 +278,25 @@ activate_operator_ssh() {
     return 1
   fi
   if ! systemctl unmask ssh.service ssh.socket ||
-    ! systemctl enable ssh.service ||
-    ! systemctl restart ssh.service; then
+    ! systemctl enable ssh.service; then
     rm -f -- "$active_ssh_authorized_keys"
     rmdir -- "$active_ssh_authorized_keys_dir" || true
     restore_diagnostic_ssh || true
-    printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
+    printf 'ERROR: unable to prepare the trusted SSH service.\n' >&2
     return 1
-  fi
-  if ! rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_key" \
-    "$diagnostic_ssh_command" "$diagnostic_ssh_config" ||
-    ! userdel "$diagnostic_ssh_user"; then
-    printf 'ERROR: unable to remove staged SSH material.\n' >&2
-    return 1
-  fi
-  if getent group "$diagnostic_ssh_user" >/dev/null; then
-    if ! groupdel "$diagnostic_ssh_user"; then
-      printf 'ERROR: unable to remove the diagnostic SSH group.\n' >&2
-      return 1
-    fi
   fi
   if ! publish_completion_marker; then
     return 1
   fi
+  if ! systemctl restart ssh.service; then
+    restore_diagnostic_ssh || true
+    printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
+    return 1
+  fi
   ssh_key_activated=true
+  if ! retire_diagnostic_ssh; then
+    printf 'WARNING: trusted SSH is committed; deferred diagnostic cleanup failed.\n' >&2
+  fi
 }
 
 record_setup_failure() {

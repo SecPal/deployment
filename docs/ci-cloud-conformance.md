@@ -276,11 +276,17 @@ metadata entry. The key comment is bound to the exact workflow run ID and
 attempt. In an early `bootcmd`, a trusted installer from `main` validates the
 run-bound key and runner IPv4, generates the image's missing Ed25519 host key
 if necessary, fully validates a separate diagnostic `sshd`, and arms its
-ten-minute fallback timer. Only after that fallback exists does the installer
-persistently mask and stop the primary SSH service and socket. A failure after
-the fallback is armed retries that mask and starts the restricted daemon
-immediately; a preparation failure leaves the primary host-key listener
-untouched. The installer creates a locked, home-less
+ten-minute fallback timer using explicit runtime-scoped systemd service and
+timer units that are validated before systemd loads them. Preparation is
+idempotent: after any failure with an already
+validated run context, the EXIT handler rebuilds the locked identity and
+root-owned inputs and attempts to start the restricted daemon immediately. It
+never deletes the only diagnostic material merely because initial preparation
+was incomplete. Only after that fallback exists does the installer persistently
+mask and stop the primary SSH service and socket. If even the bounded recovery
+cannot construct a valid daemon, the primary listener is left untouched rather
+than being replaced by an unvalidated fallback. The installer creates a locked,
+home-less
 `secpal-ci-diagnostic` account that is independent of later cloud-init user
 creation. The daemon accepts only that account
 from the runner IPv4 with the ephemeral key, denies root, passwords, forwarding,
@@ -308,13 +314,17 @@ syntax and both operator/root configurations using the validated runner source
 IPv4, the route-selected local listener IPv4, and TCP port 22. A provider-image
 `Match Address`, `Match Host`, or `Match LocalAddress` rule and any alternate
 public-key source therefore fail admission. Only after those checks and key
-publication does host setup cancel and stop the diagnostic daemon, unmask the
-main SSH service, and start normal operator SSH. If main SSH activation fails,
-the published operator key is revoked, the main service is masked again, and
-the restricted diagnostic daemon is restored. After successful activation,
-host setup removes the diagnostic identity, unit inputs, key, command, and
-configuration, then atomically publishes a root-owned mode `0400` completion
-marker as its final state transition. This prevents the runner from
+publication does host setup cancel and stop the diagnostic daemon, unmask and
+enable the main SSH service, and atomically publish a root-owned mode `0400`
+completion marker. That marker is the rollback-safe setup commit: normal
+operator SSH is started only after it exists. If main SSH activation fails,
+the published operator key and marker are revoked, the main service is masked
+again, and the restricted diagnostic daemon is restored. After successful
+activation, setup is complete; removal of the stopped diagnostic identity,
+runtime units, key, command, and configuration is best-effort retirement and
+cannot roll a committed host back into a failed state. Any retirement residue
+remains root-owned, has no main-SSH authorization, and has no active diagnostic
+listener. This prevents the runner from
 logging in while `usermod` replaces provider-image subordinate-ID ranges and
 keeps key publication outside an operator-owned directory. The EXIT handler is
 active before the first fallible host-setup
@@ -325,8 +335,11 @@ normal operator SSH on a failed setup path. If cloud-init fails after the
 installer has armed the fallback but before the trusted setup script or
 `write_files` can run, the independent timer still exposes only the forced
 diagnostic command.
-The runner recognizes its reserved exit status, records bounded bootstrap-failure
-evidence, and continues waiting briefly in case normal host setup completes.
+The runner recognizes its reserved exit status and records bounded
+bootstrap-failure evidence. A schema-valid terminal host-setup marker stops
+readiness probes immediately; otherwise host-key discovery and operator
+readiness share one absolute 15-minute bootstrap deadline, so the delayed
+diagnostic listener cannot accidentally start a second, shorter timeout.
 The runner treats failed cloud-init as terminal and never
 checks out or executes target code in that case.
 

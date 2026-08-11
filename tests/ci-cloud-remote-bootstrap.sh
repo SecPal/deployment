@@ -170,8 +170,8 @@ if [[ "$diagnostic_status" -ne 1 ]]; then
     "$diagnostic_status" >&2
   exit 1
 fi
-if [[ "$(wc -l <"$SSH_LOG")" -ne 60 ]]; then
-  printf 'FAIL: restricted diagnostic SSH escaped the readiness loop\n' >&2
+if [[ "$(wc -l <"$SSH_LOG")" -ne 2 ]]; then
+  printf 'FAIL: validated host-setup failure did not stop readiness probes\n' >&2
   exit 1
 fi
 if [[ -e "$DIAGNOSTIC_EVIDENCE_DIR/evidence.json" ]]; then
