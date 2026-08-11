@@ -122,6 +122,7 @@ bootstrap_stage="cloud-init"
 operator_ssh_ready=false
 diagnostic_ssh_seen=false
 diagnostic_ssh_output=""
+diagnostic_setup_failure=""
 for _ in {1..30}; do
   if timeout --signal=TERM --kill-after=5s 20s \
     ssh "${ssh_options[@]}" "secpal-ci@$address" true \
@@ -141,6 +142,27 @@ for _ in {1..30}; do
     "$diagnostic_probe_first_line" == SECPAL_CI_DIAGNOSTIC_SSH ]]; then
     diagnostic_ssh_seen=true
     diagnostic_ssh_output="${diagnostic_probe_output#*$'\n'}"
+    diagnostic_setup_failure_count="$(
+      grep -c '^SECPAL_CI_HOST_SETUP_FAILURE ' \
+        <<<"$diagnostic_ssh_output" || true
+    )"
+    if [[ "$diagnostic_setup_failure_count" -eq 1 ]]; then
+      diagnostic_setup_failure="$(
+        grep -m1 '^SECPAL_CI_HOST_SETUP_FAILURE ' \
+          <<<"$diagnostic_ssh_output"
+      )"
+      diagnostic_setup_failure="${diagnostic_setup_failure#SECPAL_CI_HOST_SETUP_FAILURE }"
+      set +e
+      validated_setup_failure="$(
+        printf '%s\n' "$diagnostic_setup_failure" |
+          python3 scripts/ci-cloud/host-setup-failure.py validate
+      )"
+      validated_setup_failure_status=$?
+      set -e
+      if [[ "$validated_setup_failure_status" -eq 0 ]]; then
+        host_setup_failure_json="$validated_setup_failure"
+      fi
+    fi
   fi
   sleep 5
 done

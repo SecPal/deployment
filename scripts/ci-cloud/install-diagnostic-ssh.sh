@@ -89,6 +89,13 @@ printf 'SECPAL_CI_DIAGNOSTIC_SSH\n'
 set +e
 /usr/bin/cloud-init status --long 2>&1 | /usr/bin/head -c 8192
 printf '\n'
+setup_failure="$(
+  /usr/local/sbin/secpal-ci-host-setup-failure read 2>/dev/null
+)"
+setup_failure_status=$?
+if [[ "$setup_failure_status" -eq 0 && -n "$setup_failure" ]]; then
+  printf 'SECPAL_CI_HOST_SETUP_FAILURE %s\n' "$setup_failure"
+fi
 exit 125
 DIAGNOSTIC
 

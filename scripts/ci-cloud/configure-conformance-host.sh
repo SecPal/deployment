@@ -129,12 +129,16 @@ validate_effective_sshd_config() {
 stop_diagnostic_ssh() {
   systemctl stop "$diagnostic_ssh_timer" 2>/dev/null || true
   systemctl stop "$diagnostic_ssh_service" 2>/dev/null || true
-  ! systemctl is-active --quiet "$diagnostic_ssh_service"
+  ! systemctl is-active --quiet "$diagnostic_ssh_timer" &&
+    ! systemctl is-active --quiet "$diagnostic_ssh_service"
 }
 
 restore_diagnostic_ssh() {
-  systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || true
-  systemctl start "$diagnostic_ssh_service" >/dev/null 2>&1 || true
+  rm -f -- "$active_ssh_authorized_keys"
+  rmdir -- "$active_ssh_authorized_keys_dir" 2>/dev/null || true
+  ssh_key_activated=false
+  systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
+  systemctl start "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
 }
 
 activate_operator_ssh() {
@@ -217,18 +221,23 @@ activate_operator_ssh() {
     ! systemctl restart ssh.service; then
     rm -f -- "$active_ssh_authorized_keys"
     rmdir -- "$active_ssh_authorized_keys_dir" || true
-    restore_diagnostic_ssh
+    restore_diagnostic_ssh || true
     printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
     return 1
   fi
-  ssh_key_activated=true
   if ! rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_key" \
     "$diagnostic_ssh_command" "$diagnostic_ssh_config" ||
-    ! userdel "$diagnostic_ssh_user" ||
-    ! groupdel "$diagnostic_ssh_user"; then
+    ! userdel "$diagnostic_ssh_user"; then
     printf 'ERROR: unable to remove staged SSH material.\n' >&2
     return 1
   fi
+  if getent group "$diagnostic_ssh_user" >/dev/null; then
+    if ! groupdel "$diagnostic_ssh_user"; then
+      printf 'ERROR: unable to remove the diagnostic SSH group.\n' >&2
+      return 1
+    fi
+  fi
+  ssh_key_activated=true
 }
 
 record_setup_failure() {
@@ -238,7 +247,7 @@ record_setup_failure() {
   [[ -z "$snapshot_tmp" ]] || rm -f -- "$snapshot_tmp"
   if [[ "$status" -ne 0 ]]; then
     "$failure_writer" write "$setup_stage" "$status" || true
-    activate_operator_ssh || true
+    restore_diagnostic_ssh || true
   fi
   exit "$status"
 }

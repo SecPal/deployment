@@ -10,6 +10,8 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -169,6 +171,37 @@ class HostSetupFailureTests(unittest.TestCase):
             self.helper.validate_directory(directory, 1001, 1001)
         with self.assertRaises(ValueError):
             self.helper.validate_file_metadata(marker_metadata, 1001, 1001)
+
+    def test_validate_command_canonicalizes_only_the_closed_schema(self) -> None:
+        valid = subprocess.run(
+            [sys.executable, str(HELPER), "validate"],
+            input='{"stage":"apparmor","exit_status":7}\n',
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(0, valid.returncode, valid.stderr)
+        self.assertEqual(
+            '{"exit_status":7,"stage":"apparmor"}\n',
+            valid.stdout,
+        )
+
+        for payload in (
+            '{"stage":"apparmor","exit_status":7,"token":"forbidden"}\n',
+            "x" * 129,
+        ):
+            with self.subTest(payload=payload[:32]):
+                invalid = subprocess.run(
+                    [sys.executable, str(HELPER), "validate"],
+                    input=payload,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertNotEqual(0, invalid.returncode)
+                self.assertEqual("", invalid.stdout)
 
 
 if __name__ == "__main__":

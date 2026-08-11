@@ -67,7 +67,7 @@ if [[ "${SECPAL_TEST_DIAGNOSTIC_ONLY:-false}" == true &&
   "$ssh_target" == secpal-ci-diagnostic@* && "${1:-}" == true ]]; then
   printf 'SECPAL_CI_DIAGNOSTIC_SSH\n'
   head -c 8192 /dev/zero | tr '\0' y
-  printf '\n'
+  printf '\nSECPAL_CI_HOST_SETUP_FAILURE {"exit_status":7,"stage":"apparmor"}\n'
   exit 125
 fi
 if [[ "$ssh_target" == secpal-ci-diagnostic@* ]]; then
@@ -181,7 +181,7 @@ fi
 jq -e '
   .test.failure_stage == "cloud-init" and
   .test.orchestration_exit_status == 1 and
-  .test.host_setup_failure == null and
+  .test.host_setup_failure == {"exit_status": 7, "stage": "apparmor"} and
   .test.result == "failed"
 ' "$DIAGNOSTIC_EVIDENCE_DIR/bootstrap-failure.json" >/dev/null
 grep -Fq 'cloud-init did not reach trusted host setup' \

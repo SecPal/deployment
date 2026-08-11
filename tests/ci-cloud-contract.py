@@ -252,7 +252,11 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertNotIn("    ssh-keys                 =", gcp_main)
         self.assertIn("activate_operator_ssh", host_setup)
-        self.assertIn("activate_operator_ssh || true", host_setup)
+        failure_handler = host_setup.split("record_setup_failure() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn("restore_diagnostic_ssh || true", failure_handler)
+        self.assertNotIn("activate_operator_ssh", failure_handler)
         self.assertIn("validate_effective_sshd_config || return 1", host_setup)
         self.assertIn(
             "systemctl unmask ssh.service ssh.socket",
@@ -386,8 +390,53 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertNotIn("source ", installer)
         self.assertIn("secpal-ci-diagnostic-sshd.timer", host_setup)
         self.assertIn("secpal-ci-diagnostic-sshd.service", host_setup)
+        restore_handler = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn(
+            'rm -f -- "$active_ssh_authorized_keys"',
+            restore_handler,
+        )
+        self.assertLess(
+            restore_handler.index('rm -f -- "$active_ssh_authorized_keys"'),
+            restore_handler.index("systemctl mask --now ssh.service ssh.socket"),
+        )
+        stop_handler = host_setup.split("stop_diagnostic_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn(
+            '! systemctl is-active --quiet "$diagnostic_ssh_timer"',
+            stop_handler,
+        )
+        self.assertIn(
+            '! systemctl is-active --quiet "$diagnostic_ssh_service"',
+            stop_handler,
+        )
+        self.assertIn(
+            "SECPAL_CI_HOST_SETUP_FAILURE",
+            installer,
+        )
+        self.assertIn(
+            "/usr/local/sbin/secpal-ci-host-setup-failure read",
+            installer,
+        )
+        self.assertIn("SECPAL_CI_HOST_SETUP_FAILURE", remote)
         self.assertIn("SECPAL_CI_DIAGNOSTIC_SSH", remote)
         self.assertIn("diagnostic_ssh_seen", remote)
+
+    def test_diagnostic_identity_cleanup_is_idempotent(self) -> None:
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'if getent group "$diagnostic_ssh_user" >/dev/null; then',
+            host_setup,
+        )
+        self.assertNotIn(
+            '! userdel "$diagnostic_ssh_user" ||\n'
+            '    ! groupdel "$diagnostic_ssh_user"',
+            host_setup,
+        )
 
     def test_static_contract_rejects_short_masked_ssh_wait(self) -> None:
         self.assert_mutation_rejected(
@@ -564,11 +613,11 @@ class CloudCIContractTests(unittest.TestCase):
             '    ssh-keys                 = "secpal-ci:${trimspace(var.ssh_public_key)}"\n',
         )
 
-    def test_static_contract_rejects_lost_setup_failure_access(self) -> None:
+    def test_static_contract_rejects_unrestricted_setup_failure_access(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/configure-conformance-host.sh",
+            "    restore_diagnostic_ssh || true\n",
             "    activate_operator_ssh || true\n",
-            "    true\n",
         )
 
     def test_trusted_collector_ignores_target_owned_startup_configuration(self) -> None:

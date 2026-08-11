@@ -397,6 +397,9 @@ def validate_opentofu(root: Path) -> None:
         and "AllowUsers secpal-ci-diagnostic@$runner_ipv4" in diagnostic_ssh
         and "useradd --system" in diagnostic_ssh
         and "SECPAL_CI_DIAGNOSTIC_SSH" in diagnostic_ssh
+        and "SECPAL_CI_HOST_SETUP_FAILURE" in diagnostic_ssh
+        and "/usr/local/sbin/secpal-ci-host-setup-failure read"
+        in diagnostic_ssh
         and "exit 125" in diagnostic_ssh
         and '"$key_comment" != "secpal-ci-$3-$4"' in diagnostic_ssh
         and "eval " not in diagnostic_ssh
@@ -409,12 +412,20 @@ def validate_opentofu(root: Path) -> None:
         and "secpal-ci-diagnostic-sshd.service" in host_setup
         and "stop_diagnostic_ssh" in host_setup
         and "restore_diagnostic_ssh" in host_setup
+        and 'rm -f -- "$active_ssh_authorized_keys"' in host_setup
+        and '! systemctl is-active --quiet "$diagnostic_ssh_timer"'
+        in host_setup
+        and '! systemctl is-active --quiet "$diagnostic_ssh_service"'
+        in host_setup
         and 'userdel "$diagnostic_ssh_user"' in host_setup
+        and 'if getent group "$diagnostic_ssh_user" >/dev/null; then'
+        in host_setup
         and 'groupdel "$diagnostic_ssh_user"' in host_setup,
         "trusted SSH activation must retire or restore diagnostic SSH atomically",
     )
     require(
-        "activate_operator_ssh || true" in host_setup
+        "activate_operator_ssh || true" not in host_setup
+        and "restore_diagnostic_ssh || true" in host_setup
         and 'setup_stage="ssh"\nactivate_operator_ssh\n' in host_setup
         and "active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys"
         in host_setup
@@ -422,7 +433,7 @@ def validate_opentofu(root: Path) -> None:
         in host_setup
         and 'mv -T -- "$authorized_keys_tmp_dir" \\\n    "$active_ssh_authorized_keys_dir"'
         in host_setup,
-        "host setup must defer operator SSH access and preserve failure diagnostics",
+        "host setup failures must retain restricted diagnostics without releasing operator SSH",
     )
     require(
         "validate_effective_sshd_config || return 1" in host_setup
@@ -798,6 +809,8 @@ def validate(root: Path) -> None:
     require(
         "diagnostic_ssh_seen=false" in remote
         and "SECPAL_CI_DIAGNOSTIC_SSH" in remote
+        and "SECPAL_CI_HOST_SETUP_FAILURE" in remote
+        and "scripts/ci-cloud/host-setup-failure.py validate" in remote
         and '"$diagnostic_probe_status" -eq 125' in remote
         and '"secpal-ci-diagnostic@$address"' in remote
         and "cloud-init did not reach trusted host setup" in remote,

@@ -284,7 +284,10 @@ from the runner IPv4 with the ephemeral key, denies root, passwords, forwarding,
 TTYs, user startup files, alternate key/principal sources, and every command
 except a fixed `cloud-init status --long` reporter capped at 8 KiB. Its key and
 configuration remain root-only under `/run`. It neither exposes a shell nor
-can execute the selected target revision.
+can execute the selected target revision. If trusted host setup writes its
+closed failure marker, the reporter appends only that validated stage and exit
+status; it never exposes the unrestricted operator account to retrieve the
+marker.
 
 Trusted host setup validates and
 normalizes the fixed subordinate-ID ranges, service policy, and AppArmor
@@ -303,15 +306,18 @@ IPv4, the route-selected local listener IPv4, and TCP port 22. A provider-image
 public-key source therefore fail admission. Only after those checks and key
 publication does host setup cancel and stop the diagnostic daemon, unmask the
 main SSH service, and start normal operator SSH. If main SSH activation fails,
-the main service is masked again and the restricted diagnostic daemon is
-restored. After successful activation, host setup removes the diagnostic
+the published operator key is revoked, the main service is masked again, and
+the restricted diagnostic daemon is restored. After successful activation,
+host setup removes the diagnostic
 identity, unit inputs, key, command, and configuration. This prevents the runner from
 logging in while `usermod` replaces provider-image subordinate-ID ranges and
 keeps key publication outside an operator-owned directory. The EXIT handler is
 active before the first fallible host-setup
 initialization. If an earlier trusted setup stage fails, it first writes the
-closed failure marker when possible and only then enables the same bounded
-diagnostic access. If cloud-init fails before the trusted script or `write_files`
+closed failure marker when possible, revokes any partially published operator
+key, and only then enables the same bounded diagnostic access. It never starts
+normal operator SSH on a failed setup path. If cloud-init fails before the
+trusted script or `write_files`
 can run, the independent timer still exposes only the forced diagnostic command.
 The runner recognizes its reserved exit status, records bounded bootstrap-failure
 evidence, and continues waiting briefly in case normal host setup completes.
