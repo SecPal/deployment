@@ -19,11 +19,11 @@ SPDX-License-Identifier: CC0-1.0
   owned Droplets plus static mutation tests for credential, input, provider,
   SSH-state, metadata, cleanup, action-pin, and evidence boundaries.
 - Schema-validated, failure-atomically published bootstrap-failure evidence
-  with orchestration timestamps and bounded cloud-init diagnostics when a
+  with orchestration timestamps and bounded native-bootstrap diagnostics when a
   disposable host fails before the full conformance collector can run.
-- Rendered cloud-init schema admission for both providers and a root-owned,
-  closed host-setup stage marker that diagnoses early failures without raw
-  logs or credentials.
+- A common strict-Bash host payload delivered through DigitalOcean user data
+  and GCP's native `startup-script`, with a root-owned, closed host-setup stage
+  marker that diagnoses early failures without raw logs or credentials.
 
 - A provider-neutral production host and inventory contract.
 - A versioned, non-secret production inventory schema, a closed synthetic
@@ -43,7 +43,7 @@ SPDX-License-Identifier: CC0-1.0
 ### Fixed
 
 - Added an independent, delayed, command-restricted SSH diagnostic path for
-  cloud-init failures before `runcmd`, without exposing root or target execution.
+  native-bootstrap failures, without exposing root or target execution.
 - Deferred disposable-operator SSH-key activation until trusted host setup has
   finished, preventing remote bootstrap observation from racing subordinate-ID
   normalization while retaining bounded diagnostic access after setup failure.

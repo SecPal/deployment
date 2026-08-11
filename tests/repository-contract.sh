@@ -47,13 +47,11 @@ required_files=(
   docs/ci-cloud-conformance.md
   docs/roadmap.md
   infra/ci-cloud/digitalocean/.terraform.lock.hcl
-  infra/ci-cloud/digitalocean/cloud-init.tftpl
   infra/ci-cloud/digitalocean/main.tf
   infra/ci-cloud/digitalocean/outputs.tf
   infra/ci-cloud/digitalocean/variables.tf
   infra/ci-cloud/digitalocean/versions.tf
   infra/ci-cloud/gcp/.terraform.lock.hcl
-  infra/ci-cloud/gcp/cloud-init.tftpl
   infra/ci-cloud/gcp/iam-role.yaml
   infra/ci-cloud/gcp/main.tf
   infra/ci-cloud/gcp/outputs.tf
@@ -67,6 +65,7 @@ required_files=(
   scripts/preflight.sh
   scripts/fetch-oci-attestation.py
   scripts/ci-cloud/collect-host-evidence.py
+  scripts/ci-cloud/bootstrap-conformance-host.tftpl
   scripts/ci-cloud/configure-conformance-host.sh
   scripts/ci-cloud/install-diagnostic-ssh.sh
   scripts/ci-cloud/digitalocean-janitor.py

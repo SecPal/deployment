@@ -16,7 +16,7 @@ fi
 
 scripts/validate-origin.sh "$(git remote get-url origin)"
 
-required_tools=(actionlint cloud-init markdownlint php prettier python3 reuse shellcheck yamllint)
+required_tools=(actionlint markdownlint php prettier python3 reuse shellcheck yamllint)
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then

@@ -25,7 +25,7 @@ SCHEMA_PATH = (
 )
 FAILURE_STAGES = (
     "host-key",
-    "cloud-init",
+    "bootstrap",
     "root-ssh",
     "target",
     "collector",
@@ -151,7 +151,7 @@ def main() -> int:
         except json.JSONDecodeError:
             fail("host-key observations diagnostic is invalid JSON")
         document = {
-            "schema_version": 2,
+            "schema_version": 3,
             "workflow": {
                 "repository": "SecPal/deployment",
                 "run_id": arguments.run_id,

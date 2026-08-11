@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "workflow", "test"],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "const": 3 },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -76,7 +76,7 @@
         "failure_stage": {
           "enum": [
             "host-key",
-            "cloud-init",
+            "bootstrap",
             "root-ssh",
             "target",
             "collector",
@@ -163,7 +163,7 @@
       "allOf": [
         {
           "if": {
-            "properties": { "failure_stage": { "const": "cloud-init" } }
+            "properties": { "failure_stage": { "const": "bootstrap" } }
           },
           "else": {
             "properties": { "host_setup_failure": { "type": "null" } }

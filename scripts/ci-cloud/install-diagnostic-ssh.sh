@@ -7,7 +7,7 @@ set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 diagnostic_key=/run/secpal-ci-diagnostic-authorized-key
-diagnostic_command=/run/secpal-ci-cloud-init-diagnostic
+diagnostic_command=/run/secpal-ci-bootstrap-diagnostic
 diagnostic_config=/run/secpal-ci-diagnostic-sshd.conf
 diagnostic_unit=secpal-ci-diagnostic-sshd
 diagnostic_service="${diagnostic_unit}.service"
@@ -15,6 +15,7 @@ diagnostic_timer="${diagnostic_unit}.timer"
 diagnostic_service_unit="/run/systemd/system/$diagnostic_service"
 diagnostic_timer_unit="/run/systemd/system/$diagnostic_timer"
 diagnostic_user=secpal-ci-diagnostic
+diagnostic_home=/run/secpal-ci-diagnostic-home
 primary_ssh_config=/etc/ssh/sshd_config.d/00-secpal-ci.conf
 active_operator_root=/var/lib/secpal-ci
 active_operator_key="$active_operator_root/authorized-keys/secpal-ci"
@@ -153,6 +154,7 @@ completed_setup_is_valid() {
 ensure_diagnostic_identity() {
   local group_entry group_gid user_entry user_gid user_home user_shell
 
+  install -d -o root -g root -m 0755 "$diagnostic_home" || return 1
   group_entry="$(getent group "$diagnostic_user" || true)"
   user_entry="$(getent passwd "$diagnostic_user" || true)"
   if [[ -z "$group_entry" ]]; then
@@ -164,11 +166,11 @@ ensure_diagnostic_identity() {
   [[ "$group_gid" =~ ^[1-9][0-9]*$ ]] || return 1
   if [[ -z "$user_entry" ]]; then
     useradd --system --gid "$diagnostic_user" --no-create-home \
-      --home-dir /nonexistent --shell /bin/sh "$diagnostic_user" || return 1
+      --home-dir "$diagnostic_home" --shell /bin/sh "$diagnostic_user" || return 1
     user_entry="$(getent passwd "$diagnostic_user")" || return 1
   fi
   IFS=: read -r _ _ _ user_gid _ user_home user_shell <<<"$user_entry"
-  [[ "$user_gid" == "$group_gid" && "$user_home" == /nonexistent &&
+  [[ "$user_gid" == "$group_gid" && "$user_home" == "$diagnostic_home" &&
     "$user_shell" == /bin/sh ]] || return 1
   [[ "$(id -G "$diagnostic_user")" == "$group_gid" ]] || return 1
   usermod --lock "$diagnostic_user" || return 1
@@ -201,8 +203,6 @@ set -euo pipefail
 
 printf 'SECPAL_CI_DIAGNOSTIC_SSH\n'
 set +e
-/usr/bin/cloud-init status --long 2>&1 | /usr/bin/head -c 8192
-printf '\n'
 setup_failure="$(
   /usr/local/sbin/secpal-ci-host-setup-failure read 2>/dev/null
 )"
@@ -238,7 +238,7 @@ StrictModes yes
 UseDNS no
 UsePAM yes
 AllowUsers secpal-ci-diagnostic@$runner_ipv4
-ForceCommand /run/secpal-ci-cloud-init-diagnostic
+ForceCommand /run/secpal-ci-bootstrap-diagnostic
 DisableForwarding yes
 PermitTTY no
 PermitUserEnvironment no
@@ -247,7 +247,7 @@ EOF
 
   cat >"$service_tmp" <<EOF
 [Unit]
-Description=SecPal restricted cloud-init diagnostic SSH
+Description=SecPal restricted bootstrap diagnostic SSH
 StartLimitIntervalSec=2m
 StartLimitBurst=5
 
@@ -259,7 +259,7 @@ RestartSec=5s
 EOF
   cat >"$timer_tmp" <<EOF
 [Unit]
-Description=Delay SecPal restricted cloud-init diagnostic SSH
+Description=Delay SecPal restricted bootstrap diagnostic SSH
 
 [Timer]
 OnActiveSec=10m

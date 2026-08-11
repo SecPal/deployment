@@ -234,7 +234,7 @@ ssh_options=(
   -o ServerAliveCountMax=3
 )
 
-bootstrap_stage="cloud-init"
+bootstrap_stage="bootstrap"
 operator_ssh_ready=false
 diagnostic_ssh_seen=false
 diagnostic_ssh_output=""
@@ -285,7 +285,7 @@ while ((SECONDS < bootstrap_deadline)); do
 done
 if [[ "$operator_ssh_ready" != true ]]; then
   if [[ "$diagnostic_ssh_seen" == true ]]; then
-    printf 'ERROR: cloud-init did not reach trusted host setup.\n' >&2
+    printf 'ERROR: native bootstrap did not reach trusted host setup.\n' >&2
     printf '%s\n' "$diagnostic_ssh_output" >&2
   else
     printf '%s%s\n' \
@@ -296,30 +296,22 @@ if [[ "$operator_ssh_ready" != true ]]; then
 fi
 
 set +e
-cloud_init_diagnostic="$(
+operator_identity_diagnostic="$(
   timeout --signal=TERM --kill-after=15s 12m \
     ssh "${ssh_options[@]}" "secpal-ci@$address" /bin/bash -s <<'REMOTE'
 set -euo pipefail
-set +e
-cloud-init status --wait >/dev/null
-status=$?
-set -e
-if [[ "$status" -ne 0 ]]; then
-  printf 'cloud-init bootstrap failed:\n'
-  cloud-init status --long 2>&1 | head -c 8192 || true
-elif [[ "$(id -u)" -eq 0 ]]; then
-  printf 'remote operator unexpectedly has UID 0\n'
-  status=1
+if [[ "$(id -u)" -ne 20000 || "$(id -un)" != secpal-ci ]]; then
+  printf 'remote operator identity violates the closed bootstrap contract\n'
+  exit 1
 fi
-exit "$status"
 REMOTE
 )"
-cloud_init_status=$?
+operator_identity_status=$?
 set -e
-if [[ "$cloud_init_status" -ne 0 ]]; then
-  printf 'ERROR: remote cloud-init bootstrap did not complete successfully.\n' >&2
-  if [[ -n "$cloud_init_diagnostic" ]]; then
-    printf '%s\n' "$cloud_init_diagnostic" >&2
+if [[ "$operator_identity_status" -ne 0 ]]; then
+  printf 'ERROR: remote operator identity failed bootstrap admission.\n' >&2
+  if [[ -n "$operator_identity_diagnostic" ]]; then
+    printf '%s\n' "$operator_identity_diagnostic" >&2
   fi
   set +e
   setup_diagnostic="$(
@@ -335,7 +327,7 @@ if [[ "$cloud_init_status" -ne 0 ]]; then
     printf 'Trusted host setup failure: %s\n' \
       "$host_setup_failure_json" >&2
   fi
-  exit "$cloud_init_status"
+  exit "$operator_identity_status"
 fi
 
 bootstrap_stage="root-ssh"
