@@ -273,8 +273,20 @@ the provisioning/test job ends. The disposable operator account is initially
 created without an authorized key. Cloud-init instead stages the public key as
 root-owned mode `0600`; GCP does not receive an instance-level `ssh-keys`
 metadata entry. The key comment is bound to the exact workflow run ID and
-attempt. Cloud-init runtime-masks the SSH service and socket before the daemon
-can admit an image-provided policy, and trusted host setup validates and
+attempt. Cloud-init persistently masks the SSH service and socket before the daemon
+can admit an image-provided policy. In that same early `bootcmd`, a trusted
+installer from `main` validates the run-bound key and runner IPv4, generates
+the image's missing Ed25519 host key if necessary, and schedules a separate
+diagnostic `sshd` for ten minutes later. It creates a locked, home-less
+`secpal-ci-diagnostic` account that is independent of later cloud-init user
+creation. The daemon accepts only that account
+from the runner IPv4 with the ephemeral key, denies root, passwords, forwarding,
+TTYs, user startup files, alternate key/principal sources, and every command
+except a fixed `cloud-init status --long` reporter capped at 8 KiB. Its key and
+configuration remain root-only under `/run`. It neither exposes a shell nor
+can execute the selected target revision.
+
+Trusted host setup validates and
 normalizes the fixed subordinate-ID ranges, service policy, and AppArmor
 evidence before atomically publishing a root-owned `secpal-ci` key file in a
 root-owned directory under `/run` in its final SSH stage. The temporary
@@ -289,14 +301,27 @@ syntax and both operator/root configurations using the validated runner source
 IPv4, the route-selected local listener IPv4, and TCP port 22. A provider-image
 `Match Address`, `Match Host`, or `Match LocalAddress` rule and any alternate
 public-key source therefore fail admission. Only after those checks and key
-publication does host setup unmask and start SSH. This prevents the runner from
+publication does host setup cancel and stop the diagnostic daemon, unmask the
+main SSH service, and start normal operator SSH. If main SSH activation fails,
+the main service is masked again and the restricted diagnostic daemon is
+restored. After successful activation, host setup removes the diagnostic
+identity, unit inputs, key, command, and configuration. This prevents the runner from
 logging in while `usermod` replaces provider-image subordinate-ID ranges and
 keeps key publication outside an operator-owned directory. The EXIT handler is
 active before the first fallible host-setup
 initialization. If an earlier trusted setup stage fails, it first writes the
 closed failure marker when possible and only then enables the same bounded
-diagnostic access. The runner treats failed cloud-init as terminal and never
+diagnostic access. If cloud-init fails before the trusted script or `write_files`
+can run, the independent timer still exposes only the forced diagnostic command.
+The runner recognizes its reserved exit status, records bounded bootstrap-failure
+evidence, and continues waiting briefly in case normal host setup completes.
+The runner treats failed cloud-init as terminal and never
 checks out or executes target code in that case.
+
+The persistent mask also survives an unexpected reboot before trusted setup.
+Because the diagnostic timer is intentionally transient, such a reboot fails
+closed with no SSH listener; exact workflow cleanup or the TTL janitor then
+destroys the inaccessible fixture.
 
 DigitalOcean initially embeds that public key
 in the image's root account as part of Droplet creation; cloud-init sets
@@ -310,8 +335,8 @@ reach TCP 22, through the pre-created tag-targeted firewall.
 DigitalOcean does not provide the new guest's SSH host key over a separate
 authenticated provisioning API. The runner therefore performs a bounded
 trust-on-first-use bootstrap: it requires one Ed25519 key from two consecutive
-`ssh-keyscan` observations, allows up to 15 minutes for runtime-masked SSH to be
-released after trusted host setup, hashes the resulting `known_hosts` entry,
+`ssh-keyscan` observations, allows up to 15 minutes for masked SSH to be
+released by trusted host setup or the restricted fail-safe, hashes the resulting `known_hosts` entry,
 and then uses `StrictHostKeyChecking=yes` for every command. The remaining assumption
 is that no active network attacker substitutes both first observations. The
 per-run firewall, fresh user key, single resolved OpenTofu address, and short

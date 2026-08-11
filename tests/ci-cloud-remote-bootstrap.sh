@@ -54,14 +54,28 @@ EOF
 cat >"$FAKE_BIN/ssh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+ssh_target=""
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     -i | -o) shift 2 ;;
-    *) shift; break ;;
+    *) ssh_target="$1"; shift; break ;;
   esac
 done
 printf 'ssh\n' >>"${SECPAL_TEST_SSH_LOG:?}"
 ssh_call="$(wc -l <"${SECPAL_TEST_SSH_LOG:?}")"
+if [[ "${SECPAL_TEST_DIAGNOSTIC_ONLY:-false}" == true &&
+  "$ssh_target" == secpal-ci-diagnostic@* && "${1:-}" == true ]]; then
+  printf 'SECPAL_CI_DIAGNOSTIC_SSH\n'
+  head -c 8192 /dev/zero | tr '\0' y
+  printf '\n'
+  exit 125
+fi
+if [[ "$ssh_target" == secpal-ci-diagnostic@* ]]; then
+  exit 255
+fi
+if [[ "${SECPAL_TEST_DIAGNOSTIC_ONLY:-false}" == true ]]; then
+  exit 255
+fi
 if [[ "${1:-}" == true && "$ssh_call" -eq 1 ]]; then
   exit 255
 fi
@@ -102,7 +116,7 @@ if [[ "$status" -ne 2 ]]; then
   printf 'FAIL: expected remote bootstrap status 2, got %s\n' "$status" >&2
   exit 1
 fi
-if [[ "$(wc -l <"$SSH_LOG")" -ne 4 ]]; then
+if [[ "$(wc -l <"$SSH_LOG")" -ne 5 ]]; then
   printf 'FAIL: target or collector SSH ran after failed cloud-init\n' >&2
   exit 1
 fi
@@ -135,5 +149,50 @@ grep -Fq "Host setup failure: \`apparmor\` (exit \`7\`)" \
   "$EVIDENCE_DIR/summary.md"
 grep -Fq 'Trusted host setup failure: {"exit_status":7,"stage":"apparmor"}' \
   "$TEMP_DIR/output.log"
+
+DIAGNOSTIC_EVIDENCE_DIR="$TEMP_DIR/diagnostic-evidence"
+: >"$SSH_LOG"
+: >"$SSH_KEYSCAN_LOG"
+set +e
+PATH="$FAKE_BIN:$PATH" SECPAL_TEST_SSH_LOG="$SSH_LOG" \
+  SECPAL_TEST_SSH_KEYSCAN_LOG="$SSH_KEYSCAN_LOG" \
+  SECPAL_TEST_DIAGNOSTIC_ONLY=true \
+  scripts/ci-cloud/run-remote-conformance.sh \
+  digitalocean fra1 intel 1.1.1.1 \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 12345 1 \
+  "$PRIVATE_KEY" "$DIAGNOSTIC_EVIDENCE_DIR" debian-13-x64 234194767 \
+  s-4vcpu-8gb-intel >"$TEMP_DIR/diagnostic-output.log" 2>&1
+diagnostic_status=$?
+set -e
+
+if [[ "$diagnostic_status" -ne 1 ]]; then
+  printf 'FAIL: expected diagnostic SSH status 1, got %s\n' \
+    "$diagnostic_status" >&2
+  exit 1
+fi
+if [[ "$(wc -l <"$SSH_LOG")" -ne 60 ]]; then
+  printf 'FAIL: restricted diagnostic SSH escaped the readiness loop\n' >&2
+  exit 1
+fi
+if [[ -e "$DIAGNOSTIC_EVIDENCE_DIR/evidence.json" ]]; then
+  printf 'FAIL: target evidence survived restricted diagnostic SSH\n' >&2
+  exit 1
+fi
+jq -e '
+  .test.failure_stage == "cloud-init" and
+  .test.orchestration_exit_status == 1 and
+  .test.host_setup_failure == null and
+  .test.result == "failed"
+' "$DIAGNOSTIC_EVIDENCE_DIR/bootstrap-failure.json" >/dev/null
+grep -Fq 'cloud-init did not reach trusted host setup' \
+  "$TEMP_DIR/diagnostic-output.log"
+diagnostic_ssh_bytes="$(
+  awk '/^y+$/{print length; exit}' "$TEMP_DIR/diagnostic-output.log"
+)"
+if [[ "$diagnostic_ssh_bytes" -ne 8192 ]]; then
+  printf 'FAIL: restricted SSH diagnostic was not capped (got %s)\n' \
+    "$diagnostic_ssh_bytes" >&2
+  exit 1
+fi
 
 printf 'Cloud remote bootstrap failure contract passed.\n'

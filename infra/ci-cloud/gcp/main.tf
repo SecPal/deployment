@@ -126,6 +126,9 @@ resource "google_compute_instance" "conformance" {
     user-data = templatefile("${path.module}/cloud-init.tftpl", {
       ssh_public_key            = trimspace(var.ssh_public_key)
       runner_ipv4               = var.runner_ipv4
+      run_id                    = var.run_id
+      run_attempt               = var.run_attempt
+      diagnostic_ssh_installer  = indent(8, trimspace(file("${path.module}/../../../scripts/ci-cloud/install-diagnostic-ssh.sh")))
       host_setup_script         = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/configure-conformance-host.sh")))
       host_setup_failure_script = indent(6, trimspace(file("${path.module}/../../../scripts/ci-cloud/host-setup-failure.py")))
     })

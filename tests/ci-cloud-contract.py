@@ -131,15 +131,20 @@ class CloudCIContractTests(unittest.TestCase):
                     (ROOT / relative).read_text(encoding="utf-8"),
                 )
 
-    def test_cloud_init_uses_shellchecked_host_setup(self) -> None:
+    def test_cloud_init_uses_shellchecked_trusted_setup(self) -> None:
         cloud_init = (
             ROOT / "infra/ci-cloud/digitalocean/cloud-init.tftpl"
         ).read_text(encoding="utf-8")
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
+        diagnostic_installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", host_setup)
-        self.assertNotIn("[bash, -c", cloud_init)
+        self.assertIn("set -euo pipefail", diagnostic_installer)
+        self.assertEqual(1, cloud_init.count("- /bin/bash\n    - -c\n"))
+        self.assertIn("${diagnostic_ssh_installer}", cloud_init)
         self.assertIn("/run/secpal-ci-evidence/apparmor-status", host_setup)
         self.assertIn(
             "systemctl disable --now podman.socket podman.service", host_setup
@@ -228,7 +233,7 @@ class CloudCIContractTests(unittest.TestCase):
             self.assertIn("UseDNS no", template)
             self.assertIn("AllowUsers secpal-ci", template)
             self.assertIn(
-                "- [systemctl, mask, --runtime, --now, ssh.service, ssh.socket]",
+                "${diagnostic_ssh_installer}",
                 template,
             )
             self.assertIn(
@@ -250,7 +255,7 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("activate_operator_ssh || true", host_setup)
         self.assertIn("validate_effective_sshd_config || return 1", host_setup)
         self.assertIn(
-            "systemctl unmask --runtime ssh.service ssh.socket",
+            "systemctl unmask ssh.service ssh.socket",
             host_setup,
         )
         self.assertIn("sshd -T -C", host_setup)
@@ -306,10 +311,10 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertLess(host_setup.index(expose_file), host_setup.index(expose_directory))
         self.assertLess(
             host_setup.index(expose_directory),
-            host_setup.index("systemctl unmask --runtime ssh.service ssh.socket"),
+            host_setup.index("systemctl unmask ssh.service ssh.socket"),
         )
         self.assertLess(
-            host_setup.index("systemctl unmask --runtime ssh.service ssh.socket"),
+            host_setup.index("systemctl unmask ssh.service ssh.socket"),
             host_setup.index("systemctl restart ssh.service"),
         )
         self.assertNotIn('chmod 0755 "$authorized_keys_tmp_dir"', host_setup)
@@ -333,6 +338,57 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("host_key_deadline=$((SECONDS + 15 * 60))", remote)
         self.assertIn("while ((SECONDS < host_key_deadline)); do", remote)
 
+    def test_pre_runcmd_failure_keeps_restricted_diagnostic_ssh(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        remote = (
+            ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
+        ).read_text(encoding="utf-8")
+
+        for provider in ("digitalocean", "gcp"):
+            template = (
+                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
+            ).read_text(encoding="utf-8")
+            main = (ROOT / f"infra/ci-cloud/{provider}/main.tf").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("${diagnostic_ssh_installer}", template)
+            self.assertIn('"${ssh_public_key}"', template)
+            self.assertIn('"${runner_ipv4}"', template)
+            self.assertIn('"${run_id}"', template)
+            self.assertIn('"${run_attempt}"', template)
+            self.assertIn(
+                'file("${path.module}/../../../scripts/ci-cloud/'
+                'install-diagnostic-ssh.sh")',
+                main,
+            )
+
+        for required in (
+            "systemctl mask --now ssh.service ssh.socket",
+            "secpal-ci-diagnostic-sshd",
+            "--on-active=10m",
+            "ForceCommand /run/secpal-ci-cloud-init-diagnostic",
+            "DisableForwarding yes",
+            "PermitRootLogin no",
+            "UsePAM yes",
+            "AllowUsers secpal-ci-diagnostic@",
+            "useradd --system",
+            "SECPAL_CI_DIAGNOSTIC_SSH",
+            "exit 125",
+            '"$key_comment" != "secpal-ci-$3-$4"',
+        ):
+            self.assertIn(required, installer)
+        self.assertNotIn("eval ", installer)
+        self.assertNotIn("source ", installer)
+        self.assertIn("secpal-ci-diagnostic-sshd.timer", host_setup)
+        self.assertIn("secpal-ci-diagnostic-sshd.service", host_setup)
+        self.assertIn("SECPAL_CI_DIAGNOSTIC_SSH", remote)
+        self.assertIn("diagnostic_ssh_seen", remote)
+
     def test_static_contract_rejects_short_masked_ssh_wait(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/run-remote-conformance.sh",
@@ -349,10 +405,44 @@ class CloudCIContractTests(unittest.TestCase):
 
     def test_static_contract_rejects_unmasked_bootstrap_ssh(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
-            "bootcmd:\n"
-            "  - [systemctl, mask, --runtime, --now, ssh.service, ssh.socket]\n",
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "systemctl mask --now ssh.service ssh.socket",
+            "true",
+        )
+
+    def test_static_contract_rejects_missing_diagnostic_ssh_timer(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "  --on-active=10m \\\n",
             "",
+        )
+
+    def test_static_contract_rejects_unrestricted_diagnostic_ssh(self) -> None:
+        for old, new in (
+            (
+                "ForceCommand /run/secpal-ci-cloud-init-diagnostic",
+                "ForceCommand internal-sftp",
+            ),
+            ("PermitRootLogin no", "PermitRootLogin yes"),
+            ("DisableForwarding yes", "DisableForwarding no"),
+            ("UsePAM yes", "UsePAM no"),
+            (
+                "AllowUsers secpal-ci-diagnostic@$runner_ipv4",
+                "AllowUsers secpal-ci-diagnostic",
+            ),
+        ):
+            with self.subTest(old=old):
+                self.assert_mutation_rejected(
+                    "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                    old,
+                    new,
+                )
+
+    def test_static_contract_rejects_ignored_diagnostic_ssh_marker(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-remote-conformance.sh",
+            "SECPAL_CI_DIAGNOSTIC_SSH",
+            "UNRECOGNIZED_DIAGNOSTIC_SSH",
         )
 
     def test_static_contract_rejects_global_operator_key_path(self) -> None:

@@ -3,7 +3,15 @@
 # SPDX-License-Identifier: CC0-1.0
 
 bootcmd:
-  - [systemctl, mask, --runtime, --now, ssh.service, ssh.socket]
+  - - /bin/bash
+    - -c
+    - |
+        ${diagnostic_ssh_installer}
+    - secpal-ci-install-diagnostic-ssh
+    - "${ssh_public_key}"
+    - "${runner_ipv4}"
+    - "${run_id}"
+    - "${run_attempt}"
 
 package_update: true
 package_upgrade: false

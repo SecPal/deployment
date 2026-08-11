@@ -68,6 +68,7 @@ required_files=(
   scripts/fetch-oci-attestation.py
   scripts/ci-cloud/collect-host-evidence.py
   scripts/ci-cloud/configure-conformance-host.sh
+  scripts/ci-cloud/install-diagnostic-ssh.sh
   scripts/ci-cloud/digitalocean-janitor.py
   scripts/ci-cloud/gcp-janitor.py
   scripts/ci-cloud/host-setup-failure.py

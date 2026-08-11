@@ -120,6 +120,8 @@ ssh_options=(
 
 bootstrap_stage="cloud-init"
 operator_ssh_ready=false
+diagnostic_ssh_seen=false
+diagnostic_ssh_output=""
 for _ in {1..30}; do
   if timeout --signal=TERM --kill-after=5s 20s \
     ssh "${ssh_options[@]}" "secpal-ci@$address" true \
@@ -127,12 +129,30 @@ for _ in {1..30}; do
     operator_ssh_ready=true
     break
   fi
+  set +e
+  diagnostic_probe_output="$(
+    timeout --signal=TERM --kill-after=5s 20s \
+      ssh "${ssh_options[@]}" "secpal-ci-diagnostic@$address" true 2>&1
+  )"
+  diagnostic_probe_status=$?
+  set -e
+  diagnostic_probe_first_line="${diagnostic_probe_output%%$'\n'*}"
+  if [[ "$diagnostic_probe_status" -eq 125 &&
+    "$diagnostic_probe_first_line" == SECPAL_CI_DIAGNOSTIC_SSH ]]; then
+    diagnostic_ssh_seen=true
+    diagnostic_ssh_output="${diagnostic_probe_output#*$'\n'}"
+  fi
   sleep 5
 done
 if [[ "$operator_ssh_ready" != true ]]; then
-  printf '%s%s\n' \
-    'ERROR: operator SSH access did not become ready; trusted host setup, ' \
-    'network reachability, or sshd may have failed.' >&2
+  if [[ "$diagnostic_ssh_seen" == true ]]; then
+    printf 'ERROR: cloud-init did not reach trusted host setup.\n' >&2
+    printf '%s\n' "$diagnostic_ssh_output" >&2
+  else
+    printf '%s%s\n' \
+      'ERROR: operator SSH access did not become ready; trusted host setup, ' \
+      'network reachability, or sshd may have failed.' >&2
+  fi
   exit 1
 fi
 

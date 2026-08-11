@@ -11,6 +11,12 @@ failure_writer=/usr/local/sbin/secpal-ci-host-setup-failure
 staged_ssh_public_key=/run/secpal-ci-authorized-key
 active_ssh_authorized_keys_dir=/run/secpal-ci-authorized-keys
 active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"
+diagnostic_ssh_timer=secpal-ci-diagnostic-sshd.timer
+diagnostic_ssh_service=secpal-ci-diagnostic-sshd.service
+diagnostic_ssh_key=/run/secpal-ci-diagnostic-authorized-key
+diagnostic_ssh_command=/run/secpal-ci-cloud-init-diagnostic
+diagnostic_ssh_config=/run/secpal-ci-diagnostic-sshd.conf
+diagnostic_ssh_user=secpal-ci-diagnostic
 runner_ipv4="${1:-}"
 setup_stage="initialize"
 snapshot_tmp=""
@@ -120,6 +126,17 @@ validate_effective_sshd_config() {
   done
 }
 
+stop_diagnostic_ssh() {
+  systemctl stop "$diagnostic_ssh_timer" 2>/dev/null || true
+  systemctl stop "$diagnostic_ssh_service" 2>/dev/null || true
+  ! systemctl is-active --quiet "$diagnostic_ssh_service"
+}
+
+restore_diagnostic_ssh() {
+  systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || true
+  systemctl start "$diagnostic_ssh_service" >/dev/null 2>&1 || true
+}
+
 activate_operator_ssh() {
   local authorized_keys_tmp_dir directory_metadata installed_metadata
 
@@ -190,20 +207,28 @@ activate_operator_ssh() {
     printf 'ERROR: published operator SSH key has unsafe metadata.\n' >&2
     return 1
   fi
-  if ! systemctl unmask --runtime ssh.service ssh.socket ||
+  if ! stop_diagnostic_ssh; then
+    rm -f -- "$active_ssh_authorized_keys"
+    rmdir -- "$active_ssh_authorized_keys_dir" || true
+    printf 'ERROR: unable to stop restricted diagnostic SSH.\n' >&2
+    return 1
+  fi
+  if ! systemctl unmask ssh.service ssh.socket ||
     ! systemctl restart ssh.service; then
     rm -f -- "$active_ssh_authorized_keys"
     rmdir -- "$active_ssh_authorized_keys_dir" || true
+    restore_diagnostic_ssh
     printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
     return 1
   fi
-  if ! rm -f -- "$staged_ssh_public_key"; then
-    rm -f -- "$active_ssh_authorized_keys"
-    rmdir -- "$active_ssh_authorized_keys_dir" || true
-    printf 'ERROR: unable to remove the staged operator SSH key.\n' >&2
+  ssh_key_activated=true
+  if ! rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_key" \
+    "$diagnostic_ssh_command" "$diagnostic_ssh_config" ||
+    ! userdel "$diagnostic_ssh_user" ||
+    ! groupdel "$diagnostic_ssh_user"; then
+    printf 'ERROR: unable to remove staged SSH material.\n' >&2
     return 1
   fi
-  ssh_key_activated=true
 }
 
 record_setup_failure() {
