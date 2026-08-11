@@ -130,6 +130,7 @@ def main() -> int:
     parser.add_argument("started_at")
     parser.add_argument("failure_stage", choices=FAILURE_STAGES)
     parser.add_argument("exit_status", type=int)
+    parser.add_argument("host_setup_failure_json")
     arguments = parser.parse_args()
     try:
         validate_output_dir(arguments.output_dir)
@@ -138,6 +139,10 @@ def main() -> int:
         if started_at > ended_at:
             fail("orchestration start time is after the end time")
         ended_at_text = ended_at.isoformat().replace("+00:00", "Z")
+        try:
+            host_setup_failure = json.loads(arguments.host_setup_failure_json)
+        except json.JSONDecodeError:
+            fail("host-setup failure diagnostic is invalid JSON")
         document = {
             "schema_version": 1,
             "workflow": {
@@ -159,26 +164,36 @@ def main() -> int:
                 "ended_at": ended_at_text,
                 "failure_stage": arguments.failure_stage,
                 "orchestration_exit_status": arguments.exit_status,
+                "host_setup_failure": host_setup_failure,
                 "result": "failed",
                 "failed_admission_invariants": ["CI_CLOUD_REMOTE_ORCHESTRATION"],
             },
         }
         validate_declared_schema(document)
-        summary = "\n".join(
+        summary_lines = [
+            "# Debian 13 cloud bootstrap failure",
+            "",
+            "- Result: `failed`",
+            f"- Target SHA: `{arguments.target_sha}`",
+            f"- Provider/profile: `{arguments.provider}/{arguments.profile}` in `{arguments.region}`",
+            f"- Started at: `{arguments.started_at}`",
+            f"- Ended at: `{ended_at_text}`",
+            f"- Failure stage: `{arguments.failure_stage}`",
+            f"- Orchestration exit status: `{arguments.exit_status}`",
+        ]
+        if isinstance(host_setup_failure, dict):
+            summary_lines.append(
+                "- Host setup failure: "
+                f"`{host_setup_failure.get('stage')}` "
+                f"(exit `{host_setup_failure.get('exit_status')}`)"
+            )
+        summary_lines.extend(
             (
-                "# Debian 13 cloud bootstrap failure",
-                "",
-                "- Result: `failed`",
-                f"- Target SHA: `{arguments.target_sha}`",
-                f"- Provider/profile: `{arguments.provider}/{arguments.profile}` in `{arguments.region}`",
-                f"- Started at: `{arguments.started_at}`",
-                f"- Ended at: `{ended_at_text}`",
-                f"- Failure stage: `{arguments.failure_stage}`",
-                f"- Orchestration exit status: `{arguments.exit_status}`",
                 "- Failed admission invariant: `CI_CLOUD_REMOTE_ORCHESTRATION`",
                 "",
             )
         )
+        summary = "\n".join(summary_lines)
         write_bundle(
             arguments.output_dir,
             {

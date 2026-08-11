@@ -45,6 +45,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
         image_id: str = "234194767",
         machine_type: str = "s-4vcpu-8gb-intel",
         stage: str = "cloud-init",
+        host_setup_failure: str = "null",
     ) -> subprocess.CompletedProcess[str]:
         arguments = [
             "python3",
@@ -62,6 +63,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             "2026-08-10T22:48:58Z",
             stage,
             "1",
+            host_setup_failure,
         ]
         return subprocess.run(arguments, check=False, capture_output=True, text=True)
 
@@ -87,12 +89,14 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
                     "ended_at",
                     "failure_stage",
                     "orchestration_exit_status",
+                    "host_setup_failure",
                     "result",
                     "failed_admission_invariants",
                 },
                 set(document["test"]),
             )
             self.assertEqual("failed", document["test"]["result"])
+            self.assertIsNone(document["test"]["host_setup_failure"])
             self.assertEqual(
                 "CI_CLOUD_REMOTE_ORCHESTRATION",
                 document["test"]["failed_admission_invariants"][0],
@@ -150,6 +154,51 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
                 machine_type="c4a-standard-4",
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_records_closed_host_setup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(
+                output_dir,
+                host_setup_failure='{"exit_status":7,"stage":"apparmor"}',
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            document = json.loads(
+                (output_dir / "bootstrap-failure.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                {"exit_status": 7, "stage": "apparmor"},
+                document["test"]["host_setup_failure"],
+            )
+            self.assertIn(
+                "Host setup failure: `apparmor` (exit `7`)",
+                (output_dir / "summary.md").read_text(encoding="utf-8"),
+            )
+
+    def test_rejects_unclosed_host_setup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(
+                output_dir,
+                host_setup_failure=(
+                    '{"exit_status":1,"secret":"forbidden","stage":"ssh"}'
+                ),
+            )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertEqual([], list(output_dir.iterdir()))
+
+    def test_rejects_host_setup_detail_outside_cloud_init_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(
+                output_dir,
+                stage="host-key",
+                host_setup_failure='{"exit_status":1,"stage":"initialize"}',
+            )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertEqual([], list(output_dir.iterdir()))
 
     def test_staging_failure_leaves_no_partial_evidence(self) -> None:
         writer = load_writer()

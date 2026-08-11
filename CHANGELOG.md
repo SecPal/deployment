@@ -21,6 +21,9 @@ SPDX-License-Identifier: CC0-1.0
 - Schema-validated, failure-atomically published bootstrap-failure evidence
   with orchestration timestamps and bounded cloud-init diagnostics when a
   disposable host fails before the full conformance collector can run.
+- Rendered cloud-init schema admission for both providers and a root-owned,
+  closed host-setup stage marker that diagnoses early failures without raw
+  logs or credentials.
 
 - A provider-neutral production host and inventory contract.
 - A versioned, non-secret production inventory schema, a closed synthetic

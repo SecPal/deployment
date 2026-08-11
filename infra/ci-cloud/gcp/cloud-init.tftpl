@@ -27,7 +27,6 @@ packages:
 users:
   - name: secpal-ci
     gecos: SecPal disposable conformance operator
-    groups: []
     uid: 20000
     lock_passwd: true
     shell: /bin/bash
@@ -84,6 +83,11 @@ write_files:
     permissions: "0700"
     content: |
       ${host_setup_script}
+  - path: /usr/local/sbin/secpal-ci-host-setup-failure
+    owner: root:root
+    permissions: "0700"
+    content: |
+      ${host_setup_failure_script}
 
 runcmd:
   - [/usr/local/sbin/secpal-ci-configure-conformance-host]

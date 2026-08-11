@@ -6,8 +6,31 @@ set -euo pipefail
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+diagnostic_dir=/run/secpal-ci-evidence
+failure_writer=/usr/local/sbin/secpal-ci-host-setup-failure
+setup_stage="initialize"
+snapshot_tmp=""
+install -d -o root -g root -m 0755 "$diagnostic_dir"
+rm -f -- "$diagnostic_dir/host-setup-failure.json"
+
+record_setup_failure() {
+  local status=$?
+  trap - EXIT
+  set +e
+  [[ -z "$snapshot_tmp" ]] || rm -f -- "$snapshot_tmp"
+  if [[ "$status" -ne 0 ]]; then
+    "$failure_writer" write "$setup_stage" "$status" || true
+  fi
+  exit "$status"
+}
+
+trap record_setup_failure EXIT
 install -d -o root -g root -m 0755 /etc/containers/systemd/users/20000
 install -d -o secpal-ci -g secpal-ci -m 0700 /srv/secpal-ci
+if [[ "$(id -G secpal-ci)" != "$(id -g secpal-ci)" ]]; then
+  printf 'ERROR: disposable operator has unexpected supplementary groups.\n' >&2
+  exit 1
+fi
 
 normalize_subordinate_ids() {
   local database="$1"
@@ -88,20 +111,21 @@ normalize_subordinate_ids() {
   fi
 }
 
+setup_stage="subordinate-ids"
 normalize_subordinate_ids /etc/subuid --add-subuids --del-subuids UID passwd
 normalize_subordinate_ids /etc/subgid --add-subgids --del-subgids GID group
 
+setup_stage="service-policy"
 systemctl --global disable \
   podman.socket podman.service podman-auto-update.timer || true
 systemctl disable --now podman.socket podman.service || true
 loginctl enable-linger secpal-ci
-systemctl enable --now apparmor.service
 
+setup_stage="apparmor"
+systemctl enable --now apparmor.service
 apparmor_status_path=/run/secpal-ci-evidence/apparmor-status
 evidence_dir="${apparmor_status_path%/*}"
-install -d -o root -g root -m 0755 "$evidence_dir"
 snapshot_tmp="$(mktemp "$evidence_dir/.apparmor-status.XXXXXX")"
-trap 'rm -f -- "$snapshot_tmp"' EXIT
 loaded_profiles="$(aa-status --profiled)"
 enforcing_profiles="$(aa-status --enforced)"
 if [[ ! "$loaded_profiles" =~ ^[0-9]+$ ||
@@ -115,7 +139,9 @@ printf 'loaded_profiles=%s\nenforcing_profiles=%s\n' \
 install -o root -g root -m 0644 \
   "$snapshot_tmp" "$apparmor_status_path"
 rm -f -- "$snapshot_tmp"
-trap - EXIT
+snapshot_tmp=""
 
+setup_stage="ssh"
 sshd -t
 systemctl restart ssh.service
+trap - EXIT

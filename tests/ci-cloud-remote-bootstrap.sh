@@ -56,6 +56,11 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 printf 'ssh\n' >>"${SECPAL_TEST_SSH_LOG:?}"
+if [[ "${1:-}" == /usr/bin/python3 ]]; then
+  cat >/dev/null
+  printf '{"exit_status":7,"stage":"apparmor"}\n'
+  exit 0
+fi
 exec "$@"
 EOF
 
@@ -87,7 +92,7 @@ if [[ "$status" -ne 2 ]]; then
   printf 'FAIL: expected remote bootstrap status 2, got %s\n' "$status" >&2
   exit 1
 fi
-if [[ "$(wc -l <"$SSH_LOG")" -ne 1 ]]; then
+if [[ "$(wc -l <"$SSH_LOG")" -ne 2 ]]; then
   printf 'FAIL: target or collector SSH ran after failed cloud-init\n' >&2
   exit 1
 fi
@@ -100,6 +105,7 @@ jq -e '
   .workflow.target_sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and
   .test.failure_stage == "cloud-init" and
   .test.orchestration_exit_status == 2 and
+  .test.host_setup_failure == {"exit_status": 7, "stage": "apparmor"} and
   .test.result == "failed" and
   .test.failed_admission_invariants == ["CI_CLOUD_REMOTE_ORCHESTRATION"]
 ' "$EVIDENCE_DIR/bootstrap-failure.json" >/dev/null
@@ -111,5 +117,9 @@ if [[ "$diagnostic_bytes" -ne 8192 ]]; then
 fi
 grep -Fq 'Failure stage:' "$EVIDENCE_DIR/summary.md"
 grep -Fq 'cloud-init' "$EVIDENCE_DIR/summary.md"
+grep -Fq "Host setup failure: \`apparmor\` (exit \`7\`)" \
+  "$EVIDENCE_DIR/summary.md"
+grep -Fq 'Trusted host setup failure: {"exit_status":7,"stage":"apparmor"}' \
+  "$TEMP_DIR/output.log"
 
 printf 'Cloud remote bootstrap failure contract passed.\n'
