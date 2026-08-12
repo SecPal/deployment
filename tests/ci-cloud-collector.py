@@ -567,7 +567,48 @@ class CloudHostAdmissionTests(unittest.TestCase):
             facts = self.collector.kernel_package_integrity(package, kernel)
         self.assertFalse(facts["files_verified"])
 
-    def test_kernel_facts_names_installed_dpkg_fallback_explicitly(self) -> None:
+    def test_kernel_facts_preserve_unexpected_active_apt_suite(self) -> None:
+        kernel = "6.12.94+deb13-amd64"
+        package = f"linux-image-{kernel}"
+        integrity = {
+            "status": "install ok installed",
+            "maintainer": "Debian Kernel Team <debian-kernel@lists.debian.org>",
+            "database_files_safe": True,
+            "files_verified": True,
+        }
+        with (
+            mock.patch.object(Path, "is_file", return_value=True),
+            mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(0, f"{package}: /boot/vmlinuz-{kernel}"),
+            ),
+            mock.patch.object(
+                self.collector,
+                "package_metadata",
+                return_value={
+                    "version": "6.12.94-1",
+                    "architecture": "amd64",
+                    "origin": "Debian",
+                    "suite": "trixie-updates",
+                },
+            ),
+            mock.patch.object(
+                self.collector,
+                "kernel_package_integrity",
+                return_value=integrity,
+            ),
+        ):
+            facts = self.collector.kernel_package_facts(
+                kernel,
+                "amd64",
+                {"trixie", "trixie-security", "trixie-updates"},
+            )
+        self.assertEqual(facts["provenance_basis"], "active-apt-policy")
+        self.assertEqual(facts["origin"], "Debian")
+        self.assertEqual(facts["suite"], "trixie-updates")
+
+    def test_kernel_facts_report_unavailable_active_apt_provenance(self) -> None:
         kernel = "6.12.94+deb13-amd64"
         package = f"linux-image-{kernel}"
         integrity = {
@@ -590,7 +631,7 @@ class CloudHostAdmissionTests(unittest.TestCase):
                     "version": "6.12.94-1",
                     "architecture": "amd64",
                     "origin": "",
-                    "suite": "trixie-security",
+                    "suite": "",
                 },
             ),
             mock.patch.object(
@@ -604,7 +645,7 @@ class CloudHostAdmissionTests(unittest.TestCase):
                 "amd64",
                 {"trixie", "trixie-security", "trixie-updates"},
             )
-        self.assertEqual(facts["provenance_basis"], "installed-dpkg")
+        self.assertEqual(facts["provenance_basis"], "unavailable")
         self.assertEqual(facts["origin"], "")
         self.assertEqual(facts["suite"], "")
 
@@ -806,28 +847,27 @@ location = "backup.example.invalid"
     def test_rejects_unowned_kernel(self) -> None:
         self.assert_failure(("host", "kernel_package", "owned"), False, "D1_KERNEL_PACKAGE_PROVENANCE")
 
-    def test_accepts_verified_installed_kernel_absent_from_current_apt_index(self) -> None:
+    def test_rejects_kernel_absent_from_authenticated_apt_indexes(self) -> None:
         facts = valid_facts()
         facts["host"]["kernel_package"].update(
             {
                 "origin": "",
                 "suite": "",
-                "provenance_basis": "installed-dpkg",
+                "provenance_basis": "unavailable",
             }
         )
-        self.assertNotIn(
+        self.assertIn(
             "D1_KERNEL_PACKAGE_PROVENANCE",
             self.collector.admission_failures(facts, "intel"),
         )
 
-    def test_rejects_unverified_installed_kernel_fallback(self) -> None:
+    def test_rejects_locally_verified_kernel_without_apt_provenance(self) -> None:
         facts = valid_facts()
         facts["host"]["kernel_package"].update(
             {
                 "origin": "",
                 "suite": "",
-                "files_verified": False,
-                "provenance_basis": "installed-dpkg",
+                "provenance_basis": "unavailable",
             }
         )
         self.assertIn(
@@ -1182,11 +1222,28 @@ Unattended-Upgrade::Automatic-Reboot "false";
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["unix_listener"])
 
+    def test_detects_podman_among_multiple_socket_owners(self) -> None:
+        listener = (
+            'u_str LISTEN 0 4096 /tmp/fixture.sock '
+            'users:(("helper",pid=41,fd=4),("podman",pid=42,fd=3))'
+        )
+        self.assertTrue(self.collector.podman_process_listener(listener))
+
     def test_netavark_proxy_socket_is_not_a_podman_api_listener(self) -> None:
         listener = (
             "u_str LISTEN 0 4096 /run/podman/nv-proxy.sock 531 * 0"
         )
         self.assertFalse(self.collector.podman_unix_api_listener(listener))
+
+    def test_detects_nonstandard_rootful_podman_api_socket(self) -> None:
+        listener = "u_str LISTEN 0 4096 /run/podman/custom.sock 531 * 0"
+        self.assertTrue(self.collector.podman_unix_api_listener(listener))
+
+    def test_detects_nonstandard_rootless_podman_api_socket(self) -> None:
+        listener = (
+            "u_str LISTEN 0 4096 /run/user/20000/podman/custom.sock 531 * 0"
+        )
+        self.assertTrue(self.collector.podman_unix_api_listener(listener))
 
     def test_netavark_proxy_socket_does_not_fail_api_facts(self) -> None:
         def bounded_command_result(

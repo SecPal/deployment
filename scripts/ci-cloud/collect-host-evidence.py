@@ -668,13 +668,11 @@ def kernel_package_facts(kernel: str, architecture: str, verified_suites: set[st
         "version": "", "architecture": "", "origin": "", "suite": ""
     }
     integrity = kernel_package_integrity(package, kernel)
-    active_apt_policy = bool(
-        metadata["origin"] == "Debian"
-        and metadata["suite"] in {"trixie", "trixie-security"}
+    provenance_basis = (
+        "active-apt-policy"
+        if metadata["origin"] or metadata["suite"]
+        else "unavailable"
     )
-    if not active_apt_policy:
-        metadata.update({"origin": "", "suite": ""})
-    provenance_basis = "active-apt-policy" if active_apt_policy else "installed-dpkg"
     return {
         "name": package,
         **metadata,
@@ -871,7 +869,7 @@ def is_podman_service_command(arguments: list[str]) -> bool:
 
 def podman_process_listener(output_text: str) -> bool:
     return re.search(
-        r'users:\(\("podman",pid=[0-9]+,fd=[0-9]+\)\)',
+        r'users:\([^\n]*\("podman",pid=[0-9]+,fd=[0-9]+\)',
         output_text,
     ) is not None
 
@@ -879,15 +877,15 @@ def podman_process_listener(output_text: str) -> bool:
 def podman_unix_api_listener(output_text: str) -> bool:
     if podman_process_listener(output_text):
         return True
-    return any(
-        re.search(
-            r"(?:^|\s)(?:/run/podman/podman\.sock|"
-            r"/run/user/[0-9]{1,10}/podman/podman\.sock)(?:\s|$)",
+    for line in output_text.splitlines():
+        for match in re.finditer(
+            r"(?:^|\s)(@?(?:/run/podman/[^\s]+|"
+            r"/run/user/[0-9]{1,10}/podman/[^\s]+))(?=\s|$)",
             line,
-        )
-        is not None
-        for line in output_text.splitlines()
-    )
+        ):
+            if match.group(1) != "/run/podman/nv-proxy.sock":
+                return True
+    return False
 
 
 def podman_service_process_facts() -> tuple[bool, bool]:
@@ -1215,11 +1213,6 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         and kernel_package["origin"] == "Debian"
         and kernel_package["suite"] in {"trixie", "trixie-security"}
     )
-    installed_dpkg_provenance = bool(
-        kernel_package["provenance_basis"] == "installed-dpkg"
-        and kernel_package["origin"] == ""
-        and kernel_package["suite"] == ""
-    )
     reject(
         not kernel_package["owned"]
         or kernel_package["name"] != f"linux-image-{kernel_release}"
@@ -1230,7 +1223,7 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         != "Debian Kernel Team <debian-kernel@lists.debian.org>"
         or kernel_package["database_files_safe"] is not True
         or kernel_package["files_verified"] is not True
-        or not (apt_policy_provenance or installed_dpkg_provenance),
+        or not apt_policy_provenance,
         "D1_KERNEL_PACKAGE_PROVENANCE",
     )
     reject(set(apt["configured_suites"]) != EXPECTED_SUITES, "D1_APT_CODENAME_SUITES")

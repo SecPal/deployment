@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -376,7 +375,24 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "admission failures"):
             self.validator.validate_document(document)
 
-    def test_summary_names_installed_dpkg_kernel_provenance(self) -> None:
+    def test_unavailable_kernel_provenance_fails_admission(self) -> None:
+        document = valid_document()
+        document["host"]["kernel_package"].update(
+            {
+                "origin": "",
+                "suite": "",
+                "provenance_basis": "unavailable",
+            }
+        )
+        document["test"].update(
+            {
+                "result": "failed",
+                "failed_admission_invariants": ["D1_KERNEL_PACKAGE_PROVENANCE"],
+            }
+        )
+        self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_installed_dpkg_kernel_provenance_is_rejected(self) -> None:
         document = valid_document()
         document["host"]["kernel_package"].update(
             {
@@ -385,12 +401,14 @@ class EvidenceContractTests(unittest.TestCase):
                 "provenance_basis": "installed-dpkg",
             }
         )
-        with tempfile.TemporaryDirectory() as directory:
-            summary_path = Path(directory, "summary.md")
-            self.validator.write_summary(document, summary_path)
-            summary = summary_path.read_text(encoding="utf-8")
-        self.assertIn("via `installed-dpkg`", summary)
-        self.assertIn("from `root-owned dpkg database`", summary)
+        document["test"].update(
+            {
+                "result": "failed",
+                "failed_admission_invariants": ["D1_KERNEL_PACKAGE_PROVENANCE"],
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "declared schema"):
+            self.validator.validate_document(document)
 
     def test_declared_schema_rejects_unavailable_memory_evidence(self) -> None:
         document = valid_document()

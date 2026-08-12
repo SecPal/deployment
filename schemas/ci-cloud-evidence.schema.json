@@ -300,7 +300,7 @@
             "database_files_safe": { "type": "boolean" },
             "files_verified": { "type": "boolean" },
             "provenance_basis": {
-              "enum": ["active-apt-policy", "installed-dpkg"]
+              "enum": ["active-apt-policy", "unavailable"]
             }
           }
         },

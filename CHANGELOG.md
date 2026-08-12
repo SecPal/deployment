@@ -49,9 +49,9 @@ SPDX-License-Identifier: CC0-1.0
   cleanup now preserves and runs under APT's own lock, unexpected release
   metadata fails closed, truncated listener scans cannot prove API absence, and
   the intentionally absent legacy APT source file no longer aborts collection.
-  Kernel packages rotated out of current mirror indexes retain explicit,
-  integrity-checked dpkg provenance, and Netavark's network-proxy socket is no
-  longer misclassified as the Podman remote API.
+  Kernel packages rotated out of current mirror indexes now fail closed instead
+  of treating local dpkg state as proof of Debian origin, and only Netavark's
+  exact network-proxy socket is excluded from Podman API listener detection.
 - Kept guest-visible memory as exact cloud evidence without enforcing the
   previous unmeasured universal 8 GiB D.1 floor; inventories continue to carry
   an explicit positive memory requirement until workload evidence establishes

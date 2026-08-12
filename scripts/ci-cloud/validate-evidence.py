@@ -410,7 +410,7 @@ def write_summary(document: dict[str, object], path: Path) -> None:
     kernel_source = (
         f"{kernel_package['origin']}/{kernel_package['suite']}"
         if kernel_package["provenance_basis"] == "active-apt-policy"
-        else "root-owned dpkg database"
+        else "unavailable from authenticated APT policy"
     )
     failures = test["failed_admission_invariants"]
     assert isinstance(failures, list)
