@@ -1165,6 +1165,7 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         "PROVIDER_CPU_PROFILE_AXION",
     )
     reject(platform["logical_cpu"] < 4, "D1_MINIMUM_LOGICAL_CPU")
+    reject(platform["memory_bytes"] < 1, "D1_MEMORY_EVIDENCE")
     reject(platform["root_filesystem_bytes"] < 100 * 1024**3, "D1_MINIMUM_STORAGE_100_GIB")
     return failures
 

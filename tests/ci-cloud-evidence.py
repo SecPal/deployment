@@ -363,6 +363,19 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "declared schema"):
             self.validator.validate_document(document)
 
+    def test_declared_schema_rejects_unavailable_memory_evidence(self) -> None:
+        document = valid_document()
+        document["platform"]["memory_bytes"] = 0
+        schema = json.loads(
+            (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(schema).validate(document)
+        with self.assertRaises(ValueError):
+            self.validator.validate_document(document)
+
     def test_rejects_digitalocean_evidence_with_gcp_image_id(self) -> None:
         document = valid_document()
         document["test"]["provider_image"]["id"] = (

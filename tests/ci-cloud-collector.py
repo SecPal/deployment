@@ -491,6 +491,14 @@ location = "backup.example.invalid"
             self.collector.admission_failures(facts, "intel"),
         )
 
+    def test_rejects_unavailable_guest_memory_evidence(self) -> None:
+        facts = valid_facts()
+        facts["platform"]["memory_bytes"] = 0
+        self.assertIn(
+            "D1_MEMORY_EVIDENCE",
+            self.collector.admission_failures(facts, "intel"),
+        )
+
     def test_rejects_missing_required_tool(self) -> None:
         self.assert_failure(("host", "required_tools", "missing"), ["gh"], "D1_REQUIRED_TOOLS")
 
