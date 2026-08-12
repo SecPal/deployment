@@ -301,11 +301,18 @@ documented first-boot shell-script interface, not cloud-config module ordering
 or a runner-installed schema version. The key comment is bound to the exact
 workflow run ID and attempt. The payload validates the run-bound key
 and runner IPv4, generates the image's missing Ed25519 host key if necessary,
-fully validates a separate diagnostic `sshd`, and arms its
-ten-minute crash-recovery timer using explicit runtime-scoped systemd service
-and timer units that are validated before systemd loads them. It then masks the
+fully validates a separate diagnostic `sshd`, and installs its ten-minute
+crash-recovery timer plus an independent recovery service using explicit
+bootstrap-only systemd units that are validated before systemd loads them. The
+installer first publishes a primary-SSH boot gate and then enables the
+diagnostic service across the single authenticated kernel reboot. A root-owned,
+atomically published selector chooses diagnostic SSH; the diagnostic unit
+requires that selector, while the primary unit requires its absence. Its unit
+orders itself after network readiness and before
+the trusted continuation, and recreates the required `/run/sshd` and
+`/run/secpal-ci-evidence` directories on every boot. It then masks the
 primary service and socket and immediately starts that restricted listener
-while the timer remains armed. The generated unit uses OpenSSH's systemd
+after selecting it. The generated unit uses OpenSSH's systemd
 readiness notification, and every activation restarts the unit so `systemctl`
 does not return until the newly loaded daemon has bound its listener. Only
 after that readiness signal, an active-service check, and verification that the
@@ -318,19 +325,23 @@ root-owned inputs and attempts to start the restricted daemon immediately. It
 never deletes the only diagnostic material merely because initial preparation
 was incomplete. If initial validation fails before masking, the provider
 listener remains available only under its already restrictive cloud firewall;
-if the process is interrupted after masking but before the immediate start,
-the armed timer supplies the same restricted listener after ten minutes. If
+if the process is interrupted after selector publication, that same selector
+makes a reboot start only the restricted listener; the installer EXIT handler
+also retries its immediate activation. If
 even the bounded recovery cannot construct a valid daemon, the transition
 fails rather than opening an unvalidated fallback. The installer creates a
-password-disabled `secpal-ci-diagnostic` account with a root-owned runtime home that is
+password-disabled `secpal-ci-diagnostic` account with a root-owned
+bootstrap-only home that is
 independent of later operator-user creation. The daemon accepts only that
 account from the runner IPv4 with the ephemeral Ed25519 key, denies root, passwords,
 forwarding, TTYs, user startup files, revoked or alternate key/principal
 sources, and every command except a fixed reporter that emits one reserved
 marker and, if available, one schema-closed host-setup stage and exit status.
-Its public key remains root-owned and read-only mode `0644`,
-while its configuration remains root-only under `/run`; temporary key,
-configuration, and unit files remain mode `0600` until atomic publication. It
+Its public key remains root-owned and read-only mode `0644` under
+`/var/lib/secpal-ci-diagnostic`, while its configuration remains root-only
+under `/etc/ssh`, its fixed reporter is installed under `/usr/local/sbin`, and
+its units remain under `/etc/systemd/system`; temporary key, configuration,
+command, and unit files remain private until atomic publication. It
 verifies that every published diagnostic artifact is a root-owned regular file
 with its exact intended mode before systemd can load or start the daemon. It
 neither exposes a shell nor can execute the selected target revision. The
@@ -354,10 +365,16 @@ automatic production reboots; unattended upgrades remain configured with
 automatic reboot disabled.
 
 On the next boot, the trusted continuation validates the state type,
-ownership, mode, size, field count, and closed formats before using it. It
+ownership, mode, size, field count, and closed formats before using it. The
+restricted diagnostic listener is an explicit ordering dependency, and the
+continuation validates or creates its root-owned evidence directory and arms
+the closed failure writer before it reads any persisted state. A malformed or
+missing transition state can therefore report `kernel-reboot` rather than
+degrading to an undifferentiated SSH timeout. It
 immediately disables later automatic invocations, then reconstructs the
-restricted diagnostic SSH listener from the persisted public
-context, proves that the boot ID changed, and requires `uname -r` to equal the
+restricted diagnostic inputs from the persisted public context and restarts
+the already reboot-enabled restricted listener, proves that the boot ID
+changed, and requires `uname -r` to equal the
 previously authenticated `/vmlinuz` release exactly. The continuation contains
 no reboot command, so a mismatch cannot form a reboot loop. Only after those
 checks does it recreate the root-only staged operator key and invoke trusted
@@ -405,19 +422,32 @@ could silently exclude the operator. A provider-image `Match Address`, `Match
 Host`, or `Match LocalAddress` rule, alternate public-key source, incompatible
 algorithm list, or extra access gate therefore fails admission. Only after
 those checks and key publication does host setup re-arm recovery and stop the
-diagnostic daemon, unmask the primary units, explicitly disable socket activation, enable
-the main SSH service, and atomically publish a root-owned mode `0400` completion
-marker. Before stopping the diagnostic daemon, it re-arms the recovery timer;
-the timer remains active until the main service is verified active and socket
-activation is verified inactive. Thus an abrupt interruption during the
-handoff restores the restricted listener without relying on an EXIT handler.
-That marker is the rollback-safe setup commit: normal operator SSH is started
-only after it exists. If main SSH activation fails,
+diagnostic daemon, unmask the primary units, explicitly disable socket activation,
+and enable the main SSH service. While the diagnostic selector still exists,
+the primary boot gate prevents premature activation. Host setup then atomically
+removes the selector, restarts the main service, verifies it active with socket
+activation inactive, and only then publishes a root-owned mode `0400`
+completion marker. Before stopping the diagnostic daemon, it re-arms the
+recovery timer; the timer targets a separate recovery unit that recreates the
+selector, masks primary SSH, and restores the restricted listener whenever the
+completion marker is still absent. The initial diagnostic transition, operator
+handoff, and recovery command serialize their state changes with the same
+root-owned mode `0600` file lock under `/run`. The operator handoff holds this
+kernel-managed lock through primary-listener verification and atomic marker
+publication. A recovery process whose timer expires concurrently waits for the
+lock and rechecks the marker only after acquiring it. Process termination closes
+the file descriptor and releases the lock automatically, so recovery remains
+available without a stale userspace lock. Thus an abrupt interruption during
+the handoff retains deterministic recovery without relying on an EXIT handler,
+even after the selector has moved to operator mode. The marker is the rollback-safe
+setup commit and records an already verified operator listener. If main SSH
+activation or marker publication fails,
 the published operator key and marker are revoked, the main service is masked
 again, and the restricted diagnostic daemon is restored. After successful
 activation, setup is complete; stopping the still-armed recovery timer and
 removing the stopped diagnostic identity,
-runtime units, key, command, and configuration is best-effort retirement and
+bootstrap-only units, key, command, configuration, home, and state directory
+is best-effort retirement and
 cannot roll a committed host back into a failed state. Any retirement residue
 remains root-owned, has no main-SSH authorization, and has no active diagnostic
 listener. This prevents the runner from
@@ -441,11 +471,21 @@ The runner treats failed native bootstrap as terminal and never
 checks out or executes target code in that case.
 
 The persistent mask also survives an unexpected reboot before the authenticated
-kernel-transition state is fully published. Because the diagnostic timer is
-intentionally transient, such a reboot fails closed with no SSH listener;
-exact workflow cleanup or the TTL janitor then destroys the inaccessible
-fixture. Only the one completely published state described above may
-reconstruct restricted diagnostics and continue setup. After successful setup,
+kernel-transition state is fully published. Once the restricted diagnostic
+service and its closed inputs have been atomically published and enabled, that
+service survives such a reboot while still exposing only the fixed reporter to
+the run-bound key and runner IPv4. The service retains its evidence runtime
+directory across the controlled diagnostic-to-operator handoff, so a rollback
+can publish its closed failure marker before restoring the restricted listener.
+Before diagnostic selection, the provider listener remains the only boot
+choice. After selection and until a verified operator handoff, the restricted
+diagnostic listener is the only boot choice. Removing the selector changes the
+boot choice atomically to the already prepared operator service, while the
+independent recovery unit can reverse that choice until the completion marker
+is published. Successful retirement first stops the timer and waits for any
+running recovery unit before removing its command and unit. Only these closed
+and serialized transition states may continue trusted setup.
+After successful setup,
 the persistent operator key and completion marker survive reboot. If the provider invokes the
 native bootstrap again, its idempotent entry validates the marker,
 state-directory ownership and modes, exact

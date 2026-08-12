@@ -13,15 +13,23 @@ active_ssh_root=/var/lib/secpal-ci
 active_ssh_authorized_keys_dir="$active_ssh_root/authorized-keys"
 active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"
 completion_marker="$active_ssh_root/host-setup-complete"
+operator_ssh_gate=/etc/systemd/system/ssh.service.d/secpal-ci-ready.conf
 diagnostic_ssh_timer=secpal-ci-diagnostic-sshd.timer
 diagnostic_ssh_service=secpal-ci-diagnostic-sshd.service
-diagnostic_ssh_key=/run/secpal-ci-diagnostic-authorized-key
-diagnostic_ssh_command=/run/secpal-ci-bootstrap-diagnostic
-diagnostic_ssh_config=/run/secpal-ci-diagnostic-sshd.conf
+diagnostic_ssh_recovery_service=secpal-ci-diagnostic-ssh-recover.service
+diagnostic_root=/var/lib/secpal-ci-diagnostic
+diagnostic_ssh_selector="$diagnostic_root/selected"
+diagnostic_ssh_key="$diagnostic_root/authorized-key"
+diagnostic_ssh_command=/usr/local/sbin/secpal-ci-bootstrap-diagnostic
+diagnostic_ssh_recovery_command=/usr/local/sbin/secpal-ci-recover-diagnostic-ssh
+diagnostic_ssh_config=/etc/ssh/secpal-ci-diagnostic-sshd.conf
 diagnostic_ssh_user=secpal-ci-diagnostic
-diagnostic_ssh_home=/run/secpal-ci-diagnostic-home
-diagnostic_ssh_service_unit=/run/systemd/system/secpal-ci-diagnostic-sshd.service
-diagnostic_ssh_timer_unit=/run/systemd/system/secpal-ci-diagnostic-sshd.timer
+diagnostic_ssh_home="$diagnostic_root/home"
+diagnostic_ssh_service_unit=/etc/systemd/system/secpal-ci-diagnostic-sshd.service
+diagnostic_ssh_timer_unit=/etc/systemd/system/secpal-ci-diagnostic-sshd.timer
+diagnostic_ssh_recovery_service_unit=/etc/systemd/system/secpal-ci-diagnostic-ssh-recover.service
+ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock
+ssh_handoff_lock_fd=""
 runner_ipv4="${1:-}"
 setup_stage="initialize"
 snapshot_tmp=""
@@ -37,6 +45,44 @@ is_ipv4() {
     [[ "$octet" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
     ((10#$octet <= 255)) || return 1
   done
+}
+
+acquire_ssh_handoff_lock() {
+  local fd_identity lock_identity
+
+  [[ -z "$ssh_handoff_lock_fd" ]] || return 1
+  command -v flock >/dev/null || return 1
+  [[ -d /run && ! -L /run && "$(stat -c '%u:%g:%a' -- /run)" == 0:0:755 ]] ||
+    return 1
+  if [[ ! -e "$ssh_handoff_lock" && ! -L "$ssh_handoff_lock" ]]; then
+    (umask 077; set -o noclobber; : >"$ssh_handoff_lock") 2>/dev/null || true
+  fi
+  [[ -f "$ssh_handoff_lock" && ! -L "$ssh_handoff_lock" ]] || return 1
+  lock_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "$ssh_handoff_lock"
+  )" || return 1
+  [[ "$lock_identity" == *:0:0:600 ]] || return 1
+  exec {ssh_handoff_lock_fd}<>"$ssh_handoff_lock" || return 1
+  if ! flock -x "$ssh_handoff_lock_fd"; then
+    exec {ssh_handoff_lock_fd}>&-
+    ssh_handoff_lock_fd=""
+    return 1
+  fi
+  if ! lock_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "$ssh_handoff_lock"
+  )" || ! fd_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "/proc/self/fd/$ssh_handoff_lock_fd"
+  )" || [[ "$lock_identity" != "$fd_identity" ||
+    "$lock_identity" != *:0:0:600 ]]; then
+    release_ssh_handoff_lock
+    return 1
+  fi
+}
+
+release_ssh_handoff_lock() {
+  [[ -n "$ssh_handoff_lock_fd" ]] || return 0
+  exec {ssh_handoff_lock_fd}>&-
+  ssh_handoff_lock_fd=""
 }
 
 validate_staged_operator_key() {
@@ -164,8 +210,10 @@ validate_effective_sshd_config() {
 
 stop_diagnostic_ssh() {
   systemctl stop "$diagnostic_ssh_timer" 2>/dev/null || true
+  systemctl stop "$diagnostic_ssh_recovery_service" 2>/dev/null || true
   systemctl stop "$diagnostic_ssh_service" 2>/dev/null || true
   ! systemctl is-active --quiet "$diagnostic_ssh_timer" &&
+    ! systemctl is-active --quiet "$diagnostic_ssh_recovery_service" &&
     ! systemctl is-active --quiet "$diagnostic_ssh_service"
 }
 
@@ -174,14 +222,24 @@ arm_diagnostic_ssh_recovery() {
   systemctl is-active --quiet "$diagnostic_ssh_timer"
 }
 
+operator_ssh_boot_gate_is_valid() {
+  local gate_metadata
+
+  [[ -f "$operator_ssh_gate" && ! -L "$operator_ssh_gate" ]] || return 1
+  gate_metadata="$(stat -c '%u:%g:%a' -- "$operator_ssh_gate")" || return 1
+  [[ "$gate_metadata" == 0:0:644 &&
+    "$(wc -l <"$operator_ssh_gate")" -eq 2 ]] || return 1
+  grep -Fqx '[Unit]' "$operator_ssh_gate" || return 1
+  grep -Fqx "ConditionPathExists=!$diagnostic_ssh_selector" \
+    "$operator_ssh_gate"
+}
+
 restore_diagnostic_ssh() {
   rm -f -- "$completion_marker" "$active_ssh_authorized_keys"
   rmdir -- "$active_ssh_authorized_keys_dir" 2>/dev/null || true
   rmdir -- "$active_ssh_root" 2>/dev/null || true
   ssh_key_activated=false
-  arm_diagnostic_ssh_recovery || return 1
-  systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
-  systemctl restart "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
+  systemctl start "$diagnostic_ssh_recovery_service" || return 1
   if systemctl is-active --quiet ssh.service ||
     systemctl is-active --quiet ssh.socket ||
     ! systemctl is-active --quiet "$diagnostic_ssh_service"; then
@@ -194,10 +252,14 @@ restore_diagnostic_ssh() {
 retire_diagnostic_ssh() {
   local cleanup_failed=false
 
+  systemctl disable "$diagnostic_ssh_service" >/dev/null 2>&1 || \
+    cleanup_failed=true
   stop_diagnostic_ssh || cleanup_failed=true
-  rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_key" \
-    "$diagnostic_ssh_command" "$diagnostic_ssh_config" \
-    "$diagnostic_ssh_service_unit" "$diagnostic_ssh_timer_unit" || \
+  rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_selector" \
+    "$diagnostic_ssh_key" "$diagnostic_ssh_command" \
+    "$diagnostic_ssh_recovery_command" "$diagnostic_ssh_config" \
+    "$diagnostic_ssh_service_unit" "$diagnostic_ssh_timer_unit" \
+    "$diagnostic_ssh_recovery_service_unit" || \
     cleanup_failed=true
   if getent passwd "$diagnostic_ssh_user" >/dev/null; then
     userdel "$diagnostic_ssh_user" || cleanup_failed=true
@@ -207,6 +269,10 @@ retire_diagnostic_ssh() {
   fi
   if [[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]] &&
     ! rmdir -- "$diagnostic_ssh_home"; then
+    cleanup_failed=true
+  fi
+  if [[ -e "$diagnostic_root" || -L "$diagnostic_root" ]] &&
+    ! rmdir -- "$diagnostic_root"; then
     cleanup_failed=true
   fi
   systemctl daemon-reload || cleanup_failed=true
@@ -242,6 +308,34 @@ publish_completion_marker() {
   fi
 }
 
+perform_operator_ssh_handoff() {
+  if ! systemctl stop "$diagnostic_ssh_service" ||
+    systemctl is-active --quiet "$diagnostic_ssh_service"; then
+    printf 'ERROR: unable to stop restricted diagnostic SSH.\n' >&2
+    return 1
+  fi
+  if ! systemctl unmask ssh.service ssh.socket ||
+    ! systemctl disable --now ssh.socket ||
+    ! systemctl enable ssh.service; then
+    printf 'ERROR: unable to prepare the trusted SSH service.\n' >&2
+    return 1
+  fi
+  if [[ ! -f "$diagnostic_ssh_selector" ||
+    -L "$diagnostic_ssh_selector" ]] ||
+    ! rm -f -- "$diagnostic_ssh_selector" ||
+    [[ -e "$diagnostic_ssh_selector" || -L "$diagnostic_ssh_selector" ]]; then
+    printf 'ERROR: unable to select trusted operator SSH.\n' >&2
+    return 1
+  fi
+  if ! systemctl restart ssh.service ||
+    ! systemctl is-active --quiet ssh.service ||
+    systemctl is-active --quiet ssh.socket; then
+    printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
+    return 1
+  fi
+  publish_completion_marker
+}
+
 activate_operator_ssh() {
   local authorized_keys_tmp_dir directory_metadata installed_metadata
 
@@ -250,6 +344,10 @@ activate_operator_ssh() {
   fi
   validate_staged_operator_key || return 1
   validate_effective_sshd_config || return 1
+  if ! operator_ssh_boot_gate_is_valid; then
+    printf 'ERROR: operator SSH boot gate failed validation.\n' >&2
+    return 1
+  fi
   if [[ -e "$active_ssh_root" || -L "$active_ssh_root" ]]; then
     printf 'ERROR: operator SSH state root already exists.\n' >&2
     return 1
@@ -326,32 +424,16 @@ activate_operator_ssh() {
     printf 'ERROR: unable to arm diagnostic SSH recovery.\n' >&2
     return 1
   fi
-  if ! systemctl stop "$diagnostic_ssh_service" ||
-    systemctl is-active --quiet "$diagnostic_ssh_service"; then
-    rm -f -- "$active_ssh_authorized_keys"
-    rmdir -- "$active_ssh_authorized_keys_dir" || true
-    printf 'ERROR: unable to stop restricted diagnostic SSH.\n' >&2
+  if ! acquire_ssh_handoff_lock; then
+    printf 'ERROR: unable to serialize the SSH handoff.\n' >&2
     return 1
   fi
-  if ! systemctl unmask ssh.service ssh.socket ||
-    ! systemctl disable --now ssh.socket ||
-    ! systemctl enable ssh.service; then
-    rm -f -- "$active_ssh_authorized_keys"
-    rmdir -- "$active_ssh_authorized_keys_dir" || true
+  if ! perform_operator_ssh_handoff; then
+    release_ssh_handoff_lock
     restore_diagnostic_ssh || true
-    printf 'ERROR: unable to prepare the trusted SSH service.\n' >&2
     return 1
   fi
-  if ! publish_completion_marker; then
-    return 1
-  fi
-  if ! systemctl restart ssh.service ||
-    ! systemctl is-active --quiet ssh.service ||
-    systemctl is-active --quiet ssh.socket; then
-    restore_diagnostic_ssh || true
-    printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
-    return 1
-  fi
+  release_ssh_handoff_lock
   ssh_key_activated=true
   if ! retire_diagnostic_ssh; then
     printf 'WARNING: trusted SSH is committed; deferred diagnostic cleanup failed.\n' >&2
@@ -363,6 +445,7 @@ record_setup_failure() {
   trap - EXIT
   set +e
   [[ -z "$snapshot_tmp" ]] || rm -f -- "$snapshot_tmp"
+  release_ssh_handoff_lock
   if [[ "$status" -ne 0 ]]; then
     "$failure_writer" write "$setup_stage" "$status" || true
     restore_diagnostic_ssh || true

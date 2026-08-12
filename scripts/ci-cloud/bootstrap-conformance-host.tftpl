@@ -274,8 +274,8 @@ install -o root -g root -m 0644 /dev/null "$continuation_unit"
 cat >"$continuation_unit" <<'SECPAL_CONTINUATION_UNIT'
 [Unit]
 Description=Continue SecPal CI bootstrap after the bounded kernel reboot
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target secpal-ci-diagnostic-sshd.service
+After=network-online.target secpal-ci-diagnostic-sshd.service
 ConditionPathExists=/var/lib/secpal-ci-bootstrap/pending
 
 [Service]

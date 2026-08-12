@@ -48,6 +48,20 @@ SPDX-License-Identifier: CC0-1.0
   expected kernel was running. The continuation reconstructs restricted
   diagnostics, retains its provider-reentry guard until host setup commits, and
   then retires persistent state without adding production reboot automation.
+- Kept the command-restricted diagnostic SSH service and its public-only inputs
+  available across that authenticated reboot, while preserving the runner-IP,
+  run-bound key, forced-command, and no-forwarding boundaries and removing all
+  diagnostic state after trusted operator SSH commits. The service now creates
+  its own runtime directories, starts before the reboot continuation, and keeps
+  the closed failure channel available from initial state validation through
+  the final operator handoff. A root-owned atomic selector now gives diagnostic
+  and operator SSH complementary boot gates before either transition can race a
+  reboot. An independent recovery unit restores that selector after an
+  interrupted handoff, while the completion marker is published only after the
+  operator listener is verified active and then prevents later recovery. The
+  initial transition, operator handoff, and timed recovery now share one
+  kernel-released, root-owned lock, preventing a timer expiry from racing the
+  final listener verification and setup commit.
 - Normalized disposable hosts to the exact Debian 13 Stable, Updates, and
   Security source set before package installation; corrected bounded APT
   provenance and merged-policy collection for real Debian output; and
