@@ -20,7 +20,8 @@ continuation_failure() {
 
   trap - EXIT
   set +e
-  if [[ "$status" -ne 0 && "$failure_marker_ready" == true ]]; then
+  if [[ "$status" -ne 0 && "$failure_marker_ready" == true ]] &&
+    ! "$failure_writer" read >/dev/null 2>&1; then
     "$failure_writer" write kernel-reboot "$status" || true
   fi
   exit "$status"
@@ -69,13 +70,12 @@ current_boot_id="$(< /proc/sys/kernel/random/boot_id)"
 [[ "$current_boot_id" != "$initial_boot_id" ]]
 [[ "$(uname -r)" == "$expected_kernel" ]]
 
-rm -f -- "$pending_file" "$context_file" "$continuation_unit"
-systemctl daemon-reload
-rmdir -- "$state_root"
-
 install -o root -g root -m 0600 /dev/null "$staged_operator_key"
 printf '%s\n' "$ssh_public_key" >"$staged_operator_key"
 
 /usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"
 
 trap - EXIT
+rm -f -- "$pending_file" "$context_file" "$continuation_unit"
+systemctl daemon-reload
+rmdir -- "$state_root"

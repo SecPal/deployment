@@ -130,6 +130,34 @@ def string_collection_constant(text: str, name: str) -> set[str]:
     raise ContractError(f"{name} must be a literal string collection")
 
 
+def integer_mapping_literal(text: str, key: str) -> int:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        raise ContractError(
+            f"trusted Python source containing {key} is invalid"
+        ) from None
+    values: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key_node, value_node in zip(node.keys, node.values, strict=True):
+            if not (
+                isinstance(key_node, ast.Constant) and key_node.value == key
+            ):
+                continue
+            try:
+                value = ast.literal_eval(value_node)
+            except (ValueError, TypeError, SyntaxError):
+                raise ContractError(f"{key} must be a literal integer") from None
+            if type(value) is not int:
+                raise ContractError(f"{key} must be a literal integer")
+            values.append(value)
+    if len(values) != 1:
+        raise ContractError(f"{key} literal must occur exactly once")
+    return values[0]
+
+
 def subprocess_literal_arguments(text: str, function_name: str) -> list[list[str]]:
     try:
         tree = ast.parse(text)
@@ -929,12 +957,24 @@ AllowUsers secpal-ci"""
         "kernel continuation must retire its persistent state",
     )
     require(
-        continuation.index(
+        continuation.index('printf \'%s\\n\' "$ssh_public_key"')
+        < continuation.index("secpal-ci-configure-conformance-host")
+        < continuation.index(
             'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
-        )
-        < continuation.index('printf \'%s\\n\' "$ssh_public_key"')
-        < continuation.index("secpal-ci-configure-conformance-host"),
-        "kernel continuation state must retire before operator SSH release",
+        ),
+        "kernel continuation guard must remain until host setup commits",
+    )
+    require(
+        continuation.index("secpal-ci-configure-conformance-host")
+        < continuation.rindex("trap - EXIT")
+        < continuation.index(
+            'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
+        ),
+        "kernel continuation failure scope must end at the host-setup commit",
+    )
+    require(
+        '! "$failure_writer" read >/dev/null 2>&1' in continuation,
+        "kernel continuation must preserve a more specific host-setup failure",
     )
     require(
         "linux-image-amd64" in bootstrap
@@ -1166,8 +1206,8 @@ def validate(root: Path) -> None:
     require(
         failure_schema["properties"]["schema_version"].get("const")
         == BOOTSTRAP_FAILURE_SCHEMA_VERSION
-        and f'"schema_version": {BOOTSTRAP_FAILURE_SCHEMA_VERSION}'
-        in failure_writer,
+        and integer_mapping_literal(failure_writer, "schema_version")
+        == BOOTSTRAP_FAILURE_SCHEMA_VERSION,
         "bootstrap failure writer and declared schema version must match",
     )
     root_ssh_admission = required_block(

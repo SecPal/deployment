@@ -154,10 +154,25 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertLess(
             continuation.index(
-                'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
+                "/usr/local/sbin/secpal-ci-configure-conformance-host"
             ),
             continuation.index(
-                'install -o root -g root -m 0600 /dev/null "$staged_operator_key"'
+                'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
+            ),
+        )
+        self.assertIn(
+            '! "$failure_writer" read >/dev/null 2>&1', continuation
+        )
+        self.assertLess(
+            continuation.index(
+                "/usr/local/sbin/secpal-ci-configure-conformance-host"
+            ),
+            continuation.rindex("trap - EXIT"),
+        )
+        self.assertLess(
+            continuation.rindex("trap - EXIT"),
+            continuation.index(
+                'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
             ),
         )
 
@@ -203,6 +218,20 @@ class CloudCIContractTests(unittest.TestCase):
                 'systemctl disable "$continuation_service"',
                 "true",
             ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                "/usr/local/sbin/secpal-ci-configure-conformance-host "
+                '"$runner_ipv4"',
+                'rm -f -- "$pending_file" "$context_file" '
+                '"$continuation_unit"\n'
+                "/usr/local/sbin/secpal-ci-configure-conformance-host "
+                '"$runner_ipv4"',
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                '! "$failure_writer" read >/dev/null 2>&1',
+                "true",
+            ),
         )
         for relative, old, new in cases:
             with self.subTest(relative=relative, old=old):
@@ -220,11 +249,13 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_stale_bootstrap_failure_schema_version(
         self,
     ) -> None:
-        self.assert_mutation_rejected(
-            "scripts/ci-cloud/write-bootstrap-failure.py",
-            '"schema_version": 4',
-            '"schema_version": 3',
-        )
+        for stale_version in (3, 40):
+            with self.subTest(stale_version=stale_version):
+                self.assert_mutation_rejected(
+                    "scripts/ci-cloud/write-bootstrap-failure.py",
+                    '"schema_version": 4',
+                    f'"schema_version": {stale_version}',
+                )
 
     def test_native_bootstrap_publishes_ssh_policy_with_exact_mode(self) -> None:
         bootstrap = (

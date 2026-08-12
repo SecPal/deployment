@@ -360,12 +360,15 @@ restricted diagnostic SSH listener from the persisted public
 context, proves that the boot ID changed, and requires `uname -r` to equal the
 previously authenticated `/vmlinuz` release exactly. The continuation contains
 no reboot command, so a mismatch cannot form a reboot loop. Only after those
-checks does it remove the continuation unit and persistent transition state,
-then recreate the root-only staged operator key and invoke trusted host setup.
-Operator SSH can therefore never become reachable while reboot-continuation
-state remains. Failure records the closed `kernel-reboot` stage when the
-diagnostic channel can be reconstructed and otherwise remains inaccessible and
-eligible only for exact workflow cleanup or the ownership-gated TTL janitor.
+checks does it recreate the root-only staged operator key and invoke trusted
+host setup. The persistent `pending` guard remains until host setup commits so
+a concurrent GCP startup-script invocation cannot begin a second bootstrap or
+reboot. Success then removes the continuation unit and persistent transition
+state. Failure records the closed `kernel-reboot` stage only when no more
+specific host-setup failure marker already exists, so stages such as `apparmor`
+or `ssh` remain authoritative. When the diagnostic channel cannot be
+reconstructed, the host remains inaccessible and eligible only for exact
+workflow cleanup or the ownership-gated TTL janitor.
 
 Both disposable SSH identities use the literal, impossible `*NP*` password
 marker and verify that exact effective `/etc/shadow` field before admitting a
