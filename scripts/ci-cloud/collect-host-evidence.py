@@ -229,10 +229,25 @@ def read_text(path: Path, limit: int = MAX_COMMAND_OUTPUT) -> str:
     return bounded_read_text(path, limit)[0]
 
 
-def bounded_read_text(path: Path, limit: int = MAX_COMMAND_OUTPUT) -> tuple[str, bool]:
+def bounded_read_text(
+    path: Path,
+    limit: int = MAX_COMMAND_OUTPUT,
+    *,
+    missing_ok: bool = False,
+) -> tuple[str, bool]:
     try:
         with path.open(encoding="utf-8", errors="replace") as stream:
             content = stream.read(limit + 1)
+    except FileNotFoundError:
+        if not missing_ok:
+            return "", False
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return "", True
+        except OSError:
+            return "", False
+        return "", False
     except OSError:
         return "", False
     return content[:limit], len(content) <= limit
@@ -406,11 +421,16 @@ def apt_sources(architecture: str) -> dict[str, object]:
     suites: set[str] = set()
     hosts: set[str] = set()
     files: list[str] = []
-    paths = [Path("/etc/apt/sources.list")]
+    legacy_source = Path("/etc/apt/sources.list")
+    paths = [legacy_source]
     paths.extend(Path(path) for path in glob.glob("/etc/apt/sources.list.d/*.list"))
     paths.extend(Path(path) for path in glob.glob("/etc/apt/sources.list.d/*.sources"))
     for path in sorted(paths):
-        content, complete = bounded_read_text(path, 32_768)
+        content, complete = bounded_read_text(
+            path,
+            32_768,
+            missing_ok=path == legacy_source,
+        )
         if not complete:
             raise RuntimeError("APT source file is incomplete")
         if not content:
