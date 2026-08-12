@@ -67,7 +67,7 @@ variable "ssh_public_key" {
 
   validation {
     condition = (
-      length(trimspace(var.ssh_public_key)) <= 512 &&
+      length(trimspace(var.ssh_public_key)) <= 128 &&
       can(regex("^ssh-ed25519 [A-Za-z0-9+/]+={0,2} secpal-ci-${var.run_id}-${var.run_attempt}$", trimspace(var.ssh_public_key)))
     )
     error_message = "ssh_public_key must be the run-bound Ed25519 public key."

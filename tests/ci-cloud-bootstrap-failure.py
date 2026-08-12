@@ -20,6 +20,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 ROOT = Path(__file__).resolve().parents[1]
 WRITER = ROOT / "scripts" / "ci-cloud" / "write-bootstrap-failure.py"
+HOST_SETUP_FAILURE = ROOT / "scripts" / "ci-cloud" / "host-setup-failure.py"
 SCHEMA = ROOT / "schemas" / "ci-cloud-bootstrap-failure.schema.json"
 TARGET_SHA = "a" * 40
 
@@ -34,6 +35,38 @@ def load_writer():
 
 
 class BootstrapFailureEvidenceTests(unittest.TestCase):
+    def test_accepts_every_closed_native_bootstrap_stage(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "ci_cloud_host_setup_failure", HOST_SETUP_FAILURE
+        )
+        if spec is None or spec.loader is None:
+            self.fail("unable to load host-setup failure writer")
+        writer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(writer)
+        for stage in (
+            "diagnostic-ssh",
+            "apt-sources",
+            "apt-update",
+            "kernel-install",
+            "package-install",
+            "operator-identity",
+            "host-policy",
+            "kernel-admission",
+            "reboot-state",
+            "continuation-state",
+            "kernel-verify",
+            "host-setup",
+            "host-initialize",
+            "subordinate-ids",
+            "service-policy",
+            "apparmor",
+            "ssh",
+        ):
+            self.assertEqual(
+                {"stage": stage, "exit_status": 1},
+                writer.validate_document({"stage": stage, "exit_status": 1}),
+            )
+
     def invoke(
         self,
         output_dir: Path,
@@ -77,7 +110,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             document = json.loads(
                 (output_dir / "bootstrap-failure.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(4, document["schema_version"])
+            self.assertEqual(5, document["schema_version"])
             self.assertEqual(
                 {"schema_version", "workflow", "test"}, set(document)
             )
@@ -194,13 +227,13 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             self.assertNotEqual(0, completed.returncode)
             self.assertEqual([], list(output_dir.iterdir()))
 
-    def test_records_kernel_reboot_host_setup_failure(self) -> None:
+    def test_records_kernel_verify_host_setup_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary)
             completed = self.invoke(
                 output_dir,
                 host_setup_failure=(
-                    '{"exit_status":1,"stage":"kernel-reboot"}'
+                    '{"exit_status":1,"stage":"kernel-verify"}'
                 ),
             )
             self.assertEqual(0, completed.returncode, completed.stderr)
@@ -210,7 +243,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
                 )
             )
             self.assertEqual(
-                {"exit_status": 1, "stage": "kernel-reboot"},
+                {"exit_status": 1, "stage": "kernel-verify"},
                 document["test"]["host_setup_failure"],
             )
 
@@ -232,7 +265,9 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             completed = self.invoke(
                 output_dir,
                 stage="host-key",
-                host_setup_failure='{"exit_status":1,"stage":"initialize"}',
+                host_setup_failure=(
+                    '{"exit_status":1,"stage":"diagnostic-ssh"}'
+                ),
                 host_key_observations=(
                     '{"changed_key":0,"connection_refused":1,'
                     '"connection_timeout":0,"multiple_keys":0,'

@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "workflow", "test"],
   "properties": {
-    "schema_version": { "const": 4 },
+    "schema_version": { "const": 5 },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -98,8 +98,19 @@
               "properties": {
                 "stage": {
                   "enum": [
-                    "initialize",
-                    "kernel-reboot",
+                    "diagnostic-ssh",
+                    "apt-sources",
+                    "apt-update",
+                    "kernel-install",
+                    "package-install",
+                    "operator-identity",
+                    "host-policy",
+                    "kernel-admission",
+                    "reboot-state",
+                    "continuation-state",
+                    "kernel-verify",
+                    "host-setup",
+                    "host-initialize",
                     "subordinate-ids",
                     "service-policy",
                     "apparmor",

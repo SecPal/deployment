@@ -21,6 +21,9 @@ SPDX-License-Identifier: CC0-1.0
 - Schema-validated, failure-atomically published bootstrap-failure evidence
   with orchestration timestamps and bounded native-bootstrap diagnostics when a
   disposable host fails before the full conformance collector can run.
+- Closed native-bootstrap package, kernel, reboot-continuation, and host-setup
+  failure phases that identify the active failed phase without exposing logs,
+  commands, or environment data.
 - A common strict-Bash host payload delivered through DigitalOcean user data
   and GCP's native `startup-script`, with a root-owned, closed host-setup stage
   marker that diagnoses early failures without raw logs or credentials.

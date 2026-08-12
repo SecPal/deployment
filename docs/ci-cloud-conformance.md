@@ -353,10 +353,16 @@ account to retrieve the marker.
 
 Before operator SSH can be published, the trusted first boot replaces the
 provider APT configuration with the closed signed Debian 13 sources, refreshes
-their indexes, and installs the architecture-specific `linux-image-amd64` or
-`linux-image-arm64` meta package. It admits the resolved `/vmlinuz` target only
-when the exact owning image package is installed at the current authenticated
-APT candidate version. The expected kernel release and initial Linux boot ID
+their indexes, and installs the architecture-specific
+`linux-image-cloud-amd64` or `linux-image-cloud-arm64` meta package. These are
+Debian's kernel packages for cloud platforms, matching the kernel family the
+official cloud image actually selects at boot. The bootstrap admits the meta
+package's single, exact versioned image dependency only when the image package
+is installed at its current authenticated APT candidate version and the
+corresponding regular `/boot/vmlinuz-*` image exists. It deliberately does not
+require the optional `/vmlinuz` convenience symlink, which official Debian
+cloud images can omit.
+The expected kernel release and initial Linux boot ID
 are written atomically with the bounded run context under a root-owned mode
 `0700` state directory. Only then is a root-owned continuation unit enabled and
 exactly one reboot requested. This explicit disposable-fixture transition is
@@ -369,21 +375,21 @@ ownership, mode, size, field count, and closed formats before using it. The
 restricted diagnostic listener is an explicit ordering dependency, and the
 continuation validates or creates its root-owned evidence directory and arms
 the closed failure writer before it reads any persisted state. A malformed or
-missing transition state can therefore report `kernel-reboot` rather than
+missing transition state can therefore report `continuation-state` rather than
 degrading to an undifferentiated SSH timeout. It
 immediately disables later automatic invocations, then reconstructs the
 restricted diagnostic inputs from the persisted public context and restarts
 the already reboot-enabled restricted listener, proves that the boot ID
-changed, and requires `uname -r` to equal the
-previously authenticated `/vmlinuz` release exactly. The continuation contains
+changed, and requires `uname -r` to equal the previously authenticated image
+package's kernel release exactly. The continuation contains
 no reboot command, so a mismatch cannot form a reboot loop. Only after those
 checks does it recreate the root-only staged operator key and invoke trusted
 host setup. The persistent `pending` guard remains until host setup commits so
 a concurrent GCP startup-script invocation cannot begin a second bootstrap or
 reboot. Success then removes the continuation unit and persistent transition
-state. Failure records the closed `kernel-reboot` stage only when no more
-specific host-setup failure marker already exists, so stages such as `apparmor`
-or `ssh` remain authoritative. When the diagnostic channel cannot be
+state. Failure records the current closed continuation phase only when no more
+specific host-setup failure marker already exists, so `kernel-verify`,
+`apparmor`, or `ssh` remain authoritative. When the diagnostic channel cannot be
 reconstructed, the host remains inaccessible and eligible only for exact
 workflow cleanup or the ownership-gated TTL janitor.
 
@@ -580,9 +586,13 @@ before either final path is published. They contain only the validated
 run/provider identity, orchestration start/end times, fixed failure stage, exit
 status, and `CI_CLOUD_REMOTE_ORCHESTRATION` invariant. When the trusted host
 setup itself fails, the evidence may additionally contain exactly one closed
-stage (`initialize`, `kernel-reboot`, `subordinate-ids`, `service-policy`,
-`apparmor`, or `ssh`) and its exit status. `kernel-reboot` identifies a failed
-second-boot identity or expected-kernel check. A host-key-stage failure instead records only counters for
+stage (`diagnostic-ssh`, `apt-sources`, `apt-update`, `kernel-install`,
+`package-install`, `operator-identity`, `host-policy`, `kernel-admission`,
+`reboot-state`, `continuation-state`, `kernel-verify`, `host-setup`,
+`host-initialize`, `subordinate-ids`, `service-policy`, `apparmor`, or `ssh`)
+and its exit status. The stage changes immediately before each fallible phase,
+so an early provider bootstrap failure does not collapse into an ambiguous
+`initialize` result. A host-key-stage failure instead records only counters for
 the closed categories `connection_refused`, `connection_timeout`, `no_key`,
 `multiple_keys`, `changed_key`, and `other`. Refused and timed-out connections
 come from a bounded IPv4 TCP probe and stable operating-system error codes,
@@ -597,7 +607,10 @@ closed operator identity and SSH policy.
 
 Preflight renders the common provider payload with the exact embedded trusted
 scripts, checks it as strict Bash, and statically admits both provider-native
-transport bindings and the exact SSH policy. Mutation tests reject Linux
+transport bindings and the exact SSH policy. The closed, run-bound Ed25519
+public-key input is limited to 128 bytes, and the maximum admitted rendering
+must retain at least 256 bytes below DigitalOcean's 64 KiB user-data limit.
+Mutation tests reject Linux
 account-lock commands, missing `*NP*` postconditions, and a reboot guard that
 does not revalidate the complete operator identity. They also reject removal
 of the authenticated kernel candidate, changed-boot-ID, exact running-kernel,

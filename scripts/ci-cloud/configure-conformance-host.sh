@@ -31,7 +31,7 @@ diagnostic_ssh_recovery_service_unit=/etc/systemd/system/secpal-ci-diagnostic-ss
 ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock
 ssh_handoff_lock_fd=""
 runner_ipv4="${1:-}"
-setup_stage="initialize"
+setup_stage="host-initialize"
 snapshot_tmp=""
 ssh_key_activated=false
 
@@ -99,7 +99,7 @@ validate_staged_operator_key() {
   fi
   IFS=: read -r owner_uid owner_gid file_mode file_size <<<"$metadata"
   if [[ "$owner_uid" != 0 || "$owner_gid" != 0 || "$file_mode" != 600 ||
-    ! "$file_size" =~ ^[1-9][0-9]{0,2}$ ]] || ((file_size > 512)); then
+    ! "$file_size" =~ ^[1-9][0-9]{0,2}$ ]] || ((file_size > 128)); then
     printf 'ERROR: staged operator SSH key has unsafe metadata.\n' >&2
     return 1
   fi
