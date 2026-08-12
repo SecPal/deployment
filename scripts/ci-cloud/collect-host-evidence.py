@@ -572,6 +572,91 @@ def apparmor_facts() -> dict[str, object]:
     }
 
 
+def root_owned_regular_file(path: Path, maximum_size: int) -> bool:
+    if not path.is_absolute():
+        return False
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    if (
+        not stat_module.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+        or metadata.st_mode & (stat_module.S_IWGRP | stat_module.S_IWOTH)
+        or not 0 < metadata.st_size <= maximum_size
+    ):
+        return False
+    for parent in path.parents:
+        try:
+            parent_metadata = parent.lstat()
+        except OSError:
+            return False
+        if (
+            not stat_module.S_ISDIR(parent_metadata.st_mode)
+            or parent_metadata.st_uid != 0
+            or parent_metadata.st_gid != 0
+            or parent_metadata.st_mode
+            & (stat_module.S_IWGRP | stat_module.S_IWOTH)
+        ):
+            return False
+    return True
+
+
+def kernel_package_integrity(package: str, kernel: str) -> dict[str, object]:
+    result: dict[str, object] = {
+        "status": "",
+        "maintainer": "",
+        "database_files_safe": False,
+        "files_verified": False,
+    }
+    if (
+        package != f"linux-image-{kernel}"
+        or re.fullmatch(r"linux-image-[a-z0-9+.-]{1,160}", package) is None
+    ):
+        return result
+    package_record = checked_output(
+        ["dpkg-query", "-W", "-f", "${Status}\\n${Maintainer}", package]
+    ).splitlines()
+    if len(package_record) != 2:
+        return result
+    status, maintainer = package_record
+    result.update({"status": status, "maintainer": maintainer})
+    status_database = Path("/var/lib/dpkg/status")
+    checksum_manifest = Path(f"/var/lib/dpkg/info/{package}.md5sums")
+    manifest, manifest_complete = bounded_read_text(
+        checksum_manifest,
+        4 * 1024 * 1024,
+    )
+    database_files_safe = bool(
+        root_owned_regular_file(status_database, 32 * 1024 * 1024)
+        and root_owned_regular_file(checksum_manifest, 4 * 1024 * 1024)
+        and manifest_complete
+        and re.search(
+            rf"^[0-9a-f]{{32}}  boot/vmlinuz-{re.escape(kernel)}$",
+            manifest,
+            re.MULTILINE,
+        )
+    )
+    verify_status, verify_output, verify_complete = bounded_command_result(
+        ["dpkg", "--verify", "--verify-format", "rpm", package],
+        timeout=120,
+        output_limit=65_536,
+    )
+    result.update(
+        {
+            "database_files_safe": database_files_safe,
+            "files_verified": bool(
+                database_files_safe
+                and verify_status == 0
+                and verify_complete
+                and not verify_output
+            ),
+        }
+    )
+    return result
+
+
 def kernel_package_facts(kernel: str, architecture: str, verified_suites: set[str]) -> dict[str, object]:
     package = ""
     for candidate in (Path(f"/boot/vmlinuz-{kernel}"), Path(f"/lib/modules/{kernel}/kernel")):
@@ -582,7 +667,21 @@ def kernel_package_facts(kernel: str, architecture: str, verified_suites: set[st
     metadata = package_metadata(package, architecture, verified_suites) if package else {
         "version": "", "architecture": "", "origin": "", "suite": ""
     }
-    return {"name": package, **metadata, "owned": bool(package)}
+    integrity = kernel_package_integrity(package, kernel)
+    active_apt_policy = bool(
+        metadata["origin"] == "Debian"
+        and metadata["suite"] in {"trixie", "trixie-security"}
+    )
+    if not active_apt_policy:
+        metadata.update({"origin": "", "suite": ""})
+    provenance_basis = "active-apt-policy" if active_apt_policy else "installed-dpkg"
+    return {
+        "name": package,
+        **metadata,
+        "owned": bool(package),
+        **integrity,
+        "provenance_basis": provenance_basis,
+    }
 
 
 def security_update_facts() -> dict[str, object]:
@@ -770,6 +869,27 @@ def is_podman_service_command(arguments: list[str]) -> bool:
     )
 
 
+def podman_process_listener(output_text: str) -> bool:
+    return re.search(
+        r'users:\(\("podman",pid=[0-9]+,fd=[0-9]+\)\)',
+        output_text,
+    ) is not None
+
+
+def podman_unix_api_listener(output_text: str) -> bool:
+    if podman_process_listener(output_text):
+        return True
+    return any(
+        re.search(
+            r"(?:^|\s)(?:/run/podman/podman\.sock|"
+            r"/run/user/[0-9]{1,10}/podman/podman\.sock)(?:\s|$)",
+            line,
+        )
+        is not None
+        for line in output_text.splitlines()
+    )
+
+
 def podman_service_process_facts() -> tuple[bool, bool]:
     service_process = False
     process_scan_incomplete = False
@@ -838,8 +958,9 @@ def podman_api_facts() -> dict[str, bool]:
         "user_service_enabled": user_service_enabled,
         "user_socket_active": user_socket_active,
         "user_socket_enabled": user_socket_enabled,
-        "tcp_listener": tcp_status == 0 and "podman" in tcp_listeners.lower(),
-        "unix_listener": unix_status == 0 and "podman" in unix_listeners.lower(),
+        "tcp_listener": tcp_status == 0 and podman_process_listener(tcp_listeners),
+        "unix_listener": unix_status == 0
+        and podman_unix_api_listener(unix_listeners),
         "service_process": service_process,
         "process_scan_incomplete": process_scan_incomplete,
         "listener_scan_incomplete": (
@@ -1089,13 +1210,27 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         "D1_KERNEL_DEBIAN_6_12",
     )
     kernel_package = host["kernel_package"]
+    apt_policy_provenance = bool(
+        kernel_package["provenance_basis"] == "active-apt-policy"
+        and kernel_package["origin"] == "Debian"
+        and kernel_package["suite"] in {"trixie", "trixie-security"}
+    )
+    installed_dpkg_provenance = bool(
+        kernel_package["provenance_basis"] == "installed-dpkg"
+        and kernel_package["origin"] == ""
+        and kernel_package["suite"] == ""
+    )
     reject(
         not kernel_package["owned"]
-        or not kernel_package["name"]
+        or kernel_package["name"] != f"linux-image-{kernel_release}"
         or not kernel_package["version"]
         or kernel_package["architecture"] != platform["architecture"]
-        or kernel_package["origin"] != "Debian"
-        or kernel_package["suite"] not in {"trixie", "trixie-security"},
+        or kernel_package["status"] != "install ok installed"
+        or kernel_package["maintainer"]
+        != "Debian Kernel Team <debian-kernel@lists.debian.org>"
+        or kernel_package["database_files_safe"] is not True
+        or kernel_package["files_verified"] is not True
+        or not (apt_policy_provenance or installed_dpkg_provenance),
         "D1_KERNEL_PACKAGE_PROVENANCE",
     )
     reject(set(apt["configured_suites"]) != EXPECTED_SUITES, "D1_APT_CODENAME_SUITES")

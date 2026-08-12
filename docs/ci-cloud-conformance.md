@@ -541,9 +541,13 @@ Evidence includes:
   virtualization, CPU/memory/disk facts, root filesystem and OverlayFS facts,
   required tools, clock synchronization, and effective root-SSH denial;
 - root-owned authenticated APT `InRelease` origins/suites, archive-keyring
-  presence, and each selected kernel/runtime/bootstrap package's actual
-  `apt-cache policy` Release origin and codename rather than a global suite
-  inference;
+  presence, and each selected runtime/bootstrap package's actual APT-policy
+  Release origin and codename rather than a global suite inference;
+  the running kernel's exact owning package, installed status, architecture,
+  Debian Kernel Team maintainer, safe root-owned dpkg databases, package-file
+  verification, and whether provenance came from active APT policy or the
+  installed dpkg record when that exact image version has rotated out of the
+  current signed indexes;
   every bootstrap and runtime package's exact installed version,
   architecture, origin, and suite, forbidden package absence, and effective
   security-only unattended-update/reboot and runtime-package exclusion policy;
@@ -557,6 +561,12 @@ Evidence includes:
   SecPal/GHCR mirror, rewrite, and insecure-transport facts; and
 - host AppArmor state, rootless Podman `apparmorEnabled`, and Podman
   `seccompEnabled` as three independent facts.
+
+The Unix-listener admission recognizes the standard rootful and rootless Podman
+API socket paths and listeners owned by an actual `podman` process. It does not
+equate every pathname beneath `/run/podman` with the remote API: Debian's
+Netavark `nv-proxy.sock` is network plumbing and remains independently covered
+by the admitted Netavark package and backend facts.
 
 The trusted root-only host setup records loaded and enforcing AppArmor policy
 counts in a root-owned, non-writable `/run` snapshot. The unprivileged collector

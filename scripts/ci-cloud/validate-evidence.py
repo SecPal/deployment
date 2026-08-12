@@ -263,7 +263,19 @@ def validate_document(document: object) -> dict[str, object]:
     )
     exact_keys(
         host["kernel_package"],
-        {"name", "version", "architecture", "origin", "suite", "owned"},
+        {
+            "name",
+            "version",
+            "architecture",
+            "origin",
+            "suite",
+            "owned",
+            "status",
+            "maintainer",
+            "database_files_safe",
+            "files_verified",
+            "provenance_basis",
+        },
         "$.host.kernel_package",
     )
     exact_keys(
@@ -391,8 +403,15 @@ def write_summary(document: dict[str, object], path: Path) -> None:
     apparmor = runtime["apparmor_host"]
     provider_image = test["provider_image"]
     cloud_identity = host["cloud_identity"]
+    kernel_package = host["kernel_package"]
     assert isinstance(podman, dict) and isinstance(apparmor, dict)
     assert isinstance(provider_image, dict) and isinstance(cloud_identity, dict)
+    assert isinstance(kernel_package, dict)
+    kernel_source = (
+        f"{kernel_package['origin']}/{kernel_package['suite']}"
+        if kernel_package["provenance_basis"] == "active-apt-policy"
+        else "root-owned dpkg database"
+    )
     failures = test["failed_admission_invariants"]
     assert isinstance(failures, list)
     lines = [
@@ -404,7 +423,7 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         f"- Machine type: `{test['machine_type']}`",
         f"- Provider image: `{provider_image['slug']}` resolved to `{provider_image['id']}`",
         f"- Platform: `{platform['architecture']}` / `{platform['kernel']}`",
-        f"- Kernel package: `{host['kernel_package']['name']}` from `{host['kernel_package']['origin']}/{host['kernel_package']['suite']}`",
+        f"- Kernel package: `{kernel_package['name']}` via `{kernel_package['provenance_basis']}` from `{kernel_source}`; files verified `{kernel_package['files_verified']}`",
         f"- APT releases: `{', '.join(apt['verified_release_suites'])}`; signatures `{apt['release_signatures_verified']}`",
         f"- Security updates: `{host['security_updates']['mechanism']}`; automatic `{host['security_updates']['automatic']}`; reboot `{host['security_updates']['automatic_reboot']}`",
         f"- CPU: `{platform['cpu']['vendor']} {platform['cpu']['model']}`",

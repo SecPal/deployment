@@ -281,7 +281,12 @@
             "architecture",
             "origin",
             "suite",
-            "owned"
+            "owned",
+            "status",
+            "maintainer",
+            "database_files_safe",
+            "files_verified",
+            "provenance_basis"
           ],
           "properties": {
             "name": { "$ref": "#/$defs/mediumString" },
@@ -289,7 +294,14 @@
             "architecture": { "$ref": "#/$defs/shortString" },
             "origin": { "$ref": "#/$defs/mediumString" },
             "suite": { "$ref": "#/$defs/mediumString" },
-            "owned": { "type": "boolean" }
+            "owned": { "type": "boolean" },
+            "status": { "$ref": "#/$defs/shortString" },
+            "maintainer": { "$ref": "#/$defs/mediumString" },
+            "database_files_safe": { "type": "boolean" },
+            "files_verified": { "type": "boolean" },
+            "provenance_basis": {
+              "enum": ["active-apt-policy", "installed-dpkg"]
+            }
           }
         },
         "filesystem": {

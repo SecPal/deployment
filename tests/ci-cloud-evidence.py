@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -112,6 +113,11 @@ def valid_document() -> dict[str, object]:
                 "origin": "Debian",
                 "suite": "trixie-security",
                 "owned": True,
+                "status": "install ok installed",
+                "maintainer": "Debian Kernel Team <debian-kernel@lists.debian.org>",
+                "database_files_safe": True,
+                "files_verified": True,
+                "provenance_basis": "active-apt-policy",
             },
             "filesystem": {
                 "type": "ext4",
@@ -363,6 +369,28 @@ class EvidenceContractTests(unittest.TestCase):
         document["apt"]["source_files"] = ["/etc/apt/sources.list"] * 2
         with self.assertRaisesRegex(ValueError, "declared schema"):
             self.validator.validate_document(document)
+
+    def test_unknown_kernel_provenance_basis_fails_closed(self) -> None:
+        document = valid_document()
+        document["host"]["kernel_package"]["provenance_basis"] = "provider-label"
+        with self.assertRaisesRegex(ValueError, "admission failures"):
+            self.validator.validate_document(document)
+
+    def test_summary_names_installed_dpkg_kernel_provenance(self) -> None:
+        document = valid_document()
+        document["host"]["kernel_package"].update(
+            {
+                "origin": "",
+                "suite": "",
+                "provenance_basis": "installed-dpkg",
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            summary_path = Path(directory, "summary.md")
+            self.validator.write_summary(document, summary_path)
+            summary = summary_path.read_text(encoding="utf-8")
+        self.assertIn("via `installed-dpkg`", summary)
+        self.assertIn("from `root-owned dpkg database`", summary)
 
     def test_declared_schema_rejects_unavailable_memory_evidence(self) -> None:
         document = valid_document()
