@@ -15,13 +15,14 @@ active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"
 completion_marker="$active_ssh_root/host-setup-complete"
 diagnostic_ssh_timer=secpal-ci-diagnostic-sshd.timer
 diagnostic_ssh_service=secpal-ci-diagnostic-sshd.service
-diagnostic_ssh_key=/run/secpal-ci-diagnostic-authorized-key
-diagnostic_ssh_command=/run/secpal-ci-bootstrap-diagnostic
-diagnostic_ssh_config=/run/secpal-ci-diagnostic-sshd.conf
+diagnostic_root=/var/lib/secpal-ci-diagnostic
+diagnostic_ssh_key="$diagnostic_root/authorized-key"
+diagnostic_ssh_command=/usr/local/sbin/secpal-ci-bootstrap-diagnostic
+diagnostic_ssh_config=/etc/ssh/secpal-ci-diagnostic-sshd.conf
 diagnostic_ssh_user=secpal-ci-diagnostic
-diagnostic_ssh_home=/run/secpal-ci-diagnostic-home
-diagnostic_ssh_service_unit=/run/systemd/system/secpal-ci-diagnostic-sshd.service
-diagnostic_ssh_timer_unit=/run/systemd/system/secpal-ci-diagnostic-sshd.timer
+diagnostic_ssh_home="$diagnostic_root/home"
+diagnostic_ssh_service_unit=/etc/systemd/system/secpal-ci-diagnostic-sshd.service
+diagnostic_ssh_timer_unit=/etc/systemd/system/secpal-ci-diagnostic-sshd.timer
 runner_ipv4="${1:-}"
 setup_stage="initialize"
 snapshot_tmp=""
@@ -194,6 +195,8 @@ restore_diagnostic_ssh() {
 retire_diagnostic_ssh() {
   local cleanup_failed=false
 
+  systemctl disable "$diagnostic_ssh_service" >/dev/null 2>&1 || \
+    cleanup_failed=true
   stop_diagnostic_ssh || cleanup_failed=true
   rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_key" \
     "$diagnostic_ssh_command" "$diagnostic_ssh_config" \
@@ -207,6 +210,10 @@ retire_diagnostic_ssh() {
   fi
   if [[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]] &&
     ! rmdir -- "$diagnostic_ssh_home"; then
+    cleanup_failed=true
+  fi
+  if [[ -e "$diagnostic_root" || -L "$diagnostic_root" ]] &&
+    ! rmdir -- "$diagnostic_root"; then
     cleanup_failed=true
   fi
   systemctl daemon-reload || cleanup_failed=true

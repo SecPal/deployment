@@ -6,16 +6,17 @@ set -euo pipefail
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-diagnostic_key=/run/secpal-ci-diagnostic-authorized-key
-diagnostic_command=/run/secpal-ci-bootstrap-diagnostic
-diagnostic_config=/run/secpal-ci-diagnostic-sshd.conf
+diagnostic_root=/var/lib/secpal-ci-diagnostic
+diagnostic_key="$diagnostic_root/authorized-key"
+diagnostic_command=/usr/local/sbin/secpal-ci-bootstrap-diagnostic
+diagnostic_config=/etc/ssh/secpal-ci-diagnostic-sshd.conf
 diagnostic_unit=secpal-ci-diagnostic-sshd
 diagnostic_service="${diagnostic_unit}.service"
 diagnostic_timer="${diagnostic_unit}.timer"
-diagnostic_service_unit="/run/systemd/system/$diagnostic_service"
-diagnostic_timer_unit="/run/systemd/system/$diagnostic_timer"
+diagnostic_service_unit="/etc/systemd/system/$diagnostic_service"
+diagnostic_timer_unit="/etc/systemd/system/$diagnostic_timer"
 diagnostic_user=secpal-ci-diagnostic
-diagnostic_home=/run/secpal-ci-diagnostic-home
+diagnostic_home="$diagnostic_root/home"
 primary_ssh_config=/etc/ssh/sshd_config.d/00-secpal-ci.conf
 active_operator_root=/var/lib/secpal-ci
 active_operator_key="$active_operator_root/authorized-keys/secpal-ci"
@@ -208,16 +209,23 @@ ensure_diagnostic_identity() {
 prepare_diagnostic_fallback() {
   local diagnostic_command_metadata diagnostic_config_metadata
   local diagnostic_key_metadata diagnostic_service_unit_metadata
-  local diagnostic_timer_unit_metadata
+  local diagnostic_root_metadata diagnostic_timer_unit_metadata
 
-  install -d -o root -g root -m 0755 /run/sshd /run/systemd/system || return 1
+  install -d -o root -g root -m 0755 /run/sshd /etc/ssh \
+    /etc/systemd/system /usr/local/sbin || return 1
+  if [[ -e "$diagnostic_root" || -L "$diagnostic_root" ]]; then
+    [[ -d "$diagnostic_root" && ! -L "$diagnostic_root" ]] || return 1
+    [[ "$(stat -c '%u:%g:%a' -- "$diagnostic_root")" == 0:0:755 ]] || return 1
+  else
+    install -d -o root -g root -m 0755 "$diagnostic_root" || return 1
+  fi
   ensure_diagnostic_identity || return 1
 
-  key_tmp="$(mktemp /run/.secpal-ci-diagnostic-key.XXXXXX)" || return 1
-  command_tmp="$(mktemp /run/.secpal-ci-diagnostic-command.XXXXXX)" || return 1
-  config_tmp="$(mktemp /run/.secpal-ci-diagnostic-config.XXXXXX)" || return 1
-  service_tmp="$(mktemp /run/systemd/system/.secpal-ci-diagnostic-service.XXXXXX)" || return 1
-  timer_tmp="$(mktemp /run/systemd/system/.secpal-ci-diagnostic-timer.XXXXXX)" || return 1
+  key_tmp="$(mktemp "$diagnostic_root/.authorized-key.XXXXXX")" || return 1
+  command_tmp="$(mktemp /usr/local/sbin/.secpal-ci-bootstrap-diagnostic.XXXXXX)" || return 1
+  config_tmp="$(mktemp /etc/ssh/.secpal-ci-diagnostic-sshd.XXXXXX)" || return 1
+  service_tmp="$(mktemp /etc/systemd/system/.secpal-ci-diagnostic-service.XXXXXX)" || return 1
+  timer_tmp="$(mktemp /etc/systemd/system/.secpal-ci-diagnostic-timer.XXXXXX)" || return 1
   chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp" || return 1
   chmod 0700 "$command_tmp" || return 1
 
@@ -267,7 +275,7 @@ StrictModes yes
 UseDNS no
 UsePAM yes
 AllowUsers secpal-ci-diagnostic@$runner_ipv4
-ForceCommand /run/secpal-ci-bootstrap-diagnostic
+ForceCommand /usr/local/sbin/secpal-ci-bootstrap-diagnostic
 DisableForwarding yes
 PermitTTY no
 PermitUserEnvironment no
@@ -277,6 +285,9 @@ EOF
   cat >"$service_tmp" <<EOF
 [Unit]
 Description=SecPal restricted bootstrap diagnostic SSH
+Wants=network-online.target
+After=network-online.target
+Before=secpal-ci-bootstrap-continue.service
 StartLimitIntervalSec=2m
 StartLimitBurst=5
 
@@ -285,6 +296,12 @@ Type=notify
 ExecStart=/usr/sbin/sshd -D -e -f $diagnostic_config
 Restart=on-failure
 RestartSec=5s
+RuntimeDirectory=sshd secpal-ci-evidence
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=multi-user.target
 EOF
   cat >"$timer_tmp" <<EOF
 [Unit]
@@ -332,7 +349,11 @@ EOF
   diagnostic_timer_unit_metadata="$(
     stat -c '%u:%g:%a' -- "$diagnostic_timer_unit"
   )" || return 1
-  [[ "$diagnostic_key_metadata" != 0:0:644 ||
+  diagnostic_root_metadata="$(
+    stat -c '%u:%g:%a' -- "$diagnostic_root"
+  )" || return 1
+  [[ "$diagnostic_root_metadata" != 0:0:755 ||
+    "$diagnostic_key_metadata" != 0:0:644 ||
     "$diagnostic_config_metadata" != 0:0:600 ||
     "$diagnostic_command_metadata" != 0:0:755 ||
     "$diagnostic_service_unit_metadata" != 0:0:644 ||
@@ -349,6 +370,7 @@ EOF
 
 start_diagnostic_fallback() {
   prepare_diagnostic_fallback || return 1
+  systemctl enable "$diagnostic_service" >/dev/null 2>&1 || return 1
   systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
   systemctl restart "$diagnostic_service" >/dev/null 2>&1 || return 1
   if systemctl is-active --quiet ssh.service ||

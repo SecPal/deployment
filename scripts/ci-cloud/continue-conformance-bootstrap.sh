@@ -10,6 +10,7 @@ state_root=/var/lib/secpal-ci-bootstrap
 context_file="$state_root/context"
 pending_file="$state_root/pending"
 failure_writer=/usr/local/sbin/secpal-ci-host-setup-failure
+diagnostic_dir=/run/secpal-ci-evidence
 continuation_service=secpal-ci-bootstrap-continue.service
 continuation_unit="/etc/systemd/system/$continuation_service"
 staged_operator_key=/run/secpal-ci-authorized-key
@@ -28,6 +29,14 @@ continuation_failure() {
 }
 
 trap continuation_failure EXIT
+
+if [[ -e "$diagnostic_dir" || -L "$diagnostic_dir" ]]; then
+  [[ -d "$diagnostic_dir" && ! -L "$diagnostic_dir" ]]
+  [[ "$(stat -c '%u:%g:%a' -- "$diagnostic_dir")" == 0:0:755 ]]
+else
+  install -d -o root -g root -m 0755 "$diagnostic_dir"
+fi
+failure_marker_ready=true
 
 validate_state_file() {
   local path="$1"
@@ -59,8 +68,6 @@ initial_boot_id="${pending[1]}"
 [[ "$expected_kernel" =~ ^6\.12\.[0-9]+[-+._A-Za-z0-9]*$ ]]
 [[ "$initial_boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
 
-install -d -o root -g root -m 0755 /run/secpal-ci-evidence
-failure_marker_ready=true
 systemctl disable "$continuation_service"
 /usr/local/sbin/secpal-ci-install-diagnostic-ssh \
   "$ssh_public_key" "$runner_ipv4" "$run_id" "$run_attempt"

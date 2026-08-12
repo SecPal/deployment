@@ -176,6 +176,161 @@ class CloudCIContractTests(unittest.TestCase):
             ),
         )
 
+    def test_restricted_diagnostic_ssh_survives_the_kernel_reboot(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+
+        persistent_root = "/var/lib/secpal-ci-diagnostic"
+        self.assertIn(f"diagnostic_root={persistent_root}", installer)
+        self.assertIn(
+            'diagnostic_key="$diagnostic_root/authorized-key"', installer
+        )
+        self.assertIn('diagnostic_home="$diagnostic_root/home"', installer)
+        self.assertIn(
+            'diagnostic_service_unit="/etc/systemd/system/$diagnostic_service"',
+            installer,
+        )
+        self.assertIn(
+            'diagnostic_timer_unit="/etc/systemd/system/$diagnostic_timer"',
+            installer,
+        )
+        self.assertIn(f"diagnostic_root={persistent_root}", host_setup)
+        self.assertIn(
+            'diagnostic_ssh_key="$diagnostic_root/authorized-key"', host_setup
+        )
+        self.assertIn(
+            'diagnostic_ssh_home="$diagnostic_root/home"', host_setup
+        )
+        self.assertIn(
+            "diagnostic_ssh_service_unit=/etc/systemd/system/"
+            "secpal-ci-diagnostic-sshd.service",
+            host_setup,
+        )
+        self.assertIn(
+            "diagnostic_ssh_timer_unit=/etc/systemd/system/"
+            "secpal-ci-diagnostic-sshd.timer",
+            host_setup,
+        )
+
+        self.assertNotIn("diagnostic_key=/run/", installer)
+        self.assertNotIn("diagnostic_config=/run/", installer)
+        self.assertNotIn("diagnostic_command=/run/", installer)
+        self.assertIn("WantedBy=multi-user.target", installer)
+        self.assertIn("RuntimeDirectory=sshd secpal-ci-evidence", installer)
+        self.assertIn("RuntimeDirectoryMode=0755", installer)
+        self.assertIn("RuntimeDirectoryPreserve=yes", installer)
+        self.assertIn(
+            "Before=secpal-ci-bootstrap-continue.service", installer
+        )
+        self.assertIn('systemctl enable "$diagnostic_service"', installer)
+        self.assertLess(
+            installer.index('systemctl enable "$diagnostic_service"'),
+            installer.index('systemctl restart "$diagnostic_service"'),
+        )
+        self.assertIn('systemctl disable "$diagnostic_ssh_service"', host_setup)
+        self.assertLess(
+            host_setup.index('systemctl disable "$diagnostic_ssh_service"'),
+            host_setup.index('rm -f -- "$staged_ssh_public_key"'),
+        )
+        self.assertIn('rmdir -- "$diagnostic_root"', host_setup)
+        continuation = (
+            ROOT / "scripts/ci-cloud/continue-conformance-bootstrap.sh"
+        ).read_text(encoding="utf-8")
+        diagnostic_init = (
+            'install -d -o root -g root -m 0755 "$diagnostic_dir"'
+        )
+        self.assertIn("diagnostic_dir=/run/secpal-ci-evidence", continuation)
+        self.assertIn(diagnostic_init, continuation)
+        self.assertLess(
+            continuation.index(diagnostic_init),
+            continuation.index('validate_state_file "$context_file" 1024'),
+        )
+        self.assertLess(
+            continuation.index("failure_marker_ready=true"),
+            continuation.index('validate_state_file "$context_file" 1024'),
+        )
+
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "Wants=network-online.target "
+            "secpal-ci-diagnostic-sshd.service",
+            bootstrap,
+        )
+        self.assertIn(
+            "After=network-online.target "
+            "secpal-ci-diagnostic-sshd.service",
+            bootstrap,
+        )
+
+    def test_static_contract_rejects_ephemeral_reboot_diagnostics(self) -> None:
+        cases = (
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "diagnostic_root=/var/lib/secpal-ci-diagnostic",
+                "diagnostic_root=/run/secpal-ci-diagnostic",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                'diagnostic_service_unit="/etc/systemd/system/'
+                '$diagnostic_service"',
+                'diagnostic_service_unit="/run/systemd/system/'
+                '$diagnostic_service"',
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                '  systemctl enable "$diagnostic_service" '
+                ">/dev/null 2>&1 || return 1\n",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "RuntimeDirectory=sshd secpal-ci-evidence\n",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "RuntimeDirectoryPreserve=yes\n",
+                "RuntimeDirectoryPreserve=restart\n",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "Before=secpal-ci-bootstrap-continue.service\n",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+                "After=network-online.target "
+                "secpal-ci-diagnostic-sshd.service\n",
+                "After=network-online.target\n",
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                "failure_marker_ready=true\n",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/configure-conformance-host.sh",
+                '  systemctl disable "$diagnostic_ssh_service" '
+                ">/dev/null 2>&1 || \\\n"
+                "    cleanup_failed=true\n",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/configure-conformance-host.sh",
+                '    ! rmdir -- "$diagnostic_root"; then\n',
+                "    false; then\n",
+            ),
+        )
+        for relative, old, new in cases:
+            with self.subTest(relative=relative, mutation=old):
+                self.assert_mutation_rejected(relative, old, new)
+
     def test_static_contract_rejects_unsafe_kernel_reboot_continuation(self) -> None:
         cases = (
             (
@@ -373,7 +528,9 @@ class CloudCIContractTests(unittest.TestCase):
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("diagnostic_home=/run/secpal-ci-diagnostic-home", installer)
+        self.assertIn(
+            'diagnostic_home="$diagnostic_root/home"', installer
+        )
         self.assertIn(
             'install -d -o root -g root -m 0755 "$diagnostic_home"', installer
         )
@@ -383,7 +540,7 @@ class CloudCIContractTests(unittest.TestCase):
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "diagnostic_ssh_home=/run/secpal-ci-diagnostic-home", host_setup
+            'diagnostic_ssh_home="$diagnostic_root/home"', host_setup
         )
         self.assertIn(
             '[[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]]',
@@ -826,7 +983,7 @@ class CloudCIContractTests(unittest.TestCase):
             "systemctl mask --now ssh.service ssh.socket",
             "secpal-ci-diagnostic-sshd",
             "OnActiveSec=10m",
-            "ForceCommand /run/secpal-ci-bootstrap-diagnostic",
+            "ForceCommand /usr/local/sbin/secpal-ci-bootstrap-diagnostic",
             "DisableForwarding yes",
             "PermitRootLogin no",
             "UsePAM yes",
@@ -1022,6 +1179,10 @@ class CloudCIContractTests(unittest.TestCase):
                 self.assertIn(preparation, preparation_function)
         self.assertLess(
             start_function.index("prepare_diagnostic_fallback"),
+            start_function.index('systemctl enable "$diagnostic_service"'),
+        )
+        self.assertLess(
+            start_function.index('systemctl enable "$diagnostic_service"'),
             start_function.index("systemctl mask --now ssh.service ssh.socket"),
         )
         self.assertLess(
@@ -1070,11 +1231,11 @@ class CloudCIContractTests(unittest.TestCase):
             installer,
         )
         self.assertIn(
-            'diagnostic_service_unit="/run/systemd/system/$diagnostic_service"',
+            'diagnostic_service_unit="/etc/systemd/system/$diagnostic_service"',
             installer,
         )
         self.assertIn(
-            'diagnostic_timer_unit="/run/systemd/system/$diagnostic_timer"',
+            'diagnostic_timer_unit="/etc/systemd/system/$diagnostic_timer"',
             installer,
         )
         self.assertIn(
@@ -1457,7 +1618,7 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_unrestricted_diagnostic_ssh(self) -> None:
         for old, new in (
             (
-                "ForceCommand /run/secpal-ci-bootstrap-diagnostic",
+                "ForceCommand /usr/local/sbin/secpal-ci-bootstrap-diagnostic",
                 "ForceCommand internal-sftp",
             ),
             ("PermitRootLogin no", "PermitRootLogin yes"),

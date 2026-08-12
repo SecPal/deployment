@@ -540,7 +540,7 @@ AllowUsers secpal-ci"""
         "systemctl mask --now ssh.service ssh.socket"
         in diagnostic_ssh
         and "OnActiveSec=10m" in diagnostic_ssh
-        and "ForceCommand /run/secpal-ci-bootstrap-diagnostic"
+        and "ForceCommand /usr/local/sbin/secpal-ci-bootstrap-diagnostic"
         in diagnostic_ssh
         and "DisableForwarding yes" in diagnostic_ssh
         and "PermitRootLogin no" in diagnostic_ssh
@@ -561,7 +561,13 @@ AllowUsers secpal-ci"""
         and '[[ "$password_marker" == \'*NP*\' ]] || return 1'
         in diagnostic_ssh
         and "usermod --lock" not in diagnostic_ssh
-        and "diagnostic_home=/run/secpal-ci-diagnostic-home" in diagnostic_ssh
+        and "diagnostic_root=/var/lib/secpal-ci-diagnostic" in diagnostic_ssh
+        and 'diagnostic_key="$diagnostic_root/authorized-key"' in diagnostic_ssh
+        and "diagnostic_command=/usr/local/sbin/secpal-ci-bootstrap-diagnostic"
+        in diagnostic_ssh
+        and "diagnostic_config=/etc/ssh/secpal-ci-diagnostic-sshd.conf"
+        in diagnostic_ssh
+        and 'diagnostic_home="$diagnostic_root/home"' in diagnostic_ssh
         and 'install -d -o root -g root -m 0755 "$diagnostic_home"'
         in diagnostic_ssh
         and "SECPAL_CI_DIAGNOSTIC_SSH" in diagnostic_ssh
@@ -633,8 +639,10 @@ AllowUsers secpal-ci"""
         and "ssh-keygen -A" in diagnostic_preparation
         and 'sshd -t -f "$config_tmp"' in diagnostic_preparation
         and "OnActiveSec=10m" in diagnostic_preparation
-        and "/run/systemd/system/$diagnostic_service" in diagnostic_ssh
-        and "/run/systemd/system/$diagnostic_timer" in diagnostic_ssh
+        and 'diagnostic_service_unit="/etc/systemd/system/$diagnostic_service"'
+        in diagnostic_ssh
+        and 'diagnostic_timer_unit="/etc/systemd/system/$diagnostic_timer"'
+        in diagnostic_ssh
         and 'systemd-analyze verify "$diagnostic_service_unit"'
         in diagnostic_ssh
         and 'chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp"'
@@ -657,6 +665,10 @@ AllowUsers secpal-ci"""
         in diagnostic_preparation
         and "stat -c '%u:%g:%a' -- \"$diagnostic_timer_unit\""
         in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_root\""
+        in diagnostic_preparation
+        and '"$diagnostic_root_metadata" != 0:0:755'
+        in diagnostic_preparation
         and '"$diagnostic_key_metadata" != 0:0:644'
         in diagnostic_preparation
         and '"$diagnostic_config_metadata" != 0:0:600'
@@ -668,6 +680,7 @@ AllowUsers secpal-ci"""
         and '"$diagnostic_timer_unit_metadata" != 0:0:644'
         in diagnostic_preparation
         and diagnostic_start.index("prepare_diagnostic_fallback")
+        < diagnostic_start.index('systemctl enable "$diagnostic_service"')
         < diagnostic_start.index("systemctl mask --now ssh.service ssh.socket")
         < diagnostic_start.index('systemctl restart "$diagnostic_service"')
         < diagnostic_start.index(
@@ -680,6 +693,15 @@ AllowUsers secpal-ci"""
         and "RestartSec=5s" in diagnostic_preparation
         and "StartLimitIntervalSec=2m" in diagnostic_preparation
         and "StartLimitBurst=5" in diagnostic_preparation
+        and "Wants=network-online.target" in diagnostic_preparation
+        and "After=network-online.target" in diagnostic_preparation
+        and "Before=secpal-ci-bootstrap-continue.service"
+        in diagnostic_preparation
+        and "RuntimeDirectory=sshd secpal-ci-evidence"
+        in diagnostic_preparation
+        and "RuntimeDirectoryMode=0755" in diagnostic_preparation
+        and "RuntimeDirectoryPreserve=yes" in diagnostic_preparation
+        and "WantedBy=multi-user.target" in diagnostic_preparation
         and "if ! start_diagnostic_fallback; then"
         in diagnostic_initial_transition
         and "unable to establish restricted diagnostic SSH during bootstrap"
@@ -763,10 +785,18 @@ AllowUsers secpal-ci"""
         and 'if getent group "$diagnostic_ssh_user" >/dev/null; then'
         in host_setup
         and 'groupdel "$diagnostic_ssh_user"' in host_setup
-        and "diagnostic_ssh_home=/run/secpal-ci-diagnostic-home" in host_setup
+        and "diagnostic_root=/var/lib/secpal-ci-diagnostic" in host_setup
+        and 'diagnostic_ssh_key="$diagnostic_root/authorized-key"' in host_setup
+        and 'diagnostic_ssh_home="$diagnostic_root/home"' in host_setup
+        and "diagnostic_ssh_service_unit=/etc/systemd/system/"
+        "secpal-ci-diagnostic-sshd.service" in host_setup
+        and "diagnostic_ssh_timer_unit=/etc/systemd/system/"
+        "secpal-ci-diagnostic-sshd.timer" in host_setup
+        and 'systemctl disable "$diagnostic_ssh_service"' in host_setup
         and '[[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]]'
         in host_setup
-        and 'rmdir -- "$diagnostic_ssh_home"' in host_setup,
+        and 'rmdir -- "$diagnostic_ssh_home"' in host_setup
+        and 'rmdir -- "$diagnostic_root"' in host_setup,
         "trusted SSH activation must retire or restore diagnostic SSH atomically",
     )
     require(
@@ -931,6 +961,9 @@ AllowUsers secpal-ci"""
         and "systemctl reboot" not in continuation
         and '[[ -d "$state_root" && ! -L "$state_root" ]]' in continuation
         and '== 0:0:700' in continuation
+        and "diagnostic_dir=/run/secpal-ci-evidence" in continuation
+        and 'install -d -o root -g root -m 0755 "$diagnostic_dir"'
+        in continuation
         and 'validate_state_file "$context_file" 1024' in continuation
         and 'validate_state_file "$pending_file" 256' in continuation
         and '[[ "${#context[@]}" -eq 4 && "${#pending[@]}" -eq 2 ]]'
@@ -951,6 +984,11 @@ AllowUsers secpal-ci"""
     )
     require(
         'failure_marker_ready=true' in continuation
+        and continuation.index(
+            'install -d -o root -g root -m 0755 "$diagnostic_dir"'
+        )
+        < continuation.index('failure_marker_ready=true')
+        < continuation.index('validate_state_file "$context_file" 1024')
         and 'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
         in continuation
         and 'rmdir -- "$state_root"' in continuation,
@@ -993,6 +1031,10 @@ AllowUsers secpal-ci"""
         and 'mv -T -- "$context_tmp" "$state_root/context"' in bootstrap
         and 'mv -T -- "$pending_tmp" "$pending_file"' in bootstrap
         and "ConditionPathExists=/var/lib/secpal-ci-bootstrap/pending" in bootstrap
+        and "Wants=network-online.target "
+        "secpal-ci-diagnostic-sshd.service" in bootstrap
+        and "After=network-online.target "
+        "secpal-ci-diagnostic-sshd.service" in bootstrap
         and "systemctl enable secpal-ci-bootstrap-continue.service" in bootstrap
         and bootstrap.count("systemctl reboot") == 1
         and bootstrap.index("systemctl enable secpal-ci-bootstrap-continue.service")
