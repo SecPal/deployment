@@ -54,6 +54,45 @@ if [[ -f "$completion_marker" && ! -L "$completion_marker" ]]; then
   exit 0
 fi
 
+apt_sources_dir=/etc/apt/sources.list.d
+if [[ -L "$apt_sources_dir" ]]; then
+  printf 'ERROR: APT source directory must not be a symlink.\n' >&2
+  exit 1
+fi
+install -d -o root -g root -m 0755 "$apt_sources_dir"
+if find "$apt_sources_dir" -mindepth 1 -maxdepth 1 \
+  ! -type f ! -type l -print -quit | grep -q .; then
+  printf 'ERROR: APT source directory contains an unsupported entry.\n' >&2
+  exit 1
+fi
+find "$apt_sources_dir" -mindepth 1 -maxdepth 1 \
+  \( -type f -o -type l \) -delete
+rm -f -- /etc/apt/sources.list
+install -o root -g root -m 0644 /dev/null \
+  "$apt_sources_dir/debian.sources"
+cat > "$apt_sources_dir/debian.sources" <<'SECPAL_DEBIAN_SOURCES'
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: trixie trixie-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: https://security.debian.org/debian-security
+Suites: trixie-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SECPAL_DEBIAN_SOURCES
+
+apt_lists_dir=/var/lib/apt/lists
+if [[ -L "$apt_lists_dir" ]]; then
+  printf 'ERROR: APT lists directory must not be a symlink.\n' >&2
+  exit 1
+fi
+install -d -o root -g root -m 0755 "$apt_lists_dir"
+find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \
+  \( -type f -o -type l \) -delete
+
 apt-get -o DPkg::Lock::Timeout=300 update
 apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
   aardvark-dns \

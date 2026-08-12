@@ -107,6 +107,25 @@ class CloudCIContractTests(unittest.TestCase):
             bootstrap,
         )
 
+    def test_native_bootstrap_replaces_provider_apt_sources_with_d1_sources(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Suites: trixie trixie-updates", bootstrap)
+        self.assertIn("Suites: trixie-security", bootstrap)
+        self.assertNotIn("trixie-backports", bootstrap)
+        self.assertIn("/usr/share/keyrings/debian-archive-keyring.gpg", bootstrap)
+        self.assertIn(
+            'find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \\\n'
+            "  \\( -type f -o -type l \\) -delete",
+            bootstrap,
+        )
+        self.assertLess(
+            bootstrap.index("Suites: trixie trixie-updates"),
+            bootstrap.index("apt-get -o DPkg::Lock::Timeout=300 update"),
+        )
+
     def test_native_bootstrap_validator_reports_missing_block_markers(self) -> None:
         cases = (
             (
@@ -1819,6 +1838,13 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
             "#clear Unattended-Upgrade::Origins-Pattern;\n",
             "",
+        )
+
+    def test_rejects_backports_in_native_bootstrap_sources(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "Suites: trixie trixie-updates\n",
+            "Suites: trixie trixie-updates trixie-backports\n",
         )
 
     def test_rejects_cloud_credential_in_remote_test_step(self) -> None:

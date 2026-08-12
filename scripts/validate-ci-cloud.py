@@ -455,6 +455,10 @@ AllowUsers secpal-ci"""
     for required in (
         "  gh \\\n",
         "  unattended-upgrades\n",
+        "Suites: trixie trixie-updates",
+        "Suites: trixie-security",
+        "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg",
+        'find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \\\n',
         "APT::Periodic::Unattended-Upgrade \"1\";",
         "#clear Unattended-Upgrade::Origins-Pattern;",
         "#clear Unattended-Upgrade::Package-Blacklist;",
@@ -465,6 +469,10 @@ AllowUsers secpal-ci"""
         "${host_setup_failure_script}",
     ):
         require(required in bootstrap, "native bootstrap omitted required D.1 host policy")
+    require(
+        "trixie-backports" not in bootstrap,
+        "native bootstrap must not activate the unsupported backports suite",
+    )
     require("set -euo pipefail" in host_setup, "host setup must use strict Bash mode")
     require(
         "ssh_authorized_keys" not in bootstrap

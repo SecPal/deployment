@@ -502,6 +502,7 @@
             "unix_listener",
             "service_process",
             "process_scan_incomplete",
+            "listener_scan_incomplete",
             "remote_connection"
           ],
           "properties": {
@@ -517,6 +518,7 @@
             "unix_listener": { "type": "boolean" },
             "service_process": { "type": "boolean" },
             "process_scan_incomplete": { "type": "boolean" },
+            "listener_scan_incomplete": { "type": "boolean" },
             "remote_connection": { "type": "boolean" }
           }
         },

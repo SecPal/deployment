@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import stat
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -182,6 +183,7 @@ def valid_facts() -> dict[str, object]:
                 "unix_listener": False,
                 "service_process": False,
                 "process_scan_incomplete": False,
+                "listener_scan_incomplete": False,
                 "remote_connection": False,
             },
             "updates": {
@@ -274,6 +276,81 @@ class CloudHostAdmissionTests(unittest.TestCase):
             self.assertEqual(
                 ("Debian", "trixie"),
                 self.collector.package_policy_provenance("podman", "1.0-1"),
+            )
+
+    def test_package_origin_accepts_real_debian_policy_without_release_line(self) -> None:
+        policy = """podman:
+  Installed: 5.4.2+ds1-2+b2
+  Candidate: 5.4.2+ds1-2+b2
+  Version table:
+ *** 5.4.2+ds1-2+b2 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+"""
+        with mock.patch.object(
+            self.collector, "checked_output", return_value=policy
+        ):
+            self.assertEqual(
+                ("Debian", "trixie"),
+                self.collector.package_policy_provenance(
+                    "podman", "5.4.2+ds1-2+b2"
+                ),
+            )
+
+    def test_package_origin_rejects_external_source_spoofing_debian_release(self) -> None:
+        policy = """podman:
+  Installed: 5.4.2+ds1-2+b2
+  Candidate: 5.4.2+ds1-2+b2
+  Version table:
+ *** 5.4.2+ds1-2+b2 500
+        500 https://packages.example.invalid/debian trixie/main amd64 Packages
+           release o=Debian,n=trixie,l=Debian,c=main,b=amd64
+        100 /var/lib/dpkg/status
+"""
+        with mock.patch.object(
+            self.collector, "checked_output", return_value=policy
+        ):
+            self.assertEqual(
+                ("", "trixie"),
+                self.collector.package_policy_provenance(
+                    "podman", "5.4.2+ds1-2+b2"
+                ),
+            )
+
+    def test_verified_releases_ignore_stale_inactive_backports_metadata(self) -> None:
+        release_files = [
+            f"/var/lib/apt/lists/debian_dists_{suite}_InRelease"
+            for suite in (
+                "trixie",
+                "trixie-security",
+                "trixie-updates",
+                "trixie-backports",
+            )
+        ]
+
+        def read_text(path: Path, limit: int = 8192) -> str:
+            del limit
+            suite = path.name.removeprefix("debian_dists_").removesuffix(
+                "_InRelease"
+            )
+            origin = "Debian Backports" if suite == "trixie-backports" else "Debian"
+            return f"Origin: {origin}\nCodename: {suite}\n"
+
+        metadata = mock.Mock(st_uid=0, st_mode=stat.S_IFREG | 0o644)
+        with (
+            mock.patch.object(self.collector.glob, "glob", return_value=release_files),
+            mock.patch.object(self.collector, "read_text", side_effect=read_text),
+            mock.patch.object(Path, "stat", return_value=metadata),
+        ):
+            self.assertEqual(
+                (
+                    ["Debian"],
+                    ["trixie", "trixie-security", "trixie-updates"],
+                    True,
+                ),
+                self.collector.verified_releases(
+                    {"trixie", "trixie-security", "trixie-updates"}
+                ),
             )
 
     def test_gcp_metadata_probe_detects_an_attached_identity(self) -> None:
@@ -405,6 +482,14 @@ location = "backup.example.invalid"
 
     def test_rejects_incomplete_security_update_policy(self) -> None:
         self.assert_failure(("host", "security_updates", "automatic"), False, "D1_SECURITY_UPDATE_POLICY")
+
+    def test_guest_memory_is_evidence_not_an_unmeasured_admission_floor(self) -> None:
+        facts = valid_facts()
+        facts["platform"]["memory_bytes"] = 4 * 1024**3
+        self.assertNotIn(
+            "D1_MINIMUM_MEMORY_8_GIB",
+            self.collector.admission_failures(facts, "intel"),
+        )
 
     def test_rejects_missing_required_tool(self) -> None:
         self.assert_failure(("host", "required_tools", "missing"), ["gh"], "D1_REQUIRED_TOOLS")
@@ -571,30 +656,96 @@ Unattended-Upgrade::Automatic-Reboot "false";
             facts = self.collector.security_update_facts()
         self.assertFalse(facts["timer_enabled"])
 
+    def test_security_update_policy_reads_complete_large_apt_configuration(self) -> None:
+        config = "X" * 9000 + '''
+APT::Periodic::Enable "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Origins-Pattern:: "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Package-Blacklist:: "podman";
+Unattended-Upgrade::Package-Blacklist:: "conmon";
+Unattended-Upgrade::Package-Blacklist:: "crun";
+Unattended-Upgrade::Package-Blacklist:: "netavark";
+Unattended-Upgrade::Package-Blacklist:: "aardvark-dns";
+Unattended-Upgrade::Package-Blacklist:: "passt";
+Unattended-Upgrade::Package-Blacklist:: "uidmap";
+Unattended-Upgrade::Package-Blacklist:: "dbus-user-session";
+'''
+
+        def checked_output(
+            arguments: list[str], timeout: int = 15, output_limit: int = 8192
+        ) -> str:
+            del timeout
+            self.assertEqual(["apt-config", "dump"], arguments)
+            self.assertGreaterEqual(output_limit, len(config))
+            return config[:output_limit]
+
+        with (
+            mock.patch.object(
+                self.collector, "checked_output", side_effect=checked_output
+            ),
+            mock.patch.object(self.collector, "package_version", return_value="2.12"),
+            mock.patch.object(
+                self.collector, "systemd_unit_enabled", return_value=True
+            ),
+        ):
+            self.assertEqual(
+                {
+                    "mechanism": "unattended-upgrades",
+                    "automatic": True,
+                    "timer_enabled": True,
+                    "security_suite": "trixie-security",
+                    "normal_updates_automatic": False,
+                    "major_release_upgrades_automatic": False,
+                    "automatic_reboot": False,
+                    "runtime_packages_excluded": True,
+                },
+                self.collector.security_update_facts(),
+            )
+
     def test_detects_manually_launched_unix_podman_api(self) -> None:
-        def output(arguments: list[str], timeout: int = 15) -> str:
+        def command_result(
+            arguments: list[str], timeout: int = 15
+        ) -> tuple[int, str]:
             del timeout
             if arguments == ["ss", "-lxnp"]:
-                return 'u_str LISTEN 0 4096 /tmp/fixture.sock users:(("podman",pid=42,fd=3))'
-            return ""
+                return (
+                    0,
+                    'u_str LISTEN 0 4096 /tmp/fixture.sock '
+                    'users:(("podman",pid=42,fd=3))',
+                )
+            if arguments == ["ss", "-ltnp"]:
+                return 0, ""
+            return 1, "inactive"
 
         with (
-            mock.patch.object(self.collector, "command_result", return_value=(1, "inactive")),
-            mock.patch.object(self.collector, "output", side_effect=output),
+            mock.patch.object(
+                self.collector, "command_result", side_effect=command_result
+            ),
             mock.patch.object(self.collector, "json_array_output", return_value=[]),
         ):
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["unix_listener"])
 
-    def test_treats_inaccessible_known_podman_socket_as_present(self) -> None:
+    def test_stale_known_podman_socket_is_not_an_active_listener(self) -> None:
+        def command_result(
+            arguments: list[str], timeout: int = 15
+        ) -> tuple[int, str]:
+            del timeout
+            if arguments in (["ss", "-lxnp"], ["ss", "-ltnp"]):
+                return 0, ""
+            return 1, "inactive"
+
         with (
-            mock.patch.object(self.collector, "command_result", return_value=(1, "inactive")),
-            mock.patch.object(self.collector, "output", return_value=""),
+            mock.patch.object(
+                self.collector, "command_result", side_effect=command_result
+            ),
             mock.patch.object(self.collector, "json_array_output", return_value=[]),
-            mock.patch.object(Path, "is_socket", side_effect=PermissionError("denied")),
+            mock.patch.object(Path, "is_socket", return_value=True),
         ):
             facts = self.collector.podman_api_facts()
-        self.assertTrue(facts["unix_listener"])
+        self.assertFalse(facts["unix_listener"])
+        self.assertFalse(facts["listener_scan_incomplete"])
 
     def test_rejects_missing_effective_root_ssh_denial(self) -> None:
         self.assert_failure(("host", "ssh", "root_login_denied"), False, "D1_ROOT_SSH_DISABLED")

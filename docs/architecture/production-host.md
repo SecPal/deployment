@@ -275,24 +275,26 @@ compliance from package presence or copy declarative inventory values.
 
 ## Resource admission contract
 
-The figures below are admission floors, not a claim about customer capacity.
-There is no production workload measurement yet. The minimum deliberately
-reserves room for the simultaneously present API, two worker classes,
-scheduler, frontend, PostgreSQL, Valkey, and a future edge, while the
-recommended tier doubles compute and memory and adds storage headroom for the
-first measurement cycle.
+CPU, storage, and inode values below are provisional admission floors. There is
+no production workload measurement yet. Memory is therefore not assigned a
+universal D.1 floor: every inventory still declares an explicit positive byte
+requirement and host facts must meet it, but that operator-selected value is not
+presented as an empirically proven SecPal minimum. The initial 8 GiB planning
+share remains useful for the first measurement cycle without rejecting a host
+solely because provider-reserved memory makes its guest-visible value smaller.
 
-| Resource            |   Minimum | Recommended | Evidence and behavior below the floor                                                                                                                                    |
-| ------------------- | --------: | ----------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Logical CPU         |         4 |           8 | Scheduling floor for the current role set; admission fails below 4. Production load tests in D.10 must replace assumptions with measured concurrency.                    |
-| RAM                 |     8 GiB |      16 GiB | Allows bounded concurrent services without treating swap as capacity; admission fails below 8 GiB. D.10 measures peak RSS and OOM margin.                                |
-| Total local storage |   100 GiB |     250 GiB | Conservative first-host envelope for images plus state paths; admission fails below 100 GiB. D.2 and D.7 replace allocations with measured data growth and backup sizes. |
-| Total inodes        | 1,000,000 |   2,000,000 | Protects image layers, logs, framework cache files, and state trees; admission fails below 1,000,000. D.10 records peak inode consumption.                               |
+| Resource            |            Minimum |                   Recommended | Evidence and behavior below the floor                                                                                                                                    |
+| ------------------- | -----------------: | ----------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Logical CPU         |                  4 |                             8 | Scheduling floor for the current role set; admission fails below 4. Production load tests in D.10 must replace assumptions with measured concurrency.                    |
+| RAM                 | Inventory-selected | 8 GiB initial planning target | Guest-visible memory is recorded and compared with the explicit inventory; D.10 must establish peak RSS and OOM margin before a universal floor is claimed.              |
+| Total local storage |            100 GiB |                       250 GiB | Conservative first-host envelope for images plus state paths; admission fails below 100 GiB. D.2 and D.7 replace allocations with measured data growth and backup sizes. |
+| Total inodes        |          1,000,000 |                     2,000,000 | Protects image layers, logs, framework cache files, and state trees; admission fails below 1,000,000. D.10 records peak inode consumption.                               |
 
-### Quantified minimum envelope
+### Initial unmeasured planning envelope
 
-The CPU and RAM floor is the sum of explicit planning shares for the current
-eight long-lived roles. These are admission budgets, not measured utilization:
+The CPU floor and initial RAM target use explicit planning shares for the
+current eight long-lived roles. The RAM total is not a universal admission
+floor and is not measured utilization:
 
 | Role group                              | Logical CPU share | RAM share |
 | --------------------------------------- | ----------------: | --------: |
@@ -301,7 +303,7 @@ eight long-lived roles. These are admission budgets, not measured utilization:
 | API request role                        |              0.75 |   1.5 GiB |
 | General and activity-hash-chain workers |              0.75 |   1.5 GiB |
 | Scheduler and frontend                  |              0.50 |     1 GiB |
-| **Minimum admission envelope**          |          **4.00** | **8 GiB** |
+| **Initial planning envelope**           |          **4.00** | **8 GiB** |
 
 The 100 GiB and 1,000,000-inode floor is likewise an explicit planning sum:
 
