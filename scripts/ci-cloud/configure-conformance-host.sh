@@ -28,6 +28,8 @@ diagnostic_ssh_home="$diagnostic_root/home"
 diagnostic_ssh_service_unit=/etc/systemd/system/secpal-ci-diagnostic-sshd.service
 diagnostic_ssh_timer_unit=/etc/systemd/system/secpal-ci-diagnostic-sshd.timer
 diagnostic_ssh_recovery_service_unit=/etc/systemd/system/secpal-ci-diagnostic-ssh-recover.service
+ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock
+ssh_handoff_lock_fd=""
 runner_ipv4="${1:-}"
 setup_stage="initialize"
 snapshot_tmp=""
@@ -43,6 +45,44 @@ is_ipv4() {
     [[ "$octet" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
     ((10#$octet <= 255)) || return 1
   done
+}
+
+acquire_ssh_handoff_lock() {
+  local fd_identity lock_identity
+
+  [[ -z "$ssh_handoff_lock_fd" ]] || return 1
+  command -v flock >/dev/null || return 1
+  [[ -d /run && ! -L /run && "$(stat -c '%u:%g:%a' -- /run)" == 0:0:755 ]] ||
+    return 1
+  if [[ ! -e "$ssh_handoff_lock" && ! -L "$ssh_handoff_lock" ]]; then
+    (umask 077; set -o noclobber; : >"$ssh_handoff_lock") 2>/dev/null || true
+  fi
+  [[ -f "$ssh_handoff_lock" && ! -L "$ssh_handoff_lock" ]] || return 1
+  lock_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "$ssh_handoff_lock"
+  )" || return 1
+  [[ "$lock_identity" == *:0:0:600 ]] || return 1
+  exec {ssh_handoff_lock_fd}<>"$ssh_handoff_lock" || return 1
+  if ! flock -x "$ssh_handoff_lock_fd"; then
+    exec {ssh_handoff_lock_fd}>&-
+    ssh_handoff_lock_fd=""
+    return 1
+  fi
+  if ! lock_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "$ssh_handoff_lock"
+  )" || ! fd_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "/proc/self/fd/$ssh_handoff_lock_fd"
+  )" || [[ "$lock_identity" != "$fd_identity" ||
+    "$lock_identity" != *:0:0:600 ]]; then
+    release_ssh_handoff_lock
+    return 1
+  fi
+}
+
+release_ssh_handoff_lock() {
+  [[ -n "$ssh_handoff_lock_fd" ]] || return 0
+  exec {ssh_handoff_lock_fd}>&-
+  ssh_handoff_lock_fd=""
 }
 
 validate_staged_operator_key() {
@@ -170,8 +210,10 @@ validate_effective_sshd_config() {
 
 stop_diagnostic_ssh() {
   systemctl stop "$diagnostic_ssh_timer" 2>/dev/null || true
+  systemctl stop "$diagnostic_ssh_recovery_service" 2>/dev/null || true
   systemctl stop "$diagnostic_ssh_service" 2>/dev/null || true
   ! systemctl is-active --quiet "$diagnostic_ssh_timer" &&
+    ! systemctl is-active --quiet "$diagnostic_ssh_recovery_service" &&
     ! systemctl is-active --quiet "$diagnostic_ssh_service"
 }
 
@@ -266,6 +308,34 @@ publish_completion_marker() {
   fi
 }
 
+perform_operator_ssh_handoff() {
+  if ! systemctl stop "$diagnostic_ssh_service" ||
+    systemctl is-active --quiet "$diagnostic_ssh_service"; then
+    printf 'ERROR: unable to stop restricted diagnostic SSH.\n' >&2
+    return 1
+  fi
+  if ! systemctl unmask ssh.service ssh.socket ||
+    ! systemctl disable --now ssh.socket ||
+    ! systemctl enable ssh.service; then
+    printf 'ERROR: unable to prepare the trusted SSH service.\n' >&2
+    return 1
+  fi
+  if [[ ! -f "$diagnostic_ssh_selector" ||
+    -L "$diagnostic_ssh_selector" ]] ||
+    ! rm -f -- "$diagnostic_ssh_selector" ||
+    [[ -e "$diagnostic_ssh_selector" || -L "$diagnostic_ssh_selector" ]]; then
+    printf 'ERROR: unable to select trusted operator SSH.\n' >&2
+    return 1
+  fi
+  if ! systemctl restart ssh.service ||
+    ! systemctl is-active --quiet ssh.service ||
+    systemctl is-active --quiet ssh.socket; then
+    printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
+    return 1
+  fi
+  publish_completion_marker
+}
+
 activate_operator_ssh() {
   local authorized_keys_tmp_dir directory_metadata installed_metadata
 
@@ -354,41 +424,16 @@ activate_operator_ssh() {
     printf 'ERROR: unable to arm diagnostic SSH recovery.\n' >&2
     return 1
   fi
-  if ! systemctl stop "$diagnostic_ssh_service" ||
-    systemctl is-active --quiet "$diagnostic_ssh_service"; then
-    rm -f -- "$active_ssh_authorized_keys"
-    rmdir -- "$active_ssh_authorized_keys_dir" || true
-    printf 'ERROR: unable to stop restricted diagnostic SSH.\n' >&2
+  if ! acquire_ssh_handoff_lock; then
+    printf 'ERROR: unable to serialize the SSH handoff.\n' >&2
     return 1
   fi
-  if ! systemctl unmask ssh.service ssh.socket ||
-    ! systemctl disable --now ssh.socket ||
-    ! systemctl enable ssh.service; then
-    rm -f -- "$active_ssh_authorized_keys"
-    rmdir -- "$active_ssh_authorized_keys_dir" || true
-    restore_diagnostic_ssh || true
-    printf 'ERROR: unable to prepare the trusted SSH service.\n' >&2
-    return 1
-  fi
-  if [[ ! -f "$diagnostic_ssh_selector" ||
-    -L "$diagnostic_ssh_selector" ]] ||
-    ! rm -f -- "$diagnostic_ssh_selector" ||
-    [[ -e "$diagnostic_ssh_selector" || -L "$diagnostic_ssh_selector" ]]; then
-    restore_diagnostic_ssh || true
-    printf 'ERROR: unable to select trusted operator SSH.\n' >&2
-    return 1
-  fi
-  if ! systemctl restart ssh.service ||
-    ! systemctl is-active --quiet ssh.service ||
-    systemctl is-active --quiet ssh.socket; then
-    restore_diagnostic_ssh || true
-    printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
-    return 1
-  fi
-  if ! publish_completion_marker; then
+  if ! perform_operator_ssh_handoff; then
+    release_ssh_handoff_lock
     restore_diagnostic_ssh || true
     return 1
   fi
+  release_ssh_handoff_lock
   ssh_key_activated=true
   if ! retire_diagnostic_ssh; then
     printf 'WARNING: trusted SSH is committed; deferred diagnostic cleanup failed.\n' >&2
@@ -400,6 +445,7 @@ record_setup_failure() {
   trap - EXIT
   set +e
   [[ -z "$snapshot_tmp" ]] || rm -f -- "$snapshot_tmp"
+  release_ssh_handoff_lock
   if [[ "$status" -ne 0 ]]; then
     "$failure_writer" write "$setup_stage" "$status" || true
     restore_diagnostic_ssh || true

@@ -231,9 +231,9 @@ class CloudCIContractTests(unittest.TestCase):
             installer.index('systemctl enable "$diagnostic_service"'),
             installer.index('systemctl restart "$diagnostic_service"'),
         )
-        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
-            "\n}\n", 1
-        )[0]
+        activation = host_setup.split(
+            "perform_operator_ssh_handoff() {", 1
+        )[1].split("\n}\n", 1)[0]
         retirement = host_setup.split("retire_diagnostic_ssh() {", 1)[1].split(
             "\n}\n", 1
         )[0]
@@ -288,6 +288,9 @@ class CloudCIContractTests(unittest.TestCase):
         activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
             "\n}", 1
         )[0]
+        handoff = host_setup.split("perform_operator_ssh_handoff() {", 1)[
+            1
+        ].split("\n}", 1)[0]
         restore = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
             "\n}", 1
         )[0]
@@ -301,18 +304,18 @@ class CloudCIContractTests(unittest.TestCase):
             installer,
         )
         self.assertIn("operator_ssh_boot_gate_is_valid() {", host_setup)
-        marker = "if ! publish_completion_marker; then"
+        marker = "publish_completion_marker"
         stop_diagnostic = 'systemctl stop "$diagnostic_ssh_service"'
         restart_operator = "systemctl restart ssh.service"
-        self.assertIn(stop_diagnostic, activation)
-        self.assertNotIn('systemctl disable "$diagnostic_ssh_service"', activation)
+        self.assertIn(stop_diagnostic, handoff)
+        self.assertNotIn('systemctl disable "$diagnostic_ssh_service"', handoff)
         self.assertLess(
-            activation.index(stop_diagnostic),
-            activation.index(marker),
+            handoff.index(stop_diagnostic),
+            handoff.index(marker),
         )
         self.assertLess(
-            activation.index(restart_operator),
-            activation.index(marker),
+            handoff.index(restart_operator),
+            handoff.index(marker),
         )
         self.assertNotIn('systemctl enable "$diagnostic_ssh_service"', restore)
         self.assertLess(
@@ -324,9 +327,9 @@ class CloudCIContractTests(unittest.TestCase):
         installer = (
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
         ).read_text(encoding="utf-8")
-        start = installer.split("start_diagnostic_fallback() {", 1)[1].split(
-            "\n}", 1
-        )[0]
+        start = installer.split("start_diagnostic_fallback_locked() {", 1)[
+            1
+        ].split("\n}", 1)[0]
 
         selector = "/var/lib/secpal-ci-diagnostic/selected"
         self.assertIn('diagnostic_selector="$diagnostic_root/selected"', installer)
@@ -355,6 +358,9 @@ class CloudCIContractTests(unittest.TestCase):
         activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
             "\n}", 1
         )[0]
+        handoff = host_setup.split("perform_operator_ssh_handoff() {", 1)[
+            1
+        ].split("\n}", 1)[0]
         restore = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
             "\n}", 1
         )[0]
@@ -369,25 +375,89 @@ class CloudCIContractTests(unittest.TestCase):
             "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             installer.split("<<'RECOVERY'", 1)[1].split("\nRECOVERY", 1)[0],
         )
-        self.assertIn('rm -f -- "$diagnostic_ssh_selector"', activation)
+        self.assertIn('rm -f -- "$diagnostic_ssh_selector"', handoff)
         self.assertLess(
             activation.index("arm_diagnostic_ssh_recovery"),
-            activation.index('systemctl stop "$diagnostic_ssh_service"'),
+            activation.index("acquire_ssh_handoff_lock"),
         )
         self.assertLess(
-            activation.index("systemctl enable ssh.service"),
-            activation.index('rm -f -- "$diagnostic_ssh_selector"'),
+            handoff.index("systemctl enable ssh.service"),
+            handoff.index('rm -f -- "$diagnostic_ssh_selector"'),
         )
         self.assertLess(
-            activation.index('rm -f -- "$diagnostic_ssh_selector"'),
-            activation.index("systemctl restart ssh.service"),
+            handoff.index('rm -f -- "$diagnostic_ssh_selector"'),
+            handoff.index("systemctl restart ssh.service"),
         )
         self.assertLess(
-            activation.index("systemctl is-active --quiet ssh.service"),
-            activation.index("if ! publish_completion_marker; then"),
+            handoff.index("systemctl is-active --quiet ssh.service"),
+            handoff.index("publish_completion_marker"),
         )
         self.assertIn(
             'systemctl start "$diagnostic_ssh_recovery_service"', restore
+        )
+
+    def test_ssh_handoff_and_recovery_share_one_kernel_lock(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        recovery = installer.split("<<'RECOVERY'\n", 1)[1].split(
+            "\nRECOVERY", 1
+        )[0]
+        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
+            "\n}", 1
+        )[0]
+        handoff = host_setup.split("perform_operator_ssh_handoff() {", 1)[
+            1
+        ].split("\n}", 1)[0]
+        diagnostic_start = installer.split("start_diagnostic_fallback() {", 1)[
+            1
+        ].split("\n}", 1)[0]
+        locked_start = installer.split(
+            "start_diagnostic_fallback_locked() {", 1
+        )[1].split("\n}", 1)[0]
+        stop_diagnostic = host_setup.split("stop_diagnostic_ssh() {", 1)[
+            1
+        ].split("\n}", 1)[0]
+
+        lock = "ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock"
+        self.assertIn(lock, installer)
+        self.assertIn(lock, recovery)
+        self.assertIn(lock, host_setup)
+        self.assertLess(
+            recovery.index('flock -x "$ssh_handoff_lock_fd"'),
+            recovery.index('[[ ! -e "$completion_marker"'),
+        )
+        self.assertLess(
+            activation.index("acquire_ssh_handoff_lock"),
+            activation.index("perform_operator_ssh_handoff"),
+        )
+        self.assertLess(
+            activation.index("perform_operator_ssh_handoff"),
+            activation.index("release_ssh_handoff_lock"),
+        )
+        self.assertIn("publish_completion_marker", handoff)
+        self.assertLess(
+            diagnostic_start.index("acquire_ssh_handoff_lock"),
+            diagnostic_start.index("start_diagnostic_fallback_locked"),
+        )
+        self.assertLess(
+            locked_start.index("completed_setup_is_valid"),
+            locked_start.index(
+                'rm -f -- "$completion_marker" "$active_operator_key"'
+            ),
+        )
+        self.assertLess(
+            locked_start.index(
+                'rm -f -- "$completion_marker" "$active_operator_key"'
+            ),
+            locked_start.index("prepare_diagnostic_fallback"),
+        )
+        self.assertIn(
+            'systemctl stop "$diagnostic_ssh_recovery_service"',
+            stop_diagnostic,
         )
 
     def test_systemd_reboot_contract_has_no_sshd_binary_dependency(self) -> None:
@@ -465,6 +535,24 @@ class CloudCIContractTests(unittest.TestCase):
                 "",
             ),
             (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                'exec 9<>"$ssh_handoff_lock"\n'
+                'flock -x "$ssh_handoff_lock_fd"\n',
+                'exec 9<>"$ssh_handoff_lock"\n',
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "  acquire_ssh_handoff_lock || return 1\n",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "  if completed_setup_is_valid; then\n"
+                "    return 0\n"
+                "  fi\n",
+                "",
+            ),
+            (
                 "scripts/ci-cloud/configure-conformance-host.sh",
                 '    ! rm -f -- "$diagnostic_ssh_selector" ||\n',
                 "",
@@ -473,6 +561,16 @@ class CloudCIContractTests(unittest.TestCase):
                 "scripts/ci-cloud/configure-conformance-host.sh",
                 '  systemctl start "$diagnostic_ssh_recovery_service" || return 1\n',
                 "",
+            ),
+            (
+                "scripts/ci-cloud/configure-conformance-host.sh",
+                "  if ! acquire_ssh_handoff_lock; then\n",
+                "  if false; then\n",
+            ),
+            (
+                "scripts/ci-cloud/configure-conformance-host.sh",
+                "  release_ssh_handoff_lock\n  ssh_key_activated=true\n",
+                "  ssh_key_activated=true\n",
             ),
             (
                 "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
@@ -1044,19 +1142,29 @@ class CloudCIContractTests(unittest.TestCase):
         )
         expose_file = 'chmod 0644 "$active_ssh_authorized_keys"'
         expose_directory = 'chmod 0755 "$active_ssh_authorized_keys_dir"'
+        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
+            "\n}", 1
+        )[0]
+        handoff = host_setup.split("perform_operator_ssh_handoff() {", 1)[
+            1
+        ].split("\n}", 1)[0]
         self.assertIn(private_install, host_setup)
         self.assertIn(expose_file, host_setup)
         self.assertIn(expose_directory, host_setup)
-        self.assertLess(host_setup.index(private_install), host_setup.index(publish))
-        self.assertLess(host_setup.index(publish), host_setup.index(expose_file))
-        self.assertLess(host_setup.index(expose_file), host_setup.index(expose_directory))
         self.assertLess(
-            host_setup.index(expose_directory),
-            host_setup.index("systemctl unmask ssh.service ssh.socket"),
+            activation.index(private_install), activation.index(publish)
+        )
+        self.assertLess(activation.index(publish), activation.index(expose_file))
+        self.assertLess(
+            activation.index(expose_file), activation.index(expose_directory)
         )
         self.assertLess(
-            host_setup.index("systemctl unmask ssh.service ssh.socket"),
-            host_setup.index("systemctl restart ssh.service"),
+            activation.index(expose_directory),
+            activation.index("perform_operator_ssh_handoff"),
+        )
+        self.assertLess(
+            handoff.index("systemctl unmask ssh.service ssh.socket"),
+            handoff.index("systemctl restart ssh.service"),
         )
         self.assertNotIn('chmod 0755 "$authorized_keys_tmp_dir"', host_setup)
         remote = (
@@ -1090,17 +1198,23 @@ class CloudCIContractTests(unittest.TestCase):
         activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
             "\n}\n", 1
         )[0]
+        handoff = host_setup.split("perform_operator_ssh_handoff() {", 1)[
+            1
+        ].split("\n}\n", 1)[0]
 
-        marker = "if ! publish_completion_marker; then"
+        marker = "publish_completion_marker"
         restart = "systemctl restart ssh.service"
         activated = "ssh_key_activated=true"
         retirement = "retire_diagnostic_ssh"
-        self.assertIn(marker, activation)
-        self.assertIn(restart, activation)
+        self.assertIn(marker, handoff)
+        self.assertIn(restart, handoff)
         self.assertIn(activated, activation)
         self.assertIn(retirement, activation)
-        self.assertLess(activation.index(restart), activation.index(marker))
-        self.assertLess(activation.index(marker), activation.index(activated))
+        self.assertLess(handoff.index(restart), handoff.index(marker))
+        self.assertLess(
+            activation.index("perform_operator_ssh_handoff"),
+            activation.index(activated),
+        )
         self.assertLess(activation.index(activated), activation.index(retirement))
         arm_timer = "arm_diagnostic_ssh_recovery"
         stop_listener = 'systemctl stop "$diagnostic_ssh_service"'
@@ -1114,12 +1228,15 @@ class CloudCIContractTests(unittest.TestCase):
             'systemctl is-active --quiet "$diagnostic_ssh_timer"',
             recovery,
         )
-        self.assertIn(stop_listener, activation)
-        self.assertIn(verify_primary, activation)
-        self.assertLess(activation.index(arm_timer), activation.index(stop_listener))
-        self.assertLess(activation.index(stop_listener), activation.index(restart))
-        self.assertLess(activation.index(restart), activation.index(verify_primary))
-        self.assertLess(activation.index(verify_primary), activation.index(retirement))
+        self.assertIn(stop_listener, handoff)
+        self.assertIn(verify_primary, handoff)
+        self.assertLess(
+            activation.index(arm_timer),
+            activation.index("perform_operator_ssh_handoff"),
+        )
+        self.assertLess(handoff.index(stop_listener), handoff.index(restart))
+        self.assertLess(handoff.index(restart), handoff.index(verify_primary))
+        self.assertLess(activation.index(activated), activation.index(retirement))
 
     def test_pre_runcmd_failure_keeps_restricted_diagnostic_ssh(self) -> None:
         installer = (
@@ -1338,8 +1455,10 @@ class CloudCIContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         preparation_function = installer.split(
             "prepare_diagnostic_fallback() {", 1
-        )[1].split("\nstart_diagnostic_fallback() {", 1)[0]
-        start_function = installer.split("start_diagnostic_fallback() {", 1)[
+        )[1].split("\nstart_diagnostic_fallback_locked() {", 1)[0]
+        start_function = installer.split(
+            "start_diagnostic_fallback_locked() {", 1
+        )[
             1
         ].split("\n}\n", 1)[0]
         for preparation in (
@@ -1430,8 +1549,10 @@ class CloudCIContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         preparation = installer.split(
             "prepare_diagnostic_fallback() {", 1
-        )[1].split("\nstart_diagnostic_fallback() {", 1)[0]
-        initial_start = installer.split("start_diagnostic_fallback() {", 1)[
+        )[1].split("\nstart_diagnostic_fallback_locked() {", 1)[0]
+        initial_start = installer.split(
+            "start_diagnostic_fallback_locked() {", 1
+        )[
             1
         ].split("\n}\n", 1)[0]
         restore = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
@@ -1503,7 +1624,7 @@ class CloudCIContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         preparation = installer.split("prepare_diagnostic_fallback() {", 1)[
             1
-        ].split("\nstart_diagnostic_fallback() {", 1)[0]
+        ].split("\nstart_diagnostic_fallback_locked() {", 1)[0]
         reporter = preparation.split("<<'DIAGNOSTIC'\n", 1)[1].split(
             "\nDIAGNOSTIC", 1
         )[0]
@@ -1606,13 +1727,16 @@ class CloudCIContractTests(unittest.TestCase):
             host_setup,
         )
         self.assertIn("publish_completion_marker", host_setup)
+        handoff = host_setup.split("perform_operator_ssh_handoff() {", 1)[
+            1
+        ].split("\n}", 1)[0]
         self.assertLess(
-            host_setup.index('systemctl restart ssh.service'),
-            host_setup.index("if ! publish_completion_marker; then"),
+            handoff.index('systemctl restart ssh.service'),
+            handoff.index("publish_completion_marker"),
         )
         self.assertLess(
-            host_setup.index("systemctl enable ssh.service"),
-            host_setup.index("systemctl restart ssh.service"),
+            handoff.index("systemctl enable ssh.service"),
+            handoff.index("systemctl restart ssh.service"),
         )
         self.assertIn('rm -f -- "$completion_marker"', host_setup)
         self.assertNotIn("/run/secpal-ci-authorized-keys", host_setup)
@@ -1751,10 +1875,7 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_operator_start_before_setup_commit(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/configure-conformance-host.sh",
-            "  if ! publish_completion_marker; then\n"
-            "    restore_diagnostic_ssh || true\n"
-            "    return 1\n"
-            "  fi\n",
+            "  publish_completion_marker\n",
             "",
         )
 
@@ -1933,9 +2054,9 @@ class CloudCIContractTests(unittest.TestCase):
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
-        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
-            "\n}\n", 1
-        )[0]
+        activation = host_setup.split(
+            "perform_operator_ssh_handoff() {", 1
+        )[1].split("\n}\n", 1)[0]
         self.assertIn("systemctl disable --now ssh.socket", activation)
         self.assertLess(
             activation.index("systemctl disable --now ssh.socket"),

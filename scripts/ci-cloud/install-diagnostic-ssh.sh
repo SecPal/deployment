@@ -27,6 +27,8 @@ active_operator_key="$active_operator_root/authorized-keys/secpal-ci"
 completion_marker="$active_operator_root/host-setup-complete"
 operator_ssh_gate_dir=/etc/systemd/system/ssh.service.d
 operator_ssh_gate="$operator_ssh_gate_dir/secpal-ci-ready.conf"
+ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock
+ssh_handoff_lock_fd=""
 key_tmp=""
 command_tmp=""
 recovery_command_tmp=""
@@ -49,6 +51,7 @@ cleanup() {
   [[ -z "$timer_tmp" ]] || rm -f -- "$timer_tmp"
   [[ -z "$recovery_service_tmp" ]] || rm -f -- "$recovery_service_tmp"
   [[ -z "$operator_gate_tmp" ]] || rm -f -- "$operator_gate_tmp"
+  release_ssh_handoff_lock
   if [[ "$status" -ne 0 && "$validated_context" == true ]]; then
     if ! start_diagnostic_fallback; then
       printf 'ERROR: unable to establish restricted diagnostic SSH after installer failure.\n' >&2
@@ -69,6 +72,44 @@ is_ipv4() {
     [[ "$octet" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
     ((10#$octet <= 255)) || return 1
   done
+}
+
+acquire_ssh_handoff_lock() {
+  local fd_identity lock_identity
+
+  [[ -z "$ssh_handoff_lock_fd" ]] || return 1
+  command -v flock >/dev/null || return 1
+  [[ -d /run && ! -L /run && "$(stat -c '%u:%g:%a' -- /run)" == 0:0:755 ]] ||
+    return 1
+  if [[ ! -e "$ssh_handoff_lock" && ! -L "$ssh_handoff_lock" ]]; then
+    (umask 077; set -o noclobber; : >"$ssh_handoff_lock") 2>/dev/null || true
+  fi
+  [[ -f "$ssh_handoff_lock" && ! -L "$ssh_handoff_lock" ]] || return 1
+  lock_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "$ssh_handoff_lock"
+  )" || return 1
+  [[ "$lock_identity" == *:0:0:600 ]] || return 1
+  exec {ssh_handoff_lock_fd}<>"$ssh_handoff_lock" || return 1
+  if ! flock -x "$ssh_handoff_lock_fd"; then
+    exec {ssh_handoff_lock_fd}>&-
+    ssh_handoff_lock_fd=""
+    return 1
+  fi
+  if ! lock_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "$ssh_handoff_lock"
+  )" || ! fd_identity="$(
+    stat -Lc '%d:%i:%u:%g:%a' -- "/proc/self/fd/$ssh_handoff_lock_fd"
+  )" || [[ "$lock_identity" != "$fd_identity" ||
+    "$lock_identity" != *:0:0:600 ]]; then
+    release_ssh_handoff_lock
+    return 1
+  fi
+}
+
+release_ssh_handoff_lock() {
+  [[ -n "$ssh_handoff_lock_fd" ]] || return 0
+  exec {ssh_handoff_lock_fd}>&-
+  ssh_handoff_lock_fd=""
 }
 
 validate_effective_sshd_config() {
@@ -347,6 +388,8 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 diagnostic_root=/var/lib/secpal-ci-diagnostic
 diagnostic_selector="$diagnostic_root/selected"
 completion_marker=/var/lib/secpal-ci/host-setup-complete
+ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock
+ssh_handoff_lock_fd=9
 selector_tmp=""
 
 cleanup() {
@@ -357,6 +400,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
+command -v flock >/dev/null
+[[ -d /run && ! -L /run && "$(stat -c '%u:%g:%a' -- /run)" == 0:0:755 ]]
+if [[ ! -e "$ssh_handoff_lock" && ! -L "$ssh_handoff_lock" ]]; then
+  (umask 077; set -o noclobber; : >"$ssh_handoff_lock") 2>/dev/null || true
+fi
+[[ -f "$ssh_handoff_lock" && ! -L "$ssh_handoff_lock" ]]
+lock_identity="$(stat -Lc '%d:%i:%u:%g:%a' -- "$ssh_handoff_lock")"
+[[ "$lock_identity" == *:0:0:600 ]]
+exec 9<>"$ssh_handoff_lock"
+flock -x "$ssh_handoff_lock_fd"
+fd_identity="$(
+  stat -Lc '%d:%i:%u:%g:%a' -- "/proc/self/fd/$ssh_handoff_lock_fd"
+)"
+lock_identity="$(stat -Lc '%d:%i:%u:%g:%a' -- "$ssh_handoff_lock")"
+[[ "$lock_identity" == "$fd_identity" && "$lock_identity" == *:0:0:600 ]]
 [[ ! -e "$completion_marker" && ! -L "$completion_marker" ]]
 [[ -d "$diagnostic_root" && ! -L "$diagnostic_root" ]]
 [[ "$(stat -c '%u:%g:%a' -- "$diagnostic_root")" == 0:0:755 ]]
@@ -524,7 +582,11 @@ EOF
   systemctl daemon-reload || return 1
 }
 
-start_diagnostic_fallback() {
+start_diagnostic_fallback_locked() {
+  if completed_setup_is_valid; then
+    return 0
+  fi
+  rm -f -- "$completion_marker" "$active_operator_key" || return 1
   prepare_diagnostic_fallback || return 1
   systemctl enable "$diagnostic_service" >/dev/null 2>&1 || return 1
   select_diagnostic_ssh || return 1
@@ -537,6 +599,15 @@ start_diagnostic_fallback() {
   fi
   systemctl stop "$diagnostic_timer" || return 1
   ! systemctl is-active --quiet "$diagnostic_timer"
+}
+
+start_diagnostic_fallback() {
+  local status=0
+
+  acquire_ssh_handoff_lock || return 1
+  start_diagnostic_fallback_locked || status=$?
+  release_ssh_handoff_lock || status=1
+  return "$status"
 }
 
 if [[ "$#" -ne 4 ]] || ! is_ipv4 "$2" ||
@@ -560,7 +631,6 @@ validated_context=true
 if completed_setup_is_valid; then
   exit 0
 fi
-rm -f -- "$completion_marker" "$active_operator_key"
 
 if ! start_diagnostic_fallback; then
   printf 'ERROR: unable to establish restricted diagnostic SSH during bootstrap.\n' >&2

@@ -594,10 +594,22 @@ AllowUsers secpal-ci"""
         "\n}",
         "diagnostic cleanup block",
     )
+    diagnostic_handoff_lock = required_block(
+        diagnostic_installer_runtime,
+        "acquire_ssh_handoff_lock() {",
+        "\n}",
+        "diagnostic handoff lock block",
+    )
+    host_handoff_lock = required_block(
+        host_setup,
+        "acquire_ssh_handoff_lock() {",
+        "\n}",
+        "host handoff lock block",
+    )
     diagnostic_preparation = required_block(
         diagnostic_ssh,
         "prepare_diagnostic_fallback() {",
-        "\nstart_diagnostic_fallback() {",
+        "\nstart_diagnostic_fallback_locked() {",
         "diagnostic preparation block",
     )
     diagnostic_start = required_block(
@@ -606,9 +618,15 @@ AllowUsers secpal-ci"""
         "\n}",
         "diagnostic start block",
     )
+    diagnostic_start_locked = required_block(
+        diagnostic_ssh,
+        "start_diagnostic_fallback_locked() {",
+        "\n}",
+        "locked diagnostic start block",
+    )
     diagnostic_initial_transition = required_suffix(
         diagnostic_ssh,
-        "if completed_setup_is_valid; then",
+        "\nif completed_setup_is_valid; then\n  exit 0\nfi\n",
         "completed setup transition",
     )
     operator_activation = required_block(
@@ -616,6 +634,18 @@ AllowUsers secpal-ci"""
         "activate_operator_ssh() {",
         "\n}",
         "operator SSH activation block",
+    )
+    operator_handoff = required_block(
+        host_setup,
+        "perform_operator_ssh_handoff() {",
+        "\n}",
+        "serialized operator SSH handoff block",
+    )
+    diagnostic_stop = required_block(
+        host_setup,
+        "stop_diagnostic_ssh() {",
+        "\n}",
+        "diagnostic stop block",
     )
     diagnostic_restore = required_block(
         host_setup,
@@ -715,17 +745,25 @@ AllowUsers secpal-ci"""
         in diagnostic_preparation
         and '"$diagnostic_recovery_service_unit_metadata" != 0:0:644'
         in diagnostic_preparation
-        and diagnostic_start.index("prepare_diagnostic_fallback")
-        < diagnostic_start.index('systemctl enable "$diagnostic_service"')
-        < diagnostic_start.index("select_diagnostic_ssh")
-        < diagnostic_start.index("systemctl mask --now ssh.service ssh.socket")
-        < diagnostic_start.index('systemctl restart "$diagnostic_service"')
-        < diagnostic_start.index(
+        and "if completed_setup_is_valid; then\n    return 0\n  fi\n"
+        in diagnostic_start_locked
+        and diagnostic_start_locked.index("completed_setup_is_valid")
+        < diagnostic_start_locked.index(
+            'rm -f -- "$completion_marker" "$active_operator_key"'
+        )
+        < diagnostic_start_locked.index("prepare_diagnostic_fallback")
+        < diagnostic_start_locked.index('systemctl enable "$diagnostic_service"')
+        < diagnostic_start_locked.index("select_diagnostic_ssh")
+        < diagnostic_start_locked.index(
+            "systemctl mask --now ssh.service ssh.socket"
+        )
+        < diagnostic_start_locked.index('systemctl restart "$diagnostic_service"')
+        < diagnostic_start_locked.index(
             'systemctl is-active --quiet "$diagnostic_service"'
         )
-        < diagnostic_start.index('systemctl stop "$diagnostic_timer"')
+        < diagnostic_start_locked.index('systemctl stop "$diagnostic_timer"')
         and '! systemctl is-active --quiet "$diagnostic_timer"'
-        in diagnostic_start
+        in diagnostic_start_locked
         and "Restart=on-failure" in diagnostic_preparation
         and "RestartSec=5s" in diagnostic_preparation
         and "StartLimitIntervalSec=2m" in diagnostic_preparation
@@ -741,6 +779,8 @@ AllowUsers secpal-ci"""
         and "WantedBy=multi-user.target" in diagnostic_preparation
         and "if ! start_diagnostic_fallback; then"
         in diagnostic_initial_transition
+        and 'rm -f -- "$completion_marker" "$active_operator_key"'
+        not in diagnostic_initial_transition
         and "unable to establish restricted diagnostic SSH during bootstrap"
         in diagnostic_initial_transition
         and "\nprepare_diagnostic_fallback\n"
@@ -791,23 +831,29 @@ AllowUsers secpal-ci"""
         and 'systemctl is-active --quiet "$diagnostic_ssh_timer"'
         in diagnostic_recovery
         and "arm_diagnostic_ssh_recovery" in operator_activation
-        and 'systemctl stop "$diagnostic_ssh_service"' in operator_activation
-        and 'systemctl enable ssh.service' in operator_activation
-        and 'rm -f -- "$diagnostic_ssh_selector"' in operator_activation
-        and 'systemctl restart ssh.service' in operator_activation
-        and 'systemctl is-active --quiet ssh.service' in operator_activation
+        and 'systemctl stop "$diagnostic_ssh_service"' in operator_handoff
+        and 'systemctl enable ssh.service' in operator_handoff
+        and 'rm -f -- "$diagnostic_ssh_selector"' in operator_handoff
+        and 'systemctl restart ssh.service' in operator_handoff
+        and 'systemctl is-active --quiet ssh.service' in operator_handoff
+        and "publish_completion_marker" in operator_handoff
         and operator_activation.index(
             "arm_diagnostic_ssh_recovery"
         )
-        < operator_activation.index(
+        < operator_activation.index("acquire_ssh_handoff_lock")
+        < operator_activation.index("perform_operator_ssh_handoff")
+        < operator_activation.index("retire_diagnostic_ssh")
+        and operator_activation.count("release_ssh_handoff_lock") == 2
+        and "  release_ssh_handoff_lock\n  ssh_key_activated=true\n"
+        in operator_activation
+        and operator_handoff.index(
             'systemctl stop "$diagnostic_ssh_service"'
         )
-        < operator_activation.index("systemctl enable ssh.service")
-        < operator_activation.index('rm -f -- "$diagnostic_ssh_selector"')
-        < operator_activation.index("systemctl restart ssh.service")
-        < operator_activation.index("systemctl is-active --quiet ssh.service")
-        < operator_activation.index("if ! publish_completion_marker; then")
-        < operator_activation.index("retire_diagnostic_ssh")
+        < operator_handoff.index("systemctl enable ssh.service")
+        < operator_handoff.index('rm -f -- "$diagnostic_ssh_selector"')
+        < operator_handoff.index("systemctl restart ssh.service")
+        < operator_handoff.index("systemctl is-active --quiet ssh.service")
+        < operator_handoff.index("publish_completion_marker")
         and diagnostic_restore.index('rm -f -- "$completion_marker"')
         < diagnostic_restore.index(
             'systemctl start "$diagnostic_ssh_recovery_service"'
@@ -828,6 +874,19 @@ AllowUsers secpal-ci"""
         in diagnostic_recovery_command
         and "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         in diagnostic_recovery_command
+        and "ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock"
+        in diagnostic_recovery_command
+        and "set -o noclobber" in diagnostic_recovery_command
+        and '"/proc/self/fd/$ssh_handoff_lock_fd"'
+        in diagnostic_recovery_command
+        and '"$lock_identity" == "$fd_identity"'
+        in diagnostic_recovery_command
+        and diagnostic_recovery_command.index(
+            'flock -x "$ssh_handoff_lock_fd"'
+        )
+        < diagnostic_recovery_command.index(
+            '[[ ! -e "$completion_marker" && ! -L "$completion_marker" ]]'
+        )
         and 'mv -T -- "$selector_tmp" "$diagnostic_selector"'
         in diagnostic_recovery_command
         and diagnostic_recovery_command.index(
@@ -838,7 +897,26 @@ AllowUsers secpal-ci"""
         )
         < diagnostic_recovery_command.index(
             "systemctl restart secpal-ci-diagnostic-sshd.service"
-        ),
+        )
+        and "ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock" in host_setup
+        and "ssh_handoff_lock=/run/secpal-ci-ssh-handoff.lock" in diagnostic_ssh
+        and "command -v flock >/dev/null" in diagnostic_handoff_lock
+        and "command -v flock >/dev/null" in host_handoff_lock
+        and "set -o noclobber" in diagnostic_handoff_lock
+        and "set -o noclobber" in host_handoff_lock
+        and 'flock -x "$ssh_handoff_lock_fd"' in diagnostic_handoff_lock
+        and 'flock -x "$ssh_handoff_lock_fd"' in host_handoff_lock
+        and '"/proc/self/fd/$ssh_handoff_lock_fd"' in diagnostic_handoff_lock
+        and '"/proc/self/fd/$ssh_handoff_lock_fd"' in host_handoff_lock
+        and '"$lock_identity" != "$fd_identity"' in diagnostic_handoff_lock
+        and '"$lock_identity" != "$fd_identity"' in host_handoff_lock
+        and diagnostic_start.index("acquire_ssh_handoff_lock")
+        < diagnostic_start.index("start_diagnostic_fallback_locked")
+        < diagnostic_start.index("release_ssh_handoff_lock")
+        and 'systemctl stop "$diagnostic_ssh_recovery_service"'
+        in diagnostic_stop
+        and '! systemctl is-active --quiet "$diagnostic_ssh_recovery_service"'
+        in diagnostic_stop,
         "SSH handoffs must retain a verified listener or armed recovery timer",
     )
     require(
@@ -968,19 +1046,23 @@ AllowUsers secpal-ci"""
         and "systemctl enable ssh.service" in host_setup
         and "systemctl restart ssh.service" in host_setup
         and 'chmod 0755 "$authorized_keys_tmp_dir"' not in host_setup
-        and host_setup.index(private_key_install) < host_setup.index(key_publish)
-        < host_setup.index(published_key_chmod)
-        < host_setup.index(published_directory_chmod)
-        < host_setup.index("systemctl unmask ssh.service ssh.socket")
-        < host_setup.index("systemctl disable --now ssh.socket")
-        < host_setup.index("systemctl enable ssh.service")
-        < host_setup.index("systemctl restart ssh.service"),
+        and operator_activation.index(private_key_install)
+        < operator_activation.index(key_publish)
+        < operator_activation.index(published_key_chmod)
+        < operator_activation.index(published_directory_chmod)
+        < operator_activation.index("perform_operator_ssh_handoff")
+        and operator_handoff.index("systemctl unmask ssh.service ssh.socket")
+        < operator_handoff.index("systemctl disable --now ssh.socket")
+        < operator_handoff.index("systemctl enable ssh.service")
+        < operator_handoff.index("systemctl restart ssh.service"),
         "operator SSH key staging must remain private until publication",
     )
     require(
-        operator_activation.index('rm -f -- "$diagnostic_ssh_selector"')
-        < operator_activation.index("systemctl restart ssh.service")
-        < operator_activation.index("if ! publish_completion_marker; then")
+        operator_handoff.index('rm -f -- "$diagnostic_ssh_selector"')
+        < operator_handoff.index("systemctl restart ssh.service")
+        < operator_handoff.index("publish_completion_marker")
+        and operator_activation.index("perform_operator_ssh_handoff")
+        < operator_activation.index("release_ssh_handoff_lock")
         < operator_activation.index("ssh_key_activated=true")
         < operator_activation.index("if ! retire_diagnostic_ssh; then")
         and 'rm -f -- "$completion_marker"' in host_setup,

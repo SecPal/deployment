@@ -58,7 +58,10 @@ SPDX-License-Identifier: CC0-1.0
   and operator SSH complementary boot gates before either transition can race a
   reboot. An independent recovery unit restores that selector after an
   interrupted handoff, while the completion marker is published only after the
-  operator listener is verified active and then prevents later recovery.
+  operator listener is verified active and then prevents later recovery. The
+  initial transition, operator handoff, and timed recovery now share one
+  kernel-released, root-owned lock, preventing a timer expiry from racing the
+  final listener verification and setup commit.
 - Normalized disposable hosts to the exact Debian 13 Stable, Updates, and
   Security source set before package installation; corrected bounded APT
   provenance and merged-policy collection for real Debian output; and

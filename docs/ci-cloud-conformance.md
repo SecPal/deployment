@@ -430,9 +430,16 @@ activation inactive, and only then publishes a root-owned mode `0400`
 completion marker. Before stopping the diagnostic daemon, it re-arms the
 recovery timer; the timer targets a separate recovery unit that recreates the
 selector, masks primary SSH, and restores the restricted listener whenever the
-completion marker is still absent. Thus an abrupt interruption during the
-handoff retains deterministic recovery without relying on an EXIT handler, even
-after the selector has moved to operator mode. The marker is the rollback-safe
+completion marker is still absent. The initial diagnostic transition, operator
+handoff, and recovery command serialize their state changes with the same
+root-owned mode `0600` file lock under `/run`. The operator handoff holds this
+kernel-managed lock through primary-listener verification and atomic marker
+publication. A recovery process whose timer expires concurrently waits for the
+lock and rechecks the marker only after acquiring it. Process termination closes
+the file descriptor and releases the lock automatically, so recovery remains
+available without a stale userspace lock. Thus an abrupt interruption during
+the handoff retains deterministic recovery without relying on an EXIT handler,
+even after the selector has moved to operator mode. The marker is the rollback-safe
 setup commit and records an already verified operator listener. If main SSH
 activation or marker publication fails,
 the published operator key and marker are revoked, the main service is masked
@@ -475,7 +482,9 @@ choice. After selection and until a verified operator handoff, the restricted
 diagnostic listener is the only boot choice. Removing the selector changes the
 boot choice atomically to the already prepared operator service, while the
 independent recovery unit can reverse that choice until the completion marker
-is published. Only these closed transition states may continue trusted setup.
+is published. Successful retirement first stops the timer and waits for any
+running recovery unit before removing its command and unit. Only these closed
+and serialized transition states may continue trusted setup.
 After successful setup,
 the persistent operator key and completion marker survive reboot. If the provider invokes the
 native bootstrap again, its idempotent entry validates the marker,
