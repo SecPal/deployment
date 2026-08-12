@@ -458,7 +458,9 @@ AllowUsers secpal-ci"""
         "Suites: trixie trixie-updates",
         "Suites: trixie-security",
         "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg",
-        'find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \\\n',
+        'find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \\\n'
+        "  ! -name lock \\( -type f -o -type l \\) -delete",
+        "APT::Update::Pre-Invoke::=$apt_lists_cleanup",
         "APT::Periodic::Unattended-Upgrade \"1\";",
         "#clear Unattended-Upgrade::Origins-Pattern;",
         "#clear Unattended-Upgrade::Package-Blacklist;",

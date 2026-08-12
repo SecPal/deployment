@@ -503,6 +503,7 @@
             "service_process",
             "process_scan_incomplete",
             "listener_scan_incomplete",
+            "connection_scan_incomplete",
             "remote_connection"
           ],
           "properties": {
@@ -519,6 +520,7 @@
             "service_process": { "type": "boolean" },
             "process_scan_incomplete": { "type": "boolean" },
             "listener_scan_incomplete": { "type": "boolean" },
+            "connection_scan_incomplete": { "type": "boolean" },
             "remote_connection": { "type": "boolean" }
           }
         },

@@ -68,9 +68,8 @@ fi
 find "$apt_sources_dir" -mindepth 1 -maxdepth 1 \
   \( -type f -o -type l \) -delete
 rm -f -- /etc/apt/sources.list
-install -o root -g root -m 0644 /dev/null \
-  "$apt_sources_dir/debian.sources"
-cat > "$apt_sources_dir/debian.sources" <<'SECPAL_DEBIAN_SOURCES'
+debian_sources_tmp="$(mktemp "$apt_sources_dir/.debian.sources.XXXXXX")"
+cat > "$debian_sources_tmp" <<'SECPAL_DEBIAN_SOURCES'
 Types: deb
 URIs: https://deb.debian.org/debian
 Suites: trixie trixie-updates
@@ -83,6 +82,9 @@ Suites: trixie-security
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 SECPAL_DEBIAN_SOURCES
+chown root:root "$debian_sources_tmp"
+chmod 0644 "$debian_sources_tmp"
+mv -f -- "$debian_sources_tmp" "$apt_sources_dir/debian.sources"
 
 apt_lists_dir=/var/lib/apt/lists
 if [[ -L "$apt_lists_dir" ]]; then
@@ -90,10 +92,23 @@ if [[ -L "$apt_lists_dir" ]]; then
   exit 1
 fi
 install -d -o root -g root -m 0755 "$apt_lists_dir"
-find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \
-  \( -type f -o -type l \) -delete
+apt_lists_cleanup=/usr/local/sbin/secpal-ci-reset-apt-lists
+install -o root -g root -m 0700 /dev/null "$apt_lists_cleanup"
+cat > "$apt_lists_cleanup" <<'SECPAL_APT_LISTS_CLEANUP'
+#!/usr/bin/env bash
+set -euo pipefail
 
-apt-get -o DPkg::Lock::Timeout=300 update
+apt_lists_dir=/var/lib/apt/lists
+if [[ -L "$apt_lists_dir" || -L "$apt_lists_dir/lock" ]]; then
+  printf 'ERROR: APT lists path must not contain a symlink.\n' >&2
+  exit 1
+fi
+find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \
+  ! -name lock \( -type f -o -type l \) -delete
+SECPAL_APT_LISTS_CLEANUP
+
+apt-get -o DPkg::Lock::Timeout=300 \
+  -o "APT::Update::Pre-Invoke::=$apt_lists_cleanup" update
 apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
   aardvark-dns \
   apparmor \

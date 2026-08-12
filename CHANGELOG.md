@@ -45,7 +45,9 @@ SPDX-License-Identifier: CC0-1.0
 - Normalized disposable hosts to the exact Debian 13 Stable, Updates, and
   Security source set before package installation; corrected bounded APT
   provenance and merged-policy collection for real Debian output; and
-  distinguished active Podman API listeners from stale socket files.
+  distinguished active Podman API listeners from stale socket files. APT list
+  cleanup now preserves and runs under APT's own lock, unexpected release
+  metadata fails closed, and truncated listener scans cannot prove API absence.
 - Kept guest-visible memory as exact cloud evidence without enforcing the
   previous unmeasured universal 8 GiB D.1 floor; inventories continue to carry
   an explicit positive memory requirement until workload evidence establishes

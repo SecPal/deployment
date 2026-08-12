@@ -223,6 +223,7 @@ def valid_document() -> dict[str, object]:
                 "service_process": False,
                 "process_scan_incomplete": False,
                 "listener_scan_incomplete": False,
+                "connection_scan_incomplete": False,
                 "remote_connection": False,
             },
             "updates": {
