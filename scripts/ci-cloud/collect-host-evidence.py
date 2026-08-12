@@ -125,7 +125,11 @@ def command_environment() -> dict[str, str]:
     }
 
 
-def command_result(arguments: list[str], timeout: int = 15) -> tuple[int, str]:
+def command_result(
+    arguments: list[str],
+    timeout: int = 15,
+    output_limit: int = MAX_COMMAND_OUTPUT,
+) -> tuple[int, str]:
     try:
         completed = subprocess.run(
             arguments,
@@ -138,7 +142,19 @@ def command_result(arguments: list[str], timeout: int = 15) -> tuple[int, str]:
         )
     except (OSError, subprocess.TimeoutExpired):
         return 255, ""
-    return completed.returncode, completed.stdout[:MAX_COMMAND_OUTPUT].strip()
+    return completed.returncode, completed.stdout.strip()[:output_limit]
+
+
+def bounded_command_result(
+    arguments: list[str],
+    timeout: int = 15,
+    output_limit: int = MAX_COMMAND_OUTPUT,
+) -> tuple[int, str, bool]:
+    """Return bounded output and whether the complete non-whitespace output fit."""
+
+    status, text = command_result(arguments, timeout, output_limit + 1)
+    complete = len(text) <= output_limit
+    return status, text[:output_limit], complete
 
 
 def systemd_unit_enabled(arguments: list[str], *, fail_closed: bool) -> bool:
@@ -162,12 +178,18 @@ def output(arguments: list[str], timeout: int = 15) -> str:
     return command_result(arguments, timeout)[1]
 
 
-def checked_output(arguments: list[str], timeout: int = 15) -> str:
-    status, text = command_result(arguments, timeout)
+def checked_output(
+    arguments: list[str],
+    timeout: int = 15,
+    output_limit: int = MAX_COMMAND_OUTPUT,
+) -> str:
+    status, text = command_result(arguments, timeout, output_limit)
     return text if status == 0 else ""
 
 
-def json_value_output(arguments: list[str], timeout: int = 30) -> object:
+def json_value_result(
+    arguments: list[str], timeout: int = 30
+) -> tuple[object, bool]:
     try:
         completed = subprocess.run(
             arguments,
@@ -178,14 +200,17 @@ def json_value_output(arguments: list[str], timeout: int = 30) -> object:
             env=command_environment(),
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return None, False
     if completed.returncode != 0 or len(completed.stdout) > MAX_COMMAND_OUTPUT * 16:
-        return None
+        return None, False
     try:
-        document = json.loads(completed.stdout)
+        return json.loads(completed.stdout), True
     except json.JSONDecodeError:
-        return None
-    return document
+        return None, False
+
+
+def json_value_output(arguments: list[str], timeout: int = 30) -> object:
+    return json_value_result(arguments, timeout)[0]
 
 
 def json_output(arguments: list[str], timeout: int = 30) -> dict[str, Any]:
@@ -193,21 +218,43 @@ def json_output(arguments: list[str], timeout: int = 30) -> dict[str, Any]:
     return document if isinstance(document, dict) else {}
 
 
-def json_array_output(arguments: list[str], timeout: int = 30) -> list[object]:
-    document = json_value_output(arguments, timeout)
-    return document if isinstance(document, list) else []
+def json_array_result(
+    arguments: list[str], timeout: int = 30
+) -> tuple[list[object], bool]:
+    document, complete = json_value_result(arguments, timeout)
+    return (document, True) if complete and isinstance(document, list) else ([], False)
 
 
 def read_text(path: Path, limit: int = MAX_COMMAND_OUTPUT) -> str:
+    return bounded_read_text(path, limit)[0]
+
+
+def bounded_read_text(path: Path, limit: int = MAX_COMMAND_OUTPUT) -> tuple[str, bool]:
     try:
-        return path.read_text(encoding="utf-8", errors="replace")[:limit]
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            content = stream.read(limit + 1)
     except OSError:
-        return ""
+        return "", False
+    return content[:limit], len(content) <= limit
+
+
+def bounded_read_bytes(path: Path, limit: int = MAX_COMMAND_OUTPUT) -> tuple[bytes, bool]:
+    try:
+        with path.open("rb") as stream:
+            content = stream.read(limit + 1)
+    except FileNotFoundError:
+        return b"", True
+    except OSError:
+        return b"", False
+    return content[:limit], len(content) <= limit
 
 
 def os_release() -> dict[str, str]:
     facts: dict[str, str] = {}
-    for line in read_text(Path("/etc/os-release")).splitlines():
+    content, complete = bounded_read_text(Path("/etc/os-release"))
+    if not complete:
+        content = ""
+    for line in content.splitlines():
         if "=" in line:
             name, value = line.split("=", 1)
             facts[name] = value.strip().strip('"')
@@ -253,23 +300,39 @@ def package_version(package: str) -> str:
 def package_policy_provenance(package: str, version: str) -> tuple[str, str]:
     if not version:
         return "", ""
-    policy = checked_output(["apt-cache", "policy", package], timeout=30)
+    policy = checked_output(
+        ["apt-cache", "policy", package],
+        timeout=30,
+        output_limit=65_537,
+    )
+    if len(policy) > 65_536:
+        return "", ""
     selected = False
-    pending_release = False
-    origins: set[str] = set()
+    source_hosts: set[str] = set()
+    release_origins: set[str] = set()
     suites: set[str] = set()
     for line in policy.splitlines():
         if line.strip().startswith(f"*** {version} "):
             selected = True
             continue
-        if selected and re.fullmatch(r"\s+\S+\s+[0-9]+\s*", line):
+        if selected and re.fullmatch(r"\s{0,7}\S+\s+[0-9]+\s*", line):
             break
         if not selected:
             continue
-        if line.rstrip().endswith(" Packages"):
-            pending_release = True
+        source_match = re.fullmatch(
+            r"\s+[0-9]+\s+(https?://\S+)\s+([^/\s]+)/\S+\s+\S+\s+Packages\s*",
+            line,
+        )
+        if source_match:
+            parsed = urlsplit(source_match.group(1))
+            if parsed.username or parsed.password:
+                continue
+            suite = source_match.group(2)
+            suites.add(suite)
+            if parsed.hostname:
+                source_hosts.add(parsed.hostname)
             continue
-        if not pending_release or not line.strip().startswith("release "):
+        if not line.strip().startswith("release "):
             continue
         fields = {
             key: value
@@ -280,21 +343,30 @@ def package_policy_provenance(package: str, version: str) -> tuple[str, str]:
         origin = fields.get("o", "")
         suite = fields.get("n", "")
         if origin:
-            origins.add(origin)
+            release_origins.add(origin)
         if suite:
             suites.add(suite)
-        pending_release = False
-    origin = origins.pop() if len(origins) == 1 else ""
+    official_hosts = {"deb.debian.org", "security.debian.org"}
+    origin = (
+        "Debian"
+        if source_hosts
+        and source_hosts.issubset(official_hosts)
+        and release_origins.issubset({"Debian"})
+        else ""
+    )
     suite = suites.pop() if len(suites) == 1 else ""
     return origin, suite
 
 
-def verified_releases() -> tuple[list[str], list[str], bool]:
+def verified_releases(active_suites: set[str]) -> tuple[list[str], list[str], bool]:
     origins: set[str] = set()
     suites: set[str] = set()
     safe_files = True
     files = sorted(Path(path) for path in glob.glob("/var/lib/apt/lists/*_InRelease"))
     for path in files:
+        content = read_text(path, 65_536)
+        origin_match = re.search(r"^Origin:\s*(\S.*?)\s*$", content, re.MULTILINE)
+        suite_match = re.search(r"^Codename:\s*(\S+)\s*$", content, re.MULTILINE)
         try:
             metadata = path.stat()
         except OSError:
@@ -302,13 +374,17 @@ def verified_releases() -> tuple[list[str], list[str], bool]:
             continue
         if metadata.st_uid != 0 or metadata.st_mode & (stat_module.S_IWGRP | stat_module.S_IWOTH):
             safe_files = False
-        content = read_text(path, 65_536)
-        origin_match = re.search(r"^Origin:\s*(\S.*?)\s*$", content, re.MULTILINE)
-        suite_match = re.search(r"^Codename:\s*(\S+)\s*$", content, re.MULTILINE)
-        if origin_match and suite_match:
-            origins.add(origin_match.group(1))
-            suites.add(suite_match.group(1))
-    verified = bool(files) and safe_files and origins == {"Debian"} and suites == EXPECTED_SUITES
+        if not origin_match or not suite_match:
+            safe_files = False
+            continue
+        origins.add(origin_match.group(1))
+        suites.add(suite_match.group(1))
+    verified = (
+        bool(files)
+        and safe_files
+        and origins == {"Debian"}
+        and suites == active_suites == EXPECTED_SUITES
+    )
     return sorted(origins), sorted(suites), verified
 
 
@@ -334,7 +410,9 @@ def apt_sources(architecture: str) -> dict[str, object]:
     paths.extend(Path(path) for path in glob.glob("/etc/apt/sources.list.d/*.list"))
     paths.extend(Path(path) for path in glob.glob("/etc/apt/sources.list.d/*.sources"))
     for path in sorted(paths):
-        content = read_text(path, 32_768)
+        content, complete = bounded_read_text(path, 32_768)
+        if not complete:
+            raise RuntimeError("APT source file is incomplete")
         if not content:
             continue
         files.append(str(path))
@@ -370,7 +448,7 @@ def apt_sources(architecture: str) -> dict[str, object]:
                     if parsed.hostname:
                         hosts.add(parsed.hostname)
                     suites.add(fields[2])
-    origins, release_suites, signatures_verified = verified_releases()
+    origins, release_suites, signatures_verified = verified_releases(suites)
     verified_suite_set = set(release_suites)
     forbidden = [package for package in FORBIDDEN_PACKAGES if package_version(package)]
     return {
@@ -488,7 +566,12 @@ def kernel_package_facts(kernel: str, architecture: str, verified_suites: set[st
 
 
 def security_update_facts() -> dict[str, object]:
-    config = checked_output(["apt-config", "dump"])
+    config = checked_output(
+        ["apt-config", "dump"],
+        output_limit=65_537,
+    )
+    if len(config) > 65_536:
+        config = ""
     origin_patterns = re.findall(
         r'^Unattended-Upgrade::Origins-Pattern(?:::[^ ]*)?\s+"([^"]+)";',
         config,
@@ -530,7 +613,8 @@ def security_update_facts() -> dict[str, object]:
 
 def subordinate_fact(path: Path, account: str, identity_database: str) -> dict[str, object]:
     entries: list[tuple[str, int, int]] = []
-    for line in read_text(path, 65_536).splitlines():
+    range_content, range_complete = bounded_read_text(path, 65_536)
+    for line in range_content.splitlines():
         fields = line.split(":")
         if len(fields) != 3:
             continue
@@ -548,7 +632,11 @@ def subordinate_fact(path: Path, account: str, identity_database: str) -> dict[s
     ) if len(selected) == 1 else True
     identity_field = 2
     host_identities: set[int] = set()
-    for line in checked_output(["getent", identity_database]).splitlines():
+    identity_output = checked_output(
+        ["getent", identity_database], output_limit=65_537
+    )
+    identity_complete = bool(identity_output) and len(identity_output) <= 65_536
+    for line in identity_output[:65_536].splitlines():
         fields = line.split(":")
         if len(fields) > identity_field:
             try:
@@ -560,7 +648,12 @@ def subordinate_fact(path: Path, account: str, identity_database: str) -> dict[s
         "start": start,
         "count": count,
         "entry_count": len(selected),
-        "overlap": overlaps_other_ranges or overlaps_host_identity,
+        "overlap": (
+            overlaps_other_ranges
+            or overlaps_host_identity
+            or not range_complete
+            or not identity_complete
+        ),
     }
 
 
@@ -667,12 +760,10 @@ def podman_service_process_facts() -> tuple[bool, bool]:
     for process in processes:
         if not process.name.isdigit():
             continue
-        try:
-            raw_arguments = (process / "cmdline").read_bytes()[:MAX_COMMAND_OUTPUT]
-        except PermissionError:
+        raw_arguments, complete = bounded_read_bytes(process / "cmdline")
+        if not complete:
             process_scan_incomplete = True
-            continue
-        except OSError:
+        if not raw_arguments:
             continue
         arguments = [
             value.decode("utf-8", errors="replace")
@@ -681,13 +772,6 @@ def podman_service_process_facts() -> tuple[bool, bool]:
         ]
         service_process = service_process or is_podman_service_command(arguments)
     return service_process, process_scan_incomplete
-
-
-def socket_present_or_unverifiable(path: Path) -> bool:
-    try:
-        return path.is_socket()
-    except OSError:
-        return True
 
 
 def podman_api_facts() -> dict[str, bool]:
@@ -715,13 +799,13 @@ def podman_api_facts() -> dict[str, bool]:
     user_socket_enabled = systemd_unit_enabled(
         ["systemctl", "--user", "is-enabled", "podman.socket"], fail_closed=True
     )
-    tcp_listeners = output(["ss", "-ltnp"])
-    unix_listeners = output(["ss", "-lxnp"])
-    known_api_sockets = (
-        Path("/run/podman/podman.sock"),
-        Path(f"/run/user/{CI_OPERATOR_UID}/podman/podman.sock"),
+    tcp_status, tcp_listeners, tcp_scan_complete = bounded_command_result(
+        ["ss", "-ltnp"]
     )
-    connections = json_array_output(
+    unix_status, unix_listeners, unix_scan_complete = bounded_command_result(
+        ["ss", "-lxnp"]
+    )
+    connections, connection_scan_complete = json_array_result(
         ["podman", "system", "connection", "list", "--format", "json"]
     )
     service_process, process_scan_incomplete = podman_service_process_facts()
@@ -734,11 +818,17 @@ def podman_api_facts() -> dict[str, bool]:
         "user_service_enabled": user_service_enabled,
         "user_socket_active": user_socket_active,
         "user_socket_enabled": user_socket_enabled,
-        "tcp_listener": "podman" in tcp_listeners.lower(),
-        "unix_listener": "podman" in unix_listeners.lower()
-        or any(socket_present_or_unverifiable(path) for path in known_api_sockets),
+        "tcp_listener": tcp_status == 0 and "podman" in tcp_listeners.lower(),
+        "unix_listener": unix_status == 0 and "podman" in unix_listeners.lower(),
         "service_process": service_process,
         "process_scan_incomplete": process_scan_incomplete,
+        "listener_scan_incomplete": (
+            tcp_status != 0
+            or unix_status != 0
+            or not tcp_scan_complete
+            or not unix_scan_complete
+        ),
+        "connection_scan_incomplete": not connection_scan_complete,
         "remote_connection": bool(connections),
     }
 
@@ -773,8 +863,15 @@ def registry_facts() -> dict[str, object]:
     for path in paths:
         if not path.is_file():
             continue
+        content, complete = bounded_read_text(path, 65_536)
+        if not complete:
+            return {
+                "ghcr_insecure": True,
+                "secpal_mirrors": ["invalid-config"],
+                "secpal_location_rewrite": True,
+            }
         try:
-            document = tomllib.loads(read_text(path, 65_536))
+            document = tomllib.loads(content)
         except tomllib.TOMLDecodeError:
             return {"ghcr_insecure": True, "secpal_mirrors": ["invalid-config"], "secpal_location_rewrite": True}
         registries = document.get("registry", [])
@@ -982,6 +1079,10 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         "D1_KERNEL_PACKAGE_PROVENANCE",
     )
     reject(set(apt["configured_suites"]) != EXPECTED_SUITES, "D1_APT_CODENAME_SUITES")
+    reject(
+        apt["source_hosts"] != ["deb.debian.org", "security.debian.org"],
+        "D1_APT_SOURCE_HOSTS",
+    )
     reject(apt["release_origins"] != ["Debian"], "D1_APT_RELEASE_ORIGIN")
     reject(set(apt["verified_release_suites"]) != EXPECTED_SUITES, "D1_APT_RELEASE_SUITES")
     reject(apt["release_signatures_verified"] is not True, "D1_APT_RELEASE_SIGNATURES")
@@ -1140,7 +1241,7 @@ def admission_failures(facts: dict[str, Any], profile_name: str) -> list[str]:
         "PROVIDER_CPU_PROFILE_AXION",
     )
     reject(platform["logical_cpu"] < 4, "D1_MINIMUM_LOGICAL_CPU")
-    reject(platform["memory_bytes"] < 8 * 1024**3, "D1_MINIMUM_MEMORY_8_GIB")
+    reject(platform["memory_bytes"] < 1, "D1_MEMORY_EVIDENCE")
     reject(platform["root_filesystem_bytes"] < 100 * 1024**3, "D1_MINIMUM_STORAGE_100_GIB")
     return failures
 

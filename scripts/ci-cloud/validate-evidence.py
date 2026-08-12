@@ -245,6 +245,8 @@ def validate_document(document: object) -> dict[str, object]:
             "unix_listener",
             "service_process",
             "process_scan_incomplete",
+            "listener_scan_incomplete",
+            "connection_scan_incomplete",
             "remote_connection",
         },
         "$.runtime.api",

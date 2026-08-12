@@ -54,7 +54,61 @@ if [[ -f "$completion_marker" && ! -L "$completion_marker" ]]; then
   exit 0
 fi
 
-apt-get -o DPkg::Lock::Timeout=300 update
+apt_sources_dir=/etc/apt/sources.list.d
+if [[ -L "$apt_sources_dir" ]]; then
+  printf 'ERROR: APT source directory must not be a symlink.\n' >&2
+  exit 1
+fi
+install -d -o root -g root -m 0755 "$apt_sources_dir"
+if find "$apt_sources_dir" -mindepth 1 -maxdepth 1 \
+  ! -type f ! -type l -print -quit | grep -q .; then
+  printf 'ERROR: APT source directory contains an unsupported entry.\n' >&2
+  exit 1
+fi
+find "$apt_sources_dir" -mindepth 1 -maxdepth 1 \
+  \( -type f -o -type l \) -delete
+rm -f -- /etc/apt/sources.list
+debian_sources_tmp="$(mktemp "$apt_sources_dir/.debian.sources.XXXXXX")"
+cat > "$debian_sources_tmp" <<'SECPAL_DEBIAN_SOURCES'
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: trixie trixie-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: https://security.debian.org/debian-security
+Suites: trixie-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SECPAL_DEBIAN_SOURCES
+chown root:root "$debian_sources_tmp"
+chmod 0644 "$debian_sources_tmp"
+mv -f -- "$debian_sources_tmp" "$apt_sources_dir/debian.sources"
+
+apt_lists_dir=/var/lib/apt/lists
+if [[ -L "$apt_lists_dir" ]]; then
+  printf 'ERROR: APT lists directory must not be a symlink.\n' >&2
+  exit 1
+fi
+install -d -o root -g root -m 0755 "$apt_lists_dir"
+apt_lists_cleanup=/usr/local/sbin/secpal-ci-reset-apt-lists
+install -o root -g root -m 0700 /dev/null "$apt_lists_cleanup"
+cat > "$apt_lists_cleanup" <<'SECPAL_APT_LISTS_CLEANUP'
+#!/usr/bin/env bash
+set -euo pipefail
+
+apt_lists_dir=/var/lib/apt/lists
+if [[ -L "$apt_lists_dir" || -L "$apt_lists_dir/lock" ]]; then
+  printf 'ERROR: APT lists path must not contain a symlink.\n' >&2
+  exit 1
+fi
+find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \
+  ! -name lock \( -type f -o -type l \) -delete
+SECPAL_APT_LISTS_CLEANUP
+
+apt-get -o DPkg::Lock::Timeout=300 \
+  -o "APT::Update::Pre-Invoke::=$apt_lists_cleanup" update
 apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
   aardvark-dns \
   apparmor \

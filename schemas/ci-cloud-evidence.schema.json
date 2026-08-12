@@ -163,7 +163,7 @@
         },
         "virtualization": { "$ref": "#/$defs/mediumString" },
         "logical_cpu": { "type": "integer", "minimum": 0, "maximum": 1024 },
-        "memory_bytes": { "$ref": "#/$defs/nonNegativeInteger" },
+        "memory_bytes": { "type": "integer", "minimum": 1 },
         "root_filesystem_bytes": { "$ref": "#/$defs/nonNegativeInteger" }
       }
     },
@@ -502,6 +502,8 @@
             "unix_listener",
             "service_process",
             "process_scan_incomplete",
+            "listener_scan_incomplete",
+            "connection_scan_incomplete",
             "remote_connection"
           ],
           "properties": {
@@ -517,6 +519,8 @@
             "unix_listener": { "type": "boolean" },
             "service_process": { "type": "boolean" },
             "process_scan_incomplete": { "type": "boolean" },
+            "listener_scan_incomplete": { "type": "boolean" },
+            "connection_scan_incomplete": { "type": "boolean" },
             "remote_connection": { "type": "boolean" }
           }
         },

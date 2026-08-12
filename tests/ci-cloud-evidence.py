@@ -222,6 +222,8 @@ def valid_document() -> dict[str, object]:
                 "unix_listener": False,
                 "service_process": False,
                 "process_scan_incomplete": False,
+                "listener_scan_incomplete": False,
+                "connection_scan_incomplete": False,
                 "remote_connection": False,
             },
             "updates": {
@@ -360,6 +362,19 @@ class EvidenceContractTests(unittest.TestCase):
         document = valid_document()
         document["apt"]["source_files"] = ["/etc/apt/sources.list"] * 2
         with self.assertRaisesRegex(ValueError, "declared schema"):
+            self.validator.validate_document(document)
+
+    def test_declared_schema_rejects_unavailable_memory_evidence(self) -> None:
+        document = valid_document()
+        document["platform"]["memory_bytes"] = 0
+        schema = json.loads(
+            (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(schema).validate(document)
+        with self.assertRaises(ValueError):
             self.validator.validate_document(document)
 
     def test_rejects_digitalocean_evidence_with_gcp_image_id(self) -> None:

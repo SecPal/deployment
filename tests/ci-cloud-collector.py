@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import stat
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -182,6 +184,8 @@ def valid_facts() -> dict[str, object]:
                 "unix_listener": False,
                 "service_process": False,
                 "process_scan_incomplete": False,
+                "listener_scan_incomplete": False,
+                "connection_scan_incomplete": False,
                 "remote_connection": False,
             },
             "updates": {
@@ -225,6 +229,63 @@ class CloudHostAdmissionTests(unittest.TestCase):
         self.assertEqual(["curl", "--disable"], run.call_args.args[0][:2])
         self.assertEqual(2, run.call_count)
 
+    def test_bounded_command_result_reports_truncation(self) -> None:
+        completed = self.collector.subprocess.CompletedProcess(
+            args=["fixture"],
+            returncode=0,
+            stdout="x" * (self.collector.MAX_COMMAND_OUTPUT + 1) + "\n",
+            stderr="",
+        )
+        with mock.patch.object(
+            self.collector.subprocess, "run", return_value=completed
+        ):
+            status, text, complete = self.collector.bounded_command_result(
+                ["fixture"]
+            )
+        self.assertEqual(status, 0)
+        self.assertEqual(len(text), self.collector.MAX_COMMAND_OUTPUT)
+        self.assertFalse(complete)
+
+    def test_os_release_rejects_truncated_file(self) -> None:
+        with mock.patch.object(
+            self.collector,
+            "bounded_read_text",
+            return_value=(
+                'ID=debian\nVERSION_ID="13"\nVERSION_CODENAME=trixie\n',
+                False,
+            ),
+        ):
+            self.assertEqual(
+                {
+                    "ID": "",
+                    "VERSION_ID": "",
+                    "VERSION_CODENAME": "",
+                    "PRETTY_NAME": "",
+                },
+                self.collector.os_release(),
+            )
+
+    def test_apt_sources_reject_truncated_source_file(self) -> None:
+        def glob_result(pattern: str) -> list[str]:
+            if pattern.endswith("*.sources"):
+                return ["/etc/apt/sources.list.d/oversized.sources"]
+            return []
+
+        with (
+            mock.patch.object(self.collector.glob, "glob", side_effect=glob_result),
+            mock.patch.object(
+                self.collector,
+                "bounded_read_text",
+                return_value=(
+                    "Types: deb\nURIs: https://deb.debian.org/debian\n"
+                    "Suites: trixie trixie-updates\n",
+                    False,
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "APT source file is incomplete"):
+                self.collector.apt_sources("amd64")
+
     def test_package_origin_is_bound_to_the_selected_policy_entry(self) -> None:
         policy = """podman:
   Installed: 1.0-1
@@ -236,8 +297,10 @@ class CloudHostAdmissionTests(unittest.TestCase):
         100 /var/lib/dpkg/status
 """
 
-        def checked_output(arguments: list[str], timeout: int = 15) -> str:
-            del timeout
+        def checked_output(
+            arguments: list[str], timeout: int = 15, output_limit: int = 8192
+        ) -> str:
+            del timeout, output_limit
             if arguments[:3] == ["dpkg-query", "-W", "-f"]:
                 return "amd64"
             if arguments == ["apt-cache", "policy", "podman"]:
@@ -274,6 +337,104 @@ class CloudHostAdmissionTests(unittest.TestCase):
             self.assertEqual(
                 ("Debian", "trixie"),
                 self.collector.package_policy_provenance("podman", "1.0-1"),
+            )
+
+    def test_package_origin_accepts_real_debian_policy_without_release_line(self) -> None:
+        policy = """podman:
+  Installed: 5.4.2+ds1-2+b2
+  Candidate: 5.4.2+ds1-2+b2
+  Version table:
+ *** 5.4.2+ds1-2+b2 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+        100 /var/lib/dpkg/status
+"""
+        with mock.patch.object(
+            self.collector, "checked_output", return_value=policy
+        ):
+            self.assertEqual(
+                ("Debian", "trixie"),
+                self.collector.package_policy_provenance(
+                    "podman", "5.4.2+ds1-2+b2"
+                ),
+            )
+
+    def test_package_origin_rejects_external_source_spoofing_debian_release(self) -> None:
+        policy = """podman:
+  Installed: 5.4.2+ds1-2+b2
+  Candidate: 5.4.2+ds1-2+b2
+  Version table:
+ *** 5.4.2+ds1-2+b2 500
+        500 https://packages.example.invalid/debian trixie/main amd64 Packages
+           release o=Debian,n=trixie,l=Debian,c=main,b=amd64
+        100 /var/lib/dpkg/status
+"""
+        with mock.patch.object(
+            self.collector, "checked_output", return_value=policy
+        ):
+            self.assertEqual(
+                ("", "trixie"),
+                self.collector.package_policy_provenance(
+                    "podman", "5.4.2+ds1-2+b2"
+                ),
+            )
+
+    def test_package_origin_rejects_truncated_policy(self) -> None:
+        policy = """podman:
+  Installed: 5.4.2+ds1-2+b2
+  Candidate: 5.4.2+ds1-2+b2
+  Version table:
+ *** 5.4.2+ds1-2+b2 500
+        500 https://deb.debian.org/debian trixie/main amd64 Packages
+""" + "x" * 65_536
+        with mock.patch.object(
+            self.collector, "checked_output", return_value=policy
+        ):
+            self.assertEqual(
+                ("", ""),
+                self.collector.package_policy_provenance(
+                    "podman", "5.4.2+ds1-2+b2"
+                ),
+            )
+
+    def test_verified_releases_reject_unexpected_inrelease_metadata(self) -> None:
+        release_files = [
+            f"/var/lib/apt/lists/debian_dists_{suite}_InRelease"
+            for suite in (
+                "trixie",
+                "trixie-security",
+                "trixie-updates",
+                "trixie-backports",
+            )
+        ]
+
+        def read_text(path: Path, limit: int = 8192) -> str:
+            del limit
+            suite = path.name.removeprefix("debian_dists_").removesuffix(
+                "_InRelease"
+            )
+            origin = "Debian Backports" if suite == "trixie-backports" else "Debian"
+            return f"Origin: {origin}\nCodename: {suite}\n"
+
+        metadata = mock.Mock(st_uid=0, st_mode=stat.S_IFREG | 0o644)
+        with (
+            mock.patch.object(self.collector.glob, "glob", return_value=release_files),
+            mock.patch.object(self.collector, "read_text", side_effect=read_text),
+            mock.patch.object(Path, "stat", return_value=metadata),
+        ):
+            self.assertEqual(
+                (
+                    ["Debian", "Debian Backports"],
+                    [
+                        "trixie",
+                        "trixie-backports",
+                        "trixie-security",
+                        "trixie-updates",
+                    ],
+                    False,
+                ),
+                self.collector.verified_releases(
+                    {"trixie", "trixie-security", "trixie-updates"}
+                ),
             )
 
     def test_gcp_metadata_probe_detects_an_attached_identity(self) -> None:
@@ -318,7 +479,11 @@ location = "backup.example.invalid"
 """
         with (
             mock.patch.object(Path, "is_file", return_value=True),
-            mock.patch.object(self.collector, "read_text", return_value=document),
+            mock.patch.object(
+                self.collector,
+                "bounded_read_text",
+                return_value=(document, True),
+            ),
             mock.patch.object(self.collector.glob, "glob", return_value=[]),
         ):
             self.assertEqual(
@@ -329,6 +494,48 @@ location = "backup.example.invalid"
                 },
                 self.collector.registry_facts(),
             )
+
+    def test_registry_facts_reject_truncated_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory, "registries.conf")
+            config.write_text(
+                "# x\n" * 16_384
+                + '[[registry]]\nprefix = "ghcr.io/secpal"\ninsecure = true\n',
+                encoding="utf-8",
+            )
+
+            def is_file(path: Path) -> bool:
+                return path == config
+
+            with (
+                mock.patch.object(
+                    self.collector.glob, "glob", return_value=[str(config)]
+                ),
+                mock.patch.object(Path, "is_file", is_file),
+            ):
+                self.assertEqual(
+                    {
+                        "ghcr_insecure": True,
+                        "secpal_mirrors": ["invalid-config"],
+                        "secpal_location_rewrite": True,
+                    },
+                    self.collector.registry_facts(),
+                )
+
+    def test_subordinate_fact_rejects_truncated_range_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ranges = Path(directory, "subuid")
+            ranges.write_text(
+                "secpal-ci:200000:65536\n"
+                + "# x\n" * 16_384
+                + "other:200000:65536\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                self.collector, "checked_output", return_value="root:x:0"
+            ):
+                fact = self.collector.subordinate_fact(ranges, "secpal-ci", "passwd")
+            self.assertTrue(fact["overlap"])
 
     def test_arm_cpu_model_uses_effective_lscpu_facts(self) -> None:
         lscpu = {
@@ -406,6 +613,29 @@ location = "backup.example.invalid"
     def test_rejects_incomplete_security_update_policy(self) -> None:
         self.assert_failure(("host", "security_updates", "automatic"), False, "D1_SECURITY_UPDATE_POLICY")
 
+    def test_rejects_unexpected_apt_source_host(self) -> None:
+        self.assert_failure(
+            ("apt", "source_hosts"),
+            ["deb.debian.org", "packages.example.invalid", "security.debian.org"],
+            "D1_APT_SOURCE_HOSTS",
+        )
+
+    def test_guest_memory_is_evidence_not_an_unmeasured_admission_floor(self) -> None:
+        facts = valid_facts()
+        facts["platform"]["memory_bytes"] = 4 * 1024**3
+        self.assertNotIn(
+            "D1_MINIMUM_MEMORY_8_GIB",
+            self.collector.admission_failures(facts, "intel"),
+        )
+
+    def test_rejects_unavailable_guest_memory_evidence(self) -> None:
+        facts = valid_facts()
+        facts["platform"]["memory_bytes"] = 0
+        self.assertIn(
+            "D1_MEMORY_EVIDENCE",
+            self.collector.admission_failures(facts, "intel"),
+        )
+
     def test_rejects_missing_required_tool(self) -> None:
         self.assert_failure(("host", "required_tools", "missing"), ["gh"], "D1_REQUIRED_TOOLS")
 
@@ -478,8 +708,15 @@ location = "backup.example.invalid"
 
         with (
             mock.patch.object(self.collector, "command_result", side_effect=command_result),
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                return_value=(0, "", True),
+            ),
             mock.patch.object(self.collector, "output", return_value=""),
-            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+            mock.patch.object(
+                self.collector, "json_array_result", return_value=([], True)
+            ),
         ):
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["system_socket_active"])
@@ -493,8 +730,15 @@ location = "backup.example.invalid"
 
         with (
             mock.patch.object(self.collector, "command_result", side_effect=command_result),
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                return_value=(0, "", True),
+            ),
             mock.patch.object(self.collector, "output", return_value=""),
-            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+            mock.patch.object(
+                self.collector, "json_array_result", return_value=([], True)
+            ),
         ):
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["system_service_enabled"])
@@ -510,8 +754,15 @@ location = "backup.example.invalid"
 
         with (
             mock.patch.object(self.collector, "command_result", side_effect=command_result),
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                return_value=(0, "", True),
+            ),
             mock.patch.object(self.collector, "output", return_value=""),
-            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+            mock.patch.object(
+                self.collector, "json_array_result", return_value=([], True)
+            ),
         ):
             facts = self.collector.podman_api_facts()
         self.assertFalse(facts["system_service_enabled"])
@@ -527,8 +778,15 @@ location = "backup.example.invalid"
 
         with (
             mock.patch.object(self.collector, "command_result", side_effect=command_result),
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                return_value=(0, "", True),
+            ),
             mock.patch.object(self.collector, "output", return_value=""),
-            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+            mock.patch.object(
+                self.collector, "json_array_result", return_value=([], True)
+            ),
         ):
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["system_service_enabled"])
@@ -571,30 +829,187 @@ Unattended-Upgrade::Automatic-Reboot "false";
             facts = self.collector.security_update_facts()
         self.assertFalse(facts["timer_enabled"])
 
-    def test_detects_manually_launched_unix_podman_api(self) -> None:
-        def output(arguments: list[str], timeout: int = 15) -> str:
+    def test_security_update_policy_reads_complete_large_apt_configuration(self) -> None:
+        config = "X" * 9000 + '''
+APT::Periodic::Enable "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Origins-Pattern:: "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Package-Blacklist:: "podman";
+Unattended-Upgrade::Package-Blacklist:: "conmon";
+Unattended-Upgrade::Package-Blacklist:: "crun";
+Unattended-Upgrade::Package-Blacklist:: "netavark";
+Unattended-Upgrade::Package-Blacklist:: "aardvark-dns";
+Unattended-Upgrade::Package-Blacklist:: "passt";
+Unattended-Upgrade::Package-Blacklist:: "uidmap";
+Unattended-Upgrade::Package-Blacklist:: "dbus-user-session";
+'''
+
+        def checked_output(
+            arguments: list[str], timeout: int = 15, output_limit: int = 8192
+        ) -> str:
             del timeout
+            self.assertEqual(["apt-config", "dump"], arguments)
+            self.assertGreaterEqual(output_limit, len(config))
+            return config[:output_limit]
+
+        with (
+            mock.patch.object(
+                self.collector, "checked_output", side_effect=checked_output
+            ),
+            mock.patch.object(self.collector, "package_version", return_value="2.12"),
+            mock.patch.object(
+                self.collector, "systemd_unit_enabled", return_value=True
+            ),
+        ):
+            self.assertEqual(
+                {
+                    "mechanism": "unattended-upgrades",
+                    "automatic": True,
+                    "timer_enabled": True,
+                    "security_suite": "trixie-security",
+                    "normal_updates_automatic": False,
+                    "major_release_upgrades_automatic": False,
+                    "automatic_reboot": False,
+                    "runtime_packages_excluded": True,
+                },
+                self.collector.security_update_facts(),
+            )
+
+    def test_security_update_policy_rejects_truncated_configuration(self) -> None:
+        config = '''APT::Periodic::Enable "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Origins-Pattern:: "origin=Debian,codename=trixie-security";
+Unattended-Upgrade::Automatic-Reboot "false";
+''' + "x" * 65_536
+        with (
+            mock.patch.object(
+                self.collector, "checked_output", return_value=config
+            ),
+            mock.patch.object(self.collector, "package_version", return_value="2.12"),
+            mock.patch.object(
+                self.collector, "systemd_unit_enabled", return_value=True
+            ),
+        ):
+            facts = self.collector.security_update_facts()
+        self.assertFalse(facts["automatic"])
+        self.assertTrue(facts["normal_updates_automatic"])
+
+    def test_detects_manually_launched_unix_podman_api(self) -> None:
+        def bounded_command_result(
+            arguments: list[str], timeout: int = 15, output_limit: int = 8192
+        ) -> tuple[int, str, bool]:
+            del timeout, output_limit
             if arguments == ["ss", "-lxnp"]:
-                return 'u_str LISTEN 0 4096 /tmp/fixture.sock users:(("podman",pid=42,fd=3))'
-            return ""
+                return (
+                    0,
+                    'u_str LISTEN 0 4096 /tmp/fixture.sock '
+                    'users:(("podman",pid=42,fd=3))',
+                    True,
+                )
+            if arguments == ["ss", "-ltnp"]:
+                return 0, "", True
+            raise AssertionError(f"unexpected bounded command: {arguments}")
 
         with (
-            mock.patch.object(self.collector, "command_result", return_value=(1, "inactive")),
-            mock.patch.object(self.collector, "output", side_effect=output),
-            mock.patch.object(self.collector, "json_array_output", return_value=[]),
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                side_effect=bounded_command_result,
+            ),
+            mock.patch.object(
+                self.collector, "command_result", return_value=(1, "inactive")
+            ),
+            mock.patch.object(
+                self.collector, "json_array_result", return_value=([], True)
+            ),
         ):
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["unix_listener"])
 
-    def test_treats_inaccessible_known_podman_socket_as_present(self) -> None:
+    def test_truncated_listener_scan_fails_closed(self) -> None:
+        def bounded_command_result(
+            arguments: list[str], timeout: int = 15, output_limit: int = 8192
+        ) -> tuple[int, str, bool]:
+            del timeout, output_limit
+            if arguments == ["ss", "-lxnp"]:
+                return 0, "x" * self.collector.MAX_COMMAND_OUTPUT, False
+            if arguments == ["ss", "-ltnp"]:
+                return 0, "", True
+            raise AssertionError(f"unexpected bounded command: {arguments}")
+
         with (
-            mock.patch.object(self.collector, "command_result", return_value=(1, "inactive")),
-            mock.patch.object(self.collector, "output", return_value=""),
-            mock.patch.object(self.collector, "json_array_output", return_value=[]),
-            mock.patch.object(Path, "is_socket", side_effect=PermissionError("denied")),
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                side_effect=bounded_command_result,
+            ),
+            mock.patch.object(
+                self.collector, "command_result", return_value=(1, "inactive")
+            ),
+            mock.patch.object(
+                self.collector, "json_array_result", return_value=([], True)
+            ),
         ):
             facts = self.collector.podman_api_facts()
-        self.assertTrue(facts["unix_listener"])
+        self.assertTrue(facts["listener_scan_incomplete"])
+
+    def test_failed_connection_scan_fails_closed(self) -> None:
+        with (
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                return_value=(0, "", True),
+            ),
+            mock.patch.object(
+                self.collector, "command_result", return_value=(1, "inactive")
+            ),
+            mock.patch.object(
+                self.collector, "json_array_result", return_value=([], False)
+            ),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertTrue(facts["connection_scan_incomplete"])
+
+    def test_truncated_process_command_line_fails_closed(self) -> None:
+        process = Path("/proc/42")
+        with (
+            mock.patch.object(Path, "iterdir", return_value=iter([process])),
+            mock.patch.object(
+                self.collector,
+                "bounded_read_bytes",
+                return_value=(b"/usr/bin/fixture\0" + b"x" * 8_175, False),
+            ),
+        ):
+            service, incomplete = self.collector.podman_service_process_facts()
+        self.assertFalse(service)
+        self.assertTrue(incomplete)
+
+    def test_stale_known_podman_socket_is_not_an_active_listener(self) -> None:
+        def bounded_command_result(
+            arguments: list[str], timeout: int = 15, output_limit: int = 8192
+        ) -> tuple[int, str, bool]:
+            del timeout, output_limit
+            if arguments in (["ss", "-lxnp"], ["ss", "-ltnp"]):
+                return 0, "", True
+            raise AssertionError(f"unexpected bounded command: {arguments}")
+
+        with (
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                side_effect=bounded_command_result,
+            ),
+            mock.patch.object(
+                self.collector, "command_result", return_value=(1, "inactive")
+            ),
+            mock.patch.object(
+                self.collector, "json_array_result", return_value=([], True)
+            ),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertFalse(facts["unix_listener"])
+        self.assertFalse(facts["listener_scan_incomplete"])
 
     def test_rejects_missing_effective_root_ssh_denial(self) -> None:
         self.assert_failure(("host", "ssh", "root_login_denied"), False, "D1_ROOT_SSH_DISABLED")
