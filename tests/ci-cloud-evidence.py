@@ -112,6 +112,11 @@ def valid_document() -> dict[str, object]:
                 "origin": "Debian",
                 "suite": "trixie-security",
                 "owned": True,
+                "status": "install ok installed",
+                "maintainer": "Debian Kernel Team <debian-kernel@lists.debian.org>",
+                "database_files_safe": True,
+                "files_verified": True,
+                "provenance_basis": "active-apt-policy",
             },
             "filesystem": {
                 "type": "ext4",
@@ -361,6 +366,47 @@ class EvidenceContractTests(unittest.TestCase):
     def test_declared_schema_rejects_duplicate_array_values(self) -> None:
         document = valid_document()
         document["apt"]["source_files"] = ["/etc/apt/sources.list"] * 2
+        with self.assertRaisesRegex(ValueError, "declared schema"):
+            self.validator.validate_document(document)
+
+    def test_unknown_kernel_provenance_basis_fails_closed(self) -> None:
+        document = valid_document()
+        document["host"]["kernel_package"]["provenance_basis"] = "provider-label"
+        with self.assertRaisesRegex(ValueError, "admission failures"):
+            self.validator.validate_document(document)
+
+    def test_unavailable_kernel_provenance_fails_admission(self) -> None:
+        document = valid_document()
+        document["host"]["kernel_package"].update(
+            {
+                "origin": "",
+                "suite": "",
+                "provenance_basis": "unavailable",
+            }
+        )
+        document["test"].update(
+            {
+                "result": "failed",
+                "failed_admission_invariants": ["D1_KERNEL_PACKAGE_PROVENANCE"],
+            }
+        )
+        self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_installed_dpkg_kernel_provenance_is_rejected(self) -> None:
+        document = valid_document()
+        document["host"]["kernel_package"].update(
+            {
+                "origin": "",
+                "suite": "",
+                "provenance_basis": "installed-dpkg",
+            }
+        )
+        document["test"].update(
+            {
+                "result": "failed",
+                "failed_admission_invariants": ["D1_KERNEL_PACKAGE_PROVENANCE"],
+            }
+        )
         with self.assertRaisesRegex(ValueError, "declared schema"):
             self.validator.validate_document(document)
 

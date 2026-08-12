@@ -95,6 +95,11 @@ def valid_facts() -> dict[str, object]:
                 "origin": "Debian",
                 "suite": "trixie-security",
                 "owned": True,
+                "status": "install ok installed",
+                "maintainer": "Debian Kernel Team <debian-kernel@lists.debian.org>",
+                "database_files_safe": True,
+                "files_verified": True,
+                "provenance_basis": "active-apt-policy",
             },
             "filesystem": {
                 "type": "ext4",
@@ -476,6 +481,174 @@ class CloudHostAdmissionTests(unittest.TestCase):
                 ),
             )
 
+    def test_kernel_integrity_accepts_safe_verified_dpkg_record(self) -> None:
+        kernel = "6.12.94+deb13-amd64"
+        package = f"linux-image-{kernel}"
+        record = (
+            "install ok installed\n"
+            "Debian Kernel Team <debian-kernel@lists.debian.org>"
+        )
+        with (
+            mock.patch.object(self.collector, "checked_output", return_value=record),
+            mock.patch.object(
+                self.collector,
+                "root_owned_regular_file",
+                return_value=True,
+            ),
+            mock.patch.object(
+                self.collector,
+                "bounded_read_text",
+                return_value=(
+                    f"{'a' * 32}  boot/vmlinuz-{kernel}\n",
+                    True,
+                ),
+            ),
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                return_value=(0, "", True),
+            ) as verify,
+        ):
+            facts = self.collector.kernel_package_integrity(package, kernel)
+
+        self.assertEqual(facts["status"], "install ok installed")
+        self.assertEqual(
+            facts["maintainer"],
+            "Debian Kernel Team <debian-kernel@lists.debian.org>",
+        )
+        self.assertTrue(facts["database_files_safe"])
+        self.assertTrue(facts["files_verified"])
+        self.assertEqual(
+            verify.call_args.args[0],
+            ["dpkg", "--verify", "--verify-format", "rpm", package],
+        )
+
+    def test_root_owned_regular_file_rejects_user_owned_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "status")
+            path.write_text("fixture", encoding="utf-8")
+            self.assertFalse(
+                self.collector.root_owned_regular_file(path, 1024)
+            )
+
+    def test_root_owned_regular_file_rejects_relative_path(self) -> None:
+        self.assertFalse(
+            self.collector.root_owned_regular_file(Path("status"), 1024)
+        )
+
+    def test_kernel_integrity_rejects_truncated_verification(self) -> None:
+        kernel = "6.12.94+deb13-amd64"
+        package = f"linux-image-{kernel}"
+        with (
+            mock.patch.object(
+                self.collector,
+                "checked_output",
+                return_value=(
+                    "install ok installed\n"
+                    "Debian Kernel Team <debian-kernel@lists.debian.org>"
+                ),
+            ),
+            mock.patch.object(
+                self.collector,
+                "root_owned_regular_file",
+                return_value=True,
+            ),
+            mock.patch.object(
+                self.collector,
+                "bounded_read_text",
+                return_value=(f"{'a' * 32}  boot/vmlinuz-{kernel}\n", True),
+            ),
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                return_value=(0, "", False),
+            ),
+        ):
+            facts = self.collector.kernel_package_integrity(package, kernel)
+        self.assertFalse(facts["files_verified"])
+
+    def test_kernel_facts_preserve_unexpected_active_apt_suite(self) -> None:
+        kernel = "6.12.94+deb13-amd64"
+        package = f"linux-image-{kernel}"
+        integrity = {
+            "status": "install ok installed",
+            "maintainer": "Debian Kernel Team <debian-kernel@lists.debian.org>",
+            "database_files_safe": True,
+            "files_verified": True,
+        }
+        with (
+            mock.patch.object(Path, "is_file", return_value=True),
+            mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(0, f"{package}: /boot/vmlinuz-{kernel}"),
+            ),
+            mock.patch.object(
+                self.collector,
+                "package_metadata",
+                return_value={
+                    "version": "6.12.94-1",
+                    "architecture": "amd64",
+                    "origin": "Debian",
+                    "suite": "trixie-updates",
+                },
+            ),
+            mock.patch.object(
+                self.collector,
+                "kernel_package_integrity",
+                return_value=integrity,
+            ),
+        ):
+            facts = self.collector.kernel_package_facts(
+                kernel,
+                "amd64",
+                {"trixie", "trixie-security", "trixie-updates"},
+            )
+        self.assertEqual(facts["provenance_basis"], "active-apt-policy")
+        self.assertEqual(facts["origin"], "Debian")
+        self.assertEqual(facts["suite"], "trixie-updates")
+
+    def test_kernel_facts_report_unavailable_active_apt_provenance(self) -> None:
+        kernel = "6.12.94+deb13-amd64"
+        package = f"linux-image-{kernel}"
+        integrity = {
+            "status": "install ok installed",
+            "maintainer": "Debian Kernel Team <debian-kernel@lists.debian.org>",
+            "database_files_safe": True,
+            "files_verified": True,
+        }
+        with (
+            mock.patch.object(Path, "is_file", return_value=True),
+            mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(0, f"{package}: /boot/vmlinuz-{kernel}"),
+            ),
+            mock.patch.object(
+                self.collector,
+                "package_metadata",
+                return_value={
+                    "version": "6.12.94-1",
+                    "architecture": "amd64",
+                    "origin": "",
+                    "suite": "",
+                },
+            ),
+            mock.patch.object(
+                self.collector,
+                "kernel_package_integrity",
+                return_value=integrity,
+            ),
+        ):
+            facts = self.collector.kernel_package_facts(
+                kernel,
+                "amd64",
+                {"trixie", "trixie-security", "trixie-updates"},
+            )
+        self.assertEqual(facts["provenance_basis"], "unavailable")
+        self.assertEqual(facts["origin"], "")
+        self.assertEqual(facts["suite"], "")
+
     def test_verified_releases_reject_unexpected_inrelease_metadata(self) -> None:
         release_files = [
             f"/var/lib/apt/lists/debian_dists_{suite}_InRelease"
@@ -673,6 +846,48 @@ location = "backup.example.invalid"
 
     def test_rejects_unowned_kernel(self) -> None:
         self.assert_failure(("host", "kernel_package", "owned"), False, "D1_KERNEL_PACKAGE_PROVENANCE")
+
+    def test_rejects_kernel_absent_from_authenticated_apt_indexes(self) -> None:
+        facts = valid_facts()
+        facts["host"]["kernel_package"].update(
+            {
+                "origin": "",
+                "suite": "",
+                "provenance_basis": "unavailable",
+            }
+        )
+        self.assertIn(
+            "D1_KERNEL_PACKAGE_PROVENANCE",
+            self.collector.admission_failures(facts, "intel"),
+        )
+
+    def test_rejects_locally_verified_kernel_without_apt_provenance(self) -> None:
+        facts = valid_facts()
+        facts["host"]["kernel_package"].update(
+            {
+                "origin": "",
+                "suite": "",
+                "provenance_basis": "unavailable",
+            }
+        )
+        self.assertIn(
+            "D1_KERNEL_PACKAGE_PROVENANCE",
+            self.collector.admission_failures(facts, "intel"),
+        )
+
+    def test_rejects_kernel_package_not_matching_running_release(self) -> None:
+        self.assert_failure(
+            ("host", "kernel_package", "name"),
+            "linux-image-6.12.41+deb13-amd64",
+            "D1_KERNEL_PACKAGE_PROVENANCE",
+        )
+
+    def test_rejects_non_debian_kernel_maintainer(self) -> None:
+        self.assert_failure(
+            ("host", "kernel_package", "maintainer"),
+            "Example Vendor <kernel@example.invalid>",
+            "D1_KERNEL_PACKAGE_PROVENANCE",
+        )
 
     def test_rejects_release_candidate_kernel(self) -> None:
         self.assert_failure(("platform", "kernel"), "6.12.0-rc4-amd64", "D1_KERNEL_DEBIAN_6_12")
@@ -1006,6 +1221,75 @@ Unattended-Upgrade::Automatic-Reboot "false";
         ):
             facts = self.collector.podman_api_facts()
         self.assertTrue(facts["unix_listener"])
+
+    def test_detects_podman_among_multiple_socket_owners(self) -> None:
+        listener = (
+            'u_str LISTEN 0 4096 /tmp/fixture.sock '
+            'users:(("helper",pid=41,fd=4),("podman",pid=42,fd=3))'
+        )
+        self.assertTrue(self.collector.podman_process_listener(listener))
+
+    def test_netavark_proxy_socket_is_not_a_podman_api_listener(self) -> None:
+        listener = (
+            "u_str LISTEN 0 4096 /run/podman/nv-proxy.sock 531 * 0"
+        )
+        self.assertFalse(self.collector.podman_unix_api_listener(listener))
+
+    def test_detects_nonstandard_rootful_podman_api_socket(self) -> None:
+        listener = "u_str LISTEN 0 4096 /run/podman/custom.sock 531 * 0"
+        self.assertTrue(self.collector.podman_unix_api_listener(listener))
+
+    def test_detects_nonstandard_rootless_podman_api_socket(self) -> None:
+        listener = (
+            "u_str LISTEN 0 4096 /run/user/20000/podman/custom.sock 531 * 0"
+        )
+        self.assertTrue(self.collector.podman_unix_api_listener(listener))
+
+    def test_netavark_proxy_socket_does_not_fail_api_facts(self) -> None:
+        def bounded_command_result(
+            arguments: list[str], timeout: int = 15, output_limit: int = 8192
+        ) -> tuple[int, str, bool]:
+            del timeout, output_limit
+            if arguments == ["ss", "-lxnp"]:
+                return (
+                    0,
+                    "u_str LISTEN 0 4096 /run/podman/nv-proxy.sock 531 * 0",
+                    True,
+                )
+            if arguments == ["ss", "-ltnp"]:
+                return 0, "", True
+            raise AssertionError(f"unexpected bounded command: {arguments}")
+
+        with (
+            mock.patch.object(
+                self.collector,
+                "bounded_command_result",
+                side_effect=bounded_command_result,
+            ),
+            mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(1, "inactive"),
+            ),
+            mock.patch.object(
+                self.collector,
+                "json_array_result",
+                return_value=([], True),
+            ),
+        ):
+            facts = self.collector.podman_api_facts()
+        self.assertFalse(facts["unix_listener"])
+        self.assertFalse(facts["listener_scan_incomplete"])
+
+    def test_detects_standard_rootful_podman_api_socket(self) -> None:
+        listener = "u_str LISTEN 0 4096 /run/podman/podman.sock 531 * 0"
+        self.assertTrue(self.collector.podman_unix_api_listener(listener))
+
+    def test_detects_standard_rootless_podman_api_socket(self) -> None:
+        listener = (
+            "u_str LISTEN 0 4096 /run/user/20000/podman/podman.sock 531 * 0"
+        )
+        self.assertTrue(self.collector.podman_unix_api_listener(listener))
 
     def test_truncated_listener_scan_fails_closed(self) -> None:
         def bounded_command_result(
