@@ -246,6 +246,38 @@ class CloudHostAdmissionTests(unittest.TestCase):
         self.assertEqual(len(text), self.collector.MAX_COMMAND_OUTPUT)
         self.assertFalse(complete)
 
+    def test_bounded_read_text_treats_missing_required_file_as_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory, "missing.sources")
+            self.assertEqual(
+                ("", False),
+                self.collector.bounded_read_text(missing),
+            )
+
+    def test_bounded_read_text_accepts_explicitly_optional_missing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory, "missing.sources")
+            self.assertEqual(
+                ("", True),
+                self.collector.bounded_read_text(missing, missing_ok=True),
+            )
+
+    def test_bounded_read_text_rejects_dangling_optional_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dangling = Path(directory, "missing.sources")
+            dangling.symlink_to(Path(directory, "absent-target"))
+            self.assertEqual(
+                ("", False),
+                self.collector.bounded_read_text(dangling, missing_ok=True),
+            )
+
+    def test_bounded_read_text_treats_other_read_errors_as_incomplete(self) -> None:
+        with mock.patch.object(Path, "open", side_effect=PermissionError):
+            self.assertEqual(
+                ("", False),
+                self.collector.bounded_read_text(Path("unreadable.sources")),
+            )
+
     def test_os_release_rejects_truncated_file(self) -> None:
         with mock.patch.object(
             self.collector,
@@ -285,6 +317,54 @@ class CloudHostAdmissionTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "APT source file is incomplete"):
                 self.collector.apt_sources("amd64")
+
+    def test_apt_sources_accepts_absent_legacy_source_file(self) -> None:
+        source_path = "/etc/apt/sources.list.d/debian.sources"
+
+        def glob_result(pattern: str) -> list[str]:
+            return [source_path] if pattern.endswith("*.sources") else []
+
+        def bounded_read_text(
+            path: Path,
+            limit: int = 8192,
+            *,
+            missing_ok: bool = False,
+        ) -> tuple[str, bool]:
+            del limit
+            if path == Path("/etc/apt/sources.list"):
+                self.assertTrue(missing_ok)
+                return "", True
+            self.assertFalse(missing_ok)
+            self.assertEqual(path, Path(source_path))
+            return (
+                "Types: deb\n"
+                "URIs: https://deb.debian.org/debian\n"
+                "Suites: trixie trixie-updates\n\n"
+                "Types: deb\n"
+                "URIs: https://security.debian.org/debian-security\n"
+                "Suites: trixie-security\n",
+                True,
+            )
+
+        with (
+            mock.patch.object(self.collector.glob, "glob", side_effect=glob_result),
+            mock.patch.object(
+                self.collector,
+                "bounded_read_text",
+                side_effect=bounded_read_text,
+            ),
+        ):
+            facts = self.collector.apt_sources("amd64")
+
+        self.assertEqual(facts["source_files"], [source_path])
+        self.assertEqual(
+            facts["configured_suites"],
+            ["trixie", "trixie-security", "trixie-updates"],
+        )
+        self.assertEqual(
+            facts["source_hosts"],
+            ["deb.debian.org", "security.debian.org"],
+        )
 
     def test_package_origin_is_bound_to_the_selected_policy_entry(self) -> None:
         policy = """podman:

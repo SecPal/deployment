@@ -47,7 +47,8 @@ SPDX-License-Identifier: CC0-1.0
   provenance and merged-policy collection for real Debian output; and
   distinguished active Podman API listeners from stale socket files. APT list
   cleanup now preserves and runs under APT's own lock, unexpected release
-  metadata fails closed, and truncated listener scans cannot prove API absence.
+  metadata fails closed, truncated listener scans cannot prove API absence, and
+  the intentionally absent legacy APT source file no longer aborts collection.
 - Kept guest-visible memory as exact cloud evidence without enforcing the
   previous unmeasured universal 8 GiB D.1 floor; inventories continue to carry
   an explicit positive memory requirement until workload evidence establishes
