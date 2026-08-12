@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export DEBIAN_FRONTEND=noninteractive
+
+ssh_public_key='${ssh_public_key}'
+runner_ipv4='${runner_ipv4}'
+run_id='${run_id}'
+run_attempt='${run_attempt}'
+failure_writer=/usr/local/sbin/secpal-ci-host-setup-failure
+completion_marker=/var/lib/secpal-ci/host-setup-complete
+
+bootstrap_failure() {
+  local status=$?
+  trap - EXIT
+  set +e
+  if [[ "$status" -ne 0 && -x "$failure_writer" ]] &&
+    ! "$failure_writer" read >/dev/null 2>&1; then
+    "$failure_writer" write initialize "$status" || true
+  fi
+  exit "$status"
+}
+
+trap bootstrap_failure EXIT
+
+install -d -o root -g root -m 0755 /usr/local/sbin
+
+install -o root -g root -m 0700 /dev/null \
+  /usr/local/sbin/secpal-ci-install-diagnostic-ssh
+cat > /usr/local/sbin/secpal-ci-install-diagnostic-ssh <<'SECPAL_DIAGNOSTIC_INSTALLER'
+${diagnostic_ssh_installer}
+SECPAL_DIAGNOSTIC_INSTALLER
+
+install -o root -g root -m 0700 /dev/null \
+  /usr/local/sbin/secpal-ci-configure-conformance-host
+cat > /usr/local/sbin/secpal-ci-configure-conformance-host <<'SECPAL_HOST_SETUP'
+${host_setup_script}
+SECPAL_HOST_SETUP
+
+install -o root -g root -m 0755 /dev/null "$failure_writer"
+cat > "$failure_writer" <<'SECPAL_FAILURE_WRITER'
+${host_setup_failure_script}
+SECPAL_FAILURE_WRITER
+
+/usr/local/sbin/secpal-ci-install-diagnostic-ssh \
+  "$ssh_public_key" "$runner_ipv4" "$run_id" "$run_attempt"
+
+if [[ -f "$completion_marker" && ! -L "$completion_marker" ]]; then
+  trap - EXIT
+  exit 0
+fi
+
+apt-get -o DPkg::Lock::Timeout=300 update
+apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
+  aardvark-dns \
+  apparmor \
+  apparmor-utils \
+  crun \
+  curl \
+  dbus-user-session \
+  gh \
+  git \
+  jq \
+  netavark \
+  passt \
+  podman \
+  python3 \
+  python3-jsonschema \
+  python3-yaml \
+  uidmap \
+  unattended-upgrades
+
+if getent passwd secpal-ci >/dev/null || getent group secpal-ci >/dev/null; then
+  user_entry="$(getent passwd secpal-ci || true)"
+  group_entry="$(getent group secpal-ci || true)"
+  IFS=: read -r user_name _ user_uid user_gid _ user_home user_shell \
+    <<<"$user_entry"
+  IFS=: read -r group_name _ group_gid group_members <<<"$group_entry"
+  [[ "$user_name" == secpal-ci && "$group_name" == secpal-ci &&
+    "$user_uid" == 20000 && "$user_gid" == "$group_gid" &&
+    "$user_home" == /home/secpal-ci && "$user_shell" == /bin/bash &&
+    -z "$group_members" ]]
+else
+  groupadd --gid 20000 secpal-ci
+  useradd --uid 20000 --gid 20000 --create-home \
+    --home-dir /home/secpal-ci --shell /bin/bash secpal-ci
+fi
+# OpenSSH's portable account check can reject a leading "!" lock before
+# public-key authentication, while PAM stacks may differ. Keep the password
+# unusable without relying on either behavior; password and keyboard-interactive
+# authentication remain disabled in the effective daemon policy below.
+usermod --password '*NP*' secpal-ci
+operator_shadow_entry="$(getent shadow secpal-ci)"
+IFS=: read -r operator_shadow_name operator_password_marker _ \
+  <<<"$operator_shadow_entry"
+[[ "$operator_shadow_name" == secpal-ci ]]
+[[ "$operator_password_marker" == '*NP*' ]]
+
+install -o root -g root -m 0600 /dev/null /run/secpal-ci-authorized-key
+printf '%s\n' "$ssh_public_key" > /run/secpal-ci-authorized-key
+
+install -d -o root -g root -m 0755 /etc/ssh/sshd_config.d
+install -o root -g root -m 0644 /dev/null \
+  /etc/ssh/sshd_config.d/00-secpal-ci.conf
+cat > /etc/ssh/sshd_config.d/00-secpal-ci.conf <<'SECPAL_SSH_CONFIG'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+MaxSessions 1
+PAMServiceName sshd
+PermitRootLogin no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PubkeyAcceptedAlgorithms +ssh-ed25519
+AuthorizedKeysCommand none
+AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u
+AuthorizedPrincipalsCommand none
+AuthorizedPrincipalsFile none
+TrustedUserCAKeys none
+RevokedKeys none
+RefuseConnection no
+StrictModes yes
+ChrootDirectory none
+ForceCommand none
+DisableForwarding yes
+PermitTTY no
+PermitUserEnvironment no
+PermitUserRC no
+UseDNS no
+UsePAM yes
+AllowUsers secpal-ci
+SECPAL_SSH_CONFIG
+
+cat > /etc/apt/apt.conf.d/20secpal-ci-periodic <<'SECPAL_APT_PERIODIC'
+APT::Periodic::Enable "1";
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+SECPAL_APT_PERIODIC
+
+cat > /etc/apt/apt.conf.d/99secpal-ci-unattended-upgrades <<'SECPAL_UPGRADES'
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+  "origin=Debian,codename=$${distro_codename}-security,label=Debian-Security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+#clear Unattended-Upgrade::Package-Blacklist;
+Unattended-Upgrade::Package-Blacklist {
+  "podman";
+  "conmon";
+  "crun";
+  "netavark";
+  "aardvark-dns";
+  "passt";
+  "uidmap";
+  "dbus-user-session";
+};
+SECPAL_UPGRADES
+
+install -d -o root -g root -m 0755 /etc/environment.d
+cat > /etc/environment.d/90-secpal-ci-quadlet.conf <<'SECPAL_QUADLET'
+QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000
+SECPAL_QUADLET
+
+/usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"
+trap - EXIT

@@ -102,8 +102,7 @@ ssh_call="$(wc -l <"${SECPAL_TEST_SSH_LOG:?}")"
 if [[ "${SECPAL_TEST_DIAGNOSTIC_ONLY:-false}" == true &&
   "$ssh_target" == secpal-ci-diagnostic@* && "${1:-}" == true ]]; then
   printf 'SECPAL_CI_DIAGNOSTIC_SSH\n'
-  head -c 8192 /dev/zero | tr '\0' y
-  printf '\nSECPAL_CI_HOST_SETUP_FAILURE {"exit_status":7,"stage":"apparmor"}\n'
+  printf 'SECPAL_CI_HOST_SETUP_FAILURE {"exit_status":7,"stage":"apparmor"}\n'
   exit 125
 fi
 if [[ "$ssh_target" == secpal-ci-diagnostic@* ]]; then
@@ -123,18 +122,6 @@ fi
 exec "$@"
 EOF
 
-cat >"$FAKE_BIN/cloud-init" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-case "$*" in
-  "status --wait") exit 2 ;;
-  "status --long")
-    head -c 20000 /dev/zero | tr '\0' x
-    ;;
-  *) exit 1 ;;
-esac
-EOF
-
 chmod 0755 "$FAKE_BIN"/*
 
 set +e
@@ -150,12 +137,12 @@ PATH="$FAKE_BIN:$PATH" SECPAL_TEST_SSH_LOG="$SSH_LOG" \
 status=$?
 set -e
 
-if [[ "$status" -ne 2 ]]; then
-  printf 'FAIL: expected remote bootstrap status 2, got %s\n' "$status" >&2
+if [[ "$status" -ne 1 ]]; then
+  printf 'FAIL: expected remote bootstrap status 1, got %s\n' "$status" >&2
   exit 1
 fi
 if [[ "$(wc -l <"$SSH_LOG")" -ne 5 ]]; then
-  printf 'FAIL: target or collector SSH ran after failed cloud-init\n' >&2
+  printf 'FAIL: target or collector SSH ran after failed bootstrap admission\n' >&2
   exit 1
 fi
 if [[ "$(wc -l <"$SSH_KEYSCAN_LOG")" -ne 8 ]]; then
@@ -171,22 +158,16 @@ if [[ -e "$EVIDENCE_DIR/evidence.json" ]]; then
   exit 1
 fi
 jq -e '
-  .schema_version == 2 and
+  .schema_version == 3 and
   .workflow.target_sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and
-  .test.failure_stage == "cloud-init" and
-  .test.orchestration_exit_status == 2 and
+  .test.failure_stage == "bootstrap" and
+  .test.orchestration_exit_status == 1 and
   .test.host_setup_failure == {"exit_status": 7, "stage": "apparmor"} and
   .test.result == "failed" and
   .test.failed_admission_invariants == ["CI_CLOUD_REMOTE_ORCHESTRATION"]
 ' "$EVIDENCE_DIR/bootstrap-failure.json" >/dev/null
-diagnostic_bytes="$(awk '/^x+$/{print length; exit}' "$TEMP_DIR/output.log")"
-if [[ "$diagnostic_bytes" -ne 8192 ]]; then
-  printf 'FAIL: cloud-init diagnostic was not capped at 8192 bytes (got %s)\n' \
-    "$diagnostic_bytes" >&2
-  exit 1
-fi
 grep -Fq 'Failure stage:' "$EVIDENCE_DIR/summary.md"
-grep -Fq 'cloud-init' "$EVIDENCE_DIR/summary.md"
+grep -Fq 'bootstrap' "$EVIDENCE_DIR/summary.md"
 grep -Fq "Host setup failure: \`apparmor\` (exit \`7\`)" \
   "$EVIDENCE_DIR/summary.md"
 grep -Fq 'Trusted host setup failure: {"exit_status":7,"stage":"apparmor"}' \
@@ -229,20 +210,12 @@ if [[ -e "$DIAGNOSTIC_EVIDENCE_DIR/evidence.json" ]]; then
   exit 1
 fi
 jq -e '
-  .test.failure_stage == "cloud-init" and
+  .test.failure_stage == "bootstrap" and
   .test.orchestration_exit_status == 1 and
   .test.host_setup_failure == {"exit_status": 7, "stage": "apparmor"} and
   .test.result == "failed"
 ' "$DIAGNOSTIC_EVIDENCE_DIR/bootstrap-failure.json" >/dev/null
-grep -Fq 'cloud-init did not reach trusted host setup' \
+grep -Fq 'native bootstrap did not reach trusted host setup' \
   "$TEMP_DIR/diagnostic-output.log"
-diagnostic_ssh_bytes="$(
-  awk '/^y+$/{print length; exit}' "$TEMP_DIR/diagnostic-output.log"
-)"
-if [[ "$diagnostic_ssh_bytes" -ne 8192 ]]; then
-  printf 'FAIL: restricted SSH diagnostic was not capped (got %s)\n' \
-    "$diagnostic_ssh_bytes" >&2
-  exit 1
-fi
 
 printf 'Cloud remote bootstrap failure contract passed.\n'

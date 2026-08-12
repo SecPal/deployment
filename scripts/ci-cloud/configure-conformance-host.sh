@@ -16,9 +16,10 @@ completion_marker="$active_ssh_root/host-setup-complete"
 diagnostic_ssh_timer=secpal-ci-diagnostic-sshd.timer
 diagnostic_ssh_service=secpal-ci-diagnostic-sshd.service
 diagnostic_ssh_key=/run/secpal-ci-diagnostic-authorized-key
-diagnostic_ssh_command=/run/secpal-ci-cloud-init-diagnostic
+diagnostic_ssh_command=/run/secpal-ci-bootstrap-diagnostic
 diagnostic_ssh_config=/run/secpal-ci-diagnostic-sshd.conf
 diagnostic_ssh_user=secpal-ci-diagnostic
+diagnostic_ssh_home=/run/secpal-ci-diagnostic-home
 diagnostic_ssh_service_unit=/run/systemd/system/secpal-ci-diagnostic-sshd.service
 diagnostic_ssh_timer_unit=/run/systemd/system/secpal-ci-diagnostic-sshd.timer
 runner_ipv4="${1:-}"
@@ -203,6 +204,10 @@ retire_diagnostic_ssh() {
   fi
   if getent group "$diagnostic_ssh_user" >/dev/null; then
     groupdel "$diagnostic_ssh_user" || cleanup_failed=true
+  fi
+  if [[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]] &&
+    ! rmdir -- "$diagnostic_ssh_home"; then
+    cleanup_failed=true
   fi
   systemctl daemon-reload || cleanup_failed=true
   [[ "$cleanup_failed" == false ]]

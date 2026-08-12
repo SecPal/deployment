@@ -74,6 +74,28 @@ def require(condition: bool, message: str) -> None:
         raise ContractError(message)
 
 
+def required_block(text: str, start: str, end: str, label: str) -> str:
+    require(
+        text.count(start) == 1,
+        f"{label} start marker is missing or ambiguous",
+    )
+    _, start_marker, tail = text.partition(start)
+    require(bool(start_marker), f"{label} start marker is missing")
+    block, end_marker, _ = tail.partition(end)
+    require(bool(end_marker), f"{label} end marker is missing")
+    return block
+
+
+def required_suffix(text: str, start: str, label: str) -> str:
+    require(
+        text.count(start) == 1,
+        f"{label} start marker is missing or ambiguous",
+    )
+    _, start_marker, suffix = text.rpartition(start)
+    require(bool(start_marker), f"{label} start marker is missing")
+    return suffix
+
+
 def read(root: Path, relative: str) -> str:
     path = root / relative
     require(path.is_file(), f"required cloud CI file is missing: {relative}")
@@ -333,7 +355,7 @@ def validate_opentofu(root: Path) -> None:
     versions = read(root, "infra/ci-cloud/digitalocean/versions.tf")
     variables = read(root, "infra/ci-cloud/digitalocean/variables.tf")
     outputs = read(root, "infra/ci-cloud/digitalocean/outputs.tf")
-    cloud_init = read(root, "infra/ci-cloud/digitalocean/cloud-init.tftpl")
+    bootstrap = read(root, "scripts/ci-cloud/bootstrap-conformance-host.tftpl")
     host_setup = read(root, "scripts/ci-cloud/configure-conformance-host.sh")
     diagnostic_ssh = read(root, "scripts/ci-cloud/install-diagnostic-ssh.sh")
     host_setup_failure = read(root, "scripts/ci-cloud/host-setup-failure.py")
@@ -342,6 +364,10 @@ def validate_opentofu(root: Path) -> None:
     require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
     require('version = "= 2.99.1"' in versions, "DigitalOcean provider version must be exact")
     require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
+    require(
+        "length(trimspace(var.ssh_public_key)) <= 512" in variables,
+        "DigitalOcean public key input must be bounded before API submission",
+    )
     require(main.count('resource "digitalocean_droplet"') == 1, "exactly one droplet resource is allowed")
     require("count" not in main, "resource count abstraction is forbidden")
     require(
@@ -371,9 +397,64 @@ def validate_opentofu(root: Path) -> None:
         "depends_on        = [digitalocean_firewall.conformance]" in main,
         "Droplet must wait for its tag-targeted firewall",
     )
+    require(
+        'user_data = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-conformance-host.tftpl"'
+        in main,
+        "DigitalOcean must deliver the trusted native shell payload through user data",
+    )
+    maximum_bootstrap = bootstrap
+    for placeholder, replacement in (
+        ("${ssh_public_key}", "x" * 512),
+        ("${runner_ipv4}", "255.255.255.255"),
+        ("${run_id}", "9" * 20),
+        ("${run_attempt}", "9" * 3),
+        ("${diagnostic_ssh_installer}", diagnostic_ssh.strip()),
+        ("${host_setup_script}", host_setup.strip()),
+        ("${host_setup_failure_script}", host_setup_failure.strip()),
+    ):
+        maximum_bootstrap = maximum_bootstrap.replace(placeholder, replacement)
+    require(
+        len(maximum_bootstrap.encode("utf-8")) <= 64 * 1024,
+        "rendered native bootstrap exceeds DigitalOcean's 64 KiB user-data limit",
+    )
+    bootstrap_ssh_policy = required_block(
+        bootstrap,
+        "<<'SECPAL_SSH_CONFIG'\n",
+        "\nSECPAL_SSH_CONFIG\n",
+        "native bootstrap SSH policy",
+    )
+    expected_bootstrap_ssh_policy = """PasswordAuthentication no
+KbdInteractiveAuthentication no
+MaxSessions 1
+PAMServiceName sshd
+PermitRootLogin no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PubkeyAcceptedAlgorithms +ssh-ed25519
+AuthorizedKeysCommand none
+AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u
+AuthorizedPrincipalsCommand none
+AuthorizedPrincipalsFile none
+TrustedUserCAKeys none
+RevokedKeys none
+RefuseConnection no
+StrictModes yes
+ChrootDirectory none
+ForceCommand none
+DisableForwarding yes
+PermitTTY no
+PermitUserEnvironment no
+PermitUserRC no
+UseDNS no
+UsePAM yes
+AllowUsers secpal-ci"""
+    require(
+        bootstrap_ssh_policy == expected_bootstrap_ssh_policy,
+        "native bootstrap SSH policy must match the closed operator contract",
+    )
     for required in (
-        "  - gh\n",
-        "  - unattended-upgrades\n",
+        "  gh \\\n",
+        "  unattended-upgrades\n",
         "APT::Periodic::Unattended-Upgrade \"1\";",
         "#clear Unattended-Upgrade::Origins-Pattern;",
         "#clear Unattended-Upgrade::Package-Blacklist;",
@@ -383,26 +464,29 @@ def validate_opentofu(root: Path) -> None:
         "secpal-ci-host-setup-failure",
         "${host_setup_failure_script}",
     ):
-        require(required in cloud_init, "cloud-init omitted required D.1 host policy")
+        require(required in bootstrap, "native bootstrap omitted required D.1 host policy")
     require("set -euo pipefail" in host_setup, "host setup must use strict Bash mode")
-    require("groups: []" not in cloud_init, "cloud-init user groups must satisfy its schema")
     require(
-        "ssh_authorized_keys" not in cloud_init
-        and "${diagnostic_ssh_installer}" in cloud_init
-        and "  - path: /run/secpal-ci-authorized-key\n" in cloud_init
-        and '    owner: root:root\n    permissions: "0600"\n' in cloud_init
-        and "  - path: /etc/ssh/sshd_config.d/00-secpal-ci.conf\n"
-        in cloud_init
-        and "sshd_config.d/90-secpal-ci.conf" not in cloud_init
+        "ssh_authorized_keys" not in bootstrap
+        and "${diagnostic_ssh_installer}" in bootstrap
+        and "install -o root -g root -m 0600 /dev/null /run/secpal-ci-authorized-key"
+        in bootstrap
+        and "install -o root -g root -m 0644 /dev/null \\\n"
+        "  /etc/ssh/sshd_config.d/00-secpal-ci.conf" in bootstrap
+        and "sshd_config.d/90-secpal-ci.conf" not in bootstrap
         and "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u"
-        in cloud_init,
+        in bootstrap
+        and "usermod --password '*NP*' secpal-ci" in bootstrap
+        and "operator_shadow_entry=\"$(getent shadow secpal-ci)\"" in bootstrap
+        and '[[ "$operator_password_marker" == \'*NP*\' ]]' in bootstrap
+        and "usermod --lock" not in bootstrap,
         "operator SSH key must remain root-only until trusted host setup finishes",
     )
     require(
         "systemctl mask --now ssh.service ssh.socket"
         in diagnostic_ssh
         and "OnActiveSec=10m" in diagnostic_ssh
-        and "ForceCommand /run/secpal-ci-cloud-init-diagnostic"
+        and "ForceCommand /run/secpal-ci-bootstrap-diagnostic"
         in diagnostic_ssh
         and "DisableForwarding yes" in diagnostic_ssh
         and "PermitRootLogin no" in diagnostic_ssh
@@ -416,6 +500,16 @@ def validate_opentofu(root: Path) -> None:
         and "UsePAM yes" in diagnostic_ssh
         and "AllowUsers secpal-ci-diagnostic@$runner_ipv4" in diagnostic_ssh
         and "useradd --system" in diagnostic_ssh
+        and "usermod --password '*NP*' \"$diagnostic_user\""
+        in diagnostic_ssh
+        and 'shadow_entry="$(getent shadow "$diagnostic_user")"'
+        in diagnostic_ssh
+        and '[[ "$password_marker" == \'*NP*\' ]] || return 1'
+        in diagnostic_ssh
+        and "usermod --lock" not in diagnostic_ssh
+        and "diagnostic_home=/run/secpal-ci-diagnostic-home" in diagnostic_ssh
+        and 'install -d -o root -g root -m 0755 "$diagnostic_home"'
+        in diagnostic_ssh
         and "SECPAL_CI_DIAGNOSTIC_SSH" in diagnostic_ssh
         and "SECPAL_CI_HOST_SETUP_FAILURE" in diagnostic_ssh
         and "/usr/local/sbin/secpal-ci-host-setup-failure read"
@@ -428,30 +522,56 @@ def validate_opentofu(root: Path) -> None:
         and "source " not in diagnostic_ssh,
         "pre-runcmd failures need independent restricted diagnostic SSH",
     )
-    diagnostic_cleanup = diagnostic_ssh.split("cleanup() {", 1)[1].split(
-        "\n}", 1
-    )[0]
-    diagnostic_preparation = diagnostic_ssh.split(
-        "prepare_diagnostic_fallback() {", 1
-    )[1].split("\n}", 1)[0]
-    diagnostic_start = diagnostic_ssh.split(
-        "start_diagnostic_fallback() {", 1
-    )[1].split("\n}", 1)[0]
-    diagnostic_initial_transition = diagnostic_ssh.rsplit(
-        "if completed_setup_is_valid; then", 1
-    )[1]
-    operator_activation = host_setup.split(
-        "activate_operator_ssh() {", 1
-    )[1].split("\n}", 1)[0]
-    diagnostic_restore = host_setup.split(
-        "restore_diagnostic_ssh() {", 1
-    )[1].split("\n}", 1)[0]
-    diagnostic_recovery = host_setup.split(
-        "arm_diagnostic_ssh_recovery() {", 1
-    )[1].split("\n}", 1)[0]
-    completed_validator = diagnostic_ssh.split(
-        "completed_setup_is_valid() {", 1
-    )[1].split("\n}", 1)[0]
+    diagnostic_cleanup = required_block(
+        diagnostic_ssh, "cleanup() {", "\n}", "diagnostic cleanup block"
+    )
+    diagnostic_preparation = required_block(
+        diagnostic_ssh,
+        "prepare_diagnostic_fallback() {",
+        "\n}",
+        "diagnostic preparation block",
+    )
+    diagnostic_start = required_block(
+        diagnostic_ssh,
+        "start_diagnostic_fallback() {",
+        "\n}",
+        "diagnostic start block",
+    )
+    diagnostic_initial_transition = required_suffix(
+        diagnostic_ssh,
+        "if completed_setup_is_valid; then",
+        "completed setup transition",
+    )
+    operator_activation = required_block(
+        host_setup,
+        "activate_operator_ssh() {",
+        "\n}",
+        "operator SSH activation block",
+    )
+    diagnostic_restore = required_block(
+        host_setup,
+        "restore_diagnostic_ssh() {",
+        "\n}",
+        "diagnostic restore block",
+    )
+    diagnostic_recovery = required_block(
+        host_setup,
+        "arm_diagnostic_ssh_recovery() {",
+        "\n}",
+        "diagnostic recovery block",
+    )
+    completed_validator = required_block(
+        diagnostic_ssh,
+        "completed_setup_is_valid() {",
+        "\n}",
+        "completed setup validator block",
+    )
+    operator_identity_validator = required_block(
+        diagnostic_ssh,
+        "validate_operator_identity() {",
+        "\n}",
+        "operator identity validator block",
+    )
     require(
         "ensure_diagnostic_identity" in diagnostic_preparation
         and '[[ "$(id -G "$diagnostic_user")" == "$group_gid" ]]'
@@ -525,6 +645,10 @@ def validate_opentofu(root: Path) -> None:
         and '"$ssh_socket_state" == disabled' in completed_validator
         and "validate_effective_sshd_config || return 1"
         in completed_validator
+        and "validate_operator_identity || return 1" in completed_validator
+        and "getent shadow secpal-ci" in operator_identity_validator
+        and '"$password_marker" == \'*NP*\'' in operator_identity_validator
+        and '"$(id -G secpal-ci)" == 20000' in operator_identity_validator
         and "denyusers|denygroups|allowgroups|setenv" in diagnostic_ssh
         and "pubkeyacceptedalgorithms" in diagnostic_ssh
         and "ssh-ed25519" in diagnostic_ssh
@@ -584,7 +708,11 @@ def validate_opentofu(root: Path) -> None:
         and 'userdel "$diagnostic_ssh_user"' in host_setup
         and 'if getent group "$diagnostic_ssh_user" >/dev/null; then'
         in host_setup
-        and 'groupdel "$diagnostic_ssh_user"' in host_setup,
+        and 'groupdel "$diagnostic_ssh_user"' in host_setup
+        and "diagnostic_ssh_home=/run/secpal-ci-diagnostic-home" in host_setup
+        and '[[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]]'
+        in host_setup
+        and 'rmdir -- "$diagnostic_ssh_home"' in host_setup,
         "trusted SSH activation must retire or restore diagnostic SSH atomically",
     )
     require(
@@ -727,108 +855,39 @@ def validate_opentofu(root: Path) -> None:
         "systemctl disable --now podman.socket podman.service" in host_setup,
         "host setup must disable system-scope Podman API units",
     )
-    try:
-        cloud_config = yaml.load(cloud_init, Loader=yaml.BaseLoader)
-    except yaml.YAMLError as error:
-        raise ContractError(f"cloud-init template is invalid YAML: {error}") from None
-    require(isinstance(cloud_config, dict), "cloud-init template must be a YAML mapping")
-    users = cloud_config.get("users")
     require(
-        isinstance(users, list)
-        and len(users) == 1
-        and isinstance(users[0], dict)
-        and "ssh_authorized_keys" not in users[0],
-        "cloud-init must not activate the operator key during user creation",
-    )
-    write_files = cloud_config.get("write_files")
-    require(
-        isinstance(write_files, list)
-        and any(
-            isinstance(entry, dict)
-            and entry.get("path") == "/run/secpal-ci-authorized-key"
-            and entry.get("owner") == "root:root"
-            and entry.get("permissions") == "0600"
-            and entry.get("content") == "${ssh_public_key}\n"
-            for entry in write_files
-        ),
-        "cloud-init must stage exactly one root-owned operator public key",
-    )
-    require(
-        any(
-            isinstance(entry, dict)
-            and entry.get("path")
-            == "/usr/local/sbin/secpal-ci-host-setup-failure"
-            and entry.get("owner") == "root:root"
-            and entry.get("permissions") == "0755"
-            for entry in write_files
-        ),
-        "restricted diagnostics must be able to execute the closed failure reader",
-    )
-    sshd_files = [
-        entry
-        for entry in write_files
-        if isinstance(entry, dict)
-        and str(entry.get("path", "")).startswith("/etc/ssh/sshd_config.d/")
-    ]
-    require(
-        len(sshd_files) == 1
-        and sshd_files[0].get("path")
-        == "/etc/ssh/sshd_config.d/00-secpal-ci.conf"
-        and sshd_files[0].get("owner") == "root:root"
-        and sshd_files[0].get("permissions") == "0644"
-        and sshd_files[0].get("content")
-        == "PasswordAuthentication no\n"
-        "KbdInteractiveAuthentication no\n"
-        "MaxSessions 1\n"
-        "PAMServiceName sshd\n"
-        "PermitRootLogin no\n"
-        "PubkeyAuthentication yes\n"
-        "AuthenticationMethods publickey\n"
-        "PubkeyAcceptedAlgorithms +ssh-ed25519\n"
-        "AuthorizedKeysCommand none\n"
-        "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u\n"
-        "AuthorizedPrincipalsCommand none\n"
-        "AuthorizedPrincipalsFile none\n"
-        "TrustedUserCAKeys none\n"
-        "RevokedKeys none\n"
-        "RefuseConnection no\n"
-        "StrictModes yes\n"
-        "ChrootDirectory none\n"
-        "ForceCommand none\n"
-        "DisableForwarding yes\n"
-        "PermitTTY no\n"
-        "PermitUserEnvironment no\n"
-        "PermitUserRC no\n"
-        "UseDNS no\n"
-        "UsePAM yes\n"
-        "AllowUsers secpal-ci\n",
-        "cloud-init SSH policy must be exact, prioritized, and operator-scoped",
-    )
-    require(
-        cloud_config.get("bootcmd")
-        == [
-            [
-                "/bin/bash",
-                "-c",
-                "${diagnostic_ssh_installer}\n",
-                "secpal-ci-install-diagnostic-ssh",
-                "${ssh_public_key}",
-                "${runner_ipv4}",
-                "${run_id}",
-                "${run_attempt}",
-            ]
-        ]
-        and cloud_config.get("runcmd")
-        == [["/usr/local/sbin/secpal-ci-configure-conformance-host", "${runner_ipv4}"]]
+        bootstrap.startswith("#!/usr/bin/env bash\n")
+        and "#cloud-config" not in bootstrap
+        and "set -euo pipefail" in bootstrap
+        and "${diagnostic_ssh_installer}" in bootstrap
+        and "${host_setup_script}" in bootstrap
+        and "${host_setup_failure_script}" in bootstrap
+        and 'install -o root -g root -m 0755 /dev/null "$failure_writer"'
+        in bootstrap
+        and '/usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"'
+        in bootstrap
         and "runner_ipv4               = var.runner_ipv4" in main,
-        "host setup must receive the validated runner network context",
+        "native bootstrap must install and execute only trusted host setup",
     )
-    packages = cloud_config.get("packages")
+    package_header = (
+        "apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends "
+        "\\\n"
+    )
+    package_footer = "\n\nif getent passwd secpal-ci"
+    package_block = required_block(
+        bootstrap,
+        package_header,
+        package_footer,
+        "native bootstrap package block",
+    )
+    packages = {
+        line.strip().removesuffix(" \\")
+        for line in package_block.splitlines()
+        if line.strip()
+    }
     require(
-        isinstance(packages, list)
-        and all(isinstance(package, str) for package in packages)
-        and set(packages) == string_collection_constant(collector, "BOOTSTRAP_PACKAGES"),
-        "collector bootstrap package evidence must exactly match cloud-init packages",
+        packages == string_collection_constant(collector, "BOOTSTRAP_PACKAGES"),
+        "collector bootstrap package evidence must exactly match native bootstrap packages",
     )
     curl_commands = subprocess_literal_arguments(collector, "cloud_identity_facts")
     require(
@@ -853,11 +912,14 @@ def validate_opentofu(root: Path) -> None:
     gcp_versions = read(root, "infra/ci-cloud/gcp/versions.tf")
     gcp_variables = read(root, "infra/ci-cloud/gcp/variables.tf")
     gcp_outputs = read(root, "infra/ci-cloud/gcp/outputs.tf")
-    gcp_cloud_init = read(root, "infra/ci-cloud/gcp/cloud-init.tftpl")
     read(root, "infra/ci-cloud/gcp/.terraform.lock.hcl")
     require('required_version = "= 1.12.5"' in gcp_versions, "GCP OpenTofu version must be exact")
     require('version = "= 7.40.0"' in gcp_versions, "Google provider version must be exact")
     require("~>" not in gcp_versions and ">=" not in gcp_versions, "mutable Google provider constraints are forbidden")
+    require(
+        "length(trimspace(var.ssh_public_key)) <= 512" in gcp_variables,
+        "GCP public key input must be bounded before API submission",
+    )
     require(
         "add_terraform_attribution_label = false" in gcp_versions,
         "GCP provider attribution labels must be disabled for exact janitor ownership",
@@ -912,8 +974,11 @@ def validate_opentofu(root: Path) -> None:
         "GCP host setup must receive the validated runner network context",
     )
     require(
-        "install-diagnostic-ssh.sh" in gcp_main,
-        "GCP cloud-init must embed the trusted diagnostic SSH installer",
+        '"startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-conformance-host.tftpl"'
+        in gcp_main
+        and "user-data" not in gcp_main
+        and "install-diagnostic-ssh.sh" in gcp_main,
+        "GCP must use its documented native startup-script transport",
     )
     require('protocol = "all"' in gcp_main and "priority  = 65534" in gcp_main, "GCP residual egress must be denied")
     require('condition     = var.project_id == "secpal-dev"' in gcp_variables, "GCP project allowlist changed")
@@ -924,7 +989,11 @@ def validate_opentofu(root: Path) -> None:
     )
     forbidden_gcp = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
     require(not any(value in (gcp_main + gcp_variables) for value in forbidden_gcp), "GCP OpenTofu accepted a forbidden control or private key")
-    require(gcp_cloud_init == cloud_init, "provider cloud-init admission policy drifted")
+    require(
+        gcp_main.count("bootstrap-conformance-host.tftpl") == 1
+        and main.count("bootstrap-conformance-host.tftpl") == 1,
+        "both providers must consume the single trusted bootstrap payload",
+    )
 
 
 def validate_janitor_script(root: Path) -> None:
@@ -982,9 +1051,12 @@ def validate(root: Path) -> None:
         Draft202012Validator.check_schema(failure_schema)
     except (json.JSONDecodeError, SchemaError):
         raise ContractError("bootstrap failure evidence schema is invalid") from None
-    root_ssh_admission = remote.split('bootstrap_stage="root-ssh"', 1)[1].split(
-        'started_at="$(date -u', 1
-    )[0]
+    root_ssh_admission = required_block(
+        remote,
+        'bootstrap_stage="root-ssh"',
+        'started_at="$(date -u',
+        "root SSH admission block",
+    )
     require(
         "root_ssh_denied=true" in root_ssh_admission
         and '"$root_probe_status" -eq 255' in root_ssh_admission
@@ -1020,7 +1092,6 @@ def validate(root: Path) -> None:
         'bootstrap_stage="host-key"' in remote
         and 'host_key_observations_json="null"' in remote
         and "record_host_key_observation()" in remote
-        and "classify_host_key_scan()" in remote
         and "observe_failed_host_key_scan()" in remote
         and "scripts/ci-cloud/probe-ssh-port.py" in remote
         and "connection_refused" in remote
@@ -1031,14 +1102,17 @@ def validate(root: Path) -> None:
         in remote
         and '"$orchestration_started_at"' in remote
         and "scripts/ci-cloud/write-bootstrap-failure.py" in remote
-        and "cloud-init status --long" in remote
-        and "head -c 8192" in remote
-        and "cloud-init-output.log" not in remote,
+        and 'bootstrap_stage="bootstrap"' in remote
+        and "native bootstrap did not reach trusted host setup" in remote
+        and "cloud-init" not in remote,
         "early remote failures need bounded structured evidence and diagnostics",
     )
-    host_key_classifier = remote.split("classify_host_key_scan() {", 1)[
-        1
-    ].split("\n}\n", 1)[0]
+    host_key_classifier = required_block(
+        remote,
+        "classify_host_key_scan() {",
+        "\n}\n",
+        "host-key classifier block",
+    )
     require(
         "connection_refused | connection_timeout | other"
         in host_key_classifier
@@ -1077,7 +1151,7 @@ def validate(root: Path) -> None:
         and "scripts/ci-cloud/host-setup-failure.py validate" in remote
         and '"$diagnostic_probe_status" -eq 125' in remote
         and '"secpal-ci-diagnostic@$address"' in remote
-        and "cloud-init did not reach trusted host setup" in remote,
+        and "native bootstrap did not reach trusted host setup" in remote,
         "remote orchestration must recognize bounded restricted diagnostics",
     )
     require(

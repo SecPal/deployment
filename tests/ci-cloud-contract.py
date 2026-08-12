@@ -20,6 +20,198 @@ VALIDATOR = ROOT / "scripts" / "validate-ci-cloud.py"
 
 
 class CloudCIContractTests(unittest.TestCase):
+    def test_provider_bootstrap_uses_documented_native_transports(self) -> None:
+        digitalocean = (ROOT / "infra/ci-cloud/digitalocean/main.tf").read_text(
+            encoding="utf-8"
+        )
+        gcp = (ROOT / "infra/ci-cloud/gcp/main.tf").read_text(encoding="utf-8")
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('user_data = templatefile(', digitalocean)
+        self.assertIn("bootstrap-conformance-host.tftpl", digitalocean)
+        self.assertIn('"startup-script" = templatefile(', gcp)
+        self.assertNotIn("user-data", gcp)
+        self.assertTrue(bootstrap.startswith("#!/usr/bin/env bash\n"))
+        self.assertNotIn("#cloud-config", bootstrap)
+
+    def test_ephemeral_public_key_is_bounded_before_provider_submission(self) -> None:
+        for provider in ("digitalocean", "gcp"):
+            variables = (
+                ROOT / "infra" / "ci-cloud" / provider / "variables.tf"
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "length(trimspace(var.ssh_public_key)) <= 512", variables
+            )
+
+    def test_static_contract_rejects_provider_bootstrap_transport_drift(self) -> None:
+        for relative, old, new in (
+            (
+                "infra/ci-cloud/digitalocean/main.tf",
+                "user_data = templatefile",
+                "metadata = templatefile",
+            ),
+            (
+                "infra/ci-cloud/gcp/main.tf",
+                '"startup-script" = templatefile',
+                "user-data = templatefile",
+            ),
+        ):
+            with self.subTest(relative=relative):
+                self.assert_mutation_rejected(relative, old, new)
+
+    def test_static_contract_rejects_oversized_provider_bootstrap(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "#!/usr/bin/env bash\n",
+            "#!/usr/bin/env bash\n# " + ("x" * (24 * 1024)) + "\n",
+        )
+
+    def test_static_contract_rejects_unbounded_provider_public_key(self) -> None:
+        for provider in ("digitalocean", "gcp"):
+            with self.subTest(provider=provider):
+                self.assert_mutation_rejected(
+                    f"infra/ci-cloud/{provider}/variables.tf",
+                    "length(trimspace(var.ssh_public_key)) <= 512 &&\n",
+                    "",
+                )
+
+    def test_native_bootstrap_installs_and_commits_trusted_host_setup(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("set -euo pipefail", bootstrap)
+        self.assertIn("apt-get -o DPkg::Lock::Timeout=300 update", bootstrap)
+        self.assertIn(
+            "apt-get -o DPkg::Lock::Timeout=300 install", bootstrap
+        )
+        self.assertIn("useradd", bootstrap)
+        self.assertIn("${diagnostic_ssh_installer}", bootstrap)
+        self.assertIn("${host_setup_script}", bootstrap)
+        self.assertIn("${host_setup_failure_script}", bootstrap)
+        self.assertIn(
+            '/usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"',
+            bootstrap,
+        )
+
+    def test_native_bootstrap_publishes_ssh_policy_with_exact_mode(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "install -o root -g root -m 0644 /dev/null \\\n"
+            "  /etc/ssh/sshd_config.d/00-secpal-ci.conf",
+            bootstrap,
+        )
+
+    def test_native_bootstrap_validator_reports_missing_block_markers(self) -> None:
+        cases = (
+            (
+                "SSH policy start",
+                "<<'SECPAL_SSH_CONFIG'\n",
+                "<<'SECPAL_SSH_CONFIG_MISSING'\n",
+                "native bootstrap SSH policy start marker is missing",
+            ),
+            (
+                "SSH policy end",
+                "\nSECPAL_SSH_CONFIG\n",
+                "\nSECPAL_SSH_CONFIG_MISSING\n",
+                "native bootstrap SSH policy end marker is missing",
+            ),
+            (
+                "package start",
+                "apt-get -o DPkg::Lock::Timeout=300 install -y "
+                "--no-install-recommends \\\n",
+                "apt-get -o DPkg::Lock::Timeout=300 install -y ",
+                "native bootstrap package block start marker is missing",
+            ),
+            (
+                "package end",
+                "  unattended-upgrades\n\n",
+                "  unattended-upgrades\n",
+                "native bootstrap package block end marker is missing",
+            ),
+        )
+        for label, old, new, expected in cases:
+            with self.subTest(label=label):
+                fixture = self.mutated_root(
+                    "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+                    old,
+                    new,
+                )
+                result = self.run_validator(fixture)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertNotIn("Traceback", result.stdout)
+                self.assertIn(expected, result.stdout)
+
+    def test_validator_reports_missing_runtime_block_markers(self) -> None:
+        cases = (
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "cleanup() {",
+                "cleanup_missing() {",
+                "diagnostic cleanup block start marker is missing",
+            ),
+            (
+                "scripts/ci-cloud/configure-conformance-host.sh",
+                "activate_operator_ssh() {",
+                "activate_operator_ssh_missing() {",
+                "operator SSH activation block start marker is missing",
+            ),
+            (
+                "scripts/ci-cloud/run-remote-conformance.sh",
+                'bootstrap_stage="root-ssh"',
+                'bootstrap_stage="root-ssh-missing"',
+                "root SSH admission block start marker is missing",
+            ),
+            (
+                "scripts/ci-cloud/run-remote-conformance.sh",
+                "classify_host_key_scan() {",
+                "classify_host_key_scan_missing() {",
+                "host-key classifier block start marker is missing",
+            ),
+        )
+        for relative, old, new, expected in cases:
+            with self.subTest(relative=relative, marker=old):
+                fixture = self.mutated_root(relative, old, new)
+                result = self.run_validator(fixture)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertNotIn("Traceback", result.stdout)
+                self.assertIn(expected, result.stdout)
+
+    def test_diagnostic_identity_has_existing_root_controlled_home(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("diagnostic_home=/run/secpal-ci-diagnostic-home", installer)
+        self.assertIn(
+            'install -d -o root -g root -m 0755 "$diagnostic_home"', installer
+        )
+        self.assertIn('--home-dir "$diagnostic_home"', installer)
+        self.assertNotIn("--home-dir /nonexistent", installer)
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "diagnostic_ssh_home=/run/secpal-ci-diagnostic-home", host_setup
+        )
+        self.assertIn(
+            '[[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]]',
+            host_setup,
+        )
+        self.assertIn('rmdir -- "$diagnostic_ssh_home"', host_setup)
+
+    def test_openssh_account_smoke_ignores_global_known_hosts(self) -> None:
+        smoke = (ROOT / "tests/ci-cloud-openssh-account.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("-o GlobalKnownHostsFile=/dev/null \\\n", smoke)
+
     maxDiff = None
 
     def run_validator(self, root: Path = ROOT) -> subprocess.CompletedProcess[str]:
@@ -80,7 +272,7 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("python3 tests/ci-cloud-bootstrap-failure.py", preflight)
         self.assertIn("python3 tests/ci-cloud-config.py", preflight)
         self.assertIn("python3 tests/ci-cloud-host-setup-failure.py", preflight)
-        self.assertIn("cloud-init", preflight)
+        self.assertNotIn("required_tools=(actionlint cloud-init", preflight)
 
     def test_repository_contract_requires_every_cloud_provider_root_and_janitor(self) -> None:
         repository_contract = (ROOT / "tests" / "repository-contract.sh").read_text(
@@ -88,7 +280,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         for relative in (
             "infra/ci-cloud/gcp/.terraform.lock.hcl",
-            "infra/ci-cloud/gcp/cloud-init.tftpl",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
             "infra/ci-cloud/gcp/iam-role.yaml",
             "infra/ci-cloud/gcp/main.tf",
             "infra/ci-cloud/gcp/outputs.tf",
@@ -164,9 +356,9 @@ class CloudCIContractTests(unittest.TestCase):
             ]["ignore"],
         )
 
-    def test_cloud_init_uses_shellchecked_trusted_setup(self) -> None:
-        cloud_init = (
-            ROOT / "infra/ci-cloud/digitalocean/cloud-init.tftpl"
+    def test_native_bootstrap_uses_shellchecked_trusted_setup(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
         ).read_text(encoding="utf-8")
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
@@ -176,14 +368,13 @@ class CloudCIContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", host_setup)
         self.assertIn("set -euo pipefail", diagnostic_installer)
-        self.assertEqual(1, cloud_init.count("- /bin/bash\n    - -c\n"))
-        self.assertIn("${diagnostic_ssh_installer}", cloud_init)
+        self.assertTrue(bootstrap.startswith("#!/usr/bin/env bash\n"))
+        self.assertIn("${diagnostic_ssh_installer}", bootstrap)
         self.assertIn("/run/secpal-ci-evidence/apparmor-status", host_setup)
         self.assertIn(
             "systemctl disable --now podman.socket podman.service", host_setup
         )
-        self.assertNotIn("groups: []", cloud_init)
-        self.assertIn("${host_setup_failure_script}", cloud_init)
+        self.assertIn("${host_setup_failure_script}", bootstrap)
         self.assertIn(
             '[[ "$(id -G secpal-ci)" != "$(id -g secpal-ci)" ]]',
             host_setup,
@@ -209,7 +400,7 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("Trusted host setup failure", remote)
         self.assertNotIn("cloud-init-output.log", remote)
 
-    def test_cloud_init_repairs_automatic_subordinate_ids(self) -> None:
+    def test_native_bootstrap_repairs_automatic_subordinate_ids(self) -> None:
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
@@ -230,55 +421,43 @@ class CloudCIContractTests(unittest.TestCase):
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
+        template = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("ssh_authorized_keys", template)
+        self.assertIn("/run/secpal-ci-authorized-key", template)
+        self.assertIn(
+            "install -o root -g root -m 0600 /dev/null ", template
+        )
+        self.assertIn("${ssh_public_key}", template)
+        self.assertIn(
+            "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u",
+            template,
+        )
+        self.assertIn("/etc/ssh/sshd_config.d/00-secpal-ci.conf", template)
+        self.assertNotIn("sshd_config.d/90-secpal-ci.conf", template)
+        self.assertIn("AuthenticationMethods publickey", template)
+        self.assertIn("AuthorizedKeysCommand none", template)
+        self.assertIn("AuthorizedPrincipalsCommand none", template)
+        self.assertIn("AuthorizedPrincipalsFile none", template)
+        self.assertIn("PermitRootLogin no", template)
+        self.assertIn("TrustedUserCAKeys none", template)
+        self.assertIn("UseDNS no", template)
+        self.assertIn("AllowUsers secpal-ci", template)
+        self.assertIn("${diagnostic_ssh_installer}", template)
+        self.assertIn(
+            '/usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"',
+            template,
+        )
         for provider in ("digitalocean", "gcp"):
-            template = (
-                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
-            ).read_text(encoding="utf-8")
             variables = (
                 ROOT / f"infra/ci-cloud/{provider}/variables.tf"
             ).read_text(encoding="utf-8")
-            users_block = template.split("users:\n", 1)[1].split(
-                "\ndisable_root:", 1
-            )[0]
-            self.assertNotIn("ssh_authorized_keys", users_block)
-            self.assertIn("- path: /run/secpal-ci-authorized-key", template)
-            staged_key = template.split(
-                "- path: /run/secpal-ci-authorized-key", 1
-            )[1].split("  - path:", 1)[0]
-            self.assertIn("owner: root:root", staged_key)
-            self.assertIn('permissions: "0600"', staged_key)
-            self.assertIn("${ssh_public_key}", staged_key)
-            self.assertIn(
-                "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u",
-                template,
-            )
-            self.assertIn(
-                "- path: /etc/ssh/sshd_config.d/00-secpal-ci.conf",
-                template,
-            )
-            self.assertNotIn("sshd_config.d/90-secpal-ci.conf", template)
-            self.assertIn("AuthenticationMethods publickey", template)
-            self.assertIn("AuthorizedKeysCommand none", template)
-            self.assertIn("AuthorizedPrincipalsCommand none", template)
-            self.assertIn("AuthorizedPrincipalsFile none", template)
-            self.assertIn("PermitRootLogin no", template)
-            self.assertIn("TrustedUserCAKeys none", template)
-            self.assertIn("UseDNS no", template)
-            self.assertIn("AllowUsers secpal-ci", template)
-            self.assertIn(
-                "${diagnostic_ssh_installer}",
-                template,
-            )
             self.assertIn(
                 " secpal-ci-${var.run_id}-${var.run_attempt}$",
                 variables,
             )
             self.assertNotIn("( [A-Za-z0-9._@+-]+)?", variables)
-            self.assertIn(
-                "- [/usr/local/sbin/secpal-ci-configure-conformance-host, "
-                '"${runner_ipv4}"]',
-                template,
-            )
 
         gcp_main = (ROOT / "infra/ci-cloud/gcp/main.tf").read_text(
             encoding="utf-8"
@@ -428,18 +607,18 @@ class CloudCIContractTests(unittest.TestCase):
             ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
         ).read_text(encoding="utf-8")
 
+        template = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        self.assertIn("${diagnostic_ssh_installer}", template)
+        self.assertIn("'${ssh_public_key}'", template)
+        self.assertIn("'${runner_ipv4}'", template)
+        self.assertIn("'${run_id}'", template)
+        self.assertIn("'${run_attempt}'", template)
         for provider in ("digitalocean", "gcp"):
-            template = (
-                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
-            ).read_text(encoding="utf-8")
             main = (ROOT / f"infra/ci-cloud/{provider}/main.tf").read_text(
                 encoding="utf-8"
             )
-            self.assertIn("${diagnostic_ssh_installer}", template)
-            self.assertIn('"${ssh_public_key}"', template)
-            self.assertIn('"${runner_ipv4}"', template)
-            self.assertIn('"${run_id}"', template)
-            self.assertIn('"${run_attempt}"', template)
             self.assertIn(
                 'file("${path.module}/../../../scripts/ci-cloud/'
                 'install-diagnostic-ssh.sh")',
@@ -450,7 +629,7 @@ class CloudCIContractTests(unittest.TestCase):
             "systemctl mask --now ssh.service ssh.socket",
             "secpal-ci-diagnostic-sshd",
             "OnActiveSec=10m",
-            "ForceCommand /run/secpal-ci-cloud-init-diagnostic",
+            "ForceCommand /run/secpal-ci-bootstrap-diagnostic",
             "DisableForwarding yes",
             "PermitRootLogin no",
             "UsePAM yes",
@@ -514,6 +693,117 @@ class CloudCIContractTests(unittest.TestCase):
             '    ! groupdel "$diagnostic_ssh_user"',
             host_setup,
         )
+
+    def test_ssh_identities_are_pubkey_only_without_locked_accounts(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+
+        for document in (bootstrap, installer):
+            self.assertNotIn("usermod --lock", document)
+            self.assertIn("usermod --password '*NP*'", document)
+            self.assertIn("getent shadow", document)
+            self.assertIn("== '*NP*'", document)
+
+        self.assertLess(
+            installer.index("usermod --password '*NP*'"),
+            installer.index("prepare_diagnostic_fallback()"),
+        )
+        self.assertLess(
+            bootstrap.index("usermod --password '*NP*'"),
+            bootstrap.rindex("/usr/local/sbin/secpal-ci-configure-conformance-host"),
+        )
+
+    def test_static_contract_rejects_locked_ssh_accounts(self) -> None:
+        for relative in (
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+        ):
+            with self.subTest(relative=relative):
+                self.assert_mutation_rejected(
+                    relative,
+                    "usermod --password '*NP*'",
+                    "usermod --lock",
+                )
+
+    def test_static_contract_rejects_unverified_pubkey_only_account_marker(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            '[[ "$operator_password_marker" == \'*NP*\' ]]\n',
+            "",
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            '  [[ "$password_marker" == \'*NP*\' ]] || return 1\n',
+            "",
+        )
+
+    def test_completed_setup_revalidates_operator_ssh_identity(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        validator = installer.split("validate_operator_identity() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        completed = installer.split("completed_setup_is_valid() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+
+        for expected in (
+            'getent passwd secpal-ci',
+            'getent group secpal-ci',
+            'getent shadow secpal-ci',
+            '"$user_uid" == 20000',
+            '"$user_gid" == 20000',
+            '"$user_home" == /home/secpal-ci',
+            '"$user_shell" == /bin/bash',
+            '"$password_marker" == \'*NP*\'',
+            '"$(id -G secpal-ci)" == 20000',
+        ):
+            self.assertIn(expected, validator)
+        self.assertIn("validate_operator_identity || return 1", completed)
+
+    def test_static_contract_rejects_incomplete_reboot_identity_validation(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/install-diagnostic-ssh.sh",
+            "  validate_operator_identity || return 1\n",
+            "",
+        )
+
+    def test_quality_runs_real_openssh_account_admission_smoke(self) -> None:
+        quality = (ROOT / ".github/workflows/quality.yml").read_text(
+            encoding="utf-8"
+        )
+        repository_contract = (ROOT / "tests/repository-contract.sh").read_text(
+            encoding="utf-8"
+        )
+        smoke = ROOT / "tests/ci-cloud-openssh-account.sh"
+
+        self.assertTrue(smoke.is_file())
+        self.assertIn("sudo bash tests/ci-cloud-openssh-account.sh", quality)
+        self.assertIn("openssh-server", quality)
+        self.assertIn("tests/ci-cloud-openssh-account.sh", repository_contract)
+        document = smoke.read_text(encoding="utf-8")
+        for required in (
+            "unshare",
+            "mount --bind",
+            "/usr/sbin/sshd",
+            "AuthenticationMethods publickey",
+            "PasswordAuthentication no",
+            "KbdInteractiveAuthentication no",
+            "UsePAM no",
+            "UsePAM yes",
+            "*NP*",
+            "!",
+        ):
+            self.assertIn(required, document)
 
     def test_diagnostic_fallback_is_started_after_primary_ssh_is_masked(self) -> None:
         installer = (
@@ -717,19 +1007,15 @@ class CloudCIContractTests(unittest.TestCase):
                 )
 
     def test_diagnostic_failure_reader_is_executable_by_forced_command(self) -> None:
-        for provider in ("digitalocean", "gcp"):
-            template = (
-                ROOT / f"infra/ci-cloud/{provider}/cloud-init.tftpl"
-            ).read_text(encoding="utf-8")
-            helper = template.split(
-                "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n",
-                1,
-            )[1].split("\n\n", 1)[0]
-            with self.subTest(provider=provider):
-                self.assertIn("    owner: root:root\n", helper)
-                self.assertIn('    permissions: "0755"\n', helper)
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'install -o root -g root -m 0755 /dev/null "$failure_writer"',
+            bootstrap,
+        )
 
-    def test_completed_setup_survives_cloud_init_bootcmd_on_reboot(self) -> None:
+    def test_completed_setup_survives_native_bootstrap_on_reboot(self) -> None:
         installer = (
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
         ).read_text(encoding="utf-8")
@@ -952,7 +1238,7 @@ class CloudCIContractTests(unittest.TestCase):
 
     def test_static_contract_rejects_early_operator_ssh_key_release(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
             "/run/secpal-ci-authorized-key",
             "/home/secpal-ci/.ssh/authorized_keys",
         )
@@ -974,7 +1260,7 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_unrestricted_diagnostic_ssh(self) -> None:
         for old, new in (
             (
-                "ForceCommand /run/secpal-ci-cloud-init-diagnostic",
+                "ForceCommand /run/secpal-ci-bootstrap-diagnostic",
                 "ForceCommand internal-sftp",
             ),
             ("PermitRootLogin no", "PermitRootLogin yes"),
@@ -994,13 +1280,9 @@ class CloudCIContractTests(unittest.TestCase):
 
     def test_static_contract_rejects_nonexecutable_diagnostic_reader(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
-            "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n"
-            "    owner: root:root\n"
-            '    permissions: "0755"\n',
-            "  - path: /usr/local/sbin/secpal-ci-host-setup-failure\n"
-            "    owner: root:root\n"
-            '    permissions: "0700"\n',
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            'install -o root -g root -m 0755 /dev/null "$failure_writer"',
+            'install -o root -g root -m 0700 /dev/null "$failure_writer"',
         )
 
     def test_static_contract_rejects_ignored_diagnostic_ssh_marker(self) -> None:
@@ -1012,35 +1294,35 @@ class CloudCIContractTests(unittest.TestCase):
 
     def test_static_contract_rejects_global_operator_key_path(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
             "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u",
             "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/key",
         )
 
     def test_static_contract_rejects_late_ssh_dropin(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
             "sshd_config.d/00-secpal-ci.conf",
             "sshd_config.d/90-secpal-ci.conf",
         )
 
     def test_static_contract_rejects_broadened_ssh_users(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
             "AllowUsers secpal-ci",
             "AllowUsers root secpal-ci",
         )
 
     def test_static_contract_rejects_root_key_login(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
             "PermitRootLogin no",
             "PermitRootLogin prohibit-password",
         )
 
     def test_static_contract_rejects_alternate_authentication_methods(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
             "AuthenticationMethods publickey",
             "AuthenticationMethods any",
         )
@@ -1054,8 +1336,8 @@ class CloudCIContractTests(unittest.TestCase):
         ):
             with self.subTest(directive=directive):
                 self.assert_mutation_rejected(
-                    "infra/ci-cloud/digitalocean/cloud-init.tftpl",
-                    f"      {directive}",
+                    "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+                    directive,
                     "",
                 )
 
@@ -1196,11 +1478,13 @@ class CloudCIContractTests(unittest.TestCase):
             ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
         ).read_text(encoding="utf-8")
         self.assertIn('bootstrap_stage="host-key"', remote)
+        self.assertIn('bootstrap_stage="bootstrap"', remote)
         self.assertIn("orchestration_started_at", remote)
         self.assertIn("write-bootstrap-failure.py", remote)
-        self.assertIn("cloud-init status --long", remote)
-        self.assertIn("head -c 8192", remote)
-        self.assertNotIn("cloud-init-output.log", remote)
+        self.assertIn(
+            "native bootstrap did not reach trusted host setup", remote
+        )
+        self.assertNotIn("cloud-init", remote)
         self.assertIn("host_key_observations_json", remote)
         for observation in (
             "connection_refused",
@@ -1299,31 +1583,18 @@ class CloudCIContractTests(unittest.TestCase):
             "elif false; then",
         )
 
-    def test_rendered_cloud_init_embeds_valid_host_setup(self) -> None:
+    def test_native_bootstrap_embeds_valid_host_setup(self) -> None:
         template = (
-            ROOT / "infra/ci-cloud/digitalocean/cloud-init.tftpl"
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
         ).read_text(encoding="utf-8")
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8").strip()
-        setup_lines = host_setup.splitlines()
-        indented_setup = setup_lines[0] + "\n" + "\n".join(
-            f"      {line}" for line in setup_lines[1:]
-        )
-        rendered = template.replace(
-            "${ssh_public_key}",
-            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISynthetic fixture@example",
-        ).replace("${host_setup_script}", indented_setup).replace(
-            "${host_setup_failure_script}", "#!/usr/bin/env python3\n      pass"
-        )
-        document = yaml.safe_load(rendered)
-        files = {entry["path"]: entry for entry in document["write_files"]}
-        self.assertEqual(
-            host_setup,
-            files["/usr/local/sbin/secpal-ci-configure-conformance-host"][
-                "content"
-            ].strip(),
-        )
+        rendered = template.replace("${host_setup_script}", host_setup)
+        embedded = rendered.split("<<'SECPAL_HOST_SETUP'\n", 1)[1].split(
+            "\nSECPAL_HOST_SETUP", 1
+        )[0]
+        self.assertEqual(host_setup, embedded)
 
     def test_runtime_validator_enforces_declared_evidence_schema(self) -> None:
         validator = (
@@ -1538,15 +1809,15 @@ class CloudCIContractTests(unittest.TestCase):
 
     def test_rejects_incomplete_cloud_host_admission_policy(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
-            "  - unattended-upgrades\n",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "  unattended-upgrades\n",
             "",
         )
 
     def test_rejects_appended_unattended_upgrade_origins(self) -> None:
         self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/cloud-init.tftpl",
-            "      #clear Unattended-Upgrade::Origins-Pattern;\n",
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "#clear Unattended-Upgrade::Origins-Pattern;\n",
             "",
         )
 

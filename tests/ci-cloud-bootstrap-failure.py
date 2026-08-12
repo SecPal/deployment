@@ -44,7 +44,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
         image_slug: str = "debian-13-x64",
         image_id: str = "234194767",
         machine_type: str = "s-4vcpu-8gb-intel",
-        stage: str = "cloud-init",
+        stage: str = "bootstrap",
         host_setup_failure: str = "null",
         host_key_observations: str = "null",
     ) -> subprocess.CompletedProcess[str]:
@@ -77,7 +77,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             document = json.loads(
                 (output_dir / "bootstrap-failure.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(2, document["schema_version"])
+            self.assertEqual(3, document["schema_version"])
             self.assertEqual(
                 {"schema_version", "workflow", "test"}, set(document)
             )
@@ -118,7 +118,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
                 ),
             )
             summary = (output_dir / "summary.md").read_text(encoding="utf-8")
-            self.assertIn("cloud-init", summary)
+            self.assertIn("bootstrap", summary)
             self.assertIn(TARGET_SHA, summary)
             self.assertEqual(
                 0o600,
@@ -206,7 +206,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             self.assertNotIn("host-key observations", completed.stderr)
             self.assertEqual([], list(output_dir.iterdir()))
 
-    def test_rejects_host_setup_detail_outside_cloud_init_stage(self) -> None:
+    def test_rejects_host_setup_detail_outside_bootstrap_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary)
             completed = self.invoke(

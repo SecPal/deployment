@@ -59,6 +59,14 @@ lock file. The provider's automatic Terraform-attribution label is explicitly
 disabled so the instance and disk retain the exact seven-label janitor
 ownership contract.
 
+DigitalOcean plan availability is account-specific. If the API rejects the
+fixed AMD size because the account tier does not expose it, provisioning fails
+closed and cleanup still runs; the workflow never substitutes another size,
+CPU profile, image, or region. The Intel profile can therefore establish the
+first proof of concept without making AMD capacity or additional spend a
+prerequisite. Enabling the reviewed AMD size remains an external account action
+after that proof of concept succeeds.
+
 Only one provider profile can run at a time. The workflow has a 70-minute
 provision/test limit, cleanup has a separate 20-minute limit, and ownership
 expires after two hours with a hard three-hour OpenTofu ceiling. Concurrency
@@ -251,16 +259,18 @@ output is discarded without creating a shared temporary file. Target-owned
 Python or curl startup configuration therefore cannot replace the collector or
 suppress cloud-identity evidence.
 
-Cloud-init may initially allocate a regular-user subordinate-ID range while it
-creates `secpal-ci`. Before SSH is admitted, the root-owned host setup removes
+The provider image may already carry subordinate-ID policy when the trusted
+bootstrap creates `secpal-ci`. Before SSH is admitted, the root-owned host
+setup removes
 every well-formed range assigned to that account and installs the single fixed
 `200000:65536` UID and GID ranges. Malformed databases or a failed exact
-postcondition stop cloud-init instead of leaving ambiguous mappings.
+postcondition stop bootstrap admission instead of leaving ambiguous mappings.
 
-Cloud-init establishes the root-owned, empty Quadlet definition directory and
-restricts the effective generator search path to it. The target account cannot
-populate that directory. Before PR #22 can run its real units, a follow-up must
-add one trusted, root-owned, main-controlled fixture installer to cloud-init.
+The trusted bootstrap establishes the root-owned, empty Quadlet definition
+directory and restricts the effective generator search path to it. The target
+account cannot populate that directory. Before PR #22 can run its real units, a
+follow-up must add one trusted, root-owned, main-controlled fixture installer to
+this bootstrap.
 That installer must be a one-shot service triggered only by a fixed staging
 path; accept an explicit allowlist of regular Quadlet filenames from the
 already SHA-verified checkout; reject symlinks, path traversal, unknown files,
@@ -277,12 +287,19 @@ Every run creates a new Ed25519 keypair on the GitHub runner. Only the public
 key enters OpenTofu and the selected provider. The private key is mode `0600`, is never
 an output, state value, artifact, or repository file, and is removed before
 the provisioning/test job ends. The disposable operator account is initially
-created without an authorized key. Cloud-init instead stages the public key as
-root-owned mode `0600`; GCP does not receive an instance-level `ssh-keys`
-metadata entry. The key comment is bound to the exact workflow run ID and
-attempt. In an early `bootcmd`, a trusted installer from `main` validates the
-run-bound key and runner IPv4, generates the image's missing Ed25519 host key
-if necessary, fully validates a separate diagnostic `sshd`, and arms its
+created without an authorized key. A single trusted shell payload from `main`
+instead stages the public key as root-owned mode `0600`; GCP does not receive
+an instance-level `ssh-keys` metadata entry. DigitalOcean receives that payload
+through Droplet `user_data`; GCP receives the identical reviewed payload through
+the public-image guest agent's documented `startup-script` metadata key. This
+provider-native transport split avoids assuming that two unrelated image
+families implement the same cloud-config lifecycle. DigitalOcean's image may
+use cloud-init to consume user data, but the contract relies only on its
+documented first-boot shell-script interface, not cloud-config module ordering
+or a runner-installed schema version. The key comment is bound to the exact
+workflow run ID and attempt. The payload validates the run-bound key
+and runner IPv4, generates the image's missing Ed25519 host key if necessary,
+fully validates a separate diagnostic `sshd`, and arms its
 ten-minute crash-recovery timer using explicit runtime-scoped systemd service
 and timer units that are validated before systemd loads them. It then masks the
 primary service and socket and immediately starts that restricted listener
@@ -294,7 +311,7 @@ primary units are inactive does it stop and verify the timer. The
 diagnostic service additionally restarts after an unexpected process failure.
 Those retries are rate-limited to five starts per two minutes. Preparation is
 idempotent: after any failure with an already
-validated run context, the EXIT handler rebuilds the locked identity and
+validated run context, the EXIT handler rebuilds the password-disabled identity and
 root-owned inputs and attempts to start the restricted daemon immediately. It
 never deletes the only diagnostic material merely because initial preparation
 was incomplete. If initial validation fails before masking, the provider
@@ -302,14 +319,14 @@ listener remains available only under its already restrictive cloud firewall;
 if the process is interrupted after masking but before the immediate start,
 the armed timer supplies the same restricted listener after ten minutes. If
 even the bounded recovery cannot construct a valid daemon, the transition
-fails rather than opening an unvalidated fallback. The installer creates a locked,
-home-less
-`secpal-ci-diagnostic` account that is independent of later cloud-init user
-creation. The daemon accepts only that account
-from the runner IPv4 with the ephemeral Ed25519 key, denies root, passwords,
+fails rather than opening an unvalidated fallback. The installer creates a
+password-disabled `secpal-ci-diagnostic` account with a root-owned runtime home that is
+independent of later operator-user creation. The daemon accepts only that
+account from the runner IPv4 with the ephemeral Ed25519 key, denies root, passwords,
 forwarding, TTYs, user startup files, revoked or alternate key/principal
-sources, and every command except a fixed `cloud-init status --long` reporter
-capped at 8 KiB. Its public key remains root-owned and read-only mode `0644`,
+sources, and every command except a fixed reporter that emits one reserved
+marker and, if available, one schema-closed host-setup stage and exit status.
+Its public key remains root-owned and read-only mode `0644`,
 while its configuration remains root-only under `/run`; temporary key,
 configuration, and unit files remain mode `0600` until atomic publication. It
 verifies that every published diagnostic artifact is a root-owned regular file
@@ -320,6 +337,20 @@ UID 0, allowing the diagnostic account to read only the closed non-secret
 marker. If trusted host setup writes that marker, the reporter appends only its
 validated stage and exit status; it never exposes the unrestricted operator
 account to retrieve the marker.
+
+Both disposable SSH identities use the literal, impossible `*NP*` password
+marker and verify that exact effective `/etc/shadow` field before admitting a
+listener. They are deliberately not locked with a leading `!`: Debian
+OpenSSH documents that its portable account-accessibility check rejects such a
+locked Linux account before public-key authentication. PAM-enabled behavior is
+stack-dependent, so the design does not treat an account lock as its password
+security boundary. Password and keyboard-interactive authentication remain
+disabled by the effective daemon policies, so `*NP*` does not create a
+password login path. Reboot
+admission revalidates the operator name, UID/GID, primary group, home, shell,
+supplementary groups, and password marker before trusting the persistent setup
+marker. See Debian's
+[`sshd(8)` account-accessibility contract](https://manpages.debian.org/trixie/openssh-server/sshd.8.en.html#AUTHENTICATION).
 
 Trusted host setup validates and
 normalizes the fixed subordinate-ID ranges, service policy, and AppArmor
@@ -364,10 +395,9 @@ active before the first fallible host-setup
 initialization. If an earlier trusted setup stage fails, it first writes the
 closed failure marker when possible, revokes any partially published operator
 key, and only then enables the same bounded diagnostic access. It never starts
-normal operator SSH on a failed setup path. If cloud-init fails after the
-installer has armed the fallback but before the trusted setup script or
-`write_files` can run, the independent timer still exposes only the forced
-diagnostic command.
+normal operator SSH on a failed setup path. If native bootstrap fails after the
+installer has armed the fallback but before trusted host setup can finish, the
+independent timer still exposes only the forced diagnostic command.
 The runner recognizes its reserved exit status and records bounded
 bootstrap-failure evidence. A schema-valid terminal host-setup marker stops
 readiness probes immediately; otherwise host-key discovery and operator
@@ -375,15 +405,16 @@ readiness share one absolute 15-minute bootstrap deadline. The restricted
 diagnostic listener is normally available immediately; the delayed timer is
 only the interruption-recovery path and cannot accidentally start a second,
 shorter timeout.
-The runner treats failed cloud-init as terminal and never
+The runner treats failed native bootstrap as terminal and never
 checks out or executes target code in that case.
 
 The persistent mask also survives an unexpected reboot before trusted setup.
 Because the diagnostic timer is intentionally transient, such a reboot fails
 closed with no SSH listener; exact workflow cleanup or the TTL janitor then
 destroys the inaccessible fixture. After successful setup, the persistent
-operator key and completion marker survive reboot. The repeated cloud-init
-`bootcmd` validates the marker, state-directory ownership and modes, exact
+operator key and completion marker survive reboot. If the provider invokes the
+native bootstrap again, its idempotent entry validates the marker,
+state-directory ownership and modes, exact
 run-bound public key, root-owned prioritized configuration, the same effective
 operator/root SSH policy and connection contexts used by initial admission,
 the persistently enabled primary service, and disabled socket activation before
@@ -391,13 +422,13 @@ it skips diagnostic installation. It intentionally does not require the service
 to be active while boot units may still be starting.
 Any missing, mismatched, symlinked, or malformed state revokes the persistent
 operator key and rebuilds only the restricted fallback instead of trusting a
-boolean marker. Cloud-init's one-time `runcmd` is therefore not required to
-restore normal SSH after an admitted reboot.
+boolean marker. Normal service enablement and the persistent committed state,
+not a provider-neutral cloud-config phase, restore SSH after an admitted reboot.
 
 DigitalOcean initially embeds that public key
-in the image's root account as part of Droplet creation; cloud-init sets
-`PermitRootLogin no`, creates the dedicated `secpal-ci` account, and restarts a
-validated SSH configuration. Before target code runs, the trusted runner uses
+in the image's root account as part of Droplet creation; the trusted user-data
+payload sets `PermitRootLogin no`, creates the dedicated `secpal-ci` account,
+and restarts a validated SSH configuration. Before target code runs, the trusted runner uses
 the same key and strict known-host entry to require the root public-key attempt
 to fail, then immediately rechecks the disposable operator account over the
 same transport. It records effective root denial only when the root attempt
@@ -483,18 +514,23 @@ come from a bounded IPv4 TCP probe and stable operating-system error codes,
 not locale- or version-dependent `ssh-keyscan` text; raw scanner errors and
 observed key material are discarded. That root-owned marker is limited to 128 bytes, validated
 before use, and contains no command output. A failed write leaves neither new
-artifact behind. The fallback never
-copies target output, environments, cloud credentials, or raw cloud-init logs
-into that artifact. The workflow prints at most 8 KiB of `cloud-init status
---long` output for diagnosis, and a missing provider evidence directory is a
-hard upload failure rather than a warning. Target code cannot run until
-cloud-init has completed successfully.
+artifact behind. The fallback never copies target output, environments, cloud
+credentials, provider boot logs, or arbitrary command output into that
+artifact. A missing provider evidence directory is a hard upload failure rather
+than a warning. Target code cannot run until native bootstrap has committed the
+closed operator identity and SSH policy.
 
-Preflight renders both provider templates with the exact embedded trusted
-scripts and admits them with the locally installed `cloud-init schema` command.
-This catches invalid cloud-config such as an empty user `groups` list before a
-provider run. Runtime validation remains authoritative for the provider image's
-installed cloud-init version.
+Preflight renders the common provider payload with the exact embedded trusted
+scripts, checks it as strict Bash, and statically admits both provider-native
+transport bindings and the exact SSH policy. Mutation tests reject Linux
+account-lock commands, missing `*NP*` postconditions, and a reboot guard that
+does not revalidate the complete operator identity. A separate quality job
+starts a real OpenSSH daemon against a namespace-isolated password database. It
+proves `*NP*` public-key admission, portable leading-`!` rejection without PAM,
+and production-like `UsePAM yes` plus `*NP*` admission while all password
+methods remain disabled. This targeted smoke does not simulate the provider's
+guest agent or systemd handoff. Runtime validation remains authoritative for
+the provider image and complete bootstrap behavior.
 
 Evidence includes:
 
@@ -508,7 +544,7 @@ Evidence includes:
   presence, and each selected kernel/runtime/bootstrap package's actual
   `apt-cache policy` Release origin and codename rather than a global suite
   inference;
-  every cloud-init bootstrap and runtime package's exact installed version,
+  every bootstrap and runtime package's exact installed version,
   architecture, origin, and suite, forbidden package absence, and effective
   security-only unattended-update/reboot and runtime-package exclusion policy;
 - Podman, crun features, Netavark, Aardvark, pasta/passt, uidmap, cgroup,
@@ -557,21 +593,25 @@ they do not prove that all hardware is compatible.
 5. Treat any named invariant, missing evidence, cleanup failure, or janitor
    ambiguity as a failure.
 
-No real DigitalOcean or GCP run was performed while adding this code. The GCP
-WIF trust and GitHub variables were configured separately, but the fail-closed
-provider condition accepts only the reviewed workflow from `main`; it correctly
-rejects this pull-request branch. A real Axion result remains outstanding until
-the reviewed workflow exists on `main`, the custom role is bound, and one
-manual run creates, tests, records evidence from, and destroys the host.
+Earlier workflow revisions performed real DigitalOcean Intel, DigitalOcean AMD,
+and GCP Axion provisioning attempts and exact cleanup. Intel and Axion did not
+reach trusted host setup, while the AMD API rejected the fixed size as outside
+the account tier; none produced conformance evidence. Those failures are not
+success evidence for this revision. The provider-native bootstrap change still
+requires a fresh `main` run that creates, tests, records complete evidence from,
+and destroys the host. Start with DigitalOcean Intel; do not enable or fund AMD
+capacity merely to bypass that proof-of-concept gate.
 
 ## Primary references
 
 - [DigitalOcean Linux image slugs](https://docs.digitalocean.com/products/droplets/details/images/)
 - [DigitalOcean Droplet CPU profiles](https://docs.digitalocean.com/products/droplets/details/features/)
 - [DigitalOcean custom API scopes](https://docs.digitalocean.com/reference/api/scopes/)
+- [DigitalOcean Droplet user data](https://docs.digitalocean.com/products/droplets/how-to/provide-user-data/)
 - [DigitalOcean OpenTofu/Terraform provider](https://registry.terraform.io/providers/digitalocean/digitalocean/latest/docs)
 - [OpenTofu CLI](https://opentofu.org/docs/cli/)
 - [Google Debian image families](https://cloud.google.com/compute/docs/images/os-details)
 - [Google C4A machine series](https://cloud.google.com/compute/docs/general-purpose-machines#c4a_series)
+- [Google Compute Engine Linux startup scripts](https://cloud.google.com/compute/docs/instances/startup-scripts/linux)
 - [Google GitHub Actions Workload Identity Federation](https://github.com/google-github-actions/auth#workload-identity-federation)
 - [GitHub OIDC deployment hardening](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments)
