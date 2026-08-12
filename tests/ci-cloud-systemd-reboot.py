@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -49,6 +48,7 @@ def main() -> int:
     )
 
     for line in (
+        "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete",
         "Before=secpal-ci-bootstrap-continue.service",
         "RuntimeDirectory=sshd secpal-ci-evidence",
         "RuntimeDirectoryMode=0755",
@@ -63,14 +63,11 @@ def main() -> int:
     ):
         require_line(continuation, line)
 
-    systemd_analyze = shutil.which("systemd-analyze")
-    sshd = shutil.which("sshd")
-    if sshd is None and Path("/usr/sbin/sshd").is_file():
-        sshd = "/usr/sbin/sshd"
-    if systemd_analyze is None or sshd is None:
-        fail("systemd-analyze and sshd are required")
+    systemd_analyze = "/usr/bin/systemd-analyze"
+    if not Path(systemd_analyze).is_file():
+        fail("systemd-analyze is required")
 
-    rendered_diagnostic = diagnostic.replace("/usr/sbin/sshd", sshd).replace(
+    rendered_diagnostic = diagnostic.replace("/usr/sbin/sshd", "/bin/true").replace(
         "$diagnostic_config", "/etc/ssh/sshd_config"
     )
     rendered_continuation = continuation.replace(

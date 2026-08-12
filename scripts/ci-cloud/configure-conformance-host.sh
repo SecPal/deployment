@@ -13,6 +13,8 @@ active_ssh_root=/var/lib/secpal-ci
 active_ssh_authorized_keys_dir="$active_ssh_root/authorized-keys"
 active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"
 completion_marker="$active_ssh_root/host-setup-complete"
+operator_ssh_gate_dir=/etc/systemd/system/ssh.service.d
+operator_ssh_gate="$operator_ssh_gate_dir/secpal-ci-ready.conf"
 diagnostic_ssh_timer=secpal-ci-diagnostic-sshd.timer
 diagnostic_ssh_service=secpal-ci-diagnostic-sshd.service
 diagnostic_root=/var/lib/secpal-ci-diagnostic
@@ -175,6 +177,47 @@ arm_diagnostic_ssh_recovery() {
   systemctl is-active --quiet "$diagnostic_ssh_timer"
 }
 
+operator_ssh_boot_gate_is_valid() {
+  local gate_metadata
+
+  [[ -f "$operator_ssh_gate" && ! -L "$operator_ssh_gate" ]] || return 1
+  gate_metadata="$(stat -c '%u:%g:%a' -- "$operator_ssh_gate")" || return 1
+  [[ "$gate_metadata" == 0:0:644 &&
+    "$(wc -l <"$operator_ssh_gate")" -eq 2 ]] || return 1
+  grep -Fqx '[Unit]' "$operator_ssh_gate" || return 1
+  grep -Fqx "ConditionPathExists=$completion_marker" \
+    "$operator_ssh_gate"
+}
+
+prepare_operator_ssh_boot_gate() {
+  local gate_tmp="" gate_dir_metadata
+
+  if [[ -e "$operator_ssh_gate_dir" || -L "$operator_ssh_gate_dir" ]]; then
+    [[ -d "$operator_ssh_gate_dir" && ! -L "$operator_ssh_gate_dir" ]] ||
+      return 1
+    gate_dir_metadata="$(stat -c '%u:%g:%a' -- "$operator_ssh_gate_dir")" ||
+      return 1
+    [[ "$gate_dir_metadata" == 0:0:755 ]] || return 1
+  else
+    install -d -o root -g root -m 0755 "$operator_ssh_gate_dir" || return 1
+  fi
+  if [[ -e "$operator_ssh_gate" || -L "$operator_ssh_gate" ]]; then
+    operator_ssh_boot_gate_is_valid || return 1
+    systemctl daemon-reload
+    return
+  fi
+  gate_tmp="$(mktemp "$operator_ssh_gate_dir/.secpal-ci-ready.XXXXXX")" ||
+    return 1
+  if ! chmod 0644 "$gate_tmp" ||
+    ! printf '[Unit]\nConditionPathExists=%s\n' "$completion_marker" >"$gate_tmp" ||
+    ! mv -T -- "$gate_tmp" "$operator_ssh_gate"; then
+    rm -f -- "$gate_tmp"
+    return 1
+  fi
+  operator_ssh_boot_gate_is_valid || return 1
+  systemctl daemon-reload
+}
+
 restore_diagnostic_ssh() {
   rm -f -- "$completion_marker" "$active_ssh_authorized_keys"
   rmdir -- "$active_ssh_authorized_keys_dir" 2>/dev/null || true
@@ -257,6 +300,10 @@ activate_operator_ssh() {
   fi
   validate_staged_operator_key || return 1
   validate_effective_sshd_config || return 1
+  if ! prepare_operator_ssh_boot_gate; then
+    printf 'ERROR: unable to install the operator SSH boot gate.\n' >&2
+    return 1
+  fi
   if [[ -e "$active_ssh_root" || -L "$active_ssh_root" ]]; then
     printf 'ERROR: operator SSH state root already exists.\n' >&2
     return 1

@@ -21,6 +21,7 @@ primary_ssh_config=/etc/ssh/sshd_config.d/00-secpal-ci.conf
 active_operator_root=/var/lib/secpal-ci
 active_operator_key="$active_operator_root/authorized-keys/secpal-ci"
 completion_marker="$active_operator_root/host-setup-complete"
+operator_ssh_gate=/etc/systemd/system/ssh.service.d/secpal-ci-ready.conf
 key_tmp=""
 command_tmp=""
 config_tmp=""
@@ -141,7 +142,7 @@ validate_operator_identity() {
 }
 
 completed_setup_is_valid() {
-  local config_metadata root_metadata directory_metadata key_metadata
+  local config_metadata root_metadata directory_metadata gate_metadata key_metadata
   local marker_metadata ssh_service_state ssh_socket_state
 
   [[ -f "$primary_ssh_config" && ! -L "$primary_ssh_config" &&
@@ -149,7 +150,8 @@ completed_setup_is_valid() {
     -d "$active_operator_root/authorized-keys" &&
     ! -L "$active_operator_root/authorized-keys" &&
     -f "$active_operator_key" && ! -L "$active_operator_key" &&
-    -f "$completion_marker" && ! -L "$completion_marker" ]] || return 1
+    -f "$completion_marker" && ! -L "$completion_marker" &&
+    -f "$operator_ssh_gate" && ! -L "$operator_ssh_gate" ]] || return 1
   config_metadata="$(stat -c '%u:%g:%a' -- "$primary_ssh_config")" || return 1
   root_metadata="$(stat -c '%u:%g:%a' -- "$active_operator_root")" || return 1
   directory_metadata="$(
@@ -157,11 +159,17 @@ completed_setup_is_valid() {
   )" || return 1
   key_metadata="$(stat -c '%u:%g:%a' -- "$active_operator_key")" || return 1
   marker_metadata="$(stat -c '%u:%g:%a' -- "$completion_marker")" || return 1
+  gate_metadata="$(stat -c '%u:%g:%a' -- "$operator_ssh_gate")" || return 1
   [[ "$config_metadata" == 0:0:644 && "$root_metadata" == 0:0:755 &&
     "$directory_metadata" == 0:0:755 &&
-    "$key_metadata" == 0:0:644 && "$marker_metadata" == 0:0:400 ]] || return 1
+    "$key_metadata" == 0:0:644 && "$marker_metadata" == 0:0:400 &&
+    "$gate_metadata" == 0:0:644 ]] || return 1
   [[ "$(wc -l <"$completion_marker")" -eq 1 ]] || return 1
   grep -Fqx 'SECPAL_CI_HOST_SETUP_COMPLETE' "$completion_marker" || return 1
+  [[ "$(wc -l <"$operator_ssh_gate")" -eq 2 ]] || return 1
+  grep -Fqx '[Unit]' "$operator_ssh_gate" || return 1
+  grep -Fqx "ConditionPathExists=$completion_marker" \
+    "$operator_ssh_gate" || return 1
   printf '%s\n' "$ssh_public_key" |
     cmp -s -- - "$active_operator_key" || return 1
   ssh-keygen -l -E sha256 -f "$active_operator_key" >/dev/null || return 1
@@ -285,6 +293,7 @@ EOF
   cat >"$service_tmp" <<EOF
 [Unit]
 Description=SecPal restricted bootstrap diagnostic SSH
+ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete
 Wants=network-online.target
 After=network-online.target
 Before=secpal-ci-bootstrap-continue.service

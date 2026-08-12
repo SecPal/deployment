@@ -231,10 +231,20 @@ class CloudCIContractTests(unittest.TestCase):
             installer.index('systemctl enable "$diagnostic_service"'),
             installer.index('systemctl restart "$diagnostic_service"'),
         )
-        self.assertIn('systemctl disable "$diagnostic_ssh_service"', host_setup)
+        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        retirement = host_setup.split("retire_diagnostic_ssh() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertNotIn(
+            'systemctl disable "$diagnostic_ssh_service"', activation
+        )
+        self.assertIn('systemctl disable "$diagnostic_ssh_service"', retirement)
+        self.assertIn('rm -f -- "$staged_ssh_public_key"', retirement)
         self.assertLess(
-            host_setup.index('systemctl disable "$diagnostic_ssh_service"'),
-            host_setup.index('rm -f -- "$staged_ssh_public_key"'),
+            retirement.index('systemctl disable "$diagnostic_ssh_service"'),
+            retirement.index('rm -f -- "$staged_ssh_public_key"'),
         )
         self.assertIn('rmdir -- "$diagnostic_root"', host_setup)
         continuation = (
@@ -267,6 +277,62 @@ class CloudCIContractTests(unittest.TestCase):
             "secpal-ci-diagnostic-sshd.service",
             bootstrap,
         )
+
+    def test_operator_handoff_cannot_reboot_two_port_22_listeners(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
+            "\n}", 1
+        )[0]
+        restore = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
+            "\n}", 1
+        )[0]
+
+        self.assertIn(
+            "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete",
+            installer,
+        )
+        self.assertIn(
+            "operator_ssh_gate=/etc/systemd/system/ssh.service.d/"
+            "secpal-ci-ready.conf",
+            installer,
+        )
+        self.assertIn(
+            "ConditionPathExists=%s\\n' \"$completion_marker\"",
+            host_setup,
+        )
+        self.assertIn("operator_ssh_boot_gate_is_valid() {", host_setup)
+        marker = "if ! publish_completion_marker; then"
+        stop_diagnostic = 'systemctl stop "$diagnostic_ssh_service"'
+        restart_operator = "systemctl restart ssh.service"
+        self.assertIn(stop_diagnostic, activation)
+        self.assertNotIn('systemctl disable "$diagnostic_ssh_service"', activation)
+        self.assertLess(
+            activation.index(stop_diagnostic),
+            activation.index(marker),
+        )
+        self.assertLess(
+            activation.index(marker),
+            activation.index(restart_operator),
+        )
+        self.assertNotIn('systemctl enable "$diagnostic_ssh_service"', restore)
+        self.assertLess(
+            restore.index('rm -f -- "$completion_marker"'),
+            restore.index('systemctl restart "$diagnostic_ssh_service"'),
+        )
+
+    def test_systemd_reboot_contract_has_no_sshd_binary_dependency(self) -> None:
+        test = (ROOT / "tests/ci-cloud-systemd-reboot.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn('shutil.which("sshd")', test)
+        self.assertNotIn('/usr/sbin/sshd").is_file()', test)
+        self.assertIn('replace("/usr/sbin/sshd", "/bin/true")', test)
 
     def test_static_contract_rejects_ephemeral_reboot_diagnostics(self) -> None:
         cases = (
@@ -302,6 +368,16 @@ class CloudCIContractTests(unittest.TestCase):
                 "scripts/ci-cloud/install-diagnostic-ssh.sh",
                 "Before=secpal-ci-bootstrap-continue.service\n",
                 "",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete\n",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/configure-conformance-host.sh",
+                "ConditionPathExists=%s\\n' \"$completion_marker\"",
+                "ConditionPathExists=/missing\\n' \"$completion_marker\"",
             ),
             (
                 "scripts/ci-cloud/bootstrap-conformance-host.tftpl",

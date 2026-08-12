@@ -710,6 +710,10 @@ AllowUsers secpal-ci"""
         not in diagnostic_initial_transition
         and 'completion_marker="$active_operator_root/host-setup-complete"'
         in diagnostic_ssh
+        and "operator_ssh_gate=/etc/systemd/system/ssh.service.d/"
+        "secpal-ci-ready.conf" in diagnostic_ssh
+        and 'grep -Fqx "ConditionPathExists=$completion_marker"'
+        in completed_validator
         and 'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"'
         in diagnostic_ssh
         and "if completed_setup_is_valid; then\n  exit 0\nfi\n"
@@ -743,6 +747,7 @@ AllowUsers secpal-ci"""
         and 'systemctl is-active --quiet "$diagnostic_ssh_timer"'
         in diagnostic_recovery
         and "arm_diagnostic_ssh_recovery" in operator_activation
+        and "prepare_operator_ssh_boot_gate" in operator_activation
         and 'systemctl stop "$diagnostic_ssh_service"' in operator_activation
         and 'systemctl restart ssh.service' in operator_activation
         and 'systemctl is-active --quiet ssh.service' in operator_activation
@@ -756,7 +761,8 @@ AllowUsers secpal-ci"""
         < operator_activation.index("systemctl is-active --quiet ssh.service")
         < operator_activation.index("retire_diagnostic_ssh")
         and 'arm_diagnostic_ssh_recovery || return 1' in diagnostic_restore
-        and diagnostic_restore.index("arm_diagnostic_ssh_recovery")
+        and diagnostic_restore.index('rm -f -- "$completion_marker"')
+        < diagnostic_restore.index("arm_diagnostic_ssh_recovery")
         < diagnostic_restore.index("systemctl mask --now ssh.service ssh.socket")
         < diagnostic_restore.index(
             'systemctl restart "$diagnostic_ssh_service"'
@@ -768,6 +774,24 @@ AllowUsers secpal-ci"""
             'systemctl stop "$diagnostic_ssh_timer"'
         ),
         "SSH handoffs must retain a verified listener or armed recovery timer",
+    )
+    require(
+        "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete"
+        in diagnostic_ssh
+        and "ConditionPathExists=%s" in host_setup
+        and '"$completion_marker"' in host_setup,
+        "SSH listeners must have complementary committed-state boot gates",
+    )
+    require(
+        "prepare_operator_ssh_boot_gate() {" in host_setup
+        and "operator_ssh_boot_gate_is_valid() {" in host_setup
+        and "operator_ssh_gate_dir=/etc/systemd/system/ssh.service.d"
+        in host_setup
+        and 'operator_ssh_gate="$operator_ssh_gate_dir/secpal-ci-ready.conf"'
+        in host_setup
+        and "ConditionPathExists=%s" in host_setup
+        and '"$completion_marker"' in host_setup,
+        "operator SSH must have the complementary committed-state boot gate",
     )
     require(
         "install-diagnostic-ssh.sh" in main
