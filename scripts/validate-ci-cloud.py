@@ -561,7 +561,10 @@ AllowUsers secpal-ci"""
         and '[[ "$password_marker" == \'*NP*\' ]] || return 1'
         in diagnostic_ssh
         and "usermod --lock" not in diagnostic_ssh
-        and "diagnostic_root=/var/lib/secpal-ci-diagnostic" in diagnostic_ssh
+        and diagnostic_ssh.count(
+            "diagnostic_root=/var/lib/secpal-ci-diagnostic"
+        )
+        == 2
         and 'diagnostic_key="$diagnostic_root/authorized-key"' in diagnostic_ssh
         and "diagnostic_command=/usr/local/sbin/secpal-ci-bootstrap-diagnostic"
         in diagnostic_ssh
@@ -582,13 +585,19 @@ AllowUsers secpal-ci"""
         and "source " not in diagnostic_ssh,
         "pre-runcmd failures need independent restricted diagnostic SSH",
     )
+    diagnostic_installer_runtime = diagnostic_ssh.split(
+        "cat >\"$recovery_command_tmp\" <<'RECOVERY'", 1
+    )[0]
     diagnostic_cleanup = required_block(
-        diagnostic_ssh, "cleanup() {", "\n}", "diagnostic cleanup block"
+        diagnostic_installer_runtime,
+        "cleanup() {",
+        "\n}",
+        "diagnostic cleanup block",
     )
     diagnostic_preparation = required_block(
         diagnostic_ssh,
         "prepare_diagnostic_fallback() {",
-        "\n}",
+        "\nstart_diagnostic_fallback() {",
         "diagnostic preparation block",
     )
     diagnostic_start = required_block(
@@ -620,6 +629,24 @@ AllowUsers secpal-ci"""
         "\n}",
         "diagnostic recovery block",
     )
+    diagnostic_recovery_command = required_block(
+        diagnostic_ssh,
+        "cat >\"$recovery_command_tmp\" <<'RECOVERY'",
+        "\nRECOVERY",
+        "diagnostic recovery command block",
+    )
+    diagnostic_recovery_service = required_block(
+        diagnostic_ssh,
+        'cat >"$recovery_service_tmp" <<EOF',
+        "\nEOF",
+        "diagnostic recovery service block",
+    )
+    diagnostic_timer_service = required_block(
+        diagnostic_ssh,
+        'cat >"$timer_tmp" <<EOF',
+        "\nEOF",
+        "diagnostic timer service block",
+    )
     completed_validator = required_block(
         diagnostic_ssh,
         "completed_setup_is_valid() {",
@@ -645,8 +672,9 @@ AllowUsers secpal-ci"""
         in diagnostic_ssh
         and 'systemd-analyze verify "$diagnostic_service_unit"'
         in diagnostic_ssh
-        and 'chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp"'
+        and 'chmod 0600 "$key_tmp" "$config_tmp" "$service_tmp" "$timer_tmp" \\'
         in diagnostic_preparation
+        and '"$recovery_service_tmp"' in diagnostic_preparation
         and 'chmod 0644 "$service_tmp" "$timer_tmp"'
         not in diagnostic_preparation
         and 'chmod 0644 "$diagnostic_key"' in diagnostic_preparation
@@ -665,6 +693,10 @@ AllowUsers secpal-ci"""
         in diagnostic_preparation
         and "stat -c '%u:%g:%a' -- \"$diagnostic_timer_unit\""
         in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_recovery_command\""
+        in diagnostic_preparation
+        and "stat -c '%u:%g:%a' -- \"$diagnostic_recovery_service_unit\""
+        in diagnostic_preparation
         and "stat -c '%u:%g:%a' -- \"$diagnostic_root\""
         in diagnostic_preparation
         and '"$diagnostic_root_metadata" != 0:0:755'
@@ -679,8 +711,13 @@ AllowUsers secpal-ci"""
         in diagnostic_preparation
         and '"$diagnostic_timer_unit_metadata" != 0:0:644'
         in diagnostic_preparation
+        and '"$diagnostic_recovery_command_metadata" != 0:0:755'
+        in diagnostic_preparation
+        and '"$diagnostic_recovery_service_unit_metadata" != 0:0:644'
+        in diagnostic_preparation
         and diagnostic_start.index("prepare_diagnostic_fallback")
         < diagnostic_start.index('systemctl enable "$diagnostic_service"')
+        < diagnostic_start.index("select_diagnostic_ssh")
         < diagnostic_start.index("systemctl mask --now ssh.service ssh.socket")
         < diagnostic_start.index('systemctl restart "$diagnostic_service"')
         < diagnostic_start.index(
@@ -710,9 +747,13 @@ AllowUsers secpal-ci"""
         not in diagnostic_initial_transition
         and 'completion_marker="$active_operator_root/host-setup-complete"'
         in diagnostic_ssh
-        and "operator_ssh_gate=/etc/systemd/system/ssh.service.d/"
-        "secpal-ci-ready.conf" in diagnostic_ssh
-        and 'grep -Fqx "ConditionPathExists=$completion_marker"'
+        and "operator_ssh_gate_dir=/etc/systemd/system/ssh.service.d"
+        in diagnostic_ssh
+        and 'operator_ssh_gate="$operator_ssh_gate_dir/secpal-ci-ready.conf"'
+        in diagnostic_ssh
+        and 'grep -Fqx "ConditionPathExists=!$diagnostic_selector"'
+        in completed_validator
+        and '! -e "$diagnostic_selector" && ! -L "$diagnostic_selector"'
         in completed_validator
         and 'active_operator_key="$active_operator_root/authorized-keys/secpal-ci"'
         in diagnostic_ssh
@@ -739,7 +780,10 @@ AllowUsers secpal-ci"""
         in diagnostic_cleanup
         and 'rm -f -- "$diagnostic_key" "$diagnostic_command"'
         not in diagnostic_cleanup
-        and 'systemctl restart "$diagnostic_service"' in diagnostic_ssh,
+        and 'systemctl restart "$diagnostic_service"' in diagnostic_ssh
+        and "ConditionPathExists=/var/lib/secpal-ci-diagnostic/selected"
+        in diagnostic_preparation
+        and "prepare_operator_ssh_boot_gate" in diagnostic_preparation,
         "restricted diagnostic SSH must replace primary SSH transactionally",
     )
     require(
@@ -747,8 +791,9 @@ AllowUsers secpal-ci"""
         and 'systemctl is-active --quiet "$diagnostic_ssh_timer"'
         in diagnostic_recovery
         and "arm_diagnostic_ssh_recovery" in operator_activation
-        and "prepare_operator_ssh_boot_gate" in operator_activation
         and 'systemctl stop "$diagnostic_ssh_service"' in operator_activation
+        and 'systemctl enable ssh.service' in operator_activation
+        and 'rm -f -- "$diagnostic_ssh_selector"' in operator_activation
         and 'systemctl restart ssh.service' in operator_activation
         and 'systemctl is-active --quiet ssh.service' in operator_activation
         and operator_activation.index(
@@ -757,41 +802,63 @@ AllowUsers secpal-ci"""
         < operator_activation.index(
             'systemctl stop "$diagnostic_ssh_service"'
         )
+        < operator_activation.index("systemctl enable ssh.service")
+        < operator_activation.index('rm -f -- "$diagnostic_ssh_selector"')
         < operator_activation.index("systemctl restart ssh.service")
         < operator_activation.index("systemctl is-active --quiet ssh.service")
+        < operator_activation.index("if ! publish_completion_marker; then")
         < operator_activation.index("retire_diagnostic_ssh")
-        and 'arm_diagnostic_ssh_recovery || return 1' in diagnostic_restore
         and diagnostic_restore.index('rm -f -- "$completion_marker"')
-        < diagnostic_restore.index("arm_diagnostic_ssh_recovery")
-        < diagnostic_restore.index("systemctl mask --now ssh.service ssh.socket")
         < diagnostic_restore.index(
-            'systemctl restart "$diagnostic_ssh_service"'
+            'systemctl start "$diagnostic_ssh_recovery_service"'
         )
         < diagnostic_restore.index(
             'systemctl is-active --quiet "$diagnostic_ssh_service"'
         )
         < diagnostic_restore.index(
             'systemctl stop "$diagnostic_ssh_timer"'
+        )
+        and "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete"
+        in diagnostic_recovery_service
+        and "ExecStart=$diagnostic_recovery_command"
+        in diagnostic_recovery_service
+        and "Unit=secpal-ci-diagnostic-ssh-recover.service"
+        in diagnostic_timer_service
+        and '[[ ! -e "$completion_marker" && ! -L "$completion_marker" ]]'
+        in diagnostic_recovery_command
+        and "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        in diagnostic_recovery_command
+        and 'mv -T -- "$selector_tmp" "$diagnostic_selector"'
+        in diagnostic_recovery_command
+        and diagnostic_recovery_command.index(
+            'mv -T -- "$selector_tmp" "$diagnostic_selector"'
+        )
+        < diagnostic_recovery_command.index(
+            "systemctl mask --now ssh.service ssh.socket"
+        )
+        < diagnostic_recovery_command.index(
+            "systemctl restart secpal-ci-diagnostic-sshd.service"
         ),
         "SSH handoffs must retain a verified listener or armed recovery timer",
     )
     require(
-        "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete"
+        "ConditionPathExists=/var/lib/secpal-ci-diagnostic/selected"
         in diagnostic_ssh
-        and "ConditionPathExists=%s" in host_setup
-        and '"$completion_marker"' in host_setup,
-        "SSH listeners must have complementary committed-state boot gates",
+        and "ConditionPathExists=!%s\\n'" in diagnostic_ssh
+        and '"$diagnostic_selector"' in diagnostic_ssh,
+        "SSH listeners must have complementary selector-based boot gates",
     )
     require(
-        "prepare_operator_ssh_boot_gate() {" in host_setup
+        "prepare_operator_ssh_boot_gate() {" in diagnostic_ssh
+        and "operator_ssh_boot_gate_is_valid() {" in diagnostic_ssh
         and "operator_ssh_boot_gate_is_valid() {" in host_setup
         and "operator_ssh_gate_dir=/etc/systemd/system/ssh.service.d"
-        in host_setup
+        in diagnostic_ssh
         and 'operator_ssh_gate="$operator_ssh_gate_dir/secpal-ci-ready.conf"'
-        in host_setup
-        and "ConditionPathExists=%s" in host_setup
-        and '"$completion_marker"' in host_setup,
-        "operator SSH must have the complementary committed-state boot gate",
+        in diagnostic_ssh
+        and 'grep -Fqx "ConditionPathExists=!$diagnostic_ssh_selector"'
+        in host_setup,
+        "operator SSH must receive and validate the inverse selector boot gate",
     )
     require(
         "install-diagnostic-ssh.sh" in main
@@ -816,6 +883,11 @@ AllowUsers secpal-ci"""
         "secpal-ci-diagnostic-sshd.service" in host_setup
         and "diagnostic_ssh_timer_unit=/etc/systemd/system/"
         "secpal-ci-diagnostic-sshd.timer" in host_setup
+        and "diagnostic_ssh_recovery_service_unit=/etc/systemd/system/"
+        "secpal-ci-diagnostic-ssh-recover.service" in host_setup
+        and "diagnostic_ssh_recovery_command=/usr/local/sbin/"
+        "secpal-ci-recover-diagnostic-ssh" in host_setup
+        and 'diagnostic_ssh_selector="$diagnostic_root/selected"' in host_setup
         and 'systemctl disable "$diagnostic_ssh_service"' in host_setup
         and '[[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]]'
         in host_setup
@@ -906,10 +978,11 @@ AllowUsers secpal-ci"""
         "operator SSH key staging must remain private until publication",
     )
     require(
-        host_setup.index("if ! publish_completion_marker; then")
-        < host_setup.index("systemctl restart ssh.service")
-        < host_setup.index("ssh_key_activated=true")
-        < host_setup.index("if ! retire_diagnostic_ssh; then")
+        operator_activation.index('rm -f -- "$diagnostic_ssh_selector"')
+        < operator_activation.index("systemctl restart ssh.service")
+        < operator_activation.index("if ! publish_completion_marker; then")
+        < operator_activation.index("ssh_key_activated=true")
+        < operator_activation.index("if ! retire_diagnostic_ssh; then")
         and 'rm -f -- "$completion_marker"' in host_setup,
         "operator SSH completion must be persistent, final, and rollback-safe",
     )

@@ -13,18 +13,21 @@ active_ssh_root=/var/lib/secpal-ci
 active_ssh_authorized_keys_dir="$active_ssh_root/authorized-keys"
 active_ssh_authorized_keys="$active_ssh_authorized_keys_dir/secpal-ci"
 completion_marker="$active_ssh_root/host-setup-complete"
-operator_ssh_gate_dir=/etc/systemd/system/ssh.service.d
-operator_ssh_gate="$operator_ssh_gate_dir/secpal-ci-ready.conf"
+operator_ssh_gate=/etc/systemd/system/ssh.service.d/secpal-ci-ready.conf
 diagnostic_ssh_timer=secpal-ci-diagnostic-sshd.timer
 diagnostic_ssh_service=secpal-ci-diagnostic-sshd.service
+diagnostic_ssh_recovery_service=secpal-ci-diagnostic-ssh-recover.service
 diagnostic_root=/var/lib/secpal-ci-diagnostic
+diagnostic_ssh_selector="$diagnostic_root/selected"
 diagnostic_ssh_key="$diagnostic_root/authorized-key"
 diagnostic_ssh_command=/usr/local/sbin/secpal-ci-bootstrap-diagnostic
+diagnostic_ssh_recovery_command=/usr/local/sbin/secpal-ci-recover-diagnostic-ssh
 diagnostic_ssh_config=/etc/ssh/secpal-ci-diagnostic-sshd.conf
 diagnostic_ssh_user=secpal-ci-diagnostic
 diagnostic_ssh_home="$diagnostic_root/home"
 diagnostic_ssh_service_unit=/etc/systemd/system/secpal-ci-diagnostic-sshd.service
 diagnostic_ssh_timer_unit=/etc/systemd/system/secpal-ci-diagnostic-sshd.timer
+diagnostic_ssh_recovery_service_unit=/etc/systemd/system/secpal-ci-diagnostic-ssh-recover.service
 runner_ipv4="${1:-}"
 setup_stage="initialize"
 snapshot_tmp=""
@@ -185,37 +188,8 @@ operator_ssh_boot_gate_is_valid() {
   [[ "$gate_metadata" == 0:0:644 &&
     "$(wc -l <"$operator_ssh_gate")" -eq 2 ]] || return 1
   grep -Fqx '[Unit]' "$operator_ssh_gate" || return 1
-  grep -Fqx "ConditionPathExists=$completion_marker" \
+  grep -Fqx "ConditionPathExists=!$diagnostic_ssh_selector" \
     "$operator_ssh_gate"
-}
-
-prepare_operator_ssh_boot_gate() {
-  local gate_tmp="" gate_dir_metadata
-
-  if [[ -e "$operator_ssh_gate_dir" || -L "$operator_ssh_gate_dir" ]]; then
-    [[ -d "$operator_ssh_gate_dir" && ! -L "$operator_ssh_gate_dir" ]] ||
-      return 1
-    gate_dir_metadata="$(stat -c '%u:%g:%a' -- "$operator_ssh_gate_dir")" ||
-      return 1
-    [[ "$gate_dir_metadata" == 0:0:755 ]] || return 1
-  else
-    install -d -o root -g root -m 0755 "$operator_ssh_gate_dir" || return 1
-  fi
-  if [[ -e "$operator_ssh_gate" || -L "$operator_ssh_gate" ]]; then
-    operator_ssh_boot_gate_is_valid || return 1
-    systemctl daemon-reload
-    return
-  fi
-  gate_tmp="$(mktemp "$operator_ssh_gate_dir/.secpal-ci-ready.XXXXXX")" ||
-    return 1
-  if ! chmod 0644 "$gate_tmp" ||
-    ! printf '[Unit]\nConditionPathExists=%s\n' "$completion_marker" >"$gate_tmp" ||
-    ! mv -T -- "$gate_tmp" "$operator_ssh_gate"; then
-    rm -f -- "$gate_tmp"
-    return 1
-  fi
-  operator_ssh_boot_gate_is_valid || return 1
-  systemctl daemon-reload
 }
 
 restore_diagnostic_ssh() {
@@ -223,9 +197,7 @@ restore_diagnostic_ssh() {
   rmdir -- "$active_ssh_authorized_keys_dir" 2>/dev/null || true
   rmdir -- "$active_ssh_root" 2>/dev/null || true
   ssh_key_activated=false
-  arm_diagnostic_ssh_recovery || return 1
-  systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || return 1
-  systemctl restart "$diagnostic_ssh_service" >/dev/null 2>&1 || return 1
+  systemctl start "$diagnostic_ssh_recovery_service" || return 1
   if systemctl is-active --quiet ssh.service ||
     systemctl is-active --quiet ssh.socket ||
     ! systemctl is-active --quiet "$diagnostic_ssh_service"; then
@@ -241,9 +213,11 @@ retire_diagnostic_ssh() {
   systemctl disable "$diagnostic_ssh_service" >/dev/null 2>&1 || \
     cleanup_failed=true
   stop_diagnostic_ssh || cleanup_failed=true
-  rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_key" \
-    "$diagnostic_ssh_command" "$diagnostic_ssh_config" \
-    "$diagnostic_ssh_service_unit" "$diagnostic_ssh_timer_unit" || \
+  rm -f -- "$staged_ssh_public_key" "$diagnostic_ssh_selector" \
+    "$diagnostic_ssh_key" "$diagnostic_ssh_command" \
+    "$diagnostic_ssh_recovery_command" "$diagnostic_ssh_config" \
+    "$diagnostic_ssh_service_unit" "$diagnostic_ssh_timer_unit" \
+    "$diagnostic_ssh_recovery_service_unit" || \
     cleanup_failed=true
   if getent passwd "$diagnostic_ssh_user" >/dev/null; then
     userdel "$diagnostic_ssh_user" || cleanup_failed=true
@@ -300,8 +274,8 @@ activate_operator_ssh() {
   fi
   validate_staged_operator_key || return 1
   validate_effective_sshd_config || return 1
-  if ! prepare_operator_ssh_boot_gate; then
-    printf 'ERROR: unable to install the operator SSH boot gate.\n' >&2
+  if ! operator_ssh_boot_gate_is_valid; then
+    printf 'ERROR: operator SSH boot gate failed validation.\n' >&2
     return 1
   fi
   if [[ -e "$active_ssh_root" || -L "$active_ssh_root" ]]; then
@@ -396,7 +370,12 @@ activate_operator_ssh() {
     printf 'ERROR: unable to prepare the trusted SSH service.\n' >&2
     return 1
   fi
-  if ! publish_completion_marker; then
+  if [[ ! -f "$diagnostic_ssh_selector" ||
+    -L "$diagnostic_ssh_selector" ]] ||
+    ! rm -f -- "$diagnostic_ssh_selector" ||
+    [[ -e "$diagnostic_ssh_selector" || -L "$diagnostic_ssh_selector" ]]; then
+    restore_diagnostic_ssh || true
+    printf 'ERROR: unable to select trusted operator SSH.\n' >&2
     return 1
   fi
   if ! systemctl restart ssh.service ||
@@ -404,6 +383,10 @@ activate_operator_ssh() {
     systemctl is-active --quiet ssh.socket; then
     restore_diagnostic_ssh || true
     printf 'ERROR: unable to activate the trusted SSH configuration.\n' >&2
+    return 1
+  fi
+  if ! publish_completion_marker; then
+    restore_diagnostic_ssh || true
     return 1
   fi
   ssh_key_activated=true

@@ -54,10 +54,11 @@ SPDX-License-Identifier: CC0-1.0
   diagnostic state after trusted operator SSH commits. The service now creates
   its own runtime directories, starts before the reboot continuation, and keeps
   the closed failure channel available from initial state validation through
-  the final operator handoff. The committed marker now also gates diagnostic
-  startup across power loss, a complementary gate prevents operator SSH before
-  that commit, and the handoff stops the diagnostic listener before activating
-  operator SSH while retaining deterministic rollback until activation passes.
+  the final operator handoff. A root-owned atomic selector now gives diagnostic
+  and operator SSH complementary boot gates before either transition can race a
+  reboot. An independent recovery unit restores that selector after an
+  interrupted handoff, while the completion marker is published only after the
+  operator listener is verified active and then prevents later recovery.
 - Normalized disposable hosts to the exact Debian 13 Stable, Updates, and
   Security source set before package installation; corrected bounded APT
   provenance and merged-policy collection for real Debian output; and

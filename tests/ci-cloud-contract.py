@@ -293,17 +293,12 @@ class CloudCIContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete",
+            "ConditionPathExists=/var/lib/secpal-ci-diagnostic/selected",
             installer,
         )
         self.assertIn(
-            "operator_ssh_gate=/etc/systemd/system/ssh.service.d/"
-            "secpal-ci-ready.conf",
+            'operator_ssh_gate="$operator_ssh_gate_dir/secpal-ci-ready.conf"',
             installer,
-        )
-        self.assertIn(
-            "ConditionPathExists=%s\\n' \"$completion_marker\"",
-            host_setup,
         )
         self.assertIn("operator_ssh_boot_gate_is_valid() {", host_setup)
         marker = "if ! publish_completion_marker; then"
@@ -316,13 +311,83 @@ class CloudCIContractTests(unittest.TestCase):
             activation.index(marker),
         )
         self.assertLess(
-            activation.index(marker),
             activation.index(restart_operator),
+            activation.index(marker),
         )
         self.assertNotIn('systemctl enable "$diagnostic_ssh_service"', restore)
         self.assertLess(
             restore.index('rm -f -- "$completion_marker"'),
-            restore.index('systemctl restart "$diagnostic_ssh_service"'),
+            restore.index('systemctl start "$diagnostic_ssh_recovery_service"'),
+        )
+
+    def test_initial_boot_listener_selection_is_atomic(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        start = installer.split("start_diagnostic_fallback() {", 1)[1].split(
+            "\n}", 1
+        )[0]
+
+        selector = "/var/lib/secpal-ci-diagnostic/selected"
+        self.assertIn('diagnostic_selector="$diagnostic_root/selected"', installer)
+        self.assertIn(f"ConditionPathExists={selector}", installer)
+        self.assertIn("ConditionPathExists=!%s\\n'", installer)
+        self.assertLess(
+            installer.index("prepare_operator_ssh_boot_gate"),
+            installer.index('systemctl enable "$diagnostic_service"'),
+        )
+        self.assertLess(
+            start.index('systemctl enable "$diagnostic_service"'),
+            start.index("select_diagnostic_ssh"),
+        )
+        self.assertLess(
+            start.index("select_diagnostic_ssh"),
+            start.index("systemctl mask --now ssh.service ssh.socket"),
+        )
+
+    def test_handoff_recovery_owns_the_selector_transition(self) -> None:
+        installer = (
+            ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
+        ).read_text(encoding="utf-8")
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        activation = host_setup.split("activate_operator_ssh() {", 1)[1].split(
+            "\n}", 1
+        )[0]
+        restore = host_setup.split("restore_diagnostic_ssh() {", 1)[1].split(
+            "\n}", 1
+        )[0]
+
+        self.assertIn("Unit=secpal-ci-diagnostic-ssh-recover.service", installer)
+        self.assertIn(
+            "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete",
+            installer,
+        )
+        self.assertIn("select_diagnostic_ssh() {", installer)
+        self.assertIn(
+            "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            installer.split("<<'RECOVERY'", 1)[1].split("\nRECOVERY", 1)[0],
+        )
+        self.assertIn('rm -f -- "$diagnostic_ssh_selector"', activation)
+        self.assertLess(
+            activation.index("arm_diagnostic_ssh_recovery"),
+            activation.index('systemctl stop "$diagnostic_ssh_service"'),
+        )
+        self.assertLess(
+            activation.index("systemctl enable ssh.service"),
+            activation.index('rm -f -- "$diagnostic_ssh_selector"'),
+        )
+        self.assertLess(
+            activation.index('rm -f -- "$diagnostic_ssh_selector"'),
+            activation.index("systemctl restart ssh.service"),
+        )
+        self.assertLess(
+            activation.index("systemctl is-active --quiet ssh.service"),
+            activation.index("if ! publish_completion_marker; then"),
+        )
+        self.assertIn(
+            'systemctl start "$diagnostic_ssh_recovery_service"', restore
         )
 
     def test_systemd_reboot_contract_has_no_sshd_binary_dependency(self) -> None:
@@ -371,13 +436,43 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "ConditionPathExists=/var/lib/secpal-ci-diagnostic/selected\n",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "ConditionPathExists=!%s\\n'",
+                "",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "Unit=secpal-ci-diagnostic-ssh-recover.service\n",
+                "Unit=secpal-ci-diagnostic-sshd.service\n",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
                 "ConditionPathExists=!/var/lib/secpal-ci/host-setup-complete\n",
                 "",
             ),
             (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                '  mv -T -- "$selector_tmp" "$diagnostic_selector"\n',
+                "",
+            ),
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "  prepare_operator_ssh_boot_gate || return 1\n",
+                "",
+            ),
+            (
                 "scripts/ci-cloud/configure-conformance-host.sh",
-                "ConditionPathExists=%s\\n' \"$completion_marker\"",
-                "ConditionPathExists=/missing\\n' \"$completion_marker\"",
+                '    ! rm -f -- "$diagnostic_ssh_selector" ||\n',
+                "",
+            ),
+            (
+                "scripts/ci-cloud/configure-conformance-host.sh",
+                '  systemctl start "$diagnostic_ssh_recovery_service" || return 1\n',
+                "",
             ),
             (
                 "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
@@ -988,7 +1083,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertNotIn("host_key_deadline", remote)
 
-    def test_operator_ssh_starts_only_after_setup_is_committed(self) -> None:
+    def test_setup_commits_only_after_operator_ssh_starts(self) -> None:
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
@@ -1004,8 +1099,8 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn(restart, activation)
         self.assertIn(activated, activation)
         self.assertIn(retirement, activation)
-        self.assertLess(activation.index(marker), activation.index(restart))
-        self.assertLess(activation.index(restart), activation.index(activated))
+        self.assertLess(activation.index(restart), activation.index(marker))
+        self.assertLess(activation.index(marker), activation.index(activated))
         self.assertLess(activation.index(activated), activation.index(retirement))
         arm_timer = "arm_diagnostic_ssh_recovery"
         stop_listener = 'systemctl stop "$diagnostic_ssh_service"'
@@ -1085,7 +1180,9 @@ class CloudCIContractTests(unittest.TestCase):
             restore_handler.index(
                 'rm -f -- "$completion_marker" "$active_ssh_authorized_keys"'
             ),
-            restore_handler.index("systemctl mask --now ssh.service ssh.socket"),
+            restore_handler.index(
+                'systemctl start "$diagnostic_ssh_recovery_service"'
+            ),
         )
         stop_handler = host_setup.split("stop_diagnostic_ssh() {", 1)[1].split(
             "\n}\n", 1
@@ -1235,13 +1332,13 @@ class CloudCIContractTests(unittest.TestCase):
         ):
             self.assertIn(required, document)
 
-    def test_diagnostic_fallback_is_started_after_primary_ssh_is_masked(self) -> None:
+    def test_diagnostic_fallback_selects_before_masking_primary_ssh(self) -> None:
         installer = (
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
         ).read_text(encoding="utf-8")
         preparation_function = installer.split(
             "prepare_diagnostic_fallback() {", 1
-        )[1].split("\n}\n", 1)[0]
+        )[1].split("\nstart_diagnostic_fallback() {", 1)[0]
         start_function = installer.split("start_diagnostic_fallback() {", 1)[
             1
         ].split("\n}\n", 1)[0]
@@ -1259,6 +1356,10 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertLess(
             start_function.index('systemctl enable "$diagnostic_service"'),
+            start_function.index("select_diagnostic_ssh"),
+        )
+        self.assertLess(
+            start_function.index("select_diagnostic_ssh"),
             start_function.index("systemctl mask --now ssh.service ssh.socket"),
         )
         self.assertLess(
@@ -1316,7 +1417,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertIn(
             'systemd-analyze verify "$diagnostic_service_unit" \\\n'
-            '    "$diagnostic_timer_unit"',
+            '    "$diagnostic_timer_unit" "$diagnostic_recovery_service_unit"',
             installer,
         )
 
@@ -1329,7 +1430,7 @@ class CloudCIContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         preparation = installer.split(
             "prepare_diagnostic_fallback() {", 1
-        )[1].split("\n}\n", 1)[0]
+        )[1].split("\nstart_diagnostic_fallback() {", 1)[0]
         initial_start = installer.split("start_diagnostic_fallback() {", 1)[
             1
         ].split("\n}\n", 1)[0]
@@ -1352,7 +1453,7 @@ class CloudCIContractTests(unittest.TestCase):
             initial_start.index('systemctl stop "$diagnostic_timer"'),
         )
         self.assertLess(
-            restore.index('systemctl restart "$diagnostic_ssh_service"'),
+            restore.index('systemctl start "$diagnostic_ssh_recovery_service"'),
             restore.index(
                 'systemctl is-active --quiet "$diagnostic_ssh_service"'
             ),
@@ -1402,7 +1503,7 @@ class CloudCIContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         preparation = installer.split("prepare_diagnostic_fallback() {", 1)[
             1
-        ].split("\n}\n", 1)[0]
+        ].split("\nstart_diagnostic_fallback() {", 1)[0]
         reporter = preparation.split("<<'DIAGNOSTIC'\n", 1)[1].split(
             "\nDIAGNOSTIC", 1
         )[0]
@@ -1427,8 +1528,10 @@ class CloudCIContractTests(unittest.TestCase):
             ("diagnostic_key", "0:0:644"),
             ("diagnostic_config", "0:0:600"),
             ("diagnostic_command", "0:0:755"),
+            ("diagnostic_recovery_command", "0:0:755"),
             ("diagnostic_service_unit", "0:0:644"),
             ("diagnostic_timer_unit", "0:0:644"),
+            ("diagnostic_recovery_service_unit", "0:0:644"),
         ):
             with self.subTest(artifact=artifact):
                 self.assertIn(
@@ -1504,8 +1607,8 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertIn("publish_completion_marker", host_setup)
         self.assertLess(
-            host_setup.index("if ! publish_completion_marker; then"),
             host_setup.index('systemctl restart ssh.service'),
+            host_setup.index("if ! publish_completion_marker; then"),
         )
         self.assertLess(
             host_setup.index("systemctl enable ssh.service"),
@@ -1649,6 +1752,7 @@ class CloudCIContractTests(unittest.TestCase):
         self.assert_mutation_rejected(
             "scripts/ci-cloud/configure-conformance-host.sh",
             "  if ! publish_completion_marker; then\n"
+            "    restore_diagnostic_ssh || true\n"
             "    return 1\n"
             "  fi\n",
             "",
