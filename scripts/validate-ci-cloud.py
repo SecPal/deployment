@@ -74,6 +74,28 @@ def require(condition: bool, message: str) -> None:
         raise ContractError(message)
 
 
+def required_block(text: str, start: str, end: str, label: str) -> str:
+    require(
+        text.count(start) == 1,
+        f"{label} start marker is missing or ambiguous",
+    )
+    _, start_marker, tail = text.partition(start)
+    require(bool(start_marker), f"{label} start marker is missing")
+    block, end_marker, _ = tail.partition(end)
+    require(bool(end_marker), f"{label} end marker is missing")
+    return block
+
+
+def required_suffix(text: str, start: str, label: str) -> str:
+    require(
+        text.count(start) == 1,
+        f"{label} start marker is missing or ambiguous",
+    )
+    _, start_marker, suffix = text.rpartition(start)
+    require(bool(start_marker), f"{label} start marker is missing")
+    return suffix
+
+
 def read(root: Path, relative: str) -> str:
     path = root / relative
     require(path.is_file(), f"required cloud CI file is missing: {relative}")
@@ -395,9 +417,12 @@ def validate_opentofu(root: Path) -> None:
         len(maximum_bootstrap.encode("utf-8")) <= 64 * 1024,
         "rendered native bootstrap exceeds DigitalOcean's 64 KiB user-data limit",
     )
-    bootstrap_ssh_policy = bootstrap.split(
-        "<<'SECPAL_SSH_CONFIG'\n", 1
-    )[1].split("\nSECPAL_SSH_CONFIG", 1)[0]
+    bootstrap_ssh_policy = required_block(
+        bootstrap,
+        "<<'SECPAL_SSH_CONFIG'\n",
+        "\nSECPAL_SSH_CONFIG\n",
+        "native bootstrap SSH policy",
+    )
     expected_bootstrap_ssh_policy = """PasswordAuthentication no
 KbdInteractiveAuthentication no
 MaxSessions 1
@@ -446,7 +471,8 @@ AllowUsers secpal-ci"""
         and "${diagnostic_ssh_installer}" in bootstrap
         and "install -o root -g root -m 0600 /dev/null /run/secpal-ci-authorized-key"
         in bootstrap
-        and "/etc/ssh/sshd_config.d/00-secpal-ci.conf" in bootstrap
+        and "install -o root -g root -m 0644 /dev/null \\\n"
+        "  /etc/ssh/sshd_config.d/00-secpal-ci.conf" in bootstrap
         and "sshd_config.d/90-secpal-ci.conf" not in bootstrap
         and "AuthorizedKeysFile /var/lib/secpal-ci/authorized-keys/%u"
         in bootstrap
@@ -496,33 +522,56 @@ AllowUsers secpal-ci"""
         and "source " not in diagnostic_ssh,
         "pre-runcmd failures need independent restricted diagnostic SSH",
     )
-    diagnostic_cleanup = diagnostic_ssh.split("cleanup() {", 1)[1].split(
-        "\n}", 1
-    )[0]
-    diagnostic_preparation = diagnostic_ssh.split(
-        "prepare_diagnostic_fallback() {", 1
-    )[1].split("\n}", 1)[0]
-    diagnostic_start = diagnostic_ssh.split(
-        "start_diagnostic_fallback() {", 1
-    )[1].split("\n}", 1)[0]
-    diagnostic_initial_transition = diagnostic_ssh.rsplit(
-        "if completed_setup_is_valid; then", 1
-    )[1]
-    operator_activation = host_setup.split(
-        "activate_operator_ssh() {", 1
-    )[1].split("\n}", 1)[0]
-    diagnostic_restore = host_setup.split(
-        "restore_diagnostic_ssh() {", 1
-    )[1].split("\n}", 1)[0]
-    diagnostic_recovery = host_setup.split(
-        "arm_diagnostic_ssh_recovery() {", 1
-    )[1].split("\n}", 1)[0]
-    completed_validator = diagnostic_ssh.split(
-        "completed_setup_is_valid() {", 1
-    )[1].split("\n}", 1)[0]
-    operator_identity_validator = diagnostic_ssh.split(
-        "validate_operator_identity() {", 1
-    )[1].split("\n}", 1)[0]
+    diagnostic_cleanup = required_block(
+        diagnostic_ssh, "cleanup() {", "\n}", "diagnostic cleanup block"
+    )
+    diagnostic_preparation = required_block(
+        diagnostic_ssh,
+        "prepare_diagnostic_fallback() {",
+        "\n}",
+        "diagnostic preparation block",
+    )
+    diagnostic_start = required_block(
+        diagnostic_ssh,
+        "start_diagnostic_fallback() {",
+        "\n}",
+        "diagnostic start block",
+    )
+    diagnostic_initial_transition = required_suffix(
+        diagnostic_ssh,
+        "if completed_setup_is_valid; then",
+        "completed setup transition",
+    )
+    operator_activation = required_block(
+        host_setup,
+        "activate_operator_ssh() {",
+        "\n}",
+        "operator SSH activation block",
+    )
+    diagnostic_restore = required_block(
+        host_setup,
+        "restore_diagnostic_ssh() {",
+        "\n}",
+        "diagnostic restore block",
+    )
+    diagnostic_recovery = required_block(
+        host_setup,
+        "arm_diagnostic_ssh_recovery() {",
+        "\n}",
+        "diagnostic recovery block",
+    )
+    completed_validator = required_block(
+        diagnostic_ssh,
+        "completed_setup_is_valid() {",
+        "\n}",
+        "completed setup validator block",
+    )
+    operator_identity_validator = required_block(
+        diagnostic_ssh,
+        "validate_operator_identity() {",
+        "\n}",
+        "operator identity validator block",
+    )
     require(
         "ensure_diagnostic_identity" in diagnostic_preparation
         and '[[ "$(id -G "$diagnostic_user")" == "$group_gid" ]]'
@@ -661,6 +710,8 @@ AllowUsers secpal-ci"""
         in host_setup
         and 'groupdel "$diagnostic_ssh_user"' in host_setup
         and "diagnostic_ssh_home=/run/secpal-ci-diagnostic-home" in host_setup
+        and '[[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]]'
+        in host_setup
         and 'rmdir -- "$diagnostic_ssh_home"' in host_setup,
         "trusted SSH activation must retire or restore diagnostic SSH atomically",
     )
@@ -818,10 +869,17 @@ AllowUsers secpal-ci"""
         and "runner_ipv4               = var.runner_ipv4" in main,
         "native bootstrap must install and execute only trusted host setup",
     )
-    package_block = bootstrap.split(
-        "apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \\\n",
-        1,
-    )[1].split("\n\n", 1)[0]
+    package_header = (
+        "apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends "
+        "\\\n"
+    )
+    package_footer = "\n\nif getent passwd secpal-ci"
+    package_block = required_block(
+        bootstrap,
+        package_header,
+        package_footer,
+        "native bootstrap package block",
+    )
     packages = {
         line.strip().removesuffix(" \\")
         for line in package_block.splitlines()
@@ -993,9 +1051,12 @@ def validate(root: Path) -> None:
         Draft202012Validator.check_schema(failure_schema)
     except (json.JSONDecodeError, SchemaError):
         raise ContractError("bootstrap failure evidence schema is invalid") from None
-    root_ssh_admission = remote.split('bootstrap_stage="root-ssh"', 1)[1].split(
-        'started_at="$(date -u', 1
-    )[0]
+    root_ssh_admission = required_block(
+        remote,
+        'bootstrap_stage="root-ssh"',
+        'started_at="$(date -u',
+        "root SSH admission block",
+    )
     require(
         "root_ssh_denied=true" in root_ssh_admission
         and '"$root_probe_status" -eq 255' in root_ssh_admission
@@ -1031,7 +1092,6 @@ def validate(root: Path) -> None:
         'bootstrap_stage="host-key"' in remote
         and 'host_key_observations_json="null"' in remote
         and "record_host_key_observation()" in remote
-        and "classify_host_key_scan()" in remote
         and "observe_failed_host_key_scan()" in remote
         and "scripts/ci-cloud/probe-ssh-port.py" in remote
         and "connection_refused" in remote
@@ -1047,9 +1107,12 @@ def validate(root: Path) -> None:
         and "cloud-init" not in remote,
         "early remote failures need bounded structured evidence and diagnostics",
     )
-    host_key_classifier = remote.split("classify_host_key_scan() {", 1)[
-        1
-    ].split("\n}\n", 1)[0]
+    host_key_classifier = required_block(
+        remote,
+        "classify_host_key_scan() {",
+        "\n}\n",
+        "host-key classifier block",
+    )
     require(
         "connection_refused | connection_timeout | other"
         in host_key_classifier

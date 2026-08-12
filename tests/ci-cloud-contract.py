@@ -96,6 +96,92 @@ class CloudCIContractTests(unittest.TestCase):
             bootstrap,
         )
 
+    def test_native_bootstrap_publishes_ssh_policy_with_exact_mode(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "install -o root -g root -m 0644 /dev/null \\\n"
+            "  /etc/ssh/sshd_config.d/00-secpal-ci.conf",
+            bootstrap,
+        )
+
+    def test_native_bootstrap_validator_reports_missing_block_markers(self) -> None:
+        cases = (
+            (
+                "SSH policy start",
+                "<<'SECPAL_SSH_CONFIG'\n",
+                "<<'SECPAL_SSH_CONFIG_MISSING'\n",
+                "native bootstrap SSH policy start marker is missing",
+            ),
+            (
+                "SSH policy end",
+                "\nSECPAL_SSH_CONFIG\n",
+                "\nSECPAL_SSH_CONFIG_MISSING\n",
+                "native bootstrap SSH policy end marker is missing",
+            ),
+            (
+                "package start",
+                "apt-get -o DPkg::Lock::Timeout=300 install -y "
+                "--no-install-recommends \\\n",
+                "apt-get -o DPkg::Lock::Timeout=300 install -y ",
+                "native bootstrap package block start marker is missing",
+            ),
+            (
+                "package end",
+                "  unattended-upgrades\n\n",
+                "  unattended-upgrades\n",
+                "native bootstrap package block end marker is missing",
+            ),
+        )
+        for label, old, new, expected in cases:
+            with self.subTest(label=label):
+                fixture = self.mutated_root(
+                    "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+                    old,
+                    new,
+                )
+                result = self.run_validator(fixture)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertNotIn("Traceback", result.stdout)
+                self.assertIn(expected, result.stdout)
+
+    def test_validator_reports_missing_runtime_block_markers(self) -> None:
+        cases = (
+            (
+                "scripts/ci-cloud/install-diagnostic-ssh.sh",
+                "cleanup() {",
+                "cleanup_missing() {",
+                "diagnostic cleanup block start marker is missing",
+            ),
+            (
+                "scripts/ci-cloud/configure-conformance-host.sh",
+                "activate_operator_ssh() {",
+                "activate_operator_ssh_missing() {",
+                "operator SSH activation block start marker is missing",
+            ),
+            (
+                "scripts/ci-cloud/run-remote-conformance.sh",
+                'bootstrap_stage="root-ssh"',
+                'bootstrap_stage="root-ssh-missing"',
+                "root SSH admission block start marker is missing",
+            ),
+            (
+                "scripts/ci-cloud/run-remote-conformance.sh",
+                "classify_host_key_scan() {",
+                "classify_host_key_scan_missing() {",
+                "host-key classifier block start marker is missing",
+            ),
+        )
+        for relative, old, new, expected in cases:
+            with self.subTest(relative=relative, marker=old):
+                fixture = self.mutated_root(relative, old, new)
+                result = self.run_validator(fixture)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertNotIn("Traceback", result.stdout)
+                self.assertIn(expected, result.stdout)
+
     def test_diagnostic_identity_has_existing_root_controlled_home(self) -> None:
         installer = (
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"
@@ -113,7 +199,18 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn(
             "diagnostic_ssh_home=/run/secpal-ci-diagnostic-home", host_setup
         )
+        self.assertIn(
+            '[[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]]',
+            host_setup,
+        )
         self.assertIn('rmdir -- "$diagnostic_ssh_home"', host_setup)
+
+    def test_openssh_account_smoke_ignores_global_known_hosts(self) -> None:
+        smoke = (ROOT / "tests/ci-cloud-openssh-account.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("-o GlobalKnownHostsFile=/dev/null \\\n", smoke)
 
     maxDiff = None
 

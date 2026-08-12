@@ -25,6 +25,7 @@ ssh_probe() {
   local directory="$1" port="$2"
 
   ssh -F /dev/null \
+    -o GlobalKnownHostsFile=/dev/null \
     -i "$directory/client-key" \
     -o BatchMode=yes \
     -o IdentitiesOnly=yes \
@@ -42,7 +43,7 @@ run_isolated_smoke() {
   local directory="$1" port="$2"
   local attempt status
 
-  # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap.
   cleanup_server() {
     local cleanup_status=$?
     trap - EXIT

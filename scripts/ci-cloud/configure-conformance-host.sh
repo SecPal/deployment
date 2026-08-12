@@ -205,7 +205,10 @@ retire_diagnostic_ssh() {
   if getent group "$diagnostic_ssh_user" >/dev/null; then
     groupdel "$diagnostic_ssh_user" || cleanup_failed=true
   fi
-  rmdir -- "$diagnostic_ssh_home" || cleanup_failed=true
+  if [[ -e "$diagnostic_ssh_home" || -L "$diagnostic_ssh_home" ]] &&
+    ! rmdir -- "$diagnostic_ssh_home"; then
+    cleanup_failed=true
+  fi
   systemctl daemon-reload || cleanup_failed=true
   [[ "$cleanup_failed" == false ]]
 }
