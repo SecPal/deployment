@@ -20,6 +20,15 @@ from jsonschema.exceptions import SchemaError
 PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 REQUIRED_INPUTS = {"target_sha", "provider_profile"}
 PROFILES = {"digitalocean-intel", "digitalocean-amd", "gcp-axion"}
+BOOTSTRAP_FAILURE_SCHEMA_VERSION = 4
+HOST_SETUP_FAILURE_STAGES = {
+    "initialize",
+    "kernel-reboot",
+    "subordinate-ids",
+    "service-policy",
+    "apparmor",
+    "ssh",
+}
 CREDENTIAL_KEYS = {
     "DIGITALOCEAN_TOKEN",
     "DIGITALOCEAN_ACCESS_TOKEN",
@@ -356,6 +365,7 @@ def validate_opentofu(root: Path) -> None:
     variables = read(root, "infra/ci-cloud/digitalocean/variables.tf")
     outputs = read(root, "infra/ci-cloud/digitalocean/outputs.tf")
     bootstrap = read(root, "scripts/ci-cloud/bootstrap-conformance-host.tftpl")
+    continuation = read(root, "scripts/ci-cloud/continue-conformance-bootstrap.sh")
     host_setup = read(root, "scripts/ci-cloud/configure-conformance-host.sh")
     diagnostic_ssh = read(root, "scripts/ci-cloud/install-diagnostic-ssh.sh")
     host_setup_failure = read(root, "scripts/ci-cloud/host-setup-failure.py")
@@ -411,6 +421,7 @@ def validate_opentofu(root: Path) -> None:
         ("${diagnostic_ssh_installer}", diagnostic_ssh.strip()),
         ("${host_setup_script}", host_setup.strip()),
         ("${host_setup_failure_script}", host_setup_failure.strip()),
+        ("${bootstrap_continuation_script}", continuation.strip()),
     ):
         maximum_bootstrap = maximum_bootstrap.replace(placeholder, replacement)
     require(
@@ -469,6 +480,7 @@ AllowUsers secpal-ci"""
         "secpal-ci-configure-conformance-host",
         "secpal-ci-host-setup-failure",
         "${host_setup_failure_script}",
+        "${bootstrap_continuation_script}",
     ):
         require(required in bootstrap, "native bootstrap omitted required D.1 host policy")
     require(
@@ -479,8 +491,12 @@ AllowUsers secpal-ci"""
     require(
         "ssh_authorized_keys" not in bootstrap
         and "${diagnostic_ssh_installer}" in bootstrap
-        and "install -o root -g root -m 0600 /dev/null /run/secpal-ci-authorized-key"
-        in bootstrap
+        and "/run/secpal-ci-authorized-key" not in bootstrap
+        and 'staged_operator_key=/run/secpal-ci-authorized-key' in continuation
+        and 'install -o root -g root -m 0600 /dev/null "$staged_operator_key"'
+        in continuation
+        and continuation.index('printf \'%s\\n\' "$ssh_public_key"')
+        < continuation.index("secpal-ci-configure-conformance-host")
         and "install -o root -g root -m 0644 /dev/null \\\n"
         "  /etc/ssh/sshd_config.d/00-secpal-ci.conf" in bootstrap
         and "sshd_config.d/90-secpal-ci.conf" not in bootstrap
@@ -842,7 +858,7 @@ AllowUsers secpal-ci"""
     )
     require(
         string_collection_constant(host_setup_failure, "STAGES")
-        == {"initialize", "subordinate-ids", "service-policy", "apparmor", "ssh"}
+        == HOST_SETUP_FAILURE_STAGES
         and "/usr/local/sbin/secpal-ci-host-setup-failure" in host_setup
         and '"$failure_writer" write "$setup_stage" "$status"' in host_setup,
         "host setup must emit only closed failure stages and exit status",
@@ -869,15 +885,80 @@ AllowUsers secpal-ci"""
         bootstrap.startswith("#!/usr/bin/env bash\n")
         and "#cloud-config" not in bootstrap
         and "set -euo pipefail" in bootstrap
+        and "export LC_ALL=C" in bootstrap
         and "${diagnostic_ssh_installer}" in bootstrap
         and "${host_setup_script}" in bootstrap
         and "${host_setup_failure_script}" in bootstrap
+        and "${bootstrap_continuation_script}" in bootstrap
         and 'install -o root -g root -m 0755 /dev/null "$failure_writer"'
         in bootstrap
-        and '/usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"'
+        and re.search(
+            r"^\s*runner_ipv4\s+= var\.runner_ipv4$", main, re.MULTILINE
+        ),
+        "native bootstrap must install only trusted host setup",
+    )
+    require(
+        continuation.startswith("#!/usr/bin/env bash\n")
+        and "set -euo pipefail" in continuation
+        and "systemctl reboot" not in continuation
+        and '[[ -d "$state_root" && ! -L "$state_root" ]]' in continuation
+        and '== 0:0:700' in continuation
+        and 'validate_state_file "$context_file" 1024' in continuation
+        and 'validate_state_file "$pending_file" 256' in continuation
+        and '[[ "${#context[@]}" -eq 4 && "${#pending[@]}" -eq 2 ]]'
+        in continuation
+        and '[[ "$expected_kernel" =~ ^6\\.12\\.' in continuation
+        and '[[ "$current_boot_id" != "$initial_boot_id" ]]' in continuation
+        and '[[ "$(uname -r)" == "$expected_kernel" ]]' in continuation
+        and "/usr/local/sbin/secpal-ci-install-diagnostic-ssh" in continuation
+        and "/usr/local/sbin/secpal-ci-configure-conformance-host" in continuation
+        and continuation.index('systemctl disable "$continuation_service"')
+        < continuation.index("secpal-ci-install-diagnostic-ssh")
+        < continuation.index('current_boot_id="$(< /proc/sys/kernel/random/boot_id)"')
+        < continuation.index('printf \'%s\\n\' "$ssh_public_key"')
+        < continuation.index("secpal-ci-configure-conformance-host")
+        and '"$failure_writer" write kernel-reboot "$status"' in continuation
+        and 'systemctl disable "$continuation_service"' in continuation,
+        "kernel reboot continuation must fail closed before operator SSH release",
+    )
+    require(
+        'failure_marker_ready=true' in continuation
+        and 'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
+        in continuation
+        and 'rmdir -- "$state_root"' in continuation,
+        "kernel continuation must retire its persistent state",
+    )
+    require(
+        continuation.index(
+            'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
+        )
+        < continuation.index('printf \'%s\\n\' "$ssh_public_key"')
+        < continuation.index("secpal-ci-configure-conformance-host"),
+        "kernel continuation state must retire before operator SSH release",
+    )
+    require(
+        "linux-image-amd64" in bootstrap
+        and "linux-image-arm64" in bootstrap
+        and 'expected_kernel_path="$(readlink -e /vmlinuz)"' in bootstrap
+        and 'kernel_image_package="linux-image-$expected_kernel"' in bootstrap
+        and "apt-cache policy \"$kernel_image_package\"" in bootstrap
+        and '"$candidate_kernel_version" == "$installed_kernel_version"'
         in bootstrap
-        and "runner_ipv4               = var.runner_ipv4" in main,
-        "native bootstrap must install and execute only trusted host setup",
+        and "/proc/sys/kernel/random/boot_id" in bootstrap
+        and '[[ "$(stat -c \'%u:%g:%a\' -- "$state_root")" == 0:0:700 ]]'
+        in bootstrap
+        and '[[ ! -e "$state_root" && ! -L "$state_root" ]]' in bootstrap
+        and 'install -d -o root -g root -m 0700 "$state_root"' in bootstrap
+        and 'chmod 0600 "$context_tmp" "$pending_tmp"' in bootstrap
+        and 'mv -T -- "$context_tmp" "$state_root/context"' in bootstrap
+        and 'mv -T -- "$pending_tmp" "$pending_file"' in bootstrap
+        and "ConditionPathExists=/var/lib/secpal-ci-bootstrap/pending" in bootstrap
+        and "systemctl enable secpal-ci-bootstrap-continue.service" in bootstrap
+        and bootstrap.count("systemctl reboot") == 1
+        and bootstrap.index("systemctl enable secpal-ci-bootstrap-continue.service")
+        < bootstrap.index('mv -T -- "$pending_tmp" "$pending_file"')
+        < bootstrap.index("systemctl reboot"),
+        "native bootstrap must perform one authenticated kernel reboot",
     )
     package_header = (
         "apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends "
@@ -980,7 +1061,9 @@ AllowUsers secpal-ci"""
         "GCP metadata must not activate the operator SSH key early",
     )
     require(
-        "runner_ipv4               = var.runner_ipv4" in gcp_main,
+        re.search(
+            r"^\s*runner_ipv4\s+= var\.runner_ipv4$", gcp_main, re.MULTILINE
+        ),
         "GCP host setup must receive the validated runner network context",
     )
     require(
@@ -989,6 +1072,11 @@ AllowUsers secpal-ci"""
         and "user-data" not in gcp_main
         and "install-diagnostic-ssh.sh" in gcp_main,
         "GCP must use its documented native startup-script transport",
+    )
+    require(
+        "continue-conformance-bootstrap.sh" in main
+        and "continue-conformance-bootstrap.sh" in gcp_main,
+        "both providers must embed the common trusted reboot continuation",
     )
     require('protocol = "all"' in gcp_main and "priority  = 65534" in gcp_main, "GCP residual egress must be denied")
     require('condition     = var.project_id == "secpal-dev"' in gcp_variables, "GCP project allowlist changed")
@@ -1061,6 +1149,27 @@ def validate(root: Path) -> None:
         Draft202012Validator.check_schema(failure_schema)
     except (json.JSONDecodeError, SchemaError):
         raise ContractError("bootstrap failure evidence schema is invalid") from None
+    try:
+        schema_host_setup_stages = failure_schema["properties"]["test"][
+            "properties"
+        ]["host_setup_failure"]["oneOf"][1]["properties"]["stage"]["enum"]
+    except (KeyError, IndexError, TypeError):
+        raise ContractError(
+            "bootstrap failure host-setup stage schema is invalid"
+        ) from None
+    require(
+        isinstance(schema_host_setup_stages, list)
+        and len(schema_host_setup_stages) == len(HOST_SETUP_FAILURE_STAGES)
+        and set(schema_host_setup_stages) == HOST_SETUP_FAILURE_STAGES,
+        "bootstrap failure evidence stages must match the host marker",
+    )
+    require(
+        failure_schema["properties"]["schema_version"].get("const")
+        == BOOTSTRAP_FAILURE_SCHEMA_VERSION
+        and f'"schema_version": {BOOTSTRAP_FAILURE_SCHEMA_VERSION}'
+        in failure_writer,
+        "bootstrap failure writer and declared schema version must match",
+    )
     root_ssh_admission = required_block(
         remote,
         'bootstrap_stage="root-ssh"',

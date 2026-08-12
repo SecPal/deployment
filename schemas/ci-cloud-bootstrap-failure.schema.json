@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "workflow", "test"],
   "properties": {
-    "schema_version": { "const": 3 },
+    "schema_version": { "const": 4 },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -99,6 +99,7 @@
                 "stage": {
                   "enum": [
                     "initialize",
+                    "kernel-reboot",
                     "subordinate-ids",
                     "service-policy",
                     "apparmor",
