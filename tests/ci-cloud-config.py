@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "scripts" / "ci-cloud" / "bootstrap-conformance-host.tftpl"
 HOST_SETUP = ROOT / "scripts" / "ci-cloud" / "configure-conformance-host.sh"
 HOST_SETUP_FAILURE = ROOT / "scripts" / "ci-cloud" / "host-setup-failure.py"
+BOOTSTRAP_CONTINUATION = (
+    ROOT / "scripts" / "ci-cloud" / "continue-conformance-bootstrap.sh"
+)
 DIAGNOSTIC_SSH_INSTALLER = (
     ROOT / "scripts" / "ci-cloud" / "install-diagnostic-ssh.sh"
 )
@@ -37,11 +40,13 @@ def render() -> str:
         "${host_setup_failure_script}": HOST_SETUP_FAILURE.read_text(
             encoding="utf-8"
         ).strip(),
-        "$${distro_codename}": "${distro_codename}",
+        "${bootstrap_continuation_script}": BOOTSTRAP_CONTINUATION.read_text(
+            encoding="utf-8"
+        ).strip(),
     }
     for old, new in replacements.items():
         rendered = rendered.replace(old, new)
-    return rendered
+    return rendered.replace("$${", "${")
 
 
 class ProviderBootstrapTests(unittest.TestCase):
@@ -52,6 +57,7 @@ class ProviderBootstrapTests(unittest.TestCase):
             "${diagnostic_ssh_installer}",
             "${host_setup_script}",
             "${host_setup_failure_script}",
+            "${bootstrap_continuation_script}",
             "${runner_ipv4}",
             "${run_id}",
             "${run_attempt}",

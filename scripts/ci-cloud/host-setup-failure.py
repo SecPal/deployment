@@ -18,6 +18,7 @@ MARKER_PATH = Path("/run/secpal-ci-evidence/host-setup-failure.json")
 MAX_MARKER_BYTES = 128
 STAGES = (
     "initialize",
+    "kernel-reboot",
     "subordinate-ids",
     "service-policy",
     "apparmor",

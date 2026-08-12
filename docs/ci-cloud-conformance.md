@@ -288,8 +288,10 @@ key enters OpenTofu and the selected provider. The private key is mode `0600`, i
 an output, state value, artifact, or repository file, and is removed before
 the provisioning/test job ends. The disposable operator account is initially
 created without an authorized key. A single trusted shell payload from `main`
-instead stages the public key as root-owned mode `0600`; GCP does not receive
-an instance-level `ssh-keys` metadata entry. DigitalOcean receives that payload
+retains only the public key in root-only bootstrap state across the controlled
+kernel reboot and stages it as root-owned mode `0600` only on the admitted
+second boot; GCP does not receive an instance-level `ssh-keys` metadata entry.
+DigitalOcean receives that payload
 through Droplet `user_data`; GCP receives the identical reviewed payload through
 the public-image guest agent's documented `startup-script` metadata key. This
 provider-native transport split avoids assuming that two unrelated image
@@ -337,6 +339,36 @@ UID 0, allowing the diagnostic account to read only the closed non-secret
 marker. If trusted host setup writes that marker, the reporter appends only its
 validated stage and exit status; it never exposes the unrestricted operator
 account to retrieve the marker.
+
+Before operator SSH can be published, the trusted first boot replaces the
+provider APT configuration with the closed signed Debian 13 sources, refreshes
+their indexes, and installs the architecture-specific `linux-image-amd64` or
+`linux-image-arm64` meta package. It admits the resolved `/vmlinuz` target only
+when the exact owning image package is installed at the current authenticated
+APT candidate version. The expected kernel release and initial Linux boot ID
+are written atomically with the bounded run context under a root-owned mode
+`0700` state directory. Only then is a root-owned continuation unit enabled and
+exactly one reboot requested. This explicit disposable-fixture transition is
+not production update automation and does not weaken D.1's prohibition on
+automatic production reboots; unattended upgrades remain configured with
+automatic reboot disabled.
+
+On the next boot, the trusted continuation validates the state type,
+ownership, mode, size, field count, and closed formats before using it. It
+immediately disables later automatic invocations, then reconstructs the
+restricted diagnostic SSH listener from the persisted public
+context, proves that the boot ID changed, and requires `uname -r` to equal the
+previously authenticated `/vmlinuz` release exactly. The continuation contains
+no reboot command, so a mismatch cannot form a reboot loop. Only after those
+checks does it recreate the root-only staged operator key and invoke trusted
+host setup. The persistent `pending` guard remains until host setup commits so
+a concurrent GCP startup-script invocation cannot begin a second bootstrap or
+reboot. Success then removes the continuation unit and persistent transition
+state. Failure records the closed `kernel-reboot` stage only when no more
+specific host-setup failure marker already exists, so stages such as `apparmor`
+or `ssh` remain authoritative. When the diagnostic channel cannot be
+reconstructed, the host remains inaccessible and eligible only for exact
+workflow cleanup or the ownership-gated TTL janitor.
 
 Both disposable SSH identities use the literal, impossible `*NP*` password
 marker and verify that exact effective `/etc/shadow` field before admitting a
@@ -408,11 +440,13 @@ shorter timeout.
 The runner treats failed native bootstrap as terminal and never
 checks out or executes target code in that case.
 
-The persistent mask also survives an unexpected reboot before trusted setup.
-Because the diagnostic timer is intentionally transient, such a reboot fails
-closed with no SSH listener; exact workflow cleanup or the TTL janitor then
-destroys the inaccessible fixture. After successful setup, the persistent
-operator key and completion marker survive reboot. If the provider invokes the
+The persistent mask also survives an unexpected reboot before the authenticated
+kernel-transition state is fully published. Because the diagnostic timer is
+intentionally transient, such a reboot fails closed with no SSH listener;
+exact workflow cleanup or the TTL janitor then destroys the inaccessible
+fixture. Only the one completely published state described above may
+reconstruct restricted diagnostics and continue setup. After successful setup,
+the persistent operator key and completion marker survive reboot. If the provider invokes the
 native bootstrap again, its idempotent entry validates the marker,
 state-directory ownership and modes, exact
 run-bound public key, root-owned prioritized configuration, the same effective
@@ -506,8 +540,9 @@ before either final path is published. They contain only the validated
 run/provider identity, orchestration start/end times, fixed failure stage, exit
 status, and `CI_CLOUD_REMOTE_ORCHESTRATION` invariant. When the trusted host
 setup itself fails, the evidence may additionally contain exactly one closed
-stage (`initialize`, `subordinate-ids`, `service-policy`, `apparmor`, or `ssh`)
-and its exit status. A host-key-stage failure instead records only counters for
+stage (`initialize`, `kernel-reboot`, `subordinate-ids`, `service-policy`,
+`apparmor`, or `ssh`) and its exit status. `kernel-reboot` identifies a failed
+second-boot identity or expected-kernel check. A host-key-stage failure instead records only counters for
 the closed categories `connection_refused`, `connection_timeout`, `no_key`,
 `multiple_keys`, `changed_key`, and `other`. Refused and timed-out connections
 come from a bounded IPv4 TCP probe and stable operating-system error codes,
@@ -524,7 +559,10 @@ Preflight renders the common provider payload with the exact embedded trusted
 scripts, checks it as strict Bash, and statically admits both provider-native
 transport bindings and the exact SSH policy. Mutation tests reject Linux
 account-lock commands, missing `*NP*` postconditions, and a reboot guard that
-does not revalidate the complete operator identity. A separate quality job
+does not revalidate the complete operator identity. They also reject removal
+of the authenticated kernel candidate, changed-boot-ID, exact running-kernel,
+single-reboot, persistent-state retirement, or diagnostic-before-operator
+ordering guards. A separate quality job
 starts a real OpenSSH daemon against a namespace-isolated password database. It
 proves `*NP*` public-key admission, portable leading-`!` rejection without PAM,
 and production-like `UsePAM yes` plus `*NP*` admission while all password
@@ -606,13 +644,16 @@ they do not prove that all hardware is compatible.
    ambiguity as a failure.
 
 Earlier workflow revisions performed real DigitalOcean Intel, DigitalOcean AMD,
-and GCP Axion provisioning attempts and exact cleanup. Intel and Axion did not
-reach trusted host setup, while the AMD API rejected the fixed size as outside
-the account tier; none produced conformance evidence. Those failures are not
-success evidence for this revision. The provider-native bootstrap change still
-requires a fresh `main` run that creates, tests, records complete evidence from,
-and destroys the host. Start with DigitalOcean Intel; do not enable or fund AMD
-capacity merely to bypass that proof-of-concept gate.
+and GCP Axion provisioning attempts and exact cleanup. The latest Intel attempt
+reached trusted host setup and executed the selected target successfully, but
+admission correctly failed because the provider-image running kernel package
+was absent from the refreshed authenticated Debian indexes. The AMD API had
+previously rejected the fixed size as outside the account tier, and Axion had
+not reached trusted host setup. None is success evidence for this revision.
+The authenticated kernel update/reboot transition still requires a fresh
+`main` run that creates, tests, records complete evidence from, and destroys the
+host. Start with DigitalOcean Intel; do not enable or fund AMD capacity merely
+to bypass that proof-of-concept gate.
 
 ## Primary references
 

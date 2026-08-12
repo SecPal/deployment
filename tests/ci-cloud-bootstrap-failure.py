@@ -77,7 +77,7 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             document = json.loads(
                 (output_dir / "bootstrap-failure.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(3, document["schema_version"])
+            self.assertEqual(4, document["schema_version"])
             self.assertEqual(
                 {"schema_version", "workflow", "test"}, set(document)
             )
@@ -193,6 +193,26 @@ class BootstrapFailureEvidenceTests(unittest.TestCase):
             )
             self.assertNotEqual(0, completed.returncode)
             self.assertEqual([], list(output_dir.iterdir()))
+
+    def test_records_kernel_reboot_host_setup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            completed = self.invoke(
+                output_dir,
+                host_setup_failure=(
+                    '{"exit_status":1,"stage":"kernel-reboot"}'
+                ),
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            document = json.loads(
+                (output_dir / "bootstrap-failure.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                {"exit_status": 1, "stage": "kernel-reboot"},
+                document["test"]["host_setup_failure"],
+            )
 
     def test_identifies_invalid_host_setup_failure_json(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

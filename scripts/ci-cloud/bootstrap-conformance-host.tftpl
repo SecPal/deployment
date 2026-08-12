@@ -6,6 +6,7 @@ set -euo pipefail
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C
 
 ssh_public_key='${ssh_public_key}'
 runner_ipv4='${runner_ipv4}'
@@ -13,11 +14,27 @@ run_id='${run_id}'
 run_attempt='${run_attempt}'
 failure_writer=/usr/local/sbin/secpal-ci-host-setup-failure
 completion_marker=/var/lib/secpal-ci/host-setup-complete
+state_root=/var/lib/secpal-ci-bootstrap
+pending_file="$state_root/pending"
+continuation_service=secpal-ci-bootstrap-continue.service
+continuation_unit="/etc/systemd/system/$continuation_service"
+context_tmp=""
+pending_tmp=""
+
+if [[ -e "$pending_file" || -L "$pending_file" ]]; then
+  [[ -d "$state_root" && ! -L "$state_root" ]]
+  [[ "$(stat -c '%u:%g:%a' -- "$state_root")" == 0:0:700 ]]
+  [[ -f "$pending_file" && ! -L "$pending_file" ]]
+  [[ "$(stat -c '%u:%g:%a' -- "$pending_file")" == 0:0:600 ]]
+  exit 0
+fi
 
 bootstrap_failure() {
   local status=$?
   trap - EXIT
   set +e
+  [[ -z "$context_tmp" ]] || rm -f -- "$context_tmp"
+  [[ -z "$pending_tmp" ]] || rm -f -- "$pending_tmp"
   if [[ "$status" -ne 0 && -x "$failure_writer" ]] &&
     ! "$failure_writer" read >/dev/null 2>&1; then
     "$failure_writer" write initialize "$status" || true
@@ -40,6 +57,12 @@ install -o root -g root -m 0700 /dev/null \
 cat > /usr/local/sbin/secpal-ci-configure-conformance-host <<'SECPAL_HOST_SETUP'
 ${host_setup_script}
 SECPAL_HOST_SETUP
+
+install -o root -g root -m 0700 /dev/null \
+  /usr/local/sbin/secpal-ci-continue-bootstrap
+cat > /usr/local/sbin/secpal-ci-continue-bootstrap <<'SECPAL_BOOTSTRAP_CONTINUATION'
+${bootstrap_continuation_script}
+SECPAL_BOOTSTRAP_CONTINUATION
 
 install -o root -g root -m 0755 /dev/null "$failure_writer"
 cat > "$failure_writer" <<'SECPAL_FAILURE_WRITER'
@@ -109,6 +132,18 @@ SECPAL_APT_LISTS_CLEANUP
 
 apt-get -o DPkg::Lock::Timeout=300 \
   -o "APT::Update::Pre-Invoke::=$apt_lists_cleanup" update
+
+case "$(dpkg --print-architecture)" in
+  amd64) kernel_meta_package=linux-image-amd64 ;;
+  arm64) kernel_meta_package=linux-image-arm64 ;;
+  *)
+    printf 'ERROR: host architecture has no admitted Debian kernel package.\n' >&2
+    exit 1
+    ;;
+esac
+apt-get -o DPkg::Lock::Timeout=300 install -y \
+  --no-install-recommends -- "$kernel_meta_package"
+
 apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
   aardvark-dns \
   apparmor \
@@ -153,9 +188,6 @@ IFS=: read -r operator_shadow_name operator_password_marker _ \
   <<<"$operator_shadow_entry"
 [[ "$operator_shadow_name" == secpal-ci ]]
 [[ "$operator_password_marker" == '*NP*' ]]
-
-install -o root -g root -m 0600 /dev/null /run/secpal-ci-authorized-key
-printf '%s\n' "$ssh_public_key" > /run/secpal-ci-authorized-key
 
 install -d -o root -g root -m 0755 /etc/ssh/sshd_config.d
 install -o root -g root -m 0644 /dev/null \
@@ -218,5 +250,55 @@ cat > /etc/environment.d/90-secpal-ci-quadlet.conf <<'SECPAL_QUADLET'
 QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000
 SECPAL_QUADLET
 
-/usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"
-trap - EXIT
+expected_kernel_path="$(readlink -e /vmlinuz)"
+[[ "$expected_kernel_path" =~ ^/boot/vmlinuz-(6\.12\.[0-9]+[-+._A-Za-z0-9]*)$ ]]
+expected_kernel="$${BASH_REMATCH[1]}"
+kernel_image_package="linux-image-$expected_kernel"
+[[ "$(dpkg-query -W -f '$${Status}' "$kernel_image_package")" == \
+  'install ok installed' ]]
+installed_kernel_version="$(
+  dpkg-query -W -f '$${Version}' "$kernel_image_package"
+)"
+candidate_kernel_version="$(
+  apt-cache policy "$kernel_image_package" |
+    sed -n 's/^[[:space:]]*Candidate:[[:space:]]*//p'
+)"
+[[ -n "$installed_kernel_version" &&
+  "$candidate_kernel_version" == "$installed_kernel_version" ]]
+initial_boot_id="$(< /proc/sys/kernel/random/boot_id)"
+[[ "$initial_boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+
+[[ ! -e "$state_root" && ! -L "$state_root" ]]
+install -d -o root -g root -m 0700 "$state_root"
+install -o root -g root -m 0644 /dev/null "$continuation_unit"
+cat >"$continuation_unit" <<'SECPAL_CONTINUATION_UNIT'
+[Unit]
+Description=Continue SecPal CI bootstrap after the bounded kernel reboot
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/var/lib/secpal-ci-bootstrap/pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/secpal-ci-continue-bootstrap
+TimeoutStartSec=15min
+
+[Install]
+WantedBy=multi-user.target
+SECPAL_CONTINUATION_UNIT
+systemd-analyze verify "$continuation_unit"
+systemctl daemon-reload
+systemctl enable secpal-ci-bootstrap-continue.service
+
+context_tmp="$(mktemp "$state_root/.context.XXXXXX")"
+pending_tmp="$(mktemp "$state_root/.pending.XXXXXX")"
+chmod 0600 "$context_tmp" "$pending_tmp"
+printf '%s\n%s\n%s\n%s\n' \
+  "$ssh_public_key" "$runner_ipv4" "$run_id" "$run_attempt" >"$context_tmp"
+printf '%s\n%s\n' "$expected_kernel" "$initial_boot_id" >"$pending_tmp"
+mv -T -- "$context_tmp" "$state_root/context"
+context_tmp=""
+mv -T -- "$pending_tmp" "$pending_file"
+pending_tmp=""
+
+systemctl reboot

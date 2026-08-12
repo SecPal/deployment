@@ -42,6 +42,12 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Authenticated the disposable host's current architecture-specific Debian 13
+  kernel from refreshed signed APT indexes, then continued trusted setup after
+  one state-bound reboot only when both the boot ID changed and the exact
+  expected kernel was running. The continuation reconstructs restricted
+  diagnostics, retains its provider-reentry guard until host setup commits, and
+  then retires persistent state without adding production reboot automation.
 - Normalized disposable hosts to the exact Debian 13 Stable, Updates, and
   Security source set before package installation; corrected bounded APT
   provenance and merged-policy collection for real Debian output; and

@@ -66,6 +66,7 @@ required_files=(
   scripts/fetch-oci-attestation.py
   scripts/ci-cloud/collect-host-evidence.py
   scripts/ci-cloud/bootstrap-conformance-host.tftpl
+  scripts/ci-cloud/continue-conformance-bootstrap.sh
   scripts/ci-cloud/configure-conformance-host.sh
   scripts/ci-cloud/install-diagnostic-ssh.sh
   scripts/ci-cloud/digitalocean-janitor.py

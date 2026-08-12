@@ -81,8 +81,12 @@ class CloudCIContractTests(unittest.TestCase):
         bootstrap = (
             ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
         ).read_text(encoding="utf-8")
+        continuation = (
+            ROOT / "scripts/ci-cloud/continue-conformance-bootstrap.sh"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("set -euo pipefail", bootstrap)
+        self.assertIn("export LC_ALL=C", bootstrap)
         self.assertIn(
             'apt-get -o DPkg::Lock::Timeout=300 \\\n'
             '  -o "APT::Update::Pre-Invoke::=$apt_lists_cleanup" update',
@@ -95,10 +99,163 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("${diagnostic_ssh_installer}", bootstrap)
         self.assertIn("${host_setup_script}", bootstrap)
         self.assertIn("${host_setup_failure_script}", bootstrap)
+        self.assertIn("${bootstrap_continuation_script}", bootstrap)
         self.assertIn(
             '/usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"',
+            continuation,
+        )
+
+    def test_native_bootstrap_reboots_once_into_authenticated_current_kernel(
+        self,
+    ) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        continuation = (
+            ROOT / "scripts/ci-cloud/continue-conformance-bootstrap.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("linux-image-amd64", bootstrap)
+        self.assertIn("linux-image-arm64", bootstrap)
+        self.assertIn("apt-cache policy", bootstrap)
+        self.assertIn("/boot/vmlinuz", bootstrap)
+        self.assertIn("/proc/sys/kernel/random/boot_id", bootstrap)
+        self.assertIn("secpal-ci-bootstrap-continue.service", bootstrap)
+        self.assertEqual(1, bootstrap.count("systemctl reboot"))
+        self.assertLess(
+            bootstrap.index("secpal-ci-bootstrap-continue.service"),
+            bootstrap.index("systemctl reboot"),
+        )
+        self.assertNotIn("systemctl reboot", continuation)
+        self.assertIn("ConditionPathExists=", bootstrap)
+        self.assertIn('validate_state_file "$context_file" 1024', continuation)
+        self.assertIn('validate_state_file "$pending_file" 256', continuation)
+        self.assertIn(
+            '[[ "$(stat -c \'%u:%g:%a\' -- "$state_root")" == 0:0:700 ]]',
             bootstrap,
         )
+        self.assertIn(
+            '[[ ! -e "$state_root" && ! -L "$state_root" ]]', bootstrap
+        )
+        self.assertIn('mv -T -- "$context_tmp" "$state_root/context"', bootstrap)
+        self.assertIn('mv -T -- "$pending_tmp" "$pending_file"', bootstrap)
+        self.assertIn("uname -r", continuation)
+        self.assertIn("/proc/sys/kernel/random/boot_id", continuation)
+        self.assertIn("secpal-ci-install-diagnostic-ssh", continuation)
+        self.assertIn("secpal-ci-configure-conformance-host", continuation)
+        self.assertLess(
+            continuation.index("secpal-ci-install-diagnostic-ssh"),
+            continuation.index("secpal-ci-configure-conformance-host"),
+        )
+        self.assertIn("failure_marker_ready=true", continuation)
+        self.assertIn(
+            'rm -f -- "$pending_file" "$context_file" "$continuation_unit"',
+            continuation,
+        )
+        self.assertLess(
+            continuation.index(
+                "/usr/local/sbin/secpal-ci-configure-conformance-host"
+            ),
+            continuation.index(
+                'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
+            ),
+        )
+        self.assertIn(
+            '! "$failure_writer" read >/dev/null 2>&1', continuation
+        )
+        self.assertLess(
+            continuation.index(
+                "/usr/local/sbin/secpal-ci-configure-conformance-host"
+            ),
+            continuation.rindex("trap - EXIT"),
+        )
+        self.assertLess(
+            continuation.rindex("trap - EXIT"),
+            continuation.index(
+                'rm -f -- "$pending_file" "$context_file" "$continuation_unit"'
+            ),
+        )
+
+    def test_static_contract_rejects_unsafe_kernel_reboot_continuation(self) -> None:
+        cases = (
+            (
+                "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+                "systemctl enable secpal-ci-bootstrap-continue.service",
+                "true",
+            ),
+            (
+                "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+                "systemctl reboot",
+                "systemctl reboot\nsystemctl reboot",
+            ),
+            (
+                "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+                'apt-cache policy "$kernel_image_package"',
+                'printf \'Candidate: %s\\n\' "$installed_kernel_version"',
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                '[[ "$current_boot_id" != "$initial_boot_id" ]]',
+                "true",
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                '[[ "$(uname -r)" == "$expected_kernel" ]]',
+                "true",
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                "/usr/local/sbin/secpal-ci-install-diagnostic-ssh",
+                "/bin/true",
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                'validate_state_file "$context_file" 1024',
+                "true",
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                'systemctl disable "$continuation_service"',
+                "true",
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                "/usr/local/sbin/secpal-ci-configure-conformance-host "
+                '"$runner_ipv4"',
+                'rm -f -- "$pending_file" "$context_file" '
+                '"$continuation_unit"\n'
+                "/usr/local/sbin/secpal-ci-configure-conformance-host "
+                '"$runner_ipv4"',
+            ),
+            (
+                "scripts/ci-cloud/continue-conformance-bootstrap.sh",
+                '! "$failure_writer" read >/dev/null 2>&1',
+                "true",
+            ),
+        )
+        for relative, old, new in cases:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
+    def test_static_contract_rejects_missing_kernel_reboot_evidence_stage(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "schemas/ci-cloud-bootstrap-failure.schema.json",
+            '                    "kernel-reboot",\n',
+            "",
+        )
+
+    def test_static_contract_rejects_stale_bootstrap_failure_schema_version(
+        self,
+    ) -> None:
+        for stale_version in (3, 40):
+            with self.subTest(stale_version=stale_version):
+                self.assert_mutation_rejected(
+                    "scripts/ci-cloud/write-bootstrap-failure.py",
+                    '"schema_version": 4',
+                    f'"schema_version": {stale_version}',
+                )
 
     def test_native_bootstrap_publishes_ssh_policy_with_exact_mode(self) -> None:
         bootstrap = (
@@ -453,10 +610,15 @@ class CloudCIContractTests(unittest.TestCase):
         template = (
             ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
         ).read_text(encoding="utf-8")
+        continuation = (
+            ROOT / "scripts/ci-cloud/continue-conformance-bootstrap.sh"
+        ).read_text(encoding="utf-8")
         self.assertNotIn("ssh_authorized_keys", template)
-        self.assertIn("/run/secpal-ci-authorized-key", template)
+        self.assertNotIn("/run/secpal-ci-authorized-key", template)
+        self.assertIn("/run/secpal-ci-authorized-key", continuation)
         self.assertIn(
-            "install -o root -g root -m 0600 /dev/null ", template
+            'install -o root -g root -m 0600 /dev/null "$staged_operator_key"',
+            continuation,
         )
         self.assertIn("${ssh_public_key}", template)
         self.assertIn(
@@ -476,7 +638,13 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("${diagnostic_ssh_installer}", template)
         self.assertIn(
             '/usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"',
-            template,
+            continuation,
+        )
+        self.assertLess(
+            continuation.index('printf \'%s\\n\' "$ssh_public_key"'),
+            continuation.index(
+                "/usr/local/sbin/secpal-ci-configure-conformance-host"
+            ),
         )
         for provider in ("digitalocean", "gcp"):
             variables = (
@@ -743,7 +911,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertLess(
             bootstrap.index("usermod --password '*NP*'"),
-            bootstrap.rindex("/usr/local/sbin/secpal-ci-configure-conformance-host"),
+            bootstrap.index("systemctl reboot"),
         )
 
     def test_static_contract_rejects_locked_ssh_accounts(self) -> None:
@@ -1267,7 +1435,7 @@ class CloudCIContractTests(unittest.TestCase):
 
     def test_static_contract_rejects_early_operator_ssh_key_release(self) -> None:
         self.assert_mutation_rejected(
-            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "scripts/ci-cloud/continue-conformance-bootstrap.sh",
             "/run/secpal-ci-authorized-key",
             "/home/secpal-ci/.ssh/authorized_keys",
         )
