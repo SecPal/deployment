@@ -20,6 +20,7 @@ continuation_service=secpal-ci-bootstrap-continue.service
 continuation_unit="/etc/systemd/system/$continuation_service"
 context_tmp=""
 pending_tmp=""
+setup_stage="diagnostic-ssh"
 
 if [[ -e "$pending_file" || -L "$pending_file" ]]; then
   [[ -d "$state_root" && ! -L "$state_root" ]]
@@ -37,7 +38,7 @@ bootstrap_failure() {
   [[ -z "$pending_tmp" ]] || rm -f -- "$pending_tmp"
   if [[ "$status" -ne 0 && -x "$failure_writer" ]] &&
     ! "$failure_writer" read >/dev/null 2>&1; then
-    "$failure_writer" write initialize "$status" || true
+    "$failure_writer" write "$setup_stage" "$status" || true
   fi
   exit "$status"
 }
@@ -77,6 +78,7 @@ if [[ -f "$completion_marker" && ! -L "$completion_marker" ]]; then
   exit 0
 fi
 
+setup_stage="apt-sources"
 apt_sources_dir=/etc/apt/sources.list.d
 if [[ -L "$apt_sources_dir" ]]; then
   printf 'ERROR: APT source directory must not be a symlink.\n' >&2
@@ -130,12 +132,14 @@ find "$apt_lists_dir" -mindepth 1 -maxdepth 1 \
   ! -name lock \( -type f -o -type l \) -delete
 SECPAL_APT_LISTS_CLEANUP
 
+setup_stage="apt-update"
 apt-get -o DPkg::Lock::Timeout=300 \
   -o "APT::Update::Pre-Invoke::=$apt_lists_cleanup" update
 
+setup_stage="kernel-install"
 case "$(dpkg --print-architecture)" in
-  amd64) kernel_meta_package=linux-image-amd64 ;;
-  arm64) kernel_meta_package=linux-image-arm64 ;;
+  amd64) kernel_arch=amd64; kernel_meta_package=linux-image-cloud-amd64 ;;
+  arm64) kernel_arch=arm64; kernel_meta_package=linux-image-cloud-arm64 ;;
   *)
     printf 'ERROR: host architecture has no admitted Debian kernel package.\n' >&2
     exit 1
@@ -144,6 +148,7 @@ esac
 apt-get -o DPkg::Lock::Timeout=300 install -y \
   --no-install-recommends -- "$kernel_meta_package"
 
+setup_stage="package-install"
 apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
   aardvark-dns \
   apparmor \
@@ -163,6 +168,7 @@ apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
   uidmap \
   unattended-upgrades
 
+setup_stage="operator-identity"
 if getent passwd secpal-ci >/dev/null || getent group secpal-ci >/dev/null; then
   user_entry="$(getent passwd secpal-ci || true)"
   group_entry="$(getent group secpal-ci || true)"
@@ -189,6 +195,7 @@ IFS=: read -r operator_shadow_name operator_password_marker _ \
 [[ "$operator_shadow_name" == secpal-ci ]]
 [[ "$operator_password_marker" == '*NP*' ]]
 
+setup_stage="host-policy"
 install -d -o root -g root -m 0755 /etc/ssh/sshd_config.d
 install -o root -g root -m 0644 /dev/null \
   /etc/ssh/sshd_config.d/00-secpal-ci.conf
@@ -250,10 +257,16 @@ cat > /etc/environment.d/90-secpal-ci-quadlet.conf <<'SECPAL_QUADLET'
 QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000
 SECPAL_QUADLET
 
-expected_kernel_path="$(readlink -e /vmlinuz)"
-[[ "$expected_kernel_path" =~ ^/boot/vmlinuz-(6\.12\.[0-9]+[-+._A-Za-z0-9]*)$ ]]
-expected_kernel="$${BASH_REMATCH[1]}"
-kernel_image_package="linux-image-$expected_kernel"
+setup_stage="kernel-admission"
+[[ "$(dpkg-query -W -f '$${Status}' "$kernel_meta_package")" == \
+  'install ok installed' ]]
+meta_package_dependencies="$(
+  dpkg-query -W -f '$${Depends}' "$kernel_meta_package"
+)"
+[[ "$meta_package_dependencies" =~ ^(linux-image-(6\.12\.[0-9]+[-+._A-Za-z0-9]*-cloud-$kernel_arch))[[:space:]]\(=[[:space:]]([0-9A-Za-z.+:~_-]+)\)$ ]]
+kernel_image_package="$${BASH_REMATCH[1]}"
+expected_kernel="$${kernel_image_package#linux-image-}"
+expected_kernel_package_version="$${BASH_REMATCH[3]}"
 [[ "$(dpkg-query -W -f '$${Status}' "$kernel_image_package")" == \
   'install ok installed' ]]
 installed_kernel_version="$(
@@ -264,10 +277,14 @@ candidate_kernel_version="$(
     sed -n 's/^[[:space:]]*Candidate:[[:space:]]*//p'
 )"
 [[ -n "$installed_kernel_version" &&
+  "$installed_kernel_version" == "$expected_kernel_package_version" &&
   "$candidate_kernel_version" == "$installed_kernel_version" ]]
+[[ -f "/boot/vmlinuz-$expected_kernel" &&
+  ! -L "/boot/vmlinuz-$expected_kernel" ]]
 initial_boot_id="$(< /proc/sys/kernel/random/boot_id)"
 [[ "$initial_boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
 
+setup_stage="reboot-state"
 [[ ! -e "$state_root" && ! -L "$state_root" ]]
 install -d -o root -g root -m 0700 "$state_root"
 install -o root -g root -m 0644 /dev/null "$continuation_unit"

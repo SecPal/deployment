@@ -20,10 +20,22 @@ from jsonschema.exceptions import SchemaError
 PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 REQUIRED_INPUTS = {"target_sha", "provider_profile"}
 PROFILES = {"digitalocean-intel", "digitalocean-amd", "gcp-axion"}
-BOOTSTRAP_FAILURE_SCHEMA_VERSION = 4
+BOOTSTRAP_FAILURE_SCHEMA_VERSION = 5
+BOOTSTRAP_USER_DATA_HEADROOM = 256
 HOST_SETUP_FAILURE_STAGES = {
-    "initialize",
-    "kernel-reboot",
+    "diagnostic-ssh",
+    "apt-sources",
+    "apt-update",
+    "kernel-install",
+    "package-install",
+    "operator-identity",
+    "host-policy",
+    "kernel-admission",
+    "reboot-state",
+    "continuation-state",
+    "kernel-verify",
+    "host-setup",
+    "host-initialize",
     "subordinate-ids",
     "service-policy",
     "apparmor",
@@ -403,8 +415,12 @@ def validate_opentofu(root: Path) -> None:
     require('version = "= 2.99.1"' in versions, "DigitalOcean provider version must be exact")
     require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
     require(
-        "length(trimspace(var.ssh_public_key)) <= 512" in variables,
+        "length(trimspace(var.ssh_public_key)) <= 128" in variables,
         "DigitalOcean public key input must be bounded before API submission",
+    )
+    require(
+        "((file_size > 128))" in host_setup,
+        "trusted host setup must preserve the provider public key bound",
     )
     require(main.count('resource "digitalocean_droplet"') == 1, "exactly one droplet resource is allowed")
     require("count" not in main, "resource count abstraction is forbidden")
@@ -442,7 +458,7 @@ def validate_opentofu(root: Path) -> None:
     )
     maximum_bootstrap = bootstrap
     for placeholder, replacement in (
-        ("${ssh_public_key}", "x" * 512),
+        ("${ssh_public_key}", "x" * 128),
         ("${runner_ipv4}", "255.255.255.255"),
         ("${run_id}", "9" * 20),
         ("${run_attempt}", "9" * 3),
@@ -453,8 +469,9 @@ def validate_opentofu(root: Path) -> None:
     ):
         maximum_bootstrap = maximum_bootstrap.replace(placeholder, replacement)
     require(
-        len(maximum_bootstrap.encode("utf-8")) <= 64 * 1024,
-        "rendered native bootstrap exceeds DigitalOcean's 64 KiB user-data limit",
+        len(maximum_bootstrap.encode("utf-8"))
+        <= (64 * 1024) - BOOTSTRAP_USER_DATA_HEADROOM,
+        "rendered native bootstrap leaves insufficient DigitalOcean user-data headroom",
     )
     bootstrap_ssh_policy = required_block(
         bootstrap,
@@ -1157,7 +1174,10 @@ AllowUsers secpal-ci"""
         < continuation.index('current_boot_id="$(< /proc/sys/kernel/random/boot_id)"')
         < continuation.index('printf \'%s\\n\' "$ssh_public_key"')
         < continuation.index("secpal-ci-configure-conformance-host")
-        and '"$failure_writer" write kernel-reboot "$status"' in continuation
+        and '"$failure_writer" write "$setup_stage" "$status"' in continuation
+        and 'setup_stage="continuation-state"' in continuation
+        and 'setup_stage="kernel-verify"' in continuation
+        and 'setup_stage="host-setup"' in continuation
         and 'systemctl disable "$continuation_service"' in continuation,
         "kernel reboot continuation must fail closed before operator SSH release",
     )
@@ -1181,6 +1201,28 @@ AllowUsers secpal-ci"""
         ),
         "kernel continuation guard must remain until host setup commits",
     )
+    for stage in (
+        "diagnostic-ssh",
+        "apt-sources",
+        "apt-update",
+        "kernel-install",
+        "package-install",
+        "operator-identity",
+        "host-policy",
+        "kernel-admission",
+        "reboot-state",
+    ):
+        require(
+            f'setup_stage="{stage}"' in bootstrap,
+            f"native bootstrap omits the closed {stage} failure stage",
+        )
+    require(
+        '"$failure_writer" write "$setup_stage" "$status"' in bootstrap
+        and 'setup_stage="initialize"' not in bootstrap
+        and 'setup_stage="initialize"' not in continuation
+        and 'setup_stage="initialize"' not in host_setup,
+        "native bootstrap diagnostics must identify the exact closed phase",
+    )
     require(
         continuation.index("secpal-ci-configure-conformance-host")
         < continuation.rindex("trap - EXIT")
@@ -1194,10 +1236,18 @@ AllowUsers secpal-ci"""
         "kernel continuation must preserve a more specific host-setup failure",
     )
     require(
-        "linux-image-amd64" in bootstrap
-        and "linux-image-arm64" in bootstrap
-        and 'expected_kernel_path="$(readlink -e /vmlinuz)"' in bootstrap
-        and 'kernel_image_package="linux-image-$expected_kernel"' in bootstrap
+        "linux-image-cloud-amd64" in bootstrap
+        and "linux-image-cloud-arm64" in bootstrap
+        and "readlink -e /vmlinuz" not in bootstrap
+        and 'meta_package_dependencies="$(' in bootstrap
+        and "dpkg-query -W -f '$${Depends}' \"$kernel_meta_package\""
+        in bootstrap
+        and 'kernel_image_package="$${BASH_REMATCH[1]}"' in bootstrap
+        and 'expected_kernel_package_version="$${BASH_REMATCH[3]}"'
+        in bootstrap
+        and '"$installed_kernel_version" == '
+        '"$expected_kernel_package_version"' in bootstrap
+        and '[[ -f "/boot/vmlinuz-$expected_kernel"' in bootstrap
         and "apt-cache policy \"$kernel_image_package\"" in bootstrap
         and '"$candidate_kernel_version" == "$installed_kernel_version"'
         in bootstrap
@@ -1225,7 +1275,7 @@ AllowUsers secpal-ci"""
         "apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends "
         "\\\n"
     )
-    package_footer = "\n\nif getent passwd secpal-ci"
+    package_footer = '\n\nsetup_stage="operator-identity"'
     package_block = required_block(
         bootstrap,
         package_header,
@@ -1269,7 +1319,7 @@ AllowUsers secpal-ci"""
     require('version = "= 7.40.0"' in gcp_versions, "Google provider version must be exact")
     require("~>" not in gcp_versions and ">=" not in gcp_versions, "mutable Google provider constraints are forbidden")
     require(
-        "length(trimspace(var.ssh_public_key)) <= 512" in gcp_variables,
+        "length(trimspace(var.ssh_public_key)) <= 128" in gcp_variables,
         "GCP public key input must be bounded before API submission",
     )
     require(

@@ -42,8 +42,22 @@ class CloudCIContractTests(unittest.TestCase):
                 ROOT / "infra" / "ci-cloud" / provider / "variables.tf"
             ).read_text(encoding="utf-8")
             self.assertIn(
-                "length(trimspace(var.ssh_public_key)) <= 512", variables
+                "length(trimspace(var.ssh_public_key)) <= 128", variables
             )
+        host_setup = (
+            ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("((file_size > 128))", host_setup)
+
+    def test_provider_bootstrap_preserves_explicit_user_data_headroom(
+        self,
+    ) -> None:
+        validator = VALIDATOR.read_text(encoding="utf-8")
+        self.assertIn("BOOTSTRAP_USER_DATA_HEADROOM = 256", validator)
+        self.assertIn(
+            "(64 * 1024) - BOOTSTRAP_USER_DATA_HEADROOM",
+            validator,
+        )
 
     def test_static_contract_rejects_provider_bootstrap_transport_drift(self) -> None:
         for relative, old, new in (
@@ -73,7 +87,7 @@ class CloudCIContractTests(unittest.TestCase):
             with self.subTest(provider=provider):
                 self.assert_mutation_rejected(
                     f"infra/ci-cloud/{provider}/variables.tf",
-                    "length(trimspace(var.ssh_public_key)) <= 512 &&\n",
+                    "length(trimspace(var.ssh_public_key)) <= 128 &&\n",
                     "",
                 )
 
@@ -115,10 +129,13 @@ class CloudCIContractTests(unittest.TestCase):
             ROOT / "scripts/ci-cloud/continue-conformance-bootstrap.sh"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("linux-image-amd64", bootstrap)
-        self.assertIn("linux-image-arm64", bootstrap)
+        self.assertIn("linux-image-cloud-amd64", bootstrap)
+        self.assertIn("linux-image-cloud-arm64", bootstrap)
         self.assertIn("apt-cache policy", bootstrap)
-        self.assertIn("/boot/vmlinuz", bootstrap)
+        self.assertIn("/boot/vmlinuz-$expected_kernel", bootstrap)
+        self.assertIn("meta_package_dependencies=", bootstrap)
+        self.assertIn("expected_kernel_package_version=", bootstrap)
+        self.assertNotIn("readlink -e /vmlinuz", bootstrap)
         self.assertIn("/proc/sys/kernel/random/boot_id", bootstrap)
         self.assertIn("secpal-ci-bootstrap-continue.service", bootstrap)
         self.assertEqual(1, bootstrap.count("systemctl reboot"))
@@ -661,23 +678,23 @@ class CloudCIContractTests(unittest.TestCase):
             with self.subTest(relative=relative, old=old):
                 self.assert_mutation_rejected(relative, old, new)
 
-    def test_static_contract_rejects_missing_kernel_reboot_evidence_stage(
+    def test_static_contract_rejects_missing_kernel_verify_evidence_stage(
         self,
     ) -> None:
         self.assert_mutation_rejected(
             "schemas/ci-cloud-bootstrap-failure.schema.json",
-            '                    "kernel-reboot",\n',
+            '                    "kernel-verify",\n',
             "",
         )
 
     def test_static_contract_rejects_stale_bootstrap_failure_schema_version(
         self,
     ) -> None:
-        for stale_version in (3, 40):
+        for stale_version in (4, 50):
             with self.subTest(stale_version=stale_version):
                 self.assert_mutation_rejected(
                     "scripts/ci-cloud/write-bootstrap-failure.py",
-                    '"schema_version": 4',
+                    '"schema_version": 5',
                     f'"schema_version": {stale_version}',
                 )
 
@@ -740,8 +757,8 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 "package end",
-                "  unattended-upgrades\n\n",
-                "  unattended-upgrades\n",
+                '  unattended-upgrades\n\nsetup_stage="operator-identity"',
+                '  unattended-upgrades\nsetup_stage="operator-identity"',
                 "native bootstrap package block end marker is missing",
             ),
         )
@@ -993,6 +1010,12 @@ class CloudCIContractTests(unittest.TestCase):
         )
 
     def test_host_setup_failure_diagnostic_is_closed_and_uncredentialed(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        continuation = (
+            ROOT / "scripts/ci-cloud/continue-conformance-bootstrap.sh"
+        ).read_text(encoding="utf-8")
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8")
@@ -1001,13 +1024,34 @@ class CloudCIContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("secpal-ci-host-setup-failure", host_setup)
         for stage in (
-            "initialize",
+            "diagnostic-ssh",
+            "apt-sources",
+            "apt-update",
+            "kernel-install",
+            "package-install",
+            "operator-identity",
+            "host-policy",
+            "kernel-admission",
+            "reboot-state",
+        ):
+            self.assertIn(f'setup_stage="{stage}"', bootstrap)
+        for stage in (
+            "continuation-state",
+            "kernel-verify",
+            "host-setup",
+        ):
+            self.assertIn(f'setup_stage="{stage}"', continuation)
+        for stage in (
+            "host-initialize",
             "subordinate-ids",
             "service-policy",
             "apparmor",
             "ssh",
         ):
             self.assertIn(f'setup_stage="{stage}"', host_setup)
+        self.assertNotIn('setup_stage="initialize"', bootstrap)
+        self.assertNotIn('setup_stage="initialize"', continuation)
+        self.assertNotIn('setup_stage="initialize"', host_setup)
         self.assertIn("host-setup-failure.py", remote)
         self.assertIn("Trusted host setup failure", remote)
         self.assertNotIn("cloud-init-output.log", remote)

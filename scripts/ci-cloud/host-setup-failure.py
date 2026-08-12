@@ -17,8 +17,19 @@ from pathlib import Path
 MARKER_PATH = Path("/run/secpal-ci-evidence/host-setup-failure.json")
 MAX_MARKER_BYTES = 128
 STAGES = (
-    "initialize",
-    "kernel-reboot",
+    "diagnostic-ssh",
+    "apt-sources",
+    "apt-update",
+    "kernel-install",
+    "package-install",
+    "operator-identity",
+    "host-policy",
+    "kernel-admission",
+    "reboot-state",
+    "continuation-state",
+    "kernel-verify",
+    "host-setup",
+    "host-initialize",
     "subordinate-ids",
     "service-policy",
     "apparmor",

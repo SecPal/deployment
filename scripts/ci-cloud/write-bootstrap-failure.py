@@ -151,7 +151,7 @@ def main() -> int:
         except json.JSONDecodeError:
             fail("host-key observations diagnostic is invalid JSON")
         document = {
-            "schema_version": 4,
+            "schema_version": 5,
             "workflow": {
                 "repository": "SecPal/deployment",
                 "run_id": arguments.run_id,

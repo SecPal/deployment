@@ -158,7 +158,7 @@ if [[ -e "$EVIDENCE_DIR/evidence.json" ]]; then
   exit 1
 fi
 jq -e '
-  .schema_version == 4 and
+  .schema_version == 5 and
   .workflow.target_sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and
   .test.failure_stage == "bootstrap" and
   .test.orchestration_exit_status == 1 and

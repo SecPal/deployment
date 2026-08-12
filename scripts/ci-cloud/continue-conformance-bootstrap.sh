@@ -15,6 +15,7 @@ continuation_service=secpal-ci-bootstrap-continue.service
 continuation_unit="/etc/systemd/system/$continuation_service"
 staged_operator_key=/run/secpal-ci-authorized-key
 failure_marker_ready=false
+setup_stage="continuation-state"
 
 continuation_failure() {
   local status=$?
@@ -23,7 +24,7 @@ continuation_failure() {
   set +e
   if [[ "$status" -ne 0 && "$failure_marker_ready" == true ]] &&
     ! "$failure_writer" read >/dev/null 2>&1; then
-    "$failure_writer" write kernel-reboot "$status" || true
+    "$failure_writer" write "$setup_stage" "$status" || true
   fi
   exit "$status"
 }
@@ -72,6 +73,7 @@ systemctl disable "$continuation_service"
 /usr/local/sbin/secpal-ci-install-diagnostic-ssh \
   "$ssh_public_key" "$runner_ipv4" "$run_id" "$run_attempt"
 
+setup_stage="kernel-verify"
 current_boot_id="$(< /proc/sys/kernel/random/boot_id)"
 [[ "$current_boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
 [[ "$current_boot_id" != "$initial_boot_id" ]]
@@ -80,6 +82,7 @@ current_boot_id="$(< /proc/sys/kernel/random/boot_id)"
 install -o root -g root -m 0600 /dev/null "$staged_operator_key"
 printf '%s\n' "$ssh_public_key" >"$staged_operator_key"
 
+setup_stage="host-setup"
 /usr/local/sbin/secpal-ci-configure-conformance-host "$runner_ipv4"
 
 trap - EXIT
