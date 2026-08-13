@@ -45,6 +45,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Kept exact cloud-state artifact selection bound to the original validated
+  resource attempt across GitHub failed-job reruns, rejected targeted provider
+  reruns that could duplicate that identity, and bounded transient provider
+  download retries to under six minutes before exact cleanup falls back to the TTL
+  janitor.
 - Authenticated the disposable host's current architecture-specific Debian 13
   kernel from refreshed signed APT indexes, then continued trusted setup after
   one state-bound reboot only when both the boot ID changed and the exact

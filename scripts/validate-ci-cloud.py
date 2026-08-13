@@ -247,6 +247,9 @@ def validate_action_pins(document: dict[str, object], relative: str) -> None:
 def validate_conformance_workflow(root: Path) -> None:
     relative = ".github/workflows/cloud-conformance.yml"
     document, text = load_workflow(root, relative)
+    cleanup_init_retry = read(
+        root, "scripts/ci-cloud/init-cleanup-root.sh"
+    )
     require("pull_request_target" not in text, "pull_request_target is forbidden")
     trigger = document.get("on")
     require(isinstance(trigger, dict), "cloud conformance trigger must be a mapping")
@@ -265,6 +268,23 @@ def validate_conformance_workflow(root: Path) -> None:
         text.count("${{ inputs.target_sha }}") == 1
         and "RAW_TARGET_SHA: ${{ inputs.target_sha }}" in text,
         "target_sha may enter the workflow only through the validation-step environment",
+    )
+    require(
+        text.count("${{ github.run_attempt }}") == 1
+        and text.count("github.run_attempt") == 3
+        and "RAW_RESOURCE_ATTEMPT: ${{ github.run_attempt }}" in text
+        and "GITHUB_RUN_ATTEMPT" not in text,
+        "the current workflow attempt may enter only validation and provider admission guards",
+    )
+    require(
+        "resource_attempt: ${{ steps.inputs.outputs.resource_attempt }}" in text
+        and "^[1-9][0-9]{0,2}$" in text
+        and "printf 'resource_attempt=%s\\n' \"$RAW_RESOURCE_ATTEMPT\""
+        in text
+        and text.count("${{ needs.validate.outputs.resource_attempt }}")
+        == 10
+        and text.count("needs.validate.outputs.resource_attempt") == 12,
+        "resource identity must remain bound to the original validated attempt",
     )
     require("github.ref == 'refs/heads/main'" in text, "default-branch execution must fail closed")
     concurrency = document.get("concurrency")
@@ -295,11 +315,41 @@ def validate_conformance_workflow(root: Path) -> None:
     require(jobs["digitalocean_cleanup"].get("environment") == "ci-cloud-digitalocean-cleanup", "DigitalOcean cleanup environment changed")
     require(jobs["gcp"].get("environment") == "ci-cloud-gcp", "GCP provisioning environment changed")
     require(jobs["gcp_cleanup"].get("environment") == "ci-cloud-gcp-cleanup", "GCP cleanup environment changed")
+    for provider_name in ("digitalocean", "gcp"):
+        require(
+            jobs[provider_name].get("if")
+            == (
+                "${{ needs.validate.outputs.provider == "
+                f"'{provider_name}' && github.run_attempt == "
+                "fromJSON(needs.validate.outputs.resource_attempt) }}"
+            ),
+            f"{provider_name} provisioning must reject targeted job reruns with stale resource identity",
+        )
     for cleanup_name in ("digitalocean_cleanup", "gcp_cleanup"):
         cleanup = jobs[cleanup_name]
         require(isinstance(cleanup, dict), f"{cleanup_name} job must be a mapping")
         require("always()" in str(cleanup.get("if", "")), f"{cleanup_name} must run with always()")
     require(text.count("tofu destroy --auto-approve --input=false") == 2, "each provider cleanup must use exact tofu destroy")
+    require(
+        text.count(
+            '\"$GITHUB_WORKSPACE/scripts/ci-cloud/init-cleanup-root.sh\"'
+        )
+        == 2,
+        "both exact cleanup jobs must use bounded locked initialization",
+    )
+    require(
+        cleanup_init_retry.startswith("#!/usr/bin/env bash\n")
+        and "set -euo pipefail" in cleanup_init_retry
+        and "max_attempts=3" in cleanup_init_retry
+        and cleanup_init_retry.count(
+            "tofu init -input=false -lockfile=readonly"
+        )
+        == 1
+        and "timeout --signal=TERM --kill-after=15s 90s" in cleanup_init_retry
+        and "delay=$((attempt * 10))" in cleanup_init_retry
+        and 'sleep "$delay"' in cleanup_init_retry,
+        "cleanup initialization retry contract changed",
+    )
     require("--tag-name" not in text and "delete --force" not in text, "broad cleanup is forbidden")
     require("credentials_json" not in text and "service_account_key" not in text, "long-lived GCP keys are forbidden")
     require(text.count("id-token: write") == 2, "OIDC permission must be limited to GCP apply and cleanup jobs")
@@ -360,7 +410,14 @@ def validate_conformance_workflow(root: Path) -> None:
                 "Run uncredentialed DigitalOcean remote conformance",
                 "Run uncredentialed GCP remote conformance",
             }:
-                require(not credentialed and not env, "remote conformance step must have no credential environment")
+                require(
+                    not credentialed
+                    and env
+                    == {
+                        "RESOURCE_ATTEMPT": "${{ needs.validate.outputs.resource_attempt }}"
+                    },
+                    "remote conformance may receive only the validated resource attempt",
+                )
     require(
         secret_steps
         == {
