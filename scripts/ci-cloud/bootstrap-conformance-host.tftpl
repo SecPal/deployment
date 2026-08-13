@@ -22,6 +22,8 @@ context_tmp=""
 pending_tmp=""
 setup_stage="diagnostic-ssh"
 
+${cloud_identity_gate}
+
 if [[ -e "$pending_file" || -L "$pending_file" ]]; then
   [[ -d "$state_root" && ! -L "$state_root" ]]
   [[ "$(stat -c '%u:%g:%a' -- "$state_root")" == 0:0:700 ]]

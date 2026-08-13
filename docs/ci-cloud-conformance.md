@@ -67,9 +67,11 @@ first proof of concept without making AMD capacity or additional spend a
 prerequisite. Enabling the reviewed AMD size remains an external account action
 after that proof of concept succeeds.
 
-Only one provider profile can run at a time. The workflow has a 70-minute
-provision/test limit, cleanup has a separate 20-minute limit, and ownership
-expires after two hours with a hard three-hour OpenTofu ceiling. Concurrency
+Only one provider profile can run at a time. DigitalOcean has a 70-minute
+provision/test limit and a two-hour TTL. GCP has a 100-minute limit so its
+additional bounded stop/detach/start phase plus remote test fit before GitHub
+termination, and a three-hour TTL leaves room for the separate 20-minute exact
+cleanup job. Three hours remains the hard OpenTofu TTL ceiling. Concurrency
 serializes all runs, never cancels an active run, and uses GitHub's bounded
 FIFO-by-wait-start queue so separately dispatched profiles are not silently
 replaced while another profile is active; dispatch order itself is not
@@ -118,9 +120,31 @@ OpenTofu variables, state, outputs, artifacts, VM user data, or evidence.
 GCP uses GitHub OIDC and Workload Identity Federation. Only the GCP apply,
 cleanup, and janitor jobs receive `id-token: write`. The pinned authentication
 action creates a short-lived access token without creating an ADC file or
-exporting credential variables to later steps. That token enters only the
-trusted OpenTofu apply/destroy or janitor process. No Google credential reaches
-SSH, the VM, OpenTofu state, evidence, or target code.
+exporting credential variables to later steps. Separate short-lived tokens
+enter only the trusted OpenTofu apply, exact VM-identity transition, destroy,
+or janitor processes. No Workload Identity Federation credential reaches SSH,
+the VM, OpenTofu state, evidence, or target code.
+
+GCE attaches the project's default Compute Engine service account when an
+instance-insert request omits `serviceAccounts`; an absent OpenTofu
+`service_account` block therefore is unsafe. Provisioning instead names a
+dedicated user-managed bootstrap service account which has no project/resource
+roles, no user-managed keys, no federation trust, and an empty OAuth scope set.
+It is intentionally incapable of useful cloud API access. The first native
+startup-script invocation performs only a dependency-free, fail-closed metadata
+identity gate. It waits for both an instance-specific admission marker written
+by the trusted control plane and a 404 from the service-account metadata
+directory before any diagnostic-SSH, package, operator-key, or target setup
+action. The trusted runner verifies the exact bootstrap identity and its empty
+scope set, obtains a fresh OIDC token, stops the exact run-bound instance, calls
+the bounded Compute API operation with `{"scopes":[]}`, and verifies the stopped
+instance has no service accounts. Only then does it add the admission marker,
+restart the instance, and verify both the marker and identity-free running
+state. GCE reruns the startup script after the start. If the newly provisioned
+instance was already identity-free, the runner only writes the marker while it
+remains running; the bounded waiting startup script then continues without an
+unnecessary stop. The remote target step is structurally gated on completion of
+this transition and receives no cloud token.
 
 The unique per-run ownership tag is attached to a Cloud Firewall before the
 Droplet can be created. The Droplet depends on that tag-targeted firewall, so
@@ -166,6 +190,13 @@ GCP_WORKLOAD_IDENTITY_PROVIDER=projects/94792370946/locations/global/workloadIde
 GCP_SERVICE_ACCOUNT=gcp-service-account@secpal-dev.iam.gserviceaccount.com
 ```
 
+Add one additional variable only to the provisioning environment
+`ci-cloud-gcp`:
+
+```text
+GCP_BOOTSTRAP_SERVICE_ACCOUNT=<ROLE_FREE_SERVICE_ACCOUNT_ID>@secpal-dev.iam.gserviceaccount.com
+```
+
 The provider must use issuer `https://token.actions.githubusercontent.com/`,
 default audience, the documented GitHub claim mappings, and a condition that
 requires repository `SecPal/deployment`, owner `SecPal`, ref
@@ -173,6 +204,46 @@ requires repository `SecPal/deployment`, owner `SecPal`, ref
 `cloud-conformance.yml` or `cloud-janitor.yml` from `main`. The repository
 principal receives only `roles/iam.workloadIdentityUser` on the dedicated
 service account. Never create a service-account JSON key.
+
+Create that bootstrap identity once with a deliberately chosen account ID. Do
+not use the default Compute service account or the WIF control identity. Grant
+it no IAM role and create no key or federation binding for it. Grant the WIF
+control identity `roles/iam.serviceAccountUser` only on this one service-account
+resource; this is the exact resource-level `iam.serviceAccounts.actAs` needed
+to attach the inert identity during `instances.insert`:
+
+```bash
+# Replace this quoted placeholder with the deliberately chosen account ID.
+export GCP_BOOTSTRAP_SERVICE_ACCOUNT_ID='ROLE_FREE_SERVICE_ACCOUNT_ID'
+export GCP_BOOTSTRAP_SERVICE_ACCOUNT="${GCP_BOOTSTRAP_SERVICE_ACCOUNT_ID}@secpal-dev.iam.gserviceaccount.com"
+
+gcloud iam service-accounts create "$GCP_BOOTSTRAP_SERVICE_ACCOUNT_ID" \
+  --project=secpal-dev \
+  --display-name="SecPal disposable conformance bootstrap"
+gcloud iam service-accounts add-iam-policy-binding \
+  "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \
+  --project=secpal-dev \
+  --member=serviceAccount:gcp-service-account@secpal-dev.iam.gserviceaccount.com \
+  --role=roles/iam.serviceAccountUser
+```
+
+The following project-role query must print no rows for the bootstrap identity,
+and the key query must print no user-managed key. Its own IAM policy may contain
+only the resource-level `roles/iam.serviceAccountUser` binding above:
+
+```bash
+gcloud projects get-iam-policy secpal-dev \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:serviceAccount:${GCP_BOOTSTRAP_SERVICE_ACCOUNT}" \
+  --format="table(bindings.role)"
+gcloud iam service-accounts keys list \
+  --iam-account="$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \
+  --managed-by=user \
+  --project=secpal-dev
+gcloud iam service-accounts get-iam-policy \
+  "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \
+  --project=secpal-dev
+```
 
 Link the non-production project to an active billing account, then enable the
 Compute API and the IAM, Resource Manager, Service Account Credentials, and
@@ -212,15 +283,23 @@ The billing check must report `billingEnabled: true`. Enabling billing applies
 to the whole project, not only to these CI fixtures; `secpal-dev` must remain a
 non-production project with no customer data. Never grant the CI service
 account Owner, Editor, Compute Admin, IAM administration, or
-`iam.serviceAccounts.actAs` to bypass a denied operation.
+project-level `iam.serviceAccounts.actAs` to bypass a denied operation. The
+single resource-level exception for the inert bootstrap identity is defined
+above and must not be broadened.
 
-The role contains only the concrete instance, disk, VPC, firewall, operation
-polling, image-read, label, and service-use permissions required by the root
-and the bounded janitor. It deliberately excludes Owner, Editor, Compute
-Admin, IAM administration, `iam.serviceAccounts.actAs`, and service-account
-attachment. The `network` fields used to attach the fixed subnetwork and
-firewall rules to the per-run VPC require `compute.networks.updatePolicy` in
-addition to their resource-specific create permissions; see the official
+The project custom role contains only the concrete instance, disk, VPC,
+firewall, operation
+polling, image-read, label, identity-removal, and service-use permissions
+required by the root and the bounded janitor. The identity transition adds
+only `compute.instances.stop`, `compute.instances.setServiceAccount`, and
+`compute.instances.start`. It deliberately excludes Owner, Editor, Compute
+Admin, IAM administration, and `iam.serviceAccounts.actAs`. The latter exists
+only through `roles/iam.serviceAccountUser` on the exact inert bootstrap service
+account, never at project scope. The identity-removal request omits `email` and
+submits only `{"scopes":[]}`, matching Google's `--no-service-account`
+semantics. The `network` fields used to attach the fixed subnetwork and firewall
+rules to the per-run VPC require `compute.networks.updatePolicy` in addition to their
+resource-specific create permissions; see the official
 [`subnetworks.insert`](https://cloud.google.com/compute/docs/reference/rest/v1/subnetworks/insert)
 and
 [`firewalls.insert`](https://cloud.google.com/compute/docs/reference/rest/v1/firewalls/insert)
@@ -529,11 +608,17 @@ lifetime reduce that window but do not turn TOFU into provider-attested host
 identity. A future provider feature exposing an authenticated host-key channel
 should replace this bootstrap.
 
-The VM has no attached provider credential. The GCP instance has no service
-account block, disables legacy metadata endpoints through the current official
-image defaults, blocks project SSH keys, carries no instance SSH key, and
-exposes no cloud API scope or identity token. Provider metadata may expose
-ordinary instance facts, but it is not a source of cloud-control authority.
+The target-visible VM has no attached provider credential. GCE initially
+receives only the explicitly configured role-free, scope-free bootstrap
+identity; the privileged project default identity is never attached. The
+trusted startup script admits no host or target setup until the separate
+control-plane transition has removed and twice verified that bootstrap
+identity and written the instance-specific admission marker. Identity absence
+alone is deliberately insufficient admission. The admitted GCP instance disables legacy metadata
+endpoints through the current official image defaults, blocks project SSH
+keys, carries no instance SSH key, and exposes no cloud API scope or identity
+token. Provider metadata may expose ordinary instance facts, but it is not a
+source of cloud-control authority.
 
 ## Ownership, cleanup, and orphan protection
 
@@ -565,10 +650,12 @@ run identity, verifies the full SHA, repository, name, chronology, and maximum
 TTL, retrieves the exact Droplet again, revalidates the metadata, and deletes
 only its numeric resource ID. It fails closed on extra, missing, duplicate, or
 contradictory metadata.
-It runs hourly at minute 17. Fixtures expire after two hours, so an expired
-Droplet is normally removed by the first following schedule—within roughly
-three hours of creation plus any GitHub queue delay—even when exact cleanup
-never succeeded.
+It runs hourly at minute 17. DigitalOcean fixtures expire after two hours, so
+an expired Droplet is normally removed by the first following schedule—within
+roughly three hours of creation plus any GitHub queue delay—even when exact
+cleanup never succeeded. GCP fixtures expire after three hours to accommodate
+their longer bounded provider phase and exact cleanup; the GCP janitor handles
+them on its first subsequent schedule.
 
 The GCP janitor is bounded to `secpal-dev/europe-west3-a`, and only to instance
 and disk APIs. It accepts exactly seven labels, verifies the fixed provider
@@ -710,18 +797,17 @@ they do not prove that all hardware is compatible.
 5. Treat any named invariant, missing evidence, cleanup failure, or janitor
    ambiguity as a failure.
 
-Earlier workflow revisions performed real DigitalOcean Intel, DigitalOcean AMD,
-and GCP Axion provisioning attempts and exact cleanup. The latest Intel attempt
-created the official Debian 13 fixture, completed trusted host setup and target
-conformance, and uploaded its bounded evidence. Exact cleanup then failed before
-destroy because the locked provider checksum download timed out. The AMD API
-had previously rejected the fixed size as outside the account tier, and Axion
-had not reached trusted host setup. The successful Intel test phase is useful
-evidence, but it is not end-to-end lifecycle success for this revision. The
-cleanup retry and rerun identity changes still require a fresh `main` run that
-creates, tests, records complete evidence from, and destroys the host. Start
-with DigitalOcean Intel; do not enable or fund AMD capacity merely to bypass
-that proof-of-concept gate.
+Real `main` runs have now completed the full provision, Debian 13 conformance,
+bounded-evidence, and exact-cleanup lifecycle for both DigitalOcean Intel and
+DigitalOcean AMD at the closed 8 GiB sizes. The first GCP Axion run provisioned
+and cleaned up the official Debian 13 arm64 fixture, and its target entrypoint
+itself exited successfully, but admission correctly failed
+`PROVIDER_VM_CLOUD_IDENTITY`: GCE had implicitly attached the project's default
+Compute service account. That run is failure evidence, not GCP conformance.
+After this identity-transition change is merged, the reviewed custom IAM role
+is updated, and the role-free bootstrap identity plus its exact resource-level
+binding are configured, a fresh `main` GCP Axion run must prove that the
+target-visible VM has no cloud identity and that exact cleanup still succeeds.
 
 ## Primary references
 
@@ -734,5 +820,7 @@ that proof-of-concept gate.
 - [Google Debian image families](https://cloud.google.com/compute/docs/images/os-details)
 - [Google C4A machine series](https://cloud.google.com/compute/docs/general-purpose-machines#c4a_series)
 - [Google Compute Engine Linux startup scripts](https://cloud.google.com/compute/docs/instances/startup-scripts/linux)
+- [GCE service accounts for instances](https://cloud.google.com/compute/docs/access/service-accounts)
+- [GCE instance service-account update API](https://cloud.google.com/compute/docs/reference/rest/v1/instances/setServiceAccount)
 - [Google GitHub Actions Workload Identity Federation](https://github.com/google-github-actions/auth#workload-identity-federation)
 - [GitHub OIDC deployment hardening](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments)

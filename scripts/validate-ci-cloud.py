@@ -66,7 +66,10 @@ GCP_IAM_PERMISSIONS = {
     "compute.instances.list",
     "compute.instances.setLabels",
     "compute.instances.setMetadata",
+    "compute.instances.setServiceAccount",
     "compute.instances.setTags",
+    "compute.instances.start",
+    "compute.instances.stop",
     "compute.machineTypes.get",
     "compute.networks.create",
     "compute.networks.delete",
@@ -282,8 +285,8 @@ def validate_conformance_workflow(root: Path) -> None:
         and "printf 'resource_attempt=%s\\n' \"$RAW_RESOURCE_ATTEMPT\""
         in text
         and text.count("${{ needs.validate.outputs.resource_attempt }}")
-        == 10
-        and text.count("needs.validate.outputs.resource_attempt") == 12,
+        == 11
+        and text.count("needs.validate.outputs.resource_attempt") == 13,
         "resource identity must remain bound to the original validated attempt",
     )
     require("github.ref == 'refs/heads/main'" in text, "default-branch execution must fail closed")
@@ -315,6 +318,11 @@ def validate_conformance_workflow(root: Path) -> None:
     require(jobs["digitalocean_cleanup"].get("environment") == "ci-cloud-digitalocean-cleanup", "DigitalOcean cleanup environment changed")
     require(jobs["gcp"].get("environment") == "ci-cloud-gcp", "GCP provisioning environment changed")
     require(jobs["gcp_cleanup"].get("environment") == "ci-cloud-gcp-cleanup", "GCP cleanup environment changed")
+    require(
+        jobs["digitalocean"].get("timeout-minutes") == "70"
+        and jobs["gcp"].get("timeout-minutes") == "100",
+        "provider job runtime bounds changed",
+    )
     for provider_name in ("digitalocean", "gcp"):
         require(
             jobs[provider_name].get("if")
@@ -353,14 +361,32 @@ def validate_conformance_workflow(root: Path) -> None:
     require("--tag-name" not in text and "delete --force" not in text, "broad cleanup is forbidden")
     require("credentials_json" not in text and "service_account_key" not in text, "long-lived GCP keys are forbidden")
     require(text.count("id-token: write") == 2, "OIDC permission must be limited to GCP apply and cleanup jobs")
-    require(text.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 2, "GCP auth action pin or scope changed")
-    require(text.count("create_credentials_file: false") == 2, "GCP auth must not create ADC files")
-    require(text.count("export_environment_variables: false") == 2, "GCP auth must not export job credentials")
+    require(text.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 3, "GCP auth action pin or scope changed")
+    require(text.count("create_credentials_file: false") == 3, "GCP auth must not create ADC files")
+    require(text.count("export_environment_variables: false") == 3, "GCP auth must not export job credentials")
     require(
         text.count("projects/94792370946/locations/global/workloadIdentityPools/secpal/providers/github")
         == 2
         and text.count("gcp-service-account@secpal-dev.iam.gserviceaccount.com") == 2,
         "GCP apply and cleanup identities must be validated before authentication",
+    )
+    require(
+        text.count("${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}") == 3
+        and "GCP_BOOTSTRAP_SERVICE_ACCOUNT: ${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}"
+        in text
+        and "--arg bootstrap_service_account \"$GCP_BOOTSTRAP_SERVICE_ACCOUNT\""
+        in text
+        and "bootstrap_service_account: $bootstrap_service_account" in text,
+        "GCP bootstrap identity must enter only validated trusted provisioning",
+    )
+    require(
+        "^[a-z][a-z0-9-]{4,28}[a-z0-9]@secpal-dev\\.iam\\.gserviceaccount\\.com$"
+        in text
+        and '[[ "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" != "$GCP_SERVICE_ACCOUNT" ]]'
+        in text
+        and text.count("created_at + 7200") == 1
+        and text.count("created_at + 10800") == 1,
+        "GCP bootstrap identity validation or provider TTL budget changed",
     )
     for job_name in ("validate", "digitalocean", "digitalocean_cleanup"):
         raw_permissions = jobs[job_name].get("permissions", {})
@@ -400,6 +426,7 @@ def validate_conformance_workflow(root: Path) -> None:
                         "Apply DigitalOcean infrastructure",
                         "Destroy exact DigitalOcean run infrastructure",
                         "Apply GCP infrastructure",
+                        "Remove and verify GCP VM cloud identity",
                         "Destroy exact GCP run infrastructure",
                     },
                     f"cloud credential reached unexpected step: {name}",
@@ -424,9 +451,89 @@ def validate_conformance_workflow(root: Path) -> None:
             "Apply DigitalOcean infrastructure",
             "Destroy exact DigitalOcean run infrastructure",
             "Apply GCP infrastructure",
+            "Remove and verify GCP VM cloud identity",
             "Destroy exact GCP run infrastructure",
         },
-        "cloud credentials must be scoped to apply and exact destroy only",
+        "cloud credentials must be scoped to closed provider-control steps",
+    )
+
+    gcp_steps = jobs["gcp"].get("steps", [])
+    require(isinstance(gcp_steps, list), "GCP steps must be a list")
+    gcp_steps_by_name = {
+        str(step.get("name", "")): step
+        for step in gcp_steps
+        if isinstance(step, dict)
+    }
+    identity_auth = gcp_steps_by_name.get(
+        "Authenticate trusted GCP identity transition through OIDC"
+    )
+    identity_transition = gcp_steps_by_name.get(
+        "Remove and verify GCP VM cloud identity"
+    )
+    remote_transition = gcp_steps_by_name.get(
+        "Run uncredentialed GCP remote conformance"
+    )
+    require(
+        isinstance(identity_auth, dict)
+        and identity_auth.get("id") == "gcp_identity_auth"
+        and identity_auth.get("if")
+        == "${{ steps.gcp_apply.outcome == 'success' }}"
+        and identity_auth.get("continue-on-error") == "true"
+        and identity_auth.get("with")
+        == {
+            "project_id": "${{ vars.GCP_PROJECT_ID }}",
+            "workload_identity_provider": (
+                "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}"
+            ),
+            "service_account": "${{ vars.GCP_SERVICE_ACCOUNT }}",
+            "token_format": "access_token",
+            "access_token_lifetime": "1200s",
+            "create_credentials_file": "false",
+            "export_environment_variables": "false",
+        },
+        "GCP identity transition must use a fresh bounded OIDC token",
+    )
+    require(
+        isinstance(identity_transition, dict)
+        and identity_transition.get("id") == "gcp_identity"
+        and identity_transition.get("if")
+        == (
+            "${{ steps.gcp_apply.outcome == 'success' && "
+            "steps.gcp_identity_auth.outcome == 'success' }}"
+        )
+        and identity_transition.get("continue-on-error") == "true"
+        and identity_transition.get("env")
+        == {
+            "GOOGLE_OAUTH_ACCESS_TOKEN": (
+                "${{ steps.gcp_identity_auth.outputs.access_token }}"
+            ),
+            "GCP_BOOTSTRAP_SERVICE_ACCOUNT": (
+                "${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}"
+            ),
+            "RESOURCE_ATTEMPT": (
+                "${{ needs.validate.outputs.resource_attempt }}"
+            ),
+        }
+        and identity_transition.get("run")
+        == (
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh \\\n"
+            "  secpal-dev europe-west3-a \\\n"
+            '  "spci-${GITHUB_RUN_ID}-${RESOURCE_ATTEMPT}-instance" \\\n'
+            '  "$GCP_BOOTSTRAP_SERVICE_ACCOUNT"\n'
+        ),
+        "GCP identity transition invocation changed",
+    )
+    require(
+        isinstance(remote_transition, dict)
+        and remote_transition.get("if")
+        == (
+            "${{ steps.gcp_apply.outcome == 'success' && "
+            "steps.gcp_identity.outcome == 'success' }}"
+        )
+        and gcp_steps.index(identity_auth)
+        < gcp_steps.index(identity_transition)
+        < gcp_steps.index(remote_transition),
+        "target execution must remain after verified GCP identity removal",
     )
     validate_action_pins(document, relative)
 
@@ -462,6 +569,10 @@ def validate_opentofu(root: Path) -> None:
     variables = read(root, "infra/ci-cloud/digitalocean/variables.tf")
     outputs = read(root, "infra/ci-cloud/digitalocean/outputs.tf")
     bootstrap = read(root, "scripts/ci-cloud/bootstrap-conformance-host.tftpl")
+    gcp_identity = read(root, "scripts/ci-cloud/detach-gcp-vm-identity.sh")
+    gcp_identity_gate = read(
+        root, "scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh"
+    )
     continuation = read(root, "scripts/ci-cloud/continue-conformance-bootstrap.sh")
     host_setup = read(root, "scripts/ci-cloud/configure-conformance-host.sh")
     diagnostic_ssh = read(root, "scripts/ci-cloud/install-diagnostic-ssh.sh")
@@ -471,6 +582,69 @@ def validate_opentofu(root: Path) -> None:
     require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
     require('version = "= 2.99.1"' in versions, "DigitalOcean provider version must be exact")
     require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
+    require(
+        "${cloud_identity_gate}" in bootstrap
+        and 'identity_path="instance/service-accounts/"' in gcp_identity_gate
+        and "instance/attributes/secpal-ci-cloud-identity-admitted"
+        in gcp_identity_gate
+        and "admission_deadline=$((SECONDS + 900))" in gcp_identity_gate
+        and "admission_status" in gcp_identity_gate
+        and "identity_status" in gcp_identity_gate
+        and "identity_admitted=true\n    break" in gcp_identity_gate
+        and "exit 0" not in gcp_identity_gate
+        and "curl " not in gcp_identity_gate
+        and "/dev/tcp/169.254.169.254/80" in gcp_identity_gate
+        and "Metadata-Flavor: Google" in gcp_identity_gate
+        and "timeout --signal=TERM --kill-after=1s 5s" in gcp_identity_gate
+        and bootstrap.index("${cloud_identity_gate}")
+        < bootstrap.index(
+            "install -o root -g root -m 0700 /dev/null \\\n"
+            "  /usr/local/sbin/secpal-ci-install-diagnostic-ssh"
+        ),
+        "native GCP bootstrap must defer before target access while identity exists",
+    )
+    require(
+        '[[ "$project_id" == secpal-dev ]]' in gcp_identity
+        and '[[ "$zone" == europe-west3-a ]]' in gcp_identity
+        and "^spci-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}-instance$"
+        in gcp_identity
+        and "--disable" in gcp_identity
+        and "--noproxy '*'" in gcp_identity
+        and "--max-filesize 1048576" in gcp_identity
+        and "--config -" in gcp_identity
+        and "transition_deadline=$((SECONDS + 900))" in gcp_identity
+        and gcp_identity.count("SECONDS < transition_deadline") == 2
+        and '[[ "$operation_name" =~ ^[a-z0-9][a-z0-9-]{0,127}$ ]]'
+        in gcp_identity
+        and '--header "Authorization: Bearer $access_token"'
+        not in gcp_identity
+        and gcp_identity.count("setServiceAccount") == 1
+        and gcp_identity.count("setMetadata") == 1
+        and "'{\"scopes\":[]}'" in gcp_identity
+        and "'{\"email\":\"\",\"scopes\":[]}'" not in gcp_identity
+        and "secpal-ci-cloud-identity-admitted" in gcp_identity
+        and 'value: "true"' in gcp_identity
+        and ".serviceAccounts[0].email == $email" in gcp_identity
+        and gcp_identity.count(
+            "((.serviceAccounts[0].scopes // []) | length) == 0"
+        )
+        == 2
+        and "already running without an attached cloud identity" in gcp_identity
+        and 'if ! verify_identity_free "$detached_instance"; then'
+        in gcp_identity
+        and 'if ! verify_identity_free "$running_instance"; then'
+        in gcp_identity
+        and gcp_identity.index('api_request POST "$instance_path/stop"')
+        < gcp_identity.index('api_request POST "$instance_path/setServiceAccount"')
+        < gcp_identity.index("detached_instance=\"$(wait_for_instance_status TERMINATED)\"")
+        < gcp_identity.index('set_admission_metadata "$detached_instance" TERMINATED')
+        < gcp_identity.index('api_request POST "$instance_path/start"')
+        < gcp_identity.index("running_instance=\"$(wait_for_instance_status RUNNING)\"")
+        and "target_sha" not in gcp_identity
+        and "run-remote-conformance" not in gcp_identity
+        and "iam.serviceAccounts.actAs" not in gcp_identity,
+        "GCP VM identity removal must remain exact, bounded, and independently verified",
+    )
     require(
         "length(trimspace(var.ssh_public_key)) <= 128" in variables,
         "DigitalOcean public key input must be bounded before API submission",
@@ -519,6 +693,7 @@ def validate_opentofu(root: Path) -> None:
         ("${runner_ipv4}", "255.255.255.255"),
         ("${run_id}", "9" * 20),
         ("${run_attempt}", "9" * 3),
+        ("${cloud_identity_gate}", ":"),
         ("${diagnostic_ssh_installer}", diagnostic_ssh.strip()),
         ("${host_setup_script}", host_setup.strip()),
         ("${host_setup_failure_script}", host_setup_failure.strip()),
@@ -529,6 +704,18 @@ def validate_opentofu(root: Path) -> None:
         len(maximum_bootstrap.encode("utf-8"))
         <= (64 * 1024) - BOOTSTRAP_USER_DATA_HEADROOM,
         "rendered native bootstrap leaves insufficient DigitalOcean user-data headroom",
+    )
+    require(
+        maximum_bootstrap.count("\n:\n") == 1,
+        "DigitalOcean identity gate must render as one exact no-op",
+    )
+    maximum_gcp_bootstrap = maximum_bootstrap.replace(
+        "\n:\n", f"\n{gcp_identity_gate.strip()}\n", 1
+    )
+    require(
+        len(maximum_gcp_bootstrap.encode("utf-8"))
+        <= (256 * 1024) - BOOTSTRAP_USER_DATA_HEADROOM,
+        "rendered GCP startup script leaves insufficient metadata headroom",
     )
     bootstrap_ssh_policy = required_block(
         bootstrap,
@@ -1388,7 +1575,11 @@ AllowUsers secpal-ci"""
     require(gcp_main.count('resource "google_compute_network"') == 1, "exactly one GCP network is allowed")
     require(gcp_main.count('resource "google_compute_subnetwork"') == 1, "exactly one GCP subnet is allowed")
     require(gcp_main.count('resource "google_compute_firewall"') == 3, "GCP firewall count changed")
-    require("count" not in gcp_main and "for_each" not in gcp_main, "GCP resource-count abstraction is forbidden")
+    require(
+        re.search(r"^\s*count\s*=", gcp_main, re.MULTILINE) is None
+        and re.search(r"^\s*for_each\s*=", gcp_main, re.MULTILINE) is None,
+        "GCP resource-count abstraction is forbidden",
+    )
     require(
         gcp_main.count('data "google_compute_image" "debian_13"') == 1
         and 'family  = "debian-13-arm64"' in gcp_main
@@ -1420,7 +1611,17 @@ AllowUsers secpal-ci"""
     ):
         require(label in gcp_main, "GCP ownership or TTL metadata is incomplete")
     require(gcp_main.count("labels              = local.labels") == 1 and "labels = local.labels" in gcp_main, "GCP instance and disk labels must match")
-    require("service_account" not in gcp_main, "GCP test VM must not have a service account")
+    require(
+        gcp_main.count("service_account {") == 1
+        and "email  = var.bootstrap_service_account" in gcp_main
+        and "scopes = []" in gcp_main
+        and 'variable "bootstrap_service_account"' in gcp_variables
+        and "@secpal-dev\\\\.iam\\\\.gserviceaccount\\\\.com"
+        in gcp_variables
+        and '!= "gcp-service-account@secpal-dev.iam.gserviceaccount.com"'
+        in gcp_variables,
+        "GCP VM must begin with only the closed role-free bootstrap identity",
+    )
     require('block-project-ssh-keys   = "true"' in gcp_main, "project SSH keys must be blocked")
     require('disable-legacy-endpoints = "true"' in gcp_main, "legacy GCP metadata endpoints must be disabled")
     require('enable-oslogin           = "FALSE"' in gcp_main, "unbounded OS Login identity is forbidden")
@@ -1437,6 +1638,10 @@ AllowUsers secpal-ci"""
     require(
         '"startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-conformance-host.tftpl"'
         in gcp_main
+        and 'cloud_identity_gate           = trimspace(file("${path.module}/../../../scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh"))'
+        in gcp_main
+        and 'cloud_identity_gate           = ":"' in main
+        and "secpal-ci-cloud-identity-admitted" not in gcp_main
         and "user-data" not in gcp_main
         and "install-diagnostic-ssh.sh" in gcp_main,
         "GCP must use its documented native startup-script transport",

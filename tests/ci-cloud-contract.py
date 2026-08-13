@@ -898,6 +898,7 @@ class CloudCIContractTests(unittest.TestCase):
             "Markdown, YAML, and Prettier discovery must prune OpenTofu caches",
         )
         self.assertIn("python3 tests/ci-cloud-gcp-janitor.py", preflight)
+        self.assertIn("bash tests/ci-cloud-gcp-identity.sh", preflight)
         self.assertIn("python3 tests/ci-cloud-bootstrap-failure.py", preflight)
         self.assertIn("python3 tests/ci-cloud-config.py", preflight)
         self.assertIn("python3 tests/ci-cloud-host-setup-failure.py", preflight)
@@ -917,7 +918,10 @@ class CloudCIContractTests(unittest.TestCase):
             "infra/ci-cloud/gcp/versions.tf",
             "schemas/ci-cloud-bootstrap-failure.schema.json",
             "scripts/ci-cloud/gcp-janitor.py",
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh",
+            "scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh",
             "tests/ci-cloud-gcp-janitor.py",
+            "tests/ci-cloud-gcp-identity.sh",
         ):
             with self.subTest(relative=relative):
                 self.assertIn(relative, repository_contract)
@@ -2405,15 +2409,153 @@ class CloudCIContractTests(unittest.TestCase):
             "machine_type = var.machine_type",
         )
 
-    def test_rejects_gcp_vm_service_account(self) -> None:
+    def test_gcp_vm_uses_only_inert_bootstrap_identity(self) -> None:
+        main = (ROOT / "infra/ci-cloud/gcp/main.tf").read_text(
+            encoding="utf-8"
+        )
+        variables = (ROOT / "infra/ci-cloud/gcp/variables.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('variable "bootstrap_service_account"', variables)
+        self.assertIn("@secpal-dev\\\\.iam\\\\.gserviceaccount\\\\.com", variables)
+        self.assertIn("service_account {", main)
+        self.assertIn("email  = var.bootstrap_service_account", main)
+        self.assertIn("scopes = []", main)
+
+    def test_rejects_gcp_default_vm_service_account(self) -> None:
         self.assert_mutation_rejected(
             "infra/ci-cloud/gcp/main.tf",
-            '  deletion_protection = false\n',
-            '  deletion_protection = false\n\n  service_account {\n'
-            '    email  = "default"\n'
-            '    scopes = ["cloud-platform"]\n'
-            "  }\n",
+            "email  = var.bootstrap_service_account",
+            'email  = "default"',
         )
+
+    def test_rejects_gcp_vm_cloud_api_scope(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            "scopes = []",
+            'scopes = ["cloud-platform"]',
+        )
+
+    def test_gcp_identity_is_detached_before_target_execution(self) -> None:
+        document = yaml.load(
+            (ROOT / ".github/workflows/cloud-conformance.yml").read_text(
+                encoding="utf-8"
+            ),
+            Loader=yaml.BaseLoader,
+        )
+        steps = document["jobs"]["gcp"]["steps"]
+        names = [step["name"] for step in steps]
+        auth_index = names.index(
+            "Authenticate trusted GCP identity transition through OIDC"
+        )
+        detach_index = names.index("Remove and verify GCP VM cloud identity")
+        target_index = names.index(
+            "Run uncredentialed GCP remote conformance"
+        )
+        self.assertLess(auth_index, detach_index)
+        self.assertLess(detach_index, target_index)
+        identity_auth = steps[auth_index]
+        self.assertEqual("gcp_identity_auth", identity_auth["id"])
+        self.assertEqual(
+            "${{ steps.gcp_apply.outcome == 'success' }}",
+            identity_auth["if"],
+        )
+        self.assertEqual("true", identity_auth["continue-on-error"])
+        detach = steps[detach_index]
+        self.assertEqual("gcp_identity", detach["id"])
+        self.assertEqual(
+            "${{ steps.gcp_apply.outcome == 'success' && "
+            "steps.gcp_identity_auth.outcome == 'success' }}",
+            detach["if"],
+        )
+        self.assertEqual("true", detach["continue-on-error"])
+        self.assertEqual(
+            {
+                "GOOGLE_OAUTH_ACCESS_TOKEN": (
+                    "${{ steps.gcp_identity_auth.outputs.access_token }}"
+                ),
+                "GCP_BOOTSTRAP_SERVICE_ACCOUNT": (
+                    "${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}"
+                ),
+                "RESOURCE_ATTEMPT": (
+                    "${{ needs.validate.outputs.resource_attempt }}"
+                ),
+            },
+            detach["env"],
+        )
+        self.assertEqual(
+            "${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}",
+            detach["env"]["GCP_BOOTSTRAP_SERVICE_ACCOUNT"],
+        )
+        self.assertEqual(
+            "${{ steps.gcp_apply.outcome == 'success' && "
+            "steps.gcp_identity.outcome == 'success' }}",
+            steps[target_index]["if"],
+        )
+        self.assertNotIn("target_sha", detach["run"])
+        self.assertNotIn("run-remote-conformance", detach["run"])
+
+    def test_gcp_native_bootstrap_waits_for_identity_detachment(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+        gate = "${cloud_identity_gate}"
+        diagnostic_install = (
+            "install -o root -g root -m 0700 /dev/null \\\n"
+            "  /usr/local/sbin/secpal-ci-install-diagnostic-ssh"
+        )
+        self.assertIn(gate, bootstrap)
+        self.assertLess(bootstrap.index(gate), bootstrap.index(diagnostic_install))
+        self.assertIn('cloud_identity_gate           = ":"', (
+            ROOT / "infra/ci-cloud/digitalocean/main.tf"
+        ).read_text(encoding="utf-8"))
+        self.assertIn(
+            'cloud_identity_gate           = trimspace(file('
+            '"${path.module}/../../../scripts/ci-cloud/'
+            'defer-bootstrap-for-gcp-identity.sh"))', (
+            ROOT / "infra/ci-cloud/gcp/main.tf"
+        ).read_text(encoding="utf-8"))
+        identity_gate = (
+            ROOT / "scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'identity_path="instance/service-accounts/"', identity_gate
+        )
+        self.assertIn(
+            "instance/attributes/secpal-ci-cloud-identity-admitted",
+            identity_gate,
+        )
+
+    def test_gcp_identity_transition_has_only_bounded_permissions(self) -> None:
+        role = (ROOT / "infra/ci-cloud/gcp/iam-role.yaml").read_text(
+            encoding="utf-8"
+        )
+        for permission in (
+            "compute.instances.setServiceAccount",
+            "compute.instances.start",
+            "compute.instances.stop",
+        ):
+            self.assertEqual(1, role.count(f"  - {permission}\n"))
+        self.assertNotIn("iam.serviceAccounts.actAs", role)
+        docs = (ROOT / "docs/ci-cloud-conformance.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("roles/iam.serviceAccountUser", docs)
+        self.assertIn("GCP_BOOTSTRAP_SERVICE_ACCOUNT", docs)
+
+    def test_gcp_job_budget_covers_bounded_internal_phases(self) -> None:
+        document = yaml.load(
+            (ROOT / ".github/workflows/cloud-conformance.yml").read_text(
+                encoding="utf-8"
+            ),
+            Loader=yaml.BaseLoader,
+        )
+        self.assertEqual("100", document["jobs"]["gcp"]["timeout-minutes"])
+        workflow = (
+            ROOT / ".github/workflows/cloud-conformance.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(1, workflow.count("created_at + 10800"))
+        self.assertEqual(1, workflow.count("created_at + 7200"))
 
     def test_rejects_missing_gcp_ci_owner_metadata(self) -> None:
         self.assert_mutation_rejected(
@@ -2434,13 +2576,17 @@ class CloudCIContractTests(unittest.TestCase):
             ".github/workflows/cloud-conformance.yml",
             "      - name: Run uncredentialed GCP remote conformance\n"
             "        id: gcp_conformance\n"
-            "        if: ${{ steps.gcp_apply.outcome == 'success' }}\n"
+            "        if: >-\n"
+            "          ${{ steps.gcp_apply.outcome == 'success' &&\n"
+            "          steps.gcp_identity.outcome == 'success' }}\n"
             "        continue-on-error: true\n"
             "        env:\n"
             "          RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}\n",
             "      - name: Run uncredentialed GCP remote conformance\n"
             "        id: gcp_conformance\n"
-            "        if: ${{ steps.gcp_apply.outcome == 'success' }}\n"
+            "        if: >-\n"
+            "          ${{ steps.gcp_apply.outcome == 'success' &&\n"
+            "          steps.gcp_identity.outcome == 'success' }}\n"
             "        continue-on-error: true\n"
             "        env:\n"
             "          RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}\n"
@@ -2479,6 +2625,86 @@ class CloudCIContractTests(unittest.TestCase):
             "  - serviceusage.services.use\n"
             "  - iam.serviceAccounts.actAs\n",
         )
+
+    def test_rejects_gcp_target_before_identity_detachment(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            "        if: >-\n"
+            "          ${{ steps.gcp_apply.outcome == 'success' &&\n"
+            "          steps.gcp_identity.outcome == 'success' }}\n",
+            "        if: ${{ steps.gcp_apply.outcome == 'success' }}\n",
+        )
+
+    def test_rejects_gcp_bootstrap_without_identity_gate(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            "defer-bootstrap-for-gcp-identity.sh",
+            "disabled-gcp-identity-gate.sh",
+        )
+
+    def test_rejects_curl_dependency_in_early_gcp_identity_gate(self) -> None:
+        identity_gate = (
+            ROOT / "scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("curl ", identity_gate)
+        self.assertIn("/dev/tcp/169.254.169.254/80", identity_gate)
+
+    def test_rejects_gcp_identity_start_before_stopped_detachment_check(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh",
+            "detached_instance=\"$(wait_for_instance_status TERMINATED)\"\n"
+            'if ! verify_identity_free "$detached_instance"; then\n',
+            "detached_instance='{}'\n"
+            'if ! verify_identity_free "$detached_instance"; then\n',
+        )
+
+    def test_rejects_gcp_identity_admission_before_detachment(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh",
+            'set_admission_metadata "$detached_instance" TERMINATED',
+            'set_admission_metadata "$stopped_instance" TERMINATED',
+        )
+
+    def test_rejects_gcp_bootstrap_gate_without_trusted_admission(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh",
+            'admission_path="instance/attributes/'
+            'secpal-ci-cloud-identity-admitted"',
+            'admission_path="instance/attributes/untrusted"',
+        )
+
+    def test_rejects_gcp_gate_exiting_the_embedded_bootstrap(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh",
+            "    identity_admitted=true\n    break\n",
+            "    exit 0\n",
+        )
+
+    def test_rejects_gcp_admission_marker_in_initial_metadata(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            '    enable-oslogin           = "FALSE"\n',
+            '    enable-oslogin           = "FALSE"\n'
+            '    "secpal-ci-cloud-identity-admitted" = "true"\n',
+        )
+
+    def test_rejects_missing_gcp_post_start_identity_check(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh",
+            "running_instance=\"$(wait_for_instance_status RUNNING)\"\n"
+            'if ! verify_identity_free "$running_instance"; then\n',
+            "running_instance='{}'\n"
+            'if ! verify_identity_free "$running_instance"; then\n',
+        )
+
+    def test_rejects_empty_email_in_gcp_identity_removal_request(self) -> None:
+        identity_script = (
+            ROOT / "scripts/ci-cloud/detach-gcp-vm-identity.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("'{\"scopes\":[]}'", identity_script)
+        self.assertNotIn("'{\"email\":\"\",\"scopes\":[]}'", identity_script)
 
     def test_rejects_machine_type_input(self) -> None:
         self.assert_mutation_rejected(
@@ -2624,7 +2850,7 @@ class CloudCIContractTests(unittest.TestCase):
             "RAW_RESOURCE_ATTEMPT: ${{ github.run_attempt }}", workflow
         )
         self.assertEqual(
-            10,
+            11,
             workflow.count(
                 "${{ needs.validate.outputs.resource_attempt }}"
             ),

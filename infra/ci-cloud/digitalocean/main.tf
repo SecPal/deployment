@@ -52,6 +52,7 @@ resource "digitalocean_droplet" "conformance" {
   tags              = [for tag in digitalocean_tag.ownership : tag.name]
   depends_on        = [digitalocean_firewall.conformance]
   user_data = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-conformance-host.tftpl", {
+    cloud_identity_gate           = ":"
     ssh_public_key                = trimspace(var.ssh_public_key)
     runner_ipv4                   = var.runner_ipv4
     run_id                        = var.run_id

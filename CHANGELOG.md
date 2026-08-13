@@ -45,6 +45,16 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Prevented GCE's privileged default service account from reaching the
+  disposable guest by explicitly attaching a dedicated role-free bootstrap
+  identity with no API scopes. The native startup script defers all host-access
+  setup until both identity absence and a trusted instance admission marker are
+  observable, and a separately authenticated trusted
+  control step stops the exact fixture, removes every service account, verifies
+  the stopped and restarted states, and only then admits uncredentialed target
+  execution. The project role still excludes `iam.serviceAccounts.actAs`; a
+  separate resource-level binding permits it only for the inert bootstrap
+  identity.
 - Kept exact cloud-state artifact selection bound to the original validated
   resource attempt across GitHub failed-job reruns, rejected targeted provider
   reruns that could duplicate that identity, and bounded transient provider
