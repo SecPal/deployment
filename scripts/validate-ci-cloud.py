@@ -612,6 +612,11 @@ def validate_opentofu(root: Path) -> None:
         and "--noproxy '*'" in gcp_identity
         and "--max-filesize 1048576" in gcp_identity
         and "--config -" in gcp_identity
+        and (
+            "printf 'header = \"Authorization: Bearer %s\"\\n' "
+            '"$access_token" |'
+        )
+        in gcp_identity
         and "transition_deadline=$((SECONDS + 900))" in gcp_identity
         and gcp_identity.count("SECONDS < transition_deadline") == 2
         and '[[ "$operation_name" =~ ^[a-z0-9][a-z0-9-]{0,127}$ ]]'

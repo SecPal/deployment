@@ -125,6 +125,13 @@ enter only the trusted OpenTofu apply, exact VM-identity transition, destroy,
 or janitor processes. No Workload Identity Federation credential reaches SSH,
 the VM, OpenTofu state, evidence, or target code.
 
+The identity-transition script gives curl its Bearer header through a config
+line read from standard input. This is curl's documented `--config -` behavior
+and deliberately keeps the token value out of the process argument list. The
+local contract exercises that exact config line through the real curl parser
+and a loopback HTTP server; its separate fake Compute API still verifies the
+bounded request sequence without contacting GCP.
+
 GCE attaches the project's default Compute Engine service account when an
 instance-insert request omits `serviceAccounts`; an absent OpenTofu
 `service_account` block therefore is unsafe. Provisioning instead names a

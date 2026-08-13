@@ -2706,6 +2706,16 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("'{\"scopes\":[]}'", identity_script)
         self.assertNotIn("'{\"email\":\"\",\"scopes\":[]}'", identity_script)
 
+    def test_rejects_gcp_identity_request_without_bearer_token_value(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh",
+            "  printf 'header = \"Authorization: Bearer %s\"\\n' "
+            '"$access_token" |\n',
+            "  printf 'header = \"Authorization: Bearer\"\\n' |\n",
+        )
+
     def test_rejects_machine_type_input(self) -> None:
         self.assert_mutation_rejected(
             ".github/workflows/cloud-conformance.yml",

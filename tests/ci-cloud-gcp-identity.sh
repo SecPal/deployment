@@ -12,8 +12,17 @@ FAKE_BIN="$TEMP_DIR/bin"
 STATE="$TEMP_DIR/state"
 CALLS="$TEMP_DIR/calls"
 GATE_STATE="$TEMP_DIR/gate-state"
+AUTH_PORT="$TEMP_DIR/auth-port"
+AUTH_HEADER="$TEMP_DIR/auth-header"
+AUTH_MARKER="$TEMP_DIR/auth-marker"
+AUTH_SERVER_PID=""
+REAL_CURL="$(command -v curl)"
 
 cleanup() {
+  if [[ -n "$AUTH_SERVER_PID" ]]; then
+    kill "$AUTH_SERVER_PID" 2>/dev/null || true
+    wait "$AUTH_SERVER_PID" 2>/dev/null || true
+  fi
   rm -rf -- "$TEMP_DIR"
 }
 trap cleanup EXIT
@@ -71,6 +80,14 @@ while (($# > 0)); do
 done
 
 [[ "$authorization" == true && -n "$url" ]]
+if [[ -n "${SECPAL_TEST_REAL_CURL_AUTH_URL:-}" && \
+  ! -e "$SECPAL_TEST_REAL_CURL_AUTH_MARKER" ]]; then
+  printf '%s\n' "$curl_config" |
+    "$SECPAL_TEST_REAL_CURL" --disable --fail --silent --show-error \
+      --connect-timeout 2 --max-time 5 --config - \
+      "$SECPAL_TEST_REAL_CURL_AUTH_URL" >/dev/null
+  install -m 0600 /dev/null "$SECPAL_TEST_REAL_CURL_AUTH_MARKER"
+fi
 path="${url#https://compute.googleapis.com/compute/v1/}"
 printf '%s %s %s\n' "$method" "$path" "$data" >>"$SECPAL_TEST_CALLS"
 
@@ -176,13 +193,51 @@ run_transition() {
     SECPAL_TEST_CALLS="$CALLS" \
     SECPAL_TEST_KEEP_IDENTITY="$1" \
     SECPAL_TEST_OPERATION_ERROR="$2" \
+    SECPAL_TEST_REAL_CURL="$REAL_CURL" \
+    SECPAL_TEST_REAL_CURL_AUTH_MARKER="$AUTH_MARKER" \
+    SECPAL_TEST_REAL_CURL_AUTH_URL="http://127.0.0.1:$(<"$AUTH_PORT")/" \
     "$IDENTITY_SCRIPT" secpal-dev europe-west3-a spci-12345-2-instance \
     secpal-ci-bootstrap@secpal-dev.iam.gserviceaccount.com
 }
 
+python3 - "$AUTH_PORT" "$AUTH_HEADER" <<'PY' &
+import http.server
+import pathlib
+import sys
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        pathlib.Path(sys.argv[2]).write_text(
+            self.headers.get("Authorization", ""), encoding="utf-8"
+        )
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+pathlib.Path(sys.argv[1]).write_text(str(server.server_port), encoding="ascii")
+server.handle_request()
+PY
+AUTH_SERVER_PID=$!
+for ((attempt = 1; attempt <= 100; attempt += 1)); do
+  [[ -s "$AUTH_PORT" ]] && break
+  sleep 0.01
+done
+[[ -s "$AUTH_PORT" ]]
+
 printf '%s\n' running-attached >"$STATE"
 : >"$CALLS"
 run_transition false false
+wait "$AUTH_SERVER_PID"
+AUTH_SERVER_PID=""
+[[ "$(<"$AUTH_HEADER")" == \
+  'Bearer test-access-token-with-bounded-content' ]]
 [[ "$(<"$STATE")" == running-admitted ]]
 [[ "$(grep -c 'setServiceAccount' "$CALLS")" -eq 1 ]]
 [[ "$(grep -c 'setMetadata' "$CALLS")" -eq 1 ]]
