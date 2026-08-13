@@ -1131,16 +1131,21 @@ def cloud_identity_facts(provider: str) -> dict[str, bool]:
             [
                 "curl",
                 "--disable",
+                "--proto",
+                "=http",
                 "--noproxy",
                 "*",
+                "--fail",
                 "--silent",
                 "--show-error",
                 "--max-time",
                 "5",
+                "--max-filesize",
+                "4096",
                 "--output",
-                "/dev/null",
+                "-",
                 "--write-out",
-                "%{http_code}",
+                "\n%{http_code}",
                 "--header",
                 "Metadata-Flavor: Google",
                 "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/",
@@ -1148,7 +1153,6 @@ def cloud_identity_facts(provider: str) -> dict[str, bool]:
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
             timeout=8,
         )
     except (OSError, subprocess.SubprocessError):
@@ -1157,16 +1161,21 @@ def cloud_identity_facts(provider: str) -> dict[str, bool]:
             "probe_succeeded": False,
             "identity_present": False,
         }
+    identity_body, identity_separator, identity_status = identity.stdout.rpartition(
+        b"\n"
+    )
     probe_succeeded = (
         probe.returncode == 0
         and probe.stdout.strip() == "200"
         and identity.returncode == 0
-        and identity.stdout.strip() in {"200", "404"}
+        and identity_separator == b"\n"
+        and identity_status == b"200"
+        and len(identity_body) <= 4096
     )
     return {
         "probe_supported": True,
         "probe_succeeded": probe_succeeded,
-        "identity_present": probe_succeeded and identity.stdout.strip() == "200",
+        "identity_present": probe_succeeded and identity_body != b"",
     }
 
 

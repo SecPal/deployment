@@ -212,6 +212,13 @@ def subprocess_literal_arguments(text: str, function_name: str) -> list[list[str
     return commands
 
 
+def contains_argument_pair(arguments: list[str], option: str, value: str) -> bool:
+    return any(
+        arguments[index : index + 2] == [option, value]
+        for index in range(len(arguments) - 1)
+    )
+
+
 def load_workflow(root: Path, relative: str) -> tuple[dict[str, object], str]:
     text = read(root, relative)
     try:
@@ -1598,10 +1605,25 @@ AllowUsers secpal-ci"""
         "collector bootstrap package evidence must exactly match native bootstrap packages",
     )
     curl_commands = subprocess_literal_arguments(collector, "cloud_identity_facts")
+    identity_probe = curl_commands[1] if len(curl_commands) == 2 else []
     require(
         len(curl_commands) == 2
-        and all(command[:2] == ["curl", "--disable"] for command in curl_commands),
-        "cloud identity probe must ignore target-owned curl configuration",
+        and all(command[:2] == ["curl", "--disable"] for command in curl_commands)
+        and ["--proto", "=http"] == identity_probe[2:4]
+        and "--fail" in identity_probe
+        and contains_argument_pair(identity_probe, "--max-filesize", "4096")
+        and contains_argument_pair(identity_probe, "--output", "-")
+        and contains_argument_pair(
+            identity_probe, "--write-out", "\n%{http_code}"
+        )
+        and 'identity.stdout.rpartition(\n        b"\\n"\n    )' in collector
+        and "probe.returncode == 0" in collector
+        and "identity.returncode == 0" in collector
+        and 'identity_status == b"200"' in collector
+        and "len(identity_body) <= 4096" in collector
+        and '"identity_present": probe_succeeded and identity_body != b""'
+        in collector,
+        "cloud identity probe must use bounded body-aware fail-closed semantics",
     )
     forbidden = ("tls_private_key", "private_key", "var.image", "var.machine_type", "var.resource_count")
     require(not any(value in (main + variables) for value in forbidden), "OpenTofu accepted a forbidden control or private key")
