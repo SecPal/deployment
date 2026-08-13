@@ -71,6 +71,8 @@ required_files=(
   scripts/ci-cloud/install-diagnostic-ssh.sh
   scripts/ci-cloud/digitalocean-janitor.py
   scripts/ci-cloud/gcp-janitor.py
+  scripts/ci-cloud/detach-gcp-vm-identity.sh
+  scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh
   scripts/ci-cloud/host-setup-failure.py
   scripts/ci-cloud/probe-ssh-port.py
   scripts/ci-cloud/run-remote-conformance.sh
@@ -90,6 +92,7 @@ required_files=(
   tests/ci-cloud-collector.py
   tests/ci-cloud-evidence.py
   tests/ci-cloud-gcp-janitor.py
+  tests/ci-cloud-gcp-identity.sh
   tests/ci-cloud-host-setup-failure.py
   tests/ci-cloud-janitor.py
   tests/ci-cloud-ssh-port-probe.py

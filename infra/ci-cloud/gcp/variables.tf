@@ -11,6 +11,19 @@ variable "project_id" {
   }
 }
 
+variable "bootstrap_service_account" {
+  description = "Dedicated role-free identity attached only until trusted bootstrap admission."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]@secpal-dev\\.iam\\.gserviceaccount\\.com$", var.bootstrap_service_account)) &&
+      var.bootstrap_service_account != "gcp-service-account@secpal-dev.iam.gserviceaccount.com"
+    )
+    error_message = "bootstrap_service_account must be a distinct user-managed identity in secpal-dev."
+  }
+}
+
 variable "run_id" {
   description = "GitHub Actions run ID."
   type        = string

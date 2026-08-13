@@ -119,11 +119,17 @@ resource "google_compute_instance" "conformance" {
     }
   }
 
+  service_account {
+    email  = var.bootstrap_service_account
+    scopes = []
+  }
+
   metadata = {
     block-project-ssh-keys   = "true"
     disable-legacy-endpoints = "true"
     enable-oslogin           = "FALSE"
     "startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-conformance-host.tftpl", {
+      cloud_identity_gate           = trimspace(file("${path.module}/../../../scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh"))
       ssh_public_key                = trimspace(var.ssh_public_key)
       runner_ipv4                   = var.runner_ipv4
       run_id                        = var.run_id

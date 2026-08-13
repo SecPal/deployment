@@ -286,7 +286,7 @@ jobs:
       ${{ needs.validate.outputs.provider == 'gcp' &&
       github.run_attempt == fromJSON(needs.validate.outputs.resource_attempt) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 100
     environment: ci-cloud-gcp
     permissions:
       contents: read
@@ -309,16 +309,21 @@ jobs:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          GCP_BOOTSTRAP_SERVICE_ACCOUNT: ${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}
         run: |
           [[ "$GCP_PROJECT_ID" == secpal-dev ]]
           [[ "$GCP_WORKLOAD_IDENTITY_PROVIDER" == \
             projects/94792370946/locations/global/workloadIdentityPools/secpal/providers/github ]]
           [[ "$GCP_SERVICE_ACCOUNT" == \
             gcp-service-account@secpal-dev.iam.gserviceaccount.com ]]
+          [[ "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" =~ \
+            ^[a-z][a-z0-9-]{4,28}[a-z0-9]@secpal-dev\.iam\.gserviceaccount\.com$ ]]
+          [[ "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" != "$GCP_SERVICE_ACCOUNT" ]]
 
       - name: Generate ephemeral GCP SSH identity and run variables
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_BOOTSTRAP_SERVICE_ACCOUNT: ${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
           RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}
         run: |
@@ -338,10 +343,11 @@ jobs:
               raise SystemExit("runner address is not a public IPv4 address")
           PY
           created_at="$(date -u +%s)"
-          expires_at="$((created_at + 7200))"
+          expires_at="$((created_at + 10800))"
           public_key="$(cat "$RUNNER_TEMP/ci-cloud/id_ed25519.pub")"
           jq -n \
             --arg project_id "$GCP_PROJECT_ID" \
+            --arg bootstrap_service_account "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$RESOURCE_ATTEMPT" \
             --arg target_sha "$TARGET_SHA" \
@@ -350,7 +356,9 @@ jobs:
             --arg ssh_public_key "$public_key" \
             --arg created_at "$created_at" \
             --arg expires_at "$expires_at" \
-            '{project_id: $project_id, run_id: $run_id,
+            '{project_id: $project_id,
+              bootstrap_service_account: $bootstrap_service_account,
+              run_id: $run_id,
               run_attempt: $run_attempt, target_sha: $target_sha,
               zone: $zone, runner_ipv4: $runner_ipv4,
               ssh_public_key: $ssh_public_key,
@@ -400,9 +408,41 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
+      - name: Authenticate trusted GCP identity transition through OIDC
+        id: gcp_identity_auth
+        if: ${{ steps.gcp_apply.outcome == 'success' }}
+        continue-on-error: true
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 1200s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Remove and verify GCP VM cloud identity
+        id: gcp_identity
+        if: >-
+          ${{ steps.gcp_apply.outcome == 'success' &&
+          steps.gcp_identity_auth.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gcp_identity_auth.outputs.access_token }}
+          GCP_BOOTSTRAP_SERVICE_ACCOUNT: ${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}
+          RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}
+        run: |
+          scripts/ci-cloud/detach-gcp-vm-identity.sh \
+            secpal-dev europe-west3-a \
+            "spci-${GITHUB_RUN_ID}-${RESOURCE_ATTEMPT}-instance" \
+            "$GCP_BOOTSTRAP_SERVICE_ACCOUNT"
+
       - name: Run uncredentialed GCP remote conformance
         id: gcp_conformance
-        if: ${{ steps.gcp_apply.outcome == 'success' }}
+        if: >-
+          ${{ steps.gcp_apply.outcome == 'success' &&
+          steps.gcp_identity.outcome == 'success' }}
         continue-on-error: true
         env:
           RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}
@@ -437,9 +477,14 @@ jobs:
         if: ${{ always() }}
         env:
           APPLY_OUTCOME: ${{ steps.gcp_apply.outcome }}
+          IDENTITY_AUTH_OUTCOME: ${{ steps.gcp_identity_auth.outcome }}
+          IDENTITY_OUTCOME: ${{ steps.gcp_identity.outcome }}
           CONFORMANCE_OUTCOME: ${{ steps.gcp_conformance.outcome }}
         run: |
-          if [[ "$APPLY_OUTCOME" != success || "$CONFORMANCE_OUTCOME" != success ]]; then
+          if [[ "$APPLY_OUTCOME" != success || \
+            "$IDENTITY_AUTH_OUTCOME" != success || \
+            "$IDENTITY_OUTCOME" != success || \
+            "$CONFORMANCE_OUTCOME" != success ]]; then
             printf 'ERROR: GCP provisioning or remote conformance failed.\n' >&2
             exit 1
           fi
