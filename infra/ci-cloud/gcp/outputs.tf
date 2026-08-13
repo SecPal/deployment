@@ -1,11 +1,6 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-output "ipv4_address" {
-  description = "Public address admitted only through the per-run SSH firewall."
-  value       = google_compute_instance.conformance.network_interface[0].access_config[0].nat_ip
-}
-
 output "image_id" {
   description = "Exact provider image self-link resolved from the closed Debian 13 arm64 family."
   value       = data.google_compute_image.debian_13.self_link

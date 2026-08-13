@@ -2494,6 +2494,79 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertNotIn("target_sha", detach["run"])
         self.assertNotIn("run-remote-conformance", detach["run"])
+        self.assertIn(
+            '"$RUNNER_TEMP/ci-cloud/ipv4_address"', detach["run"]
+        )
+        apply = steps[names.index("Apply GCP infrastructure")]
+        self.assertNotIn("tofu output -raw ipv4_address", apply["run"])
+        self.assertIn(
+            '"$(cat "$RUNNER_TEMP/ci-cloud/ipv4_address")"',
+            steps[target_index]["run"],
+        )
+
+    def test_rejects_stale_gcp_ip_after_identity_transition(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            "          unset GOOGLE_OAUTH_ACCESS_TOKEN\n"
+            "          tofu output -raw image_id >",
+            "          unset GOOGLE_OAUTH_ACCESS_TOKEN\n"
+            "          tofu output -raw ipv4_address > "
+            '"$RUNNER_TEMP/ci-cloud/ipv4_address"\n'
+            "          tofu output -raw image_id >",
+        )
+
+    def test_rejects_missing_live_gcp_ip_handoff(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            '            "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \\\n'
+            '            "$RUNNER_TEMP/ci-cloud/ipv4_address"\n',
+            '            "$GCP_BOOTSTRAP_SERVICE_ACCOUNT"\n',
+        )
+
+    def test_gcp_root_does_not_export_a_pre_transition_address(self) -> None:
+        outputs = (ROOT / "infra/ci-cloud/gcp/outputs.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn('output "ipv4_address"', outputs)
+        self.assertNotIn('output "initial_ipv4_address"', outputs)
+
+    def test_rejects_gcp_pre_transition_address_output(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/outputs.tf",
+            'output "image_id" {',
+            'output "ipv4_address" {\n'
+            "  value = google_compute_instance.conformance."
+            "network_interface[0].access_config[0].nat_ip\n"
+            "}\n\n"
+            'output "image_id" {',
+        )
+
+    def test_rejects_live_ip_publication_before_final_gcp_postconditions(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh",
+            'live_ipv4="$(wait_for_admitted_identity_free_public_ipv4)"\n'
+            'publish_current_ipv4 "$live_ipv4"\n',
+            'publish_current_ipv4 "34.120.30.31"\n'
+            'live_ipv4="$(wait_for_admitted_identity_free_public_ipv4)"\n',
+        )
+
+    def test_rejects_non_atomic_live_gcp_ip_publication(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh",
+            '  mv -T -- "$published_ipv4_tmp" "$ipv4_output"\n',
+            '  cp -- "$published_ipv4_tmp" "$ipv4_output"\n',
+        )
+
+    def test_rejects_gcp_live_ip_pending_state_without_bounded_retry(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/detach-gcp-vm-identity.sh",
+            "          75) ;;\n",
+            "          75) return 1 ;;\n",
+        )
 
     def test_gcp_native_bootstrap_waits_for_identity_detachment(self) -> None:
         bootstrap = (
@@ -2693,10 +2766,8 @@ class CloudCIContractTests(unittest.TestCase):
     def test_rejects_missing_gcp_post_start_identity_check(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/detach-gcp-vm-identity.sh",
-            "running_instance=\"$(wait_for_instance_status RUNNING)\"\n"
-            'if ! verify_identity_free "$running_instance"; then\n',
-            "running_instance='{}'\n"
-            'if ! verify_identity_free "$running_instance"; then\n',
+            '        if ! verify_identity_free "$response"; then\n',
+            '        if false; then\n',
         )
 
     def test_rejects_empty_email_in_gcp_identity_removal_request(self) -> None:

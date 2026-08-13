@@ -393,7 +393,6 @@ jobs:
         run: |
           tofu apply --auto-approve --input=false
           unset GOOGLE_OAUTH_ACCESS_TOKEN
-          tofu output -raw ipv4_address > "$RUNNER_TEMP/ci-cloud/ipv4_address"
           tofu output -raw image_id > "$RUNNER_TEMP/ci-cloud/image_id"
           tofu output -raw machine_type > "$RUNNER_TEMP/ci-cloud/machine_type"
 
@@ -436,7 +435,8 @@ jobs:
           scripts/ci-cloud/detach-gcp-vm-identity.sh \
             secpal-dev europe-west3-a \
             "spci-${GITHUB_RUN_ID}-${RESOURCE_ATTEMPT}-instance" \
-            "$GCP_BOOTSTRAP_SERVICE_ACCOUNT"
+            "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \
+            "$RUNNER_TEMP/ci-cloud/ipv4_address"
 
       - name: Run uncredentialed GCP remote conformance
         id: gcp_conformance

@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-if [[ "$#" -ne 4 ]]; then
-  printf 'ERROR: expected GCP project, zone, exact instance name, and bootstrap identity.\n' >&2
+if [[ "$#" -ne 5 ]]; then
+  printf 'ERROR: expected GCP project, zone, exact instance name, bootstrap identity, and live IPv4 output.\n' >&2
   exit 2
 fi
 
@@ -13,6 +13,7 @@ project_id="$1"
 zone="$2"
 instance_name="$3"
 bootstrap_service_account="$4"
+ipv4_output="$5"
 access_token="${GOOGLE_OAUTH_ACCESS_TOKEN:-}"
 admission_key="secpal-ci-cloud-identity-admitted"
 
@@ -21,6 +22,10 @@ admission_key="secpal-ci-cloud-identity-admitted"
 [[ "$instance_name" =~ ^spci-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}-instance$ ]]
 [[ "$bootstrap_service_account" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]@secpal-dev\.iam\.gserviceaccount\.com$ ]]
 [[ "$bootstrap_service_account" != gcp-service-account@secpal-dev.iam.gserviceaccount.com ]]
+if [[ "$ipv4_output" != /*/ipv4_address ]]; then
+  printf 'ERROR: live GCP IPv4 output is outside the closed path format.\n' >&2
+  exit 2
+fi
 if [[ ! "$access_token" =~ ^[A-Za-z0-9._~-]{20,4096}$ ]]; then
   printf 'ERROR: GCP access token is outside the closed in-memory format.\n' >&2
   exit 2
@@ -29,9 +34,13 @@ fi
 api_root="https://compute.googleapis.com/compute/v1/projects/$project_id/zones/$zone"
 instance_path="instances/$instance_name"
 temporary_directory="$(mktemp -d)"
+published_ipv4_tmp=""
 transition_deadline=$((SECONDS + 900))
 
 cleanup() {
+  if [[ -n "$published_ipv4_tmp" ]]; then
+    rm -f -- "$published_ipv4_tmp"
+  fi
   rm -rf -- "$temporary_directory"
 }
 trap cleanup EXIT
@@ -152,6 +161,118 @@ verify_identity_free() {
     <<<"$instance" >/dev/null
 }
 
+validate_public_ipv4() {
+  local candidate="$1"
+
+  python3 - "$candidate" <<'PY'
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.ip_address(sys.argv[1])
+except ValueError:
+    raise SystemExit("GCP fixture address is not an IP address") from None
+if address.version != 4 or not address.is_global:
+    raise SystemExit("GCP fixture address is not a public IPv4 address")
+print(address)
+PY
+}
+
+public_ipv4_from_instance() {
+  local instance="$1"
+  local candidate
+
+  if ! candidate="$(
+    jq -er '
+      [.networkInterfaces[]?.accessConfigs[]?] as $configs |
+      if ($configs | length) == 0 or
+        (($configs | length) == 1 and
+          (($configs[0].natIP // null) == null))
+      then ""
+      elif ($configs | length) == 1 and
+        ($configs[0].natIP | type) == "string"
+      then $configs[0].natIP
+      else error("ambiguous or invalid external IPv4 access configuration")
+      end
+    ' <<<"$instance"
+  )"; then
+    printf 'ERROR: running GCP fixture has an ambiguous external address.\n' >&2
+    return 1
+  fi
+  if [[ -z "$candidate" ]]; then
+    return 75
+  fi
+  if ! validate_public_ipv4 "$candidate"; then
+    printf 'ERROR: running GCP fixture address failed public IPv4 admission.\n' >&2
+    return 1
+  fi
+}
+
+wait_for_admitted_identity_free_public_ipv4() {
+  local attempt response status live_ipv4 address_status
+
+  for ((attempt = 1; attempt <= 60 && SECONDS < transition_deadline; attempt += 1)); do
+    response="$(api_request GET "$instance_path")"
+    jq -e --arg name "$instance_name" '.name == $name' \
+      <<<"$response" >/dev/null
+    status="$(jq -er '.status' <<<"$response")"
+    case "$status" in
+      RUNNING)
+        if ! verify_identity_free "$response"; then
+          printf 'ERROR: GCP VM cloud identity is attached in the final running state.\n' >&2
+          return 1
+        fi
+        if [[ "$(admission_state "$response")" != admitted ]]; then
+          printf 'ERROR: trusted GCP identity admission is absent from the final running state.\n' >&2
+          return 1
+        fi
+        address_status=0
+        live_ipv4="$(public_ipv4_from_instance "$response")" || address_status=$?
+        case "$address_status" in
+          0)
+            printf '%s' "$live_ipv4"
+            return 0
+            ;;
+          75) ;;
+          *) return 1 ;;
+        esac
+        ;;
+      PROVISIONING | STAGING | STOPPING | TERMINATED) ;;
+      *)
+        printf 'ERROR: GCP instance returned an unknown final status.\n' >&2
+        return 1
+        ;;
+    esac
+    sleep 5
+  done
+  printf 'ERROR: GCP fixture did not reach its complete network and identity postcondition.\n' >&2
+  return 1
+}
+
+publish_current_ipv4() {
+  local candidate="$1"
+  local output_directory validated_ipv4
+
+  if ! validated_ipv4="$(validate_public_ipv4 "$candidate")"; then
+    printf 'ERROR: live GCP IPv4 handoff failed public-address admission.\n' >&2
+    return 1
+  fi
+
+  output_directory="${ipv4_output%/*}"
+  if [[ ! -d "$output_directory" || -L "$output_directory" ||
+    "$(stat -c '%u:%a' -- "$output_directory")" != "$(id -u):700" ||
+    -e "$ipv4_output" || -L "$ipv4_output" ]]; then
+    printf 'ERROR: live GCP IPv4 output location is not a fresh private directory.\n' >&2
+    return 1
+  fi
+  published_ipv4_tmp="$(mktemp "$output_directory/.ipv4_address.XXXXXX")"
+  chmod 0600 "$published_ipv4_tmp"
+  printf '%s\n' "$validated_ipv4" >"$published_ipv4_tmp"
+  mv -T -- "$published_ipv4_tmp" "$ipv4_output"
+  published_ipv4_tmp=""
+  printf 'Recorded the verified live GCP fixture address.\n'
+}
+
 set_admission_metadata() {
   local instance="$1"
   local expected_status="$2"
@@ -193,8 +314,10 @@ initial_admission="$(admission_state "$initial_instance")"
 if verify_identity_free "$initial_instance"; then
   if [[ "$initial_admission" == absent ]]; then
     printf 'Admitting the already identity-free running GCP fixture.\n'
-    set_admission_metadata "$initial_instance" RUNNING >/dev/null
+    initial_instance="$(set_admission_metadata "$initial_instance" RUNNING)"
   fi
+  live_ipv4="$(wait_for_admitted_identity_free_public_ipv4)"
+  publish_current_ipv4 "$live_ipv4"
   printf 'GCP fixture is already running without an attached cloud identity.\n'
   exit 0
 fi
@@ -244,14 +367,6 @@ start_operation="$(
   api_request POST "$instance_path/start" '{}' | jq -er '.name'
 )"
 wait_for_operation "$start_operation"
-running_instance="$(wait_for_instance_status RUNNING)"
-if ! verify_identity_free "$running_instance"; then
-  printf 'ERROR: GCP VM cloud identity reappeared after start.\n' >&2
-  exit 1
-fi
-if [[ "$(admission_state "$running_instance")" != admitted ]]; then
-  printf 'ERROR: trusted GCP identity admission disappeared after start.\n' >&2
-  exit 1
-fi
-
+live_ipv4="$(wait_for_admitted_identity_free_public_ipv4)"
+publish_current_ipv4 "$live_ipv4"
 printf 'GCP fixture is running without an attached cloud identity.\n'

@@ -152,7 +152,12 @@ state. GCE reruns the startup script after the start. If the newly provisioned
 instance was already identity-free, the runner only writes the marker while it
 remains running; the bounded waiting startup script then continues without an
 unnecessary stop. The remote target step is structurally gated on completion of
-this transition and receives no cloud token.
+this transition and receives no cloud token. Because GCE can release an
+ephemeral external IPv4 when an instance stops, the pre-stop OpenTofu address
+is never used for remote access. The same trusted transition reads exactly one
+current `natIP` from the final identity-free running instance, admits it as a
+public IPv4, and atomically hands it to the later uncredentialed SSH step. A
+missing, private, or ambiguous address stops the run before target execution.
 
 The unique per-run ownership tag is attached to a Cloud Firewall before the
 Droplet can be created. The Droplet depends on that tag-targeted firewall, so

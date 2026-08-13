@@ -470,6 +470,7 @@ def validate_conformance_workflow(root: Path) -> None:
     identity_transition = gcp_steps_by_name.get(
         "Remove and verify GCP VM cloud identity"
     )
+    gcp_apply = gcp_steps_by_name.get("Apply GCP infrastructure")
     remote_transition = gcp_steps_by_name.get(
         "Run uncredentialed GCP remote conformance"
     )
@@ -519,9 +520,15 @@ def validate_conformance_workflow(root: Path) -> None:
             "scripts/ci-cloud/detach-gcp-vm-identity.sh \\\n"
             "  secpal-dev europe-west3-a \\\n"
             '  "spci-${GITHUB_RUN_ID}-${RESOURCE_ATTEMPT}-instance" \\\n'
-            '  "$GCP_BOOTSTRAP_SERVICE_ACCOUNT"\n'
+            '  "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \\\n'
+            '  "$RUNNER_TEMP/ci-cloud/ipv4_address"\n'
         ),
         "GCP identity transition invocation changed",
+    )
+    require(
+        isinstance(gcp_apply, dict)
+        and "tofu output -raw ipv4_address" not in str(gcp_apply.get("run", "")),
+        "stale pre-transition GCP addresses must not reach remote orchestration",
     )
     require(
         isinstance(remote_transition, dict)
@@ -570,6 +577,7 @@ def validate_opentofu(root: Path) -> None:
     outputs = read(root, "infra/ci-cloud/digitalocean/outputs.tf")
     bootstrap = read(root, "scripts/ci-cloud/bootstrap-conformance-host.tftpl")
     gcp_identity = read(root, "scripts/ci-cloud/detach-gcp-vm-identity.sh")
+    gcp_outputs = read(root, "infra/ci-cloud/gcp/outputs.tf")
     gcp_identity_gate = read(
         root, "scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh"
     )
@@ -578,6 +586,18 @@ def validate_opentofu(root: Path) -> None:
     diagnostic_ssh = read(root, "scripts/ci-cloud/install-diagnostic-ssh.sh")
     host_setup_failure = read(root, "scripts/ci-cloud/host-setup-failure.py")
     collector = read(root, "scripts/ci-cloud/collect-host-evidence.py")
+    gcp_final_postcondition = required_block(
+        gcp_identity,
+        "wait_for_admitted_identity_free_public_ipv4() {\n",
+        "\n}\n\npublish_current_ipv4() {",
+        "GCP final network and identity postcondition",
+    )
+    gcp_ipv4_publisher = required_block(
+        gcp_identity,
+        "publish_current_ipv4() {\n",
+        "\n}\n\nset_admission_metadata() {",
+        "GCP live IPv4 publisher",
+    )
     read(root, "infra/ci-cloud/digitalocean/.terraform.lock.hcl")
     require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
     require('version = "= 2.99.1"' in versions, "DigitalOcean provider version must be exact")
@@ -618,7 +638,7 @@ def validate_opentofu(root: Path) -> None:
         )
         in gcp_identity
         and "transition_deadline=$((SECONDS + 900))" in gcp_identity
-        and gcp_identity.count("SECONDS < transition_deadline") == 2
+        and gcp_identity.count("SECONDS < transition_deadline") == 3
         and '[[ "$operation_name" =~ ^[a-z0-9][a-z0-9-]{0,127}$ ]]'
         in gcp_identity
         and '--header "Authorization: Bearer $access_token"'
@@ -635,16 +655,53 @@ def validate_opentofu(root: Path) -> None:
         )
         == 2
         and "already running without an attached cloud identity" in gcp_identity
+        and '[[ "$#" -ne 5 ]]' in gcp_identity
+        and '[[ "$ipv4_output" != /*/ipv4_address ]]' in gcp_identity
+        and "ipaddress.ip_address" in gcp_identity
+        and "address.version != 4 or not address.is_global" in gcp_identity
+        and gcp_identity.count(
+            'live_ipv4="$(wait_for_admitted_identity_free_public_ipv4)"\n'
+            '  publish_current_ipv4 "$live_ipv4"'
+        )
+        == 1
+        and gcp_identity.count(
+            'live_ipv4="$(wait_for_admitted_identity_free_public_ipv4)"\n'
+            'publish_current_ipv4 "$live_ipv4"'
+        )
+        == 1
+        and 'chmod 0600 "$published_ipv4_tmp"' in gcp_identity
         and 'if ! verify_identity_free "$detached_instance"; then'
-        in gcp_identity
-        and 'if ! verify_identity_free "$running_instance"; then'
         in gcp_identity
         and gcp_identity.index('api_request POST "$instance_path/stop"')
         < gcp_identity.index('api_request POST "$instance_path/setServiceAccount"')
         < gcp_identity.index("detached_instance=\"$(wait_for_instance_status TERMINATED)\"")
         < gcp_identity.index('set_admission_metadata "$detached_instance" TERMINATED')
         < gcp_identity.index('api_request POST "$instance_path/start"')
-        < gcp_identity.index("running_instance=\"$(wait_for_instance_status RUNNING)\"")
+        < gcp_identity.rindex(
+            'live_ipv4="$(wait_for_admitted_identity_free_public_ipv4)"'
+        )
+        and gcp_final_postcondition.index('status="$(jq -er')
+        < gcp_final_postcondition.index('if ! verify_identity_free "$response"; then')
+        < gcp_final_postcondition.index(
+            'if [[ "$(admission_state "$response")" != admitted ]]; then'
+        )
+        < gcp_final_postcondition.index(
+            'live_ipv4="$(public_ipv4_from_instance "$response")"'
+        )
+        < gcp_final_postcondition.index("75) ;;")
+        and gcp_ipv4_publisher.index(
+            'validated_ipv4="$(validate_public_ipv4 "$candidate")"'
+        )
+        < gcp_ipv4_publisher.index('published_ipv4_tmp="$(mktemp')
+        < gcp_ipv4_publisher.index('chmod 0600 "$published_ipv4_tmp"')
+        < gcp_ipv4_publisher.index(
+            'printf \'%s\\n\' "$validated_ipv4" >"$published_ipv4_tmp"'
+        )
+        < gcp_ipv4_publisher.index(
+            'mv -T -- "$published_ipv4_tmp" "$ipv4_output"'
+        )
+        and 'output "ipv4_address"' not in gcp_outputs
+        and 'output "initial_ipv4_address"' not in gcp_outputs
         and "target_sha" not in gcp_identity
         and "run-remote-conformance" not in gcp_identity
         and "iam.serviceAccounts.actAs" not in gcp_identity,

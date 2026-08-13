@@ -45,6 +45,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Re-resolved and strictly admitted GCE's current public IPv4 only after the
+  identity-removal stop/start completed. GCE can replace an ephemeral external
+  address during that transition, so remote SSH no longer consumes the stale
+  pre-stop OpenTofu output; missing, private, or ambiguous live addresses now
+  fail closed before target execution.
 - Prevented GCE's privileged default service account from reaching the
   disposable guest by explicitly attaching a dedicated role-free bootstrap
   identity with no API scopes. The native startup script defers all host-access
