@@ -349,7 +349,12 @@ rootless Podman state; Python user-site startup hooks are disabled, and the GCP
 metadata probe disables curl configuration before any other curl option. Target
 output is discarded without creating a shared temporary file. Target-owned
 Python or curl startup configuration therefore cannot replace the collector or
-suppress cloud-identity evidence.
+suppress cloud-identity evidence. The final GCP collector applies the same
+metadata semantics as the early bootstrap gate: HTTP 200 with a bounded empty
+`service-accounts/` directory proves identity absence, while a non-empty body
+records identity presence. It discards the body after classification and treats
+404, transport failure, truncation, or a malformed response as an unsuccessful
+probe rather than evidence of absence.
 
 The provider image may already carry subordinate-ID policy when the trusted
 bootstrap creates `secpal-ci`. Before SSH is admitted, the root-owned host

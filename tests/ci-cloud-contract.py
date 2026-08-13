@@ -2770,6 +2770,46 @@ class CloudCIContractTests(unittest.TestCase):
             '        if false; then\n',
         )
 
+    def test_rejects_gcp_collector_identity_status_without_body_semantics(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-host-evidence.py",
+            '"identity_present": probe_succeeded and identity_body != b"",\n',
+            '"identity_present": probe_succeeded and identity_status == b"200",\n',
+        )
+
+    def test_rejects_gcp_collector_without_metadata_probe_exit_status(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-host-evidence.py",
+            "        probe.returncode == 0\n        and probe.stdout.strip() == \"200\"\n",
+            '        probe.stdout.strip() == "200"\n',
+        )
+
+    def test_rejects_gcp_collector_without_identity_probe_exit_status(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-host-evidence.py",
+            "        and identity.returncode == 0\n",
+            "",
+        )
+
+    def test_rejects_unbounded_gcp_collector_identity_body(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-host-evidence.py",
+            '                "--max-filesize",\n'
+            '                "4096",\n',
+            "",
+        )
+
+    def test_rejects_discarded_gcp_collector_identity_body(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-host-evidence.py",
+            '                "--output",\n'
+            '                "-",\n',
+            '                "--output",\n'
+            '                "/dev/null",\n',
+        )
+
     def test_rejects_empty_email_in_gcp_identity_removal_request(self) -> None:
         identity_script = (
             ROOT / "scripts/ci-cloud/detach-gcp-vm-identity.sh"

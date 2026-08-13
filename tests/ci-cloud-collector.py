@@ -7,9 +7,13 @@
 from __future__ import annotations
 
 import copy
+import http.server
 import importlib.util
+import os
 import stat
+import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -17,6 +21,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 COLLECTOR_PATH = ROOT / "scripts" / "ci-cloud" / "collect-host-evidence.py"
+GCP_IDENTITY_GATE_PATH = (
+    ROOT / "scripts" / "ci-cloud" / "defer-bootstrap-for-gcp-identity.sh"
+)
 REQUIRED_TOOLS = {
     "aa-status", "apt-cache", "apt-config", "bash", "curl", "df", "dpkg",
     "dpkg-query", "findmnt", "getent", "gh", "git", "id", "install",
@@ -216,7 +223,7 @@ class CloudHostAdmissionTests(unittest.TestCase):
             args=[], returncode=0, stdout="200", stderr=""
         )
         absent_identity = self.collector.subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="404", stderr=""
+            args=[], returncode=0, stdout=b"\n200", stderr=b""
         )
         with mock.patch.object(
             self.collector.subprocess,
@@ -232,7 +239,237 @@ class CloudHostAdmissionTests(unittest.TestCase):
                 self.collector.cloud_identity_facts("gcp"),
             )
         self.assertEqual(["curl", "--disable"], run.call_args.args[0][:2])
+        self.assertIn("--max-filesize", run.call_args.args[0])
+        self.assertIn("4096", run.call_args.args[0])
+        self.assertEqual(
+            "-",
+            run.call_args.args[0][run.call_args.args[0].index("--output") + 1],
+        )
+        self.assertNotIn("text", run.call_args_list[1].kwargs)
         self.assertEqual(2, run.call_count)
+
+    def test_gcp_metadata_probe_fails_closed_for_unproven_identity_absence(
+        self,
+    ) -> None:
+        successful_probe = self.collector.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="200", stderr=""
+        )
+        cases = (
+            (
+                self.collector.subprocess.CompletedProcess(
+                    args=[], returncode=7, stdout="200", stderr=""
+                ),
+                self.collector.subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=b"\n200", stderr=b""
+                ),
+            ),
+            (
+                successful_probe,
+                self.collector.subprocess.CompletedProcess(
+                    args=[], returncode=22, stdout=b"\n200", stderr=b""
+                ),
+            ),
+            (
+                successful_probe,
+                self.collector.subprocess.CompletedProcess(
+                    args=[], returncode=22, stdout=b"\n404", stderr=b""
+                ),
+            ),
+            (
+                successful_probe,
+                self.collector.subprocess.CompletedProcess(
+                    args=[], returncode=63, stdout=b"x" * 4096, stderr=b""
+                ),
+            ),
+            (
+                successful_probe,
+                self.collector.subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=b"200", stderr=b""
+                ),
+            ),
+        )
+        for probe, identity in cases:
+            with self.subTest(probe=probe, identity=identity):
+                with mock.patch.object(
+                    self.collector.subprocess,
+                    "run",
+                    side_effect=[probe, identity],
+                ):
+                    self.assertEqual(
+                        {
+                            "probe_supported": True,
+                            "probe_succeeded": False,
+                            "identity_present": False,
+                        },
+                        self.collector.cloud_identity_facts("gcp"),
+                    )
+
+    def test_gcp_metadata_probe_fails_closed_on_identity_transport_error(
+        self,
+    ) -> None:
+        probe = self.collector.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="200", stderr=""
+        )
+        with mock.patch.object(
+            self.collector.subprocess,
+            "run",
+            side_effect=[
+                probe,
+                self.collector.subprocess.TimeoutExpired("curl", 8),
+            ],
+        ):
+            self.assertEqual(
+                {
+                    "probe_supported": True,
+                    "probe_succeeded": False,
+                    "identity_present": False,
+                },
+                self.collector.cloud_identity_facts("gcp"),
+            )
+
+    def test_gcp_identity_curl_transport_matches_collector_semantics(self) -> None:
+        probe = self.collector.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="200", stderr=""
+        )
+        absent_identity = self.collector.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"\n200", stderr=b""
+        )
+        with mock.patch.object(
+            self.collector.subprocess,
+            "run",
+            side_effect=[probe, absent_identity],
+        ) as run:
+            self.collector.cloud_identity_facts("gcp")
+        identity_command = list(run.call_args_list[1].args[0])
+
+        cases = (
+            (200, b"", True, False),
+            (200, b"default/\n", True, True),
+            (404, b"", False, False),
+            (200, b"x" * 4097, False, False),
+        )
+        for status, body, probe_succeeded, identity_present in cases:
+            with self.subTest(status=status, body_length=len(body)):
+                class MetadataHandler(http.server.BaseHTTPRequestHandler):
+                    def do_GET(self) -> None:
+                        self.send_response(status)
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        try:
+                            self.wfile.write(body)
+                        except BrokenPipeError:
+                            pass
+
+                    def log_message(self, format: str, *args: object) -> None:
+                        pass
+
+                with http.server.HTTPServer(("127.0.0.1", 0), MetadataHandler) as server:
+                    server_thread = threading.Thread(
+                        target=server.serve_forever,
+                        daemon=True,
+                    )
+                    server_thread.start()
+                    command = identity_command[:-1] + [
+                        f"http://127.0.0.1:{server.server_port}/"
+                    ]
+                    identity = subprocess.run(
+                        command,
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        timeout=8,
+                    )
+                    server.shutdown()
+                    server_thread.join(timeout=2)
+
+                with mock.patch.object(
+                    self.collector.subprocess,
+                    "run",
+                    side_effect=[probe, identity],
+                ):
+                    self.assertEqual(
+                        {
+                            "probe_supported": True,
+                            "probe_succeeded": probe_succeeded,
+                            "identity_present": identity_present,
+                        },
+                        self.collector.cloud_identity_facts("gcp"),
+                    )
+
+    def test_gcp_bootstrap_gate_and_collector_have_matching_identity_semantics(
+        self,
+    ) -> None:
+        cases = (
+            ("absent", "200", 0, b"\n200", 0, True),
+            ("present", "200\nZGVmYXVsdC8=", 0, b"default/\n\n200", 0, False),
+            ("not-found", "404", 0, b"\n404", 22, False),
+            ("transport-error", "", 7, b"\n000", 7, False),
+            ("oversized", "", 63, b"x" * 4096, 63, False),
+        )
+        with tempfile.TemporaryDirectory(prefix="secpal-gcp-identity-parity-") as raw:
+            fake_bin = Path(raw) / "bin"
+            fake_bin.mkdir(mode=0o700)
+            fake_timeout = fake_bin / "timeout"
+            fake_timeout.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *secpal-ci-cloud-identity-admitted* ]]; then
+  printf '%s\\n%s' 200 dHJ1ZQ==
+  exit 0
+fi
+printf '%s' "$SECPAL_TEST_IDENTITY_FRAME"
+exit "$SECPAL_TEST_IDENTITY_EXIT"
+""",
+                encoding="utf-8",
+            )
+            fake_timeout.chmod(0o700)
+
+            successful_probe = self.collector.subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="200", stderr=""
+            )
+            for (
+                name,
+                gate_frame,
+                gate_exit,
+                collector_frame,
+                collector_exit,
+                expected_admitted,
+            ) in cases:
+                with self.subTest(name=name):
+                    environment = dict(os.environ)
+                    environment.update(
+                        {
+                            "PATH": f"{fake_bin}:/usr/bin:/bin",
+                            "SECPAL_TEST_IDENTITY_FRAME": gate_frame,
+                            "SECPAL_TEST_IDENTITY_EXIT": str(gate_exit),
+                        }
+                    )
+                    gate = subprocess.run(
+                        [str(GCP_IDENTITY_GATE_PATH)],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env=environment,
+                        timeout=8,
+                    )
+                    identity = self.collector.subprocess.CompletedProcess(
+                        args=[],
+                        returncode=collector_exit,
+                        stdout=collector_frame,
+                        stderr=b"",
+                    )
+                    with mock.patch.object(
+                        self.collector.subprocess,
+                        "run",
+                        side_effect=[successful_probe, identity],
+                    ):
+                        facts = self.collector.cloud_identity_facts("gcp")
+                    collector_admitted = (
+                        facts["probe_succeeded"] is True
+                        and facts["identity_present"] is False
+                    )
+                    self.assertEqual(expected_admitted, gate.returncode == 0)
+                    self.assertEqual(expected_admitted, collector_admitted)
 
     def test_bounded_command_result_reports_truncation(self) -> None:
         completed = self.collector.subprocess.CompletedProcess(
@@ -696,7 +933,10 @@ class CloudHostAdmissionTests(unittest.TestCase):
                 args=[], returncode=0, stdout="200", stderr=""
             ),
             self.collector.subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="200", stderr=""
+                args=[],
+                returncode=0,
+                stdout=b"default/\nci@example/\n\n200",
+                stderr=b"",
             ),
         ]
         with mock.patch.object(

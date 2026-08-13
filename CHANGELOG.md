@@ -45,6 +45,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Aligned final GCP cloud-identity evidence with the already admitted bootstrap
+  gate: Compute Engine returns HTTP 200 with an empty service-account directory
+  when no identity is attached. The collector now admits only that bounded
+  empty-body response, treats a non-empty body as identity presence, and fails
+  closed on every incomplete or ambiguous probe without recording its body.
 - Re-resolved and strictly admitted GCE's current public IPv4 only after the
   identity-removal stop/start completed. GCE can replace an ephemeral external
   address during that transition, so remote SSH no longer consumes the stale
