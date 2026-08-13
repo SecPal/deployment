@@ -25,11 +25,11 @@ credentials. Every host and all of its state are disposable test fixtures.
 
 ## Implemented and planned matrix
 
-| Provider       | Image                                 | Architecture | CPU evidence          | Status                        |
-| -------------- | ------------------------------------- | ------------ | --------------------- | ----------------------------- |
-| DigitalOcean   | official `debian-13-x64`              | `amd64`      | Premium Intel profile | implemented, one host per run |
-| DigitalOcean   | official `debian-13-x64`              | `amd64`      | Premium AMD profile   | implemented, one host per run |
-| Google Compute | `debian-cloud/debian-13-arm64` family | `arm64`      | Axion/C4A             | implemented, one host per run |
+| Provider       | Image                                 | Architecture | CPU evidence          | Status                             |
+| -------------- | ------------------------------------- | ------------ | --------------------- | ---------------------------------- |
+| DigitalOcean   | official `debian-13-x64`              | `amd64`      | Premium Intel profile | implemented; real lifecycle passed |
+| DigitalOcean   | official `debian-13-x64`              | `amd64`      | Premium AMD profile   | implemented; real lifecycle passed |
+| Google Compute | `debian-cloud/debian-13-arm64` family | `arm64`      | Axion/C4A             | implemented; real lifecycle passed |
 
 The DigitalOcean root is
 [`infra/ci-cloud/digitalocean`](../infra/ci-cloud/digitalocean). It uses the
@@ -815,17 +815,25 @@ they do not prove that all hardware is compatible.
 5. Treat any named invariant, missing evidence, cleanup failure, or janitor
    ambiguity as a failure.
 
-Real `main` runs have now completed the full provision, Debian 13 conformance,
-bounded-evidence, and exact-cleanup lifecycle for both DigitalOcean Intel and
-DigitalOcean AMD at the closed 8 GiB sizes. The first GCP Axion run provisioned
-and cleaned up the official Debian 13 arm64 fixture, and its target entrypoint
-itself exited successfully, but admission correctly failed
-`PROVIDER_VM_CLOUD_IDENTITY`: GCE had implicitly attached the project's default
-Compute service account. That run is failure evidence, not GCP conformance.
-After this identity-transition change is merged, the reviewed custom IAM role
-is updated, and the role-free bootstrap identity plus its exact resource-level
-binding are configured, a fresh `main` GCP Axion run must prove that the
-target-visible VM has no cloud identity and that exact cleanup still succeeds.
+Real `main` runs have completed the full provision, Debian 13 conformance,
+bounded-evidence, and exact-cleanup lifecycle for every implemented profile:
+
+| Profile              | Tested target SHA                          | Successful run                                                               |
+| -------------------- | ------------------------------------------ | ---------------------------------------------------------------------------- |
+| DigitalOcean / Intel | `80300294a12891201a551419f6144af058852313` | [31671500152](https://github.com/SecPal/deployment/actions/runs/31671500152) |
+| DigitalOcean / AMD   | `80300294a12891201a551419f6144af058852313` | [31672125657](https://github.com/SecPal/deployment/actions/runs/31672125657) |
+| GCP / Axion          | `b04f00a3a7871e143446c352c1a13a42932890dd` | [31732827718](https://github.com/SecPal/deployment/actions/runs/31732827718) |
+
+The GCP evidence records the official Debian 13 arm64 image on
+`c4a-standard-4`, effective `arm64` with an ARM Neoverse-V2 CPU, a successful
+cloud-identity probe, and no attached VM cloud identity. Its target entrypoint
+passed, bounded evidence uploaded, and the independent exact cleanup completed.
+
+These foundation runs did not all test the same target SHA: the DigitalOcean
+proofs predate the final GCP identity correction. They establish that each
+closed provider profile can complete its lifecycle, but they are not a claim
+that one identical reviewed revision has passed the full three-profile matrix.
+A deliberate same-SHA matrix run is the next reproducibility check.
 
 ## Primary references
 
