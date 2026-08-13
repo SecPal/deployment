@@ -132,10 +132,11 @@ dedicated user-managed bootstrap service account which has no project/resource
 roles, no user-managed keys, no federation trust, and an empty OAuth scope set.
 It is intentionally incapable of useful cloud API access. The first native
 startup-script invocation performs only a dependency-free, fail-closed metadata
-identity gate. It waits for both an instance-specific admission marker written
-by the trusted control plane and a 404 from the service-account metadata
-directory before any diagnostic-SSH, package, operator-key, or target setup
-action. The trusted runner verifies the exact bootstrap identity and its empty
+identity gate. It waits for both an instance-specific admission marker with the
+exact value `true` written by the trusted control plane and the documented HTTP
+200 response with an empty body from the service-account metadata directory
+before any diagnostic-SSH, package, operator-key, or target setup action. The
+trusted runner verifies the exact bootstrap identity and its empty
 scope set, obtains a fresh OIDC token, stops the exact run-bound instance, calls
 the bounded Compute API operation with `{"scopes":[]}`, and verifies the stopped
 instance has no service accounts. Only then does it add the admission marker,

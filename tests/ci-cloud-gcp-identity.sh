@@ -261,14 +261,16 @@ fi
 if [[ "$*" == *"secpal-ci-cloud-identity-admitted"* ]]; then
   case "$(<"$SECPAL_TEST_GATE_STATE")" in
     waiting) printf '%s' 404 ;;
-    admitted) printf '%s' 200 ;;
-    inconsistent) printf '%s' 200 ;;
+    admitted) printf '%s\n%s' 200 dHJ1ZQ== ;;
+    inconsistent) printf '%s\n%s' 200 dHJ1ZQ== ;;
+    identity-not-found) printf '%s' 404 ;;
   esac
 else
   case "$(<"$SECPAL_TEST_GATE_STATE")" in
-    waiting) printf '%s' 200 ;;
-    admitted) printf '%s' 404 ;;
-    inconsistent) printf '%s' 200 ;;
+    waiting) printf '%s\n%s' 200 ZGVmYXVsdC8= ;;
+    admitted) printf '%s' 200 ;;
+    inconsistent) printf '%s\n%s' 200 ZGVmYXVsdC8= ;;
+    identity-not-found) printf '%s' 404 ;;
   esac
 fi
 FAKE_METADATA_TIMEOUT
@@ -305,7 +307,7 @@ inline_output="$(
 )"
 [[ "$inline_output" == *"embedded bootstrap continued."* ]]
 
-for gate_mode in inconsistent transport-error; do
+for gate_mode in inconsistent identity-not-found transport-error; do
   printf '%s\n' "$gate_mode" >"$GATE_STATE"
   set +e
   PATH="$FAKE_BIN:/usr/bin:/bin" SECPAL_TEST_GATE_MODE="$gate_mode" \
