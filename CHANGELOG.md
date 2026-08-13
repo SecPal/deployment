@@ -45,6 +45,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Updated the cloud-conformance evidence record after the first successful GCP
+  Axion lifecycle, including verified absence of a VM cloud identity, bounded
+  evidence publication, and exact cleanup. All three implemented provider/CPU
+  profiles now have real successful foundation runs; the documentation keeps
+  their differing tested target SHAs explicit.
 - Aligned final GCP cloud-identity evidence with the already admitted bootstrap
   gate: Compute Engine returns HTTP 200 with an empty service-account directory
   when no identity is attached. The collector now admits only that bounded
