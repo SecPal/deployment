@@ -547,7 +547,17 @@ cannot choose names, tags, or labels.
 The independent cleanup job uses `if: ${{ always() }}`, downloads only that
 run's short-lived non-secret OpenTofu state artifact, and performs exact
 `tofu destroy`. It never deletes by prefix, account, project, or broad tag.
-Cleanup does not require SSH or a reachable VM.
+Cleanup does not require SSH or a reachable VM. The validation job publishes
+the original, closed run-attempt identity once; provisioning, evidence, and
+cleanup reuse that value, so a GitHub failed-job rerun cannot drift to a new
+artifact name. A targeted rerun of a provider job is skipped because it cannot
+refresh the validation job's resource identity; use a full workflow rerun or a
+new dispatch when a new fixture is intended. A cleanup-only rerun continues to
+select the original state. Cleanup initializes the locked provider at most
+three times, with ten- and twenty-second delays and a 90-second bound per
+attempt. The nominal retry schedule is five minutes; even if every process
+requires the full forced-termination grace, the hard bound remains below six
+minutes before cleanup fails closed to the janitor.
 
 The scheduled TTL janitor is a second trusted workflow. It lists Droplets,
 accepts only resources with all five unambiguous tags carrying one consistent
@@ -555,6 +565,10 @@ run identity, verifies the full SHA, repository, name, chronology, and maximum
 TTL, retrieves the exact Droplet again, revalidates the metadata, and deletes
 only its numeric resource ID. It fails closed on extra, missing, duplicate, or
 contradictory metadata.
+It runs hourly at minute 17. Fixtures expire after two hours, so an expired
+Droplet is normally removed by the first following schedule—within roughly
+three hours of creation plus any GitHub queue delay—even when exact cleanup
+never succeeded.
 
 The GCP janitor is bounded to `secpal-dev/europe-west3-a`, and only to instance
 and disk APIs. It accepts exactly seven labels, verifies the fixed provider
@@ -698,15 +712,16 @@ they do not prove that all hardware is compatible.
 
 Earlier workflow revisions performed real DigitalOcean Intel, DigitalOcean AMD,
 and GCP Axion provisioning attempts and exact cleanup. The latest Intel attempt
-reached trusted host setup and executed the selected target successfully, but
-admission correctly failed because the provider-image running kernel package
-was absent from the refreshed authenticated Debian indexes. The AMD API had
-previously rejected the fixed size as outside the account tier, and Axion had
-not reached trusted host setup. None is success evidence for this revision.
-The authenticated kernel update/reboot transition still requires a fresh
-`main` run that creates, tests, records complete evidence from, and destroys the
-host. Start with DigitalOcean Intel; do not enable or fund AMD capacity merely
-to bypass that proof-of-concept gate.
+created the official Debian 13 fixture, completed trusted host setup and target
+conformance, and uploaded its bounded evidence. Exact cleanup then failed before
+destroy because the locked provider checksum download timed out. The AMD API
+had previously rejected the fixed size as outside the account tier, and Axion
+had not reached trusted host setup. The successful Intel test phase is useful
+evidence, but it is not end-to-end lifecycle success for this revision. The
+cleanup retry and rerun identity changes still require a fresh `main` run that
+creates, tests, records complete evidence from, and destroys the host. Start
+with DigitalOcean Intel; do not enable or fund AMD capacity merely to bypass
+that proof-of-concept gate.
 
 ## Primary references
 

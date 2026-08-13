@@ -2432,9 +2432,18 @@ class CloudCIContractTests(unittest.TestCase):
     def test_rejects_gcp_access_token_in_remote_test_step(self) -> None:
         self.assert_mutation_rejected(
             ".github/workflows/cloud-conformance.yml",
-            "      - name: Run uncredentialed GCP remote conformance\n",
             "      - name: Run uncredentialed GCP remote conformance\n"
+            "        id: gcp_conformance\n"
+            "        if: ${{ steps.gcp_apply.outcome == 'success' }}\n"
+            "        continue-on-error: true\n"
             "        env:\n"
+            "          RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}\n",
+            "      - name: Run uncredentialed GCP remote conformance\n"
+            "        id: gcp_conformance\n"
+            "        if: ${{ steps.gcp_apply.outcome == 'success' }}\n"
+            "        continue-on-error: true\n"
+            "        env:\n"
+            "          RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}\n"
             "          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}\n",
         )
 
@@ -2548,9 +2557,18 @@ class CloudCIContractTests(unittest.TestCase):
     def test_rejects_cloud_credential_in_remote_test_step(self) -> None:
         self.assert_mutation_rejected(
             ".github/workflows/cloud-conformance.yml",
-            "      - name: Run uncredentialed DigitalOcean remote conformance\n",
             "      - name: Run uncredentialed DigitalOcean remote conformance\n"
+            "        id: conformance\n"
+            "        if: ${{ steps.apply.outcome == 'success' }}\n"
+            "        continue-on-error: true\n"
             "        env:\n"
+            "          RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}\n",
+            "      - name: Run uncredentialed DigitalOcean remote conformance\n"
+            "        id: conformance\n"
+            "        if: ${{ steps.apply.outcome == 'success' }}\n"
+            "        continue-on-error: true\n"
+            "        env:\n"
+            "          RESOURCE_ATTEMPT: ${{ needs.validate.outputs.resource_attempt }}\n"
             "          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}\n",
         )
 
@@ -2591,6 +2609,95 @@ class CloudCIContractTests(unittest.TestCase):
             "tofu destroy --auto-approve --input=false",
             "doctl compute droplet delete --force --tag-name secpal-ci",
         )
+
+    def test_cleanup_reuses_validated_resource_attempt_across_reruns(
+        self,
+    ) -> None:
+        workflow = (
+            ROOT / ".github/workflows/cloud-conformance.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "resource_attempt: ${{ steps.inputs.outputs.resource_attempt }}",
+            workflow,
+        )
+        self.assertIn(
+            "RAW_RESOURCE_ATTEMPT: ${{ github.run_attempt }}", workflow
+        )
+        self.assertEqual(
+            10,
+            workflow.count(
+                "${{ needs.validate.outputs.resource_attempt }}"
+            ),
+        )
+
+    def test_provider_jobs_reject_targeted_reruns_with_stale_identity(
+        self,
+    ) -> None:
+        document = yaml.load(
+            (ROOT / ".github/workflows/cloud-conformance.yml").read_text(
+                encoding="utf-8"
+            ),
+            Loader=yaml.BaseLoader,
+        )
+        jobs = document["jobs"]
+        for provider in ("digitalocean", "gcp"):
+            with self.subTest(provider=provider):
+                self.assertEqual(
+                    "${{ needs.validate.outputs.provider == "
+                    f"'{provider}' && github.run_attempt == "
+                    "fromJSON(needs.validate.outputs.resource_attempt) }}",
+                    jobs[provider]["if"],
+                )
+
+    def test_cleanup_init_uses_bounded_retry_helper(self) -> None:
+        workflow = (
+            ROOT / ".github/workflows/cloud-conformance.yml"
+        ).read_text(encoding="utf-8")
+        helper = (
+            ROOT / "scripts/ci-cloud/init-cleanup-root.sh"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            2,
+            workflow.count(
+                '"$GITHUB_WORKSPACE/scripts/ci-cloud/init-cleanup-root.sh"'
+            ),
+        )
+        self.assertIn(
+            "timeout --signal=TERM --kill-after=15s 90s", helper
+        )
+
+    def test_rejects_cleanup_bound_to_current_rerun_attempt(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            "cloud-state-digitalocean-${{ github.run_id }}-"
+            "${{ needs.validate.outputs.resource_attempt }}",
+            "cloud-state-digitalocean-${{ github.run_id }}-"
+            "${{ github.run_attempt }}",
+        )
+
+    def test_rejects_cleanup_without_bounded_init_retry(self) -> None:
+        self.assert_mutation_rejected(
+            ".github/workflows/cloud-conformance.yml",
+            '"$GITHUB_WORKSPACE/scripts/ci-cloud/init-cleanup-root.sh"',
+            "tofu init -input=false -lockfile=readonly",
+        )
+
+    def test_rejects_provider_job_rerun_without_fresh_identity(self) -> None:
+        for provider in ("digitalocean", "gcp"):
+            with self.subTest(provider=provider):
+                guarded = (
+                    "    if: >-\n"
+                    "      ${{ needs.validate.outputs.provider == "
+                    f"'{provider}' &&\n"
+                    "      github.run_attempt == "
+                    "fromJSON(needs.validate.outputs.resource_attempt) }}\n"
+                )
+                self.assert_mutation_rejected(
+                    ".github/workflows/cloud-conformance.yml",
+                    guarded,
+                    "    if: ${{ needs.validate.outputs.provider == "
+                    f"'{provider}' }}\n",
+                )
 
     def test_rejects_broad_janitor_deletion(self) -> None:
         self.assert_mutation_rejected(
