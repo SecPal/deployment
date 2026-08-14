@@ -2015,7 +2015,7 @@ def validate(root: Path) -> None:
         "target entrypoint must reject arbitrary lifecycle commands and instances",
     )
     require(
-        remote.count("< scripts/ci-cloud/collect-workload-evidence.py") == 1
+        remote.count("< scripts/ci-cloud/collect-workload-evidence.py") == 2
         and '"$phase" "$target_sha" "$fixture_instance"' in remote
         and "collect_workload_phase()" in remote
         and "collect_workload_phase baseline" in remote
@@ -2023,9 +2023,11 @@ def validate(root: Path) -> None:
         and "collect_workload_phase post-cleanup" in remote
         and remote.index('bootstrap_stage="collector-baseline"')
         < remote.index('bootstrap_stage="target-workload-prepare-start"')
+        < remote.index('bootstrap_stage="trusted-quadlet-normalize-live"')
         < remote.index('bootstrap_stage="collector-live"')
         < remote.index('bootstrap_stage="target-workload-cleanup"')
         < remote.index('bootstrap_stage="target-host"')
+        < remote.index('bootstrap_stage="trusted-quadlet-normalize-cleanup"')
         < remote.index('bootstrap_stage="collector-post-cleanup"')
         and "trap collect_cleanup_after_interruption INT TERM HUP" in remote
         and "workload_evidence_finalized=true" in remote
@@ -2056,8 +2058,19 @@ def validate(root: Path) -> None:
         and 'QUADLET_ROOT = Path("/etc/containers/systemd/users/20000")'
         in workload_collector
         and "instance != target_sha[:12]" in workload_collector
-        and 'phase not in {"baseline", "live", "post-cleanup"}'
+        and 'phase not in {"baseline", "normalize", "live", "post-cleanup"}'
         in workload_collector
+        and 'choices=["baseline", "normalize", "live", "post-cleanup"]'
+        in workload_collector
+        and '"systemctl", "--user", "set-environment"'
+        in workload_collector
+        and 'f"QUADLET_UNIT_DIRS={QUADLET_ROOT}"' in workload_collector
+        and '"systemctl", "--user", "show-environment"' in workload_collector
+        and '"systemctl", "--user", "unset-environment", *names'
+        in workload_collector
+        and "TRUSTED_MANAGER_ENVIRONMENT" in workload_collector
+        and "observed == expected" in workload_collector
+        and '["systemctl", "--user", "daemon-reload"]' in workload_collector
         and "workload_admission_failures" in workload_collector
         and "shell=True" not in workload_collector
         and "os.system" not in workload_collector
@@ -2065,7 +2078,7 @@ def validate(root: Path) -> None:
         "workload collection must remain fixed, rootless, bounded, and independent",
     )
     require(
-        'phase not in {"baseline", "live", "post-cleanup"}'
+        'phase not in {"baseline", "normalize", "live", "post-cleanup"}'
         in workload_collector
         and '("Names", "Name", "name")' in workload_collector
         and 'state.get("Healthcheck", {})' in workload_collector

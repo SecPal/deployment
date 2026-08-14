@@ -359,6 +359,8 @@ cleanup_status=125
 live_collection_status=125
 cleanup_collection_status=125
 baseline_collection_status=125
+live_normalization_status=125
+cleanup_normalization_status=125
 checkout_admitted=false
 cleanup_completed=false
 workload_evidence_finalized=false
@@ -530,6 +532,18 @@ collect_workload_live() { collect_workload_phase live; }
 collect_workload_baseline() { collect_workload_phase baseline; }
 collect_workload_post_cleanup() { collect_workload_phase post-cleanup; }
 
+normalize_quadlet_runtime() {
+  timeout --signal=TERM --kill-after=15s 3m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
+    HOME=/home/secpal-ci \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/bin/python3 -I - normalize "$target_sha" "$fixture_instance" \
+    < scripts/ci-cloud/collect-workload-evidence.py >/dev/null
+}
+
 collect_host_and_assemble() {
   local require_passed="$1"
   local ended_at
@@ -551,6 +565,7 @@ collect_host_and_assemble() {
     "$host_evidence_json" "$baseline_evidence_json" \
     "$live_evidence_json" "$cleanup_evidence_json" \
     "$host_status" "$prepare_start_status" "$cleanup_status" \
+    "$live_normalization_status" "$cleanup_normalization_status" \
     "$baseline_collection_status" "$live_collection_status" \
     "$cleanup_collection_status" \
     >"$evidence_json"
@@ -588,6 +603,8 @@ collect_cleanup_after_interruption() {
   fi
   if [[ "$checkout_admitted" == true &&
     "$workload_evidence_finalized" == false ]]; then
+    normalize_quadlet_runtime
+    cleanup_normalization_status=$?
     collect_workload_post_cleanup
     cleanup_collection_status=$?
     workload_evidence_finalized=true
@@ -616,6 +633,12 @@ run_target_prepare_start
 prepare_start_status=$?
 set -e
 
+bootstrap_stage="trusted-quadlet-normalize-live"
+set +e
+normalize_quadlet_runtime
+live_normalization_status=$?
+set -e
+
 bootstrap_stage="collector-live"
 set +e
 collect_workload_live
@@ -635,6 +658,12 @@ bootstrap_stage="target-host"
 set +e
 run_target_host
 host_status=$?
+set -e
+
+bootstrap_stage="trusted-quadlet-normalize-cleanup"
+set +e
+normalize_quadlet_runtime
+cleanup_normalization_status=$?
 set -e
 
 bootstrap_stage="collector-post-cleanup"

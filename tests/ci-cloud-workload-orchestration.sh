@@ -131,6 +131,10 @@ if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
   exit 0
 fi
 case " $* " in
+  *' /usr/bin/python3 -I - normalize '*)
+    cat >/dev/null
+    printf 'collector:normalize\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    ;;
   *' /usr/bin/python3 -I - baseline '*)
     cat >/dev/null
     printf 'collector:baseline\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
@@ -178,9 +182,11 @@ expected_sequence() {
     control:create-volume \
     collector:baseline \
     target:workload-prepare-start \
+    collector:normalize \
     collector:live \
     target:workload-cleanup \
     target:host \
+    collector:normalize \
     collector:post-cleanup \
     control:remove-network \
     control:remove-volume \
@@ -233,6 +239,7 @@ if [[ "$interrupt_status" -ne 130 ]]; then
   exit 1
 fi
 grep -Fxq 'target:workload-cleanup' "$INTERRUPT_LOG"
+grep -Fxq 'collector:normalize' "$INTERRUPT_LOG"
 grep -Fxq 'collector:post-cleanup' "$INTERRUPT_LOG"
 
 HOST_INTERRUPT_LOG="$TEMP_DIR/host-interrupt.log"
@@ -247,6 +254,7 @@ if [[ "$host_interrupt_status" -ne 130 ]]; then
   exit 1
 fi
 if [[ "$(grep -Fxc 'target:workload-cleanup' "$HOST_INTERRUPT_LOG")" -ne 1 ||
+  "$(grep -Fxc 'collector:normalize' "$HOST_INTERRUPT_LOG")" -ne 2 ||
   "$(grep -Fxc 'collector:post-cleanup' "$HOST_INTERRUPT_LOG")" -ne 1 ]]; then
   printf 'FAIL: finalized workload cleanup evidence was repeated during host interruption.\n' >&2
   exit 1

@@ -31,10 +31,12 @@ FAILURE_STAGES = (
     "control-resources",
     "collector-baseline",
     "target-workload-prepare-start",
+    "trusted-quadlet-normalize-live",
     "collector-live",
     "target-workload-cleanup",
-    "collector-post-cleanup",
     "target-host",
+    "trusted-quadlet-normalize-cleanup",
+    "collector-post-cleanup",
     "collector",
 )
 OUTPUT_NAMES = frozenset(("bootstrap-failure.json", "summary.md"))

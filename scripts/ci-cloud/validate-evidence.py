@@ -141,6 +141,14 @@ def recompute_admission(
                 "TARGET_WORKLOAD_PREPARE_START",
             ),
             (phase_statuses["workload_cleanup"], "TARGET_WORKLOAD_CLEANUP"),
+            (
+                phase_statuses["trusted_quadlet_normalize_live"],
+                "TRUSTED_QUADLET_NORMALIZE_LIVE",
+            ),
+            (
+                phase_statuses["trusted_quadlet_normalize_cleanup"],
+                "TRUSTED_QUADLET_NORMALIZE_CLEANUP",
+            ),
             (collection_statuses["baseline"], "TRUSTED_BASELINE_COLLECTION"),
             (collection_statuses["live"], "TRUSTED_LIVE_COLLECTION"),
             (
@@ -198,7 +206,11 @@ def validate_document(document: object) -> dict[str, object]:
     )
     phase_statuses = exact_keys(
         test["phase_exit_statuses"],
-        {"host", "workload_prepare_start", "workload_cleanup"},
+        {
+            "host", "workload_prepare_start", "workload_cleanup",
+            "trusted_quadlet_normalize_live",
+            "trusted_quadlet_normalize_cleanup",
+        },
         "$.test.phase_exit_statuses",
     )
     collection_statuses = exact_keys(
@@ -277,7 +289,7 @@ def validate_document(document: object) -> dict[str, object]:
             "phase", "target_admitted", "collector_uid", "collector_gid",
             "complete", "containers", "networks", "volumes",
             "migration_invocation_count", "podman_api", "user_work",
-            "control_resources",
+            "processes", "control_resources",
         },
         "$.workload.baseline",
     )
@@ -286,10 +298,10 @@ def validate_document(document: object) -> dict[str, object]:
         {
             "phase", "target_admitted", "collector_uid", "collector_gid",
             "complete", "quadlet_search_paths", "installed_units",
-            "generated_services", "containers", "singleton_roles", "networks",
+            "generated_services", "containers", "networks",
             "volumes", "all_containers", "all_networks", "all_volumes",
-            "migration", "readiness", "podman_rootless", "oci_runtime",
-            "podman_api", "control_resources",
+            "podman_rootless", "oci_runtime",
+            "podman_api", "user_work", "processes", "control_resources",
         },
         "$.workload.live",
     )
@@ -300,26 +312,16 @@ def validate_document(document: object) -> dict[str, object]:
             "complete", "owned_units", "generated_services", "containers",
             "networks", "volumes", "all_containers", "all_networks",
             "all_volumes", "migration_invocation_count", "podman_api",
-            "user_work", "control_resources",
+            "user_work", "processes", "control_resources",
         },
         "$.workload.post_cleanup",
     )
-    exact_keys(
-        live["singleton_roles"],
-        {"scheduler", "worker-hash-chain"},
-        "$.workload.live.singleton_roles",
-    )
-    exact_keys(
-        live["migration"],
-        {"observed", "state", "exit_code", "invocation_count"},
-        "$.workload.live.migration",
-    )
-    exact_keys(live["readiness"], {"observed", "ready_roles"}, "$.workload.live.readiness")
     exact_keys(
         baseline["user_work"],
         {"active_units", "jobs"},
         "$.workload.baseline.user_work",
     )
+    exact_keys(live["user_work"], {"active_units", "jobs"}, "$.workload.live.user_work")
     exact_keys(
         post_cleanup["user_work"],
         {"active_units", "jobs"},
@@ -353,7 +355,8 @@ def validate_document(document: object) -> dict[str, object]:
                 "logical_name", "unit", "fragment_path", "fragment_uid", "fragment_gid",
                 "fragment_mode", "drop_in_paths", "drop_in_owners", "active_state",
                 "sub_state", "result", "exec_main_status", "main_pid", "control_group",
-                "invocation_id",
+                "invocation_id", "source_path", "fragment_sha256",
+                "drop_in_sha256",
             },
             f"$.workload.live.generated_services[{index}]",
         )
@@ -370,7 +373,9 @@ def validate_document(document: object) -> dict[str, object]:
             container,
             {
                 "id", "role", "name", "state", "pid", "exit_code", "health", "oci_runtime",
-                "rootless", "privileged", "pid_mode", "userns_mode",
+                "rootless", "privileged", "configured_user", "effective_uid",
+                "effective_gid", "read_only_rootfs", "entrypoint", "command",
+                "healthcheck_command", "pid_mode", "userns_mode",
                 "ipc_mode", "uts_mode", "network_mode", "cap_add",
                 "effective_caps", "bounding_caps", "devices_present",
                 "mounts", "tmpfs", "remote_api_environment", "security_opt",
@@ -404,6 +409,20 @@ def validate_document(document: object) -> dict[str, object]:
                 tmpfs,
                 {"destination", "size_bytes", "mode", "uid", "gid", "flags"},
                 f"$.workload.live.containers[{index}].tmpfs[{tmpfs_index}]",
+            )
+    for phase_name, observation in (
+        ("baseline", baseline),
+        ("live", live),
+        ("post_cleanup", post_cleanup),
+    ):
+        for index, process in enumerate(
+            observation["processes"]
+            if isinstance(observation["processes"], list) else []
+        ):
+            exact_keys(
+                process,
+                {"executable", "control_group", "uid", "gid", "count"},
+                f"$.workload.{phase_name}.processes[{index}]",
             )
     exact_keys(platform["os_release"], {"ID", "VERSION_ID", "VERSION_CODENAME", "PRETTY_NAME"}, "$.platform.os_release")
     exact_keys(platform["cpu"], {"vendor", "model"}, "$.platform.cpu")

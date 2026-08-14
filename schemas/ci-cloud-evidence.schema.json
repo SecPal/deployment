@@ -70,11 +70,21 @@
         "phase_exit_statuses": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["host", "workload_prepare_start", "workload_cleanup"],
+          "required": [
+            "host",
+            "workload_prepare_start",
+            "workload_cleanup",
+            "trusted_quadlet_normalize_live",
+            "trusted_quadlet_normalize_cleanup"
+          ],
           "properties": {
             "host": { "$ref": "#/$defs/exitStatus" },
             "workload_prepare_start": { "$ref": "#/$defs/exitStatus" },
-            "workload_cleanup": { "$ref": "#/$defs/exitStatus" }
+            "workload_cleanup": { "$ref": "#/$defs/exitStatus" },
+            "trusted_quadlet_normalize_live": { "$ref": "#/$defs/exitStatus" },
+            "trusted_quadlet_normalize_cleanup": {
+              "$ref": "#/$defs/exitStatus"
+            }
           }
         },
         "collection_exit_statuses": {
@@ -662,8 +672,11 @@
         "fragment_uid",
         "fragment_gid",
         "fragment_mode",
+        "fragment_sha256",
+        "source_path",
         "drop_in_paths",
         "drop_in_owners",
+        "drop_in_sha256",
         "active_state",
         "sub_state",
         "result",
@@ -705,6 +718,15 @@
         "fragment_uid": { "const": 20000 },
         "fragment_gid": { "const": 20000 },
         "fragment_mode": { "const": "0644" },
+        "fragment_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_path": {
+          "type": "string",
+          "pattern": "^/etc/containers/systemd/users/20000/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.(container|network|volume)$",
+          "maxLength": 192
+        },
         "drop_in_paths": {
           "type": "array",
           "uniqueItems": true,
@@ -719,6 +741,14 @@
           "type": "array",
           "maxItems": 8,
           "items": { "$ref": "#/$defs/dropInOwner" }
+        },
+        "drop_in_sha256": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
         },
         "active_state": { "$ref": "#/$defs/shortString" },
         "sub_state": { "$ref": "#/$defs/shortString" },
@@ -772,6 +802,13 @@
         "oci_runtime",
         "rootless",
         "privileged",
+        "configured_user",
+        "effective_uid",
+        "effective_gid",
+        "read_only_rootfs",
+        "entrypoint",
+        "command",
+        "healthcheck_command",
         "pid_mode",
         "userns_mode",
         "ipc_mode",
@@ -811,6 +848,24 @@
         "oci_runtime": { "$ref": "#/$defs/shortString" },
         "rootless": { "type": "boolean" },
         "privileged": { "type": "boolean" },
+        "configured_user": {
+          "type": "string",
+          "pattern": "^[0-9]{1,10}:[0-9]{1,10}$"
+        },
+        "effective_uid": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 4294967295
+        },
+        "effective_gid": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 4294967295
+        },
+        "read_only_rootfs": { "type": "boolean" },
+        "entrypoint": { "$ref": "#/$defs/commandArray" },
+        "command": { "$ref": "#/$defs/commandArray" },
+        "healthcheck_command": { "$ref": "#/$defs/commandArray" },
         "pid_mode": { "$ref": "#/$defs/shortString" },
         "userns_mode": { "$ref": "#/$defs/shortString" },
         "ipc_mode": { "$ref": "#/$defs/shortString" },
@@ -927,6 +982,25 @@
         }
       }
     },
+    "processFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable", "control_group", "uid", "gid", "count"],
+      "properties": {
+        "executable": {
+          "type": "string",
+          "pattern": "^/[^\\u0000]{0,511}$"
+        },
+        "control_group": {
+          "type": "string",
+          "pattern": "^/user\\.slice/user-20000\\.slice/",
+          "maxLength": 512
+        },
+        "uid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "gid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "count": { "type": "integer", "minimum": 1, "maximum": 256 }
+      }
+    },
     "baselineObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -942,6 +1016,7 @@
         "migration_invocation_count",
         "podman_api",
         "user_work",
+        "processes",
         "control_resources"
       ],
       "properties": {
@@ -956,6 +1031,11 @@
         "migration_invocation_count": { "const": 0 },
         "podman_api": { "type": "boolean" },
         "user_work": { "$ref": "#/$defs/userWork" },
+        "processes": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/processFact" }
+        },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -972,17 +1052,16 @@
         "installed_units",
         "generated_services",
         "containers",
-        "singleton_roles",
         "networks",
         "volumes",
         "all_containers",
         "all_networks",
         "all_volumes",
-        "migration",
-        "readiness",
         "podman_rootless",
         "oci_runtime",
         "podman_api",
+        "user_work",
+        "processes",
         "control_resources"
       ],
       "properties": {
@@ -1012,63 +1091,18 @@
         },
         "podman_rootless": { "type": "boolean" },
         "oci_runtime": { "$ref": "#/$defs/shortString" },
-        "singleton_roles": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["scheduler", "worker-hash-chain"],
-          "properties": {
-            "scheduler": { "type": "integer", "minimum": 0, "maximum": 10 },
-            "worker-hash-chain": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 10
-            }
-          }
-        },
         "networks": { "$ref": "#/$defs/stringArray" },
         "volumes": { "$ref": "#/$defs/stringArray" },
         "all_containers": { "$ref": "#/$defs/stringArray" },
         "all_networks": { "$ref": "#/$defs/stringArray" },
         "all_volumes": { "$ref": "#/$defs/stringArray" },
-        "migration": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["observed", "state", "exit_code", "invocation_count"],
-          "properties": {
-            "observed": { "type": "boolean" },
-            "state": {
-              "enum": [
-                "unknown",
-                "created",
-                "configured",
-                "exited",
-                "running",
-                "stopped"
-              ]
-            },
-            "exit_code": { "type": "integer", "minimum": -1, "maximum": 255 },
-            "invocation_count": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 16
-            }
-          }
-        },
-        "readiness": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["observed", "ready_roles"],
-          "properties": {
-            "observed": { "type": "boolean" },
-            "ready_roles": {
-              "type": "array",
-              "uniqueItems": true,
-              "maxItems": 10,
-              "items": { "$ref": "#/$defs/workloadRole" }
-            }
-          }
-        },
         "podman_api": { "type": "boolean" },
+        "user_work": { "$ref": "#/$defs/userWork" },
+        "processes": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/processFact" }
+        },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -1092,6 +1126,7 @@
         "migration_invocation_count",
         "podman_api",
         "user_work",
+        "processes",
         "control_resources"
       ],
       "properties": {
@@ -1115,6 +1150,11 @@
         },
         "podman_api": { "type": "boolean" },
         "user_work": { "$ref": "#/$defs/userWork" },
+        "processes": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/processFact" }
+        },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -1177,20 +1217,6 @@
                   "containers": { "minItems": 10, "maxItems": 10 },
                   "networks": { "minItems": 2, "maxItems": 2 },
                   "volumes": { "minItems": 3, "maxItems": 3 },
-                  "migration": {
-                    "const": {
-                      "observed": true,
-                      "state": "exited",
-                      "exit_code": 0,
-                      "invocation_count": 1
-                    }
-                  },
-                  "readiness": {
-                    "properties": {
-                      "observed": { "const": true },
-                      "ready_roles": { "minItems": 8, "maxItems": 8 }
-                    }
-                  },
                   "podman_rootless": { "const": true },
                   "oci_runtime": { "const": "crun" },
                   "podman_api": { "const": false },
@@ -1236,6 +1262,16 @@
     },
     "nonNegativeInteger": { "type": "integer", "minimum": 0 },
     "shortString": { "type": "string", "maxLength": 64 },
+    "commandArray": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "pattern": "^[^\\u0000]+$"
+      }
+    },
     "mediumString": { "type": "string", "maxLength": 256 },
     "stringArray": {
       "type": "array",

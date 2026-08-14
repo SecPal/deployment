@@ -367,15 +367,24 @@ The trusted runner creates one unrelated rootless control network and volume
 and records a main-controlled baseline of every rootless Podman container,
 network, volume, fixture migration invocation, and Podman API/socket activation
 state before any target code runs.
-It then invokes target prepare/start, streams the main-controlled live
-collector, requests target cleanup, and runs the separate target `host` phase
-for D.1 admission. Only after every target-controlled phase has returned does
-the trusted post-cleanup collector finalize D.1a evidence. Host-phase
+It then invokes target prepare/start, has the trusted unprivileged collector
+replace the complete bounded user-manager environment with the fixed home,
+runtime directory, bus, locale, executable path, and sole Quadlet path, perform
+a bounded `daemon-reload`, and verify that exact environment afterward. The
+runner then streams the main-controlled live collector and requests target cleanup,
+runs the separate target `host` phase for D.1 admission, and repeats the same
+fixed Quadlet normalization before post-cleanup collection. Both normalization
+results are explicit phase statuses and are required to pass. Only after every
+target-controlled phase has returned does the trusted post-cleanup collector
+finalize D.1a evidence. Host-phase
 descendants can therefore neither prepare the observed workload nor race the
 earlier baseline, and a resource created or leaked by that final target phase
 cannot escape the final inventory.
 Live admission requires the baseline plus exactly the closed fixture resource
-set. The same trusted lifecycle guard remeasures the migration invocation count
+set. It also requires every loaded generated service to identify the expected
+root-owned Quadlet source and records hashes of the effective fragment and
+drop-ins after the trusted reload. Target-produced status is not used for this
+correlation. The same trusted lifecycle guard remeasures the migration invocation count
 and Podman API/socket state during live and post-cleanup collection. A passing
 cleanup must therefore leave the migration count at exactly one and the API
 boundary disabled; removing the visible fixture cannot hide a second migration
@@ -824,9 +833,10 @@ so an early provider bootstrap failure does not collapse into an ambiguous
 `initialize` result. The runner, failure writer, and schema share the same
 closed orchestration-stage set: `host-key`, `bootstrap`, `root-ssh`,
 `target-checkout`, `control-resources`, `collector-baseline`,
-`target-workload-prepare-start`, `collector-live`,
-`target-workload-cleanup`, `target-host`, `collector-post-cleanup`, and
-`collector`. A host-key-stage failure instead records only counters for
+`target-workload-prepare-start`, `trusted-quadlet-normalize-live`,
+`collector-live`, `target-workload-cleanup`, `target-host`,
+`trusted-quadlet-normalize-cleanup`, `collector-post-cleanup`, and `collector`.
+A host-key-stage failure instead records only counters for
 the closed categories `connection_refused`, `connection_timeout`, `no_key`,
 `multiple_keys`, `changed_key`, and `other`. Refused and timed-out connections
 come from a bounded IPv4 TCP probe and stable operating-system error codes,
@@ -888,11 +898,16 @@ Evidence includes:
 - host AppArmor state, rootless Podman `apparmorEnabled`, and Podman
   `seccompEnabled` as three independent facts;
 - the exact 16-file root-owned Quadlet snapshot with paths, modes, and SHA-256
-  digests; the effective sole search path; and each generated user-service
-  fragment and drop-in path, owner, group, and mode; every generated service's
+  digests; the effective sole search path; and each generated user-service's
+  expected root-owned Quadlet source plus fragment and drop-in path, owner,
+  group, mode, and SHA-256 digest after a trusted unprivileged reload; every
+  generated service's
   effective active/sub-state, result, exit status, main PID, and control group;
-- the exact ten-container logical-role set, singleton counts for scheduler and
-  activity-hash-chain worker, effective rootless/crun/security facts and private
+- the exact ten-container logical-role set, with scheduler and
+  activity-hash-chain-worker cardinality derived from that independently
+  observed set rather than accepted as a reported count; effective
+  rootless/crun/security facts, the configured container user, the running
+  process's effective container UID/GID, a read-only root filesystem, and private
   PID, user, IPC, UTS, and network namespace modes,
   the closed role-to-network topology, the complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
@@ -906,14 +921,20 @@ Evidence includes:
   immutable local image references with distinct API and frontend content
   digests, the exact `PODMAN_SYSTEMD_UNIT` binding from each container to its
   generated service, and—for every running role—the container process cgroup
-  nested beneath that effective service cgroup; for each exited one-shot role,
+  nested beneath that effective service cgroup; the effective configured
+  entrypoint, command, and healthcheck for the migration and application-family
+  roles, including the exact migration command and distinct non-migration
+  commands for API, workers, and scheduler; for each exited one-shot role,
   one ordered Podman `create` → `start` → `died` lifecycle for the independently
   inspected full container ID plus exactly one journal record from a
   `/usr/bin/podman run` command naming that exact container in the generated
   service's exact systemd invocation; `inspect`, another Podman subcommand, a
   different name, a duplicate lifecycle, or a bare container-ID message cannot
-  establish this binding; one exited zero-status migration systemd invocation established
-  from a separate journal query restricted to invocation-ID fields, healthy
+  establish this binding, and any Podman `exec`/`exec_died` event for an
+  integration container makes lifecycle collection incomplete; one exited
+  zero-status migration systemd invocation
+  correlated with the exact configured migration command and established from
+  a separate journal query restricted to invocation-ID fields, healthy
   state for every health-bearing role, and running state for the remaining
   long-lived roles;
   and
@@ -924,7 +945,12 @@ Evidence includes:
   target-added container, network, and volume regardless of its name; exact
   restoration of the baseline active systemd user-unit and pending-job sets,
   measured both before and after the final inventory so a cleanup- or host-phase
-  transient service, timer, or queued job fails closed;
+  transient service, timer, or queued job fails closed; a bounded census of
+  executable, cgroup, effective host UID/GID, and count for every process in the
+  service account's complete UID-20000 user slice, including SSH session scopes,
+  requiring exact baseline restoration
+  after cleanup and confining every live process delta to an independently
+  observed generated-service cgroup;
   exact singleton `no-new-privileges` admission with every target-selected
   seccomp or other additional security option rejected; exact added, effective,
   and bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the
@@ -971,6 +997,11 @@ that fact is separately added to the trusted protocol, production
 service-account paths, production readiness, customer workload
 capacity, backup/restore, public networking, every provider image, or universal
 hardware compatibility.
+The migration evidence proves that the fixed configured command received one
+successful, service-correlated execution. It does not inspect application data
+and therefore does not by itself prove the semantic contents of a database
+migration. Likewise, singleton admission proves one observed container for each
+closed singleton role, not application-internal leader-election semantics.
 Three successful representative hosts demonstrate independent reproducibility;
 they do not prove that all hardware is compatible.
 

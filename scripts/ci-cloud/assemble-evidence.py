@@ -115,6 +115,10 @@ def assemble(
     status_invariants = {
         ("phase", "workload_prepare_start"): "TARGET_WORKLOAD_PREPARE_START",
         ("phase", "workload_cleanup"): "TARGET_WORKLOAD_CLEANUP",
+        ("phase", "trusted_quadlet_normalize_live"):
+            "TRUSTED_QUADLET_NORMALIZE_LIVE",
+        ("phase", "trusted_quadlet_normalize_cleanup"):
+            "TRUSTED_QUADLET_NORMALIZE_CLEANUP",
         ("collection", "baseline"): "TRUSTED_BASELINE_COLLECTION",
         ("collection", "live"): "TRUSTED_LIVE_COLLECTION",
         ("collection", "post_cleanup"): "TRUSTED_POST_CLEANUP_COLLECTION",
@@ -151,6 +155,8 @@ def main() -> int:
     parser.add_argument("host_status")
     parser.add_argument("prepare_start_status")
     parser.add_argument("cleanup_status")
+    parser.add_argument("live_normalization_status")
+    parser.add_argument("cleanup_normalization_status")
     parser.add_argument("baseline_collection_status")
     parser.add_argument("live_collection_status")
     parser.add_argument("cleanup_collection_status")
@@ -160,6 +166,12 @@ def main() -> int:
             "host": status(arguments.host_status),
             "workload_prepare_start": status(arguments.prepare_start_status),
             "workload_cleanup": status(arguments.cleanup_status),
+            "trusted_quadlet_normalize_live": status(
+                arguments.live_normalization_status
+            ),
+            "trusted_quadlet_normalize_cleanup": status(
+                arguments.cleanup_normalization_status
+            ),
         }
         collection_statuses = {
             "baseline": status(arguments.baseline_collection_status),

@@ -116,6 +116,38 @@ ROLE_IDENTITIES = {
     "gateway": (10003, 10003),
 }
 HEALTHY_ROLES = {"postgres", "valkey", "api", "frontend", "gateway"}
+API_ENTRYPOINT = ("/bin/bash", "/run/secpal/container-entrypoint.sh")
+ROLE_EXECUTION = {
+    "secrets-init": (
+        ("/bin/bash", "/run/secpal/init-local-secrets.sh"), (), ()
+    ),
+    "migrate": (API_ENTRYPOINT, ("php", "artisan", "migrate", "--force"), ()),
+    "api": (
+        API_ENTRYPOINT,
+        ("frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"),
+        ("CMD", "/usr/local/bin/secpal-http-live"),
+    ),
+    "worker-general": (
+        API_ENTRYPOINT,
+        (
+            "php", "artisan", "queue:work",
+            "--queue=merkle,opentimestamp,default", "--sleep=1", "--tries=3",
+            "--timeout=90",
+        ),
+        (),
+    ),
+    "worker-hash-chain": (
+        API_ENTRYPOINT,
+        (
+            "php", "artisan", "queue:work", "--queue=activity-hash-chain",
+            "--sleep=1", "--tries=3", "--timeout=90",
+        ),
+        (),
+    ),
+    "scheduler": (
+        API_ENTRYPOINT, ("php", "artisan", "schedule:work"), ()
+    ),
+}
 
 
 def load_collector():
@@ -177,8 +209,22 @@ def valid_observations() -> dict[str, object]:
             "fragment_uid": 20000,
             "fragment_gid": 20000,
             "fragment_mode": "0644",
+            "fragment_sha256": f"{generated_names.index(logical_name) + 101:064x}",
+            "source_path": str(
+                (
+                    Path("/etc/containers/systemd/users/20000")
+                    / (
+                        f"{prefix}-{logical_name}.container"
+                        if logical_name in ROLES
+                        else f"{prefix}-{logical_name.removesuffix('-network')}.network"
+                        if logical_name.endswith("-network")
+                        else f"{prefix}-{logical_name.removesuffix('-volume')}.volume"
+                    )
+                )
+            ),
             "drop_in_paths": [],
             "drop_in_owners": [],
+            "drop_in_sha256": [],
             "active_state": "active",
             "sub_state": (
                 "exited"
@@ -235,6 +281,9 @@ def valid_observations() -> dict[str, object]:
             key=lambda item: item["destination"],
         )
         uid, gid = ROLE_IDENTITIES[role]
+        entrypoint, command, healthcheck = ROLE_EXECUTION.get(
+            role, ((), (), ())
+        )
         tmpfs = sorted(
             [
                 {
@@ -270,6 +319,13 @@ def valid_observations() -> dict[str, object]:
                 "oci_runtime": "crun",
                 "rootless": True,
                 "privileged": False,
+                "configured_user": f"{uid}:{gid}",
+                "effective_uid": uid if not one_shot else -1,
+                "effective_gid": gid if not one_shot else -1,
+                "read_only_rootfs": True,
+                "entrypoint": list(entrypoint),
+                "command": list(command),
+                "healthcheck_command": list(healthcheck),
                 "pid_mode": "private",
                 "userns_mode": "private",
                 "ipc_mode": "private",
@@ -303,7 +359,8 @@ def valid_observations() -> dict[str, object]:
                     f"{generated_names.index(role) + 1:032x}" if one_shot else ""
                 ),
                 "image": (
-                    f"localhost/secpal-ci-{role}@sha256:{role_index:064x}"
+                    f"localhost/secpal-ci-{role}@sha256:"
+                    f"{(5 if role in {'migrate', 'api', 'worker-general', 'worker-hash-chain', 'scheduler'} else role_index):064x}"
                 ),
             }
         )
@@ -324,6 +381,7 @@ def valid_observations() -> dict[str, object]:
                 "active_units": ["dbus.service", "dbus.socket"],
                 "jobs": [],
             },
+            "processes": [],
             "containers": [],
             "networks": ["podman", "secpal-ci-unrelated-control-network"],
             "volumes": ["secpal-ci-unrelated-control-volume"],
@@ -346,7 +404,6 @@ def valid_observations() -> dict[str, object]:
             "containers": containers,
             "podman_rootless": True,
             "oci_runtime": "crun",
-            "singleton_roles": {"scheduler": 1, "worker-hash-chain": 1},
             "networks": [f"{prefix}-application", f"{prefix}-edge"],
             "volumes": [f"{prefix}-postgres", f"{prefix}-private-storage", f"{prefix}-secrets"],
             "all_containers": sorted(item["name"] for item in containers),
@@ -366,14 +423,15 @@ def valid_observations() -> dict[str, object]:
                     f"{prefix}-secrets",
                 ]
             ),
-            "migration": {
-                "observed": True,
-                "state": "exited",
-                "exit_code": 0,
-                "invocation_count": 1,
-            },
-            "readiness": {"observed": True, "ready_roles": sorted(set(ROLES) - {"secrets-init", "migrate"})},
             "podman_api": False,
+            "user_work": {
+                "active_units": sorted(
+                    ["dbus.service", "dbus.socket"]
+                    + [service["unit"] for service in services]
+                ),
+                "jobs": [],
+            },
+            "processes": [],
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
@@ -401,6 +459,7 @@ def valid_observations() -> dict[str, object]:
                 "active_units": ["dbus.service", "dbus.socket"],
                 "jobs": [],
             },
+            "processes": [],
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
@@ -433,7 +492,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             observations["baseline"],
             observations["live"],
             observations["post_cleanup"],
-            {"host": 0, "workload_prepare_start": 0, "workload_cleanup": 0},
+            {
+                "host": 0,
+                "workload_prepare_start": 0,
+                "workload_cleanup": 0,
+                "trusted_quadlet_normalize_live": 0,
+                "trusted_quadlet_normalize_cleanup": 0,
+            },
             {"baseline": 0, "live": 0, "post_cleanup": 0},
         )
         self.assertEqual("passed", document["workload"]["result"])
@@ -461,7 +526,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             observations["baseline"],
             observations["live"],
             observations["post_cleanup"],
-            {"host": 7, "workload_prepare_start": 0, "workload_cleanup": 0},
+            {
+                "host": 7,
+                "workload_prepare_start": 0,
+                "workload_cleanup": 0,
+                "trusted_quadlet_normalize_live": 0,
+                "trusted_quadlet_normalize_cleanup": 0,
+            },
             {"baseline": 0, "live": 0, "post_cleanup": 0},
         )
         self.assertEqual(
@@ -472,6 +543,46 @@ class WorkloadEvidenceTests(unittest.TestCase):
             document["host_admission"],
         )
         self.assertEqual("passed", document["workload"]["result"])
+
+    def test_each_trusted_quadlet_normalization_status_is_authoritative(self) -> None:
+        observations = valid_observations()
+        for phase, invariant in (
+            ("trusted_quadlet_normalize_live", "TRUSTED_QUADLET_NORMALIZE_LIVE"),
+            (
+                "trusted_quadlet_normalize_cleanup",
+                "TRUSTED_QUADLET_NORMALIZE_CLEANUP",
+            ),
+        ):
+            host = {
+                "schema_version": 1,
+                "workflow": {"target_sha": "a" * 40},
+                "test": {"failed_admission_invariants": []},
+                "platform": {},
+                "apt": {},
+                "host": {},
+                "runtime": {},
+            }
+            statuses = {
+                "host": 0,
+                "workload_prepare_start": 0,
+                "workload_cleanup": 0,
+                "trusted_quadlet_normalize_live": 0,
+                "trusted_quadlet_normalize_cleanup": 0,
+            }
+            statuses[phase] = 1
+            document = self.assembler.assemble(
+                host,
+                observations["baseline"],
+                observations["live"],
+                observations["post_cleanup"],
+                statuses,
+                {"baseline": 0, "live": 0, "post_cleanup": 0},
+            )
+            self.assertEqual("failed", document["workload"]["result"])
+            self.assertIn(
+                invariant,
+                document["workload"]["failed_admission_invariants"],
+            )
 
     def assert_failure(self, mutation, expected: str) -> None:
         observations = valid_observations()
@@ -976,8 +1087,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_duplicate_singleton_roles_are_rejected(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["singleton_roles"].__setitem__(
-                "scheduler", 2
+            lambda evidence: evidence["live"]["containers"][9].__setitem__(
+                "role", "scheduler"
             ),
             "D1A_SINGLETON_ROLES",
         )
@@ -1088,6 +1199,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 },
                 "Env": [],
                 "Image": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
+                "User": "10001:10001",
+                "Entrypoint": list(API_ENTRYPOINT),
+                "Cmd": list(ROLE_EXECUTION["api"][1]),
+                "Healthcheck": {"Test": list(ROLE_EXECUTION["api"][2])},
             },
             "HostConfig": {
                 "Privileged": False,
@@ -1100,6 +1215,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "CapAdd": [],
                 "Devices": [],
                 "Tmpfs": {},
+                "ReadonlyRootfs": True,
             },
             "NetworkSettings": {
                 "Networks": {"secpal-int-aaaaaaaaaaaa-application": {}},
@@ -1119,9 +1235,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             (inspection, "BoundingCaps"),
             (inspection["State"], "Pid"),
             (inspection["Config"], "Env"),
+            (inspection["Config"], "User"),
+            (inspection["Config"], "Entrypoint"),
+            (inspection["Config"], "Cmd"),
+            (inspection["Config"], "Healthcheck"),
             (inspection["HostConfig"], "CapAdd"),
             (inspection["HostConfig"], "Devices"),
             (inspection["HostConfig"], "Tmpfs"),
+            (inspection["HostConfig"], "ReadonlyRootfs"),
             (inspection["NetworkSettings"], "Ports"),
         )
         for owner, field in required_fields:
@@ -1147,6 +1268,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     self.collector,
                     "container_lifecycle_events",
                     return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+                ), mock.patch.object(
+                    self.collector,
+                    "effective_process_identity",
+                    return_value=(10001, 10001, True),
                 ):
                     _, complete = self.collector.container_facts(
                         "aaaaaaaaaaaa", rootless=True
@@ -1169,6 +1294,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 },
                 "Env": [],
                 "Image": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
+                "User": "10001:10001",
+                "Entrypoint": list(API_ENTRYPOINT),
+                "Cmd": list(ROLE_EXECUTION["api"][1]),
+                "Healthcheck": {"Test": list(ROLE_EXECUTION["api"][2])},
             },
             "HostConfig": {
                 "Privileged": False,
@@ -1181,6 +1310,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "CapAdd": [],
                 "Devices": [],
                 "Tmpfs": {},
+                "ReadonlyRootfs": True,
             },
             "NetworkSettings": {
                 "Networks": {"secpal-int-aaaaaaaaaaaa-application": {}},
@@ -1202,6 +1332,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "container_lifecycle_events",
             return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_process_identity",
+            return_value=(10001, 10001, True),
         ):
             facts, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True
@@ -1220,6 +1354,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "container_lifecycle_events",
             return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_process_identity",
+            return_value=(10001, 10001, True),
         ):
             facts, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True
@@ -1404,6 +1542,20 @@ class WorkloadEvidenceTests(unittest.TestCase):
             [event["status"] for event in events],
         )
 
+        exec_event = valid + "\n" + json.dumps(
+            {
+                "Type": "container",
+                "status": "exec",
+                "id": container_id,
+                "timeNano": 5,
+            }
+        )
+        with mock.patch.object(
+            self.collector, "command_result", return_value=(0, exec_event, True)
+        ):
+            _, complete = self.collector.container_lifecycle_events(container_id)
+        self.assertFalse(complete)
+
     def test_remote_or_socket_api_evidence_is_rejected(self) -> None:
         observations = valid_observations()
         observations["live"]["podman_api"] = True
@@ -1489,27 +1641,396 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertTrue(complete)
         self.assertTrue(unsafe)
 
-    def test_migration_and_readiness_must_be_independently_observed(self) -> None:
+    def test_migration_and_readiness_are_derived_from_raw_facts(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["migration"].__setitem__("observed", False),
+            lambda evidence: next(
+                item for item in evidence["live"]["containers"]
+                if item["role"] == "migrate"
+            ).__setitem__("state", "running"),
             "D1A_MIGRATION",
         )
         self.assert_failure(
-            lambda evidence: evidence["live"]["migration"].__setitem__(
-                "state", "running"
+            lambda evidence: evidence["post_cleanup"].__setitem__(
+                "migration_invocation_count", 2
             ),
             "D1A_MIGRATION",
         )
         self.assert_failure(
-            lambda evidence: evidence["live"]["migration"].__setitem__(
-                "invocation_count", 2
-            ),
-            "D1A_MIGRATION",
-        )
-        self.assert_failure(
-            lambda evidence: evidence["live"]["readiness"].__setitem__("observed", False),
+            lambda evidence: next(
+                item for item in evidence["live"]["containers"]
+                if item["role"] == "api"
+            ).__setitem__("health", "unhealthy"),
             "D1A_READINESS",
         )
+
+    def test_runtime_identity_and_read_only_rootfs_are_contract_facts(self) -> None:
+        identity = valid_observations()
+        identity["live"]["containers"][8]["configured_user"] = "0:0"
+        identity["live"]["containers"][8]["effective_uid"] = 0
+        identity["live"]["containers"][8]["effective_gid"] = 0
+        self.assertIn(
+            "D1A_RUNTIME_IDENTITY",
+            self.collector.workload_admission_failures(identity),
+        )
+
+        writable = valid_observations()
+        writable["live"]["containers"][8]["read_only_rootfs"] = False
+        self.assertIn(
+            "D1A_READ_ONLY_ROOTFS",
+            self.collector.workload_admission_failures(writable),
+        )
+
+    def test_migration_admission_binds_the_exact_configured_command(self) -> None:
+        def mutate_role(role, field, value):
+            observations = valid_observations()
+            container = next(
+                item for item in observations["live"]["containers"]
+                if item["role"] == role
+            )
+            container[field] = value
+            self.assertIn(
+                "D1A_EXECUTION_CONTRACT",
+                self.collector.workload_admission_failures(observations),
+            )
+
+        mutate_role("migrate", "command", ["true"])
+        mutate_role(
+            "api", "healthcheck_command",
+            ["CMD", "php", "artisan", "migrate", "--force"],
+        )
+        mutate_role("postgres", "command", ["php", "artisan", "migrate"])
+
+    def test_loaded_services_are_bound_to_root_owned_quadlet_sources(self) -> None:
+        wrong_source = valid_observations()
+        wrong_source["live"]["generated_services"][0]["source_path"] = (
+            "/home/secpal-ci/.config/containers/systemd/attacker.container"
+        )
+        self.assertIn(
+            "D1A_GENERATED_PROVENANCE",
+            self.collector.workload_admission_failures(wrong_source),
+        )
+
+        wrong_digest = valid_observations()
+        wrong_digest["live"]["generated_services"][0]["fragment_sha256"] = ""
+        self.assertIn(
+            "D1A_GENERATED_PROVENANCE",
+            self.collector.workload_admission_failures(wrong_digest),
+        )
+
+        contradictory_drop_ins = valid_observations()
+        contradictory_drop_ins["live"]["generated_services"][0][
+            "drop_in_sha256"
+        ] = ["a" * 64]
+        self.assertIn(
+            "D1A_GENERATED_PROVENANCE",
+            self.collector.workload_admission_failures(contradictory_drop_ins),
+        )
+
+    def test_live_user_work_rejects_unrelated_target_services(self) -> None:
+        observations = valid_observations()
+        baseline = observations["baseline"]["user_work"]
+        generated = [
+            service["unit"] for service in observations["live"]["generated_services"]
+        ]
+        observations["live"]["user_work"] = {
+            "active_units": sorted([*baseline["active_units"], *generated]),
+            "jobs": [],
+        }
+        observations["live"]["processes"] = []
+        observations["baseline"]["processes"] = []
+        observations["post_cleanup"]["processes"] = []
+        self.assertEqual(
+            [], self.collector.workload_admission_failures(observations)
+        )
+        observations["live"]["user_work"]["active_units"].append(
+            "hidden-scheduler.service"
+        )
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
+    def test_live_process_delta_is_confined_to_generated_service_cgroups(self) -> None:
+        observations = valid_observations()
+        baseline_process = {
+            "executable": "/usr/lib/systemd/systemd",
+            "control_group": "/user.slice/user-20000.slice/user@20000.service/init.scope",
+            "uid": 20000,
+            "gid": 20000,
+            "count": 1,
+        }
+        observations["baseline"]["processes"] = [baseline_process]
+        observations["post_cleanup"]["processes"] = [baseline_process]
+        observations["live"]["processes"] = [
+            baseline_process,
+            {
+                "executable": "/usr/bin/php",
+                "control_group": (
+                    "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+                    f"secpal-int-{observations['instance']}-scheduler.service/container"
+                ),
+                "uid": 210000,
+                "gid": 210000,
+                "count": 1,
+            },
+        ]
+        baseline = observations["baseline"]["user_work"]
+        observations["live"]["user_work"] = {
+            "active_units": sorted(
+                [
+                    *baseline["active_units"],
+                    *[
+                        service["unit"]
+                        for service in observations["live"]["generated_services"]
+                    ],
+                ]
+            ),
+            "jobs": [],
+        }
+        self.assertEqual(
+            [], self.collector.workload_admission_failures(observations)
+        )
+        observations["live"]["processes"].append(
+            {
+                "executable": "/usr/bin/php",
+                "control_group": (
+                    "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+                    "hidden-scheduler.service"
+                ),
+                "uid": 20000,
+                "gid": 20000,
+                "count": 1,
+            }
+        )
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        wrong_identity = valid_observations()
+        wrong_identity["live"]["processes"] = [{
+            "executable": "/usr/bin/php",
+            "control_group": (
+                "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+                f"secpal-int-{wrong_identity['instance']}-scheduler.service/container"
+            ),
+            "uid": 200001,
+            "gid": 200001,
+            "count": 1,
+        }]
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(wrong_identity),
+        )
+
+        cleanup_leak = valid_observations()
+        cleanup_leak["post_cleanup"]["processes"] = [{
+            "executable": "/usr/bin/php",
+            "control_group": "/user.slice/user-20000.slice/session-stale.scope",
+            "uid": 20000,
+            "gid": 20000,
+            "count": 1,
+        }]
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(cleanup_leak),
+        )
+
+    def test_runner_normalizes_quadlet_generation_before_each_final_observation(self) -> None:
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        self.assertIn("normalize_quadlet_runtime()", runner)
+        self.assertLess(
+            runner.index('bootstrap_stage="target-workload-prepare-start"'),
+            runner.index('bootstrap_stage="trusted-quadlet-normalize-live"'),
+        )
+        self.assertLess(
+            runner.index('bootstrap_stage="trusted-quadlet-normalize-live"'),
+            runner.index('bootstrap_stage="collector-live"'),
+        )
+        self.assertLess(
+            runner.index('bootstrap_stage="target-host"'),
+            runner.index('bootstrap_stage="trusted-quadlet-normalize-cleanup"'),
+        )
+        self.assertLess(
+            runner.index('bootstrap_stage="trusted-quadlet-normalize-cleanup"'),
+            runner.index('bootstrap_stage="collector-post-cleanup"'),
+        )
+
+    def test_quadlet_normalization_uses_only_the_fixed_user_manager_contract(self) -> None:
+        calls = []
+        original_environment = "PATH=/target/bin\nATTACKER_VALUE=present\n"
+        trusted_environment = (
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus\n"
+            "HOME=/home/secpal-ci\nLANG=C.UTF-8\nLC_ALL=C.UTF-8\n"
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+            "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000\n"
+            "XDG_RUNTIME_DIR=/run/user/20000\n"
+        )
+
+        def command_result(arguments, **kwargs):
+            calls.append((arguments, kwargs))
+            if arguments[-1] == "show-environment":
+                output = original_environment if len(calls) == 1 else trusted_environment
+                return 0, output, True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=["/etc/containers/systemd/users/20000"],
+        ):
+            self.assertTrue(self.collector.normalize_quadlet_runtime())
+        self.assertEqual(
+            [
+                (["systemctl", "--user", "show-environment"], {}),
+                ([
+                    "systemctl", "--user", "unset-environment",
+                    "ATTACKER_VALUE", "PATH",
+                ], {}),
+                ([
+                    "systemctl", "--user", "set-environment",
+                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
+                    "HOME=/home/secpal-ci",
+                    "LANG=C.UTF-8",
+                    "LC_ALL=C.UTF-8",
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000",
+                    "XDG_RUNTIME_DIR=/run/user/20000",
+                ], {}),
+                (["systemctl", "--user", "daemon-reload"], {"timeout": 60}),
+                (["systemctl", "--user", "show-environment"], {}),
+            ],
+            calls,
+        )
+
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            side_effect=(
+                (0, original_environment, True),
+                (0, "", True),
+                (0, "", True),
+                (1, "", True),
+                (0, trusted_environment, True),
+            ),
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=["/etc/containers/systemd/users/20000"],
+        ):
+            self.assertFalse(self.collector.normalize_quadlet_runtime())
+
+    def test_process_census_records_bounded_identity_and_cgroup_facts(self) -> None:
+        process = Path("/proc/1234")
+
+        def control_group(pid):
+            if pid == os.getpid():
+                return (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    "session-collector.scope",
+                    True,
+                )
+            return (
+                "/user.slice/user-20000.slice/session-attacker.scope",
+                True,
+            )
+
+        with mock.patch.object(
+            self.collector.Path, "iterdir", return_value=(process,)
+        ), mock.patch.object(
+            self.collector, "process_control_group", side_effect=control_group
+        ), mock.patch.object(
+            self.collector,
+            "process_host_identity",
+            return_value=(210000, 210000, True),
+        ), mock.patch.object(
+            self.collector.os, "readlink", return_value="/usr/bin/php"
+        ):
+            facts, complete = self.collector.user_process_facts()
+        self.assertTrue(complete)
+        self.assertEqual(
+            [{
+                "executable": "/usr/bin/php",
+                "control_group": "/user.slice/user-20000.slice/session-attacker.scope",
+                "uid": 210000,
+                "gid": 210000,
+                "count": 1,
+            }],
+            facts,
+        )
+
+    def test_live_collection_fails_closed_when_user_processes_change_mid_observation(self) -> None:
+        hidden = [{
+            "executable": "/usr/bin/php",
+            "control_group": (
+                "/user.slice/user-20000.slice/user@20000.service/"
+                "hidden.scope"
+            ),
+            "uid": 20000,
+            "gid": 20000,
+            "count": 1,
+        }]
+        empty_inventory = {"containers": [], "networks": [], "volumes": []}
+        with mock.patch.object(
+            self.collector, "user_work_facts",
+            side_effect=(({"active_units": [], "jobs": []}, True),) * 2,
+        ), mock.patch.object(
+            self.collector, "user_process_facts",
+            side_effect=(([], True), (hidden, True)),
+        ), mock.patch.object(
+            self.collector, "installed_unit_facts", return_value=([], True)
+        ), mock.patch.object(
+            self.collector, "generated_service_facts", return_value=([], True)
+        ), mock.patch.object(
+            self.collector,
+            "podman_runtime_facts",
+            return_value=(True, "crun", True),
+        ), mock.patch.object(
+            self.collector, "container_facts", return_value=([], True)
+        ), mock.patch.object(
+            self.collector, "bind_container_services", return_value=([], True)
+        ), mock.patch.object(
+            self.collector,
+            "resource_inventory",
+            return_value=(empty_inventory, True),
+        ), mock.patch.object(
+            self.collector,
+            "lifecycle_guard_facts",
+            return_value=({"migration_invocation_count": 0, "podman_api": False}, True),
+        ), mock.patch.object(
+            self.collector, "control_resource_facts", return_value=({}, True)
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=["/etc/containers/systemd/users/20000"],
+        ):
+            observation = self.collector.collect_live("aaaaaaaaaaaa")
+        self.assertFalse(observation["complete"])
+        self.assertEqual(hidden, observation["processes"])
+
+    def test_container_identity_is_read_from_the_live_process_status(self) -> None:
+        status = (
+            b"Name:\tphp\n"
+            b"Uid:\t210000\t210000\t210000\t210000\n"
+            b"Gid:\t210000\t210000\t210000\t210000\n"
+        )
+        with mock.patch.object(
+            self.collector.Path, "open", return_value=io.BytesIO(status)
+        ):
+            self.assertEqual(
+                (10001, 10001, True),
+                self.collector.effective_process_identity(1234),
+            )
+        malformed = status.replace(b"210000\t210000\t210000\t210000", b"210000\t0\t210000\t210000", 1)
+        with mock.patch.object(
+            self.collector.Path, "open", return_value=io.BytesIO(malformed)
+        ):
+            self.assertEqual(
+                (-1, -1, False),
+                self.collector.effective_process_identity(1234),
+            )
 
     def test_post_cleanup_rechecks_migration_count_and_podman_api(self) -> None:
         self.assert_failure(
@@ -1683,7 +2204,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertIn("collect-workload-evidence.py", runner)
         self.assertIn("collect_workload_phase()", runner)
         self.assertEqual(
-            1,
+            2,
             runner.count("< scripts/ci-cloud/collect-workload-evidence.py"),
         )
         self.assertLess(
@@ -1769,15 +2290,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertEqual("live", observation["phase"])
         self.assertFalse(observation["target_admitted"])
         self.assertFalse(observation["complete"])
-        self.assertEqual(
-            {
-                "observed": False,
-                "state": "unknown",
-                "exit_code": -1,
-                "invocation_count": 0,
-            },
-            observation["migration"],
-        )
+        self.assertNotIn("migration", observation)
 
     def test_target_entrypoint_has_closed_versioned_phase_parser(self) -> None:
         target = TARGET_PATH.read_text(encoding="utf-8")

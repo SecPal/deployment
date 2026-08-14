@@ -84,6 +84,8 @@ def valid_document() -> dict[str, object]:
                 "host": 0,
                 "workload_prepare_start": 0,
                 "workload_cleanup": 0,
+                "trusted_quadlet_normalize_live": 0,
+                "trusted_quadlet_normalize_cleanup": 0,
             },
             "collection_exit_statuses": {
                 "baseline": 0,

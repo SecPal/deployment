@@ -61,6 +61,9 @@ class RoleContract(NamedTuple):
     binds: tuple[tuple[str, str], ...] = ()
     tmpfs: tuple[tuple[str, int, str, bool], ...] = ()
     capabilities: tuple[str, ...] = ()
+    entrypoint: tuple[str, ...] | None = None
+    command: tuple[str, ...] | None = None
+    healthcheck: tuple[str, ...] | None = None
 
 
 API_VOLUMES = (
@@ -100,6 +103,9 @@ ROLE_CONTRACTS = {
         ),
         tmpfs=(("/tmp", 16, "0700", True),),
         capabilities=("CAP_CHOWN", "CAP_FOWNER"),
+        entrypoint=("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+        command=(),
+        healthcheck=(),
     ),
     "postgres": RoleContract(
         (999, 999),
@@ -124,6 +130,9 @@ ROLE_CONTRACTS = {
         binds=API_BINDS
         + (("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),),
         tmpfs=API_TMPFS,
+        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        command=("php", "artisan", "migrate", "--force"),
+        healthcheck=(),
     ),
     "api": RoleContract(
         (10001, 10001),
@@ -131,18 +140,37 @@ ROLE_CONTRACTS = {
         volumes=API_VOLUMES,
         binds=API_BINDS,
         tmpfs=API_TMPFS,
+        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        command=("frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"),
+        healthcheck=("CMD", "/usr/local/bin/secpal-http-live"),
     ),
     "worker-general": RoleContract(
         (10001, 10001), networks=("application",), volumes=API_VOLUMES,
         binds=API_BINDS, tmpfs=API_TMPFS,
+        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        command=(
+            "php", "artisan", "queue:work",
+            "--queue=merkle,opentimestamp,default", "--sleep=1", "--tries=3",
+            "--timeout=90",
+        ),
+        healthcheck=(),
     ),
     "worker-hash-chain": RoleContract(
         (10001, 10001), networks=("application",), volumes=API_VOLUMES,
         binds=API_BINDS, tmpfs=API_TMPFS,
+        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        command=(
+            "php", "artisan", "queue:work", "--queue=activity-hash-chain",
+            "--sleep=1", "--tries=3", "--timeout=90",
+        ),
+        healthcheck=(),
     ),
     "scheduler": RoleContract(
         (10001, 10001), networks=("application",), volumes=API_VOLUMES,
         binds=API_BINDS, tmpfs=API_TMPFS,
+        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        command=("php", "artisan", "schedule:work"),
+        healthcheck=(),
     ),
     "frontend": RoleContract(
         (101, 101), networks=("edge",), tmpfs=(("/tmp", 32, "0700", True),)
@@ -162,16 +190,17 @@ BASELINE_OBSERVATION_FIELDS = frozenset(
     {
         "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
         "containers", "networks", "volumes", "migration_invocation_count",
-        "podman_api", "user_work", "control_resources",
+        "podman_api", "user_work", "processes", "control_resources",
     }
 )
 LIVE_OBSERVATION_FIELDS = frozenset(
     {
         "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
         "quadlet_search_paths", "installed_units", "generated_services",
-        "containers", "singleton_roles", "networks", "volumes", "migration",
-        "readiness", "all_containers", "all_networks", "all_volumes",
-        "podman_rootless", "oci_runtime", "podman_api", "control_resources",
+        "containers", "networks", "volumes", "all_containers",
+        "all_networks", "all_volumes",
+        "podman_rootless", "oci_runtime", "podman_api", "user_work",
+        "processes", "control_resources",
     }
 )
 CLEANUP_OBSERVATION_FIELDS = frozenset(
@@ -180,8 +209,17 @@ CLEANUP_OBSERVATION_FIELDS = frozenset(
         "owned_units", "generated_services", "containers", "networks", "volumes",
         "all_containers", "all_networks", "all_volumes",
         "migration_invocation_count", "podman_api", "user_work",
-        "control_resources",
+        "processes", "control_resources",
     }
+)
+TRUSTED_MANAGER_ENVIRONMENT = (
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
+    "HOME=/home/secpal-ci",
+    "LANG=C.UTF-8",
+    "LC_ALL=C.UTF-8",
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    f"QUADLET_UNIT_DIRS={QUADLET_ROOT}",
+    "XDG_RUNTIME_DIR=/run/user/20000",
 )
 
 
@@ -206,6 +244,7 @@ def incomplete_observation(phase: str) -> dict[str, object]:
         common["migration_invocation_count"] = 0
         common["podman_api"] = True
         common["user_work"] = {"active_units": [], "jobs": []}
+        common["processes"] = []
         return common
     common.update(
         {
@@ -220,6 +259,7 @@ def incomplete_observation(phase: str) -> dict[str, object]:
         common["migration_invocation_count"] = 0
         common["podman_api"] = True
         common["user_work"] = {"active_units": [], "jobs": []}
+        common["processes"] = []
         return common
     if phase != "live":
         raise ValueError("observation phase is outside the closed contract")
@@ -229,15 +269,9 @@ def incomplete_observation(phase: str) -> dict[str, object]:
             "installed_units": [],
             "podman_rootless": False,
             "oci_runtime": "",
-            "singleton_roles": {"scheduler": 0, "worker-hash-chain": 0},
-            "migration": {
-                "observed": False,
-                "state": "unknown",
-                "exit_code": -1,
-                "invocation_count": 0,
-            },
-            "readiness": {"observed": False, "ready_roles": []},
             "podman_api": True,
+            "user_work": {"active_units": [], "jobs": []},
+            "processes": [],
         }
     )
     return common
@@ -367,10 +401,27 @@ def expected_unit_names(instance: str) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def expected_generated_source(instance: str, logical_name: str) -> Path:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        raise ValueError("fixture instance is outside the closed contract")
+    prefix = f"secpal-int-{instance}"
+    if logical_name in ROLES:
+        return QUADLET_ROOT / f"{prefix}-{logical_name}.container"
+    if logical_name.endswith("-network"):
+        kind = logical_name.removesuffix("-network")
+        if kind in NETWORK_KINDS:
+            return QUADLET_ROOT / f"{prefix}-{kind}.network"
+    if logical_name.endswith("-volume"):
+        kind = logical_name.removesuffix("-volume")
+        if kind in VOLUME_KINDS:
+            return QUADLET_ROOT / f"{prefix}-{kind}.volume"
+    raise ValueError("generated logical name is outside the closed contract")
+
+
 def admit_collection_context(
     phase: str, target_sha: str, instance: str, checkout: Path
 ) -> None:
-    if phase not in {"baseline", "live", "post-cleanup"}:
+    if phase not in {"baseline", "normalize", "live", "post-cleanup"}:
         raise ValueError("collection phase is outside the closed contract")
     if os.getuid() != CI_UID or os.getgid() != CI_GID:
         raise ValueError("collector must run as UID/GID 20000")
@@ -387,6 +438,57 @@ def admit_collection_context(
         raise ValueError("collector did not admit the exact target SHA")
     if not checkout_tree_clean(checkout, target_sha):
         raise ValueError("collector did not admit a clean target tree")
+
+
+def manager_environment() -> dict[str, str] | None:
+    status, output, complete = command_result(
+        ["systemctl", "--user", "show-environment"]
+    )
+    if status != 0 or not complete or len(output.encode("utf-8")) > 16_384:
+        return None
+    environment: dict[str, str] = {}
+    for line in output.splitlines():
+        if len(line) > 2048 or "=" not in line or "\x00" in line:
+            return None
+        name, value = line.split("=", 1)
+        if (
+            re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) is None
+            or name in environment
+        ):
+            return None
+        environment[name] = value
+        if len(environment) > 128:
+            return None
+    return environment
+
+
+def normalize_quadlet_runtime() -> bool:
+    existing = manager_environment()
+    if existing is None:
+        return False
+    names = sorted(existing)
+    if names:
+        unset_status, _, unset_complete = command_result(
+            ["systemctl", "--user", "unset-environment", *names]
+        )
+        if unset_status != 0 or not unset_complete:
+            return False
+    set_status, _, set_complete = command_result(
+        ["systemctl", "--user", "set-environment", *TRUSTED_MANAGER_ENVIRONMENT]
+    )
+    if set_status != 0 or not set_complete:
+        return False
+    reload_status, _, reload_complete = command_result(
+        ["systemctl", "--user", "daemon-reload"], timeout=60
+    )
+    observed = manager_environment()
+    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
+    return (
+        reload_status == 0
+        and reload_complete
+        and observed == expected
+        and quadlet_search_paths() == [str(QUADLET_ROOT)]
+    )
 
 
 def file_fact(path: Path, name: str) -> dict[str, object] | None:
@@ -454,14 +556,16 @@ def installed_unit_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
     return facts, complete
 
 
-def metadata_fact(path: Path) -> tuple[int, int, str] | None:
-    try:
-        metadata = path.lstat()
-    except OSError:
+def generated_file_fact(path: Path) -> tuple[int, int, str, str] | None:
+    fact = file_fact(path, path.name)
+    if fact is None:
         return None
-    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-        return None
-    return metadata.st_uid, metadata.st_gid, f"0{stat.S_IMODE(metadata.st_mode):03o}"
+    return (
+        int(fact["uid"]),
+        int(fact["gid"]),
+        str(fact["mode"]),
+        str(fact["sha256"]),
+    )
 
 
 def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
@@ -471,6 +575,7 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
     expected_properties = {
         "FragmentPath", "DropInPaths", "ActiveState", "SubState", "Result",
         "ExecMainStatus", "MainPID", "ControlGroup", "InvocationID",
+        "SourcePath",
     }
     for logical_name in GENERATED_LOGICAL_NAMES:
         unit = f"{prefix}-{logical_name}.service"
@@ -481,7 +586,7 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                 "--property=ActiveState", "--property=SubState",
                 "--property=Result", "--property=ExecMainStatus",
                 "--property=MainPID", "--property=ControlGroup",
-                "--property=InvocationID",
+                "--property=InvocationID", "--property=SourcePath",
             ]
         )
         properties: dict[str, str] = {}
@@ -496,8 +601,11 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
             properties[key] = item
         fragment = Path(properties.get("FragmentPath", ""))
         drop_ins = [Path(item) for item in properties.get("DropInPaths", "").split()]
-        fragment_metadata = metadata_fact(fragment) if str(fragment) != "." else None
-        drop_in_metadata = [metadata_fact(path) for path in drop_ins]
+        fragment_metadata = (
+            generated_file_fact(fragment) if str(fragment) != "." else None
+        )
+        drop_in_metadata = [generated_file_fact(path) for path in drop_ins]
+        source_path = properties.get("SourcePath", "")
         active_state = properties.get("ActiveState", "")
         sub_state = properties.get("SubState", "")
         result = properties.get("Result", "")
@@ -520,6 +628,9 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
             or int(main_pid) > 4_194_304
             or len(control_group) > 256
             or control_group != "" and not control_group.startswith("/")
+            or len(source_path) > 256
+            or not source_path.startswith("/")
+            or "\x00" in source_path
             or re.fullmatch(r"[0-9a-f]{32}", invocation_id) is None
         ):
             complete = False
@@ -532,11 +643,16 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                 "fragment_uid": fragment_metadata[0],
                 "fragment_gid": fragment_metadata[1],
                 "fragment_mode": fragment_metadata[2],
+                "fragment_sha256": fragment_metadata[3],
+                "source_path": source_path,
                 "drop_in_paths": [str(path) for path in drop_ins],
                 "drop_in_owners": [
                     {"uid": item[0], "gid": item[1], "mode": item[2]}
                     for item in drop_in_metadata
                     if item is not None
+                ],
+                "drop_in_sha256": [
+                    item[3] for item in drop_in_metadata if item is not None
                 ],
                 "active_state": active_state,
                 "sub_state": sub_state,
@@ -608,6 +724,8 @@ def container_lifecycle_events(
             event_id = record.get("ID", record.get("id"))
             time_nano = record.get("TimeNano", record.get("timeNano"))
             if status not in relevant:
+                if status in {"exec", "exec_died"}:
+                    return [], False
                 continue
             if (
                 event_type != "container"
@@ -742,6 +860,88 @@ def normalized_tmpfs(
     )
 
 
+def normalized_command(value: object) -> tuple[list[str], bool]:
+    if value is None:
+        return [], True
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        return [], False
+    if (
+        len(values) > 32
+        or any(
+            not isinstance(item, str)
+            or not item
+            or len(item) > 1024
+            or "\x00" in item
+            for item in values
+        )
+        or sum(len(item) for item in values) > 8192
+    ):
+        return [], False
+    return list(values), True
+
+
+def container_identity_from_host(value: int) -> int:
+    if value == CI_UID:
+        return 0
+    if 200_000 <= value <= 265_535:
+        return value - 199_999
+    return -1
+
+
+def container_identity_on_host(value: int) -> int:
+    return CI_UID if value == 0 else 199_999 + value
+
+
+def process_status_identity(
+    pid: int, *, require_all_ids_equal: bool
+) -> tuple[int, int, bool]:
+    if pid <= 0 or pid > 4_194_304:
+        return -1, -1, False
+    try:
+        with Path(f"/proc/{pid}/status").open("rb") as stream:
+            content = stream.read(16_385)
+    except OSError:
+        return -1, -1, False
+    if len(content) > 16_384:
+        return -1, -1, False
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return -1, -1, False
+    values: dict[str, int] = {}
+    for field in ("Uid", "Gid"):
+        matching = [line for line in lines if line.startswith(f"{field}:\t")]
+        if len(matching) != 1:
+            return -1, -1, False
+        fields = matching[0].split()
+        if len(fields) != 5 or any(not item.isdigit() for item in fields[1:]):
+            return -1, -1, False
+        effective = int(fields[2])
+        if require_all_ids_equal and any(
+            int(item) != effective for item in fields[1:]
+        ):
+            return -1, -1, False
+        values[field] = effective
+    return values["Uid"], values["Gid"], True
+
+
+def effective_process_identity(pid: int) -> tuple[int, int, bool]:
+    uid, gid, complete = process_status_identity(
+        pid, require_all_ids_equal=True
+    )
+    if not complete:
+        return -1, -1, False
+    container_uid = container_identity_from_host(uid)
+    container_gid = container_identity_from_host(gid)
+    if container_uid < 0 or container_gid < 0:
+        return -1, -1, False
+    return container_uid, container_gid, True
+
+
 def container_facts(
     instance: str, *, rootless: bool
 ) -> tuple[list[dict[str, object]], bool]:
@@ -778,11 +978,14 @@ def container_facts(
             "Mounts", "OCIRuntime", "EffectiveCaps", "BoundingCaps",
         }
         required_state = {"Status", "ExitCode", "Pid"}
-        required_config = {"Labels", "Env", "Image"}
+        required_config = {
+            "Labels", "Env", "Image", "User", "Entrypoint", "Cmd",
+            "Healthcheck",
+        }
         required_host_config = {
             "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
             "NetworkMode",
-            "SecurityOpt", "CapAdd", "Devices", "Tmpfs",
+            "SecurityOpt", "CapAdd", "Devices", "Tmpfs", "ReadonlyRootfs",
         }
         required_network_settings = {"Networks", "Ports"}
         if (
@@ -798,6 +1001,9 @@ def container_facts(
             or not isinstance(item["BoundingCaps"], list)
             or not isinstance(config["Labels"], dict)
             or not isinstance(config["Env"], list)
+            or not isinstance(config["User"], str)
+            or re.fullmatch(r"[0-9]{1,10}:[0-9]{1,10}", config["User"])
+            is None
             or not isinstance(state["Pid"], int)
             or isinstance(state["Pid"], bool)
             or not 0 <= state["Pid"] <= 4_194_304
@@ -806,6 +1012,7 @@ def container_facts(
             or not isinstance(host_config["CapAdd"], list)
             or not isinstance(host_config["Devices"], list)
             or not isinstance(host_config["Tmpfs"], dict)
+            or not isinstance(host_config["ReadonlyRootfs"], bool)
             or not isinstance(network_settings["Networks"], dict)
             or not isinstance(network_settings["Ports"], dict)
         ):
@@ -847,6 +1054,24 @@ def container_facts(
         devices = host_config["Devices"]
         mounts = item["Mounts"]
         environment = config["Env"]
+        entrypoint, entrypoint_complete = normalized_command(config["Entrypoint"])
+        command, command_complete = normalized_command(config["Cmd"])
+        configured_healthcheck = config["Healthcheck"]
+        if configured_healthcheck is None:
+            healthcheck_command, healthcheck_complete = [], True
+        elif isinstance(configured_healthcheck, dict) and set(
+            configured_healthcheck
+        ).issuperset({"Test"}):
+            healthcheck_command, healthcheck_complete = normalized_command(
+                configured_healthcheck["Test"]
+            )
+        else:
+            healthcheck_command, healthcheck_complete = [], False
+        effective_uid, effective_gid, identity_complete = (
+            effective_process_identity(state["Pid"])
+            if str(state.get("Status", "")) == "running"
+            else (-1, -1, True)
+        )
         if any(not isinstance(value, str) for value in environment) or any(
             not isinstance(value, str)
             for values in (cap_add, effective_caps, bounding_caps)
@@ -856,7 +1081,13 @@ def container_facts(
         mount_facts, mounts_complete = normalized_mounts(mounts)
         tmpfs_facts, tmpfs_complete = normalized_tmpfs(host_config["Tmpfs"])
         lifecycle_events, events_complete = container_lifecycle_events(item["Id"])
-        complete = complete and mounts_complete and tmpfs_complete and events_complete
+        complete = complete and all(
+            (
+                mounts_complete, tmpfs_complete, events_complete,
+                entrypoint_complete, command_complete, healthcheck_complete,
+                identity_complete,
+            )
+        )
         remote_api_environment = any(
             isinstance(value, str)
             and value.split("=", 1)[0] in {"CONTAINER_HOST", "DOCKER_HOST"}
@@ -874,6 +1105,13 @@ def container_facts(
                 "oci_runtime": str(item["OCIRuntime"]),
                 "rootless": rootless,
                 "privileged": host_config["Privileged"],
+                "configured_user": config["User"],
+                "effective_uid": effective_uid,
+                "effective_gid": effective_gid,
+                "read_only_rootfs": host_config["ReadonlyRootfs"],
+                "entrypoint": entrypoint,
+                "command": command,
+                "healthcheck_command": healthcheck_command,
                 "pid_mode": str(host_config["PidMode"] or "private"),
                 "userns_mode": str(host_config["UsernsMode"] or "host"),
                 "ipc_mode": str(host_config["IpcMode"] or "private"),
@@ -1232,6 +1470,71 @@ def process_control_group(pid: int) -> tuple[str, bool]:
     return control_group, True
 
 
+def process_host_identity(pid: int) -> tuple[int, int, bool]:
+    return process_status_identity(pid, require_all_ids_equal=False)
+
+
+def user_process_facts() -> tuple[list[dict[str, object]], bool]:
+    user_slice_prefix = "/user.slice/user-20000.slice/"
+    own_group, own_group_complete = process_control_group(os.getpid())
+    if not own_group_complete:
+        return [], False
+    try:
+        processes = tuple(Path("/proc").iterdir())
+    except OSError:
+        return [], False
+    facts: dict[tuple[str, str, int, int], int] = {}
+    complete = True
+    visited = 0
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        visited += 1
+        if visited > 8192:
+            return [], False
+        pid = int(process.name)
+        control_group, group_complete = process_control_group(pid)
+        if not group_complete:
+            if process.exists():
+                complete = False
+            continue
+        if not control_group.startswith(user_slice_prefix) or control_group == own_group:
+            continue
+        uid, gid, identity_complete = process_host_identity(pid)
+        try:
+            executable = os.readlink(process / "exe")
+        except OSError:
+            if process.exists():
+                complete = False
+            continue
+        if (
+            not identity_complete
+            or not executable.startswith("/")
+            or len(executable) > 512
+            or "\x00" in executable
+            or executable.endswith(" (deleted)")
+        ):
+            complete = False
+            continue
+        key = (executable, control_group, uid, gid)
+        facts[key] = facts.get(key, 0) + 1
+        if facts[key] > 256 or len(facts) > 256:
+            return [], False
+    return (
+        [
+            {
+                "executable": executable,
+                "control_group": control_group,
+                "uid": uid,
+                "gid": gid,
+                "count": count,
+            }
+            for (executable, control_group, uid, gid), count in sorted(facts.items())
+        ],
+        complete,
+    )
+
+
 def service_state_matches_role(
     service: dict[str, object], logical_name: str
 ) -> bool:
@@ -1478,22 +1781,29 @@ def collect_baseline(instance: str) -> dict[str, object]:
     controls, controls_complete = control_resource_facts()
     lifecycle, lifecycle_complete = lifecycle_guard_facts(instance)
     user_work, user_work_complete = user_work_facts()
+    processes, processes_complete = user_process_facts()
     return {
         "phase": "baseline",
         "target_admitted": True,
         "collector_uid": os.getuid(),
         "collector_gid": os.getgid(),
         "complete": all(
-            (complete, controls_complete, lifecycle_complete, user_work_complete)
+            (
+                complete, controls_complete, lifecycle_complete,
+                user_work_complete, processes_complete,
+            )
         ),
         **inventory,
         **lifecycle,
         "user_work": user_work,
+        "processes": processes,
         "control_resources": controls,
     }
 
 
 def collect_live(instance: str) -> dict[str, object]:
+    user_work_before, user_work_before_complete = user_work_facts()
+    processes_before, processes_before_complete = user_process_facts()
     units, units_complete = installed_unit_facts(instance)
     services, services_complete = generated_service_facts(instance)
     podman_rootless, oci_runtime, runtime_complete = podman_runtime_facts()
@@ -1507,18 +1817,8 @@ def collect_live(instance: str) -> dict[str, object]:
     volumes = [name for name in inventory["volumes"] if name.startswith(prefix)]
     lifecycle, lifecycle_complete = lifecycle_guard_facts(instance)
     controls, controls_complete = control_resource_facts()
-    by_role = {str(item.get("role")): item for item in containers}
-    migrate = by_role.get("migrate", {})
-    ready_roles = sorted(
-        role
-        for role in READY_ROLES
-        if by_role.get(role, {}).get("state") == "running"
-        and (
-            by_role.get(role, {}).get("health") == "healthy"
-            if role in HEALTHY_ROLES
-            else by_role.get(role, {}).get("health") == "none"
-        )
-    )
+    user_work_after, user_work_after_complete = user_work_facts()
+    processes_after, processes_after_complete = user_process_facts()
     return {
         "phase": "live",
         "target_admitted": True,
@@ -1529,6 +1829,10 @@ def collect_live(instance: str) -> dict[str, object]:
                 units_complete, services_complete, containers_complete,
                 bindings_complete, inventory_complete, runtime_complete,
                 lifecycle_complete, controls_complete,
+                user_work_before_complete, user_work_after_complete,
+                user_work_before == user_work_after,
+                processes_before_complete, processes_after_complete,
+                processes_before == processes_after,
             )
         ),
         "quadlet_search_paths": quadlet_search_paths(),
@@ -1537,26 +1841,14 @@ def collect_live(instance: str) -> dict[str, object]:
         "containers": containers,
         "podman_rootless": podman_rootless,
         "oci_runtime": oci_runtime,
-        "singleton_roles": {
-            role: sum(item.get("role") == role for item in containers)
-            for role in ("scheduler", "worker-hash-chain")
-        },
         "networks": networks,
         "volumes": volumes,
         "all_containers": inventory["containers"],
         "all_networks": inventory["networks"],
         "all_volumes": inventory["volumes"],
-        "migration": {
-            "observed": bool(migrate) and lifecycle["migration_invocation_count"] > 0,
-            "state": str(migrate.get("state", "unknown")),
-            "exit_code": int(migrate.get("exit_code", -1)),
-            "invocation_count": lifecycle["migration_invocation_count"],
-        },
-        "readiness": {
-            "observed": set(ready_roles) == READY_ROLES,
-            "ready_roles": ready_roles,
-        },
         "podman_api": lifecycle["podman_api"],
+        "user_work": user_work_after,
+        "processes": processes_after,
         "control_resources": controls,
     }
 
@@ -1596,6 +1888,7 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
     user_work_before, user_work_before_complete = user_work_facts()
     controls, controls_complete = control_resource_facts()
     lifecycle, lifecycle_complete = lifecycle_guard_facts(instance)
+    processes_before, processes_before_complete = user_process_facts()
     for root in (QUADLET_ROOT, SYSTEMD_ROOT):
         try:
             owned_units.extend(path.name for path in root.iterdir() if path.name.startswith(prefix))
@@ -1608,6 +1901,7 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
                 "all_containers": [], "all_networks": [], "all_volumes": [],
                 **lifecycle,
                 "user_work": user_work_before,
+                "processes": processes_before,
                 "control_resources": controls,
             }
     generated, generated_complete = generated_cleanup_artifacts(instance)
@@ -1622,6 +1916,7 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
         name for name in inventory["volumes"] if name.startswith(f"{prefix}-")
     ]
     user_work_after, user_work_after_complete = user_work_facts()
+    processes_after, processes_after_complete = user_process_facts()
     return {
         "phase": "post-cleanup",
         "target_admitted": True,
@@ -1632,6 +1927,8 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
                 inventory_complete, generated_complete, controls_complete,
                 lifecycle_complete, user_work_before_complete,
                 user_work_after_complete, user_work_before == user_work_after,
+                processes_before_complete, processes_after_complete,
+                processes_before == processes_after,
             )
         ),
         "owned_units": sorted(owned_units),
@@ -1644,6 +1941,7 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
         "all_volumes": inventory["volumes"],
         **lifecycle,
         "user_work": user_work_after,
+        "processes": processes_after,
         "control_resources": controls,
     }
 
@@ -1657,6 +1955,55 @@ def exact_string_set(value: object) -> set[str] | None:
         return None
     names = set(value)
     return names if len(names) == len(value) else None
+
+
+def exact_process_map(
+    value: object,
+) -> dict[tuple[str, str, int, int], int] | None:
+    if not isinstance(value, list) or len(value) > 256:
+        return None
+    facts: dict[tuple[str, str, int, int], int] = {}
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {
+            "executable", "control_group", "uid", "gid", "count"
+        }:
+            return None
+        executable = item.get("executable")
+        control_group = item.get("control_group")
+        uid = item.get("uid")
+        gid = item.get("gid")
+        count = item.get("count")
+        if (
+            not isinstance(executable, str)
+            or not executable.startswith("/")
+            or len(executable) > 512
+            or "\x00" in executable
+            or not isinstance(control_group, str)
+            or not control_group.startswith("/user.slice/user-20000.slice/")
+            or len(control_group) > 512
+            or type(uid) is not int
+            or not 0 <= uid <= 4_294_967_295
+            or type(gid) is not int
+            or not 0 <= gid <= 4_294_967_295
+            or type(count) is not int
+            or not 1 <= count <= 256
+        ):
+            return None
+        key = (executable, control_group, uid, gid)
+        if key in facts:
+            return None
+        facts[key] = count
+    return facts
+
+
+def generated_source_matches(instance: str, service: dict[str, object]) -> bool:
+    try:
+        expected = expected_generated_source(
+            instance, str(service.get("logical_name", ""))
+        )
+    except ValueError:
+        return False
+    return service.get("source_path") == str(expected)
 
 
 def workload_admission_failures(observations: object) -> list[str]:
@@ -1731,7 +2078,8 @@ def workload_admission_failures(observations: object) -> list[str]:
             "logical_name", "unit", "fragment_path", "fragment_uid", "fragment_gid",
             "fragment_mode", "drop_in_paths", "drop_in_owners", "active_state",
             "sub_state", "result", "exec_main_status", "main_pid", "control_group",
-            "invocation_id",
+            "invocation_id", "source_path", "fragment_sha256",
+            "drop_in_sha256",
         }
         or not str(service["fragment_path"]).startswith(f"{GENERATOR_ROOT}/")
         or service["fragment_uid"] != CI_UID
@@ -1748,6 +2096,23 @@ def workload_admission_failures(observations: object) -> list[str]:
         for service in services if isinstance(service, dict)
     ):
         failures.append("D1A_GENERATED_UNITS")
+    if isinstance(services, list) and any(
+        not isinstance(service, dict)
+        or not generated_source_matches(str(instance), service)
+        or re.fullmatch(
+            r"[0-9a-f]{64}", str(service.get("fragment_sha256", ""))
+        )
+        is None
+        or not isinstance(service.get("drop_in_sha256"), list)
+        or len(service.get("drop_in_sha256", []))
+        != len(service.get("drop_in_paths", []))
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(digest)) is None
+            for digest in service.get("drop_in_sha256", [])
+        )
+        for service in services
+    ):
+        failures.append("D1A_GENERATED_PROVENANCE")
     if isinstance(services, list):
         for service in services:
             if not isinstance(service, dict):
@@ -1786,6 +2151,40 @@ def workload_admission_failures(observations: object) -> list[str]:
                 or item.get("bounding_caps") != expected_caps
             ):
                 failures.append("D1A_PRIVILEGE_BOUNDARY")
+            if role_contract is None:
+                failures.append("D1A_RUNTIME_IDENTITY")
+            else:
+                expected_uid, expected_gid = role_contract.identity
+                running = item.get("state") == "running"
+                if (
+                    item.get("configured_user")
+                    != f"{expected_uid}:{expected_gid}"
+                    or item.get("effective_uid")
+                    != (expected_uid if running else -1)
+                    or item.get("effective_gid")
+                    != (expected_gid if running else -1)
+                ):
+                    failures.append("D1A_RUNTIME_IDENTITY")
+            if item.get("read_only_rootfs") is not True:
+                failures.append("D1A_READ_ONLY_ROOTFS")
+            if role_contract is not None and any(
+                expected is not None and item.get(field) != list(expected)
+                for field, expected in (
+                    ("entrypoint", role_contract.entrypoint),
+                    ("command", role_contract.command),
+                    ("healthcheck_command", role_contract.healthcheck),
+                )
+            ):
+                failures.append("D1A_EXECUTION_CONTRACT")
+            if str(item.get("role")) != "migrate" and any(
+                "migrat" in argument.casefold()
+                for field in ("entrypoint", "command", "healthcheck_command")
+                for argument in (
+                    item.get(field) if isinstance(item.get(field), list) else []
+                )
+                if isinstance(argument, str)
+            ):
+                failures.append("D1A_EXECUTION_CONTRACT")
             if item.get("devices_present") is not False:
                 failures.append("D1A_PRIVILEGE_BOUNDARY")
             mounts = item.get("mounts")
@@ -1916,7 +2315,25 @@ def workload_admission_failures(observations: object) -> list[str]:
             or api_identity[1] == frontend_identity[1]
         ):
             failures.append("D1A_IMAGE_ROLE_SEPARATION")
-    if live.get("singleton_roles") != {"scheduler": 1, "worker-hash-chain": 1}:
+        api_family = {
+            role: str(images_by_role.get(role, "")).rsplit("@sha256:", 1)
+            for role in (
+                "migrate", "api", "worker-general", "worker-hash-chain",
+                "scheduler",
+            )
+        }
+        if (
+            any(len(identity) != 2 for identity in api_family.values())
+            or len({identity[1] for identity in api_family.values()}) != 1
+        ):
+            failures.append("D1A_EXECUTION_CONTRACT")
+    if isinstance(containers, list) and any(
+        sum(
+            isinstance(item, dict) and item.get("role") == role
+            for item in containers
+        ) != 1
+        for role in ("scheduler", "worker-hash-chain")
+    ):
         failures.append("D1A_SINGLETON_ROLES")
     if live.get("podman_api") is not False:
         failures.append("D1A_PODMAN_API_DISABLED")
@@ -1938,13 +2355,79 @@ def workload_admission_failures(observations: object) -> list[str]:
         or cleanup_user_work != baseline_user_work
     ):
         failures.append("D1A_PENDING_USER_WORK")
-    migration = live.get("migration")
-    if migration != {
-        "observed": True,
-        "state": "exited",
-        "exit_code": 0,
-        "invocation_count": 1,
-    }:
+    live_user_work = exact_keys(live.get("user_work"), {"active_units", "jobs"})
+    expected_live_units = (
+        exact_string_set(baseline_user_work.get("active_units"))
+        if baseline_user_work is not None
+        else None
+    )
+    generated_units = {
+        str(service.get("unit"))
+        for service in services
+        if isinstance(service, dict)
+    } if isinstance(services, list) else set()
+    if (
+        live_user_work is None
+        or expected_live_units is None
+        or exact_string_set(live_user_work.get("active_units"))
+        != expected_live_units | generated_units
+        or live_user_work.get("jobs")
+        != (baseline_user_work.get("jobs") if baseline_user_work else None)
+    ):
+        failures.append("D1A_LIVE_USER_WORK")
+    baseline_processes = exact_process_map(baseline.get("processes"))
+    live_processes = exact_process_map(live.get("processes"))
+    cleanup_processes = exact_process_map(cleanup.get("processes"))
+    allowed_groups = {
+        str(service.get("control_group")): {
+            (CI_UID, CI_GID),
+            (
+                container_identity_on_host(
+                    ROLE_CONTRACTS[str(service.get("logical_name"))].identity[0]
+                ),
+                container_identity_on_host(
+                    ROLE_CONTRACTS[str(service.get("logical_name"))].identity[1]
+                ),
+            ),
+        }
+        for service in services
+        if (
+            isinstance(service, dict)
+            and service.get("control_group")
+            and str(service.get("logical_name")) in ROLE_CONTRACTS
+        )
+    } if isinstance(services, list) else {}
+    if (
+        baseline_processes is None
+        or live_processes is None
+        or cleanup_processes != baseline_processes
+        or any(
+            live_processes.get(key, 0) < count
+            for key, count in baseline_processes.items()
+        )
+        or any(
+            not any(
+                (key[1] == group or key[1].startswith(f"{group}/"))
+                and (key[2], key[3]) in identities
+                for group, identities in allowed_groups.items()
+            )
+            for key, count in live_processes.items()
+            if count > baseline_processes.get(key, 0)
+        )
+    ):
+        failures.append("D1A_PROCESS_DELTA")
+    migrate = next(
+        (
+            item for item in containers
+            if isinstance(item, dict) and item.get("role") == "migrate"
+        ),
+        {},
+    ) if isinstance(containers, list) else {}
+    if (
+        migrate.get("state") != "exited"
+        or migrate.get("exit_code") != 0
+        or cleanup.get("migration_invocation_count") != 1
+    ):
         failures.append("D1A_MIGRATION")
     if cleanup.get("migration_invocation_count") != 1:
         failures.append("D1A_CLEANUP_MIGRATION")
@@ -1957,21 +2440,19 @@ def workload_admission_failures(observations: object) -> list[str]:
     ) if isinstance(containers, list) else {}
     if secrets_init.get("state") != "exited" or secrets_init.get("exit_code") != 0:
         failures.append("D1A_LIFECYCLE")
-    readiness = live.get("readiness")
-    if not isinstance(readiness, dict) or readiness.get("observed") is not True or set(
-        readiness.get("ready_roles", [])
-    ) != READY_ROLES:
-        failures.append("D1A_READINESS")
-    elif any(
-        not isinstance(item, dict)
-        or item.get("state") != "running"
-        or (
-            item.get("health") != "healthy"
-            if item.get("role") in HEALTHY_ROLES
-            else item.get("health") != "none"
-        )
+    by_role = {
+        str(item.get("role")): item
         for item in containers
-        if isinstance(item, dict) and item.get("role") in READY_ROLES
+        if isinstance(item, dict)
+    } if isinstance(containers, list) else {}
+    if any(
+        by_role.get(role, {}).get("state") != "running"
+        or (
+            by_role.get(role, {}).get("health") != "healthy"
+            if role in HEALTHY_ROLES
+            else by_role.get(role, {}).get("health") != "none"
+        )
+        for role in READY_ROLES
     ):
         failures.append("D1A_READINESS")
     prefix = f"secpal-int-{instance}-"
@@ -2052,7 +2533,9 @@ def workload_admission_failures(observations: object) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=["baseline", "live", "post-cleanup"])
+    parser.add_argument(
+        "phase", choices=["baseline", "normalize", "live", "post-cleanup"]
+    )
     parser.add_argument("target_sha")
     parser.add_argument("instance")
     arguments = parser.parse_args()
@@ -2060,6 +2543,8 @@ def main() -> int:
         admit_collection_context(arguments.phase, arguments.target_sha, arguments.instance, CHECKOUT)
         if arguments.phase == "baseline":
             observation = collect_baseline(arguments.instance)
+        elif arguments.phase == "normalize":
+            return 0 if normalize_quadlet_runtime() else 1
         elif arguments.phase == "live":
             observation = collect_live(arguments.instance)
         else:
