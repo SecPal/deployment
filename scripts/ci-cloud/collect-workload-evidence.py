@@ -66,7 +66,7 @@ BASELINE_OBSERVATION_FIELDS = frozenset(
     {
         "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
         "containers", "networks", "volumes", "migration_invocation_count",
-        "control_resources",
+        "podman_api", "control_resources",
     }
 )
 LIVE_OBSERVATION_FIELDS = frozenset(
@@ -82,7 +82,8 @@ CLEANUP_OBSERVATION_FIELDS = frozenset(
     {
         "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
         "owned_units", "generated_services", "containers", "networks", "volumes",
-        "all_containers", "all_networks", "all_volumes", "control_resources",
+        "all_containers", "all_networks", "all_volumes",
+        "migration_invocation_count", "podman_api", "control_resources",
     }
 )
 
@@ -106,6 +107,7 @@ def incomplete_observation(phase: str) -> dict[str, object]:
     }
     if phase == "baseline":
         common["migration_invocation_count"] = 0
+        common["podman_api"] = True
         return common
     common.update(
         {
@@ -117,6 +119,8 @@ def incomplete_observation(phase: str) -> dict[str, object]:
     )
     if phase == "post-cleanup":
         common["owned_units"] = []
+        common["migration_invocation_count"] = 0
+        common["podman_api"] = True
         return common
     if phase != "live":
         raise ValueError("observation phase is outside the closed contract")
@@ -298,25 +302,56 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
     facts: list[dict[str, object]] = []
     complete = True
     prefix = f"secpal-int-{instance}"
+    expected_properties = {
+        "FragmentPath", "DropInPaths", "ActiveState", "SubState", "Result",
+        "ExecMainStatus", "MainPID", "ControlGroup",
+    }
     for logical_name in GENERATED_LOGICAL_NAMES:
         unit = f"{prefix}-{logical_name}.service"
         status_code, value, bounded = command_result(
             [
                 "systemctl", "--user", "show", unit,
                 "--property=FragmentPath", "--property=DropInPaths",
+                "--property=ActiveState", "--property=SubState",
+                "--property=Result", "--property=ExecMainStatus",
+                "--property=MainPID", "--property=ControlGroup",
             ]
         )
         properties: dict[str, str] = {}
         for line in value.splitlines():
-            if "=" in line:
-                key, item = line.split("=", 1)
-                properties[key] = item
+            if "=" not in line:
+                properties = {}
+                break
+            key, item = line.split("=", 1)
+            if key not in expected_properties or key in properties:
+                properties = {}
+                break
+            properties[key] = item
         fragment = Path(properties.get("FragmentPath", ""))
         drop_ins = [Path(item) for item in properties.get("DropInPaths", "").split()]
         fragment_metadata = metadata_fact(fragment) if str(fragment) != "." else None
         drop_in_metadata = [metadata_fact(path) for path in drop_ins]
-        if status_code != 0 or not bounded or fragment_metadata is None or any(
-            item is None for item in drop_in_metadata
+        active_state = properties.get("ActiveState", "")
+        sub_state = properties.get("SubState", "")
+        result = properties.get("Result", "")
+        exec_main_status = properties.get("ExecMainStatus", "")
+        main_pid = properties.get("MainPID", "")
+        control_group = properties.get("ControlGroup", "")
+        if (
+            status_code != 0
+            or not bounded
+            or set(properties) != expected_properties
+            or fragment_metadata is None
+            or any(item is None for item in drop_in_metadata)
+            or re.fullmatch(r"[a-z][a-z0-9-]{0,31}", active_state) is None
+            or re.fullmatch(r"[a-z][a-z0-9-]{0,31}", sub_state) is None
+            or re.fullmatch(r"[a-z][a-z0-9-]{0,31}", result) is None
+            or re.fullmatch(r"[0-9]{1,3}", exec_main_status) is None
+            or int(exec_main_status) > 255
+            or re.fullmatch(r"[0-9]{1,10}", main_pid) is None
+            or int(main_pid) > 4_194_304
+            or len(control_group) > 256
+            or control_group != "" and not control_group.startswith("/")
         ):
             complete = False
             continue
@@ -334,6 +369,12 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                     for item in drop_in_metadata
                     if item is not None
                 ],
+                "active_state": active_state,
+                "sub_state": sub_state,
+                "result": result,
+                "exec_main_status": int(exec_main_status),
+                "main_pid": int(main_pid),
+                "control_group": control_group,
             }
         )
     return facts, complete
@@ -403,7 +444,7 @@ def container_facts(
             "Name", "State", "Config", "HostConfig", "NetworkSettings",
             "Mounts", "OCIRuntime",
         }
-        required_state = {"Status", "ExitCode"}
+        required_state = {"Status", "ExitCode", "Pid"}
         required_config = {"Labels", "Env", "Image"}
         required_host_config = {
             "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
@@ -420,6 +461,9 @@ def container_facts(
             or not isinstance(item["Mounts"], list)
             or not isinstance(config["Labels"], dict)
             or not isinstance(config["Env"], list)
+            or not isinstance(state["Pid"], int)
+            or isinstance(state["Pid"], bool)
+            or not 0 <= state["Pid"] <= 4_194_304
             or not isinstance(host_config["Privileged"], bool)
             or not isinstance(host_config["SecurityOpt"], list)
             or not isinstance(host_config["CapAdd"], list)
@@ -487,6 +531,7 @@ def container_facts(
                 "role": role,
                 "name": name,
                 "state": str(state.get("Status", "")),
+                "pid": state["Pid"],
                 "exit_code": int(state.get("ExitCode", -1)),
                 "health": health,
                 "oci_runtime": str(item["OCIRuntime"]),
@@ -505,6 +550,7 @@ def container_facts(
                 "networks": sorted(str(value) for value in network_map),
                 "published_ports": sorted(published),
                 "auto_update": "io.containers.autoupdate" in labels,
+                "systemd_unit": str(labels.get("PODMAN_SYSTEMD_UNIT", "")),
                 "image": str(item.get("ImageName", config.get("Image", ""))),
             }
         )
@@ -751,18 +797,144 @@ def migration_invocation_facts(instance: str) -> tuple[int, bool]:
     return len(invocation_ids), True
 
 
+def lifecycle_guard_facts(instance: str) -> tuple[dict[str, object], bool]:
+    migration_invocations, migration_complete = migration_invocation_facts(instance)
+    podman_api, podman_api_complete = podman_api_facts()
+    return (
+        {
+            "migration_invocation_count": migration_invocations,
+            "podman_api": podman_api,
+        },
+        migration_complete and podman_api_complete,
+    )
+
+
+def process_control_group(pid: int) -> tuple[str, bool]:
+    if pid <= 0 or pid > 4_194_304:
+        return "", False
+    try:
+        with Path(f"/proc/{pid}/cgroup").open("rb") as stream:
+            content = stream.read(8193)
+    except OSError:
+        return "", False
+    if len(content) > 8192:
+        return "", False
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return "", False
+    if len(lines) != 1 or not lines[0].startswith("0::/"):
+        return "", False
+    control_group = lines[0][3:]
+    if len(control_group) > 256 or "\x00" in control_group:
+        return "", False
+    return control_group, True
+
+
+def service_state_matches_role(
+    service: dict[str, object], logical_name: str
+) -> bool:
+    unit = service.get("unit")
+    common_state = (
+        logical_name in GENERATED_LOGICAL_NAMES
+        and isinstance(unit, str)
+        and service.get("active_state") == "active"
+        and service.get("result") == "success"
+        and type(service.get("exec_main_status")) is int
+        and service["exec_main_status"] == 0
+        and type(service.get("main_pid")) is int
+    )
+    if logical_name in READY_ROLES:
+        return (
+            common_state
+            and service.get("sub_state") == "running"
+            and service["main_pid"] > 0
+            and isinstance(service.get("control_group"), str)
+            and service["control_group"].endswith(f"/{unit}")
+        )
+    return (
+        common_state
+        and service.get("sub_state") == "exited"
+        and service["main_pid"] == 0
+        and service.get("control_group") == ""
+    )
+
+
+def container_pid_matches_state(container: dict[str, object]) -> bool:
+    pid = container.get("pid")
+    state = container.get("state")
+    return type(pid) is int and (
+        (state == "running" and pid > 0)
+        or (state == "exited" and pid == 0)
+    )
+
+
+def bind_container_services(
+    services: list[dict[str, object]],
+    containers: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], bool]:
+    services_by_role = {
+        str(service.get("logical_name")): service
+        for service in services
+        if isinstance(service, dict)
+    }
+    complete = len(services_by_role) == len(services)
+    bound: list[dict[str, object]] = []
+    for container in containers:
+        fact = dict(container)
+        role = str(fact.get("role", ""))
+        expected_unit = f"{fact.get('name', '')}.service"
+        service = services_by_role.get(role)
+        if not isinstance(service, dict):
+            fact["service_managed"] = False
+            bound.append(fact)
+            complete = False
+            continue
+        common_binding = (
+            fact.get("systemd_unit") == expected_unit
+            and service.get("unit") == expected_unit
+            and service_state_matches_role(service, role)
+            and container_pid_matches_state(fact)
+        )
+        if fact.get("state") == "running":
+            pid = fact.get("pid")
+            control_group = service.get("control_group")
+            observed_group, observed_complete = (
+                process_control_group(pid)
+                if type(pid) is int
+                else ("", False)
+            )
+            complete = complete and observed_complete
+            managed = (
+                common_binding
+                and isinstance(control_group, str)
+                and (
+                    observed_group == control_group
+                    or observed_group.startswith(f"{control_group}/")
+                )
+            )
+        else:
+            managed = (
+                common_binding
+                and fact.get("state") == "exited"
+            )
+        fact["service_managed"] = managed
+        bound.append(fact)
+    return bound, complete
+
+
 def collect_baseline(instance: str) -> dict[str, object]:
     inventory, complete = resource_inventory()
     controls, controls_complete = control_resource_facts()
-    migration_invocations, migration_complete = migration_invocation_facts(instance)
+    lifecycle, lifecycle_complete = lifecycle_guard_facts(instance)
     return {
         "phase": "baseline",
         "target_admitted": True,
         "collector_uid": os.getuid(),
         "collector_gid": os.getgid(),
-        "complete": complete and controls_complete and migration_complete,
+        "complete": complete and controls_complete and lifecycle_complete,
         **inventory,
-        "migration_invocation_count": migration_invocations,
+        **lifecycle,
         "control_resources": controls,
     }
 
@@ -774,12 +946,12 @@ def collect_live(instance: str) -> dict[str, object]:
     containers, containers_complete = container_facts(
         instance, rootless=podman_rootless
     )
+    containers, bindings_complete = bind_container_services(services, containers)
     inventory, inventory_complete = resource_inventory()
     prefix = f"secpal-int-{instance}-"
     networks = [name for name in inventory["networks"] if name.startswith(prefix)]
     volumes = [name for name in inventory["volumes"] if name.startswith(prefix)]
-    podman_api, podman_api_complete = podman_api_facts()
-    migration_invocations, migration_complete = migration_invocation_facts(instance)
+    lifecycle, lifecycle_complete = lifecycle_guard_facts(instance)
     controls, controls_complete = control_resource_facts()
     by_role = {str(item.get("role")): item for item in containers}
     migrate = by_role.get("migrate", {})
@@ -801,8 +973,8 @@ def collect_live(instance: str) -> dict[str, object]:
         "complete": all(
             (
                 units_complete, services_complete, containers_complete,
-                inventory_complete, runtime_complete,
-                podman_api_complete, migration_complete, controls_complete,
+                bindings_complete, inventory_complete, runtime_complete,
+                lifecycle_complete, controls_complete,
             )
         ),
         "quadlet_search_paths": quadlet_search_paths(),
@@ -821,16 +993,16 @@ def collect_live(instance: str) -> dict[str, object]:
         "all_networks": inventory["networks"],
         "all_volumes": inventory["volumes"],
         "migration": {
-            "observed": bool(migrate) and migration_invocations > 0,
+            "observed": bool(migrate) and lifecycle["migration_invocation_count"] > 0,
             "state": str(migrate.get("state", "unknown")),
             "exit_code": int(migrate.get("exit_code", -1)),
-            "invocation_count": migration_invocations,
+            "invocation_count": lifecycle["migration_invocation_count"],
         },
         "readiness": {
             "observed": set(ready_roles) == READY_ROLES,
             "ready_roles": ready_roles,
         },
-        "podman_api": podman_api,
+        "podman_api": lifecycle["podman_api"],
         "control_resources": controls,
     }
 
@@ -868,6 +1040,7 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
     prefix = f"secpal-int-{instance}"
     owned_units = []
     controls, controls_complete = control_resource_facts()
+    lifecycle, lifecycle_complete = lifecycle_guard_facts(instance)
     for root in (QUADLET_ROOT, SYSTEMD_ROOT):
         try:
             owned_units.extend(path.name for path in root.iterdir() if path.name.startswith(prefix))
@@ -878,6 +1051,7 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
                 "complete": False, "owned_units": [], "generated_services": [],
                 "containers": [], "networks": [], "volumes": [],
                 "all_containers": [], "all_networks": [], "all_volumes": [],
+                **lifecycle,
                 "control_resources": controls,
             }
     generated, generated_complete = generated_cleanup_artifacts(instance)
@@ -896,7 +1070,12 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
         "target_admitted": True,
         "collector_uid": os.getuid(),
         "collector_gid": os.getgid(),
-        "complete": inventory_complete and generated_complete and controls_complete,
+        "complete": all(
+            (
+                inventory_complete, generated_complete, controls_complete,
+                lifecycle_complete,
+            )
+        ),
         "owned_units": sorted(owned_units),
         "generated_services": sorted(generated),
         "containers": containers,
@@ -905,6 +1084,7 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
         "all_containers": inventory["containers"],
         "all_networks": inventory["networks"],
         "all_volumes": inventory["volumes"],
+        **lifecycle,
         "control_resources": controls,
     }
 
@@ -954,6 +1134,8 @@ def workload_admission_failures(observations: object) -> list[str]:
         failures.append("D1A_PHASE_CONSISTENCY")
     if baseline.get("migration_invocation_count") != 0:
         failures.append("D1A_BASELINE_MIGRATION")
+    if baseline.get("podman_api") is not False:
+        failures.append("D1A_PODMAN_API_DISABLED")
     instance = observations.get("instance")
     try:
         names = expected_unit_names(str(instance))
@@ -988,7 +1170,8 @@ def workload_admission_failures(observations: object) -> list[str]:
         not isinstance(service, dict)
         or set(service) != {
             "logical_name", "unit", "fragment_path", "fragment_uid", "fragment_gid",
-            "fragment_mode", "drop_in_paths", "drop_in_owners",
+            "fragment_mode", "drop_in_paths", "drop_in_owners", "active_state",
+            "sub_state", "result", "exec_main_status", "main_pid", "control_group",
         }
         or not str(service["fragment_path"]).startswith(f"{GENERATOR_ROOT}/")
         or service["fragment_uid"] != CI_UID
@@ -1004,6 +1187,14 @@ def workload_admission_failures(observations: object) -> list[str]:
         for service in services if isinstance(service, dict)
     ):
         failures.append("D1A_GENERATED_UNITS")
+    if isinstance(services, list):
+        for service in services:
+            if not isinstance(service, dict):
+                continue
+            if not service_state_matches_role(
+                service, str(service.get("logical_name", ""))
+            ):
+                failures.append("D1A_SERVICE_STATE")
     containers = live.get("containers")
     container_roles = [
         item.get("role") for item in containers if isinstance(item, dict)
@@ -1049,6 +1240,13 @@ def workload_admission_failures(observations: object) -> list[str]:
             if any(network == "host" for network in item.get("networks", [])):
                 failures.append("D1A_HOST_NETWORK")
             role = str(item.get("role"))
+            expected_service = f"secpal-int-{instance}-{role}.service"
+            if (
+                item.get("systemd_unit") != expected_service
+                or item.get("service_managed") is not True
+                or not container_pid_matches_state(item)
+            ):
+                failures.append("D1A_SERVICE_BINDING")
             expected_networks = [
                 f"secpal-int-{instance}-{kind}"
                 for kind in ROLE_NETWORK_KINDS.get(role, ())
@@ -1089,6 +1287,8 @@ def workload_admission_failures(observations: object) -> list[str]:
         failures.append("D1A_SINGLETON_ROLES")
     if live.get("podman_api") is not False:
         failures.append("D1A_PODMAN_API_DISABLED")
+    if cleanup.get("podman_api") is not False:
+        failures.append("D1A_PODMAN_API_DISABLED")
     migration = live.get("migration")
     if migration != {
         "observed": True,
@@ -1097,6 +1297,8 @@ def workload_admission_failures(observations: object) -> list[str]:
         "invocation_count": 1,
     }:
         failures.append("D1A_MIGRATION")
+    if cleanup.get("migration_invocation_count") != 1:
+        failures.append("D1A_CLEANUP_MIGRATION")
     secrets_init = next(
         (
             item for item in containers

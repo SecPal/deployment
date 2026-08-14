@@ -357,14 +357,20 @@ fixture client.
 
 The trusted runner creates one unrelated rootless control network and volume
 and records a main-controlled baseline of every rootless Podman container,
-network, volume, and fixture migration invocation before any target code runs.
+network, volume, fixture migration invocation, and Podman API/socket activation
+state before any target code runs.
 It then invokes target prepare/start, streams the main-controlled live
 collector, requests target cleanup, and streams the main-controlled
 post-cleanup collector. Only after that D.1a evidence is finalized does the
 separate target `host` phase run for D.1 admission. Host-phase descendants can
 therefore neither prepare the observed workload nor race the earlier baseline.
 Live admission requires the baseline plus exactly the closed fixture resource
-set; post-cleanup admission requires the exact baseline.
+set. The same trusted lifecycle guard remeasures the migration invocation count
+and Podman API/socket state during live and post-cleanup collection. A passing
+cleanup must therefore leave the migration count at exactly one and the API
+boundary disabled; removing the visible fixture cannot hide a second migration
+or a newly activated socket. Post-cleanup admission otherwise requires the
+exact baseline.
 An unprefixed, wrongly named, or leaked target resource cannot
 disappear from the trusted inventory merely because it is outside the fixture
 prefix.
@@ -799,7 +805,12 @@ stage (`diagnostic-ssh`, `apt-sources`, `apt-update`, `kernel-install`,
 `host-initialize`, `subordinate-ids`, `service-policy`, `apparmor`, or `ssh`)
 and its exit status. The stage changes immediately before each fallible phase,
 so an early provider bootstrap failure does not collapse into an ambiguous
-`initialize` result. A host-key-stage failure instead records only counters for
+`initialize` result. The runner, failure writer, and schema share the same
+closed orchestration-stage set: `host-key`, `bootstrap`, `root-ssh`,
+`target-checkout`, `control-resources`, `collector-baseline`,
+`target-workload-prepare-start`, `collector-live`,
+`target-workload-cleanup`, `collector-post-cleanup`, `target-host`, and
+`collector`. A host-key-stage failure instead records only counters for
 the closed categories `connection_refused`, `connection_timeout`, `no_key`,
 `multiple_keys`, `changed_key`, and `other`. Refused and timed-out connections
 come from a bounded IPv4 TCP probe and stable operating-system error codes,
@@ -862,20 +873,25 @@ Evidence includes:
   `seccompEnabled` as three independent facts;
 - the exact 16-file root-owned Quadlet snapshot with paths, modes, and SHA-256
   digests; the effective sole search path; and each generated user-service
-  fragment and drop-in path, owner, group, and mode;
+  fragment and drop-in path, owner, group, and mode; every generated service's
+  effective active/sub-state, result, exit status, main PID, and control group;
 - the exact ten-container logical-role set, singleton counts for scheduler and
   activity-hash-chain worker, effective rootless/crun/security facts and private
   PID, user, IPC, UTS, and network namespace modes,
   the closed role-to-network topology, the gateway's sole loopback publication,
   immutable local image references with distinct API and frontend content
-  digests, one exited zero-status migration systemd invocation established from
+  digests, the exact `PODMAN_SYSTEMD_UNIT` binding from each container to its
+  generated service, and—for every running role—the container process cgroup
+  nested beneath that effective service cgroup; one exited zero-status migration
+  systemd invocation established from
   a journal query restricted to invocation-ID fields, healthy state for every
   health-bearing role, and running state for the remaining long-lived roles;
   and
-- a pre-workload full rootless Podman inventory and zero-invocation migration
-  baseline, plus a distinct post-cleanup observation requiring exact restoration
-  of that inventory, including absence of every target-added container, network,
-  and volume regardless of its name;
+- a pre-workload full rootless Podman inventory, zero-invocation migration
+  baseline, and disabled Podman API/socket boundary, plus a distinct post-cleanup
+  observation requiring exactly one migration invocation, the still-disabled API
+  boundary, and exact restoration of that inventory, including absence of every
+  target-added container, network, and volume regardless of its name;
   exact `no-new-privileges` admission and Podman 5.4 `Healthcheck`/network-name
   field interpretation; and
 - exact absence of every integration unit, generated service and nested

@@ -105,6 +105,30 @@ def valid_observations() -> dict[str, object]:
             "fragment_mode": "0644",
             "drop_in_paths": [],
             "drop_in_owners": [],
+            "active_state": "active",
+            "sub_state": (
+                "exited"
+                if logical_name in {"secrets-init", "migrate"}
+                or logical_name.endswith(("-network", "-volume"))
+                else "running"
+            ),
+            "result": "success",
+            "exec_main_status": 0,
+            "main_pid": (
+                0
+                if logical_name in {"secrets-init", "migrate"}
+                or logical_name.endswith(("-network", "-volume"))
+                else 1000 + generated_names.index(logical_name)
+            ),
+            "control_group": (
+                ""
+                if logical_name in {"secrets-init", "migrate"}
+                or logical_name.endswith(("-network", "-volume"))
+                else (
+                    "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+                    f"{prefix}-{logical_name}.service"
+                )
+            ),
         }
         for logical_name in generated_names
     ]
@@ -116,6 +140,7 @@ def valid_observations() -> dict[str, object]:
                 "role": role,
                 "name": f"{prefix}-{role}",
                 "state": "exited" if one_shot else "running",
+                "pid": 0 if one_shot else 2000 + role_index,
                 "exit_code": 0,
                 "health": "healthy" if role in HEALTHY_ROLES else "none",
                 "oci_runtime": "crun",
@@ -134,6 +159,8 @@ def valid_observations() -> dict[str, object]:
                 "networks": [f"{prefix}-{network}" for network in ROLE_NETWORKS[role]],
                 "published_ports": ["127.0.0.1:18443:8443/tcp"] if role == "gateway" else [],
                 "auto_update": False,
+                "systemd_unit": f"{prefix}-{role}.service",
+                "service_managed": True,
                 "image": (
                     f"localhost/secpal-ci-{role}@sha256:{role_index:064x}"
                 ),
@@ -151,6 +178,7 @@ def valid_observations() -> dict[str, object]:
             "collector_gid": 20000,
             "complete": True,
             "migration_invocation_count": 0,
+            "podman_api": False,
             "containers": [],
             "networks": ["podman", "secpal-ci-unrelated-control-network"],
             "volumes": ["secpal-ci-unrelated-control-volume"],
@@ -222,6 +250,8 @@ def valid_observations() -> dict[str, object]:
             "all_containers": [],
             "all_networks": ["podman", "secpal-ci-unrelated-control-network"],
             "all_volumes": ["secpal-ci-unrelated-control-volume"],
+            "migration_invocation_count": 1,
+            "podman_api": False,
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
@@ -431,6 +461,77 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
         self.assert_failure(add_untrusted_drop_in, "D1A_GENERATED_UNITS")
 
+    def test_effective_service_state_is_required_for_every_generated_unit(self) -> None:
+        for field, value in (
+            ("active_state", "inactive"),
+            ("exec_main_status", False),
+            ("main_pid", True),
+        ):
+            with self.subTest(field=field):
+                self.assert_failure(
+                    lambda evidence, field=field, value=value: evidence["live"][
+                        "generated_services"
+                    ][4].__setitem__(field, value),
+                    "D1A_SERVICE_STATE",
+                )
+
+    def test_each_container_is_bound_to_its_generated_systemd_service(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+                "service_managed", False
+            ),
+            "D1A_SERVICE_BINDING",
+        )
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+                "systemd_unit", "unrelated.service"
+            ),
+            "D1A_SERVICE_BINDING",
+        )
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+                "pid", True
+            ),
+            "D1A_SERVICE_BINDING",
+        )
+
+    def test_running_container_binding_uses_the_effective_service_cgroup(self) -> None:
+        unit = "secpal-int-aaaaaaaaaaaa-api.service"
+        control_group = (
+            "/user.slice/user-20000.slice/user@20000.service/app.slice/" + unit
+        )
+        services = [
+            {
+                "logical_name": "api",
+                "unit": unit,
+                "active_state": "active",
+                "sub_state": "running",
+                "result": "success",
+                "exec_main_status": 0,
+                "main_pid": 123,
+                "control_group": control_group,
+            }
+        ]
+        containers = [
+            {
+                "role": "api",
+                "name": "secpal-int-aaaaaaaaaaaa-api",
+                "state": "running",
+                "pid": 456,
+                "systemd_unit": unit,
+            }
+        ]
+        with mock.patch.object(
+            self.collector,
+            "process_control_group",
+            return_value=(f"{control_group}/container", True),
+        ):
+            bound, complete = self.collector.bind_container_services(
+                services, containers
+            )
+        self.assertTrue(complete)
+        self.assertTrue(bound[0]["service_managed"])
+
     def test_cleanup_scans_generated_drop_in_directories_and_files(self) -> None:
         prefix = "secpal-int-aaaaaaaaaaaa-api.service"
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -611,11 +712,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "Name": "secpal-int-aaaaaaaaaaaa-api",
             "State": {
                 "Status": "running",
+                "Pid": 2345,
                 "ExitCode": 0,
                 "Healthcheck": {"Status": "healthy"},
             },
             "Config": {
-                "Labels": {},
+                "Labels": {
+                    "PODMAN_SYSTEMD_UNIT": "secpal-int-aaaaaaaaaaaa-api.service"
+                },
                 "Env": [],
                 "Image": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
             },
@@ -641,6 +745,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         required_fields = (
             (inspection, "OCIRuntime"),
             (inspection, "Mounts"),
+            (inspection["State"], "Pid"),
             (inspection["Config"], "Env"),
             (inspection["HostConfig"], "CapAdd"),
             (inspection["HostConfig"], "Devices"),
@@ -651,6 +756,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 candidate = copy.deepcopy(inspection)
                 if owner is inspection:
                     del candidate[field]
+                elif owner is inspection["State"]:
+                    del candidate["State"][field]
                 elif owner is inspection["Config"]:
                     del candidate["Config"][field]
                 elif owner is inspection["HostConfig"]:
@@ -674,11 +781,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "Name": "secpal-int-aaaaaaaaaaaa-api",
             "State": {
                 "Status": "running",
+                "Pid": 2345,
                 "ExitCode": 0,
                 "Healthcheck": {"Status": "healthy"},
             },
             "Config": {
-                "Labels": {},
+                "Labels": {
+                    "PODMAN_SYSTEMD_UNIT": "secpal-int-aaaaaaaaaaaa-api.service"
+                },
                 "Env": [],
                 "Image": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
             },
@@ -825,6 +935,54 @@ class WorkloadEvidenceTests(unittest.TestCase):
             lambda evidence: evidence["live"]["readiness"].__setitem__("observed", False),
             "D1A_READINESS",
         )
+
+    def test_post_cleanup_rechecks_migration_count_and_podman_api(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["post_cleanup"].__setitem__(
+                "migration_invocation_count", 2
+            ),
+            "D1A_CLEANUP_MIGRATION",
+        )
+        self.assert_failure(
+            lambda evidence: evidence["post_cleanup"].__setitem__(
+                "podman_api", True
+            ),
+            "D1A_PODMAN_API_DISABLED",
+        )
+
+    def test_cleanup_collector_uses_the_shared_lifecycle_guard(self) -> None:
+        controls = {
+            "network_present": True,
+            "volume_present": True,
+            "network_id": "b" * 64,
+            "volume_created_at": "2026-08-14T12:00:00Z",
+        }
+        with mock.patch.object(
+            self.collector.Path, "iterdir", return_value=iter(())
+        ), mock.patch.object(
+            self.collector,
+            "generated_cleanup_artifacts",
+            return_value=([], True),
+        ), mock.patch.object(
+            self.collector,
+            "resource_inventory",
+            return_value=({"containers": [], "networks": [], "volumes": []}, True),
+        ), mock.patch.object(
+            self.collector,
+            "control_resource_facts",
+            return_value=(controls, True),
+        ), mock.patch.object(
+            self.collector,
+            "lifecycle_guard_facts",
+            return_value=(
+                {"migration_invocation_count": 1, "podman_api": False},
+                True,
+            ),
+        ) as guard:
+            observation = self.collector.collect_post_cleanup("aaaaaaaaaaaa")
+        guard.assert_called_once_with("aaaaaaaaaaaa")
+        self.assertEqual(1, observation["migration_invocation_count"])
+        self.assertFalse(observation["podman_api"])
 
     def test_migration_invocations_are_counted_from_systemd_journal_ids(self) -> None:
         first = "a" * 32

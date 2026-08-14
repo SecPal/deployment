@@ -78,9 +78,15 @@
             "host-key",
             "bootstrap",
             "root-ssh",
-            "target",
-            "collector",
-            "validation"
+            "target-checkout",
+            "control-resources",
+            "collector-baseline",
+            "target-workload-prepare-start",
+            "collector-live",
+            "target-workload-cleanup",
+            "collector-post-cleanup",
+            "target-host",
+            "collector"
           ]
         },
         "orchestration_exit_status": {

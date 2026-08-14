@@ -276,7 +276,7 @@ def validate_document(document: object) -> dict[str, object]:
         {
             "phase", "target_admitted", "collector_uid", "collector_gid",
             "complete", "containers", "networks", "volumes",
-            "migration_invocation_count", "control_resources",
+            "migration_invocation_count", "podman_api", "control_resources",
         },
         "$.workload.baseline",
     )
@@ -298,7 +298,8 @@ def validate_document(document: object) -> dict[str, object]:
             "phase", "target_admitted", "collector_uid", "collector_gid",
             "complete", "owned_units", "generated_services", "containers",
             "networks", "volumes", "all_containers", "all_networks",
-            "all_volumes", "control_resources",
+            "all_volumes", "migration_invocation_count", "podman_api",
+            "control_resources",
         },
         "$.workload.post_cleanup",
     )
@@ -339,7 +340,8 @@ def validate_document(document: object) -> dict[str, object]:
             service,
             {
                 "logical_name", "unit", "fragment_path", "fragment_uid", "fragment_gid",
-                "fragment_mode", "drop_in_paths", "drop_in_owners",
+                "fragment_mode", "drop_in_paths", "drop_in_owners", "active_state",
+                "sub_state", "result", "exec_main_status", "main_pid", "control_group",
             },
             f"$.workload.live.generated_services[{index}]",
         )
@@ -355,11 +357,12 @@ def validate_document(document: object) -> dict[str, object]:
         exact_keys(
             container,
             {
-                "role", "name", "state", "exit_code", "health", "oci_runtime",
+                "role", "name", "state", "pid", "exit_code", "health", "oci_runtime",
                 "rootless", "privileged", "pid_mode", "userns_mode",
                 "ipc_mode", "uts_mode", "network_mode", "cap_add", "devices_present",
                 "podman_socket_mount", "remote_api_environment", "security_opt",
-                "networks", "published_ports", "auto_update", "image",
+                "networks", "published_ports", "auto_update", "systemd_unit",
+                "service_managed", "image",
             },
             f"$.workload.live.containers[{index}]",
         )

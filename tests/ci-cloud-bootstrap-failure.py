@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WRITER = ROOT / "scripts" / "ci-cloud" / "write-bootstrap-failure.py"
 HOST_SETUP_FAILURE = ROOT / "scripts" / "ci-cloud" / "host-setup-failure.py"
 SCHEMA = ROOT / "schemas" / "ci-cloud-bootstrap-failure.schema.json"
+RUNNER = ROOT / "scripts" / "ci-cloud" / "run-remote-conformance.sh"
 TARGET_SHA = "a" * 40
 
 
@@ -35,6 +37,22 @@ def load_writer():
 
 
 class BootstrapFailureEvidenceTests(unittest.TestCase):
+    def test_failure_contract_covers_every_remote_runner_stage(self) -> None:
+        writer = load_writer()
+        runner_stages = set(
+            re.findall(
+                r'^bootstrap_stage="([a-z0-9-]+)"$',
+                RUNNER.read_text(encoding="utf-8"),
+                flags=re.MULTILINE,
+            )
+        )
+        schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        schema_stages = set(
+            schema["properties"]["test"]["properties"]["failure_stage"]["enum"]
+        )
+        self.assertEqual(runner_stages, set(writer.FAILURE_STAGES))
+        self.assertEqual(runner_stages, schema_stages)
+
     def test_accepts_every_closed_native_bootstrap_stage(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "ci_cloud_host_setup_failure", HOST_SETUP_FAILURE

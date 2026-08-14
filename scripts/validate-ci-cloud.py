@@ -2162,6 +2162,27 @@ def validate(root: Path) -> None:
         and "os.link(" in failure_writer,
         "bootstrap failure evidence must be schema-validated and failure-atomic",
     )
+    try:
+        schema_orchestration_stages = failure_schema["properties"]["test"][
+            "properties"
+        ]["failure_stage"]["enum"]
+    except (KeyError, TypeError):
+        raise ContractError(
+            "bootstrap failure orchestration stage schema is invalid"
+        ) from None
+    runner_orchestration_stages = set(
+        re.findall(r'^bootstrap_stage="([a-z0-9-]+)"$', remote, re.MULTILINE)
+    )
+    writer_orchestration_stages = string_collection_constant(
+        failure_writer, "FAILURE_STAGES"
+    )
+    require(
+        isinstance(schema_orchestration_stages, list)
+        and len(schema_orchestration_stages) == len(set(schema_orchestration_stages))
+        and set(schema_orchestration_stages) == writer_orchestration_stages
+        and runner_orchestration_stages == writer_orchestration_stages,
+        "runner, writer, and schema must share one closed failure-stage contract",
+    )
 
 
 def main(arguments: list[str]) -> int:

@@ -27,9 +27,15 @@ FAILURE_STAGES = (
     "host-key",
     "bootstrap",
     "root-ssh",
-    "target",
+    "target-checkout",
+    "control-resources",
+    "collector-baseline",
+    "target-workload-prepare-start",
+    "collector-live",
+    "target-workload-cleanup",
+    "collector-post-cleanup",
+    "target-host",
     "collector",
-    "validation",
 )
 OUTPUT_NAMES = frozenset(("bootstrap-failure.json", "summary.md"))
 

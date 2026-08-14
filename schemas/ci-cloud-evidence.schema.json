@@ -663,7 +663,13 @@
         "fragment_gid",
         "fragment_mode",
         "drop_in_paths",
-        "drop_in_owners"
+        "drop_in_owners",
+        "active_state",
+        "sub_state",
+        "result",
+        "exec_main_status",
+        "main_pid",
+        "control_group"
       ],
       "properties": {
         "logical_name": {
@@ -712,6 +718,24 @@
           "type": "array",
           "maxItems": 8,
           "items": { "$ref": "#/$defs/dropInOwner" }
+        },
+        "active_state": { "$ref": "#/$defs/shortString" },
+        "sub_state": { "$ref": "#/$defs/shortString" },
+        "result": { "$ref": "#/$defs/shortString" },
+        "exec_main_status": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "main_pid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304
+        },
+        "control_group": {
+          "type": "string",
+          "pattern": "^$|^/",
+          "maxLength": 256
         }
       }
     },
@@ -736,6 +760,7 @@
         "role",
         "name",
         "state",
+        "pid",
         "exit_code",
         "health",
         "oci_runtime",
@@ -754,6 +779,8 @@
         "networks",
         "published_ports",
         "auto_update",
+        "systemd_unit",
+        "service_managed",
         "image"
       ],
       "properties": {
@@ -766,6 +793,7 @@
         "state": {
           "enum": ["created", "configured", "exited", "running", "stopped"]
         },
+        "pid": { "type": "integer", "minimum": 0, "maximum": 4194304 },
         "exit_code": { "type": "integer", "minimum": -1, "maximum": 255 },
         "health": { "enum": ["none", "starting", "healthy", "unhealthy"] },
         "oci_runtime": { "$ref": "#/$defs/shortString" },
@@ -784,6 +812,12 @@
         "networks": { "$ref": "#/$defs/stringArray" },
         "published_ports": { "$ref": "#/$defs/stringArray" },
         "auto_update": { "type": "boolean" },
+        "systemd_unit": {
+          "type": "string",
+          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
+          "maxLength": 96
+        },
+        "service_managed": { "type": "boolean" },
         "image": { "type": "string", "maxLength": 512 }
       }
     },
@@ -800,6 +834,7 @@
         "networks",
         "volumes",
         "migration_invocation_count",
+        "podman_api",
         "control_resources"
       ],
       "properties": {
@@ -812,6 +847,7 @@
         "networks": { "$ref": "#/$defs/stringArray" },
         "volumes": { "$ref": "#/$defs/stringArray" },
         "migration_invocation_count": { "const": 0 },
+        "podman_api": { "type": "boolean" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -945,6 +981,8 @@
         "all_containers",
         "all_networks",
         "all_volumes",
+        "migration_invocation_count",
+        "podman_api",
         "control_resources"
       ],
       "properties": {
@@ -961,6 +999,12 @@
         "all_containers": { "$ref": "#/$defs/stringArray" },
         "all_networks": { "$ref": "#/$defs/stringArray" },
         "all_volumes": { "$ref": "#/$defs/stringArray" },
+        "migration_invocation_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "podman_api": { "type": "boolean" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -998,6 +1042,7 @@
                 "properties": {
                   "target_admitted": { "const": true },
                   "complete": { "const": true },
+                  "podman_api": { "const": false },
                   "control_resources": {
                     "properties": {
                       "network_present": { "const": true },
@@ -1060,6 +1105,8 @@
                   "containers": { "maxItems": 0 },
                   "networks": { "maxItems": 0 },
                   "volumes": { "maxItems": 0 },
+                  "migration_invocation_count": { "const": 1 },
+                  "podman_api": { "const": false },
                   "control_resources": {
                     "properties": {
                       "network_present": { "const": true },
