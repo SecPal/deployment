@@ -533,7 +533,14 @@ collect_workload_baseline() { collect_workload_phase baseline; }
 collect_workload_post_cleanup() { collect_workload_phase post-cleanup; }
 
 normalize_quadlet_runtime() {
-  timeout --signal=TERM --kill-after=15s 3m \
+  local mode="$1"
+  local outer_timeout
+  case "$mode" in
+    live) outer_timeout=12m ;;
+    cleanup) outer_timeout=3m ;;
+    *) return 125 ;;
+  esac
+  timeout --signal=TERM --kill-after=15s "$outer_timeout" \
     ssh "${ssh_options[@]}" "secpal-ci@$address" \
     /usr/bin/env -i \
     HOME=/home/secpal-ci \
@@ -541,6 +548,7 @@ normalize_quadlet_runtime() {
     LC_ALL=C.UTF-8 \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     /usr/bin/python3 -I - normalize "$target_sha" "$fixture_instance" \
+    "$mode" \
     < scripts/ci-cloud/collect-workload-evidence.py >/dev/null
 }
 
@@ -603,7 +611,7 @@ collect_cleanup_after_interruption() {
   fi
   if [[ "$checkout_admitted" == true &&
     "$workload_evidence_finalized" == false ]]; then
-    normalize_quadlet_runtime
+    normalize_quadlet_runtime cleanup
     cleanup_normalization_status=$?
     collect_workload_post_cleanup
     cleanup_collection_status=$?
@@ -635,7 +643,7 @@ set -e
 
 bootstrap_stage="trusted-quadlet-normalize-live"
 set +e
-normalize_quadlet_runtime
+normalize_quadlet_runtime live
 live_normalization_status=$?
 set -e
 
@@ -662,7 +670,7 @@ set -e
 
 bootstrap_stage="trusted-quadlet-normalize-cleanup"
 set +e
-normalize_quadlet_runtime
+normalize_quadlet_runtime cleanup
 cleanup_normalization_status=$?
 set -e
 

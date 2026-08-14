@@ -322,6 +322,9 @@ def valid_observations() -> dict[str, object]:
                 "configured_user": f"{uid}:{gid}",
                 "effective_uid": uid if not one_shot else -1,
                 "effective_gid": gid if not one_shot else -1,
+                "effective_supplementary_gids": (
+                    [gid] if not one_shot else []
+                ),
                 "read_only_rootfs": True,
                 "entrypoint": list(entrypoint),
                 "command": list(command),
@@ -332,6 +335,7 @@ def valid_observations() -> dict[str, object]:
                 "uts_mode": "private",
                 "network_mode": "private",
                 "cap_add": capabilities,
+                "group_add": [],
                 "effective_caps": capabilities,
                 "bounding_caps": capabilities,
                 "devices_present": False,
@@ -360,7 +364,7 @@ def valid_observations() -> dict[str, object]:
                 ),
                 "image": (
                     f"localhost/secpal-ci-{role}@sha256:"
-                    f"{(5 if role in {'migrate', 'api', 'worker-general', 'worker-hash-chain', 'scheduler'} else role_index):064x}"
+                    f"{(5 if role in {'secrets-init', 'migrate', 'api', 'worker-general', 'worker-hash-chain', 'scheduler'} else role_index):064x}"
                 ),
             }
         )
@@ -428,6 +432,7 @@ def valid_observations() -> dict[str, object]:
                 "active_units": sorted(
                     ["dbus.service", "dbus.socket"]
                     + [service["unit"] for service in services]
+                    + [f"{prefix}.target"]
                 ),
                 "jobs": [],
             },
@@ -1140,6 +1145,29 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "D1A_IMAGE_ROLE_SEPARATION",
         )
 
+    def test_secrets_initializer_requires_the_api_image_digest(self) -> None:
+        observations = valid_observations()
+        containers = observations["live"]["containers"]
+        api = next(item for item in containers if item["role"] == "api")
+        secrets_init = next(
+            item for item in containers if item["role"] == "secrets-init"
+        )
+        api_digest = api["image"].rsplit("@sha256:", 1)[1]
+        secrets_init["image"] = (
+            "localhost/secpal-ci-secrets-init@sha256:" + api_digest
+        )
+        self.assertNotIn(
+            "D1A_EXECUTION_CONTRACT",
+            self.collector.workload_admission_failures(observations),
+        )
+        secrets_init["image"] = (
+            "localhost/secpal-ci-secrets-init@sha256:" + "f" * 64
+        )
+        self.assertIn(
+            "D1A_EXECUTION_CONTRACT",
+            self.collector.workload_admission_failures(observations),
+        )
+
     def test_secrets_initializer_requires_exact_bounded_capabilities(self) -> None:
         observations = valid_observations()
         self.assertNotIn(
@@ -1213,6 +1241,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "NetworkMode": "private",
                 "SecurityOpt": ["no-new-privileges"],
                 "CapAdd": [],
+                "GroupAdd": [],
                 "Devices": [],
                 "Tmpfs": {},
                 "ReadonlyRootfs": True,
@@ -1240,6 +1269,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             (inspection["Config"], "Cmd"),
             (inspection["Config"], "Healthcheck"),
             (inspection["HostConfig"], "CapAdd"),
+            (inspection["HostConfig"], "GroupAdd"),
             (inspection["HostConfig"], "Devices"),
             (inspection["HostConfig"], "Tmpfs"),
             (inspection["HostConfig"], "ReadonlyRootfs"),
@@ -1271,7 +1301,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 ), mock.patch.object(
                     self.collector,
                     "effective_process_identity",
-                    return_value=(10001, 10001, True),
+                    return_value=(10001, 10001, [10001], True),
                 ):
                     _, complete = self.collector.container_facts(
                         "aaaaaaaaaaaa", rootless=True
@@ -1308,6 +1338,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "NetworkMode": "private",
                 "SecurityOpt": ["no-new-privileges"],
                 "CapAdd": [],
+                "GroupAdd": [],
                 "Devices": [],
                 "Tmpfs": {},
                 "ReadonlyRootfs": True,
@@ -1335,7 +1366,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ), mock.patch.object(
             self.collector,
             "effective_process_identity",
-            return_value=(10001, 10001, True),
+            return_value=(10001, 10001, [10001], True),
         ):
             facts, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True
@@ -1357,7 +1388,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ), mock.patch.object(
             self.collector,
             "effective_process_identity",
-            return_value=(10001, 10001, True),
+            return_value=(10001, 10001, [10001], True),
         ):
             facts, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True
@@ -1733,7 +1764,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
             service["unit"] for service in observations["live"]["generated_services"]
         ]
         observations["live"]["user_work"] = {
-            "active_units": sorted([*baseline["active_units"], *generated]),
+            "active_units": sorted([
+                *baseline["active_units"],
+                *generated,
+                f"secpal-int-{observations['instance']}.target",
+            ]),
             "jobs": [],
         }
         observations["live"]["processes"] = []
@@ -1744,6 +1779,25 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         observations["live"]["user_work"]["active_units"].append(
             "hidden-scheduler.service"
+        )
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
+    def test_live_user_work_includes_the_active_fixture_target(self) -> None:
+        observations = valid_observations()
+        fixture_target = f"secpal-int-{observations['instance']}.target"
+        self.assertIn(
+            fixture_target,
+            observations["live"]["user_work"]["active_units"],
+        )
+        self.assertNotIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+        observations["live"]["user_work"]["active_units"].remove(
+            fixture_target
         )
         self.assertIn(
             "D1A_LIVE_USER_WORK",
@@ -1783,6 +1837,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         service["unit"]
                         for service in observations["live"]["generated_services"]
                     ],
+                    f"secpal-int-{observations['instance']}.target",
                 ]
             ),
             "jobs": [],
@@ -1836,7 +1891,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector.workload_admission_failures(cleanup_leak),
         )
 
-    def test_runner_normalizes_quadlet_generation_before_each_final_observation(self) -> None:
+    def test_runner_reestablishes_trusted_quadlet_activation_before_live_observation(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
         self.assertIn("normalize_quadlet_runtime()", runner)
         self.assertLess(
@@ -1847,6 +1902,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             runner.index('bootstrap_stage="trusted-quadlet-normalize-live"'),
             runner.index('bootstrap_stage="collector-live"'),
         )
+        live_normalization = runner.split(
+            'bootstrap_stage="trusted-quadlet-normalize-live"', 1
+        )[1].split('bootstrap_stage="collector-live"', 1)[0]
+        self.assertIn("normalize_quadlet_runtime live", live_normalization)
         self.assertLess(
             runner.index('bootstrap_stage="target-host"'),
             runner.index('bootstrap_stage="trusted-quadlet-normalize-cleanup"'),
@@ -1881,7 +1940,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "quadlet_search_paths",
             return_value=["/etc/containers/systemd/users/20000"],
         ):
-            self.assertTrue(self.collector.normalize_quadlet_runtime())
+            self.assertTrue(
+                self.collector.normalize_quadlet_runtime(
+                    "aaaaaaaaaaaa", activate=True
+                )
+            )
         self.assertEqual(
             [
                 (["systemctl", "--user", "show-environment"], {}),
@@ -1900,6 +1963,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "XDG_RUNTIME_DIR=/run/user/20000",
                 ], {}),
                 (["systemctl", "--user", "daemon-reload"], {"timeout": 60}),
+                ([
+                    "systemctl", "--user", "stop",
+                    "secpal-int-aaaaaaaaaaaa.target",
+                    *[
+                        f"secpal-int-aaaaaaaaaaaa-{logical_name}.service"
+                        for logical_name in self.collector.GENERATED_LOGICAL_NAMES
+                    ],
+                ], {"timeout": 120}),
+                ([
+                    "systemctl", "--user", "start",
+                    "secpal-int-aaaaaaaaaaaa.target",
+                ], {"timeout": 600}),
                 (["systemctl", "--user", "show-environment"], {}),
             ],
             calls,
@@ -1920,7 +1995,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "quadlet_search_paths",
             return_value=["/etc/containers/systemd/users/20000"],
         ):
-            self.assertFalse(self.collector.normalize_quadlet_runtime())
+            self.assertFalse(
+                self.collector.normalize_quadlet_runtime(
+                    "aaaaaaaaaaaa", activate=False
+                )
+            )
 
     def test_process_census_records_bounded_identity_and_cgroup_facts(self) -> None:
         process = Path("/proc/1234")
@@ -2015,12 +2094,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             b"Name:\tphp\n"
             b"Uid:\t210000\t210000\t210000\t210000\n"
             b"Gid:\t210000\t210000\t210000\t210000\n"
+            b"Groups:\t210000\n"
         )
         with mock.patch.object(
             self.collector.Path, "open", return_value=io.BytesIO(status)
         ):
             self.assertEqual(
-                (10001, 10001, True),
+                (10001, 10001, [10001], True),
                 self.collector.effective_process_identity(1234),
             )
         malformed = status.replace(b"210000\t210000\t210000\t210000", b"210000\t0\t210000\t210000", 1)
@@ -2028,9 +2108,33 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector.Path, "open", return_value=io.BytesIO(malformed)
         ):
             self.assertEqual(
-                (-1, -1, False),
+                (-1, -1, [], False),
                 self.collector.effective_process_identity(1234),
             )
+
+    def test_supplementary_groups_are_inside_the_exact_identity_boundary(self) -> None:
+        observations = valid_observations()
+        api = next(
+            item for item in observations["live"]["containers"]
+            if item["role"] == "api"
+        )
+        api["group_add"] = []
+        api["effective_supplementary_gids"] = [10001]
+        self.assertNotIn(
+            "D1A_PRIVILEGE_BOUNDARY",
+            self.collector.workload_admission_failures(observations),
+        )
+        api["group_add"] = ["0"]
+        self.assertIn(
+            "D1A_PRIVILEGE_BOUNDARY",
+            self.collector.workload_admission_failures(observations),
+        )
+        api["group_add"] = []
+        api["effective_supplementary_gids"] = [0, 10001]
+        self.assertIn(
+            "D1A_PRIVILEGE_BOUNDARY",
+            self.collector.workload_admission_failures(observations),
+        )
 
     def test_post_cleanup_rechecks_migration_count_and_podman_api(self) -> None:
         self.assert_failure(

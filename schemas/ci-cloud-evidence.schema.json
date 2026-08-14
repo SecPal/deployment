@@ -805,6 +805,7 @@
         "configured_user",
         "effective_uid",
         "effective_gid",
+        "effective_supplementary_gids",
         "read_only_rootfs",
         "entrypoint",
         "command",
@@ -815,6 +816,7 @@
         "uts_mode",
         "network_mode",
         "cap_add",
+        "group_add",
         "effective_caps",
         "bounding_caps",
         "devices_present",
@@ -862,6 +864,16 @@
           "minimum": -1,
           "maximum": 4294967295
         },
+        "effective_supplementary_gids": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
         "read_only_rootfs": { "type": "boolean" },
         "entrypoint": { "$ref": "#/$defs/commandArray" },
         "command": { "$ref": "#/$defs/commandArray" },
@@ -872,6 +884,7 @@
         "uts_mode": { "$ref": "#/$defs/shortString" },
         "network_mode": { "$ref": "#/$defs/shortString" },
         "cap_add": { "$ref": "#/$defs/stringArray" },
+        "group_add": { "$ref": "#/$defs/stringArray" },
         "effective_caps": { "$ref": "#/$defs/stringArray" },
         "bounding_caps": { "$ref": "#/$defs/stringArray" },
         "devices_present": { "type": "boolean" },

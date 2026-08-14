@@ -98,7 +98,7 @@ strict-host SSH from the trusted main orchestration script
         | fetch exact validated 40-character target SHA
         | run only fixed v1 phases of target-conformance.sh as UID 20000
         v
-trusted controls/baseline -> target prepare/start -> trusted live collector
+trusted controls/baseline -> target fixture publication -> trusted activation/live collector
         v
 target cleanup -> target host -> trusted post-cleanup collector
         |
@@ -361,17 +361,24 @@ may cross the root-owned publication boundary only through the fixed trusted
 fixture client. Its future fixed client path may stage runtime assets only below
 `/home/secpal-ci/quadlet-fixture/<instance>/assets`; this location is derived
 from the admitted SHA prefix, is not a phase argument, and every effective bind
-source outside its closed filename set fails trusted live admission.
+source outside its closed filename set fails trusted live admission. The stable
+`workload-prepare-start` interface publishes the fixture but does not establish
+the admitted runtime invocation: final activation belongs to the trusted
+collector boundary.
 
 The trusted runner creates one unrelated rootless control network and volume
 and records a main-controlled baseline of every rootless Podman container,
 network, volume, fixture migration invocation, and Podman API/socket activation
 state before any target code runs.
-It then invokes target prepare/start, has the trusted unprivileged collector
+It then invokes target fixture publication and has the trusted unprivileged collector
 replace the complete bounded user-manager environment with the fixed home,
 runtime directory, bus, locale, executable path, and sole Quadlet path, perform
-a bounded `daemon-reload`, and verify that exact environment afterward. The
-runner then streams the main-controlled live collector and requests target cleanup,
+a bounded `daemon-reload`, synchronously stop the exact fixture target and every
+generated service, and start the exact fixture target from the newly loaded
+root-owned definitions. The collector verifies the exact manager environment
+after this activation. A target-controlled earlier invocation therefore cannot
+survive while acquiring the regenerated fragment's provenance. The runner then
+streams the main-controlled live collector and requests target cleanup,
 runs the separate target `host` phase for D.1 admission, and repeats the same
 fixed Quadlet normalization before post-cleanup collection. Both normalization
 results are explicit phase statuses and are required to pass. Only after every
@@ -381,7 +388,7 @@ descendants can therefore neither prepare the observed workload nor race the
 earlier baseline, and a resource created or leaked by that final target phase
 cannot escape the final inventory.
 Live admission requires the baseline plus exactly the closed fixture resource
-set. It also requires every loaded generated service to identify the expected
+set and the exact active fixture target. It also requires every loaded generated service to identify the expected
 root-owned Quadlet source and records hashes of the effective fragment and
 drop-ins after the trusted reload. Target-produced status is not used for this
 correlation. The same trusted lifecycle guard remeasures the migration invocation count
@@ -907,7 +914,8 @@ Evidence includes:
   activity-hash-chain-worker cardinality derived from that independently
   observed set rather than accepted as a reported count; effective
   rootless/crun/security facts, the configured container user, the running
-  process's effective container UID/GID, a read-only root filesystem, and private
+  process's effective container UID/GID and bounded supplementary GID set, an
+  empty configured `GroupAdd` set, a read-only root filesystem, and private
   PID, user, IPC, UTS, and network namespace modes,
   the closed role-to-network topology, the complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
@@ -919,7 +927,9 @@ Evidence includes:
   destinations, or privilege-expanding tmpfs flags fail admission; the
   gateway's sole loopback publication,
   immutable local image references with distinct API and frontend content
-  digests, the exact `PODMAN_SYSTEMD_UNIT` binding from each container to its
+  digests and one shared API-family digest across the secrets initializer,
+  migration, API, workers, and scheduler, the exact `PODMAN_SYSTEMD_UNIT`
+  binding from each container to its
   generated service, and—for every running role—the container process cgroup
   nested beneath that effective service cgroup; the effective configured
   entrypoint, command, and healthcheck for the migration and application-family

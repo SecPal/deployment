@@ -333,6 +333,24 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workload|incomplete|declared schema"):
             self.validator.validate_document(document)
 
+    def test_workload_instance_is_bound_to_the_exact_target_sha(self) -> None:
+        document = valid_document()
+
+        def replace_instance(value: object) -> object:
+            if isinstance(value, str):
+                return value.replace("aaaaaaaaaaaa", "bbbbbbbbbbbb")
+            if isinstance(value, list):
+                return [replace_instance(item) for item in value]
+            if isinstance(value, dict):
+                return {
+                    key: replace_instance(item) for key, item in value.items()
+                }
+            return value
+
+        document["workload"] = replace_instance(document["workload"])
+        with self.assertRaisesRegex(ValueError, "workload instance"):
+            self.validator.validate_document(document)
+
     def test_phase_failure_is_preserved_and_forces_d1a_failure(self) -> None:
         document = valid_document()
         document["test"]["phase_exit_statuses"]["workload_prepare_start"] = 7

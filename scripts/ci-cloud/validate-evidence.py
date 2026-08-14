@@ -374,9 +374,10 @@ def validate_document(document: object) -> dict[str, object]:
             {
                 "id", "role", "name", "state", "pid", "exit_code", "health", "oci_runtime",
                 "rootless", "privileged", "configured_user", "effective_uid",
-                "effective_gid", "read_only_rootfs", "entrypoint", "command",
+                "effective_gid", "effective_supplementary_gids",
+                "read_only_rootfs", "entrypoint", "command",
                 "healthcheck_command", "pid_mode", "userns_mode",
-                "ipc_mode", "uts_mode", "network_mode", "cap_add",
+                "ipc_mode", "uts_mode", "network_mode", "cap_add", "group_add",
                 "effective_caps", "bounding_caps", "devices_present",
                 "mounts", "tmpfs", "remote_api_environment", "security_opt",
                 "lifecycle_events", "networks", "published_ports", "auto_update", "systemd_unit",
@@ -545,6 +546,8 @@ def validate_document(document: object) -> dict[str, object]:
     )
     if workflow["repository"] != "SecPal/deployment" or re.fullmatch(r"[0-9a-f]{40}", str(workflow["target_sha"])) is None:
         fail("workflow identity is invalid")
+    if workload["instance"] != str(workflow["target_sha"])[:12]:
+        fail("workload instance does not match the exact target SHA")
     provider_identity = (
         test["provider"],
         test["region"],

@@ -462,7 +462,9 @@ def manager_environment() -> dict[str, str] | None:
     return environment
 
 
-def normalize_quadlet_runtime() -> bool:
+def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return False
     existing = manager_environment()
     if existing is None:
         return False
@@ -481,12 +483,29 @@ def normalize_quadlet_runtime() -> bool:
     reload_status, _, reload_complete = command_result(
         ["systemctl", "--user", "daemon-reload"], timeout=60
     )
+    if reload_status != 0 or not reload_complete:
+        return False
+    if activate:
+        prefix = f"secpal-int-{instance}"
+        target = f"{prefix}.target"
+        services = [
+            f"{prefix}-{logical_name}.service"
+            for logical_name in GENERATED_LOGICAL_NAMES
+        ]
+        stop_status, _, stop_complete = command_result(
+            ["systemctl", "--user", "stop", target, *services], timeout=120
+        )
+        if stop_status != 0 or not stop_complete:
+            return False
+        start_status, _, start_complete = command_result(
+            ["systemctl", "--user", "start", target], timeout=600
+        )
+        if start_status != 0 or not start_complete:
+            return False
     observed = manager_environment()
     expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
     return (
-        reload_status == 0
-        and reload_complete
-        and observed == expected
+        observed == expected
         and quadlet_search_paths() == [str(QUADLET_ROOT)]
     )
 
@@ -896,50 +915,78 @@ def container_identity_on_host(value: int) -> int:
     return CI_UID if value == 0 else 199_999 + value
 
 
-def process_status_identity(
+def process_status_facts(
     pid: int, *, require_all_ids_equal: bool
-) -> tuple[int, int, bool]:
+) -> tuple[int, int, list[int], bool]:
     if pid <= 0 or pid > 4_194_304:
-        return -1, -1, False
+        return -1, -1, [], False
     try:
         with Path(f"/proc/{pid}/status").open("rb") as stream:
             content = stream.read(16_385)
     except OSError:
-        return -1, -1, False
+        return -1, -1, [], False
     if len(content) > 16_384:
-        return -1, -1, False
+        return -1, -1, [], False
     try:
         lines = content.decode("utf-8").splitlines()
     except UnicodeDecodeError:
-        return -1, -1, False
+        return -1, -1, [], False
     values: dict[str, int] = {}
     for field in ("Uid", "Gid"):
         matching = [line for line in lines if line.startswith(f"{field}:\t")]
         if len(matching) != 1:
-            return -1, -1, False
+            return -1, -1, [], False
         fields = matching[0].split()
         if len(fields) != 5 or any(not item.isdigit() for item in fields[1:]):
-            return -1, -1, False
+            return -1, -1, [], False
         effective = int(fields[2])
         if require_all_ids_equal and any(
             int(item) != effective for item in fields[1:]
         ):
-            return -1, -1, False
+            return -1, -1, [], False
         values[field] = effective
-    return values["Uid"], values["Gid"], True
+    matching_groups = [line for line in lines if line.startswith("Groups:\t")]
+    if len(matching_groups) != 1:
+        return -1, -1, [], False
+    group_fields = matching_groups[0].split()[1:]
+    if (
+        len(group_fields) > 64
+        or any(not item.isdigit() for item in group_fields)
+    ):
+        return -1, -1, [], False
+    groups = [int(item) for item in group_fields]
+    if len(groups) != len(set(groups)):
+        return -1, -1, [], False
+    return values["Uid"], values["Gid"], sorted(groups), True
 
 
-def effective_process_identity(pid: int) -> tuple[int, int, bool]:
-    uid, gid, complete = process_status_identity(
+def process_status_identity(
+    pid: int, *, require_all_ids_equal: bool
+) -> tuple[int, int, bool]:
+    uid, gid, _, complete = process_status_facts(
+        pid, require_all_ids_equal=require_all_ids_equal
+    )
+    return uid, gid, complete
+
+
+def effective_process_identity(pid: int) -> tuple[int, int, list[int], bool]:
+    uid, gid, supplementary_groups, complete = process_status_facts(
         pid, require_all_ids_equal=True
     )
     if not complete:
-        return -1, -1, False
+        return -1, -1, [], False
     container_uid = container_identity_from_host(uid)
     container_gid = container_identity_from_host(gid)
-    if container_uid < 0 or container_gid < 0:
-        return -1, -1, False
-    return container_uid, container_gid, True
+    container_groups = [
+        container_identity_from_host(value) for value in supplementary_groups
+    ]
+    if (
+        container_uid < 0
+        or container_gid < 0
+        or any(value < 0 for value in container_groups)
+    ):
+        return -1, -1, [], False
+    return container_uid, container_gid, sorted(container_groups), True
 
 
 def container_facts(
@@ -985,7 +1032,8 @@ def container_facts(
         required_host_config = {
             "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
             "NetworkMode",
-            "SecurityOpt", "CapAdd", "Devices", "Tmpfs", "ReadonlyRootfs",
+            "SecurityOpt", "CapAdd", "GroupAdd", "Devices", "Tmpfs",
+            "ReadonlyRootfs",
         }
         required_network_settings = {"Networks", "Ports"}
         if (
@@ -1010,6 +1058,7 @@ def container_facts(
             or not isinstance(host_config["Privileged"], bool)
             or not isinstance(host_config["SecurityOpt"], list)
             or not isinstance(host_config["CapAdd"], list)
+            or not isinstance(host_config["GroupAdd"], list)
             or not isinstance(host_config["Devices"], list)
             or not isinstance(host_config["Tmpfs"], dict)
             or not isinstance(host_config["ReadonlyRootfs"], bool)
@@ -1049,6 +1098,7 @@ def container_facts(
             complete = False
         security_opt = host_config["SecurityOpt"]
         cap_add = host_config["CapAdd"]
+        group_add = host_config["GroupAdd"]
         effective_caps = item["EffectiveCaps"]
         bounding_caps = item["BoundingCaps"]
         devices = host_config["Devices"]
@@ -1067,14 +1117,14 @@ def container_facts(
             )
         else:
             healthcheck_command, healthcheck_complete = [], False
-        effective_uid, effective_gid, identity_complete = (
+        effective_uid, effective_gid, effective_groups, identity_complete = (
             effective_process_identity(state["Pid"])
             if str(state.get("Status", "")) == "running"
-            else (-1, -1, True)
+            else (-1, -1, [], True)
         )
         if any(not isinstance(value, str) for value in environment) or any(
             not isinstance(value, str)
-            for values in (cap_add, effective_caps, bounding_caps)
+            for values in (cap_add, group_add, effective_caps, bounding_caps)
             for value in values
         ):
             complete = False
@@ -1108,6 +1158,7 @@ def container_facts(
                 "configured_user": config["User"],
                 "effective_uid": effective_uid,
                 "effective_gid": effective_gid,
+                "effective_supplementary_gids": effective_groups,
                 "read_only_rootfs": host_config["ReadonlyRootfs"],
                 "entrypoint": entrypoint,
                 "command": command,
@@ -1121,6 +1172,7 @@ def container_facts(
                     f"CAP_{str(value).upper().removeprefix('CAP_')}"
                     for value in cap_add
                 ),
+                "group_add": sorted(str(value) for value in group_add),
                 "effective_caps": sorted(
                     f"CAP_{str(value).upper().removeprefix('CAP_')}"
                     for value in effective_caps
@@ -2147,6 +2199,7 @@ def workload_admission_failures(observations: object) -> list[str]:
             if (
                 item.get("privileged") is not False
                 or item.get("cap_add") != expected_caps
+                or item.get("group_add") != []
                 or item.get("effective_caps") != expected_caps
                 or item.get("bounding_caps") != expected_caps
             ):
@@ -2165,6 +2218,14 @@ def workload_admission_failures(observations: object) -> list[str]:
                     != (expected_gid if running else -1)
                 ):
                     failures.append("D1A_RUNTIME_IDENTITY")
+                effective_groups = item.get("effective_supplementary_gids")
+                groups_valid = isinstance(effective_groups, list) and (
+                    effective_groups in ([], [expected_gid])
+                    if running
+                    else effective_groups == []
+                )
+                if not groups_valid:
+                    failures.append("D1A_PRIVILEGE_BOUNDARY")
             if item.get("read_only_rootfs") is not True:
                 failures.append("D1A_READ_ONLY_ROOTFS")
             if role_contract is not None and any(
@@ -2318,8 +2379,8 @@ def workload_admission_failures(observations: object) -> list[str]:
         api_family = {
             role: str(images_by_role.get(role, "")).rsplit("@sha256:", 1)
             for role in (
-                "migrate", "api", "worker-general", "worker-hash-chain",
-                "scheduler",
+                "secrets-init", "migrate", "api", "worker-general",
+                "worker-hash-chain", "scheduler",
             )
         }
         if (
@@ -2366,11 +2427,16 @@ def workload_admission_failures(observations: object) -> list[str]:
         for service in services
         if isinstance(service, dict)
     } if isinstance(services, list) else set()
+    fixture_target = (
+        {f"secpal-int-{instance}.target"}
+        if re.fullmatch(r"[0-9a-f]{12}", str(instance)) is not None
+        else set()
+    )
     if (
         live_user_work is None
         or expected_live_units is None
         or exact_string_set(live_user_work.get("active_units"))
-        != expected_live_units | generated_units
+        != expected_live_units | generated_units | fixture_target
         or live_user_work.get("jobs")
         != (baseline_user_work.get("jobs") if baseline_user_work else None)
     ):
@@ -2538,13 +2604,23 @@ def main() -> int:
     )
     parser.add_argument("target_sha")
     parser.add_argument("instance")
+    parser.add_argument(
+        "normalization_mode", nargs="?", choices=["live", "cleanup"]
+    )
     arguments = parser.parse_args()
     try:
+        if (arguments.phase == "normalize") != (
+            arguments.normalization_mode is not None
+        ):
+            raise ValueError("normalization mode does not match collection phase")
         admit_collection_context(arguments.phase, arguments.target_sha, arguments.instance, CHECKOUT)
         if arguments.phase == "baseline":
             observation = collect_baseline(arguments.instance)
         elif arguments.phase == "normalize":
-            return 0 if normalize_quadlet_runtime() else 1
+            return 0 if normalize_quadlet_runtime(
+                arguments.instance,
+                activate=arguments.normalization_mode == "live",
+            ) else 1
         elif arguments.phase == "live":
             observation = collect_live(arguments.instance)
         else:
