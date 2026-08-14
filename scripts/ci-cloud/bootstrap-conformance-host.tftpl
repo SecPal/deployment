@@ -49,17 +49,36 @@ trap bootstrap_failure EXIT
 
 install -d -o root -g root -m 0755 /usr/local/sbin
 
+decode_embedded_script() {
+  local encoded="$1"
+  local destination="$2"
+  local mode="$3"
+  local temporary
+
+  temporary="$(mktemp /usr/local/sbin/.secpal-ci-script.XXXXXX)"
+  if ! printf '%s' "$encoded" | base64 --decode | gzip --decompress >"$temporary";
+  then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  install -o root -g root -m "$mode" "$temporary" "$destination"
+  rm -f -- "$temporary"
+}
+
+command -v base64 >/dev/null
+command -v gzip >/dev/null
+decode_embedded_script '${host_setup_script_base64gzip}' \
+  /usr/local/sbin/secpal-ci-configure-conformance-host 0700
+decode_embedded_script '${quadlet_fixture_installer_base64gzip}' \
+  /usr/local/sbin/secpal-ci-quadlet-fixture-installer 0700
+decode_embedded_script '${quadlet_fixture_client_base64gzip}' \
+  /usr/local/bin/secpal-ci-quadlet-fixture 0755
+
 install -o root -g root -m 0700 /dev/null \
   /usr/local/sbin/secpal-ci-install-diagnostic-ssh
 cat > /usr/local/sbin/secpal-ci-install-diagnostic-ssh <<'SECPAL_DIAGNOSTIC_INSTALLER'
 ${diagnostic_ssh_installer}
 SECPAL_DIAGNOSTIC_INSTALLER
-
-install -o root -g root -m 0700 /dev/null \
-  /usr/local/sbin/secpal-ci-configure-conformance-host
-cat > /usr/local/sbin/secpal-ci-configure-conformance-host <<'SECPAL_HOST_SETUP'
-${host_setup_script}
-SECPAL_HOST_SETUP
 
 install -o root -g root -m 0700 /dev/null \
   /usr/local/sbin/secpal-ci-continue-bootstrap

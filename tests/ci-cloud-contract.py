@@ -111,7 +111,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertIn("useradd", bootstrap)
         self.assertIn("${diagnostic_ssh_installer}", bootstrap)
-        self.assertIn("${host_setup_script}", bootstrap)
+        self.assertIn("${host_setup_script_base64gzip}", bootstrap)
         self.assertIn("${host_setup_failure_script}", bootstrap)
         self.assertIn("${bootstrap_continuation_script}", bootstrap)
         self.assertIn(
@@ -2291,17 +2291,20 @@ class CloudCIContractTests(unittest.TestCase):
         )
 
     def test_native_bootstrap_embeds_valid_host_setup(self) -> None:
+        import base64
+        import gzip
+
         template = (
             ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
         ).read_text(encoding="utf-8")
         host_setup = (
             ROOT / "scripts/ci-cloud/configure-conformance-host.sh"
         ).read_text(encoding="utf-8").strip()
-        rendered = template.replace("${host_setup_script}", host_setup)
-        embedded = rendered.split("<<'SECPAL_HOST_SETUP'\n", 1)[1].split(
-            "\nSECPAL_HOST_SETUP", 1
-        )[0]
-        self.assertEqual(host_setup, embedded)
+        encoded = base64.b64encode(
+            gzip.compress(host_setup.encode("utf-8"), mtime=0)
+        ).decode("ascii")
+        self.assertIn("${host_setup_script_base64gzip}", template)
+        self.assertEqual(host_setup, gzip.decompress(base64.b64decode(encoded)).decode())
 
     def test_runtime_validator_enforces_declared_evidence_schema(self) -> None:
         validator = (
@@ -2579,15 +2582,22 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assertIn(gate, bootstrap)
         self.assertLess(bootstrap.index(gate), bootstrap.index(diagnostic_install))
-        self.assertIn('cloud_identity_gate           = ":"', (
+        digitalocean_main = (
             ROOT / "infra/ci-cloud/digitalocean/main.tf"
-        ).read_text(encoding="utf-8"))
-        self.assertIn(
-            'cloud_identity_gate           = trimspace(file('
-            '"${path.module}/../../../scripts/ci-cloud/'
-            'defer-bootstrap-for-gcp-identity.sh"))', (
-            ROOT / "infra/ci-cloud/gcp/main.tf"
-        ).read_text(encoding="utf-8"))
+        ).read_text(encoding="utf-8")
+        gcp_main = (ROOT / "infra/ci-cloud/gcp/main.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(
+            digitalocean_main,
+            r'(?m)^\s*cloud_identity_gate\s+= ":"$',
+        )
+        self.assertRegex(
+            gcp_main,
+            r'(?m)^\s*cloud_identity_gate\s+= trimspace\(file\('
+            r'"\$\{path\.module\}/\.\./\.\./\.\./scripts/ci-cloud/'
+            r'defer-bootstrap-for-gcp-identity\.sh"\)\)$',
+        )
         identity_gate = (
             ROOT / "scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh"
         ).read_text(encoding="utf-8")
@@ -2808,6 +2818,172 @@ class CloudCIContractTests(unittest.TestCase):
             '                "-",\n',
             '                "--output",\n'
             '                "/dev/null",\n',
+        )
+
+    def test_rejects_unbounded_quadlet_fixture_unit(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            "MAX_UNIT_BYTES = 64 * 1024",
+            "MAX_UNIT_BYTES = 1024 * 1024",
+        )
+
+    def test_rejects_quadlet_fixture_symlink_following(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            '        flags |= os.O_NOFOLLOW\n',
+            "",
+        )
+
+    def test_rejects_writable_untrusted_quadlet_request_path(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            "ReadWritePaths={layout.quadlet_root} {layout.systemd_root} {layout.state_root}",
+            "ReadWritePaths={layout.quadlet_root} {layout.systemd_root} "
+            "{layout.state_root} -{layout.request_path(operation)}",
+        )
+
+    def test_rejects_quadlet_fixture_without_shared_operation_lock(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            "            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)\n",
+            "            pass\n",
+        )
+
+    def test_rejects_non_resumable_quadlet_cleanup_state(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            '        state["state"] = "removing"\n',
+            "        pass\n",
+        )
+
+    def test_rejects_ambiguous_quadlet_manifest_json(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            "json.loads(content, object_pairs_hook=reject_duplicate_keys)",
+            "json.loads(content)",
+        )
+
+    def test_rejects_boolean_quadlet_manifest_schema_version(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            '        type(manifest["schema_version"]) is not int\n',
+            "        False\n",
+        )
+
+    def test_rejects_blocking_trusted_fixture_file_open(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            "def bounded_trusted_file(\n"
+            "    path: Path,\n"
+            "    layout: Layout,\n"
+            "    *,\n"
+            "    mode: int,\n"
+            "    maximum: int,\n"
+            "    rejection_code: str,\n"
+            ") -> bytes:\n"
+            "    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK",
+            "def bounded_trusted_file(\n"
+            "    path: Path,\n"
+            "    layout: Layout,\n"
+            "    *,\n"
+            "    mode: int,\n"
+            "    maximum: int,\n"
+            "    rejection_code: str,\n"
+            ") -> bytes:\n"
+            "    flags = os.O_RDONLY | os.O_CLOEXEC",
+        )
+
+    def test_rejects_blocking_untrusted_fixture_file_open(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            "def bounded_regular_file(path: Path, layout: Layout, maximum: int) -> bytes:\n"
+            "    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK",
+            "def bounded_regular_file(path: Path, layout: Layout, maximum: int) -> bytes:\n"
+            "    flags = os.O_RDONLY | os.O_CLOEXEC",
+        )
+
+    def test_rejects_blocking_fixture_client_source_open(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-client.py",
+            "flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK",
+            "flags = os.O_RDONLY | os.O_CLOEXEC",
+        )
+
+    def test_rejects_quadlet_result_without_closed_reason(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            '        "reason": reason,\n',
+            "",
+        )
+
+    def test_rejects_arbitrary_quadlet_fixture_filenames(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            "        if observed_names != set(names):\n",
+            "        if False:\n",
+        )
+
+    def test_rejects_quadlet_cleanup_without_recorded_digest(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            '        if not trusted_file_matches(destination, state["files"][name], layout):\n',
+            "        if False:\n",
+        )
+
+    def test_rejects_quadlet_install_trigger_left_active(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            '        if operation == "install":\n'
+            "            stop_path_trigger(trigger, stop_trigger)\n",
+            '        if operation == "install":\n'
+            "            pass\n",
+        )
+
+    def test_rejects_unbounded_quadlet_removal_retries(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            "TriggerLimitIntervalSec=60s\nTriggerLimitBurst=3",
+            "TriggerLimitIntervalSec=0\nTriggerLimitBurst=0",
+        )
+
+    def test_rejects_quadlet_removal_without_automatic_resume(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            '                retrying = read_active_state(layout)["state"] == "removing"\n',
+            "                retrying = False\n",
+        )
+
+    def test_rejects_persistent_quadlet_root_bridge(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-installer.py",
+            '["systemctl", "start", INSTALL_PATH_UNIT, REMOVE_PATH_UNIT],\n',
+            '["systemctl", "enable", "--now", INSTALL_PATH_UNIT, REMOVE_PATH_UNIT],\n',
+        )
+
+    def test_rejects_source_path_in_quadlet_fixture_request(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/quadlet-fixture-client.py",
+            '            "schema_version": SCHEMA_VERSION,\n',
+            '            "schema_version": SCHEMA_VERSION,\n'
+            '            "source": str(source),\n',
+        )
+
+    def test_rejects_plaintext_quadlet_installer_provider_embedding(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/main.tf",
+            'base64gzip(file("${path.module}/../../../scripts/ci-cloud/'
+            'quadlet-fixture-installer.py"))',
+            'file("${path.module}/../../../scripts/ci-cloud/'
+            'quadlet-fixture-installer.py")',
+        )
+
+    def test_rejects_plaintext_quadlet_client_provider_embedding(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/gcp/main.tf",
+            'base64gzip(file("${path.module}/../../../scripts/ci-cloud/'
+            'quadlet-fixture-client.py"))',
+            'file("${path.module}/../../../scripts/ci-cloud/'
+            'quadlet-fixture-client.py")',
         )
 
     def test_rejects_empty_email_in_gcp_identity_removal_request(self) -> None:

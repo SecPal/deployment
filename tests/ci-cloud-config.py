@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import base64
+import gzip
+import re
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +25,16 @@ BOOTSTRAP_CONTINUATION = (
 DIAGNOSTIC_SSH_INSTALLER = (
     ROOT / "scripts" / "ci-cloud" / "install-diagnostic-ssh.sh"
 )
+QUADLET_FIXTURE_INSTALLER = (
+    ROOT / "scripts" / "ci-cloud" / "quadlet-fixture-installer.py"
+)
+QUADLET_FIXTURE_CLIENT = (
+    ROOT / "scripts" / "ci-cloud" / "quadlet-fixture-client.py"
+)
+
+
+def base64gzip(path: Path) -> str:
+    return base64.b64encode(gzip.compress(path.read_bytes(), mtime=0)).decode("ascii")
 
 
 def render() -> str:
@@ -36,13 +49,19 @@ def render() -> str:
         "${diagnostic_ssh_installer}": DIAGNOSTIC_SSH_INSTALLER.read_text(
             encoding="utf-8"
         ).strip(),
-        "${host_setup_script}": HOST_SETUP.read_text(encoding="utf-8").strip(),
+        "${host_setup_script_base64gzip}": base64gzip(HOST_SETUP),
         "${host_setup_failure_script}": HOST_SETUP_FAILURE.read_text(
             encoding="utf-8"
         ).strip(),
         "${bootstrap_continuation_script}": BOOTSTRAP_CONTINUATION.read_text(
             encoding="utf-8"
         ).strip(),
+        "${quadlet_fixture_installer_base64gzip}": base64gzip(
+            QUADLET_FIXTURE_INSTALLER
+        ),
+        "${quadlet_fixture_client_base64gzip}": base64gzip(
+            QUADLET_FIXTURE_CLIENT
+        ),
     }
     for old, new in replacements.items():
         rendered = rendered.replace(old, new)
@@ -55,9 +74,11 @@ class ProviderBootstrapTests(unittest.TestCase):
         self.assertLessEqual(len(rendered.encode("utf-8")), 64 * 1024)
         for placeholder in (
             "${diagnostic_ssh_installer}",
-            "${host_setup_script}",
+            "${host_setup_script_base64gzip}",
             "${host_setup_failure_script}",
             "${bootstrap_continuation_script}",
+            "${quadlet_fixture_installer_base64gzip}",
+            "${quadlet_fixture_client_base64gzip}",
             "${runner_ipv4}",
             "${run_id}",
             "${run_attempt}",
@@ -80,6 +101,31 @@ class ProviderBootstrapTests(unittest.TestCase):
             completed.returncode,
             f"{completed.stdout}\n{completed.stderr}",
         )
+
+    def test_compressed_trusted_scripts_round_trip_from_rendered_payload(self) -> None:
+        rendered = render()
+        for destination, source in (
+            (
+                "/usr/local/sbin/secpal-ci-configure-conformance-host",
+                HOST_SETUP,
+            ),
+            (
+                "/usr/local/sbin/secpal-ci-quadlet-fixture-installer",
+                QUADLET_FIXTURE_INSTALLER,
+            ),
+            (
+                "/usr/local/bin/secpal-ci-quadlet-fixture",
+                QUADLET_FIXTURE_CLIENT,
+            ),
+        ):
+            match = re.search(
+                r"decode_embedded_script '([A-Za-z0-9+/=]+)' \\\n"
+                + re.escape(f"  {destination}"),
+                rendered,
+            )
+            self.assertIsNotNone(match, destination)
+            decoded = gzip.decompress(base64.b64decode(match.group(1)))
+            self.assertEqual(source.read_bytes(), decoded)
 
 
 if __name__ == "__main__":

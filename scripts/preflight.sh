@@ -62,6 +62,7 @@ python3 tests/ci-cloud-gcp-janitor.py
 bash tests/ci-cloud-gcp-identity.sh
 python3 tests/ci-cloud-host-setup-failure.py
 python3 tests/ci-cloud-janitor.py
+python3 tests/ci-cloud-quadlet-fixture.py
 python3 tests/ci-cloud-ssh-port-probe.py
 python3 tests/ci-cloud-systemd-reboot.py
 bash tests/ci-cloud-remote-bootstrap.sh

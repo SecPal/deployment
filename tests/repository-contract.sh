@@ -75,6 +75,8 @@ required_files=(
   scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh
   scripts/ci-cloud/host-setup-failure.py
   scripts/ci-cloud/probe-ssh-port.py
+  scripts/ci-cloud/quadlet-fixture-client.py
+  scripts/ci-cloud/quadlet-fixture-installer.py
   scripts/ci-cloud/run-remote-conformance.sh
   scripts/ci-cloud/target-conformance.sh
   scripts/ci-cloud/validate-evidence.py
@@ -95,6 +97,7 @@ required_files=(
   tests/ci-cloud-gcp-identity.sh
   tests/ci-cloud-host-setup-failure.py
   tests/ci-cloud-janitor.py
+  tests/ci-cloud-quadlet-fixture.py
   tests/ci-cloud-ssh-port-probe.py
   tests/ci-cloud-remote-bootstrap.sh
   tests/ci-cloud-systemd-reboot.py

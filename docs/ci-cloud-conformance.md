@@ -363,20 +363,65 @@ every well-formed range assigned to that account and installs the single fixed
 `200000:65536` UID and GID ranges. Malformed databases or a failed exact
 postcondition stop bootstrap admission instead of leaving ambiguous mappings.
 
-The trusted bootstrap establishes the root-owned, empty Quadlet definition
-directory and restricts the effective generator search path to it. The target
-account cannot populate that directory. Before PR #22 can run its real units, a
-follow-up must add one trusted, root-owned, main-controlled fixture installer to
-this bootstrap.
-That installer must be a one-shot service triggered only by a fixed staging
-path; accept an explicit allowlist of regular Quadlet filenames from the
-already SHA-verified checkout; reject symlinks, path traversal, unknown files,
-and oversized content; copy only those files as root-owned mode `0644` into the
-fixed definition directory; never source or execute target content; and disable
-its trigger before the unprivileged lifecycle begins. The collector must then
-prove the complete tree ownership, restricted search path, generated units,
-and effective workload behavior. Merely extending the unprivileged target
-script cannot create the required root-owned trust boundary.
+The trusted bootstrap establishes the root-owned, initially empty Quadlet
+definition directory and restricts the effective generator search path to it.
+The target account cannot write that directory. A main-controlled fixture
+bridge can promote one target-produced snapshot across that boundary without
+granting sudo or a general root file-copy interface.
+
+The main-controlled bootstrap installs the root-owned client as a fixed
+executable for the disposable operator; it is not loaded from `target_sha`.
+That unprivileged client publishes only an operation, a bounded instance ID, a
+random request ID, and the complete closed set of 16 expected integration
+filenames below one fixed staging path. No source path or command crosses the
+request boundary. The manifest is canonical JSON with exact JSON types and no
+duplicate keys. The root-owned one-shot installer rejects missing, extra,
+non-regular, multiply linked, symlinked, changing, non-UTF-8, NUL-containing,
+or oversized inputs. It snapshots at most 64 KiB per unit and 512 KiB in total,
+then atomically installs only the derived destinations as root-owned mode
+`0644`. It never imports a target-controlled Python module, sources a target
+shell fragment, invokes a target command, or starts a generated user unit.
+
+The root process stops the install operation's non-persistent path trigger
+before it parses the request and never writes to or removes anything from the
+user-controlled staging tree. The removal trigger remains armed only while a
+root-recorded `removing` transition may need to resume; it is stopped before a
+terminal removal result is published. Automatic removal retries are bounded to
+three activations in 60 seconds. The systemd filesystem sandbox exposes only
+the fixed trusted destination and state directories as writable. Replacing the
+staging path can cause only a fail-closed request or self-inflicted denial of
+service, not a privileged write or unlink through a swapped intermediate path.
+The unprivileged client removes its own request after reading the bounded
+root-owned result.
+
+Before publication, the installer records the exact filename, size, and SHA-256
+set in root-only runtime state. A separate fixed cleanup request must match the
+same instance and every installed digest; ambiguity stops cleanup without broad
+deletion. Both operations share one non-blocking, root-owned lock, so concurrent
+install and removal requests cannot interleave trusted state transitions. The
+cleanup state changes atomically to `removing` before the first unlink; a later
+exact request can resume safely after interruption while still rejecting a
+missing file from an allegedly complete `active` snapshot. An interrupted
+removal publishes only the closed `retrying`/`internal-error` status and leaves
+its bounded trigger armed; success or a terminal admission rejection stops it.
+Neither trigger is enabled across a reboot. Both root services use fixed
+commands, private networking, `NoNewPrivileges`, and a strict protected
+filesystem view. The bounded result contains only a closed admission reason
+code, never an exception string. Target code can deny service to its own
+disposable test by submitting a bad request, but cannot select a root command,
+destination, unrelated file, or cloud credential.
+
+The reviewed Python installer and client are gzip/base64-encoded only for
+provider payload transport so DigitalOcean's 64-KiB user-data ceiling retains
+explicit headroom; each decoded root-owned file is byte-for-byte the reviewed
+main-controlled source. Compression does not move trust to the tested revision.
+
+PR #22 must still adopt the unprivileged client after incorporating current
+`main`, replace its hosted-runner sudo installation/removal calls for the cloud
+path, and extend the target entrypoint and evidence for its real lifecycle. The
+collector must then prove the complete tree ownership, restricted search path,
+generated units, and effective workload behavior. The bridge alone does not
+claim that PR #22 or any product container has run on a cloud fixture.
 
 ## Ephemeral SSH and initial host identity
 
@@ -829,11 +874,21 @@ The GCP evidence records the official Debian 13 arm64 image on
 cloud-identity probe, and no attached VM cloud identity. Its target entrypoint
 passed, bounded evidence uploaded, and the independent exact cleanup completed.
 
-These foundation runs did not all test the same target SHA: the DigitalOcean
-proofs predate the final GCP identity correction. They establish that each
-closed provider profile can complete its lifecycle, but they are not a claim
-that one identical reviewed revision has passed the full three-profile matrix.
-A deliberate same-SHA matrix run is the next reproducibility check.
+The foundation was subsequently repeated against one identical target SHA,
+`c6adf7cf9b66ae793eaef4ac4ed9c8a67c88726c`, across the complete matrix:
+
+| Profile              | Successful same-SHA run                                                      |
+| -------------------- | ---------------------------------------------------------------------------- |
+| DigitalOcean / Intel | [31734492022](https://github.com/SecPal/deployment/actions/runs/31734492022) |
+| DigitalOcean / AMD   | [31734512140](https://github.com/SecPal/deployment/actions/runs/31734512140) |
+| GCP / Axion          | [31734518859](https://github.com/SecPal/deployment/actions/runs/31734518859) |
+
+All three evidence artifacts report `target_exit_status=0`, no failed admission
+invariant, the selected effective CPU/architecture, and a passed result. Each
+independent exact cleanup job also passed. This establishes reproducibility of
+the current production-host foundation across the three representative
+profiles; it still does not prove universal hardware compatibility or PR #22's
+rootless workload lifecycle.
 
 ## Primary references
 
