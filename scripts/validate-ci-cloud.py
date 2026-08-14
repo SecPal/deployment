@@ -1920,6 +1920,12 @@ def validate(root: Path) -> None:
     validate_gcp_iam_role(root)
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
+    target = read(root, "scripts/ci-cloud/target-conformance.sh")
+    workload_collector = read(
+        root, "scripts/ci-cloud/collect-workload-evidence.py"
+    )
+    evidence_assembler = read(root, "scripts/ci-cloud/assemble-evidence.py")
+    evidence_schema_text = read(root, "schemas/ci-cloud-evidence.schema.json")
     ssh_probe = read(root, "scripts/ci-cloud/probe-ssh-port.py")
     failure_writer = read(root, "scripts/ci-cloud/write-bootstrap-failure.py")
     failure_schema_text = read(
@@ -1986,8 +1992,124 @@ def validate(root: Path) -> None:
     )
     require(
         "/tmp/secpal-target-conformance.log" not in remote
-        and ") >/dev/null 2>&1" in remote,
+        and remote.count(">/dev/null 2>&1") >= 3,
         "target output must not use a shared temporary path",
+    )
+    require(
+        remote.count("v1 host") == 1
+        and remote.count("v1 workload-prepare-start") == 1
+        and remote.count("v1 workload-cleanup") == 1
+        and "SECPAL_TARGET_COMMAND" not in remote
+        and "sudo" not in remote
+        and "/home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh"
+        in remote,
+        "target lifecycle must use only the fixed versioned phase interface",
+    )
+    require(
+        '[[ "$#" -eq 2 && "$1" == v1 ]]' in target
+        and "host | workload-prepare-start | workload-cleanup" in target
+        and '"$SECPAL_FIXTURE_INSTANCE" != "${SECPAL_TARGET_SHA:0:12}"'
+        in target
+        and "eval" not in target
+        and "source " not in target,
+        "target entrypoint must reject arbitrary lifecycle commands and instances",
+    )
+    require(
+        remote.count("< scripts/ci-cloud/collect-workload-evidence.py") == 2
+        and '"$phase" "$target_sha" "$fixture_instance"' in remote
+        and "collect_workload_phase()" in remote
+        and "collect_workload_phase baseline" in remote
+        and "collect_workload_phase live" in remote
+        and "collect_workload_phase post-cleanup" in remote
+        and remote.index('bootstrap_stage="collector-baseline"')
+        < remote.index('bootstrap_stage="target-workload-prepare-start"')
+        < remote.index('bootstrap_stage="trusted-quadlet-normalize-live"')
+        < remote.index('bootstrap_stage="collector-live"')
+        < remote.index('bootstrap_stage="target-workload-cleanup"')
+        < remote.index('bootstrap_stage="target-host"')
+        < remote.index('bootstrap_stage="trusted-quadlet-normalize-cleanup"')
+        < remote.index('bootstrap_stage="collector-post-cleanup"')
+        and "trap collect_cleanup_after_interruption INT TERM HUP" in remote
+        and "workload_evidence_finalized=true" in remote
+        and "collect_host_and_assemble false" in remote,
+        "trusted orchestration must finalize workload evidence after every target phase",
+    )
+    require(
+        "run_control_resource()" in remote
+        and "create-network)" in remote
+        and "create-volume)" in remote
+        and "remove-network)" in remote
+        and "remove-volume)" in remote,
+        "control resources must use one closed bounded operation wrapper",
+    )
+    require(
+        remote.count('diff-index --quiet --no-ext-diff "$1" --') == 1
+        and remote.count('read-tree --reset "$1"') == 1
+        and remote.count("ls-files --others") == 1
+        and "run_target_phase()" in remote
+        and "GIT_NO_REPLACE_OBJECTS=1" in remote,
+        "the shared target wrapper must admit an exact clean selected worktree",
+    )
+    require(
+        "CI_UID = 20000" in workload_collector
+        and "CI_GID = 20000" in workload_collector
+        and 'CHECKOUT = Path("/home/secpal-ci/deployment-target")'
+        in workload_collector
+        and 'QUADLET_ROOT = Path("/etc/containers/systemd/users/20000")'
+        in workload_collector
+        and "instance != target_sha[:12]" in workload_collector
+        and 'phase not in {"baseline", "normalize", "live", "post-cleanup"}'
+        in workload_collector
+        and 'choices=["baseline", "normalize", "live", "post-cleanup"]'
+        in workload_collector
+        and '"systemctl", "--user", "set-environment"'
+        in workload_collector
+        and 'f"QUADLET_UNIT_DIRS={QUADLET_ROOT}"' in workload_collector
+        and '"systemctl", "--user", "show-environment"' in workload_collector
+        and '"systemctl", "--user", "unset-environment", *names'
+        in workload_collector
+        and "TRUSTED_MANAGER_ENVIRONMENT" in workload_collector
+        and "observed == expected" in workload_collector
+        and '["systemctl", "--user", "daemon-reload"]' in workload_collector
+        and "workload_admission_failures" in workload_collector
+        and "shell=True" not in workload_collector
+        and "os.system" not in workload_collector
+        and "eval(" not in workload_collector,
+        "workload collection must remain fixed, rootless, bounded, and independent",
+    )
+    require(
+        'phase not in {"baseline", "normalize", "live", "post-cleanup"}'
+        in workload_collector
+        and '("Names", "Name", "name")' in workload_collector
+        and 'state.get("Healthcheck", {})' in workload_collector
+        and '"rootless": rootless' in workload_collector
+        and 'item["Rootless"]' not in workload_collector
+        and 'security_options != ["no-new-privileges"]' in workload_collector
+        and "D1A_RESOURCE_INVENTORY" in workload_collector
+        and "D1A_VOLUME_TOPOLOGY" in workload_collector
+        and "D1A_TMPFS_TOPOLOGY" in workload_collector
+        and "D1A_CONTAINER_LIFECYCLE" in workload_collector
+        and "container_lifecycle_events" in workload_collector
+        and 'item.get("effective_caps") != expected_caps' in workload_collector,
+        "Podman evidence must use admitted v5 fields and exact inventory/security facts",
+    )
+    try:
+        evidence_schema = json.loads(evidence_schema_text)
+        Draft202012Validator.check_schema(evidence_schema)
+    except (json.JSONDecodeError, SchemaError):
+        raise ContractError("cloud evidence schema is invalid") from None
+    require(
+        evidence_schema.get("properties", {})
+        .get("schema_version", {})
+        .get("const")
+        == 2
+        and {"host_admission", "workload"}.issubset(
+            set(evidence_schema.get("required", []))
+        )
+        and "workload_admission_failures" in evidence_assembler
+        and "TARGET_WORKLOAD_PREPARE_START" in evidence_assembler
+        and "TRUSTED_POST_CLEANUP_COLLECTION" in evidence_assembler,
+        "D.1 and D.1a evidence must remain separate and jointly fail closed",
     )
     require(
         'bootstrap_stage="host-key"' in remote
@@ -2074,6 +2196,27 @@ def validate(root: Path) -> None:
         and "write_bundle(" in failure_writer
         and "os.link(" in failure_writer,
         "bootstrap failure evidence must be schema-validated and failure-atomic",
+    )
+    try:
+        schema_orchestration_stages = failure_schema["properties"]["test"][
+            "properties"
+        ]["failure_stage"]["enum"]
+    except (KeyError, TypeError):
+        raise ContractError(
+            "bootstrap failure orchestration stage schema is invalid"
+        ) from None
+    runner_orchestration_stages = set(
+        re.findall(r'^bootstrap_stage="([a-z0-9-]+)"$', remote, re.MULTILINE)
+    )
+    writer_orchestration_stages = string_collection_constant(
+        failure_writer, "FAILURE_STAGES"
+    )
+    require(
+        isinstance(schema_orchestration_stages, list)
+        and len(schema_orchestration_stages) == len(set(schema_orchestration_stages))
+        and set(schema_orchestration_stages) == writer_orchestration_stages
+        and runner_orchestration_stages == writer_orchestration_stages,
+        "runner, writer, and schema must share one closed failure-stage contract",
     )
 
 

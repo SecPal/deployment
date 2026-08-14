@@ -8,13 +8,15 @@
     "schema_version",
     "workflow",
     "test",
+    "host_admission",
     "platform",
     "apt",
     "host",
-    "runtime"
+    "runtime",
+    "workload"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -37,7 +39,8 @@
         "provider_image",
         "started_at",
         "ended_at",
-        "target_exit_status",
+        "phase_exit_statuses",
+        "collection_exit_statuses",
         "result",
         "failed_admission_invariants"
       ],
@@ -64,10 +67,35 @@
         },
         "started_at": { "type": "string", "format": "date-time" },
         "ended_at": { "type": "string", "format": "date-time" },
-        "target_exit_status": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 255
+        "phase_exit_statuses": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "workload_prepare_start",
+            "workload_cleanup",
+            "trusted_quadlet_normalize_live",
+            "trusted_quadlet_normalize_cleanup"
+          ],
+          "properties": {
+            "host": { "$ref": "#/$defs/exitStatus" },
+            "workload_prepare_start": { "$ref": "#/$defs/exitStatus" },
+            "workload_cleanup": { "$ref": "#/$defs/exitStatus" },
+            "trusted_quadlet_normalize_live": { "$ref": "#/$defs/exitStatus" },
+            "trusted_quadlet_normalize_cleanup": {
+              "$ref": "#/$defs/exitStatus"
+            }
+          }
+        },
+        "collection_exit_statuses": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseline", "live", "post_cleanup"],
+          "properties": {
+            "baseline": { "$ref": "#/$defs/exitStatus" },
+            "live": { "$ref": "#/$defs/exitStatus" },
+            "post_cleanup": { "$ref": "#/$defs/exitStatus" }
+          }
         },
         "result": { "enum": ["passed", "failed"] },
         "failed_admission_invariants": {
@@ -123,6 +151,7 @@
         }
       ]
     },
+    "host_admission": { "$ref": "#/$defs/admissionResult" },
     "platform": {
       "type": "object",
       "additionalProperties": false,
@@ -560,11 +589,702 @@
           }
         }
       }
-    }
+    },
+    "workload": { "$ref": "#/$defs/workloadEvidence" }
   },
   "$defs": {
+    "exitStatus": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "invariantArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 128,
+      "items": { "type": "string", "pattern": "^[A-Z0-9_]+$" }
+    },
+    "admissionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "failed_admission_invariants"],
+      "properties": {
+        "result": { "enum": ["passed", "failed"] },
+        "failed_admission_invariants": { "$ref": "#/$defs/invariantArray" }
+      }
+    },
+    "controlResources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network_present",
+        "volume_present",
+        "network_id",
+        "volume_created_at"
+      ],
+      "properties": {
+        "network_present": { "type": "boolean" },
+        "volume_present": { "type": "boolean" },
+        "network_id": {
+          "type": "string",
+          "pattern": "^$|^[0-9a-f]{64}$"
+        },
+        "volume_created_at": {
+          "type": "string",
+          "pattern": "^$|^[0-9T:+.Z-]{1,64}$"
+        }
+      }
+    },
+    "unitFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path", "uid", "gid", "mode", "sha256"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^secpal-int-[0-9a-f]{12}(-[a-z0-9-]+\\.(container|network|volume)|\\.target)$",
+          "maxLength": 96
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/etc/(containers/systemd/users/20000|systemd/user)/secpal-int-[0-9a-f]{12}",
+          "maxLength": 192
+        },
+        "uid": { "const": 0 },
+        "gid": { "const": 0 },
+        "mode": { "const": "0644" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "dropInOwner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "gid", "mode"],
+      "properties": {
+        "uid": { "const": 20000 },
+        "gid": { "const": 20000 },
+        "mode": { "const": "0644" }
+      }
+    },
+    "generatedServiceFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logical_name",
+        "unit",
+        "fragment_path",
+        "fragment_uid",
+        "fragment_gid",
+        "fragment_mode",
+        "fragment_sha256",
+        "source_path",
+        "drop_in_paths",
+        "drop_in_owners",
+        "drop_in_sha256",
+        "active_state",
+        "sub_state",
+        "result",
+        "exec_main_status",
+        "main_pid",
+        "control_group",
+        "invocation_id"
+      ],
+      "properties": {
+        "logical_name": {
+          "enum": [
+            "secrets-init",
+            "postgres",
+            "valkey",
+            "migrate",
+            "api",
+            "worker-general",
+            "worker-hash-chain",
+            "scheduler",
+            "frontend",
+            "gateway",
+            "application-network",
+            "edge-network",
+            "secrets-volume",
+            "private-storage-volume",
+            "postgres-volume"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
+          "maxLength": 96
+        },
+        "fragment_path": {
+          "type": "string",
+          "pattern": "^/run/user/20000/systemd/generator/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
+          "maxLength": 192
+        },
+        "fragment_uid": { "const": 20000 },
+        "fragment_gid": { "const": 20000 },
+        "fragment_mode": { "const": "0644" },
+        "fragment_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_path": {
+          "type": "string",
+          "pattern": "^/etc/containers/systemd/users/20000/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.(container|network|volume)$",
+          "maxLength": 192
+        },
+        "drop_in_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^/run/user/20000/systemd/generator/",
+            "maxLength": 256
+          }
+        },
+        "drop_in_owners": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/dropInOwner" }
+        },
+        "drop_in_sha256": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "active_state": { "$ref": "#/$defs/shortString" },
+        "sub_state": { "$ref": "#/$defs/shortString" },
+        "result": { "$ref": "#/$defs/shortString" },
+        "exec_main_status": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "main_pid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304
+        },
+        "control_group": {
+          "type": "string",
+          "pattern": "^$|^/",
+          "maxLength": 256
+        },
+        "invocation_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      }
+    },
+    "workloadRole": {
+      "enum": [
+        "secrets-init",
+        "postgres",
+        "valkey",
+        "migrate",
+        "api",
+        "worker-general",
+        "worker-hash-chain",
+        "scheduler",
+        "frontend",
+        "gateway"
+      ]
+    },
+    "containerFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "role",
+        "name",
+        "state",
+        "pid",
+        "exit_code",
+        "health",
+        "oci_runtime",
+        "rootless",
+        "privileged",
+        "configured_user",
+        "effective_uid",
+        "effective_gid",
+        "effective_supplementary_gids",
+        "read_only_rootfs",
+        "entrypoint",
+        "command",
+        "healthcheck_command",
+        "pid_mode",
+        "userns_mode",
+        "ipc_mode",
+        "uts_mode",
+        "network_mode",
+        "cap_add",
+        "group_add",
+        "effective_caps",
+        "bounding_caps",
+        "devices_present",
+        "mounts",
+        "tmpfs",
+        "remote_api_environment",
+        "security_opt",
+        "lifecycle_events",
+        "networks",
+        "published_ports",
+        "auto_update",
+        "systemd_unit",
+        "container_cgroup",
+        "lifecycle_service_invocation",
+        "image"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "role": { "$ref": "#/$defs/workloadRole" },
+        "name": {
+          "type": "string",
+          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+$",
+          "maxLength": 96
+        },
+        "state": {
+          "enum": ["created", "configured", "exited", "running", "stopped"]
+        },
+        "pid": { "type": "integer", "minimum": 0, "maximum": 4194304 },
+        "exit_code": { "type": "integer", "minimum": -1, "maximum": 255 },
+        "health": { "enum": ["none", "starting", "healthy", "unhealthy"] },
+        "oci_runtime": { "$ref": "#/$defs/shortString" },
+        "rootless": { "type": "boolean" },
+        "privileged": { "type": "boolean" },
+        "configured_user": {
+          "type": "string",
+          "pattern": "^[0-9]{1,10}:[0-9]{1,10}$"
+        },
+        "effective_uid": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 4294967295
+        },
+        "effective_gid": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 4294967295
+        },
+        "effective_supplementary_gids": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "read_only_rootfs": { "type": "boolean" },
+        "entrypoint": { "$ref": "#/$defs/commandArray" },
+        "command": { "$ref": "#/$defs/commandArray" },
+        "healthcheck_command": { "$ref": "#/$defs/commandArray" },
+        "pid_mode": { "$ref": "#/$defs/shortString" },
+        "userns_mode": { "$ref": "#/$defs/shortString" },
+        "ipc_mode": { "$ref": "#/$defs/shortString" },
+        "uts_mode": { "$ref": "#/$defs/shortString" },
+        "network_mode": { "$ref": "#/$defs/shortString" },
+        "cap_add": { "$ref": "#/$defs/stringArray" },
+        "group_add": { "$ref": "#/$defs/stringArray" },
+        "effective_caps": { "$ref": "#/$defs/stringArray" },
+        "bounding_caps": { "$ref": "#/$defs/stringArray" },
+        "devices_present": { "type": "boolean" },
+        "mounts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/containerMount" }
+        },
+        "tmpfs": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/containerTmpfs" }
+        },
+        "remote_api_environment": { "type": "boolean" },
+        "security_opt": { "$ref": "#/$defs/stringArray" },
+        "lifecycle_events": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/containerLifecycleEvent" }
+        },
+        "networks": { "$ref": "#/$defs/stringArray" },
+        "published_ports": { "$ref": "#/$defs/stringArray" },
+        "auto_update": { "type": "boolean" },
+        "systemd_unit": {
+          "type": "string",
+          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
+          "maxLength": 96
+        },
+        "container_cgroup": { "type": "string", "maxLength": 256 },
+        "lifecycle_service_invocation": {
+          "type": "string",
+          "pattern": "^$|^[0-9a-f]{32}$"
+        },
+        "image": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "containerMount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "source", "destination", "rw"],
+      "properties": {
+        "type": { "enum": ["bind", "volume"] },
+        "source": { "type": "string", "maxLength": 512 },
+        "destination": { "type": "string", "pattern": "^/[^\\u0000]{0,255}$" },
+        "rw": { "type": "boolean" }
+      }
+    },
+    "containerTmpfs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destination", "size_bytes", "mode", "uid", "gid", "flags"],
+      "properties": {
+        "destination": { "type": "string", "pattern": "^/[^\\u0000]{0,255}$" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "mode": { "type": "string", "pattern": "^0[0-7]{3}$" },
+        "uid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "gid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "flags": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 6,
+          "items": {
+            "enum": ["nodev", "noexec", "nosuid", "rprivate", "rw", "tmpcopyup"]
+          }
+        }
+      }
+    },
+    "containerLifecycleEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "time_nano"],
+      "properties": {
+        "status": { "enum": ["create", "start", "died"] },
+        "time_nano": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999999999999999999999
+        }
+      }
+    },
+    "userWork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active_units", "jobs"],
+      "properties": {
+        "active_units": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
+          }
+        },
+        "jobs": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
+          }
+        }
+      }
+    },
+    "processFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable", "control_group", "uid", "gid", "count"],
+      "properties": {
+        "executable": {
+          "type": "string",
+          "pattern": "^/[^\\u0000]{0,511}$"
+        },
+        "control_group": {
+          "type": "string",
+          "pattern": "^/user\\.slice/user-20000\\.slice/",
+          "maxLength": 512
+        },
+        "uid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "gid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "count": { "type": "integer", "minimum": 1, "maximum": 256 }
+      }
+    },
+    "baselineObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "target_admitted",
+        "collector_uid",
+        "collector_gid",
+        "complete",
+        "containers",
+        "networks",
+        "volumes",
+        "migration_invocation_count",
+        "podman_api",
+        "user_work",
+        "processes",
+        "control_resources"
+      ],
+      "properties": {
+        "phase": { "const": "baseline" },
+        "target_admitted": { "type": "boolean" },
+        "collector_uid": { "const": 20000 },
+        "collector_gid": { "const": 20000 },
+        "complete": { "type": "boolean" },
+        "containers": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/stringArray" },
+        "volumes": { "$ref": "#/$defs/stringArray" },
+        "migration_invocation_count": { "const": 0 },
+        "podman_api": { "type": "boolean" },
+        "user_work": { "$ref": "#/$defs/userWork" },
+        "processes": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/processFact" }
+        },
+        "control_resources": { "$ref": "#/$defs/controlResources" }
+      }
+    },
+    "liveObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "target_admitted",
+        "collector_uid",
+        "collector_gid",
+        "complete",
+        "quadlet_search_paths",
+        "installed_units",
+        "generated_services",
+        "containers",
+        "networks",
+        "volumes",
+        "all_containers",
+        "all_networks",
+        "all_volumes",
+        "podman_rootless",
+        "oci_runtime",
+        "podman_api",
+        "user_work",
+        "processes",
+        "control_resources"
+      ],
+      "properties": {
+        "phase": { "const": "live" },
+        "target_admitted": { "type": "boolean" },
+        "collector_uid": { "const": 20000 },
+        "collector_gid": { "const": 20000 },
+        "complete": { "type": "boolean" },
+        "quadlet_search_paths": { "$ref": "#/$defs/stringArray" },
+        "installed_units": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/unitFact" }
+        },
+        "generated_services": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 15,
+          "items": { "$ref": "#/$defs/generatedServiceFact" }
+        },
+        "containers": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/containerFact" }
+        },
+        "podman_rootless": { "type": "boolean" },
+        "oci_runtime": { "$ref": "#/$defs/shortString" },
+        "networks": { "$ref": "#/$defs/stringArray" },
+        "volumes": { "$ref": "#/$defs/stringArray" },
+        "all_containers": { "$ref": "#/$defs/stringArray" },
+        "all_networks": { "$ref": "#/$defs/stringArray" },
+        "all_volumes": { "$ref": "#/$defs/stringArray" },
+        "podman_api": { "type": "boolean" },
+        "user_work": { "$ref": "#/$defs/userWork" },
+        "processes": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/processFact" }
+        },
+        "control_resources": { "$ref": "#/$defs/controlResources" }
+      }
+    },
+    "cleanupObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "target_admitted",
+        "collector_uid",
+        "collector_gid",
+        "complete",
+        "owned_units",
+        "generated_services",
+        "containers",
+        "networks",
+        "volumes",
+        "all_containers",
+        "all_networks",
+        "all_volumes",
+        "migration_invocation_count",
+        "podman_api",
+        "user_work",
+        "processes",
+        "control_resources"
+      ],
+      "properties": {
+        "phase": { "const": "post-cleanup" },
+        "target_admitted": { "type": "boolean" },
+        "collector_uid": { "const": 20000 },
+        "collector_gid": { "const": 20000 },
+        "complete": { "type": "boolean" },
+        "owned_units": { "$ref": "#/$defs/stringArray" },
+        "generated_services": { "$ref": "#/$defs/stringArray" },
+        "containers": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/stringArray" },
+        "volumes": { "$ref": "#/$defs/stringArray" },
+        "all_containers": { "$ref": "#/$defs/stringArray" },
+        "all_networks": { "$ref": "#/$defs/stringArray" },
+        "all_volumes": { "$ref": "#/$defs/stringArray" },
+        "migration_invocation_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "podman_api": { "type": "boolean" },
+        "user_work": { "$ref": "#/$defs/userWork" },
+        "processes": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/processFact" }
+        },
+        "control_resources": { "$ref": "#/$defs/controlResources" }
+      }
+    },
+    "workloadEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "instance",
+        "result",
+        "failed_admission_invariants",
+        "baseline",
+        "live",
+        "post_cleanup"
+      ],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "instance": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+        "result": { "enum": ["passed", "failed"] },
+        "failed_admission_invariants": { "$ref": "#/$defs/invariantArray" },
+        "baseline": { "$ref": "#/$defs/baselineObservation" },
+        "live": { "$ref": "#/$defs/liveObservation" },
+        "post_cleanup": { "$ref": "#/$defs/cleanupObservation" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["result"],
+            "properties": { "result": { "const": "passed" } }
+          },
+          "then": {
+            "properties": {
+              "failed_admission_invariants": { "maxItems": 0 },
+              "baseline": {
+                "properties": {
+                  "target_admitted": { "const": true },
+                  "complete": { "const": true },
+                  "podman_api": { "const": false },
+                  "control_resources": {
+                    "properties": {
+                      "network_present": { "const": true },
+                      "volume_present": { "const": true },
+                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "volume_created_at": {
+                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                      }
+                    }
+                  }
+                }
+              },
+              "live": {
+                "properties": {
+                  "target_admitted": { "const": true },
+                  "complete": { "const": true },
+                  "quadlet_search_paths": {
+                    "const": ["/etc/containers/systemd/users/20000"]
+                  },
+                  "installed_units": { "minItems": 16, "maxItems": 16 },
+                  "generated_services": { "minItems": 15, "maxItems": 15 },
+                  "containers": { "minItems": 10, "maxItems": 10 },
+                  "networks": { "minItems": 2, "maxItems": 2 },
+                  "volumes": { "minItems": 3, "maxItems": 3 },
+                  "podman_rootless": { "const": true },
+                  "oci_runtime": { "const": "crun" },
+                  "podman_api": { "const": false },
+                  "control_resources": {
+                    "properties": {
+                      "network_present": { "const": true },
+                      "volume_present": { "const": true },
+                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "volume_created_at": {
+                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                      }
+                    }
+                  }
+                }
+              },
+              "post_cleanup": {
+                "properties": {
+                  "target_admitted": { "const": true },
+                  "complete": { "const": true },
+                  "owned_units": { "maxItems": 0 },
+                  "generated_services": { "maxItems": 0 },
+                  "containers": { "maxItems": 0 },
+                  "networks": { "maxItems": 0 },
+                  "volumes": { "maxItems": 0 },
+                  "migration_invocation_count": { "const": 1 },
+                  "podman_api": { "const": false },
+                  "control_resources": {
+                    "properties": {
+                      "network_present": { "const": true },
+                      "volume_present": { "const": true },
+                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "volume_created_at": {
+                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "nonNegativeInteger": { "type": "integer", "minimum": 0 },
     "shortString": { "type": "string", "maxLength": 64 },
+    "commandArray": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "pattern": "^[^\\u0000]+$"
+      }
+    },
     "mediumString": { "type": "string", "maxLength": 256 },
     "stringArray": {
       "type": "array",

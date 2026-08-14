@@ -17,6 +17,7 @@ import jsonschema
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR_PATH = ROOT / "scripts" / "ci-cloud" / "validate-evidence.py"
+WORKLOAD_TEST_PATH = ROOT / "tests" / "ci-cloud-workload-evidence.py"
 
 
 def load_validator():
@@ -26,6 +27,17 @@ def load_validator():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def valid_workload() -> dict[str, object]:
+    spec = importlib.util.spec_from_file_location(
+        "ci_cloud_workload_test_fixtures", WORKLOAD_TEST_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load workload evidence fixture")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.valid_observations()
 
 
 def valid_document() -> dict[str, object]:
@@ -50,7 +62,7 @@ def valid_document() -> dict[str, object]:
     }
     packages["dbus-user-session"]["architecture"] = "all"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "workflow": {
             "repository": "SecPal/deployment",
             "run_id": "12345",
@@ -68,7 +80,22 @@ def valid_document() -> dict[str, object]:
             },
             "started_at": "2026-08-09T12:00:00Z",
             "ended_at": "2026-08-09T12:10:00Z",
-            "target_exit_status": 0,
+            "phase_exit_statuses": {
+                "host": 0,
+                "workload_prepare_start": 0,
+                "workload_cleanup": 0,
+                "trusted_quadlet_normalize_live": 0,
+                "trusted_quadlet_normalize_cleanup": 0,
+            },
+            "collection_exit_statuses": {
+                "baseline": 0,
+                "live": 0,
+                "post_cleanup": 0,
+            },
+            "result": "passed",
+            "failed_admission_invariants": [],
+        },
+        "host_admission": {
             "result": "passed",
             "failed_admission_invariants": [],
         },
@@ -241,6 +268,7 @@ def valid_document() -> dict[str, object]:
                 "secpal_location_rewrite": False,
             },
         },
+        "workload": valid_workload(),
     }
 
 
@@ -258,6 +286,117 @@ class EvidenceContractTests(unittest.TestCase):
         )
         jsonschema.Draft202012Validator(schema).validate(document)
         self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_d1_and_d1a_results_are_distinct_and_both_required(self) -> None:
+        document = valid_document()
+        document["host_admission"]["result"] = "failed"
+        with self.assertRaisesRegex(ValueError, "host admission"):
+            self.validator.validate_document(document)
+
+        document = valid_document()
+        del document["workload"]["post_cleanup"]
+        with self.assertRaisesRegex(ValueError, "workload|incomplete|declared schema"):
+            self.validator.validate_document(document)
+
+    def test_schema_forbids_passed_d1a_with_invalid_live_or_cleanup_state(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for mutate in (
+            lambda document: document["workload"]["live"].__setitem__(
+                "complete", False
+            ),
+            lambda document: document["workload"]["post_cleanup"].__setitem__(
+                "containers", ["secpal-int-aaaaaaaaaaaa-api"]
+            ),
+            lambda document: document["workload"]["post_cleanup"][
+                "control_resources"
+            ].__setitem__("network_present", False),
+        ):
+            with self.subTest(mutate=mutate):
+                document = valid_document()
+                mutate(document)
+                errors = list(
+                    jsonschema.Draft202012Validator(schema).iter_errors(document)
+                )
+                self.assertTrue(errors)
+
+    def test_target_controlled_status_cannot_replace_independent_workload_facts(self) -> None:
+        document = valid_document()
+        document["workload"] = {
+            "protocol_version": 1,
+            "instance": "aaaaaaaaaaaa",
+            "target_status": "passed",
+        }
+        with self.assertRaisesRegex(ValueError, "workload|incomplete|declared schema"):
+            self.validator.validate_document(document)
+
+    def test_workload_instance_is_bound_to_the_exact_target_sha(self) -> None:
+        document = valid_document()
+
+        def replace_instance(value: object) -> object:
+            if isinstance(value, str):
+                return value.replace("aaaaaaaaaaaa", "bbbbbbbbbbbb")
+            if isinstance(value, list):
+                return [replace_instance(item) for item in value]
+            if isinstance(value, dict):
+                return {
+                    key: replace_instance(item) for key, item in value.items()
+                }
+            return value
+
+        document["workload"] = replace_instance(document["workload"])
+        with self.assertRaisesRegex(ValueError, "workload instance"):
+            self.validator.validate_document(document)
+
+    def test_phase_failure_is_preserved_and_forces_d1a_failure(self) -> None:
+        document = valid_document()
+        document["test"]["phase_exit_statuses"]["workload_prepare_start"] = 7
+        document["test"]["result"] = "failed"
+        document["test"]["failed_admission_invariants"] = [
+            "TARGET_WORKLOAD_PREPARE_START"
+        ]
+        document["workload"]["result"] = "failed"
+        document["workload"]["failed_admission_invariants"] = [
+            "TARGET_WORKLOAD_PREPARE_START"
+        ]
+        self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_host_phase_failure_forces_only_d1_host_admission_failure(self) -> None:
+        document = valid_document()
+        document["test"]["phase_exit_statuses"]["host"] = 7
+        document["test"]["result"] = "failed"
+        document["test"]["failed_admission_invariants"] = [
+            "TARGET_HOST_CONTRACT"
+        ]
+        document["host_admission"] = {
+            "result": "failed",
+            "failed_admission_invariants": ["TARGET_HOST_CONTRACT"],
+        }
+        self.assertEqual("passed", document["workload"]["result"])
+        self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_cleanup_collection_failure_cannot_report_conformance(self) -> None:
+        document = valid_document()
+        document["test"]["collection_exit_statuses"]["post_cleanup"] = 124
+        with self.assertRaisesRegex(ValueError, "result|admission failures"):
+            self.validator.validate_document(document)
+
+    def test_unknown_workload_field_is_rejected(self) -> None:
+        document = valid_document()
+        document["workload"]["live"]["target_claimed_ready"] = True
+        with self.assertRaisesRegex(ValueError, "unknown|declared schema"):
+            self.validator.validate_document(document)
+
+    def test_unprefixed_resource_cannot_survive_validator_recomputation(self) -> None:
+        document = valid_document()
+        document["workload"]["live"]["all_containers"].append(
+            "target-created-rogue"
+        )
+        with self.assertRaisesRegex(ValueError, "workload admission failures"):
+            self.validator.validate_document(document)
 
     def test_complete_gcp_axion_evidence_is_accepted(self) -> None:
         document = valid_document()
@@ -390,6 +529,12 @@ class EvidenceContractTests(unittest.TestCase):
                 "failed_admission_invariants": ["D1_KERNEL_PACKAGE_PROVENANCE"],
             }
         )
+        document["host_admission"].update(
+            {
+                "result": "failed",
+                "failed_admission_invariants": ["D1_KERNEL_PACKAGE_PROVENANCE"],
+            }
+        )
         self.assertEqual(document, self.validator.validate_document(document))
 
     def test_installed_dpkg_kernel_provenance_is_rejected(self) -> None:
@@ -402,6 +547,12 @@ class EvidenceContractTests(unittest.TestCase):
             }
         )
         document["test"].update(
+            {
+                "result": "failed",
+                "failed_admission_invariants": ["D1_KERNEL_PACKAGE_PROVENANCE"],
+            }
+        )
+        document["host_admission"].update(
             {
                 "result": "failed",
                 "failed_admission_invariants": ["D1_KERNEL_PACKAGE_PROVENANCE"],

@@ -96,9 +96,13 @@ one tagged Debian 13 VM + firewall + public SSH key
 strict-host SSH from the trusted main orchestration script
         |
         | fetch exact validated 40-character target SHA
-        | run only scripts/ci-cloud/target-conformance.sh from that SHA
+        | run only fixed v1 phases of target-conformance.sh as UID 20000
         v
-trusted collector streamed from main; bounded JSON + summary
+trusted controls/baseline -> target fixture publication -> trusted activation/live collector
+        v
+target cleanup -> target host -> trusted post-cleanup collector
+        |
+        | bounded JSON + summary
         |
         | token exists only in a separate always() cleanup job
         v
@@ -336,13 +340,77 @@ passes them to the trusted collector. The closed schema admits only the fixed
 DigitalOcean numeric image ID or the official exact GCP Debian 13 arm64 image
 self-link with its matching fixed machine type. The trusted remote runner then
 initializes a new public checkout, fetches only the selected commit, verifies
-`HEAD` byte-for-byte against the SHA, and invokes the single fixed target path
-under a 40-minute timeout. The bootstrap target entrypoint runs the production
-host contract and negative validators. A later D.1a-compatible commit can
-extend that same narrow entrypoint with the reviewed real rootless
-Podman/Quadlet lifecycle.
+`HEAD` byte-for-byte against the SHA, and invokes the single fixed target path.
+The versioned interface admits exactly `v1 host`,
+`v1 workload-prepare-start`, and `v1 workload-cleanup`; no workflow input or
+target output can select a command, executable, source path, Quadlet path,
+collector field, or additional argument. Every phase runs as UID/GID 20000
+with a phase-specific timeout and an empty environment containing only the
+fixed home, locale, path, exact SHA, and SHA-derived 12-hex fixture instance.
+The trusted wrapper also enters the literal checkout before target execution
+and applies a 32-MiB per-file process limit to every phase. Immediately before
+and after each target phase it verifies that `HEAD` still names the selected
+commit, that no tracked byte or mode differs from that commit, and that no
+untracked or ignored path has appeared. The trusted workload collectors repeat
+the clean-tree admission. Python bytecode generation is disabled so the fixed
+target suite does not dirty its own checkout. The target cannot select these
+boundaries.
+The target account has no sudo authority. The `host` phase retains the D.1
+contract suite. PR #22 owns the implementation of the two workload phases and
+may cross the root-owned publication boundary only through the fixed trusted
+fixture client. Its future fixed client path may stage runtime assets only below
+`/home/secpal-ci/quadlet-fixture/<instance>/assets`; this location is derived
+from the admitted SHA prefix, is not a phase argument, and every effective bind
+source outside its closed filename set fails trusted live admission. The stable
+`workload-prepare-start` interface publishes the fixture but does not establish
+the admitted runtime invocation: final activation belongs to the trusted
+collector boundary.
 
-After the target exits, the runner starts the main-controlled collector by
+The trusted runner creates one unrelated rootless control network and volume
+and records a main-controlled baseline of every rootless Podman container,
+network, volume, fixture migration invocation, and Podman API/socket activation
+state before any target code runs.
+It then invokes target fixture publication and has the trusted unprivileged collector
+replace the complete bounded user-manager environment with the fixed home,
+runtime directory, bus, locale, executable path, and sole Quadlet path, perform
+a bounded `daemon-reload`, synchronously stop the exact fixture target and every
+generated service, and start the exact fixture target from the newly loaded
+root-owned definitions. The collector verifies the exact manager environment
+after this activation. A target-controlled earlier invocation therefore cannot
+survive while acquiring the regenerated fragment's provenance. The runner then
+streams the main-controlled live collector and requests target cleanup,
+runs the separate target `host` phase for D.1 admission, and repeats the same
+fixed Quadlet normalization before post-cleanup collection. Both normalization
+results are explicit phase statuses and are required to pass. Only after every
+target-controlled phase has returned does the trusted post-cleanup collector
+finalize D.1a evidence. Host-phase
+descendants can therefore neither prepare the observed workload nor race the
+earlier baseline, and a resource created or leaked by that final target phase
+cannot escape the final inventory.
+Live admission requires the baseline plus exactly the closed fixture resource
+set and the exact active fixture target. It also requires every loaded generated service to identify the expected
+root-owned Quadlet source and records hashes of the effective fragment and
+drop-ins after the trusted reload. Target-produced status is not used for this
+correlation. The same trusted lifecycle guard remeasures the migration invocation count
+and Podman API/socket state during live and post-cleanup collection. A passing
+cleanup must therefore leave the migration count at exactly one and the API
+boundary disabled; removing the visible fixture cannot hide a second migration
+or a newly activated socket. Post-cleanup admission otherwise requires the
+exact baseline.
+An unprefixed, wrongly named, or leaked target resource cannot
+disappear from the trusted inventory merely because it is outside the fixture
+prefix.
+It attempts cleanup and the post-cleanup observation even when prepare/start
+fails or a handled `INT`, `TERM`, or `HUP` arrives while the host remains
+reachable. An interruption during the host phase does not repeat an already
+completed target cleanup, but it still performs the single final post-cleanup
+observation. Target phase status is preserved but is never evidence that a
+workload existed or was removed. Every remote collection,
+including the final D.1 host collection, has an outer deadline. A missing,
+excessive, truncated, or malformed workload payload is normalized to a
+schema-closed incomplete observation so its collection status and the remaining
+lifecycle results stay reviewable; it can never become passing evidence. The
+collector runs by
 absolute path under an empty environment and Python isolated mode. The
 collector retains only the fixed operator home needed to observe effective
 rootless Podman state; Python user-site startup hooks are disabled, and the GCP
@@ -355,6 +423,12 @@ metadata semantics as the early bootstrap gate: HTTP 200 with a bounded empty
 records identity presence. It discards the body after classification and treats
 404, transport failure, truncation, or a malformed response as an unsuccessful
 probe rather than evidence of absence.
+
+Collector subprocess output is consumed incrementally and the whole process
+group is terminated as soon as the fixed byte or time limit is exceeded; an
+untrusted command cannot force the trusted collector to buffer unbounded
+output. The four fixed SSH operations that create and remove the unrelated
+control network and volume also have explicit outer deadlines.
 
 The provider image may already carry subordinate-ID policy when the trusted
 bootstrap creates `secpal-ci`. Before SSH is admitted, the root-owned host
@@ -416,12 +490,14 @@ provider payload transport so DigitalOcean's 64-KiB user-data ceiling retains
 explicit headroom; each decoded root-owned file is byte-for-byte the reviewed
 main-controlled source. Compression does not move trust to the tested revision.
 
-PR #22 must still adopt the unprivileged client after incorporating current
-`main`, replace its hosted-runner sudo installation/removal calls for the cloud
-path, and extend the target entrypoint and evidence for its real lifecycle. The
-collector must then prove the complete tree ownership, restricted search path,
-generated units, and effective workload behavior. The bridge alone does not
-claim that PR #22 or any product container has run on a cloud fixture.
+This prerequisite supplies the trusted protocol and independent observations;
+it does not implement the PR #22 product runtime. After this change merges,
+PR #22 must update from that merged `main` commit, adopt the unprivileged
+fixture client for its fixed cloud phases, and only then run one exact updated
+PR #22 SHA on DigitalOcean Intel, DigitalOcean AMD, and GCP Axion. All three
+bounded artifacts require review before a workload-conformance claim. This
+prerequisite by itself does not prove that PR #22, a SecPal product image, or
+any product container ran in cloud.
 
 ## Ephemeral SSH and initial host identity
 
@@ -740,7 +816,12 @@ covered now; the remaining limitation is explicit.
 ## Evidence and interpretation
 
 Each reachable host produces JSON validated against the committed closed schema
-plus a concise Markdown summary. Incomplete, schema-invalid, oversized,
+plus a concise Markdown summary. Schema version 2 keeps the D.1 production-host
+admission result separate from the D.1a workload result; the overall result can
+pass only when both pass and every target and collector phase exits zero.
+The D.1 host phase status contributes only to D.1 host admission; baseline,
+live, cleanup, and workload phase statuses contribute only to D.1a admission.
+Incomplete, schema-invalid, oversized,
 unknown, credential-shaped, or internally contradictory evidence fails.
 If orchestration fails before the full collector can complete, the trusted
 runner instead failure-atomically publishes a separate
@@ -756,7 +837,13 @@ stage (`diagnostic-ssh`, `apt-sources`, `apt-update`, `kernel-install`,
 `host-initialize`, `subordinate-ids`, `service-policy`, `apparmor`, or `ssh`)
 and its exit status. The stage changes immediately before each fallible phase,
 so an early provider bootstrap failure does not collapse into an ambiguous
-`initialize` result. A host-key-stage failure instead records only counters for
+`initialize` result. The runner, failure writer, and schema share the same
+closed orchestration-stage set: `host-key`, `bootstrap`, `root-ssh`,
+`target-checkout`, `control-resources`, `collector-baseline`,
+`target-workload-prepare-start`, `trusted-quadlet-normalize-live`,
+`collector-live`, `target-workload-cleanup`, `target-host`,
+`trusted-quadlet-normalize-cleanup`, `collector-post-cleanup`, and `collector`.
+A host-key-stage failure instead records only counters for
 the closed categories `connection_refused`, `connection_timeout`, `no_key`,
 `multiple_keys`, `changed_key`, and `other`. Refused and timed-out connections
 come from a bounded IPv4 TCP probe and stable operating-system error codes,
@@ -816,14 +903,86 @@ Evidence includes:
   processes, complete process visibility, auto-update state, and effective
   SecPal/GHCR mirror, rewrite, and insecure-transport facts; and
 - host AppArmor state, rootless Podman `apparmorEnabled`, and Podman
-  `seccompEnabled` as three independent facts.
+  `seccompEnabled` as three independent facts;
+- the exact 16-file root-owned Quadlet snapshot with paths, modes, and SHA-256
+  digests; the effective sole search path; and each generated user-service's
+  expected root-owned Quadlet source plus fragment and drop-in path, owner,
+  group, mode, and SHA-256 digest after a trusted unprivileged reload; every
+  generated service's
+  effective active/sub-state, result, exit status, main PID, and control group;
+- the exact ten-container logical-role set, with scheduler and
+  activity-hash-chain-worker cardinality derived from that independently
+  observed set rather than accepted as a reported count; effective
+  rootless/crun/security facts, the configured container user, the running
+  process's effective container UID/GID and bounded supplementary GID set, an
+  empty configured `GroupAdd` set, a read-only root filesystem, and private
+  PID, user, IPC, UTS, and network namespace modes,
+  the closed role-to-network topology, the complete semantic role-to-mount
+  topology (bind/volume type, exact volume name or fixed
+  `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
+  and read/write state), and the
+  exact per-role tmpfs destinations, sizes, modes, container UID/GID ownership,
+  and `rprivate`/`tmpcopyup`/`nosuid`/`nodev`/`noexec` flags; target-selected
+  bind roots, the unrelated control volume, missing mounts, duplicate
+  destinations, or privilege-expanding tmpfs flags fail admission; the
+  gateway's sole loopback publication,
+  immutable local image references with distinct API and frontend content
+  digests and one shared API-family digest across the secrets initializer,
+  migration, API, workers, and scheduler, the exact `PODMAN_SYSTEMD_UNIT`
+  binding from each container to its
+  generated service, and—for every running role—the container process cgroup
+  nested beneath that effective service cgroup; the effective configured
+  entrypoint, command, and healthcheck for the migration and application-family
+  roles, including the exact migration command and distinct non-migration
+  commands for API, workers, and scheduler; for each exited one-shot role,
+  one ordered Podman `create` → `start` → `died` lifecycle for the independently
+  inspected full container ID plus exactly one journal record from a
+  `/usr/bin/podman run` command naming that exact container in the generated
+  service's exact systemd invocation; `inspect`, another Podman subcommand, a
+  different name, a duplicate lifecycle, or a bare container-ID message cannot
+  establish this binding, and any Podman `exec`/`exec_died` event for an
+  integration container makes lifecycle collection incomplete; one exited
+  zero-status migration systemd invocation
+  correlated with the exact configured migration command and established from
+  a separate journal query restricted to invocation-ID fields, healthy
+  state for every health-bearing role, and running state for the remaining
+  long-lived roles;
+  and
+- a pre-workload full rootless Podman inventory, zero-invocation migration
+  baseline, and disabled Podman API/socket boundary, plus a distinct post-cleanup
+  observation requiring exactly one migration invocation, the still-disabled API
+  boundary, and exact restoration of that inventory, including absence of every
+  target-added container, network, and volume regardless of its name; exact
+  restoration of the baseline active systemd user-unit and pending-job sets,
+  measured both before and after the final inventory so a cleanup- or host-phase
+  transient service, timer, or queued job fails closed; a bounded census of
+  executable, cgroup, effective host UID/GID, and count for every process in the
+  service account's complete UID-20000 user slice, including SSH session scopes,
+  requiring exact baseline restoration
+  after cleanup and confining every live process delta to an independently
+  observed generated-service cgroup;
+  exact singleton `no-new-privileges` admission with every target-selected
+  seccomp or other additional security option rejected; exact added, effective,
+  and bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the
+  secrets initializer, empty for every other role); and Podman 5.4 `Healthcheck`/network-name
+  field interpretation; an empty Podman 5.4 `UsernsMode` is retained as the
+  documented `host` mode and rejected rather than rewritten as `private`; and
+- exact absence of every integration unit, generated service and nested
+  generated drop-in artifact across the user manager's `generator.early`,
+  `generator`, and `generator.late` outputs, plus container, network, and volume
+  absence while the deliberately unrelated control network and volume retain
+  the same bounded network ID and volume creation identity observed before
+  target execution.
 
 The Unix-listener admission recognizes listeners in the rootful and rootless
-Podman runtime directories, including nonstandard socket-activation paths, and
-listeners owned by an actual `podman` process. The exact Debian Netavark
-`/run/podman/nv-proxy.sock` path is the sole pathname exception: it is network
-plumbing and remains independently covered by the admitted Netavark package
-and backend facts.
+Podman runtime directories and listeners owned by an actual `podman` process.
+Workload admission additionally requires the active user socket-unit set to be
+exactly the trusted root-owned `dbus.socket`, with its standard trigger and no
+drop-ins. A target-created socket-activation path is therefore rejected even
+while no Podman service process exists. The exact Debian Netavark
+`/run/podman/nv-proxy.sock` path is the sole Podman-runtime pathname exception:
+it is network plumbing and remains independently covered by the admitted
+Netavark package and backend facts.
 
 The trusted root-only host setup records loaded and enforcing AppArmor policy
 counts in a root-owned, non-writable `/run` snapshot. The unprivileged collector
@@ -842,11 +1001,17 @@ versions while requiring those packages to come from the authenticated Debian
 13 suites. It does not make the provider slug or Debian package repositories
 immutable across separate conformance runs; that variability is intentional
 only for this isolated, non-production compatibility probe.
-The empty root-owned definition tree does not prove PR #22 units, workload
-AppArmor confinement, production service-account paths, or product lifecycle
-behavior. Evidence also does not prove production readiness, customer workload
+The workload collector establishes only the bounded facts represented by the
+closed D.1a schema. It does not prove per-container AppArmor confinement unless
+that fact is separately added to the trusted protocol, production
+service-account paths, production readiness, customer workload
 capacity, backup/restore, public networking, every provider image, or universal
 hardware compatibility.
+The migration evidence proves that the fixed configured command received one
+successful, service-correlated execution. It does not inspect application data
+and therefore does not by itself prove the semantic contents of a database
+migration. Likewise, singleton admission proves one observed container for each
+closed singleton role, not application-internal leader-election semantics.
 Three successful representative hosts demonstrate independent reproducibility;
 they do not prove that all hardware is compatible.
 
@@ -859,6 +1024,11 @@ they do not prove that all hardware is compatible.
 4. Inspect the bounded evidence artifact and the independent cleanup job.
 5. Treat any named invariant, missing evidence, cleanup failure, or janitor
    ambiguity as a failure.
+
+For PR #22 specifically, merge this prerequisite first, update PR #22 from the
+merged commit, implement only its fixed-client target phases, and dispatch the
+three providers against one exact resulting PR #22 SHA. Evidence from an older
+PR #22 SHA cannot exercise this main-controlled protocol and is not admissible.
 
 Real `main` runs have completed the full provision, Debian 13 conformance,
 bounded-evidence, and exact-cleanup lifecycle for every implemented profile:
