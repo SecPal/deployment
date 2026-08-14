@@ -25,7 +25,12 @@ MAX_OUTPUT = 256 * 1024
 CHECKOUT = Path("/home/secpal-ci/deployment-target")
 QUADLET_ROOT = Path("/etc/containers/systemd/users/20000")
 SYSTEMD_ROOT = Path("/etc/systemd/user")
-GENERATOR_ROOT = Path("/run/user/20000/systemd/generator")
+GENERATOR_BASE = Path("/run/user/20000/systemd")
+GENERATOR_ROOT = GENERATOR_BASE / "generator"
+GENERATOR_ROOTS = tuple(
+    GENERATOR_BASE / name
+    for name in ("generator.early", "generator", "generator.late")
+)
 PODMAN_EXECUTABLE = Path("/usr/bin/podman")
 DBUS_SOCKET_FRAGMENTS = frozenset(
     {Path("/usr/lib/systemd/user/dbus.socket"), Path("/lib/systemd/user/dbus.socket")}
@@ -401,7 +406,8 @@ def container_facts(
         required_state = {"Status", "ExitCode"}
         required_config = {"Labels", "Env", "Image"}
         required_host_config = {
-            "Privileged", "PidMode", "UsernsMode", "NetworkMode",
+            "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
+            "NetworkMode",
             "SecurityOpt", "CapAdd", "Devices",
         }
         required_network_settings = {"Networks", "Ports"}
@@ -488,6 +494,8 @@ def container_facts(
                 "privileged": host_config["Privileged"],
                 "pid_mode": str(host_config["PidMode"] or "private"),
                 "userns_mode": str(host_config["UsernsMode"] or "private"),
+                "ipc_mode": str(host_config["IpcMode"] or "private"),
+                "uts_mode": str(host_config["UTSMode"] or "private"),
                 "network_mode": str(host_config["NetworkMode"] or "private"),
                 "cap_add": sorted(str(value) for value in cap_add),
                 "devices_present": bool(devices),
@@ -833,7 +841,7 @@ def generated_cleanup_artifacts(instance: str) -> tuple[list[str], bool]:
     maximum_artifacts = 128
     maximum_entries = 1024
     visited_entries = 0
-    pending = [(GENERATOR_ROOT, False)]
+    pending = [(root, False) for root in GENERATOR_ROOTS]
     while pending:
         directory, fixture_parent = pending.pop()
         try:
@@ -842,7 +850,7 @@ def generated_cleanup_artifacts(instance: str) -> tuple[list[str], bool]:
                 visited_entries += 1
                 if visited_entries > maximum_entries:
                     return sorted(artifacts), False
-                relative = entry.relative_to(GENERATOR_ROOT)
+                relative = entry.relative_to(GENERATOR_BASE)
                 fixture_owned = fixture_parent or entry.name.startswith(prefix)
                 if fixture_owned:
                     artifacts.append(str(relative))
@@ -1018,7 +1026,10 @@ def workload_admission_failures(observations: object) -> list[str]:
                 "remote_api_environment"
             ) is not False:
                 failures.append("D1A_PODMAN_API_DISABLED")
-            if item.get("pid_mode") != "private" or item.get("userns_mode") != "private":
+            if any(
+                item.get(field) != "private"
+                for field in ("pid_mode", "userns_mode", "ipc_mode", "uts_mode")
+            ):
                 failures.append("D1A_HOST_NAMESPACES")
             network_mode = str(item.get("network_mode", ""))
             if re.match(r"^(?:host$|container(?::|$)|ns:)", network_mode):

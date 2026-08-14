@@ -98,9 +98,9 @@ strict-host SSH from the trusted main orchestration script
         | fetch exact validated 40-character target SHA
         | run only fixed v1 phases of target-conformance.sh as UID 20000
         v
-target host -> trusted controls/baseline -> target prepare/start
+trusted controls/baseline -> target prepare/start -> trusted live collector
         v
-trusted live collector -> target cleanup -> trusted post-cleanup collector
+target cleanup -> trusted post-cleanup collector -> target host
         |
         | bounded JSON + summary
         |
@@ -355,28 +355,30 @@ contract suite. PR #22 owns the implementation of the two workload phases and
 may cross the root-owned publication boundary only through the fixed trusted
 fixture client.
 
-The trusted runner completes the target `host` phase before it creates one
-unrelated rootless control network and volume and records a main-controlled
-baseline of every rootless Podman container, network, and volume. This prevents
-host-phase side effects from being mistaken for prepare/start evidence: any
-fixture resource left by `host` is already present in the baseline and fails
-baseline admission, and any migration invocation already recorded for the
-fixture fails the zero-invocation baseline. The runner then invokes target
-prepare/start, streams the main-controlled live collector, requests target
-cleanup, and streams the main-controlled post-cleanup collector. Live admission
-requires the baseline plus exactly the closed fixture resource set;
-post-cleanup admission requires the exact baseline.
+The trusted runner creates one unrelated rootless control network and volume
+and records a main-controlled baseline of every rootless Podman container,
+network, volume, and fixture migration invocation before any target code runs.
+It then invokes target prepare/start, streams the main-controlled live
+collector, requests target cleanup, and streams the main-controlled
+post-cleanup collector. Only after that D.1a evidence is finalized does the
+separate target `host` phase run for D.1 admission. Host-phase descendants can
+therefore neither prepare the observed workload nor race the earlier baseline.
+Live admission requires the baseline plus exactly the closed fixture resource
+set; post-cleanup admission requires the exact baseline.
 An unprefixed, wrongly named, or leaked target resource cannot
 disappear from the trusted inventory merely because it is outside the fixture
 prefix.
 It attempts cleanup and the post-cleanup observation even when prepare/start
 fails or a handled `INT`, `TERM`, or `HUP` arrives while the host remains
-reachable. Target phase status is preserved but is never evidence that a
-workload existed or was removed. Every remote collection, including the final
-D.1 host collection, has an outer deadline. A missing, excessive, truncated,
-or malformed workload payload is normalized to a schema-closed incomplete
-observation so its collection status and the remaining lifecycle results stay
-reviewable; it can never become passing evidence. The collector runs by
+reachable. Once D.1a evidence is finalized, an interruption during the later
+host phase preserves it instead of repeating target cleanup or replacing the
+post-cleanup observation. Target phase status is preserved but is never
+evidence that a workload existed or was removed. Every remote collection,
+including the final D.1 host collection, has an outer deadline. A missing,
+excessive, truncated, or malformed workload payload is normalized to a
+schema-closed incomplete observation so its collection status and the remaining
+lifecycle results stay reviewable; it can never become passing evidence. The
+collector runs by
 absolute path under an empty environment and Python isolated mode. The
 collector retains only the fixed operator home needed to observe effective
 rootless Podman state; Python user-site startup hooks are disabled, and the GCP
@@ -862,7 +864,8 @@ Evidence includes:
   digests; the effective sole search path; and each generated user-service
   fragment and drop-in path, owner, group, and mode;
 - the exact ten-container logical-role set, singleton counts for scheduler and
-  activity-hash-chain worker, effective rootless/crun/security/namespace facts,
+  activity-hash-chain worker, effective rootless/crun/security facts and private
+  PID, user, IPC, UTS, and network namespace modes,
   the closed role-to-network topology, the gateway's sole loopback publication,
   immutable local image references with distinct API and frontend content
   digests, one exited zero-status migration systemd invocation established from
@@ -876,9 +879,11 @@ Evidence includes:
   exact `no-new-privileges` admission and Podman 5.4 `Healthcheck`/network-name
   field interpretation; and
 - exact absence of every integration unit, generated service and nested
-  generated drop-in artifact, container, network, and volume while the
-  deliberately unrelated control network and volume retain the same bounded
-  network ID and volume creation identity observed before target execution.
+  generated drop-in artifact across the user manager's `generator.early`,
+  `generator`, and `generator.late` outputs, plus container, network, and volume
+  absence while the deliberately unrelated control network and volume retain
+  the same bounded network ID and volume creation identity observed before
+  target execution.
 
 The Unix-listener admission recognizes listeners in the rootful and rootless
 Podman runtime directories and listeners owned by an actual `podman` process.

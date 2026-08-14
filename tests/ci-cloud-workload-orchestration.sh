@@ -114,6 +114,11 @@ if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
   grep -Fq 'cd /home/secpal-ci/deployment-target' <<<"$wrapper"
   grep -Fq 'ulimit -f 32768' <<<"$wrapper"
   printf 'target:%s\n' "$phase" >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+  if [[ "$phase" == host &&
+    "${SECPAL_TEST_INTERRUPT_HOST:-false}" == true ]]; then
+    kill -TERM "$PPID"
+    exit 143
+  fi
   if [[ "$phase" == workload-prepare-start &&
     "${SECPAL_TEST_INTERRUPT_PREPARE:-false}" == true ]]; then
     kill -TERM "$PPID"
@@ -169,7 +174,6 @@ chmod 0755 "$FAKE_BIN"/*
 expected_sequence() {
   printf '%s\n' \
     checkout \
-    target:host \
     control:create-network \
     control:create-volume \
     collector:baseline \
@@ -179,6 +183,7 @@ expected_sequence() {
     collector:post-cleanup \
     control:remove-network \
     control:remove-volume \
+    target:host \
     collector:host
 }
 
@@ -229,5 +234,23 @@ if [[ "$interrupt_status" -ne 130 ]]; then
 fi
 grep -Fxq 'target:workload-cleanup' "$INTERRUPT_LOG"
 grep -Fxq 'collector:post-cleanup' "$INTERRUPT_LOG"
+
+HOST_INTERRUPT_LOG="$TEMP_DIR/host-interrupt.log"
+set +e
+SECPAL_TEST_INTERRUPT_HOST=true \
+  run_fixture "$TEMP_DIR/host-interrupt-evidence" "$HOST_INTERRUPT_LOG"
+host_interrupt_status=$?
+set -e
+if [[ "$host_interrupt_status" -ne 130 ]]; then
+  printf 'FAIL: expected handled host interruption status 130, got %s\n' \
+    "$host_interrupt_status" >&2
+  exit 1
+fi
+if [[ "$(grep -Fxc 'target:workload-cleanup' "$HOST_INTERRUPT_LOG")" -ne 1 ||
+  "$(grep -Fxc 'collector:post-cleanup' "$HOST_INTERRUPT_LOG")" -ne 1 ]]; then
+  printf 'FAIL: finalized workload cleanup evidence was repeated during host interruption.\n' >&2
+  exit 1
+fi
+grep -Fxq 'collector:host' "$HOST_INTERRUPT_LOG"
 
 printf 'Cloud workload orchestration fixture passed.\n'

@@ -123,6 +123,8 @@ def valid_observations() -> dict[str, object]:
                 "privileged": False,
                 "pid_mode": "private",
                 "userns_mode": "private",
+                "ipc_mode": "private",
+                "uts_mode": "private",
                 "network_mode": "private",
                 "cap_add": [],
                 "devices_present": False,
@@ -432,27 +434,69 @@ class WorkloadEvidenceTests(unittest.TestCase):
     def test_cleanup_scans_generated_drop_in_directories_and_files(self) -> None:
         prefix = "secpal-int-aaaaaaaaaaaa-api.service"
         with tempfile.TemporaryDirectory() as temporary_directory:
-            generator = Path(temporary_directory)
+            generator_base = Path(temporary_directory)
+            generator = generator_base / "generator"
+            generator.mkdir()
             drop_in = generator / f"{prefix}.d"
             drop_in.mkdir()
             (drop_in / "10-dependency.conf").write_text(
                 "[Unit]\n", encoding="utf-8"
             )
-            with mock.patch.object(self.collector, "GENERATOR_ROOT", generator):
+            with mock.patch.object(self.collector, "GENERATOR_BASE", generator_base), \
+                mock.patch.object(self.collector, "GENERATOR_ROOTS", (generator,)):
                 artifacts, complete = self.collector.generated_cleanup_artifacts(
                     "aaaaaaaaaaaa"
                 )
         self.assertTrue(complete)
         self.assertEqual(
-            [f"{prefix}.d", f"{prefix}.d/10-dependency.conf"], artifacts
+            [
+                f"generator/{prefix}.d",
+                f"generator/{prefix}.d/10-dependency.conf",
+            ],
+            artifacts,
+        )
+
+    def test_cleanup_scans_all_three_user_generator_output_directories(self) -> None:
+        prefix = "secpal-int-aaaaaaaaaaaa-api.service"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            generator_base = Path(temporary_directory)
+            roots = tuple(
+                generator_base / name
+                for name in ("generator.early", "generator", "generator.late")
+            )
+            for root in roots:
+                root.mkdir()
+            (roots[0] / prefix).touch()
+            drop_in = roots[2] / f"{prefix}.d"
+            drop_in.mkdir()
+            (drop_in / "10-late.conf").touch()
+            with mock.patch.object(
+                self.collector, "GENERATOR_BASE", generator_base, create=True
+            ), mock.patch.object(
+                self.collector, "GENERATOR_ROOTS", roots, create=True
+            ):
+                artifacts, complete = self.collector.generated_cleanup_artifacts(
+                    "aaaaaaaaaaaa"
+                )
+        self.assertTrue(complete)
+        self.assertEqual(
+            [
+                f"generator.early/{prefix}",
+                f"generator.late/{prefix}.d",
+                f"generator.late/{prefix}.d/10-late.conf",
+            ],
+            artifacts,
         )
 
     def test_cleanup_generator_scan_is_bounded_even_by_unrelated_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            generator = Path(temporary_directory)
+            generator_base = Path(temporary_directory)
+            generator = generator_base / "generator"
+            generator.mkdir()
             for index in range(1025):
                 (generator / f"unrelated-{index:04d}").touch()
-            with mock.patch.object(self.collector, "GENERATOR_ROOT", generator):
+            with mock.patch.object(self.collector, "GENERATOR_BASE", generator_base), \
+                mock.patch.object(self.collector, "GENERATOR_ROOTS", (generator,)):
                 artifacts, complete = self.collector.generated_cleanup_artifacts(
                     "aaaaaaaaaaaa"
                 )
@@ -461,10 +505,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_cleanup_generator_evidence_cannot_exceed_schema_bound(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            generator = Path(temporary_directory)
+            generator_base = Path(temporary_directory)
+            generator = generator_base / "generator"
+            generator.mkdir()
             for index in range(129):
                 (generator / f"secpal-int-aaaaaaaaaaaa-{index:03d}.service").touch()
-            with mock.patch.object(self.collector, "GENERATOR_ROOT", generator):
+            with mock.patch.object(self.collector, "GENERATOR_BASE", generator_base), \
+                mock.patch.object(self.collector, "GENERATOR_ROOTS", (generator,)):
                 artifacts, complete = self.collector.generated_cleanup_artifacts(
                     "aaaaaaaaaaaa"
                 )
@@ -497,6 +544,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ("privileged", True, "D1A_PRIVILEGE_BOUNDARY"),
             ("pid_mode", "host", "D1A_HOST_NAMESPACES"),
             ("userns_mode", "host", "D1A_HOST_NAMESPACES"),
+            ("ipc_mode", "host", "D1A_HOST_NAMESPACES"),
+            ("uts_mode", "host", "D1A_HOST_NAMESPACES"),
             ("network_mode", "host", "D1A_HOST_NETWORK"),
             ("auto_update", True, "D1A_AUTO_UPDATE_DISABLED"),
         )
@@ -574,6 +623,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Privileged": False,
                 "PidMode": "private",
                 "UsernsMode": "private",
+                "IpcMode": "private",
+                "UTSMode": "private",
                 "NetworkMode": "private",
                 "SecurityOpt": ["no-new-privileges"],
                 "CapAdd": [],
@@ -635,6 +686,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Privileged": False,
                 "PidMode": "private",
                 "UsernsMode": "private",
+                "IpcMode": "private",
+                "UTSMode": "private",
                 "NetworkMode": "private",
                 "SecurityOpt": ["no-new-privileges"],
                 "CapAdd": [],
@@ -877,13 +930,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertNotIn("sudo", runner)
         self.assertIn("collect-workload-evidence.py", runner)
         self.assertLess(
-            runner.index('bootstrap_stage="target-host"'),
-            runner.index('bootstrap_stage="collector-baseline"'),
-        )
-        self.assertLess(
             runner.index('bootstrap_stage="collector-baseline"'),
             runner.index('bootstrap_stage="target-workload-prepare-start"'),
         )
+        self.assertLess(
+            runner.index('bootstrap_stage="collector-post-cleanup"'),
+            runner.index('bootstrap_stage="target-host"'),
+        )
+        self.assertIn("workload_evidence_finalized=true", runner)
         self.assertLess(
             runner.index("v1 workload-prepare-start"),
             runner.index('"live"'),

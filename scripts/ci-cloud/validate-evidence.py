@@ -357,7 +357,7 @@ def validate_document(document: object) -> dict[str, object]:
             {
                 "role", "name", "state", "exit_code", "health", "oci_runtime",
                 "rootless", "privileged", "pid_mode", "userns_mode",
-                "network_mode", "cap_add", "devices_present",
+                "ipc_mode", "uts_mode", "network_mode", "cap_add", "devices_present",
                 "podman_socket_mount", "remote_api_environment", "security_opt",
                 "networks", "published_ports", "auto_update", "image",
             },

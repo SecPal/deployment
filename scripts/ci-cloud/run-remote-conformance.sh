@@ -361,6 +361,7 @@ cleanup_collection_status=125
 baseline_collection_status=125
 checkout_admitted=false
 cleanup_completed=false
+workload_evidence_finalized=false
 
 bootstrap_stage="target-checkout"
 set +e
@@ -544,28 +545,28 @@ collect_cleanup_after_interruption() {
   local signal_status=130
   trap - INT TERM HUP
   set +e
-  if [[ "$checkout_admitted" == true && "$cleanup_completed" == false ]]; then
+  if [[ "$checkout_admitted" == true &&
+    "$workload_evidence_finalized" == false &&
+    "$cleanup_completed" == false ]]; then
     run_target_cleanup
     cleanup_status=$?
     if [[ "$cleanup_status" -eq 0 ]]; then
       cleanup_completed=true
     fi
   fi
-  if [[ "$checkout_admitted" == true ]]; then
+  if [[ "$checkout_admitted" == true &&
+    "$workload_evidence_finalized" == false ]]; then
     collect_workload_post_cleanup
     cleanup_collection_status=$?
+    workload_evidence_finalized=true
+  fi
+  if [[ "$checkout_admitted" == true ]]; then
     collect_host_and_assemble false
   fi
   exit "$signal_status"
 }
 
 trap collect_cleanup_after_interruption INT TERM HUP
-
-bootstrap_stage="target-host"
-set +e
-run_target_host
-host_status=$?
-set -e
 
 bootstrap_stage="control-resources"
 ssh "${ssh_options[@]}" "secpal-ci@$address" \
@@ -617,8 +618,8 @@ set +e
 collect_workload_post_cleanup
 cleanup_collection_status=$?
 set -e
+workload_evidence_finalized=true
 
-trap - INT TERM HUP
 set +e
 ssh "${ssh_options[@]}" "secpal-ci@$address" \
   /usr/bin/env -i HOME=/home/secpal-ci PATH=/usr/bin:/bin \
@@ -628,5 +629,12 @@ ssh "${ssh_options[@]}" "secpal-ci@$address" \
   /usr/bin/podman volume rm secpal-ci-unrelated-control-volume >/dev/null 2>&1
 set -e
 
+bootstrap_stage="target-host"
+set +e
+run_target_host
+host_status=$?
+set -e
+
+trap - INT TERM HUP
 bootstrap_stage="collector"
 collect_host_and_assemble true
