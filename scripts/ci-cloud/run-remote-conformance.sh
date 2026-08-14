@@ -55,6 +55,7 @@ known_hosts="$(dirname "$evidence_dir")/known_hosts"
 evidence_json="$evidence_dir/evidence.json"
 evidence_summary="$evidence_dir/summary.md"
 host_evidence_json="$evidence_dir/.host-evidence.json"
+baseline_evidence_json="$evidence_dir/.workload-baseline.json"
 live_evidence_json="$evidence_dir/.workload-live.json"
 cleanup_evidence_json="$evidence_dir/.workload-post-cleanup.json"
 bootstrap_stage="host-key"
@@ -357,6 +358,7 @@ prepare_start_status=125
 cleanup_status=125
 live_collection_status=125
 cleanup_collection_status=125
+baseline_collection_status=125
 checkout_admitted=false
 cleanup_completed=false
 
@@ -471,6 +473,18 @@ collect_workload_live() {
     < scripts/ci-cloud/collect-workload-evidence.py >"$live_evidence_json"
 }
 
+collect_workload_baseline() {
+  timeout --signal=TERM --kill-after=15s 3m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
+    HOME=/home/secpal-ci \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/bin/python3 -I - "baseline" "$target_sha" "$fixture_instance" \
+    < scripts/ci-cloud/collect-workload-evidence.py >"$baseline_evidence_json"
+}
+
 collect_workload_post_cleanup() {
   timeout --signal=TERM --kill-after=15s 3m \
     ssh "${ssh_options[@]}" "secpal-ci@$address" \
@@ -485,13 +499,19 @@ collect_workload_post_cleanup() {
 
 write_incomplete_live_observation() {
   printf '%s\n' \
-    '{"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_present":false,"volume_present":false},"generated_services":[],"installed_units":[],"migration":{"exit_code":-1,"observed":false},"networks":[],"oci_runtime":"","phase":"live","podman_api":true,"podman_rootless":false,"quadlet_search_paths":[],"readiness":{"observed":false,"ready_roles":[]},"singleton_roles":{"scheduler":0,"worker-hash-chain":0},"target_admitted":false,"volumes":[]}' \
+    '{"all_containers":[],"all_networks":[],"all_volumes":[],"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_present":false,"volume_present":false},"generated_services":[],"installed_units":[],"migration":{"exit_code":-1,"observed":false},"networks":[],"oci_runtime":"","phase":"live","podman_api":true,"podman_rootless":false,"quadlet_search_paths":[],"readiness":{"observed":false,"ready_roles":[]},"singleton_roles":{"scheduler":0,"worker-hash-chain":0},"target_admitted":false,"volumes":[]}' \
     >"$live_evidence_json"
+}
+
+write_incomplete_baseline_observation() {
+  printf '%s\n' \
+    '{"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_present":false,"volume_present":false},"networks":[],"phase":"baseline","target_admitted":false,"volumes":[]}' \
+    >"$baseline_evidence_json"
 }
 
 write_incomplete_cleanup_observation() {
   printf '%s\n' \
-    '{"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_present":false,"volume_present":false},"generated_services":[],"networks":[],"owned_units":[],"phase":"post-cleanup","target_admitted":false,"volumes":[]}' \
+    '{"all_containers":[],"all_networks":[],"all_volumes":[],"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_present":false,"volume_present":false},"generated_services":[],"networks":[],"owned_units":[],"phase":"post-cleanup","target_admitted":false,"volumes":[]}' \
     >"$cleanup_evidence_json"
 }
 
@@ -500,6 +520,7 @@ collect_host_and_assemble() {
   local ended_at
   local validation_status
   ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  [[ -s "$baseline_evidence_json" ]] || write_incomplete_baseline_observation
   [[ -s "$live_evidence_json" ]] || write_incomplete_live_observation
   [[ -s "$cleanup_evidence_json" ]] || write_incomplete_cleanup_observation
   ssh "${ssh_options[@]}" "secpal-ci@$address" \
@@ -514,9 +535,11 @@ collect_host_and_assemble() {
     "$machine_type" \
     < scripts/ci-cloud/collect-host-evidence.py >"$host_evidence_json"
   python3 scripts/ci-cloud/assemble-evidence.py \
-    "$host_evidence_json" "$live_evidence_json" "$cleanup_evidence_json" \
+    "$host_evidence_json" "$baseline_evidence_json" \
+    "$live_evidence_json" "$cleanup_evidence_json" \
     "$host_status" "$prepare_start_status" "$cleanup_status" \
-    "$live_collection_status" "$cleanup_collection_status" \
+    "$baseline_collection_status" "$live_collection_status" \
+    "$cleanup_collection_status" \
     >"$evidence_json"
   if [[ "$require_passed" == true ]]; then
     set +e
@@ -531,7 +554,8 @@ collect_host_and_assemble() {
     validation_status=$?
     set -e
   fi
-  rm -f -- "$host_evidence_json" "$live_evidence_json" \
+  rm -f -- "$host_evidence_json" "$baseline_evidence_json" \
+    "$live_evidence_json" \
     "$cleanup_evidence_json"
   return "$validation_status"
 }
@@ -574,6 +598,12 @@ ssh "${ssh_options[@]}" "secpal-ci@$address" \
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   /usr/bin/podman volume create secpal-ci-unrelated-control-volume \
   >/dev/null
+
+bootstrap_stage="collector-baseline"
+set +e
+collect_workload_baseline
+baseline_collection_status=$?
+set -e
 
 bootstrap_stage="target-host"
 set +e

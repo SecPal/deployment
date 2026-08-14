@@ -13,10 +13,11 @@ FAKE_BIN="$TEMP_DIR/bin"
 PRIVATE_KEY="$TEMP_DIR/id_ed25519"
 LIVE_JSON="$TEMP_DIR/live.json"
 CLEANUP_JSON="$TEMP_DIR/cleanup.json"
+BASELINE_JSON="$TEMP_DIR/baseline.json"
 mkdir -p "$FAKE_BIN"
 install -m 0600 /dev/null "$PRIVATE_KEY"
 
-"$REAL_PYTHON" - "$LIVE_JSON" "$CLEANUP_JSON" <<'PY'
+"$REAL_PYTHON" - "$BASELINE_JSON" "$LIVE_JSON" "$CLEANUP_JSON" <<'PY'
 import importlib.util
 import json
 import sys
@@ -27,7 +28,9 @@ spec = importlib.util.spec_from_file_location("workload_fixture", path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 observations = module.valid_observations()
-for output, key in zip(sys.argv[1:], ("live", "post_cleanup"), strict=True):
+for output, key in zip(
+    sys.argv[1:], ("baseline", "live", "post_cleanup"), strict=True
+):
     Path(output).write_text(
         json.dumps(observations[key], sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
@@ -116,6 +119,11 @@ if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
   exit 0
 fi
 case " $* " in
+  *' /usr/bin/python3 -I - baseline '*)
+    cat >/dev/null
+    printf 'collector:baseline\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    cat "${SECPAL_TEST_BASELINE_JSON:?}"
+    ;;
   *' /usr/bin/python3 -I - live '*)
     cat >/dev/null
     printf 'collector:live\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
@@ -156,6 +164,7 @@ expected_sequence() {
     checkout \
     control:create-network \
     control:create-volume \
+    collector:baseline \
     target:host \
     target:workload-prepare-start \
     collector:live \
@@ -173,6 +182,7 @@ run_fixture() {
     SECPAL_TEST_REAL_PYTHON="$REAL_PYTHON" \
     SECPAL_TEST_SEQUENCE_LOG="$sequence_log" \
     SECPAL_TEST_LIVE_JSON="$LIVE_JSON" \
+    SECPAL_TEST_BASELINE_JSON="$BASELINE_JSON" \
     SECPAL_TEST_CLEANUP_JSON="$CLEANUP_JSON" \
     scripts/ci-cloud/run-remote-conformance.sh \
     digitalocean fra1 intel 1.1.1.1 \

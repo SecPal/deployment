@@ -2015,16 +2015,18 @@ def validate(root: Path) -> None:
         "target entrypoint must reject arbitrary lifecycle commands and instances",
     )
     require(
-        remote.count("< scripts/ci-cloud/collect-workload-evidence.py") == 2
+        remote.count("< scripts/ci-cloud/collect-workload-evidence.py") == 3
+        and '"baseline" "$target_sha" "$fixture_instance"' in remote
         and '"live" "$target_sha" "$fixture_instance"' in remote
         and '"post-cleanup" "$target_sha" "$fixture_instance"' in remote
-        and remote.index('bootstrap_stage="target-workload-prepare-start"')
+        and remote.index('bootstrap_stage="collector-baseline"')
+        < remote.index('bootstrap_stage="target-workload-prepare-start"')
         < remote.index('bootstrap_stage="collector-live"')
         < remote.index('bootstrap_stage="target-workload-cleanup"')
         < remote.index('bootstrap_stage="collector-post-cleanup"')
         and "trap collect_cleanup_after_interruption INT TERM HUP" in remote
         and "collect_host_and_assemble false" in remote,
-        "trusted orchestration must preserve live and post-cleanup phase ordering",
+        "trusted orchestration must preserve baseline, live, and cleanup ordering",
     )
     require(
         "CI_UID = 20000" in workload_collector
@@ -2034,12 +2036,25 @@ def validate(root: Path) -> None:
         and 'QUADLET_ROOT = Path("/etc/containers/systemd/users/20000")'
         in workload_collector
         and "instance != target_sha[:12]" in workload_collector
-        and 'phase not in {"live", "post-cleanup"}' in workload_collector
+        and 'phase not in {"baseline", "live", "post-cleanup"}'
+        in workload_collector
         and "workload_admission_failures" in workload_collector
         and "shell=True" not in workload_collector
         and "os.system" not in workload_collector
         and "eval(" not in workload_collector,
         "workload collection must remain fixed, rootless, bounded, and independent",
+    )
+    require(
+        'phase not in {"baseline", "live", "post-cleanup"}'
+        in workload_collector
+        and '("Names", "Name", "name")' in workload_collector
+        and 'state.get("Healthcheck", {})' in workload_collector
+        and '"rootless": rootless' in workload_collector
+        and 'item["Rootless"]' not in workload_collector
+        and '"no-new-privileges" not in security_options'
+        in workload_collector
+        and "D1A_RESOURCE_INVENTORY" in workload_collector,
+        "Podman evidence must use admitted v5 fields and exact inventory/security facts",
     )
     try:
         evidence_schema = json.loads(evidence_schema_text)

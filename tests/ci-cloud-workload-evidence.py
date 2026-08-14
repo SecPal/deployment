@@ -138,6 +138,20 @@ def valid_observations() -> dict[str, object]:
         "instance": instance,
         "result": "passed",
         "failed_admission_invariants": [],
+        "baseline": {
+            "phase": "baseline",
+            "target_admitted": True,
+            "collector_uid": 20000,
+            "collector_gid": 20000,
+            "complete": True,
+            "containers": [],
+            "networks": ["podman", "secpal-ci-unrelated-control-network"],
+            "volumes": ["secpal-ci-unrelated-control-volume"],
+            "control_resources": {
+                "network_present": True,
+                "volume_present": True,
+            },
+        },
         "live": {
             "phase": "live",
             "target_admitted": True,
@@ -153,6 +167,23 @@ def valid_observations() -> dict[str, object]:
             "singleton_roles": {"scheduler": 1, "worker-hash-chain": 1},
             "networks": [f"{prefix}-application", f"{prefix}-edge"],
             "volumes": [f"{prefix}-postgres", f"{prefix}-private-storage", f"{prefix}-secrets"],
+            "all_containers": sorted(item["name"] for item in containers),
+            "all_networks": sorted(
+                [
+                    "podman",
+                    "secpal-ci-unrelated-control-network",
+                    f"{prefix}-application",
+                    f"{prefix}-edge",
+                ]
+            ),
+            "all_volumes": sorted(
+                [
+                    "secpal-ci-unrelated-control-volume",
+                    f"{prefix}-postgres",
+                    f"{prefix}-private-storage",
+                    f"{prefix}-secrets",
+                ]
+            ),
             "migration": {"observed": True, "exit_code": 0},
             "readiness": {"observed": True, "ready_roles": sorted(set(ROLES) - {"secrets-init", "migrate"})},
             "podman_api": False,
@@ -172,6 +203,9 @@ def valid_observations() -> dict[str, object]:
             "containers": [],
             "networks": [],
             "volumes": [],
+            "all_containers": [],
+            "all_networks": ["podman", "secpal-ci-unrelated-control-network"],
+            "all_volumes": ["secpal-ci-unrelated-control-volume"],
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
@@ -199,10 +233,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
         }
         document = self.assembler.assemble(
             host,
+            observations["baseline"],
             observations["live"],
             observations["post_cleanup"],
             {"host": 0, "workload_prepare_start": 0, "workload_cleanup": 0},
-            {"live": 0, "post_cleanup": 0},
+            {"baseline": 0, "live": 0, "post_cleanup": 0},
         )
         self.assertEqual("passed", document["workload"]["result"])
         self.assertEqual("live", document["workload"]["live"]["phase"])
@@ -210,6 +245,36 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "post-cleanup", document["workload"]["post_cleanup"]["phase"]
         )
         self.assertEqual([], document["workload"]["post_cleanup"]["containers"])
+
+    def test_host_phase_failure_remains_in_d1_host_admission(self) -> None:
+        observations = valid_observations()
+        host = {
+            "schema_version": 1,
+            "workflow": {"target_sha": "a" * 40},
+            "test": {
+                "failed_admission_invariants": ["TARGET_CONFORMANCE_ENTRYPOINT"]
+            },
+            "platform": {},
+            "apt": {},
+            "host": {},
+            "runtime": {},
+        }
+        document = self.assembler.assemble(
+            host,
+            observations["baseline"],
+            observations["live"],
+            observations["post_cleanup"],
+            {"host": 7, "workload_prepare_start": 0, "workload_cleanup": 0},
+            {"baseline": 0, "live": 0, "post_cleanup": 0},
+        )
+        self.assertEqual(
+            {
+                "result": "failed",
+                "failed_admission_invariants": ["TARGET_HOST_CONTRACT"],
+            },
+            document["host_admission"],
+        )
+        self.assertEqual("passed", document["workload"]["result"])
 
     def assert_failure(self, mutation, expected: str) -> None:
         observations = valid_observations()
@@ -250,6 +315,42 @@ class WorkloadEvidenceTests(unittest.TestCase):
             with self.subTest(phase=phase, instance=instance, checkout=checkout):
                 with self.assertRaises(ValueError):
                     self.collector.admit_collection_context(phase, sha, instance, checkout)
+
+    def test_network_listing_accepts_podman_lowercase_name(self) -> None:
+        with mock.patch.object(
+            self.collector,
+            "json_array",
+            return_value=([{"name": "secpal-ci-unrelated-control-network"}], True),
+        ):
+            self.assertEqual(
+                (["secpal-ci-unrelated-control-network"], True),
+                self.collector.names_from_listing(["podman", "network", "ls"]),
+            )
+
+    def test_inventory_rejects_unprefixed_target_resources_and_cleanup_leaks(self) -> None:
+        for phase, field in (
+            ("live", "all_containers"),
+            ("live", "all_networks"),
+            ("live", "all_volumes"),
+            ("post_cleanup", "all_containers"),
+            ("post_cleanup", "all_networks"),
+            ("post_cleanup", "all_volumes"),
+        ):
+            with self.subTest(phase=phase, field=field):
+                self.assert_failure(
+                    lambda evidence, phase=phase, field=field: evidence[phase][
+                        field
+                    ].append("target-created-rogue"),
+                    "D1A_RESOURCE_INVENTORY",
+                )
+
+    def test_baseline_rejects_preexisting_fixture_resources(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["baseline"]["containers"].append(
+                "secpal-int-aaaaaaaaaaaa-api"
+            ),
+            "D1A_BASELINE_INVENTORY",
+        )
 
     def test_false_green_target_status_cannot_replace_live_observation(self) -> None:
         self.assert_failure(
@@ -344,7 +445,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
     def test_container_inspection_missing_security_facts_is_incomplete(self) -> None:
         inspection = {
             "Name": "secpal-int-aaaaaaaaaaaa-api",
-            "State": {"Status": "running", "ExitCode": 0, "Health": {"Status": "healthy"}},
+            "State": {
+                "Status": "running",
+                "ExitCode": 0,
+                "Healthcheck": {"Status": "healthy"},
+            },
             "Config": {
                 "Labels": {},
                 "Env": [],
@@ -365,12 +470,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             },
             "Mounts": [],
             "OCIRuntime": "crun",
-            "Rootless": True,
             "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
         }
         required_fields = (
             (inspection, "OCIRuntime"),
-            (inspection, "Rootless"),
             (inspection, "Mounts"),
             (inspection["Config"], "Env"),
             (inspection["HostConfig"], "CapAdd"),
@@ -395,8 +498,63 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 ), mock.patch.object(
                     self.collector, "json_array", return_value=([candidate], True)
                 ):
-                    _, complete = self.collector.container_facts("aaaaaaaaaaaa")
+                    _, complete = self.collector.container_facts(
+                        "aaaaaaaaaaaa", rootless=True
+                    )
                 self.assertFalse(complete)
+
+    def test_podman_healthcheck_and_global_rootless_fact_are_used(self) -> None:
+        inspection = {
+            "Name": "secpal-int-aaaaaaaaaaaa-api",
+            "State": {
+                "Status": "running",
+                "ExitCode": 0,
+                "Healthcheck": {"Status": "healthy"},
+            },
+            "Config": {
+                "Labels": {},
+                "Env": [],
+                "Image": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
+            },
+            "HostConfig": {
+                "Privileged": False,
+                "PidMode": "private",
+                "UsernsMode": "private",
+                "NetworkMode": "private",
+                "SecurityOpt": ["no-new-privileges"],
+                "CapAdd": [],
+                "Devices": [],
+            },
+            "NetworkSettings": {
+                "Networks": {"secpal-int-aaaaaaaaaaaa-application": {}},
+                "Ports": {},
+            },
+            "Mounts": [],
+            "OCIRuntime": "crun",
+            "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
+        }
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([inspection], True)
+        ):
+            facts, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True
+            )
+        self.assertTrue(complete)
+        self.assertEqual("healthy", facts[0]["health"])
+        self.assertTrue(facts[0]["rootless"])
+
+    def test_no_new_privileges_requires_the_exact_security_option(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+                "security_opt",
+                ["seccomp=/home/secpal-ci/no-new-privileges.json"],
+            ),
+            "D1A_SECURITY_OPTIONS",
+        )
 
     def test_remote_or_socket_api_evidence_is_rejected(self) -> None:
         observations = valid_observations()
@@ -472,8 +630,29 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "D1A_CONTROL_RESOURCES_PRESERVED",
         )
 
+    def test_cleanup_generator_scan_failure_marks_observation_incomplete(self) -> None:
+        with mock.patch.object(
+            self.collector.Path, "iterdir", return_value=iter(())
+        ), mock.patch.object(
+            self.collector.Path, "glob", side_effect=PermissionError("hidden")
+        ), mock.patch.object(
+            self.collector,
+            "resource_inventory",
+            return_value=(
+                {"containers": [], "networks": [], "volumes": []},
+                True,
+            ),
+        ), mock.patch.object(
+            self.collector,
+            "control_resource_facts",
+            return_value={"network_present": True, "volume_present": True},
+        ):
+            observation = self.collector.collect_post_cleanup("aaaaaaaaaaaa")
+        self.assertFalse(observation["complete"])
+
     def test_truncated_unknown_and_contradictory_observations_fail_closed(self) -> None:
         for mutate in (
+            lambda evidence: evidence["baseline"].__setitem__("complete", False),
             lambda evidence: evidence["live"].__setitem__("complete", False),
             lambda evidence: evidence["live"].__setitem__("target_status", "passed"),
             lambda evidence: evidence["post_cleanup"].__setitem__("complete", False),
@@ -489,6 +668,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertNotIn("SECPAL_TARGET_COMMAND", runner)
         self.assertNotIn("sudo", runner)
         self.assertIn("collect-workload-evidence.py", runner)
+        self.assertLess(
+            runner.index('bootstrap_stage="collector-baseline"'),
+            runner.index('bootstrap_stage="target-workload-prepare-start"'),
+        )
         self.assertLess(
             runner.index("v1 workload-prepare-start"),
             runner.index('"live"'),

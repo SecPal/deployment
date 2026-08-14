@@ -117,7 +117,7 @@ def expected_unit_names(instance: str) -> tuple[str, ...]:
 def admit_collection_context(
     phase: str, target_sha: str, instance: str, checkout: Path
 ) -> None:
-    if phase not in {"live", "post-cleanup"}:
+    if phase not in {"baseline", "live", "post-cleanup"}:
         raise ValueError("collection phase is outside the closed contract")
     if os.getuid() != CI_UID or os.getgid() != CI_GID:
         raise ValueError("collector must run as UID/GID 20000")
@@ -255,7 +255,7 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
 
 
 def names_from_listing(
-    arguments: list[str], prefix: str
+    arguments: list[str], prefix: str | None = None
 ) -> tuple[list[str], bool]:
     rows, complete = json_array(arguments)
     names: list[str] = []
@@ -263,19 +263,30 @@ def names_from_listing(
         if not isinstance(row, dict):
             complete = False
             continue
-        raw_names = row.get("Names", row.get("Name", []))
+        name_key = next(
+            (key for key in ("Names", "Name", "name") if key in row), None
+        )
+        if name_key is None:
+            complete = False
+            continue
+        raw_names = row[name_key]
         candidates = raw_names if isinstance(raw_names, list) else [raw_names]
         for name in candidates:
-            if isinstance(name, str) and name.startswith(prefix):
+            if not isinstance(name, str) or not name:
+                complete = False
+            elif prefix is None or name.startswith(prefix):
                 names.append(name)
     return sorted(names), complete and len(names) == len(set(names))
 
 
-def container_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
+def container_facts(
+    instance: str, *, rootless: bool
+) -> tuple[list[dict[str, object]], bool]:
     prefix = f"secpal-int-{instance}-"
-    names, complete = names_from_listing(
-        ["podman", "ps", "--all", "--format", "json"], prefix
+    all_names, complete = names_from_listing(
+        ["podman", "ps", "--all", "--format", "json"]
     )
+    names = [name for name in all_names if name.startswith(prefix)]
     if not names:
         return [], complete
     inspections, inspection_complete = json_array(
@@ -296,7 +307,10 @@ def container_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
         if not all(isinstance(value, dict) for value in (state, config, host_config, network_settings)):
             complete = False
             continue
-        required_item = {"Name", "State", "Config", "HostConfig", "NetworkSettings", "Mounts", "OCIRuntime", "Rootless"}
+        required_item = {
+            "Name", "State", "Config", "HostConfig", "NetworkSettings",
+            "Mounts", "OCIRuntime",
+        }
         required_state = {"Status", "ExitCode"}
         required_config = {"Labels", "Env", "Image"}
         required_host_config = {
@@ -310,7 +324,6 @@ def container_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
             or not required_config.issubset(config)
             or not required_host_config.issubset(host_config)
             or not required_network_settings.issubset(network_settings)
-            or not isinstance(item["Rootless"], bool)
             or not isinstance(item["Mounts"], list)
             or not isinstance(config["Labels"], dict)
             or not isinstance(config["Env"], list)
@@ -323,7 +336,7 @@ def container_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
         ):
             complete = False
             continue
-        health_value = state.get("Health", {})
+        health_value = state.get("Healthcheck", {})
         health = (
             str(health_value.get("Status", "none"))
             if isinstance(health_value, dict)
@@ -384,7 +397,7 @@ def container_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
                 "exit_code": int(state.get("ExitCode", -1)),
                 "health": health,
                 "oci_runtime": str(item["OCIRuntime"]),
-                "rootless": item["Rootless"],
+                "rootless": rootless,
                 "privileged": host_config["Privileged"],
                 "pid_mode": str(host_config["PidMode"] or "private"),
                 "userns_mode": str(host_config["UsernsMode"] or "private"),
@@ -431,15 +444,35 @@ def podman_runtime_facts() -> tuple[bool, str, bool]:
 
 def control_resource_facts() -> dict[str, bool]:
     networks, networks_complete = names_from_listing(
-        ["podman", "network", "ls", "--format", "json"], CONTROL_NETWORK
+        ["podman", "network", "ls", "--format", "json"]
     )
     volumes, volumes_complete = names_from_listing(
-        ["podman", "volume", "ls", "--format", "json"], CONTROL_VOLUME
+        ["podman", "volume", "ls", "--format", "json"]
     )
     return {
-        "network_present": networks_complete and networks == [CONTROL_NETWORK],
-        "volume_present": volumes_complete and volumes == [CONTROL_VOLUME],
+        "network_present": networks_complete and CONTROL_NETWORK in networks,
+        "volume_present": volumes_complete and CONTROL_VOLUME in volumes,
     }
+
+
+def resource_inventory() -> tuple[dict[str, list[str]], bool]:
+    containers, containers_complete = names_from_listing(
+        ["podman", "ps", "--all", "--format", "json"]
+    )
+    networks, networks_complete = names_from_listing(
+        ["podman", "network", "ls", "--format", "json"]
+    )
+    volumes, volumes_complete = names_from_listing(
+        ["podman", "volume", "ls", "--format", "json"]
+    )
+    return (
+        {
+            "containers": containers,
+            "networks": networks,
+            "volumes": volumes,
+        },
+        containers_complete and networks_complete and volumes_complete,
+    )
 
 
 def podman_api_facts() -> tuple[bool, bool]:
@@ -490,18 +523,30 @@ def podman_api_facts() -> tuple[bool, bool]:
     return False, True
 
 
+def collect_baseline() -> dict[str, object]:
+    inventory, complete = resource_inventory()
+    return {
+        "phase": "baseline",
+        "target_admitted": True,
+        "collector_uid": os.getuid(),
+        "collector_gid": os.getgid(),
+        "complete": complete,
+        **inventory,
+        "control_resources": control_resource_facts(),
+    }
+
+
 def collect_live(instance: str) -> dict[str, object]:
     units, units_complete = installed_unit_facts(instance)
     services, services_complete = generated_service_facts(instance)
-    containers, containers_complete = container_facts(instance)
-    prefix = f"secpal-int-{instance}-"
-    networks, networks_complete = names_from_listing(
-        ["podman", "network", "ls", "--format", "json"], prefix
-    )
-    volumes, volumes_complete = names_from_listing(
-        ["podman", "volume", "ls", "--format", "json"], prefix
-    )
     podman_rootless, oci_runtime, runtime_complete = podman_runtime_facts()
+    containers, containers_complete = container_facts(
+        instance, rootless=podman_rootless
+    )
+    inventory, inventory_complete = resource_inventory()
+    prefix = f"secpal-int-{instance}-"
+    networks = [name for name in inventory["networks"] if name.startswith(prefix)]
+    volumes = [name for name in inventory["volumes"] if name.startswith(prefix)]
     podman_api, podman_api_complete = podman_api_facts()
     by_role = {str(item.get("role")): item for item in containers}
     migrate = by_role.get("migrate", {})
@@ -523,7 +568,7 @@ def collect_live(instance: str) -> dict[str, object]:
         "complete": all(
             (
                 units_complete, services_complete, containers_complete,
-                networks_complete, volumes_complete, runtime_complete,
+                inventory_complete, runtime_complete,
                 podman_api_complete,
             )
         ),
@@ -539,6 +584,9 @@ def collect_live(instance: str) -> dict[str, object]:
         },
         "networks": networks,
         "volumes": volumes,
+        "all_containers": inventory["containers"],
+        "all_networks": inventory["networks"],
+        "all_volumes": inventory["volumes"],
         "migration": {
             "observed": bool(migrate),
             "exit_code": int(migrate.get("exit_code", -1)),
@@ -564,33 +612,39 @@ def collect_post_cleanup(instance: str) -> dict[str, object]:
                 "collector_uid": os.getuid(), "collector_gid": os.getgid(),
                 "complete": False, "owned_units": [], "generated_services": [],
                 "containers": [], "networks": [], "volumes": [],
+                "all_containers": [], "all_networks": [], "all_volumes": [],
                 "control_resources": control_resource_facts(),
             }
     generated = []
+    generated_complete = True
     try:
         generated = [path.name for path in GENERATOR_ROOT.glob(f"{prefix}*.service")]
     except OSError:
-        pass
-    containers, containers_complete = names_from_listing(
-        ["podman", "ps", "--all", "--format", "json"], f"{prefix}-"
-    )
-    networks, networks_complete = names_from_listing(
-        ["podman", "network", "ls", "--format", "json"], f"{prefix}-"
-    )
-    volumes, volumes_complete = names_from_listing(
-        ["podman", "volume", "ls", "--format", "json"], f"{prefix}-"
-    )
+        generated_complete = False
+    inventory, inventory_complete = resource_inventory()
+    containers = [
+        name for name in inventory["containers"] if name.startswith(f"{prefix}-")
+    ]
+    networks = [
+        name for name in inventory["networks"] if name.startswith(f"{prefix}-")
+    ]
+    volumes = [
+        name for name in inventory["volumes"] if name.startswith(f"{prefix}-")
+    ]
     return {
         "phase": "post-cleanup",
         "target_admitted": True,
         "collector_uid": os.getuid(),
         "collector_gid": os.getgid(),
-        "complete": containers_complete and networks_complete and volumes_complete,
+        "complete": inventory_complete and generated_complete,
         "owned_units": sorted(owned_units),
         "generated_services": sorted(generated),
         "containers": containers,
         "networks": networks,
         "volumes": volumes,
+        "all_containers": inventory["containers"],
+        "all_networks": inventory["networks"],
+        "all_volumes": inventory["volumes"],
         "control_resources": control_resource_facts(),
     }
 
@@ -599,40 +653,60 @@ def exact_keys(value: object, expected: set[str]) -> dict[str, Any] | None:
     return value if isinstance(value, dict) and set(value) == expected else None
 
 
+def exact_string_set(value: object) -> set[str] | None:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        return None
+    names = set(value)
+    return names if len(names) == len(value) else None
+
+
 def workload_admission_failures(observations: object) -> list[str]:
     failures: list[str] = []
     if not isinstance(observations, dict):
         return ["D1A_OBSERVATION_SCHEMA"]
+    baseline_value = observations.get("baseline")
     live_value = observations.get("live")
     cleanup_value = observations.get("post_cleanup")
+    baseline_expected = {
+        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
+        "containers", "networks", "volumes", "control_resources",
+    }
     live_expected = {
         "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
         "quadlet_search_paths", "installed_units", "generated_services", "containers",
         "singleton_roles", "networks", "volumes", "migration", "readiness",
-        "podman_rootless", "oci_runtime", "podman_api", "control_resources",
+        "all_containers", "all_networks", "all_volumes", "podman_rootless",
+        "oci_runtime", "podman_api", "control_resources",
     }
     cleanup_expected = {
         "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
         "owned_units", "generated_services", "containers", "networks", "volumes",
-        "control_resources",
+        "all_containers", "all_networks", "all_volumes", "control_resources",
     }
+    baseline = exact_keys(baseline_value, baseline_expected)
     live = exact_keys(live_value, live_expected)
     cleanup = exact_keys(cleanup_value, cleanup_expected)
+    if baseline is None:
+        failures.append("D1A_BASELINE_OBSERVATION")
     if live is None:
         failures.append("D1A_LIVE_OBSERVATION")
     if cleanup is None:
         failures.append("D1A_POST_CLEANUP_OBSERVATION")
-    if live is None or cleanup is None:
+    if baseline is None or live is None or cleanup is None:
         return failures
     if any(
         observation.get("target_admitted") is not True
         or observation.get("collector_uid") != CI_UID
         or observation.get("collector_gid") != CI_GID
         or observation.get("complete") is not True
-        for observation in (live, cleanup)
+        for observation in (baseline, live, cleanup)
     ):
         failures.append("D1A_OBSERVATION_INCOMPLETE")
-    if live["phase"] != "live" or cleanup["phase"] != "post-cleanup":
+    if (
+        baseline["phase"] != "baseline"
+        or live["phase"] != "live"
+        or cleanup["phase"] != "post-cleanup"
+    ):
         failures.append("D1A_PHASE_CONSISTENCY")
     instance = observations.get("instance")
     try:
@@ -708,8 +782,8 @@ def workload_admission_failures(observations: object) -> list[str]:
             if item.get("auto_update") is not False:
                 failures.append("D1A_AUTO_UPDATE_DISABLED")
             security_options = item.get("security_opt", [])
-            if not isinstance(security_options, list) or not any(
-                "no-new-privileges" in str(option) for option in security_options
+            if not isinstance(security_options, list) or (
+                "no-new-privileges" not in security_options
             ) or any(
                 "unconfined" in str(option) or str(option).endswith("=disable")
                 for option in security_options
@@ -787,7 +861,47 @@ def workload_admission_failures(observations: object) -> list[str]:
         "owned_units", "generated_services", "containers", "networks", "volumes"
     )):
         failures.append("D1A_CLEANUP_ABSENCE")
-    for observation in (live, cleanup):
+    baseline_inventory = {
+        kind: exact_string_set(baseline.get(kind))
+        for kind in ("containers", "networks", "volumes")
+    }
+    live_inventory = {
+        kind: exact_string_set(live.get(f"all_{kind}"))
+        for kind in ("containers", "networks", "volumes")
+    }
+    cleanup_inventory = {
+        kind: exact_string_set(cleanup.get(f"all_{kind}"))
+        for kind in ("containers", "networks", "volumes")
+    }
+    expected_live_additions = {
+        "containers": {f"secpal-int-{instance}-{role}" for role in ROLES},
+        "networks": {f"secpal-int-{instance}-{kind}" for kind in NETWORK_KINDS},
+        "volumes": {f"secpal-int-{instance}-{kind}" for kind in VOLUME_KINDS},
+    }
+    fixture_prefix = f"secpal-int-{instance}"
+    if (
+        any(
+            baseline_inventory[kind] is None
+            or any(
+                name.startswith(fixture_prefix)
+                for name in baseline_inventory[kind]
+            )
+            for kind in ("containers", "networks", "volumes")
+        )
+        or baseline_inventory["networks"] is not None
+        and CONTROL_NETWORK not in baseline_inventory["networks"]
+        or baseline_inventory["volumes"] is not None
+        and CONTROL_VOLUME not in baseline_inventory["volumes"]
+    ):
+        failures.append("D1A_BASELINE_INVENTORY")
+    if any(
+        baseline_inventory[kind] is None
+        or live_inventory[kind] != baseline_inventory[kind] | expected_live_additions[kind]
+        or cleanup_inventory[kind] != baseline_inventory[kind]
+        for kind in ("containers", "networks", "volumes")
+    ):
+        failures.append("D1A_RESOURCE_INVENTORY")
+    for observation in (baseline, live, cleanup):
         if observation.get("control_resources") != {
             "network_present": True, "volume_present": True
         }:
@@ -798,17 +912,18 @@ def workload_admission_failures(observations: object) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=["live", "post-cleanup"])
+    parser.add_argument("phase", choices=["baseline", "live", "post-cleanup"])
     parser.add_argument("target_sha")
     parser.add_argument("instance")
     arguments = parser.parse_args()
     try:
         admit_collection_context(arguments.phase, arguments.target_sha, arguments.instance, CHECKOUT)
-        observation = (
-            collect_live(arguments.instance)
-            if arguments.phase == "live"
-            else collect_post_cleanup(arguments.instance)
-        )
+        if arguments.phase == "baseline":
+            observation = collect_baseline()
+        elif arguments.phase == "live":
+            observation = collect_live(arguments.instance)
+        else:
+            observation = collect_post_cleanup(arguments.instance)
     except ValueError as error:
         print(f"ERROR: workload collection refused: {error}", file=sys.stderr)
         return 1

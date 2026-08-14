@@ -85,7 +85,11 @@ def valid_document() -> dict[str, object]:
                 "workload_prepare_start": 0,
                 "workload_cleanup": 0,
             },
-            "collection_exit_statuses": {"live": 0, "post_cleanup": 0},
+            "collection_exit_statuses": {
+                "baseline": 0,
+                "live": 0,
+                "post_cleanup": 0,
+            },
             "result": "passed",
             "failed_admission_invariants": [],
         },
@@ -340,6 +344,20 @@ class EvidenceContractTests(unittest.TestCase):
         ]
         self.assertEqual(document, self.validator.validate_document(document))
 
+    def test_host_phase_failure_forces_only_d1_host_admission_failure(self) -> None:
+        document = valid_document()
+        document["test"]["phase_exit_statuses"]["host"] = 7
+        document["test"]["result"] = "failed"
+        document["test"]["failed_admission_invariants"] = [
+            "TARGET_HOST_CONTRACT"
+        ]
+        document["host_admission"] = {
+            "result": "failed",
+            "failed_admission_invariants": ["TARGET_HOST_CONTRACT"],
+        }
+        self.assertEqual("passed", document["workload"]["result"])
+        self.assertEqual(document, self.validator.validate_document(document))
+
     def test_cleanup_collection_failure_cannot_report_conformance(self) -> None:
         document = valid_document()
         document["test"]["collection_exit_statuses"]["post_cleanup"] = 124
@@ -350,6 +368,14 @@ class EvidenceContractTests(unittest.TestCase):
         document = valid_document()
         document["workload"]["live"]["target_claimed_ready"] = True
         with self.assertRaisesRegex(ValueError, "unknown|declared schema"):
+            self.validator.validate_document(document)
+
+    def test_unprefixed_resource_cannot_survive_validator_recomputation(self) -> None:
+        document = valid_document()
+        document["workload"]["live"]["all_containers"].append(
+            "target-created-rogue"
+        )
+        with self.assertRaisesRegex(ValueError, "workload admission failures"):
             self.validator.validate_document(document)
 
     def test_complete_gcp_axion_evidence_is_accepted(self) -> None:

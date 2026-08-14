@@ -98,7 +98,7 @@ strict-host SSH from the trusted main orchestration script
         | fetch exact validated 40-character target SHA
         | run only fixed v1 phases of target-conformance.sh as UID 20000
         v
-target prepare/start -> trusted live collector -> target cleanup
+trusted baseline -> target prepare/start -> trusted live collector -> target cleanup
         |
         | trusted post-cleanup collector; bounded JSON + summary
         |
@@ -354,8 +354,14 @@ may cross the root-owned publication boundary only through the fixed trusted
 fixture client.
 
 The trusted runner creates one unrelated rootless control network and volume,
-invokes target prepare/start, streams the main-controlled live collector, then
-requests target cleanup and streams the main-controlled post-cleanup collector.
+records a main-controlled baseline of every rootless Podman container, network,
+and volume, invokes target prepare/start, streams the main-controlled live
+collector, then requests target cleanup and streams the main-controlled
+post-cleanup collector. Live admission requires the baseline plus exactly the
+closed fixture resource set; post-cleanup admission requires the exact baseline.
+An unprefixed, wrongly named, or leaked target resource cannot
+disappear from the trusted inventory merely because it is outside the fixture
+prefix.
 It attempts cleanup and the post-cleanup observation even when prepare/start
 fails or a handled `INT`, `TERM`, or `HUP` arrives while the host remains
 reachable. Target phase status is preserved but is never evidence that a
@@ -762,6 +768,8 @@ Each reachable host produces JSON validated against the committed closed schema
 plus a concise Markdown summary. Schema version 2 keeps the D.1 production-host
 admission result separate from the D.1a workload result; the overall result can
 pass only when both pass and every target and collector phase exits zero.
+The D.1 host phase status contributes only to D.1 host admission; baseline,
+live, cleanup, and workload phase statuses contribute only to D.1a admission.
 Incomplete, schema-invalid, oversized,
 unknown, credential-shaped, or internally contradictory evidence fails.
 If orchestration fails before the full collector can complete, the trusted
@@ -848,7 +856,12 @@ Evidence includes:
   immutable local image references, migration exit, healthy state for every
   health-bearing role, and running state for the remaining long-lived roles;
   and
-- a distinct post-cleanup observation requiring exact absence of every
+- a pre-target full rootless Podman inventory and distinct post-cleanup
+  observation requiring exact restoration of that inventory, including absence
+  of every target-added container, network, and volume regardless of its name;
+  exact `no-new-privileges` admission and Podman 5.4 `Healthcheck`/network-name
+  field interpretation; and
+- exact absence of every
   integration unit, generated service, container, network, and volume while
   the deliberately unrelated control network and volume remain present.
 

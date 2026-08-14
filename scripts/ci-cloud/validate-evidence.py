@@ -135,13 +135,13 @@ def recompute_admission(
         )
         phase_statuses = test["phase_exit_statuses"]
         collection_statuses = test["collection_exit_statuses"]
-        status_invariants = (
-            (phase_statuses["host"], "TARGET_HOST_CONTRACT"),
+        workload_status_invariants = (
             (
                 phase_statuses["workload_prepare_start"],
                 "TARGET_WORKLOAD_PREPARE_START",
             ),
             (phase_statuses["workload_cleanup"], "TARGET_WORKLOAD_CLEANUP"),
+            (collection_statuses["baseline"], "TRUSTED_BASELINE_COLLECTION"),
             (collection_statuses["live"], "TRUSTED_LIVE_COLLECTION"),
             (
                 collection_statuses["post_cleanup"],
@@ -150,8 +150,11 @@ def recompute_admission(
         )
     except (AttributeError, KeyError, TypeError, ValueError):
         fail("workload evidence is malformed")
+    if phase_statuses["host"] != 0:
+        host_failures.append("TARGET_HOST_CONTRACT")
+    host_failures = list(dict.fromkeys(host_failures))
     workload_failures.extend(
-        invariant for value, invariant in status_invariants if value != 0
+        invariant for value, invariant in workload_status_invariants if value != 0
     )
     workload_failures = list(dict.fromkeys(workload_failures))
     overall = list(dict.fromkeys([*host_failures, *workload_failures]))
@@ -200,7 +203,7 @@ def validate_document(document: object) -> dict[str, object]:
     )
     collection_statuses = exact_keys(
         test["collection_exit_statuses"],
-        {"live", "post_cleanup"},
+        {"baseline", "live", "post_cleanup"},
         "$.test.collection_exit_statuses",
     )
     platform = exact_keys(
@@ -264,9 +267,18 @@ def validate_document(document: object) -> dict[str, object]:
         root["workload"],
         {
             "protocol_version", "instance", "result",
-            "failed_admission_invariants", "live", "post_cleanup",
+            "failed_admission_invariants", "baseline", "live", "post_cleanup",
         },
         "$.workload",
+    )
+    baseline = exact_keys(
+        workload["baseline"],
+        {
+            "phase", "target_admitted", "collector_uid", "collector_gid",
+            "complete", "containers", "networks", "volumes",
+            "control_resources",
+        },
+        "$.workload.baseline",
     )
     live = exact_keys(
         workload["live"],
@@ -274,8 +286,9 @@ def validate_document(document: object) -> dict[str, object]:
             "phase", "target_admitted", "collector_uid", "collector_gid",
             "complete", "quadlet_search_paths", "installed_units",
             "generated_services", "containers", "singleton_roles", "networks",
-            "volumes", "migration", "readiness", "podman_rootless",
-            "oci_runtime", "podman_api", "control_resources",
+            "volumes", "all_containers", "all_networks", "all_volumes",
+            "migration", "readiness", "podman_rootless", "oci_runtime",
+            "podman_api", "control_resources",
         },
         "$.workload.live",
     )
@@ -284,7 +297,8 @@ def validate_document(document: object) -> dict[str, object]:
         {
             "phase", "target_admitted", "collector_uid", "collector_gid",
             "complete", "owned_units", "generated_services", "containers",
-            "networks", "volumes", "control_resources",
+            "networks", "volumes", "all_containers", "all_networks",
+            "all_volumes", "control_resources",
         },
         "$.workload.post_cleanup",
     )
@@ -296,6 +310,7 @@ def validate_document(document: object) -> dict[str, object]:
     exact_keys(live["migration"], {"observed", "exit_code"}, "$.workload.live.migration")
     exact_keys(live["readiness"], {"observed", "ready_roles"}, "$.workload.live.readiness")
     for path, controls in (
+        ("$.workload.baseline.control_resources", baseline["control_resources"]),
         ("$.workload.live.control_resources", live["control_resources"]),
         (
             "$.workload.post_cleanup.control_resources",
@@ -604,7 +619,7 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         f"- VM cloud identity present: `{cloud_identity['identity_present']}`",
         f"- Lifecycle phase statuses: `{json.dumps(test['phase_exit_statuses'], sort_keys=True, separators=(',', ':'))}`",
         f"- Collector phase statuses: `{json.dumps(test['collection_exit_statuses'], sort_keys=True, separators=(',', ':'))}`",
-        f"- Workload instance: `{workload['instance']}`; live containers `{len(workload['live']['containers'])}`; post-cleanup containers `{len(workload['post_cleanup']['containers'])}`",
+        f"- Workload instance: `{workload['instance']}`; baseline containers `{len(workload['baseline']['containers'])}`; live containers `{len(workload['live']['containers'])}`; post-cleanup containers `{len(workload['post_cleanup']['containers'])}`",
         f"- Failed admission invariants: `{', '.join(str(item) for item in failures) if failures else 'none'}`",
         "",
     ]

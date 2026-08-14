@@ -80,8 +80,9 @@
         "collection_exit_statuses": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["live", "post_cleanup"],
+          "required": ["baseline", "live", "post_cleanup"],
           "properties": {
+            "baseline": { "$ref": "#/$defs/exitStatus" },
             "live": { "$ref": "#/$defs/exitStatus" },
             "post_cleanup": { "$ref": "#/$defs/exitStatus" }
           }
@@ -769,6 +770,32 @@
         "image": { "type": "string", "maxLength": 512 }
       }
     },
+    "baselineObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "target_admitted",
+        "collector_uid",
+        "collector_gid",
+        "complete",
+        "containers",
+        "networks",
+        "volumes",
+        "control_resources"
+      ],
+      "properties": {
+        "phase": { "const": "baseline" },
+        "target_admitted": { "type": "boolean" },
+        "collector_uid": { "const": 20000 },
+        "collector_gid": { "const": 20000 },
+        "complete": { "type": "boolean" },
+        "containers": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/stringArray" },
+        "volumes": { "$ref": "#/$defs/stringArray" },
+        "control_resources": { "$ref": "#/$defs/controlResources" }
+      }
+    },
     "liveObservation": {
       "type": "object",
       "additionalProperties": false,
@@ -785,6 +812,9 @@
         "singleton_roles",
         "networks",
         "volumes",
+        "all_containers",
+        "all_networks",
+        "all_volumes",
         "migration",
         "readiness",
         "podman_rootless",
@@ -834,6 +864,9 @@
         },
         "networks": { "$ref": "#/$defs/stringArray" },
         "volumes": { "$ref": "#/$defs/stringArray" },
+        "all_containers": { "$ref": "#/$defs/stringArray" },
+        "all_networks": { "$ref": "#/$defs/stringArray" },
+        "all_volumes": { "$ref": "#/$defs/stringArray" },
         "migration": {
           "type": "object",
           "additionalProperties": false,
@@ -875,6 +908,9 @@
         "containers",
         "networks",
         "volumes",
+        "all_containers",
+        "all_networks",
+        "all_volumes",
         "control_resources"
       ],
       "properties": {
@@ -888,6 +924,9 @@
         "containers": { "$ref": "#/$defs/stringArray" },
         "networks": { "$ref": "#/$defs/stringArray" },
         "volumes": { "$ref": "#/$defs/stringArray" },
+        "all_containers": { "$ref": "#/$defs/stringArray" },
+        "all_networks": { "$ref": "#/$defs/stringArray" },
+        "all_volumes": { "$ref": "#/$defs/stringArray" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -899,6 +938,7 @@
         "instance",
         "result",
         "failed_admission_invariants",
+        "baseline",
         "live",
         "post_cleanup"
       ],
@@ -907,6 +947,7 @@
         "instance": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
         "result": { "enum": ["passed", "failed"] },
         "failed_admission_invariants": { "$ref": "#/$defs/invariantArray" },
+        "baseline": { "$ref": "#/$defs/baselineObservation" },
         "live": { "$ref": "#/$defs/liveObservation" },
         "post_cleanup": { "$ref": "#/$defs/cleanupObservation" }
       },
@@ -919,6 +960,18 @@
           "then": {
             "properties": {
               "failed_admission_invariants": { "maxItems": 0 },
+              "baseline": {
+                "properties": {
+                  "target_admitted": { "const": true },
+                  "complete": { "const": true },
+                  "control_resources": {
+                    "const": {
+                      "network_present": true,
+                      "volume_present": true
+                    }
+                  }
+                }
+              },
               "live": {
                 "properties": {
                   "target_admitted": { "const": true },

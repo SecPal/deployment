@@ -60,6 +60,7 @@ def load_workload_collector():
 
 def assemble(
     host_document: object,
+    baseline: object,
     live: object,
     post_cleanup: object,
     phase_statuses: dict[str, int],
@@ -82,20 +83,24 @@ def assemble(
         for value in test.get("failed_admission_invariants", [])
         if value != "TARGET_CONFORMANCE_ENTRYPOINT"
     ]
+    if phase_statuses["host"] != 0:
+        host_failures.append("TARGET_HOST_CONTRACT")
+    host_failures = list(dict.fromkeys(host_failures))
     workload = {
         "protocol_version": 1,
         "instance": target_sha[:12],
         "result": "failed",
         "failed_admission_invariants": [],
+        "baseline": baseline,
         "live": live,
         "post_cleanup": post_cleanup,
     }
     module = load_workload_collector()
     workload_failures = module.workload_admission_failures(workload)
     status_invariants = {
-        ("phase", "host"): "TARGET_HOST_CONTRACT",
         ("phase", "workload_prepare_start"): "TARGET_WORKLOAD_PREPARE_START",
         ("phase", "workload_cleanup"): "TARGET_WORKLOAD_CLEANUP",
+        ("collection", "baseline"): "TRUSTED_BASELINE_COLLECTION",
         ("collection", "live"): "TRUSTED_LIVE_COLLECTION",
         ("collection", "post_cleanup"): "TRUSTED_POST_CLEANUP_COLLECTION",
     }
@@ -125,17 +130,20 @@ def assemble(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("host", type=Path)
+    parser.add_argument("baseline", type=Path)
     parser.add_argument("live", type=Path)
     parser.add_argument("post_cleanup", type=Path)
     parser.add_argument("host_status")
     parser.add_argument("prepare_start_status")
     parser.add_argument("cleanup_status")
+    parser.add_argument("baseline_collection_status")
     parser.add_argument("live_collection_status")
     parser.add_argument("cleanup_collection_status")
     arguments = parser.parse_args()
     try:
         document = assemble(
             read_document(arguments.host),
+            read_document(arguments.baseline),
             read_document(arguments.live),
             read_document(arguments.post_cleanup),
             {
@@ -144,6 +152,7 @@ def main() -> int:
                 "workload_cleanup": status(arguments.cleanup_status),
             },
             {
+                "baseline": status(arguments.baseline_collection_status),
                 "live": status(arguments.live_collection_status),
                 "post_cleanup": status(arguments.cleanup_collection_status),
             },
