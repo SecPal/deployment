@@ -98,9 +98,11 @@ strict-host SSH from the trusted main orchestration script
         | fetch exact validated 40-character target SHA
         | run only fixed v1 phases of target-conformance.sh as UID 20000
         v
-trusted baseline -> target prepare/start -> trusted live collector -> target cleanup
+target host -> trusted controls/baseline -> target prepare/start
+        v
+trusted live collector -> target cleanup -> trusted post-cleanup collector
         |
-        | trusted post-cleanup collector; bounded JSON + summary
+        | bounded JSON + summary
         |
         | token exists only in a separate always() cleanup job
         v
@@ -353,12 +355,17 @@ contract suite. PR #22 owns the implementation of the two workload phases and
 may cross the root-owned publication boundary only through the fixed trusted
 fixture client.
 
-The trusted runner creates one unrelated rootless control network and volume,
-records a main-controlled baseline of every rootless Podman container, network,
-and volume, invokes target prepare/start, streams the main-controlled live
-collector, then requests target cleanup and streams the main-controlled
-post-cleanup collector. Live admission requires the baseline plus exactly the
-closed fixture resource set; post-cleanup admission requires the exact baseline.
+The trusted runner completes the target `host` phase before it creates one
+unrelated rootless control network and volume and records a main-controlled
+baseline of every rootless Podman container, network, and volume. This prevents
+host-phase side effects from being mistaken for prepare/start evidence: any
+fixture resource left by `host` is already present in the baseline and fails
+baseline admission, and any migration invocation already recorded for the
+fixture fails the zero-invocation baseline. The runner then invokes target
+prepare/start, streams the main-controlled live collector, requests target
+cleanup, and streams the main-controlled post-cleanup collector. Live admission
+requires the baseline plus exactly the closed fixture resource set;
+post-cleanup admission requires the exact baseline.
 An unprefixed, wrongly named, or leaked target resource cannot
 disappear from the trusted inventory merely because it is outside the fixture
 prefix.
@@ -859,12 +866,13 @@ Evidence includes:
   the closed role-to-network topology, the gateway's sole loopback publication,
   immutable local image references with distinct API and frontend content
   digests, one exited zero-status migration systemd invocation established from
-  the journal's invocation IDs, healthy state for every health-bearing role,
-  and running state for the remaining long-lived roles;
+  a journal query restricted to invocation-ID fields, healthy state for every
+  health-bearing role, and running state for the remaining long-lived roles;
   and
-- a pre-target full rootless Podman inventory and distinct post-cleanup
-  observation requiring exact restoration of that inventory, including absence
-  of every target-added container, network, and volume regardless of its name;
+- a pre-workload full rootless Podman inventory and zero-invocation migration
+  baseline, plus a distinct post-cleanup observation requiring exact restoration
+  of that inventory, including absence of every target-added container, network,
+  and volume regardless of its name;
   exact `no-new-privileges` admission and Podman 5.4 `Healthcheck`/network-name
   field interpretation; and
 - exact absence of every integration unit, generated service and nested
@@ -873,11 +881,14 @@ Evidence includes:
   network ID and volume creation identity observed before target execution.
 
 The Unix-listener admission recognizes listeners in the rootful and rootless
-Podman runtime directories, including nonstandard socket-activation paths, and
-listeners owned by an actual `podman` process. The exact Debian Netavark
-`/run/podman/nv-proxy.sock` path is the sole pathname exception: it is network
-plumbing and remains independently covered by the admitted Netavark package
-and backend facts.
+Podman runtime directories and listeners owned by an actual `podman` process.
+Workload admission additionally requires the active user socket-unit set to be
+exactly the trusted root-owned `dbus.socket`, with its standard trigger and no
+drop-ins. A target-created socket-activation path is therefore rejected even
+while no Podman service process exists. The exact Debian Netavark
+`/run/podman/nv-proxy.sock` path is the sole Podman-runtime pathname exception:
+it is network plumbing and remains independently covered by the admitted
+Netavark package and backend facts.
 
 The trusted root-only host setup records loaded and enforcing AppArmor policy
 counts in a root-owned, non-writable `/run` snapshot. The unprivileged collector

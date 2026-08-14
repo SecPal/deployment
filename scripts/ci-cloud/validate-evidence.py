@@ -276,7 +276,7 @@ def validate_document(document: object) -> dict[str, object]:
         {
             "phase", "target_admitted", "collector_uid", "collector_gid",
             "complete", "containers", "networks", "volumes",
-            "control_resources",
+            "migration_invocation_count", "control_resources",
         },
         "$.workload.baseline",
     )

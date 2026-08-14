@@ -11,25 +11,41 @@ trap 'rm -rf -- "$TEMP_DIR"' EXIT
 REAL_PYTHON="$(command -v python3)"
 FAKE_BIN="$TEMP_DIR/bin"
 PRIVATE_KEY="$TEMP_DIR/id_ed25519"
+HOST_JSON="$TEMP_DIR/host.json"
 LIVE_JSON="$TEMP_DIR/live.json"
 CLEANUP_JSON="$TEMP_DIR/cleanup.json"
 BASELINE_JSON="$TEMP_DIR/baseline.json"
 mkdir -p "$FAKE_BIN"
 install -m 0600 /dev/null "$PRIVATE_KEY"
 
-"$REAL_PYTHON" - "$BASELINE_JSON" "$LIVE_JSON" "$CLEANUP_JSON" <<'PY'
+"$REAL_PYTHON" - "$HOST_JSON" "$BASELINE_JSON" "$LIVE_JSON" "$CLEANUP_JSON" <<'PY'
 import importlib.util
 import json
 import sys
 from pathlib import Path
 
-path = Path("tests/ci-cloud-workload-evidence.py")
-spec = importlib.util.spec_from_file_location("workload_fixture", path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-observations = module.valid_observations()
+def load(path, name):
+    spec = importlib.util.spec_from_file_location(name, Path(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+workload = load("tests/ci-cloud-workload-evidence.py", "workload_fixture")
+evidence = load("tests/ci-cloud-evidence.py", "evidence_fixture")
+observations = workload.valid_observations()
+host = evidence.valid_document()
+host["schema_version"] = 1
+host.pop("host_admission")
+host.pop("workload")
+host["test"].pop("phase_exit_statuses")
+host["test"].pop("collection_exit_statuses")
+host["test"]["target_exit_status"] = 0
+Path(sys.argv[1]).write_text(
+    json.dumps(host, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
 for output, key in zip(
-    sys.argv[1:], ("baseline", "live", "post_cleanup"), strict=True
+    sys.argv[2:], ("baseline", "live", "post_cleanup"), strict=True
 ):
     Path(output).write_text(
         json.dumps(observations[key], sort_keys=True, separators=(",", ":")) + "\n",
@@ -66,16 +82,7 @@ EOF
 cat >"$FAKE_BIN/python3" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-case "${1:-}" in
-  scripts/ci-cloud/assemble-evidence.py)
-    printf '{"assembled":true}\n'
-    ;;
-  scripts/ci-cloud/validate-evidence.py)
-    printf 'synthetic trusted orchestration\n' >"$3"
-    exit "${SECPAL_TEST_VALIDATION_STATUS:-0}"
-    ;;
-  *) exec "${SECPAL_TEST_REAL_PYTHON:?}" "$@" ;;
-esac
+exec "${SECPAL_TEST_REAL_PYTHON:?}" "$@"
 EOF
 cat >"$FAKE_BIN/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -137,7 +144,7 @@ case " $* " in
   *' /usr/bin/python3 -I - digitalocean '*)
     cat >/dev/null
     printf 'collector:host\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
-    printf '{}\n'
+    cat "${SECPAL_TEST_HOST_JSON:?}"
     ;;
   *' /usr/bin/podman network create '*)
     printf 'control:create-network\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
@@ -162,10 +169,10 @@ chmod 0755 "$FAKE_BIN"/*
 expected_sequence() {
   printf '%s\n' \
     checkout \
+    target:host \
     control:create-network \
     control:create-volume \
     collector:baseline \
-    target:host \
     target:workload-prepare-start \
     collector:live \
     target:workload-cleanup \
@@ -181,6 +188,7 @@ run_fixture() {
   PATH="$FAKE_BIN:$PATH" \
     SECPAL_TEST_REAL_PYTHON="$REAL_PYTHON" \
     SECPAL_TEST_SEQUENCE_LOG="$sequence_log" \
+    SECPAL_TEST_HOST_JSON="$HOST_JSON" \
     SECPAL_TEST_LIVE_JSON="$LIVE_JSON" \
     SECPAL_TEST_BASELINE_JSON="$BASELINE_JSON" \
     SECPAL_TEST_CLEANUP_JSON="$CLEANUP_JSON" \
@@ -197,7 +205,7 @@ diff -u <(expected_sequence) "$SUCCESS_LOG"
 
 FAILURE_LOG="$TEMP_DIR/failure.log"
 set +e
-SECPAL_TEST_FAIL_PREPARE=true SECPAL_TEST_VALIDATION_STATUS=1 \
+SECPAL_TEST_FAIL_PREPARE=true \
   run_fixture "$TEMP_DIR/failure-evidence" "$FAILURE_LOG"
 failure_status=$?
 set -e

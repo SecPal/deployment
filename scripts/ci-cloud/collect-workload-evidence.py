@@ -27,6 +27,9 @@ QUADLET_ROOT = Path("/etc/containers/systemd/users/20000")
 SYSTEMD_ROOT = Path("/etc/systemd/user")
 GENERATOR_ROOT = Path("/run/user/20000/systemd/generator")
 PODMAN_EXECUTABLE = Path("/usr/bin/podman")
+DBUS_SOCKET_FRAGMENTS = frozenset(
+    {Path("/usr/lib/systemd/user/dbus.socket"), Path("/lib/systemd/user/dbus.socket")}
+)
 CONTROL_NETWORK = "secpal-ci-unrelated-control-network"
 CONTROL_VOLUME = "secpal-ci-unrelated-control-volume"
 ROLES = (
@@ -54,6 +57,82 @@ ROLE_NETWORK_KINDS = {
     "frontend": ("edge",),
     "gateway": ("edge",),
 }
+BASELINE_OBSERVATION_FIELDS = frozenset(
+    {
+        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
+        "containers", "networks", "volumes", "migration_invocation_count",
+        "control_resources",
+    }
+)
+LIVE_OBSERVATION_FIELDS = frozenset(
+    {
+        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
+        "quadlet_search_paths", "installed_units", "generated_services",
+        "containers", "singleton_roles", "networks", "volumes", "migration",
+        "readiness", "all_containers", "all_networks", "all_volumes",
+        "podman_rootless", "oci_runtime", "podman_api", "control_resources",
+    }
+)
+CLEANUP_OBSERVATION_FIELDS = frozenset(
+    {
+        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
+        "owned_units", "generated_services", "containers", "networks", "volumes",
+        "all_containers", "all_networks", "all_volumes", "control_resources",
+    }
+)
+
+
+def incomplete_observation(phase: str) -> dict[str, object]:
+    common: dict[str, object] = {
+        "phase": phase,
+        "target_admitted": False,
+        "collector_uid": CI_UID,
+        "collector_gid": CI_GID,
+        "complete": False,
+        "containers": [],
+        "networks": [],
+        "volumes": [],
+        "control_resources": {
+            "network_present": False,
+            "volume_present": False,
+            "network_id": "",
+            "volume_created_at": "",
+        },
+    }
+    if phase == "baseline":
+        common["migration_invocation_count"] = 0
+        return common
+    common.update(
+        {
+            "all_containers": [],
+            "all_networks": [],
+            "all_volumes": [],
+            "generated_services": [],
+        }
+    )
+    if phase == "post-cleanup":
+        common["owned_units"] = []
+        return common
+    if phase != "live":
+        raise ValueError("observation phase is outside the closed contract")
+    common.update(
+        {
+            "quadlet_search_paths": [],
+            "installed_units": [],
+            "podman_rootless": False,
+            "oci_runtime": "",
+            "singleton_roles": {"scheduler": 0, "worker-hash-chain": 0},
+            "migration": {
+                "observed": False,
+                "state": "unknown",
+                "exit_code": -1,
+                "invocation_count": 0,
+            },
+            "readiness": {"observed": False, "ready_roles": []},
+            "podman_api": True,
+        }
+    )
+    return common
 
 
 def command_environment() -> dict[str, str]:
@@ -520,6 +599,52 @@ def resource_inventory() -> tuple[dict[str, list[str]], bool]:
     )
 
 
+def user_socket_activation_facts() -> tuple[bool, bool]:
+    status_code, output, complete = command_result(
+        [
+            "systemctl", "--user", "list-units", "--type=socket",
+            "--state=active", "--no-legend", "--plain", "--no-pager",
+        ]
+    )
+    if status_code != 0 or not complete:
+        return True, False
+    units: list[str] = []
+    for line in output.splitlines():
+        fields = line.split()
+        if not fields or re.fullmatch(r"[A-Za-z0-9:_.@-]+\.socket", fields[0]) is None:
+            return True, False
+        units.append(fields[0])
+    if len(units) != len(set(units)) or len(units) > 16:
+        return True, False
+    if units != ["dbus.socket"]:
+        return True, True
+    status_code, output, complete = command_result(
+        [
+            "systemctl", "--user", "show", "dbus.socket",
+            "--property=FragmentPath", "--property=DropInPaths",
+            "--property=Triggers",
+        ]
+    )
+    if status_code != 0 or not complete:
+        return True, False
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" not in line:
+            return True, False
+        key, value = line.split("=", 1)
+        if key in properties:
+            return True, False
+        properties[key] = value
+    if set(properties) != {"FragmentPath", "DropInPaths", "Triggers"}:
+        return True, False
+    trusted = (
+        Path(properties["FragmentPath"]) in DBUS_SOCKET_FRAGMENTS
+        and properties["DropInPaths"] == ""
+        and properties["Triggers"] == "dbus.service"
+    )
+    return not trusted, True
+
+
 def podman_api_facts() -> tuple[bool, bool]:
     for scope in ([], ["--user"]):
         for kind in ("service", "socket"):
@@ -530,6 +655,11 @@ def podman_api_facts() -> tuple[bool, bool]:
                 return True, False
             if status_code == 0:
                 return True, True
+    unsafe_socket_activation, socket_activation_complete = (
+        user_socket_activation_facts()
+    )
+    if not socket_activation_complete or unsafe_socket_activation:
+        return True, socket_activation_complete
     connections, complete = json_array(
         ["podman", "system", "connection", "list", "--format", "json"]
     )
@@ -585,7 +715,7 @@ def migration_invocation_facts(instance: str) -> tuple[int, bool]:
             "journalctl",
             f"--user-unit={unit}",
             "--output=json",
-            "--all",
+            "--output-fields=_SYSTEMD_INVOCATION_ID",
             "--no-pager",
         ],
         timeout=30,
@@ -613,16 +743,18 @@ def migration_invocation_facts(instance: str) -> tuple[int, bool]:
     return len(invocation_ids), True
 
 
-def collect_baseline() -> dict[str, object]:
+def collect_baseline(instance: str) -> dict[str, object]:
     inventory, complete = resource_inventory()
     controls, controls_complete = control_resource_facts()
+    migration_invocations, migration_complete = migration_invocation_facts(instance)
     return {
         "phase": "baseline",
         "target_admitted": True,
         "collector_uid": os.getuid(),
         "collector_gid": os.getgid(),
-        "complete": complete and controls_complete,
+        "complete": complete and controls_complete and migration_complete,
         **inventory,
+        "migration_invocation_count": migration_invocations,
         "control_resources": controls,
     }
 
@@ -787,25 +919,9 @@ def workload_admission_failures(observations: object) -> list[str]:
     baseline_value = observations.get("baseline")
     live_value = observations.get("live")
     cleanup_value = observations.get("post_cleanup")
-    baseline_expected = {
-        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
-        "containers", "networks", "volumes", "control_resources",
-    }
-    live_expected = {
-        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
-        "quadlet_search_paths", "installed_units", "generated_services", "containers",
-        "singleton_roles", "networks", "volumes", "migration", "readiness",
-        "all_containers", "all_networks", "all_volumes", "podman_rootless",
-        "oci_runtime", "podman_api", "control_resources",
-    }
-    cleanup_expected = {
-        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
-        "owned_units", "generated_services", "containers", "networks", "volumes",
-        "all_containers", "all_networks", "all_volumes", "control_resources",
-    }
-    baseline = exact_keys(baseline_value, baseline_expected)
-    live = exact_keys(live_value, live_expected)
-    cleanup = exact_keys(cleanup_value, cleanup_expected)
+    baseline = exact_keys(baseline_value, set(BASELINE_OBSERVATION_FIELDS))
+    live = exact_keys(live_value, set(LIVE_OBSERVATION_FIELDS))
+    cleanup = exact_keys(cleanup_value, set(CLEANUP_OBSERVATION_FIELDS))
     if baseline is None:
         failures.append("D1A_BASELINE_OBSERVATION")
     if live is None:
@@ -828,6 +944,8 @@ def workload_admission_failures(observations: object) -> list[str]:
         or cleanup["phase"] != "post-cleanup"
     ):
         failures.append("D1A_PHASE_CONSISTENCY")
+    if baseline.get("migration_invocation_count") != 0:
+        failures.append("D1A_BASELINE_MIGRATION")
     instance = observations.get("instance")
     try:
         names = expected_unit_names(str(instance))
@@ -870,6 +988,11 @@ def workload_admission_failures(observations: object) -> list[str]:
         or service["fragment_mode"] != "0644"
         or any(not str(path).startswith(f"{GENERATOR_ROOT}/") for path in service["drop_in_paths"])
         or len(service["drop_in_paths"]) != len(service["drop_in_owners"])
+        or any(
+            not isinstance(owner, dict)
+            or owner != {"uid": CI_UID, "gid": CI_GID, "mode": "0644"}
+            for owner in service["drop_in_owners"]
+        )
         for service in services if isinstance(service, dict)
     ):
         failures.append("D1A_GENERATED_UNITS")
@@ -897,7 +1020,8 @@ def workload_admission_failures(observations: object) -> list[str]:
                 failures.append("D1A_PODMAN_API_DISABLED")
             if item.get("pid_mode") != "private" or item.get("userns_mode") != "private":
                 failures.append("D1A_HOST_NAMESPACES")
-            if item.get("network_mode") in {"host", "container"}:
+            network_mode = str(item.get("network_mode", ""))
+            if re.match(r"^(?:host$|container(?::|$)|ns:)", network_mode):
                 failures.append("D1A_HOST_NETWORK")
             if item.get("auto_update") is not False:
                 failures.append("D1A_AUTO_UPDATE_DISABLED")
@@ -1073,7 +1197,7 @@ def main() -> int:
     try:
         admit_collection_context(arguments.phase, arguments.target_sha, arguments.instance, CHECKOUT)
         if arguments.phase == "baseline":
-            observation = collect_baseline()
+            observation = collect_baseline(arguments.instance)
         elif arguments.phase == "live":
             observation = collect_live(arguments.instance)
         else:

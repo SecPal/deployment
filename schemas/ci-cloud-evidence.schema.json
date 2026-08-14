@@ -795,6 +795,7 @@
         "containers",
         "networks",
         "volumes",
+        "migration_invocation_count",
         "control_resources"
       ],
       "properties": {
@@ -806,6 +807,7 @@
         "containers": { "$ref": "#/$defs/stringArray" },
         "networks": { "$ref": "#/$defs/stringArray" },
         "volumes": { "$ref": "#/$defs/stringArray" },
+        "migration_invocation_count": { "const": 0 },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },

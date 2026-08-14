@@ -2019,14 +2019,15 @@ def validate(root: Path) -> None:
         and '"baseline" "$target_sha" "$fixture_instance"' in remote
         and '"live" "$target_sha" "$fixture_instance"' in remote
         and '"post-cleanup" "$target_sha" "$fixture_instance"' in remote
-        and remote.index('bootstrap_stage="collector-baseline"')
+        and remote.index('bootstrap_stage="target-host"')
+        < remote.index('bootstrap_stage="collector-baseline"')
         < remote.index('bootstrap_stage="target-workload-prepare-start"')
         < remote.index('bootstrap_stage="collector-live"')
         < remote.index('bootstrap_stage="target-workload-cleanup"')
         < remote.index('bootstrap_stage="collector-post-cleanup"')
         and "trap collect_cleanup_after_interruption INT TERM HUP" in remote
         and "collect_host_and_assemble false" in remote,
-        "trusted orchestration must preserve baseline, live, and cleanup ordering",
+        "trusted orchestration must preserve host, baseline, live, and cleanup ordering",
     )
     require(
         "CI_UID = 20000" in workload_collector

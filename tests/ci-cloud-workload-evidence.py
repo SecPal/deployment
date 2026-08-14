@@ -148,6 +148,7 @@ def valid_observations() -> dict[str, object]:
             "collector_uid": 20000,
             "collector_gid": 20000,
             "complete": True,
+            "migration_invocation_count": 0,
             "containers": [],
             "networks": ["podman", "secpal-ci-unrelated-control-network"],
             "volumes": ["secpal-ci-unrelated-control-volume"],
@@ -394,6 +395,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "D1A_BASELINE_INVENTORY",
         )
 
+    def test_baseline_rejects_a_migration_run_by_the_host_phase(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["baseline"].__setitem__(
+                "migration_invocation_count", 1
+            ),
+            "D1A_BASELINE_MIGRATION",
+        )
+
     def test_false_green_target_status_cannot_replace_live_observation(self) -> None:
         self.assert_failure(
             lambda evidence: evidence.__setitem__("live", None),
@@ -407,6 +416,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
             "D1A_GENERATED_UNITS",
         )
+
+    def test_generated_drop_in_owner_and_mode_are_admitted_independently(self) -> None:
+        def add_untrusted_drop_in(evidence) -> None:
+            service = evidence["live"]["generated_services"][0]
+            service["drop_in_paths"] = [
+                "/run/user/20000/systemd/generator/secpal-int-aaaaaaaaaaaa-api.service.d/10.conf"
+            ]
+            service["drop_in_owners"] = [
+                {"uid": 0, "gid": 0, "mode": "0600"}
+            ]
+
+        self.assert_failure(add_untrusted_drop_in, "D1A_GENERATED_UNITS")
 
     def test_cleanup_scans_generated_drop_in_directories_and_files(self) -> None:
         prefix = "secpal-int-aaaaaaaaaaaa-api.service"
@@ -680,6 +701,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ), mock.patch.object(
             self.collector, "json_array", return_value=([], True)
         ), mock.patch.object(
+            self.collector,
+            "user_socket_activation_facts",
+            return_value=(False, True),
+        ), mock.patch.object(
             self.collector.Path, "iterdir", return_value=(Path("/proc/123"),)
         ), mock.patch.object(
             self.collector.Path, "open", side_effect=OSError("hidden process")
@@ -698,6 +723,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ), mock.patch.object(
             self.collector, "json_array", return_value=([], True)
         ), mock.patch.object(
+            self.collector,
+            "user_socket_activation_facts",
+            return_value=(False, True),
+        ), mock.patch.object(
             self.collector.Path, "iterdir", return_value=(process,)
         ), mock.patch.object(
             self.collector.Path,
@@ -707,6 +736,20 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector.Path, "stat", return_value=metadata
         ):
             self.assertEqual((True, True), self.collector.podman_api_facts())
+
+    def test_podman_api_rejects_arbitrary_active_user_socket_units(self) -> None:
+        listing = "\n".join(
+            (
+                "dbus.socket loaded active listening D-Bus User Message Bus Socket",
+                "hidden.socket loaded active listening Hidden activation socket",
+            )
+        )
+        with mock.patch.object(
+            self.collector, "command_result", return_value=(0, listing, True)
+        ):
+            unsafe, complete = self.collector.user_socket_activation_facts()
+        self.assertTrue(complete)
+        self.assertTrue(unsafe)
 
     def test_migration_and_readiness_must_be_independently_observed(self) -> None:
         self.assert_failure(
@@ -737,13 +780,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
             json.dumps({"_SYSTEMD_INVOCATION_ID": value})
             for value in (first, first, second)
         )
-        with mock.patch.object(
-            self.collector, "command_result", return_value=(0, journal, True)
-        ):
+        arguments = []
+
+        def collect(command, timeout=20):
+            arguments.extend(command)
+            return 0, journal, True
+
+        with mock.patch.object(self.collector, "command_result", side_effect=collect):
             self.assertEqual(
                 (2, True),
                 self.collector.migration_invocation_facts("aaaaaaaaaaaa"),
             )
+        self.assertIn("--output-fields=_SYSTEMD_INVOCATION_ID", arguments)
+        self.assertNotIn("--all", arguments)
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][4].__setitem__(
                 "health", "none"
@@ -828,6 +877,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertNotIn("sudo", runner)
         self.assertIn("collect-workload-evidence.py", runner)
         self.assertLess(
+            runner.index('bootstrap_stage="target-host"'),
+            runner.index('bootstrap_stage="collector-baseline"'),
+        )
+        self.assertLess(
             runner.index('bootstrap_stage="collector-baseline"'),
             runner.index('bootstrap_stage="target-workload-prepare-start"'),
         )
@@ -853,6 +906,17 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "timeout --signal=TERM --kill-after=30s 12m \\\n    ssh",
             host_collection,
         )
+        self.assertNotIn("write_incomplete_", runner)
+
+    def test_namespace_sharing_network_modes_are_rejected_by_prefix(self) -> None:
+        for network_mode in ("container:deadbeef", "ns:/proc/1/ns/net"):
+            with self.subTest(network_mode=network_mode):
+                self.assert_failure(
+                    lambda evidence, mode=network_mode: evidence["live"][
+                        "containers"
+                    ][0].__setitem__("network_mode", mode),
+                    "D1A_HOST_NETWORK",
+                )
 
     def test_malformed_observation_becomes_closed_incomplete_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

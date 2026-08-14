@@ -497,32 +497,11 @@ collect_workload_post_cleanup() {
     < scripts/ci-cloud/collect-workload-evidence.py >"$cleanup_evidence_json"
 }
 
-write_incomplete_live_observation() {
-  printf '%s\n' \
-    '{"all_containers":[],"all_networks":[],"all_volumes":[],"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_id":"","network_present":false,"volume_created_at":"","volume_present":false},"generated_services":[],"installed_units":[],"migration":{"exit_code":-1,"invocation_count":0,"observed":false,"state":"unknown"},"networks":[],"oci_runtime":"","phase":"live","podman_api":true,"podman_rootless":false,"quadlet_search_paths":[],"readiness":{"observed":false,"ready_roles":[]},"singleton_roles":{"scheduler":0,"worker-hash-chain":0},"target_admitted":false,"volumes":[]}' \
-    >"$live_evidence_json"
-}
-
-write_incomplete_baseline_observation() {
-  printf '%s\n' \
-    '{"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_id":"","network_present":false,"volume_created_at":"","volume_present":false},"networks":[],"phase":"baseline","target_admitted":false,"volumes":[]}' \
-    >"$baseline_evidence_json"
-}
-
-write_incomplete_cleanup_observation() {
-  printf '%s\n' \
-    '{"all_containers":[],"all_networks":[],"all_volumes":[],"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_id":"","network_present":false,"volume_created_at":"","volume_present":false},"generated_services":[],"networks":[],"owned_units":[],"phase":"post-cleanup","target_admitted":false,"volumes":[]}' \
-    >"$cleanup_evidence_json"
-}
-
 collect_host_and_assemble() {
   local require_passed="$1"
   local ended_at
   local validation_status
   ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  [[ -s "$baseline_evidence_json" ]] || write_incomplete_baseline_observation
-  [[ -s "$live_evidence_json" ]] || write_incomplete_live_observation
-  [[ -s "$cleanup_evidence_json" ]] || write_incomplete_cleanup_observation
   timeout --signal=TERM --kill-after=30s 12m \
     ssh "${ssh_options[@]}" "secpal-ci@$address" \
     /usr/bin/env -i \
@@ -582,6 +561,12 @@ collect_cleanup_after_interruption() {
 
 trap collect_cleanup_after_interruption INT TERM HUP
 
+bootstrap_stage="target-host"
+set +e
+run_target_host
+host_status=$?
+set -e
+
 bootstrap_stage="control-resources"
 ssh "${ssh_options[@]}" "secpal-ci@$address" \
   /usr/bin/env -i \
@@ -604,12 +589,6 @@ bootstrap_stage="collector-baseline"
 set +e
 collect_workload_baseline
 baseline_collection_status=$?
-set -e
-
-bootstrap_stage="target-host"
-set +e
-run_target_host
-host_status=$?
 set -e
 
 bootstrap_stage="target-workload-prepare-start"

@@ -41,69 +41,18 @@ def read_document(path: Path) -> object:
         raise ValueError(f"bounded evidence input is malformed: {path.name}") from error
 
 
-def incomplete_observation(phase: str) -> dict[str, object]:
-    common: dict[str, object] = {
-        "phase": phase,
-        "target_admitted": False,
-        "collector_uid": 20000,
-        "collector_gid": 20000,
-        "complete": False,
-        "containers": [],
-        "networks": [],
-        "volumes": [],
-        "control_resources": {
-            "network_present": False,
-            "volume_present": False,
-            "network_id": "",
-            "volume_created_at": "",
-        },
-    }
-    if phase == "baseline":
-        return common
-    common.update(
-        {
-            "all_containers": [],
-            "all_networks": [],
-            "all_volumes": [],
-            "generated_services": [],
-        }
-    )
-    if phase == "post-cleanup":
-        common["owned_units"] = []
-        return common
-    if phase != "live":
-        raise ValueError("observation phase is outside the closed contract")
-    common.update(
-        {
-            "quadlet_search_paths": [],
-            "installed_units": [],
-            "podman_rootless": False,
-            "oci_runtime": "",
-            "singleton_roles": {"scheduler": 0, "worker-hash-chain": 0},
-            "migration": {
-                "observed": False,
-                "state": "unknown",
-                "exit_code": -1,
-                "invocation_count": 0,
-            },
-            "readiness": {"observed": False, "ready_roles": []},
-            "podman_api": True,
-        }
-    )
-    return common
-
-
 def read_observation(
     path: Path, phase: str, collection_status: int
 ) -> dict[str, object]:
+    module = load_workload_collector()
     if collection_status != 0:
-        return incomplete_observation(phase)
+        return module.incomplete_observation(phase)
     try:
         document = read_document(path)
     except (OSError, ValueError):
-        return incomplete_observation(phase)
+        return module.incomplete_observation(phase)
     if not isinstance(document, dict) or document.get("phase") != phase:
-        return incomplete_observation(phase)
+        return module.incomplete_observation(phase)
     return document
 
 
