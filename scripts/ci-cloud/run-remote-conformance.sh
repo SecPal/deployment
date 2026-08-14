@@ -54,6 +54,10 @@ orchestration_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 known_hosts="$(dirname "$evidence_dir")/known_hosts"
 evidence_json="$evidence_dir/evidence.json"
 evidence_summary="$evidence_dir/summary.md"
+host_evidence_json="$evidence_dir/.host-evidence.json"
+baseline_evidence_json="$evidence_dir/.workload-baseline.json"
+live_evidence_json="$evidence_dir/.workload-live.json"
+cleanup_evidence_json="$evidence_dir/.workload-post-cleanup.json"
 bootstrap_stage="host-key"
 host_setup_failure_json="null"
 host_key_observations_json="null"
@@ -348,9 +352,22 @@ if [[ "$root_probe_status" -eq 255 && "$operator_recheck_status" -eq 0 ]]; then
 fi
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-bootstrap_stage="target"
+fixture_instance="${target_sha:0:12}"
+host_status=125
+prepare_start_status=125
+cleanup_status=125
+live_collection_status=125
+cleanup_collection_status=125
+baseline_collection_status=125
+live_normalization_status=125
+cleanup_normalization_status=125
+checkout_admitted=false
+cleanup_completed=false
+workload_evidence_finalized=false
+
+bootstrap_stage="target-checkout"
 set +e
-timeout --signal=TERM --kill-after=30s 42m \
+timeout --signal=TERM --kill-after=30s 12m \
   ssh "${ssh_options[@]}" "secpal-ci@$address" /bin/bash -s -- "$target_sha" <<'REMOTE'
 set -euo pipefail
 target_sha="$1"
@@ -372,40 +389,303 @@ if [[ ! -x "$checkout/scripts/ci-cloud/target-conformance.sh" ]]; then
   printf 'ERROR: selected target has no executable cloud conformance entrypoint.\n' >&2
   exit 1
 fi
-set +e
-(
-  cd "$checkout"
-  ulimit -f 32768
-  env -i \
+REMOTE
+checkout_status=$?
+set -e
+if [[ "$checkout_status" -ne 0 ]]; then
+  exit "$checkout_status"
+fi
+checkout_admitted=true
+
+run_control_resource() {
+  local operation="$1"
+  local -a podman_arguments
+  case "$operation" in
+    create-network)
+      podman_arguments=(network create secpal-ci-unrelated-control-network)
+      ;;
+    create-volume)
+      podman_arguments=(volume create secpal-ci-unrelated-control-volume)
+      ;;
+    remove-network)
+      podman_arguments=(network rm secpal-ci-unrelated-control-network)
+      ;;
+    remove-volume)
+      podman_arguments=(volume rm secpal-ci-unrelated-control-volume)
+      ;;
+    *) return 125 ;;
+  esac
+  timeout --signal=TERM --kill-after=15s 3m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
     HOME=/home/secpal-ci \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    SECPAL_TARGET_SHA="$target_sha" \
-    timeout --signal=TERM --kill-after=30s 40m \
-    bash scripts/ci-cloud/target-conformance.sh
-) >/dev/null 2>&1
-status=$?
-set -e
-exit "$status"
-REMOTE
-target_status=$?
-set -e
-ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    /usr/bin/podman "${podman_arguments[@]}"
+}
 
-bootstrap_stage="collector"
-ssh "${ssh_options[@]}" "secpal-ci@$address" \
-  /usr/bin/env -i \
+run_target_phase() {
+  local outer_timeout
+  local phase="$1"
+  case "$phase" in
+    host) outer_timeout=22m ;;
+    workload-prepare-start) outer_timeout=12m ;;
+    workload-cleanup) outer_timeout=7m ;;
+    *) return 125 ;;
+  esac
+  timeout --signal=TERM --kill-after=30s "$outer_timeout" \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /bin/bash -s -- "$target_sha" "$fixture_instance" "$phase" \
+    <<'REMOTE' >/dev/null 2>&1
+set -euo pipefail
+[[ "$#" -eq 3 && "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" ]]
+case "$3" in
+  host)
+    phase_timeout=20m
+    phase_arguments=(v1 host)
+    ;;
+  workload-prepare-start)
+    phase_timeout=10m
+    phase_arguments=(v1 workload-prepare-start)
+    ;;
+  workload-cleanup)
+    phase_timeout=5m
+    phase_arguments=(v1 workload-cleanup)
+    ;;
+  *) exit 125 ;;
+esac
+cd /home/secpal-ci/deployment-target
+git_config_digest="$(/usr/bin/sha256sum -- .git/config)"
+git_config_digest="${git_config_digest%% *}"
+admit_target_tree() {
+  local observed_git_config_digest
+  observed_git_config_digest="$(/usr/bin/sha256sum -- .git/config)"
+  observed_git_config_digest="${observed_git_config_digest%% *}"
+  [[ "$observed_git_config_digest" == "$git_config_digest" ]]
+  [[ "$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 /usr/bin/git \
+    --git-dir="$PWD/.git" --work-tree="$PWD" \
+    rev-parse --verify 'HEAD^{commit}')" == "$1" ]]
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 /usr/bin/git \
+    --git-dir="$PWD/.git" --work-tree="$PWD" \
+    -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+    read-tree --reset "$1"
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 /usr/bin/git \
+    --git-dir="$PWD/.git" --work-tree="$PWD" \
+    -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+    diff-index --quiet --no-ext-diff "$1" --
+  [[ -z "$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 /usr/bin/git \
+    --git-dir="$PWD/.git" --work-tree="$PWD" \
+    -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+    ls-files --others)" ]]
+}
+admit_target_tree "$1"
+ulimit -f 32768
+set +e
+/usr/bin/env -i \
   HOME=/home/secpal-ci \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  /usr/bin/python3 -I - "$provider" "$region" "$profile" "$target_sha" \
-  "$run_id" "$run_attempt" "$started_at" "$ended_at" "$target_status" \
-  "$root_ssh_denied" "$provider_image_slug" "$provider_image_id" \
-  "$machine_type" \
-  < scripts/ci-cloud/collect-host-evidence.py > "$evidence_json"
+  PYTHONDONTWRITEBYTECODE=1 \
+  SECPAL_TARGET_SHA="$1" \
+  SECPAL_FIXTURE_INSTANCE="$2" \
+  /usr/bin/timeout --signal=TERM --kill-after=15s "$phase_timeout" \
+  /bin/bash /home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh \
+  "${phase_arguments[@]}"
+target_status=$?
+set -e
+admit_target_tree "$1"
+exit "$target_status"
+REMOTE
+}
 
-bootstrap_stage="validation"
-python3 scripts/ci-cloud/validate-evidence.py \
-  "$evidence_json" "$evidence_summary" --require-passed
+run_target_host() { run_target_phase host; }
+run_target_prepare_start() { run_target_phase workload-prepare-start; }
+run_target_cleanup() { run_target_phase workload-cleanup; }
+
+collect_workload_phase() {
+  local evidence_path
+  local phase="$1"
+  case "$phase" in
+    baseline) evidence_path="$baseline_evidence_json" ;;
+    live) evidence_path="$live_evidence_json" ;;
+    post-cleanup) evidence_path="$cleanup_evidence_json" ;;
+    *) return 125 ;;
+  esac
+  timeout --signal=TERM --kill-after=15s 3m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
+    HOME=/home/secpal-ci \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/bin/python3 -I - "$phase" "$target_sha" "$fixture_instance" \
+    < scripts/ci-cloud/collect-workload-evidence.py >"$evidence_path"
+}
+
+collect_workload_live() { collect_workload_phase live; }
+collect_workload_baseline() { collect_workload_phase baseline; }
+collect_workload_post_cleanup() { collect_workload_phase post-cleanup; }
+
+normalize_quadlet_runtime() {
+  local mode="$1"
+  local outer_timeout
+  case "$mode" in
+    live) outer_timeout=12m ;;
+    cleanup) outer_timeout=3m ;;
+    *) return 125 ;;
+  esac
+  timeout --signal=TERM --kill-after=15s "$outer_timeout" \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
+    HOME=/home/secpal-ci \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/bin/python3 -I - normalize "$target_sha" "$fixture_instance" \
+    "$mode" \
+    < scripts/ci-cloud/collect-workload-evidence.py >/dev/null
+}
+
+collect_host_and_assemble() {
+  local require_passed="$1"
+  local ended_at
+  local validation_status
+  ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  timeout --signal=TERM --kill-after=30s 12m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
+    HOME=/home/secpal-ci \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/bin/python3 -I - "$provider" "$region" "$profile" "$target_sha" \
+    "$run_id" "$run_attempt" "$started_at" "$ended_at" "$host_status" \
+    "$root_ssh_denied" "$provider_image_slug" "$provider_image_id" \
+    "$machine_type" \
+    < scripts/ci-cloud/collect-host-evidence.py >"$host_evidence_json"
+  python3 scripts/ci-cloud/assemble-evidence.py \
+    "$host_evidence_json" "$baseline_evidence_json" \
+    "$live_evidence_json" "$cleanup_evidence_json" \
+    "$host_status" "$prepare_start_status" "$cleanup_status" \
+    "$live_normalization_status" "$cleanup_normalization_status" \
+    "$baseline_collection_status" "$live_collection_status" \
+    "$cleanup_collection_status" \
+    >"$evidence_json"
+  if [[ "$require_passed" == true ]]; then
+    set +e
+    python3 scripts/ci-cloud/validate-evidence.py \
+      "$evidence_json" "$evidence_summary" --require-passed
+    validation_status=$?
+    set -e
+  else
+    set +e
+    python3 scripts/ci-cloud/validate-evidence.py \
+      "$evidence_json" "$evidence_summary"
+    validation_status=$?
+    set -e
+  fi
+  rm -f -- "$host_evidence_json" "$baseline_evidence_json" \
+    "$live_evidence_json" \
+    "$cleanup_evidence_json"
+  return "$validation_status"
+}
+
+collect_cleanup_after_interruption() {
+  local signal_status=130
+  trap - INT TERM HUP
+  set +e
+  if [[ "$checkout_admitted" == true &&
+    "$workload_evidence_finalized" == false &&
+    "$cleanup_completed" == false ]]; then
+    run_target_cleanup
+    cleanup_status=$?
+    if [[ "$cleanup_status" -eq 0 ]]; then
+      cleanup_completed=true
+    fi
+  fi
+  if [[ "$checkout_admitted" == true &&
+    "$workload_evidence_finalized" == false ]]; then
+    normalize_quadlet_runtime cleanup
+    cleanup_normalization_status=$?
+    collect_workload_post_cleanup
+    cleanup_collection_status=$?
+    workload_evidence_finalized=true
+  fi
+  if [[ "$checkout_admitted" == true ]]; then
+    collect_host_and_assemble false
+  fi
+  exit "$signal_status"
+}
+
+trap collect_cleanup_after_interruption INT TERM HUP
+
+bootstrap_stage="control-resources"
+run_control_resource create-network >/dev/null
+run_control_resource create-volume >/dev/null
+
+bootstrap_stage="collector-baseline"
+set +e
+collect_workload_baseline
+baseline_collection_status=$?
+set -e
+
+bootstrap_stage="target-workload-prepare-start"
+set +e
+run_target_prepare_start
+prepare_start_status=$?
+set -e
+
+bootstrap_stage="trusted-quadlet-normalize-live"
+set +e
+normalize_quadlet_runtime live
+live_normalization_status=$?
+set -e
+
+bootstrap_stage="collector-live"
+set +e
+collect_workload_live
+live_collection_status=$?
+set -e
+
+bootstrap_stage="target-workload-cleanup"
+set +e
+run_target_cleanup
+cleanup_status=$?
+set -e
+if [[ "$cleanup_status" -eq 0 ]]; then
+  cleanup_completed=true
+fi
+
+bootstrap_stage="target-host"
+set +e
+run_target_host
+host_status=$?
+set -e
+
+bootstrap_stage="trusted-quadlet-normalize-cleanup"
+set +e
+normalize_quadlet_runtime cleanup
+cleanup_normalization_status=$?
+set -e
+
+bootstrap_stage="collector-post-cleanup"
+set +e
+collect_workload_post_cleanup
+cleanup_collection_status=$?
+set -e
+workload_evidence_finalized=true
+
+set +e
+run_control_resource remove-network >/dev/null 2>&1
+run_control_resource remove-volume >/dev/null 2>&1
+set -e
+
+trap - INT TERM HUP
+bootstrap_stage="collector"
+collect_host_and_assemble true

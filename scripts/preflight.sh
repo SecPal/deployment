@@ -67,7 +67,9 @@ python3 tests/ci-cloud-janitor.py
 python3 tests/ci-cloud-quadlet-fixture.py
 python3 tests/ci-cloud-ssh-port-probe.py
 python3 tests/ci-cloud-systemd-reboot.py
+python3 tests/ci-cloud-workload-evidence.py
 bash tests/ci-cloud-remote-bootstrap.sh
+bash tests/ci-cloud-workload-orchestration.sh
 bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py

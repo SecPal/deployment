@@ -2178,7 +2178,7 @@ class CloudCIContractTests(unittest.TestCase):
             ROOT / "scripts/ci-cloud/run-remote-conformance.sh"
         ).read_text(encoding="utf-8")
         self.assertNotIn("/tmp/secpal-target-conformance.log", remote)
-        self.assertIn(") >/dev/null 2>&1", remote)
+        self.assertIn("<<'REMOTE' >/dev/null 2>&1", remote)
 
     def test_early_remote_failure_writes_bounded_structured_evidence(self) -> None:
         remote = (
@@ -2212,7 +2212,12 @@ class CloudCIContractTests(unittest.TestCase):
         fixture = (
             ROOT / "tests/ci-cloud-remote-bootstrap.sh"
         ).read_text(encoding="utf-8")
-        self.assertEqual(2, remote.count("<<'REMOTE'\nset -euo pipefail\n"))
+        remote_programs = remote.split("<<'REMOTE'")[1:]
+        self.assertEqual(3, len(remote_programs))
+        for program in remote_programs:
+            self.assertTrue(
+                program.split("\n", 1)[1].startswith("set -euo pipefail\n")
+            )
         self.assertIn(
             "cat >\"$FAKE_BIN/sleep\" <<'EOF'\n"
             "#!/usr/bin/env bash\n"
@@ -2237,8 +2242,8 @@ class CloudCIContractTests(unittest.TestCase):
     def test_static_contract_rejects_shared_target_log(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/run-remote-conformance.sh",
-            ") >/dev/null 2>&1",
-            ") >/tmp/secpal-target-conformance.log 2>&1",
+            "<<'REMOTE' >/dev/null 2>&1",
+            "<<'REMOTE' >/tmp/secpal-target-conformance.log 2>&1",
         )
 
     def test_static_contract_rejects_warning_only_evidence_upload(self) -> None:
