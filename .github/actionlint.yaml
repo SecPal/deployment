@@ -7,3 +7,10 @@ paths:
   .github/workflows/local-integration.yml:
     ignore:
       - 'label "ubuntu-26\.04(-arm)?" is unknown'
+  .github/workflows/cloud-conformance.yml:
+    ignore:
+      # GitHub supports concurrency.queue, pending actionlint support:
+      # https://github.com/rhysd/actionlint/pull/636
+      - >-
+        ^unexpected key "queue" for "concurrency" section\.
+        expected one of "cancel-in-progress", "group"$

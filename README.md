@@ -193,6 +193,23 @@ This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use
 production credentials, or select the future production edge.
 
+## Ephemeral Debian 13 cloud conformance
+
+The repository now contains a manual, protected
+[`Debian 13 cloud conformance`](docs/ci-cloud-conformance.md) foundation. It
+can provision one short-lived official Debian 13 host using a closed
+DigitalOcean Intel/AMD or Google C4A/Axion profile, run an exact 40-character
+deployment commit SHA without exposing cloud-control credentials to that
+commit, collect bounded host/runtime evidence, and destroy the exact OpenTofu
+state. Metadata-gated TTL janitors protect billable compute fixtures.
+
+This CI infrastructure is non-production. It contains no customer data,
+production inventory, DNS, certificate, backup, or service credential and is
+not part of the production installation path. Google authentication uses
+repository- and workflow-scoped Workload Identity Federation without a JSON
+key or useful VM identity. GitHub-hosted Ubuntu integration evidence remains
+distinct from Debian 13 host admission.
+
 Phase C is complete. API and frontend publication, token-free fail-closed
 digest consumption, pre-execution attestation verification, and hosted
 post-merge integration evidence are operationally verified. This does not

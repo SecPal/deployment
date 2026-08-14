@@ -16,6 +16,10 @@ SPDX-License-Identifier = "MIT"
 
 [[annotations]]
 path = [
+  "infra/ci-cloud/digitalocean/.terraform.lock.hcl",
+  "infra/ci-cloud/gcp/.terraform.lock.hcl",
+  "schemas/ci-cloud-bootstrap-failure.schema.json",
+  "schemas/ci-cloud-evidence.schema.json",
   "schemas/production-host-facts.schema.json",
   "schemas/production-inventory.schema.json",
 ]

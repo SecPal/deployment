@@ -108,6 +108,11 @@ def main() -> int:
 
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(schema)
+    memory_schema = schema["properties"]["resources"]["properties"]["memory_bytes"]
+    if memory_schema != {"type": "integer", "minimum": 1}:
+        raise AssertionError(
+            "inventory memory must remain explicit without an unmeasured universal floor"
+        )
     closed_object_count = assert_schema_objects_are_closed(schema)
     host_facts_schema = json.loads(HOST_FACTS_SCHEMA.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(host_facts_schema)

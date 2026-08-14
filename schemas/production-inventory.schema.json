@@ -254,7 +254,7 @@
         },
         "memory_bytes": {
           "type": "integer",
-          "minimum": 8589934592
+          "minimum": 1
         },
         "storage_total_bytes": {
           "type": "integer",

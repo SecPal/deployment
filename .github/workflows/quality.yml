@@ -32,6 +32,27 @@ jobs:
       - name: Check whitespace errors
         run: git diff --check
 
+  openssh-account-contract:
+    name: OpenSSH Account Contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install isolated OpenSSH test daemon
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          sudo systemctl mask --runtime ssh.service ssh.socket
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get install --yes --no-install-recommends openssh-server
+          dpkg-query -W -f='${binary:Package} ${Version}\n' openssh-server
+
+      - name: Exercise real OpenSSH account accessibility
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: sudo bash tests/ci-cloud-openssh-account.sh
+
   reuse:
     name: REUSE Compliance
     uses: SecPal/.github/.github/workflows/reusable-reuse.yml@75bd30d419c5a85422cec10cc5480bf198ee9424 # main
