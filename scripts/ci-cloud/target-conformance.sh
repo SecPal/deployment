@@ -4,6 +4,25 @@
 
 set -euo pipefail
 
+if ! [[ "$#" -eq 2 && "$1" == v1 ]]; then
+  printf 'ERROR: target lifecycle requires protocol v1 and one closed phase.\n' >&2
+  exit 64
+fi
+phase="$2"
+case "$phase" in
+  host | workload-prepare-start | workload-cleanup) ;;
+  *)
+    printf 'ERROR: target lifecycle phase is outside the closed interface.\n' >&2
+    exit 64
+    ;;
+esac
+
+readonly checkout=/home/secpal-ci/deployment-target
+if [[ "$PWD" != "$checkout" ]]; then
+  printf 'ERROR: target lifecycle did not start in the fixed checkout.\n' >&2
+  exit 1
+fi
+
 if [[ ! "${SECPAL_TARGET_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'ERROR: target conformance requires a validated full commit SHA.\n' >&2
   exit 1
@@ -12,6 +31,12 @@ fi
 actual_sha="$(git rev-parse --verify 'HEAD^{commit}')"
 if [[ "$actual_sha" != "$SECPAL_TARGET_SHA" ]]; then
   printf 'ERROR: checked-out commit does not equal the selected target SHA.\n' >&2
+  exit 1
+fi
+
+if [[ ! "${SECPAL_FIXTURE_INSTANCE:-}" =~ ^[0-9a-f]{12}$ ||
+  "$SECPAL_FIXTURE_INSTANCE" != "${SECPAL_TARGET_SHA:0:12}" ]]; then
+  printf 'ERROR: fixture instance is not derived from the selected target SHA.\n' >&2
   exit 1
 fi
 
@@ -24,6 +49,11 @@ for forbidden_name in \
     exit 1
   fi
 done
+
+if [[ "$phase" != host ]]; then
+  printf 'ERROR: this target does not implement the fixed D.1a lifecycle phase.\n' >&2
+  exit 64
+fi
 
 timeout --signal=TERM --kill-after=15s 8m \
   python3 tests/production-contract-regressions.py

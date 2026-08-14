@@ -1920,6 +1920,12 @@ def validate(root: Path) -> None:
     validate_gcp_iam_role(root)
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
+    target = read(root, "scripts/ci-cloud/target-conformance.sh")
+    workload_collector = read(
+        root, "scripts/ci-cloud/collect-workload-evidence.py"
+    )
+    evidence_assembler = read(root, "scripts/ci-cloud/assemble-evidence.py")
+    evidence_schema_text = read(root, "schemas/ci-cloud-evidence.schema.json")
     ssh_probe = read(root, "scripts/ci-cloud/probe-ssh-port.py")
     failure_writer = read(root, "scripts/ci-cloud/write-bootstrap-failure.py")
     failure_schema_text = read(
@@ -1986,8 +1992,72 @@ def validate(root: Path) -> None:
     )
     require(
         "/tmp/secpal-target-conformance.log" not in remote
-        and ") >/dev/null 2>&1" in remote,
+        and remote.count(">/dev/null 2>&1") >= 3,
         "target output must not use a shared temporary path",
+    )
+    require(
+        remote.count("v1 host") == 1
+        and remote.count("v1 workload-prepare-start") == 1
+        and remote.count("v1 workload-cleanup") == 1
+        and "SECPAL_TARGET_COMMAND" not in remote
+        and "sudo" not in remote
+        and "/home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh"
+        in remote,
+        "target lifecycle must use only the fixed versioned phase interface",
+    )
+    require(
+        '[[ "$#" -eq 2 && "$1" == v1 ]]' in target
+        and "host | workload-prepare-start | workload-cleanup" in target
+        and '"$SECPAL_FIXTURE_INSTANCE" != "${SECPAL_TARGET_SHA:0:12}"'
+        in target
+        and "eval" not in target
+        and "source " not in target,
+        "target entrypoint must reject arbitrary lifecycle commands and instances",
+    )
+    require(
+        remote.count("< scripts/ci-cloud/collect-workload-evidence.py") == 2
+        and '"live" "$target_sha" "$fixture_instance"' in remote
+        and '"post-cleanup" "$target_sha" "$fixture_instance"' in remote
+        and remote.index('bootstrap_stage="target-workload-prepare-start"')
+        < remote.index('bootstrap_stage="collector-live"')
+        < remote.index('bootstrap_stage="target-workload-cleanup"')
+        < remote.index('bootstrap_stage="collector-post-cleanup"')
+        and "trap collect_cleanup_after_interruption INT TERM HUP" in remote
+        and "collect_host_and_assemble false" in remote,
+        "trusted orchestration must preserve live and post-cleanup phase ordering",
+    )
+    require(
+        "CI_UID = 20000" in workload_collector
+        and "CI_GID = 20000" in workload_collector
+        and 'CHECKOUT = Path("/home/secpal-ci/deployment-target")'
+        in workload_collector
+        and 'QUADLET_ROOT = Path("/etc/containers/systemd/users/20000")'
+        in workload_collector
+        and "instance != target_sha[:12]" in workload_collector
+        and 'phase not in {"live", "post-cleanup"}' in workload_collector
+        and "workload_admission_failures" in workload_collector
+        and "shell=True" not in workload_collector
+        and "os.system" not in workload_collector
+        and "eval(" not in workload_collector,
+        "workload collection must remain fixed, rootless, bounded, and independent",
+    )
+    try:
+        evidence_schema = json.loads(evidence_schema_text)
+        Draft202012Validator.check_schema(evidence_schema)
+    except (json.JSONDecodeError, SchemaError):
+        raise ContractError("cloud evidence schema is invalid") from None
+    require(
+        evidence_schema.get("properties", {})
+        .get("schema_version", {})
+        .get("const")
+        == 2
+        and {"host_admission", "workload"}.issubset(
+            set(evidence_schema.get("required", []))
+        )
+        and "workload_admission_failures" in evidence_assembler
+        and "TARGET_WORKLOAD_PREPARE_START" in evidence_assembler
+        and "TRUSTED_POST_CLEANUP_COLLECTION" in evidence_assembler,
+        "D.1 and D.1a evidence must remain separate and jointly fail closed",
     )
     require(
         'bootstrap_stage="host-key"' in remote

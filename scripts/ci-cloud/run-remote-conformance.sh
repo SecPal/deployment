@@ -54,6 +54,9 @@ orchestration_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 known_hosts="$(dirname "$evidence_dir")/known_hosts"
 evidence_json="$evidence_dir/evidence.json"
 evidence_summary="$evidence_dir/summary.md"
+host_evidence_json="$evidence_dir/.host-evidence.json"
+live_evidence_json="$evidence_dir/.workload-live.json"
+cleanup_evidence_json="$evidence_dir/.workload-post-cleanup.json"
 bootstrap_stage="host-key"
 host_setup_failure_json="null"
 host_key_observations_json="null"
@@ -348,9 +351,18 @@ if [[ "$root_probe_status" -eq 255 && "$operator_recheck_status" -eq 0 ]]; then
 fi
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-bootstrap_stage="target"
+fixture_instance="${target_sha:0:12}"
+host_status=125
+prepare_start_status=125
+cleanup_status=125
+live_collection_status=125
+cleanup_collection_status=125
+checkout_admitted=false
+cleanup_completed=false
+
+bootstrap_stage="target-checkout"
 set +e
-timeout --signal=TERM --kill-after=30s 42m \
+timeout --signal=TERM --kill-after=30s 12m \
   ssh "${ssh_options[@]}" "secpal-ci@$address" /bin/bash -s -- "$target_sha" <<'REMOTE'
 set -euo pipefail
 target_sha="$1"
@@ -372,40 +384,239 @@ if [[ ! -x "$checkout/scripts/ci-cloud/target-conformance.sh" ]]; then
   printf 'ERROR: selected target has no executable cloud conformance entrypoint.\n' >&2
   exit 1
 fi
-set +e
-(
-  cd "$checkout"
-  ulimit -f 32768
-  env -i \
+REMOTE
+checkout_status=$?
+set -e
+if [[ "$checkout_status" -ne 0 ]]; then
+  exit "$checkout_status"
+fi
+checkout_admitted=true
+
+run_target_host() {
+  (
+    timeout --signal=TERM --kill-after=30s 22m \
+      ssh "${ssh_options[@]}" "secpal-ci@$address" \
+      /bin/bash -s -- "$target_sha" "$fixture_instance" host <<'REMOTE'
+set -euo pipefail
+[[ "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" && "$3" == host ]]
+cd /home/secpal-ci/deployment-target
+ulimit -f 32768
+exec /usr/bin/env -i \
+  HOME=/home/secpal-ci \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  SECPAL_TARGET_SHA="$1" \
+  SECPAL_FIXTURE_INSTANCE="$2" \
+  /usr/bin/timeout --signal=TERM --kill-after=15s 20m \
+  /bin/bash /home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh \
+  v1 host
+REMOTE
+  ) >/dev/null 2>&1
+}
+
+run_target_prepare_start() {
+  timeout --signal=TERM --kill-after=30s 12m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /bin/bash -s -- "$target_sha" "$fixture_instance" workload-prepare-start \
+    <<'REMOTE' >/dev/null 2>&1
+set -euo pipefail
+[[ "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" && "$3" == workload-prepare-start ]]
+cd /home/secpal-ci/deployment-target
+ulimit -f 32768
+exec /usr/bin/env -i \
+  HOME=/home/secpal-ci \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  SECPAL_TARGET_SHA="$1" \
+  SECPAL_FIXTURE_INSTANCE="$2" \
+  /usr/bin/timeout --signal=TERM --kill-after=15s 10m \
+  /bin/bash /home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh \
+  v1 workload-prepare-start
+REMOTE
+}
+
+run_target_cleanup() {
+  timeout --signal=TERM --kill-after=30s 7m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /bin/bash -s -- "$target_sha" "$fixture_instance" workload-cleanup \
+    <<'REMOTE' >/dev/null 2>&1
+set -euo pipefail
+[[ "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" && "$3" == workload-cleanup ]]
+cd /home/secpal-ci/deployment-target
+ulimit -f 32768
+exec /usr/bin/env -i \
+  HOME=/home/secpal-ci \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  SECPAL_TARGET_SHA="$1" \
+  SECPAL_FIXTURE_INSTANCE="$2" \
+  /usr/bin/timeout --signal=TERM --kill-after=15s 5m \
+  /bin/bash /home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh \
+  v1 workload-cleanup
+REMOTE
+}
+
+collect_workload_live() {
+  timeout --signal=TERM --kill-after=15s 3m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
     HOME=/home/secpal-ci \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    SECPAL_TARGET_SHA="$target_sha" \
-    timeout --signal=TERM --kill-after=30s 40m \
-    bash scripts/ci-cloud/target-conformance.sh
-) >/dev/null 2>&1
-status=$?
-set -e
-exit "$status"
-REMOTE
-target_status=$?
-set -e
-ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    /usr/bin/python3 -I - "live" "$target_sha" "$fixture_instance" \
+    < scripts/ci-cloud/collect-workload-evidence.py >"$live_evidence_json"
+}
 
-bootstrap_stage="collector"
+collect_workload_post_cleanup() {
+  timeout --signal=TERM --kill-after=15s 3m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
+    HOME=/home/secpal-ci \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/bin/python3 -I - "post-cleanup" "$target_sha" "$fixture_instance" \
+    < scripts/ci-cloud/collect-workload-evidence.py >"$cleanup_evidence_json"
+}
+
+write_incomplete_live_observation() {
+  printf '%s\n' \
+    '{"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_present":false,"volume_present":false},"generated_services":[],"installed_units":[],"migration":{"exit_code":-1,"observed":false},"networks":[],"oci_runtime":"","phase":"live","podman_api":true,"podman_rootless":false,"quadlet_search_paths":[],"readiness":{"observed":false,"ready_roles":[]},"singleton_roles":{"scheduler":0,"worker-hash-chain":0},"target_admitted":false,"volumes":[]}' \
+    >"$live_evidence_json"
+}
+
+write_incomplete_cleanup_observation() {
+  printf '%s\n' \
+    '{"collector_gid":20000,"collector_uid":20000,"complete":false,"containers":[],"control_resources":{"network_present":false,"volume_present":false},"generated_services":[],"networks":[],"owned_units":[],"phase":"post-cleanup","target_admitted":false,"volumes":[]}' \
+    >"$cleanup_evidence_json"
+}
+
+collect_host_and_assemble() {
+  local require_passed="$1"
+  local ended_at
+  local validation_status
+  ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  [[ -s "$live_evidence_json" ]] || write_incomplete_live_observation
+  [[ -s "$cleanup_evidence_json" ]] || write_incomplete_cleanup_observation
+  ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
+    HOME=/home/secpal-ci \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/bin/python3 -I - "$provider" "$region" "$profile" "$target_sha" \
+    "$run_id" "$run_attempt" "$started_at" "$ended_at" "$host_status" \
+    "$root_ssh_denied" "$provider_image_slug" "$provider_image_id" \
+    "$machine_type" \
+    < scripts/ci-cloud/collect-host-evidence.py >"$host_evidence_json"
+  python3 scripts/ci-cloud/assemble-evidence.py \
+    "$host_evidence_json" "$live_evidence_json" "$cleanup_evidence_json" \
+    "$host_status" "$prepare_start_status" "$cleanup_status" \
+    "$live_collection_status" "$cleanup_collection_status" \
+    >"$evidence_json"
+  if [[ "$require_passed" == true ]]; then
+    set +e
+    python3 scripts/ci-cloud/validate-evidence.py \
+      "$evidence_json" "$evidence_summary" --require-passed
+    validation_status=$?
+    set -e
+  else
+    set +e
+    python3 scripts/ci-cloud/validate-evidence.py \
+      "$evidence_json" "$evidence_summary"
+    validation_status=$?
+    set -e
+  fi
+  rm -f -- "$host_evidence_json" "$live_evidence_json" \
+    "$cleanup_evidence_json"
+  return "$validation_status"
+}
+
+collect_cleanup_after_interruption() {
+  local signal_status=130
+  trap - INT TERM HUP
+  set +e
+  if [[ "$checkout_admitted" == true && "$cleanup_completed" == false ]]; then
+    run_target_cleanup
+    cleanup_status=$?
+    if [[ "$cleanup_status" -eq 0 ]]; then
+      cleanup_completed=true
+    fi
+  fi
+  if [[ "$checkout_admitted" == true ]]; then
+    collect_workload_post_cleanup
+    cleanup_collection_status=$?
+    collect_host_and_assemble false
+  fi
+  exit "$signal_status"
+}
+
+trap collect_cleanup_after_interruption INT TERM HUP
+
+bootstrap_stage="control-resources"
 ssh "${ssh_options[@]}" "secpal-ci@$address" \
   /usr/bin/env -i \
   HOME=/home/secpal-ci \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  /usr/bin/python3 -I - "$provider" "$region" "$profile" "$target_sha" \
-  "$run_id" "$run_attempt" "$started_at" "$ended_at" "$target_status" \
-  "$root_ssh_denied" "$provider_image_slug" "$provider_image_id" \
-  "$machine_type" \
-  < scripts/ci-cloud/collect-host-evidence.py > "$evidence_json"
+  /usr/bin/podman network create secpal-ci-unrelated-control-network \
+  >/dev/null
+ssh "${ssh_options[@]}" "secpal-ci@$address" \
+  /usr/bin/env -i \
+  HOME=/home/secpal-ci \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  /usr/bin/podman volume create secpal-ci-unrelated-control-volume \
+  >/dev/null
 
-bootstrap_stage="validation"
-python3 scripts/ci-cloud/validate-evidence.py \
-  "$evidence_json" "$evidence_summary" --require-passed
+bootstrap_stage="target-host"
+set +e
+run_target_host
+host_status=$?
+set -e
+
+bootstrap_stage="target-workload-prepare-start"
+set +e
+run_target_prepare_start
+prepare_start_status=$?
+set -e
+
+bootstrap_stage="collector-live"
+set +e
+collect_workload_live
+live_collection_status=$?
+set -e
+
+bootstrap_stage="target-workload-cleanup"
+set +e
+run_target_cleanup
+cleanup_status=$?
+set -e
+if [[ "$cleanup_status" -eq 0 ]]; then
+  cleanup_completed=true
+fi
+
+bootstrap_stage="collector-post-cleanup"
+set +e
+collect_workload_post_cleanup
+cleanup_collection_status=$?
+set -e
+
+trap - INT TERM HUP
+set +e
+ssh "${ssh_options[@]}" "secpal-ci@$address" \
+  /usr/bin/env -i HOME=/home/secpal-ci PATH=/usr/bin:/bin \
+  /usr/bin/podman network rm secpal-ci-unrelated-control-network >/dev/null 2>&1
+ssh "${ssh_options[@]}" "secpal-ci@$address" \
+  /usr/bin/env -i HOME=/home/secpal-ci PATH=/usr/bin:/bin \
+  /usr/bin/podman volume rm secpal-ci-unrelated-control-volume >/dev/null 2>&1
+set -e
+
+bootstrap_stage="collector"
+collect_host_and_assemble true

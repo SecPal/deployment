@@ -21,6 +21,7 @@ from jsonschema.exceptions import SchemaError
 
 MAX_EVIDENCE_BYTES = 262_144
 COLLECTOR_PATH = Path(__file__).with_name("collect-host-evidence.py")
+WORKLOAD_COLLECTOR_PATH = Path(__file__).with_name("collect-workload-evidence.py")
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "ci-cloud-evidence.schema.json"
 RUNTIME_PACKAGE_NAMES = {
     "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
@@ -42,8 +43,26 @@ FORBIDDEN_VALUE = re.compile(
 )
 
 
+class DuplicateJSONKey(ValueError):
+    pass
+
+
 def fail(message: str) -> NoReturn:
     raise ValueError(message)
+
+
+def exact_json_loads(payload: bytes) -> object:
+    def reject_duplicate_keys(
+        pairs: list[tuple[str, object]],
+    ) -> dict[str, object]:
+        document: dict[str, object] = {}
+        for key, value in pairs:
+            if key in document:
+                raise DuplicateJSONKey(key)
+            document[key] = value
+        return document
+
+    return json.loads(payload, object_pairs_hook=reject_duplicate_keys)
 
 
 def exact_keys(value: object, expected: set[str], path: str) -> dict[str, object]:
@@ -83,34 +102,73 @@ def validate_declared_schema(document: object) -> None:
         fail(f"document violates declared schema at {location}")
 
 
-def recompute_admission(document: dict[str, object]) -> list[str]:
-    spec = importlib.util.spec_from_file_location("ci_cloud_evidence_collector", COLLECTOR_PATH)
+def load_trusted_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         fail("trusted admission implementation is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def recompute_admission(
+    document: dict[str, object],
+) -> tuple[list[str], list[str], list[str]]:
+    module = load_trusted_module(COLLECTOR_PATH, "ci_cloud_evidence_collector")
     test = document["test"]
     assert isinstance(test, dict)
     effective_facts = {
         name: document[name] for name in ("platform", "apt", "host", "runtime")
     }
     try:
-        failures = module.admission_failures(effective_facts, str(test["profile"]))
+        host_failures = module.admission_failures(
+            effective_facts, str(test["profile"])
+        )
     except (AttributeError, KeyError, TypeError, ValueError):
         fail("effective facts are malformed")
-    if test["target_exit_status"] != 0:
-        failures.append("TARGET_CONFORMANCE_ENTRYPOINT")
-    return failures
+    workload_module = load_trusted_module(
+        WORKLOAD_COLLECTOR_PATH, "ci_cloud_workload_evidence_collector"
+    )
+    try:
+        workload_failures = workload_module.workload_admission_failures(
+            document["workload"]
+        )
+        phase_statuses = test["phase_exit_statuses"]
+        collection_statuses = test["collection_exit_statuses"]
+        status_invariants = (
+            (phase_statuses["host"], "TARGET_HOST_CONTRACT"),
+            (
+                phase_statuses["workload_prepare_start"],
+                "TARGET_WORKLOAD_PREPARE_START",
+            ),
+            (phase_statuses["workload_cleanup"], "TARGET_WORKLOAD_CLEANUP"),
+            (collection_statuses["live"], "TRUSTED_LIVE_COLLECTION"),
+            (
+                collection_statuses["post_cleanup"],
+                "TRUSTED_POST_CLEANUP_COLLECTION",
+            ),
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        fail("workload evidence is malformed")
+    workload_failures.extend(
+        invariant for value, invariant in status_invariants if value != 0
+    )
+    workload_failures = list(dict.fromkeys(workload_failures))
+    overall = list(dict.fromkeys([*host_failures, *workload_failures]))
+    return host_failures, workload_failures, overall
 
 
 def validate_document(document: object) -> dict[str, object]:
     reject_sensitive(document)
     root = exact_keys(
         document,
-        {"schema_version", "workflow", "test", "platform", "apt", "host", "runtime"},
+        {
+            "schema_version", "workflow", "test", "host_admission",
+            "platform", "apt", "host", "runtime", "workload",
+        },
         "$",
     )
-    if root["schema_version"] != 1:
+    if root["schema_version"] != 2:
         fail("unsupported evidence schema version")
     workflow = exact_keys(root["workflow"], {"repository", "run_id", "run_attempt", "target_sha"}, "$.workflow")
     test = exact_keys(
@@ -123,11 +181,27 @@ def validate_document(document: object) -> dict[str, object]:
             "provider_image",
             "started_at",
             "ended_at",
-            "target_exit_status",
+            "phase_exit_statuses",
+            "collection_exit_statuses",
             "result",
             "failed_admission_invariants",
         },
         "$.test",
+    )
+    host_admission = exact_keys(
+        root["host_admission"],
+        {"result", "failed_admission_invariants"},
+        "$.host_admission",
+    )
+    phase_statuses = exact_keys(
+        test["phase_exit_statuses"],
+        {"host", "workload_prepare_start", "workload_cleanup"},
+        "$.test.phase_exit_statuses",
+    )
+    collection_statuses = exact_keys(
+        test["collection_exit_statuses"],
+        {"live", "post_cleanup"},
+        "$.test.collection_exit_statuses",
     )
     platform = exact_keys(
         root["platform"],
@@ -186,6 +260,83 @@ def validate_document(document: object) -> dict[str, object]:
         },
         "$.runtime",
     )
+    workload = exact_keys(
+        root["workload"],
+        {
+            "protocol_version", "instance", "result",
+            "failed_admission_invariants", "live", "post_cleanup",
+        },
+        "$.workload",
+    )
+    live = exact_keys(
+        workload["live"],
+        {
+            "phase", "target_admitted", "collector_uid", "collector_gid",
+            "complete", "quadlet_search_paths", "installed_units",
+            "generated_services", "containers", "singleton_roles", "networks",
+            "volumes", "migration", "readiness", "podman_rootless",
+            "oci_runtime", "podman_api", "control_resources",
+        },
+        "$.workload.live",
+    )
+    post_cleanup = exact_keys(
+        workload["post_cleanup"],
+        {
+            "phase", "target_admitted", "collector_uid", "collector_gid",
+            "complete", "owned_units", "generated_services", "containers",
+            "networks", "volumes", "control_resources",
+        },
+        "$.workload.post_cleanup",
+    )
+    exact_keys(
+        live["singleton_roles"],
+        {"scheduler", "worker-hash-chain"},
+        "$.workload.live.singleton_roles",
+    )
+    exact_keys(live["migration"], {"observed", "exit_code"}, "$.workload.live.migration")
+    exact_keys(live["readiness"], {"observed", "ready_roles"}, "$.workload.live.readiness")
+    for path, controls in (
+        ("$.workload.live.control_resources", live["control_resources"]),
+        (
+            "$.workload.post_cleanup.control_resources",
+            post_cleanup["control_resources"],
+        ),
+    ):
+        exact_keys(controls, {"network_present", "volume_present"}, path)
+    for index, unit in enumerate(live["installed_units"] if isinstance(live["installed_units"], list) else []):
+        exact_keys(
+            unit, {"name", "path", "uid", "gid", "mode", "sha256"},
+            f"$.workload.live.installed_units[{index}]",
+        )
+    for index, service in enumerate(live["generated_services"] if isinstance(live["generated_services"], list) else []):
+        service_fact = exact_keys(
+            service,
+            {
+                "logical_name", "unit", "fragment_path", "fragment_uid", "fragment_gid",
+                "fragment_mode", "drop_in_paths", "drop_in_owners",
+            },
+            f"$.workload.live.generated_services[{index}]",
+        )
+        for owner_index, owner in enumerate(
+            service_fact["drop_in_owners"]
+            if isinstance(service_fact["drop_in_owners"], list) else []
+        ):
+            exact_keys(
+                owner, {"uid", "gid", "mode"},
+                f"$.workload.live.generated_services[{index}].drop_in_owners[{owner_index}]",
+            )
+    for index, container in enumerate(live["containers"] if isinstance(live["containers"], list) else []):
+        exact_keys(
+            container,
+            {
+                "role", "name", "state", "exit_code", "health", "oci_runtime",
+                "rootless", "privileged", "pid_mode", "userns_mode",
+                "network_mode", "cap_add", "devices_present",
+                "podman_socket_mount", "remote_api_environment", "security_opt",
+                "networks", "published_ports", "auto_update", "image",
+            },
+            f"$.workload.live.containers[{index}]",
+        )
     exact_keys(platform["os_release"], {"ID", "VERSION_ID", "VERSION_CODENAME", "PRETTY_NAME"}, "$.platform.os_release")
     exact_keys(platform["cpu"], {"vendor", "model"}, "$.platform.cpu")
     exact_keys(test["provider_image"], {"slug", "id"}, "$.test.provider_image")
@@ -365,9 +516,9 @@ def validate_document(document: object) -> dict[str, object]:
         or not all(re.fullmatch(r"[A-Z0-9_]+", str(item)) for item in failures)
     ):
         fail("failed admission invariants are malformed")
-    expected_result = "passed" if not failures and test["target_exit_status"] == 0 else "failed"
-    if test["result"] != expected_result:
-        fail("result contradicts target status or admission failures")
+    for value in [*phase_statuses.values(), *collection_statuses.values()]:
+        if type(value) is not int or not 0 <= value <= 255:
+            fail("phase status is malformed")
     for field, expected_names in (
         ("runtime_packages", RUNTIME_PACKAGE_NAMES),
         ("bootstrap_packages", BOOTSTRAP_PACKAGE_NAMES),
@@ -381,8 +532,20 @@ def validate_document(document: object) -> dict[str, object]:
                 {"version", "architecture", "origin", "suite"},
                 f"$.apt.{field}.{name}",
             )
-    if [str(item) for item in failures] != recompute_admission(root):
-        fail("admission failures do not match effective facts")
+    host_failures, workload_failures, overall_failures = recompute_admission(root)
+    if host_admission["failed_admission_invariants"] != host_failures or (
+        host_admission["result"] != ("passed" if not host_failures else "failed")
+    ):
+        fail("host admission failures do not match effective facts for D.1")
+    if workload["failed_admission_invariants"] != workload_failures or (
+        workload["result"] != ("passed" if not workload_failures else "failed")
+    ):
+        fail("workload admission failures do not match independent D.1a observations")
+    expected_result = "passed" if not overall_failures else "failed"
+    if test["result"] != expected_result:
+        fail("result contradicts phase status or admission failures")
+    if [str(item) for item in failures] != overall_failures:
+        fail("result or admission failures contradicts effective facts")
     validate_declared_schema(root)
     if podman["apparmor_enabled"] is not None and not isinstance(podman["apparmor_enabled"], bool):
         fail("Podman AppArmor capability must remain distinct boolean evidence")
@@ -396,9 +559,12 @@ def write_summary(document: dict[str, object], path: Path) -> None:
     runtime = document["runtime"]
     apt = document["apt"]
     host = document["host"]
+    host_admission = document["host_admission"]
+    workload = document["workload"]
     assert isinstance(workflow, dict) and isinstance(test, dict)
     assert isinstance(platform, dict) and isinstance(runtime, dict)
     assert isinstance(apt, dict) and isinstance(host, dict)
+    assert isinstance(host_admission, dict) and isinstance(workload, dict)
     podman = runtime["podman"]
     apparmor = runtime["apparmor_host"]
     provider_image = test["provider_image"]
@@ -418,6 +584,8 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         "# Debian 13 cloud conformance evidence",
         "",
         f"- Result: `{test['result']}`",
+        f"- D.1 production-host admission: `{host_admission['result']}`",
+        f"- D.1a workload admission: `{workload['result']}`",
         f"- Target SHA: `{workflow['target_sha']}`",
         f"- Provider/profile: `{test['provider']}/{test['profile']}` in `{test['region']}`",
         f"- Machine type: `{test['machine_type']}`",
@@ -434,6 +602,9 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         f"- Podman seccomp: `{podman['seccomp_enabled']}`",
         f"- Root SSH denied: `{host['ssh']['root_login_denied']}`",
         f"- VM cloud identity present: `{cloud_identity['identity_present']}`",
+        f"- Lifecycle phase statuses: `{json.dumps(test['phase_exit_statuses'], sort_keys=True, separators=(',', ':'))}`",
+        f"- Collector phase statuses: `{json.dumps(test['collection_exit_statuses'], sort_keys=True, separators=(',', ':'))}`",
+        f"- Workload instance: `{workload['instance']}`; live containers `{len(workload['live']['containers'])}`; post-cleanup containers `{len(workload['post_cleanup']['containers'])}`",
         f"- Failed admission invariants: `{', '.join(str(item) for item in failures) if failures else 'none'}`",
         "",
     ]
@@ -450,9 +621,15 @@ def main() -> int:
         payload = arguments.evidence.read_bytes()
         if not payload or len(payload) > MAX_EVIDENCE_BYTES:
             fail("evidence is empty or exceeds 256 KiB")
-        document = validate_document(json.loads(payload))
+        document = validate_document(exact_json_loads(payload))
         write_summary(document, arguments.summary)
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        DuplicateJSONKey,
+        ValueError,
+    ) as error:
         print(f"ERROR: evidence validation failed closed: {error}", file=sys.stderr)
         return 1
     test = document["test"]

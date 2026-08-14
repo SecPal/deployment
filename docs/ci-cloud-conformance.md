@@ -96,9 +96,11 @@ one tagged Debian 13 VM + firewall + public SSH key
 strict-host SSH from the trusted main orchestration script
         |
         | fetch exact validated 40-character target SHA
-        | run only scripts/ci-cloud/target-conformance.sh from that SHA
+        | run only fixed v1 phases of target-conformance.sh as UID 20000
         v
-trusted collector streamed from main; bounded JSON + summary
+target prepare/start -> trusted live collector -> target cleanup
+        |
+        | trusted post-cleanup collector; bounded JSON + summary
         |
         | token exists only in a separate always() cleanup job
         v
@@ -336,14 +338,29 @@ passes them to the trusted collector. The closed schema admits only the fixed
 DigitalOcean numeric image ID or the official exact GCP Debian 13 arm64 image
 self-link with its matching fixed machine type. The trusted remote runner then
 initializes a new public checkout, fetches only the selected commit, verifies
-`HEAD` byte-for-byte against the SHA, and invokes the single fixed target path
-under a 40-minute timeout. The bootstrap target entrypoint runs the production
-host contract and negative validators. A later D.1a-compatible commit can
-extend that same narrow entrypoint with the reviewed real rootless
-Podman/Quadlet lifecycle.
+`HEAD` byte-for-byte against the SHA, and invokes the single fixed target path.
+The versioned interface admits exactly `v1 host`,
+`v1 workload-prepare-start`, and `v1 workload-cleanup`; no workflow input or
+target output can select a command, executable, source path, Quadlet path,
+collector field, or additional argument. Every phase runs as UID/GID 20000
+with a phase-specific timeout and an empty environment containing only the
+fixed home, locale, path, exact SHA, and SHA-derived 12-hex fixture instance.
+The trusted wrapper also enters the literal checkout before target execution
+and applies a 32-MiB per-file process limit to every phase. The target cannot
+select either boundary.
+The target account has no sudo authority. The `host` phase retains the D.1
+contract suite. PR #22 owns the implementation of the two workload phases and
+may cross the root-owned publication boundary only through the fixed trusted
+fixture client.
 
-After the target exits, the runner starts the main-controlled collector by
-absolute path under an empty environment and Python isolated mode. The
+The trusted runner creates one unrelated rootless control network and volume,
+invokes target prepare/start, streams the main-controlled live collector, then
+requests target cleanup and streams the main-controlled post-cleanup collector.
+It attempts cleanup and the post-cleanup observation even when prepare/start
+fails or a handled `INT`, `TERM`, or `HUP` arrives while the host remains
+reachable. Target phase status is preserved but is never evidence that a
+workload existed or was removed. The collector runs by absolute path under an
+empty environment and Python isolated mode. The
 collector retains only the fixed operator home needed to observe effective
 rootless Podman state; Python user-site startup hooks are disabled, and the GCP
 metadata probe disables curl configuration before any other curl option. Target
@@ -416,12 +433,14 @@ provider payload transport so DigitalOcean's 64-KiB user-data ceiling retains
 explicit headroom; each decoded root-owned file is byte-for-byte the reviewed
 main-controlled source. Compression does not move trust to the tested revision.
 
-PR #22 must still adopt the unprivileged client after incorporating current
-`main`, replace its hosted-runner sudo installation/removal calls for the cloud
-path, and extend the target entrypoint and evidence for its real lifecycle. The
-collector must then prove the complete tree ownership, restricted search path,
-generated units, and effective workload behavior. The bridge alone does not
-claim that PR #22 or any product container has run on a cloud fixture.
+This prerequisite supplies the trusted protocol and independent observations;
+it does not implement the PR #22 product runtime. After this change merges,
+PR #22 must update from that merged `main` commit, adopt the unprivileged
+fixture client for its fixed cloud phases, and only then run one exact updated
+PR #22 SHA on DigitalOcean Intel, DigitalOcean AMD, and GCP Axion. All three
+bounded artifacts require review before a workload-conformance claim. This
+prerequisite by itself does not prove that PR #22, a SecPal product image, or
+any product container ran in cloud.
 
 ## Ephemeral SSH and initial host identity
 
@@ -740,7 +759,10 @@ covered now; the remaining limitation is explicit.
 ## Evidence and interpretation
 
 Each reachable host produces JSON validated against the committed closed schema
-plus a concise Markdown summary. Incomplete, schema-invalid, oversized,
+plus a concise Markdown summary. Schema version 2 keeps the D.1 production-host
+admission result separate from the D.1a workload result; the overall result can
+pass only when both pass and every target and collector phase exits zero.
+Incomplete, schema-invalid, oversized,
 unknown, credential-shaped, or internally contradictory evidence fails.
 If orchestration fails before the full collector can complete, the trusted
 runner instead failure-atomically publishes a separate
@@ -816,7 +838,19 @@ Evidence includes:
   processes, complete process visibility, auto-update state, and effective
   SecPal/GHCR mirror, rewrite, and insecure-transport facts; and
 - host AppArmor state, rootless Podman `apparmorEnabled`, and Podman
-  `seccompEnabled` as three independent facts.
+  `seccompEnabled` as three independent facts;
+- the exact 16-file root-owned Quadlet snapshot with paths, modes, and SHA-256
+  digests; the effective sole search path; and each generated user-service
+  fragment and drop-in path, owner, group, and mode;
+- the exact ten-container logical-role set, singleton counts for scheduler and
+  activity-hash-chain worker, effective rootless/crun/security/namespace facts,
+  the closed role-to-network topology, the gateway's sole loopback publication,
+  immutable local image references, migration exit, healthy state for every
+  health-bearing role, and running state for the remaining long-lived roles;
+  and
+- a distinct post-cleanup observation requiring exact absence of every
+  integration unit, generated service, container, network, and volume while
+  the deliberately unrelated control network and volume remain present.
 
 The Unix-listener admission recognizes listeners in the rootful and rootless
 Podman runtime directories, including nonstandard socket-activation paths, and
@@ -842,9 +876,10 @@ versions while requiring those packages to come from the authenticated Debian
 13 suites. It does not make the provider slug or Debian package repositories
 immutable across separate conformance runs; that variability is intentional
 only for this isolated, non-production compatibility probe.
-The empty root-owned definition tree does not prove PR #22 units, workload
-AppArmor confinement, production service-account paths, or product lifecycle
-behavior. Evidence also does not prove production readiness, customer workload
+The workload collector establishes only the bounded facts represented by the
+closed D.1a schema. It does not prove per-container AppArmor confinement unless
+that fact is separately added to the trusted protocol, production
+service-account paths, production readiness, customer workload
 capacity, backup/restore, public networking, every provider image, or universal
 hardware compatibility.
 Three successful representative hosts demonstrate independent reproducibility;
@@ -859,6 +894,11 @@ they do not prove that all hardware is compatible.
 4. Inspect the bounded evidence artifact and the independent cleanup job.
 5. Treat any named invariant, missing evidence, cleanup failure, or janitor
    ambiguity as a failure.
+
+For PR #22 specifically, merge this prerequisite first, update PR #22 from the
+merged commit, implement only its fixed-client target phases, and dispatch the
+three providers against one exact resulting PR #22 SHA. Evidence from an older
+PR #22 SHA cannot exercise this main-controlled protocol and is not admissible.
 
 Real `main` runs have completed the full provision, Debian 13 conformance,
 bounded-evidence, and exact-cleanup lifecycle for every implemented profile:

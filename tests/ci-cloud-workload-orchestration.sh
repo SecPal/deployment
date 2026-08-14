@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf -- "$TEMP_DIR"' EXIT
+REAL_PYTHON="$(command -v python3)"
+FAKE_BIN="$TEMP_DIR/bin"
+PRIVATE_KEY="$TEMP_DIR/id_ed25519"
+LIVE_JSON="$TEMP_DIR/live.json"
+CLEANUP_JSON="$TEMP_DIR/cleanup.json"
+mkdir -p "$FAKE_BIN"
+install -m 0600 /dev/null "$PRIVATE_KEY"
+
+"$REAL_PYTHON" - "$LIVE_JSON" "$CLEANUP_JSON" <<'PY'
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+path = Path("tests/ci-cloud-workload-evidence.py")
+spec = importlib.util.spec_from_file_location("workload_fixture", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+observations = module.valid_observations()
+for output, key in zip(sys.argv[1:], ("live", "post_cleanup"), strict=True):
+    Path(output).write_text(
+        json.dumps(observations[key], sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+PY
+
+cat >"$FAKE_BIN/ssh-keyscan" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestOnlyKey\n' "${*: -1}"
+EOF
+cat >"$FAKE_BIN/ssh-keygen" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == -lf ]]; then
+  printf '256 SHA256:test-only fixture (ED25519)\n'
+fi
+EOF
+cat >"$FAKE_BIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+EOF
+cat >"$FAKE_BIN/timeout" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while [[ "$1" == --* ]]; do
+  shift
+done
+shift
+exec "$@"
+EOF
+cat >"$FAKE_BIN/python3" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  scripts/ci-cloud/assemble-evidence.py)
+    printf '{"assembled":true}\n'
+    ;;
+  scripts/ci-cloud/validate-evidence.py)
+    printf 'synthetic trusted orchestration\n' >"$3"
+    exit "${SECPAL_TEST_VALIDATION_STATUS:-0}"
+    ;;
+  *) exec "${SECPAL_TEST_REAL_PYTHON:?}" "$@" ;;
+esac
+EOF
+cat >"$FAKE_BIN/ssh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -i | -o) shift 2 ;;
+    *) ssh_target="$1"; shift; break ;;
+  esac
+done
+if [[ "$ssh_target" == root@* ]]; then
+  exit 255
+fi
+if [[ "${1:-}" == true ]]; then
+  exit 0
+fi
+if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
+  if [[ "${3:-}" != -- ]]; then
+    cat >/dev/null
+    exit 0
+  fi
+  if [[ "$#" -eq 4 ]]; then
+    cat >/dev/null
+    printf 'checkout\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    exit 0
+  fi
+  phase="${6:-}"
+  wrapper="$(cat)"
+  grep -Fq 'cd /home/secpal-ci/deployment-target' <<<"$wrapper"
+  grep -Fq 'ulimit -f 32768' <<<"$wrapper"
+  printf 'target:%s\n' "$phase" >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+  if [[ "$phase" == workload-prepare-start &&
+    "${SECPAL_TEST_INTERRUPT_PREPARE:-false}" == true ]]; then
+    kill -TERM "$PPID"
+    exit 143
+  fi
+  if [[ "$phase" == workload-prepare-start &&
+    "${SECPAL_TEST_FAIL_PREPARE:-false}" == true ]]; then
+    exit 7
+  fi
+  exit 0
+fi
+case " $* " in
+  *' /usr/bin/python3 -I - live '*)
+    cat >/dev/null
+    printf 'collector:live\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    cat "${SECPAL_TEST_LIVE_JSON:?}"
+    ;;
+  *' /usr/bin/python3 -I - post-cleanup '*)
+    cat >/dev/null
+    printf 'collector:post-cleanup\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    cat "${SECPAL_TEST_CLEANUP_JSON:?}"
+    ;;
+  *' /usr/bin/python3 -I - digitalocean '*)
+    cat >/dev/null
+    printf 'collector:host\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    printf '{}\n'
+    ;;
+  *' /usr/bin/podman network create '*)
+    printf 'control:create-network\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    ;;
+  *' /usr/bin/podman volume create '*)
+    printf 'control:create-volume\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    ;;
+  *' /usr/bin/podman network rm '*)
+    printf 'control:remove-network\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    ;;
+  *' /usr/bin/podman volume rm '*)
+    printf 'control:remove-volume\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    ;;
+  *)
+    printf 'unexpected synthetic SSH command: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac
+EOF
+chmod 0755 "$FAKE_BIN"/*
+
+expected_sequence() {
+  printf '%s\n' \
+    checkout \
+    control:create-network \
+    control:create-volume \
+    target:host \
+    target:workload-prepare-start \
+    collector:live \
+    target:workload-cleanup \
+    collector:post-cleanup \
+    control:remove-network \
+    control:remove-volume \
+    collector:host
+}
+
+run_fixture() {
+  local evidence_dir="$1"
+  local sequence_log="$2"
+  PATH="$FAKE_BIN:$PATH" \
+    SECPAL_TEST_REAL_PYTHON="$REAL_PYTHON" \
+    SECPAL_TEST_SEQUENCE_LOG="$sequence_log" \
+    SECPAL_TEST_LIVE_JSON="$LIVE_JSON" \
+    SECPAL_TEST_CLEANUP_JSON="$CLEANUP_JSON" \
+    scripts/ci-cloud/run-remote-conformance.sh \
+    digitalocean fra1 intel 1.1.1.1 \
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 12345 1 \
+    "$PRIVATE_KEY" "$evidence_dir" debian-13-x64 234194767 \
+    s-4vcpu-8gb-intel >/dev/null 2>&1
+}
+
+SUCCESS_LOG="$TEMP_DIR/success.log"
+run_fixture "$TEMP_DIR/success-evidence" "$SUCCESS_LOG"
+diff -u <(expected_sequence) "$SUCCESS_LOG"
+
+FAILURE_LOG="$TEMP_DIR/failure.log"
+set +e
+SECPAL_TEST_FAIL_PREPARE=true SECPAL_TEST_VALIDATION_STATUS=1 \
+  run_fixture "$TEMP_DIR/failure-evidence" "$FAILURE_LOG"
+failure_status=$?
+set -e
+if [[ "$failure_status" -ne 1 ]]; then
+  printf 'FAIL: expected prepare failure evidence status 1, got %s\n' \
+    "$failure_status" >&2
+  exit 1
+fi
+diff -u <(expected_sequence) "$FAILURE_LOG"
+
+INTERRUPT_LOG="$TEMP_DIR/interrupt.log"
+set +e
+SECPAL_TEST_INTERRUPT_PREPARE=true \
+  run_fixture "$TEMP_DIR/interrupt-evidence" "$INTERRUPT_LOG"
+interrupt_status=$?
+set -e
+if [[ "$interrupt_status" -ne 130 ]]; then
+  printf 'FAIL: expected handled interruption status 130, got %s\n' \
+    "$interrupt_status" >&2
+  exit 1
+fi
+grep -Fxq 'target:workload-cleanup' "$INTERRUPT_LOG"
+grep -Fxq 'collector:post-cleanup' "$INTERRUPT_LOG"
+
+printf 'Cloud workload orchestration fixture passed.\n'

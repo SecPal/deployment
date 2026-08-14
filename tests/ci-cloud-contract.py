@@ -2212,7 +2212,12 @@ class CloudCIContractTests(unittest.TestCase):
         fixture = (
             ROOT / "tests/ci-cloud-remote-bootstrap.sh"
         ).read_text(encoding="utf-8")
-        self.assertEqual(2, remote.count("<<'REMOTE'\nset -euo pipefail\n"))
+        remote_programs = remote.split("<<'REMOTE'")[1:]
+        self.assertEqual(5, len(remote_programs))
+        for program in remote_programs:
+            self.assertTrue(
+                program.split("\n", 1)[1].startswith("set -euo pipefail\n")
+            )
         self.assertIn(
             "cat >\"$FAKE_BIN/sleep\" <<'EOF'\n"
             "#!/usr/bin/env bash\n"
