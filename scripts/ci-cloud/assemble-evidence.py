@@ -41,6 +41,72 @@ def read_document(path: Path) -> object:
         raise ValueError(f"bounded evidence input is malformed: {path.name}") from error
 
 
+def incomplete_observation(phase: str) -> dict[str, object]:
+    common: dict[str, object] = {
+        "phase": phase,
+        "target_admitted": False,
+        "collector_uid": 20000,
+        "collector_gid": 20000,
+        "complete": False,
+        "containers": [],
+        "networks": [],
+        "volumes": [],
+        "control_resources": {
+            "network_present": False,
+            "volume_present": False,
+            "network_id": "",
+            "volume_created_at": "",
+        },
+    }
+    if phase == "baseline":
+        return common
+    common.update(
+        {
+            "all_containers": [],
+            "all_networks": [],
+            "all_volumes": [],
+            "generated_services": [],
+        }
+    )
+    if phase == "post-cleanup":
+        common["owned_units"] = []
+        return common
+    if phase != "live":
+        raise ValueError("observation phase is outside the closed contract")
+    common.update(
+        {
+            "quadlet_search_paths": [],
+            "installed_units": [],
+            "podman_rootless": False,
+            "oci_runtime": "",
+            "singleton_roles": {"scheduler": 0, "worker-hash-chain": 0},
+            "migration": {
+                "observed": False,
+                "state": "unknown",
+                "exit_code": -1,
+                "invocation_count": 0,
+            },
+            "readiness": {"observed": False, "ready_roles": []},
+            "podman_api": True,
+        }
+    )
+    return common
+
+
+def read_observation(
+    path: Path, phase: str, collection_status: int
+) -> dict[str, object]:
+    if collection_status != 0:
+        return incomplete_observation(phase)
+    try:
+        document = read_document(path)
+    except (OSError, ValueError):
+        return incomplete_observation(phase)
+    if not isinstance(document, dict) or document.get("phase") != phase:
+        return incomplete_observation(phase)
+    return document
+
+
 def status(value: str) -> int:
     if re.fullmatch(r"[0-9]{1,3}", value) is None or not 0 <= int(value) <= 255:
         raise ValueError("phase status is outside the closed range")
@@ -141,21 +207,29 @@ def main() -> int:
     parser.add_argument("cleanup_collection_status")
     arguments = parser.parse_args()
     try:
+        phase_statuses = {
+            "host": status(arguments.host_status),
+            "workload_prepare_start": status(arguments.prepare_start_status),
+            "workload_cleanup": status(arguments.cleanup_status),
+        }
+        collection_statuses = {
+            "baseline": status(arguments.baseline_collection_status),
+            "live": status(arguments.live_collection_status),
+            "post_cleanup": status(arguments.cleanup_collection_status),
+        }
         document = assemble(
             read_document(arguments.host),
-            read_document(arguments.baseline),
-            read_document(arguments.live),
-            read_document(arguments.post_cleanup),
-            {
-                "host": status(arguments.host_status),
-                "workload_prepare_start": status(arguments.prepare_start_status),
-                "workload_cleanup": status(arguments.cleanup_status),
-            },
-            {
-                "baseline": status(arguments.baseline_collection_status),
-                "live": status(arguments.live_collection_status),
-                "post_cleanup": status(arguments.cleanup_collection_status),
-            },
+            read_observation(
+                arguments.baseline, "baseline", collection_statuses["baseline"]
+            ),
+            read_observation(arguments.live, "live", collection_statuses["live"]),
+            read_observation(
+                arguments.post_cleanup,
+                "post-cleanup",
+                collection_statuses["post_cleanup"],
+            ),
+            phase_statuses,
+            collection_statuses,
         )
     except (OSError, ValueError) as error:
         print(f"ERROR: unable to assemble trusted cloud evidence: {error}", file=sys.stderr)

@@ -307,7 +307,11 @@ def validate_document(document: object) -> dict[str, object]:
         {"scheduler", "worker-hash-chain"},
         "$.workload.live.singleton_roles",
     )
-    exact_keys(live["migration"], {"observed", "exit_code"}, "$.workload.live.migration")
+    exact_keys(
+        live["migration"],
+        {"observed", "state", "exit_code", "invocation_count"},
+        "$.workload.live.migration",
+    )
     exact_keys(live["readiness"], {"observed", "ready_roles"}, "$.workload.live.readiness")
     for path, controls in (
         ("$.workload.baseline.control_resources", baseline["control_resources"]),
@@ -317,7 +321,14 @@ def validate_document(document: object) -> dict[str, object]:
             post_cleanup["control_resources"],
         ),
     ):
-        exact_keys(controls, {"network_present", "volume_present"}, path)
+        exact_keys(
+            controls,
+            {
+                "network_present", "volume_present", "network_id",
+                "volume_created_at",
+            },
+            path,
+        )
     for index, unit in enumerate(live["installed_units"] if isinstance(live["installed_units"], list) else []):
         exact_keys(
             unit, {"name", "path", "uid", "gid", "mode", "sha256"},

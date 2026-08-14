@@ -365,8 +365,12 @@ prefix.
 It attempts cleanup and the post-cleanup observation even when prepare/start
 fails or a handled `INT`, `TERM`, or `HUP` arrives while the host remains
 reachable. Target phase status is preserved but is never evidence that a
-workload existed or was removed. The collector runs by absolute path under an
-empty environment and Python isolated mode. The
+workload existed or was removed. Every remote collection, including the final
+D.1 host collection, has an outer deadline. A missing, excessive, truncated,
+or malformed workload payload is normalized to a schema-closed incomplete
+observation so its collection status and the remaining lifecycle results stay
+reviewable; it can never become passing evidence. The collector runs by
+absolute path under an empty environment and Python isolated mode. The
 collector retains only the fixed operator home needed to observe effective
 rootless Podman state; Python user-site startup hooks are disabled, and the GCP
 metadata probe disables curl configuration before any other curl option. Target
@@ -853,17 +857,20 @@ Evidence includes:
 - the exact ten-container logical-role set, singleton counts for scheduler and
   activity-hash-chain worker, effective rootless/crun/security/namespace facts,
   the closed role-to-network topology, the gateway's sole loopback publication,
-  immutable local image references, migration exit, healthy state for every
-  health-bearing role, and running state for the remaining long-lived roles;
+  immutable local image references with distinct API and frontend content
+  digests, one exited zero-status migration systemd invocation established from
+  the journal's invocation IDs, healthy state for every health-bearing role,
+  and running state for the remaining long-lived roles;
   and
 - a pre-target full rootless Podman inventory and distinct post-cleanup
   observation requiring exact restoration of that inventory, including absence
   of every target-added container, network, and volume regardless of its name;
   exact `no-new-privileges` admission and Podman 5.4 `Healthcheck`/network-name
   field interpretation; and
-- exact absence of every
-  integration unit, generated service, container, network, and volume while
-  the deliberately unrelated control network and volume remain present.
+- exact absence of every integration unit, generated service and nested
+  generated drop-in artifact, container, network, and volume while the
+  deliberately unrelated control network and volume retain the same bounded
+  network ID and volume creation identity observed before target execution.
 
 The Unix-listener admission recognizes listeners in the rootful and rootless
 Podman runtime directories, including nonstandard socket-activation paths, and

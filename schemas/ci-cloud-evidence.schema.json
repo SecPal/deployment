@@ -602,10 +602,23 @@
     "controlResources": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["network_present", "volume_present"],
+      "required": [
+        "network_present",
+        "volume_present",
+        "network_id",
+        "volume_created_at"
+      ],
       "properties": {
         "network_present": { "type": "boolean" },
-        "volume_present": { "type": "boolean" }
+        "volume_present": { "type": "boolean" },
+        "network_id": {
+          "type": "string",
+          "pattern": "^$|^[0-9a-f]{64}$"
+        },
+        "volume_created_at": {
+          "type": "string",
+          "pattern": "^$|^[0-9T:+.Z-]{1,64}$"
+        }
       }
     },
     "unitFact": {
@@ -870,10 +883,25 @@
         "migration": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["observed", "exit_code"],
+          "required": ["observed", "state", "exit_code", "invocation_count"],
           "properties": {
             "observed": { "type": "boolean" },
-            "exit_code": { "type": "integer", "minimum": -1, "maximum": 255 }
+            "state": {
+              "enum": [
+                "unknown",
+                "created",
+                "configured",
+                "exited",
+                "running",
+                "stopped"
+              ]
+            },
+            "exit_code": { "type": "integer", "minimum": -1, "maximum": 255 },
+            "invocation_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            }
           }
         },
         "readiness": {
@@ -965,9 +993,13 @@
                   "target_admitted": { "const": true },
                   "complete": { "const": true },
                   "control_resources": {
-                    "const": {
-                      "network_present": true,
-                      "volume_present": true
+                    "properties": {
+                      "network_present": { "const": true },
+                      "volume_present": { "const": true },
+                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "volume_created_at": {
+                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                      }
                     }
                   }
                 }
@@ -985,7 +1017,12 @@
                   "networks": { "minItems": 2, "maxItems": 2 },
                   "volumes": { "minItems": 3, "maxItems": 3 },
                   "migration": {
-                    "const": { "observed": true, "exit_code": 0 }
+                    "const": {
+                      "observed": true,
+                      "state": "exited",
+                      "exit_code": 0,
+                      "invocation_count": 1
+                    }
                   },
                   "readiness": {
                     "properties": {
@@ -997,9 +1034,13 @@
                   "oci_runtime": { "const": "crun" },
                   "podman_api": { "const": false },
                   "control_resources": {
-                    "const": {
-                      "network_present": true,
-                      "volume_present": true
+                    "properties": {
+                      "network_present": { "const": true },
+                      "volume_present": { "const": true },
+                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "volume_created_at": {
+                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                      }
                     }
                   }
                 }
@@ -1014,9 +1055,13 @@
                   "networks": { "maxItems": 0 },
                   "volumes": { "maxItems": 0 },
                   "control_resources": {
-                    "const": {
-                      "network_present": true,
-                      "volume_present": true
+                    "properties": {
+                      "network_present": { "const": true },
+                      "volume_present": { "const": true },
+                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "volume_created_at": {
+                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                      }
                     }
                   }
                 }

@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -107,7 +109,7 @@ def valid_observations() -> dict[str, object]:
         for logical_name in generated_names
     ]
     containers = []
-    for role in ROLES:
+    for role_index, role in enumerate(ROLES, start=1):
         one_shot = role in {"secrets-init", "migrate"}
         containers.append(
             {
@@ -130,7 +132,9 @@ def valid_observations() -> dict[str, object]:
                 "networks": [f"{prefix}-{network}" for network in ROLE_NETWORKS[role]],
                 "published_ports": ["127.0.0.1:18443:8443/tcp"] if role == "gateway" else [],
                 "auto_update": False,
-                "image": f"localhost/secpal-ci-{role}@sha256:{'a' * 64}",
+                "image": (
+                    f"localhost/secpal-ci-{role}@sha256:{role_index:064x}"
+                ),
             }
         )
     return {
@@ -150,6 +154,8 @@ def valid_observations() -> dict[str, object]:
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
+                "network_id": "b" * 64,
+                "volume_created_at": "2026-08-14T12:00:00Z",
             },
         },
         "live": {
@@ -184,12 +190,19 @@ def valid_observations() -> dict[str, object]:
                     f"{prefix}-secrets",
                 ]
             ),
-            "migration": {"observed": True, "exit_code": 0},
+            "migration": {
+                "observed": True,
+                "state": "exited",
+                "exit_code": 0,
+                "invocation_count": 1,
+            },
             "readiness": {"observed": True, "ready_roles": sorted(set(ROLES) - {"secrets-init", "migrate"})},
             "podman_api": False,
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
+                "network_id": "b" * 64,
+                "volume_created_at": "2026-08-14T12:00:00Z",
             },
         },
         "post_cleanup": {
@@ -209,6 +222,8 @@ def valid_observations() -> dict[str, object]:
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
+                "network_id": "b" * 64,
+                "volume_created_at": "2026-08-14T12:00:00Z",
             },
         },
     }
@@ -327,6 +342,33 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 self.collector.names_from_listing(["podman", "network", "ls"]),
             )
 
+    def test_resource_name_evidence_is_truncated_fail_closed_at_schema_bound(self) -> None:
+        rows = [{"Name": f"resource-{index:03d}"} for index in range(129)]
+        with mock.patch.object(
+            self.collector, "json_array", return_value=(rows, True)
+        ):
+            names, complete = self.collector.names_from_listing(
+                ["podman", "network", "ls"]
+            )
+        self.assertEqual(128, len(names))
+        self.assertFalse(complete)
+
+    def test_control_resource_identity_uses_bounded_podman_inspection(self) -> None:
+        network_id = "b" * 64
+        created_at = "2026-08-14T12:00:00Z"
+        with mock.patch.object(
+            self.collector,
+            "json_array",
+            side_effect=[
+                ([{"name": "secpal-ci-unrelated-control-network", "id": network_id}], True),
+                ([{"Name": "secpal-ci-unrelated-control-volume", "CreatedAt": created_at}], True),
+            ],
+        ):
+            facts, complete = self.collector.control_resource_facts()
+        self.assertTrue(complete)
+        self.assertEqual(network_id, facts["network_id"])
+        self.assertEqual(created_at, facts["volume_created_at"])
+
     def test_inventory_rejects_unprefixed_target_resources_and_cleanup_leaks(self) -> None:
         for phase, field in (
             ("live", "all_containers"),
@@ -365,6 +407,48 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
             "D1A_GENERATED_UNITS",
         )
+
+    def test_cleanup_scans_generated_drop_in_directories_and_files(self) -> None:
+        prefix = "secpal-int-aaaaaaaaaaaa-api.service"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            generator = Path(temporary_directory)
+            drop_in = generator / f"{prefix}.d"
+            drop_in.mkdir()
+            (drop_in / "10-dependency.conf").write_text(
+                "[Unit]\n", encoding="utf-8"
+            )
+            with mock.patch.object(self.collector, "GENERATOR_ROOT", generator):
+                artifacts, complete = self.collector.generated_cleanup_artifacts(
+                    "aaaaaaaaaaaa"
+                )
+        self.assertTrue(complete)
+        self.assertEqual(
+            [f"{prefix}.d", f"{prefix}.d/10-dependency.conf"], artifacts
+        )
+
+    def test_cleanup_generator_scan_is_bounded_even_by_unrelated_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            generator = Path(temporary_directory)
+            for index in range(1025):
+                (generator / f"unrelated-{index:04d}").touch()
+            with mock.patch.object(self.collector, "GENERATOR_ROOT", generator):
+                artifacts, complete = self.collector.generated_cleanup_artifacts(
+                    "aaaaaaaaaaaa"
+                )
+        self.assertEqual([], artifacts)
+        self.assertFalse(complete)
+
+    def test_cleanup_generator_evidence_cannot_exceed_schema_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            generator = Path(temporary_directory)
+            for index in range(129):
+                (generator / f"secpal-int-aaaaaaaaaaaa-{index:03d}.service").touch()
+            with mock.patch.object(self.collector, "GENERATOR_ROOT", generator):
+                artifacts, complete = self.collector.generated_cleanup_artifacts(
+                    "aaaaaaaaaaaa"
+                )
+        self.assertEqual(128, len(artifacts))
+        self.assertFalse(complete)
 
     def test_unexpected_missing_and_duplicate_containers_are_rejected(self) -> None:
         for mutate in (
@@ -412,6 +496,16 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "image", "docker.io/secpal/api:latest"
             ),
             "D1A_IMAGE_PROVENANCE",
+        )
+
+    def test_api_and_frontend_require_distinct_image_identities(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][8].__setitem__(
+                "image",
+                "localhost/secpal-ci-frontend@sha256:"
+                + evidence["live"]["containers"][4]["image"].rsplit(":", 1)[1],
+            ),
+            "D1A_IMAGE_ROLE_SEPARATION",
         )
 
     def test_each_container_requires_its_exact_fixture_network(self) -> None:
@@ -592,15 +686,64 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ):
             self.assertEqual((True, False), self.collector.podman_api_facts())
 
+    def test_podman_api_scan_uses_executable_identity_not_argv_zero(self) -> None:
+        process = Path("/proc/123")
+        metadata = types.SimpleNamespace(st_dev=1, st_ino=2)
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            side_effect=lambda arguments, timeout=20: (
+                (0, "", True) if arguments[:2] == ["ss", "-lxnp"] else (3, "", True)
+            ),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([], True)
+        ), mock.patch.object(
+            self.collector.Path, "iterdir", return_value=(process,)
+        ), mock.patch.object(
+            self.collector.Path,
+            "open",
+            return_value=io.BytesIO(b"renamed-client\0system\0service\0--time=0\0"),
+        ), mock.patch.object(
+            self.collector.Path, "stat", return_value=metadata
+        ):
+            self.assertEqual((True, True), self.collector.podman_api_facts())
+
     def test_migration_and_readiness_must_be_independently_observed(self) -> None:
         self.assert_failure(
             lambda evidence: evidence["live"]["migration"].__setitem__("observed", False),
             "D1A_MIGRATION",
         )
         self.assert_failure(
+            lambda evidence: evidence["live"]["migration"].__setitem__(
+                "state", "running"
+            ),
+            "D1A_MIGRATION",
+        )
+        self.assert_failure(
+            lambda evidence: evidence["live"]["migration"].__setitem__(
+                "invocation_count", 2
+            ),
+            "D1A_MIGRATION",
+        )
+        self.assert_failure(
             lambda evidence: evidence["live"]["readiness"].__setitem__("observed", False),
             "D1A_READINESS",
         )
+
+    def test_migration_invocations_are_counted_from_systemd_journal_ids(self) -> None:
+        first = "a" * 32
+        second = "b" * 32
+        journal = "\n".join(
+            json.dumps({"_SYSTEMD_INVOCATION_ID": value})
+            for value in (first, first, second)
+        )
+        with mock.patch.object(
+            self.collector, "command_result", return_value=(0, journal, True)
+        ):
+            self.assertEqual(
+                (2, True),
+                self.collector.migration_invocation_facts("aaaaaaaaaaaa"),
+            )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][4].__setitem__(
                 "health", "none"
@@ -629,12 +772,20 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
             "D1A_CONTROL_RESOURCES_PRESERVED",
         )
+        self.assert_failure(
+            lambda evidence: evidence["post_cleanup"]["control_resources"].__setitem__(
+                "network_id", "c" * 64
+            ),
+            "D1A_CONTROL_RESOURCES_PRESERVED",
+        )
 
     def test_cleanup_generator_scan_failure_marks_observation_incomplete(self) -> None:
         with mock.patch.object(
             self.collector.Path, "iterdir", return_value=iter(())
         ), mock.patch.object(
-            self.collector.Path, "glob", side_effect=PermissionError("hidden")
+            self.collector,
+            "generated_cleanup_artifacts",
+            return_value=([], False),
         ), mock.patch.object(
             self.collector,
             "resource_inventory",
@@ -645,7 +796,15 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ), mock.patch.object(
             self.collector,
             "control_resource_facts",
-            return_value={"network_present": True, "volume_present": True},
+            return_value=(
+                {
+                    "network_present": True,
+                    "volume_present": True,
+                    "network_id": "b" * 64,
+                    "volume_created_at": "2026-08-14T12:00:00Z",
+                },
+                True,
+            ),
         ):
             observation = self.collector.collect_post_cleanup("aaaaaaaaaaaa")
         self.assertFalse(observation["complete"])
@@ -685,6 +844,34 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertEqual(
             3,
             runner.count("cd /home/secpal-ci/deployment-target"),
+        )
+        host_collection = runner.split("collect_host_and_assemble()", 1)[1]
+        host_collection = host_collection.split(
+            "collect_cleanup_after_interruption()", 1
+        )[0]
+        self.assertIn(
+            "timeout --signal=TERM --kill-after=30s 12m \\\n    ssh",
+            host_collection,
+        )
+
+    def test_malformed_observation_becomes_closed_incomplete_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "live.json"
+            path.write_text('{"phase":', encoding="utf-8")
+            observation = self.assembler.read_observation(
+                path, "live", collection_status=255
+            )
+        self.assertEqual("live", observation["phase"])
+        self.assertFalse(observation["target_admitted"])
+        self.assertFalse(observation["complete"])
+        self.assertEqual(
+            {
+                "observed": False,
+                "state": "unknown",
+                "exit_code": -1,
+                "invocation_count": 0,
+            },
+            observation["migration"],
         )
 
     def test_target_entrypoint_has_closed_versioned_phase_parser(self) -> None:
