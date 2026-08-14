@@ -2071,9 +2071,13 @@ def validate(root: Path) -> None:
         and 'state.get("Healthcheck", {})' in workload_collector
         and '"rootless": rootless' in workload_collector
         and 'item["Rootless"]' not in workload_collector
-        and '"no-new-privileges" not in security_options'
-        in workload_collector
-        and "D1A_RESOURCE_INVENTORY" in workload_collector,
+        and 'security_options != ["no-new-privileges"]' in workload_collector
+        and "D1A_RESOURCE_INVENTORY" in workload_collector
+        and "D1A_VOLUME_TOPOLOGY" in workload_collector
+        and "D1A_TMPFS_TOPOLOGY" in workload_collector
+        and "D1A_CONTAINER_LIFECYCLE" in workload_collector
+        and "container_lifecycle_events" in workload_collector
+        and 'item.get("effective_caps") != expected_caps' in workload_collector,
         "Podman evidence must use admitted v5 fields and exact inventory/security facts",
     )
     try:

@@ -778,16 +778,20 @@
         "uts_mode",
         "network_mode",
         "cap_add",
+        "effective_caps",
+        "bounding_caps",
         "devices_present",
-        "podman_socket_mount",
+        "mounts",
+        "tmpfs",
         "remote_api_environment",
         "security_opt",
+        "lifecycle_events",
         "networks",
         "published_ports",
         "auto_update",
         "systemd_unit",
-        "service_managed",
-        "service_correlation",
+        "container_cgroup",
+        "lifecycle_service_invocation",
         "image"
       ],
       "properties": {
@@ -813,10 +817,27 @@
         "uts_mode": { "$ref": "#/$defs/shortString" },
         "network_mode": { "$ref": "#/$defs/shortString" },
         "cap_add": { "$ref": "#/$defs/stringArray" },
+        "effective_caps": { "$ref": "#/$defs/stringArray" },
+        "bounding_caps": { "$ref": "#/$defs/stringArray" },
         "devices_present": { "type": "boolean" },
-        "podman_socket_mount": { "type": "boolean" },
+        "mounts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/containerMount" }
+        },
+        "tmpfs": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/containerTmpfs" }
+        },
         "remote_api_environment": { "type": "boolean" },
         "security_opt": { "$ref": "#/$defs/stringArray" },
+        "lifecycle_events": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/containerLifecycleEvent" }
+        },
         "networks": { "$ref": "#/$defs/stringArray" },
         "published_ports": { "$ref": "#/$defs/stringArray" },
         "auto_update": { "type": "boolean" },
@@ -825,9 +846,60 @@
           "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
           "maxLength": 96
         },
-        "service_managed": { "type": "boolean" },
-        "service_correlation": { "enum": ["none", "cgroup", "journal"] },
+        "container_cgroup": { "type": "string", "maxLength": 256 },
+        "lifecycle_service_invocation": {
+          "type": "string",
+          "pattern": "^$|^[0-9a-f]{32}$"
+        },
         "image": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "containerMount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "source", "destination", "rw"],
+      "properties": {
+        "type": { "enum": ["bind", "volume"] },
+        "source": { "type": "string", "maxLength": 512 },
+        "destination": { "type": "string", "pattern": "^/[^\\u0000]{0,255}$" },
+        "rw": { "type": "boolean" }
+      }
+    },
+    "containerTmpfs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destination", "size_bytes", "mode", "uid", "gid", "flags"],
+      "properties": {
+        "destination": { "type": "string", "pattern": "^/[^\\u0000]{0,255}$" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "mode": { "type": "string", "pattern": "^0[0-7]{3}$" },
+        "uid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "gid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "flags": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 6,
+          "items": {
+            "enum": ["nodev", "noexec", "nosuid", "rprivate", "rw", "tmpcopyup"]
+          }
+        }
+      }
+    },
+    "containerLifecycleEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "time_nano"],
+      "properties": {
+        "status": { "enum": ["create", "start", "died"] },
+        "time_nano": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999999999999999999999
+        }
       }
     },
     "userWork": {

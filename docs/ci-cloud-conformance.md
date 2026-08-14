@@ -358,7 +358,10 @@ boundaries.
 The target account has no sudo authority. The `host` phase retains the D.1
 contract suite. PR #22 owns the implementation of the two workload phases and
 may cross the root-owned publication boundary only through the fixed trusted
-fixture client.
+fixture client. Its future fixed client path may stage runtime assets only below
+`/home/secpal-ci/quadlet-fixture/<instance>/assets`; this location is derived
+from the admitted SHA prefix, is not a phase argument, and every effective bind
+source outside its closed filename set fails trusted live admission.
 
 The trusted runner creates one unrelated rootless control network and volume
 and records a main-controlled baseline of every rootless Podman container,
@@ -891,14 +894,25 @@ Evidence includes:
 - the exact ten-container logical-role set, singleton counts for scheduler and
   activity-hash-chain worker, effective rootless/crun/security facts and private
   PID, user, IPC, UTS, and network namespace modes,
-  the closed role-to-network topology, the gateway's sole loopback publication,
+  the closed role-to-network topology, the complete semantic role-to-mount
+  topology (bind/volume type, exact volume name or fixed
+  `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
+  and read/write state), and the
+  exact per-role tmpfs destinations, sizes, modes, container UID/GID ownership,
+  and `rprivate`/`tmpcopyup`/`nosuid`/`nodev`/`noexec` flags; target-selected
+  bind roots, the unrelated control volume, missing mounts, duplicate
+  destinations, or privilege-expanding tmpfs flags fail admission; the
+  gateway's sole loopback publication,
   immutable local image references with distinct API and frontend content
   digests, the exact `PODMAN_SYSTEMD_UNIT` binding from each container to its
   generated service, and—for every running role—the container process cgroup
   nested beneath that effective service cgroup; for each exited one-shot role,
-  exactly one journal record from `/usr/bin/podman` in the generated service's
-  exact systemd invocation that reports the independently inspected full
-  container ID; one exited zero-status migration systemd invocation established
+  one ordered Podman `create` → `start` → `died` lifecycle for the independently
+  inspected full container ID plus exactly one journal record from a
+  `/usr/bin/podman run` command naming that exact container in the generated
+  service's exact systemd invocation; `inspect`, another Podman subcommand, a
+  different name, a duplicate lifecycle, or a bare container-ID message cannot
+  establish this binding; one exited zero-status migration systemd invocation established
   from a separate journal query restricted to invocation-ID fields, healthy
   state for every health-bearing role, and running state for the remaining
   long-lived roles;
@@ -911,7 +925,10 @@ Evidence includes:
   restoration of the baseline active systemd user-unit and pending-job sets,
   measured both before and after the final inventory so a cleanup- or host-phase
   transient service, timer, or queued job fails closed;
-  exact `no-new-privileges` admission and Podman 5.4 `Healthcheck`/network-name
+  exact singleton `no-new-privileges` admission with every target-selected
+  seccomp or other additional security option rejected; exact added, effective,
+  and bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the
+  secrets initializer, empty for every other role); and Podman 5.4 `Healthcheck`/network-name
   field interpretation; an empty Podman 5.4 `UsernsMode` is retained as the
   documented `host` mode and rejected rather than rewritten as `private`; and
 - exact absence of every integration unit, generated service and nested

@@ -12,13 +12,14 @@ import json
 import os
 import re
 import selectors
+import shlex
 import signal
 import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 
 CI_UID = 20000
@@ -53,17 +54,109 @@ GENERATED_LOGICAL_NAMES = (
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
-ROLE_NETWORK_KINDS = {
-    "secrets-init": (),
-    "postgres": ("application",),
-    "valkey": ("application",),
-    "migrate": ("application",),
-    "api": ("application", "edge"),
-    "worker-general": ("application",),
-    "worker-hash-chain": ("application",),
-    "scheduler": ("application",),
-    "frontend": ("edge",),
-    "gateway": ("edge",),
+class RoleContract(NamedTuple):
+    identity: tuple[int, int]
+    networks: tuple[str, ...] = ()
+    volumes: tuple[tuple[str, str, bool], ...] = ()
+    binds: tuple[tuple[str, str], ...] = ()
+    tmpfs: tuple[tuple[str, int, str, bool], ...] = ()
+    capabilities: tuple[str, ...] = ()
+
+
+API_VOLUMES = (
+    ("secrets", "/run/secpal-secrets", False),
+    ("private-storage", "/app/storage/app/private", True),
+)
+API_BINDS = (
+    ("container-entrypoint.sh", "/run/secpal/container-entrypoint.sh"),
+    ("phase-b-runtime-probe.php", "/run/secpal/phase-b-runtime-probe.php"),
+)
+API_TMPFS = (
+    ("/tmp", 32, "0700", True),
+    ("/config", 16, "0700", True),
+    ("/data", 16, "0700", True),
+    ("/app/storage/app/public", 32, "0750", False),
+    ("/app/storage/framework/cache/data", 32, "0750", True),
+    ("/app/storage/framework/sessions", 32, "0750", True),
+    ("/app/storage/framework/views", 32, "0750", True),
+    ("/app/storage/logs", 32, "0750", True),
+    ("/app/bootstrap/cache", 16, "0750", True),
+)
+ROLE_CONTRACTS = {
+    "secrets-init": RoleContract(
+        (0, 0),
+        networks=(),
+        volumes=(
+            ("secrets", "/run/secpal-secrets", True),
+            ("postgres", "/var/lib/postgresql/data", True),
+            ("private-storage", "/mnt/secpal-private-storage", True),
+        ),
+        binds=(
+            ("init-local-secrets.sh", "/run/secpal/init-local-secrets.sh"),
+            (
+                "quadlet-oneshot-entrypoint.sh",
+                "/run/secpal/quadlet-oneshot-entrypoint.sh",
+            ),
+        ),
+        tmpfs=(("/tmp", 16, "0700", True),),
+        capabilities=("CAP_CHOWN", "CAP_FOWNER"),
+    ),
+    "postgres": RoleContract(
+        (999, 999),
+        networks=("application",),
+        volumes=(
+            ("secrets", "/run/secpal-secrets", False),
+            ("postgres", "/var/lib/postgresql/data", True),
+        ),
+        tmpfs=(("/tmp", 32, "0700", True), ("/run/postgresql", 16, "0750", True)),
+    ),
+    "valkey": RoleContract(
+        (10002, 10002),
+        networks=("application",),
+        volumes=(("secrets", "/run/secpal-secrets", False),),
+        binds=(("valkey-entrypoint.sh", "/run/secpal/valkey-entrypoint.sh"),),
+        tmpfs=(("/tmp", 16, "0700", True), ("/data", 32, "0700", True)),
+    ),
+    "migrate": RoleContract(
+        (10001, 10001),
+        networks=("application",),
+        volumes=API_VOLUMES,
+        binds=API_BINDS
+        + (("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),),
+        tmpfs=API_TMPFS,
+    ),
+    "api": RoleContract(
+        (10001, 10001),
+        networks=("application", "edge"),
+        volumes=API_VOLUMES,
+        binds=API_BINDS,
+        tmpfs=API_TMPFS,
+    ),
+    "worker-general": RoleContract(
+        (10001, 10001), networks=("application",), volumes=API_VOLUMES,
+        binds=API_BINDS, tmpfs=API_TMPFS,
+    ),
+    "worker-hash-chain": RoleContract(
+        (10001, 10001), networks=("application",), volumes=API_VOLUMES,
+        binds=API_BINDS, tmpfs=API_TMPFS,
+    ),
+    "scheduler": RoleContract(
+        (10001, 10001), networks=("application",), volumes=API_VOLUMES,
+        binds=API_BINDS, tmpfs=API_TMPFS,
+    ),
+    "frontend": RoleContract(
+        (101, 101), networks=("edge",), tmpfs=(("/tmp", 32, "0700", True),)
+    ),
+    "gateway": RoleContract(
+        (10003, 10003),
+        networks=("edge",),
+        binds=(("Caddyfile", "/etc/caddy/Caddyfile"),),
+        tmpfs=(
+            ("/tmp", 16, "0700", True),
+            ("/config", 16, "0700", True),
+            ("/data", 32, "0700", True),
+        ),
+    ),
 }
 BASELINE_OBSERVATION_FIELDS = frozenset(
     {
@@ -486,6 +579,169 @@ def names_from_listing(
     )
 
 
+def container_lifecycle_events(
+    container_id: str,
+) -> tuple[list[dict[str, object]], bool]:
+    if re.fullmatch(r"[0-9a-f]{64}", container_id) is None:
+        return [], False
+    status_code, output, complete = command_result(
+        [
+            "podman", "events", "--stream=false", "--format=json",
+            "--since=4h",
+            "--filter", f"container={container_id}",
+        ],
+        timeout=30,
+    )
+    if status_code != 0 or not complete:
+        return [], False
+    relevant = {"create", "start", "died"}
+    events: list[dict[str, object]] = []
+    try:
+        for line in output.splitlines():
+            if not line:
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                return [], False
+            status = record.get("Status", record.get("status"))
+            event_type = record.get("Type", record.get("type"))
+            event_id = record.get("ID", record.get("id"))
+            time_nano = record.get("TimeNano", record.get("timeNano"))
+            if status not in relevant:
+                continue
+            if (
+                event_type != "container"
+                or event_id != container_id
+                or type(time_nano) is not int
+                or not 0 < time_nano < 10**21
+            ):
+                return [], False
+            events.append({"status": status, "time_nano": time_nano})
+    except json.JSONDecodeError:
+        return [], False
+    return (
+        events,
+        len(events) <= 4
+        and all(
+            int(events[index - 1]["time_nano"])
+            < int(events[index]["time_nano"])
+            for index in range(1, len(events))
+        ),
+    )
+
+
+def normalized_mounts(
+    mounts: list[object],
+) -> tuple[list[dict[str, object]], bool]:
+    normalized: list[dict[str, object]] = []
+    for mount in mounts:
+        if (
+            not isinstance(mount, dict)
+            or not {"Type", "Destination", "RW"}.issubset(mount)
+            or not isinstance(mount["Type"], str)
+            or not isinstance(mount["Destination"], str)
+            or not isinstance(mount["RW"], bool)
+        ):
+            return [], False
+        mount_type = mount["Type"].lower()
+        if mount_type == "tmpfs":
+            continue
+        source_field = "Name" if mount_type == "volume" else "Source"
+        if (
+            mount_type not in {"bind", "volume"}
+            or not isinstance(mount.get(source_field), str)
+            or not mount[source_field]
+            or not mount["Destination"].startswith("/")
+        ):
+            return [], False
+        normalized.append(
+            {
+                "type": mount_type,
+                "source": mount[source_field],
+                "destination": mount["Destination"],
+                "rw": mount["RW"],
+            }
+        )
+    normalized.sort(key=lambda item: str(item["destination"]))
+    destinations = [str(item["destination"]) for item in normalized]
+    return (
+        normalized[:16],
+        len(normalized) <= 16 and len(destinations) == len(set(destinations)),
+    )
+
+
+def parsed_tmpfs_size(value: str) -> int | None:
+    match = re.fullmatch(r"([1-9][0-9]*)([kmg]?)", value.lower())
+    if match is None:
+        return None
+    multipliers = {
+        "": 1,
+        "k": 1024,
+        "m": 1024 * 1024,
+        "g": 1024 * 1024 * 1024,
+    }
+    return int(match.group(1)) * multipliers[match.group(2)]
+
+
+def normalized_tmpfs(
+    tmpfs: dict[object, object],
+) -> tuple[list[dict[str, object]], bool]:
+    facts: list[dict[str, object]] = []
+    allowed_flags = {"rprivate", "tmpcopyup", "nosuid", "nodev", "noexec", "rw"}
+    for destination, raw_options in tmpfs.items():
+        if (
+            not isinstance(destination, str)
+            or not destination.startswith("/")
+            or not isinstance(raw_options, str)
+        ):
+            return [], False
+        flags: set[str] = set()
+        values: dict[str, str] = {}
+        for raw_option in raw_options.split(","):
+            option = raw_option.strip().lower()
+            if not option:
+                return [], False
+            if "=" in option:
+                name, value = option.split("=", 1)
+                if name in values or name not in {"size", "mode", "uid", "gid"}:
+                    return [], False
+                values[name] = value
+            elif option in flags or option not in allowed_flags:
+                return [], False
+            else:
+                flags.add(option)
+        size = parsed_tmpfs_size(values.get("size", ""))
+        try:
+            mode = f"{int(values.get('mode', ''), 8):04o}"
+            uid = int(values.get("uid", ""), 10)
+            gid = int(values.get("gid", ""), 10)
+        except ValueError:
+            return [], False
+        if (
+            size is None
+            or set(values) != {"size", "mode", "uid", "gid"}
+            or not 0 <= uid <= 2**32 - 1
+            or not 0 <= gid <= 2**32 - 1
+        ):
+            return [], False
+        facts.append(
+            {
+                "destination": destination,
+                "size_bytes": size,
+                "mode": mode,
+                "uid": uid,
+                "gid": gid,
+                "flags": sorted(flags),
+            }
+        )
+    facts.sort(key=lambda item: str(item["destination"]))
+    destinations = [str(item["destination"]) for item in facts]
+    return (
+        facts[:16],
+        len(facts) <= 16 and len(destinations) == len(set(destinations)),
+    )
+
+
 def container_facts(
     instance: str, *, rootless: bool
 ) -> tuple[list[dict[str, object]], bool]:
@@ -519,14 +775,14 @@ def container_facts(
             continue
         required_item = {
             "Id", "Name", "State", "Config", "HostConfig", "NetworkSettings",
-            "Mounts", "OCIRuntime",
+            "Mounts", "OCIRuntime", "EffectiveCaps", "BoundingCaps",
         }
         required_state = {"Status", "ExitCode", "Pid"}
         required_config = {"Labels", "Env", "Image"}
         required_host_config = {
             "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
             "NetworkMode",
-            "SecurityOpt", "CapAdd", "Devices",
+            "SecurityOpt", "CapAdd", "Devices", "Tmpfs",
         }
         required_network_settings = {"Networks", "Ports"}
         if (
@@ -538,6 +794,8 @@ def container_facts(
             or not isinstance(item["Id"], str)
             or re.fullmatch(r"[0-9a-f]{64}", item["Id"]) is None
             or not isinstance(item["Mounts"], list)
+            or not isinstance(item["EffectiveCaps"], list)
+            or not isinstance(item["BoundingCaps"], list)
             or not isinstance(config["Labels"], dict)
             or not isinstance(config["Env"], list)
             or not isinstance(state["Pid"], int)
@@ -547,6 +805,7 @@ def container_facts(
             or not isinstance(host_config["SecurityOpt"], list)
             or not isinstance(host_config["CapAdd"], list)
             or not isinstance(host_config["Devices"], list)
+            or not isinstance(host_config["Tmpfs"], dict)
             or not isinstance(network_settings["Networks"], dict)
             or not isinstance(network_settings["Ports"], dict)
         ):
@@ -583,23 +842,21 @@ def container_facts(
             complete = False
         security_opt = host_config["SecurityOpt"]
         cap_add = host_config["CapAdd"]
+        effective_caps = item["EffectiveCaps"]
+        bounding_caps = item["BoundingCaps"]
         devices = host_config["Devices"]
         mounts = item["Mounts"]
         environment = config["Env"]
         if any(not isinstance(value, str) for value in environment) or any(
-            not isinstance(value, dict) for value in mounts
+            not isinstance(value, str)
+            for values in (cap_add, effective_caps, bounding_caps)
+            for value in values
         ):
             complete = False
-        socket_paths = ("/run/podman", "/run/user/20000/podman", "podman.sock")
-        podman_socket_mount = any(
-            isinstance(mount, dict)
-            and any(
-                marker in str(mount.get(field, ""))
-                for marker in socket_paths
-                for field in ("Source", "Destination")
-            )
-            for mount in mounts
-        )
+        mount_facts, mounts_complete = normalized_mounts(mounts)
+        tmpfs_facts, tmpfs_complete = normalized_tmpfs(host_config["Tmpfs"])
+        lifecycle_events, events_complete = container_lifecycle_events(item["Id"])
+        complete = complete and mounts_complete and tmpfs_complete and events_complete
         remote_api_environment = any(
             isinstance(value, str)
             and value.split("=", 1)[0] in {"CONTAINER_HOST", "DOCKER_HOST"}
@@ -622,11 +879,24 @@ def container_facts(
                 "ipc_mode": str(host_config["IpcMode"] or "private"),
                 "uts_mode": str(host_config["UTSMode"] or "private"),
                 "network_mode": str(host_config["NetworkMode"] or "private"),
-                "cap_add": sorted(str(value) for value in cap_add),
+                "cap_add": sorted(
+                    f"CAP_{str(value).upper().removeprefix('CAP_')}"
+                    for value in cap_add
+                ),
+                "effective_caps": sorted(
+                    f"CAP_{str(value).upper().removeprefix('CAP_')}"
+                    for value in effective_caps
+                ),
+                "bounding_caps": sorted(
+                    f"CAP_{str(value).upper().removeprefix('CAP_')}"
+                    for value in bounding_caps
+                ),
                 "devices_present": bool(devices),
-                "podman_socket_mount": podman_socket_mount,
+                "mounts": mount_facts,
+                "tmpfs": tmpfs_facts,
                 "remote_api_environment": remote_api_environment,
                 "security_opt": sorted(str(value) for value in security_opt),
+                "lifecycle_events": lifecycle_events,
                 "networks": sorted(str(value) for value in network_map),
                 "published_ports": sorted(published),
                 "auto_update": "io.containers.autoupdate" in labels,
@@ -1000,12 +1270,88 @@ def container_pid_matches_state(container: dict[str, object]) -> bool:
     )
 
 
+def expected_role_mounts(instance: str, role: str) -> list[dict[str, object]]:
+    prefix = f"secpal-int-{instance}-"
+    asset_root = Path("/home/secpal-ci/quadlet-fixture") / instance / "assets"
+    contract = ROLE_CONTRACTS.get(role)
+    if contract is None:
+        return []
+    facts = [
+        {
+            "type": "volume",
+            "source": f"{prefix}{kind}",
+            "destination": destination,
+            "rw": writable,
+        }
+        for kind, destination, writable in contract.volumes
+    ]
+    facts.extend(
+        {
+            "type": "bind",
+            "source": str(asset_root / asset_name),
+            "destination": destination,
+            "rw": False,
+        }
+        for asset_name, destination in contract.binds
+    )
+    return sorted(facts, key=lambda item: str(item["destination"]))
+
+
+def expected_role_tmpfs(role: str) -> list[dict[str, object]]:
+    contract = ROLE_CONTRACTS.get(role)
+    if contract is None:
+        return []
+    uid, gid = contract.identity
+    return sorted(
+        [
+            {
+                "destination": destination,
+                "size_bytes": size_mib * 1024 * 1024,
+                "mode": mode,
+                "uid": uid,
+                "gid": gid,
+                "flags": sorted(
+                    ["rprivate", "tmpcopyup", "nosuid", "nodev"]
+                    + (["noexec"] if noexec else [])
+                ),
+            }
+            for destination, size_mib, mode, noexec in contract.tmpfs
+        ],
+        key=lambda item: str(item["destination"]),
+    )
+
+
+def tmpfs_contract_matches(
+    observed: object, expected: list[dict[str, object]]
+) -> bool:
+    if not isinstance(observed, list) or len(observed) != len(expected):
+        return False
+    for fact, contract in zip(observed, expected, strict=True):
+        if not isinstance(fact, dict) or set(fact) != set(contract):
+            return False
+        flags = fact.get("flags")
+        expected_flags = contract["flags"]
+        if (
+            not isinstance(flags, list)
+            or len(flags) != len(set(flags))
+            or set(flags) not in (set(expected_flags), set(expected_flags) | {"rw"})
+        ):
+            return False
+        normalized = dict(fact)
+        normalized["flags"] = [flag for flag in flags if flag != "rw"]
+        if normalized != contract:
+            return False
+    return True
+
+
 def exited_container_execution_matches(
     service: dict[str, object], container: dict[str, object]
 ) -> tuple[bool, bool]:
     unit = service.get("unit")
     invocation_id = service.get("invocation_id")
     container_id = container.get("id")
+    container_name = container.get("name")
+    lifecycle_events = container.get("lifecycle_events")
     if (
         not isinstance(unit, str)
         or re.fullmatch(r"secpal-int-[0-9a-f]{12}-[a-z0-9-]+\.service", unit)
@@ -1014,6 +1360,12 @@ def exited_container_execution_matches(
         or re.fullmatch(r"[0-9a-f]{32}", invocation_id) is None
         or not isinstance(container_id, str)
         or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
+        or not isinstance(container_name, str)
+        or re.fullmatch(r"secpal-int-[0-9a-f]{12}-[a-z0-9-]+", container_name)
+        is None
+        or not isinstance(lifecycle_events, list)
+        or [event.get("status") for event in lifecycle_events if isinstance(event, dict)]
+        != ["create", "start", "died"]
     ):
         return False, False
     status_code, output, complete = command_result(
@@ -1021,7 +1373,7 @@ def exited_container_execution_matches(
             "journalctl",
             f"--user-unit={unit}",
             "--output=json",
-            "--output-fields=_SYSTEMD_INVOCATION_ID,_EXE,MESSAGE",
+            "--output-fields=_SYSTEMD_INVOCATION_ID,_EXE,_CMDLINE,MESSAGE",
             "--no-pager",
         ],
         timeout=30,
@@ -1036,10 +1388,29 @@ def exited_container_execution_matches(
             record = json.loads(line)
             if not isinstance(record, dict):
                 return False, False
+            command_line = record.get("_CMDLINE")
+            try:
+                command = shlex.split(command_line) if isinstance(command_line, str) else []
+            except ValueError:
+                return False, False
+            names = [
+                value.split("=", 1)[1]
+                for value in command
+                if value.startswith("--name=")
+            ]
+            names.extend(
+                command[index + 1]
+                for index, value in enumerate(command[:-1])
+                if value == "--name"
+            )
             if (
                 record.get("_SYSTEMD_INVOCATION_ID") == invocation_id
                 and record.get("_EXE") == str(PODMAN_EXECUTABLE)
                 and record.get("MESSAGE") == container_id
+                and len(command) >= 2
+                and command[0] == str(PODMAN_EXECUTABLE)
+                and command[1] == "run"
+                and names == [container_name]
             ):
                 matches += 1
     except json.JSONDecodeError:
@@ -1064,8 +1435,8 @@ def bind_container_services(
         expected_unit = f"{fact.get('name', '')}.service"
         service = services_by_role.get(role)
         if not isinstance(service, dict):
-            fact["service_managed"] = False
-            fact["service_correlation"] = "none"
+            fact["container_cgroup"] = ""
+            fact["lifecycle_service_invocation"] = ""
             bound.append(fact)
             complete = False
             continue
@@ -1077,22 +1448,14 @@ def bind_container_services(
         )
         if fact.get("state") == "running":
             pid = fact.get("pid")
-            control_group = service.get("control_group")
             observed_group, observed_complete = (
                 process_control_group(pid)
                 if type(pid) is int
                 else ("", False)
             )
             complete = complete and observed_complete
-            managed = (
-                common_binding
-                and isinstance(control_group, str)
-                and (
-                    observed_group == control_group
-                    or observed_group.startswith(f"{control_group}/")
-                )
-            )
-            correlation = "cgroup" if managed else "none"
+            fact["container_cgroup"] = observed_group
+            fact["lifecycle_service_invocation"] = ""
         else:
             execution_matches, execution_complete = (
                 exited_container_execution_matches(service, fact)
@@ -1100,10 +1463,12 @@ def bind_container_services(
                 else (False, True)
             )
             complete = complete and execution_complete
-            managed = common_binding and execution_matches
-            correlation = "journal" if managed else "none"
-        fact["service_managed"] = managed
-        fact["service_correlation"] = correlation
+            fact["container_cgroup"] = ""
+            fact["lifecycle_service_invocation"] = (
+                str(service.get("invocation_id", ""))
+                if common_binding and execution_matches
+                else ""
+            )
         bound.append(fact)
     return bound, complete
 
@@ -1398,6 +1763,11 @@ def workload_admission_failures(observations: object) -> list[str]:
     if len(container_roles) != len(ROLES) or set(container_roles) != set(ROLES):
         failures.append("D1A_CONTAINER_SET")
     if isinstance(containers, list):
+        services_by_role = {
+            str(service.get("logical_name")): service
+            for service in services
+            if isinstance(service, dict)
+        } if isinstance(services, list) else {}
         for item in containers:
             if not isinstance(item, dict):
                 continue
@@ -1405,13 +1775,37 @@ def workload_admission_failures(observations: object) -> list[str]:
                 failures.append("D1A_ROOTLESS")
             if item.get("oci_runtime") != "crun":
                 failures.append("D1A_OCI_RUNTIME")
-            if item.get("privileged") is not False or item.get("cap_add"):
+            role_contract = ROLE_CONTRACTS.get(str(item.get("role")))
+            expected_caps = (
+                list(role_contract.capabilities) if role_contract is not None else []
+            )
+            if (
+                item.get("privileged") is not False
+                or item.get("cap_add") != expected_caps
+                or item.get("effective_caps") != expected_caps
+                or item.get("bounding_caps") != expected_caps
+            ):
                 failures.append("D1A_PRIVILEGE_BOUNDARY")
             if item.get("devices_present") is not False:
                 failures.append("D1A_PRIVILEGE_BOUNDARY")
-            if item.get("podman_socket_mount") is not False or item.get(
-                "remote_api_environment"
-            ) is not False:
+            mounts = item.get("mounts")
+            if (
+                not isinstance(mounts, list)
+                or any(not isinstance(mount, dict) for mount in mounts)
+                or any(
+                    any(
+                        marker in str(mount.get(field, ""))
+                        for marker in (
+                            "/run/podman", "/run/user/20000/podman",
+                            "podman.sock",
+                        )
+                        for field in ("source", "destination")
+                    )
+                    for mount in mounts
+                    if isinstance(mount, dict)
+                )
+                or item.get("remote_api_environment") is not False
+            ):
                 failures.append("D1A_PODMAN_API_DISABLED")
             if any(
                 item.get(field) != "private"
@@ -1424,12 +1818,7 @@ def workload_admission_failures(observations: object) -> list[str]:
             if item.get("auto_update") is not False:
                 failures.append("D1A_AUTO_UPDATE_DISABLED")
             security_options = item.get("security_opt", [])
-            if not isinstance(security_options, list) or (
-                "no-new-privileges" not in security_options
-            ) or any(
-                "unconfined" in str(option) or str(option).endswith("=disable")
-                for option in security_options
-            ):
+            if security_options != ["no-new-privileges"]:
                 failures.append("D1A_SECURITY_OPTIONS")
             if re.fullmatch(r"localhost/secpal-ci-[a-z0-9-]+@sha256:[0-9a-f]{64}", str(item.get("image"))) is None:
                 failures.append("D1A_IMAGE_PROVENANCE")
@@ -1437,21 +1826,66 @@ def workload_admission_failures(observations: object) -> list[str]:
                 failures.append("D1A_HOST_NETWORK")
             role = str(item.get("role"))
             expected_service = f"secpal-int-{instance}-{role}.service"
-            expected_correlation = "cgroup" if role in READY_ROLES else "journal"
+            expected_service_fact = services_by_role.get(role, {})
+            expected_control_group = expected_service_fact.get("control_group")
+            container_control_group = item.get("container_cgroup")
+            lifecycle_invocation = item.get("lifecycle_service_invocation")
+            if role in READY_ROLES:
+                service_binding_matches = (
+                    isinstance(expected_control_group, str)
+                    and expected_control_group
+                    and isinstance(container_control_group, str)
+                    and (
+                        container_control_group == expected_control_group
+                        or container_control_group.startswith(
+                            f"{expected_control_group}/"
+                        )
+                    )
+                    and lifecycle_invocation == ""
+                )
+            else:
+                service_binding_matches = (
+                    container_control_group == ""
+                    and lifecycle_invocation
+                    == expected_service_fact.get("invocation_id")
+                )
             if (
                 re.fullmatch(r"[0-9a-f]{64}", str(item.get("id", ""))) is None
                 or item.get("systemd_unit") != expected_service
-                or item.get("service_managed") is not True
-                or item.get("service_correlation") != expected_correlation
+                or not service_binding_matches
                 or not container_pid_matches_state(item)
             ):
                 failures.append("D1A_SERVICE_BINDING")
             expected_networks = [
                 f"secpal-int-{instance}-{kind}"
-                for kind in ROLE_NETWORK_KINDS.get(role, ())
+                for kind in (
+                    ROLE_CONTRACTS[role].networks if role in ROLE_CONTRACTS else ()
+                )
             ]
             if item.get("networks") != expected_networks:
                 failures.append("D1A_CONTAINER_NETWORKS")
+            if mounts != expected_role_mounts(instance, role):
+                failures.append("D1A_VOLUME_TOPOLOGY")
+            tmpfs = item.get("tmpfs")
+            expected_tmpfs = expected_role_tmpfs(role)
+            if not tmpfs_contract_matches(tmpfs, expected_tmpfs):
+                failures.append("D1A_TMPFS_TOPOLOGY")
+            lifecycle_events = item.get("lifecycle_events")
+            expected_lifecycle = (
+                ["create", "start"]
+                if role in READY_ROLES
+                else ["create", "start", "died"]
+            )
+            if (
+                not isinstance(lifecycle_events, list)
+                or [
+                    event.get("status")
+                    for event in lifecycle_events
+                    if isinstance(event, dict)
+                ] != expected_lifecycle
+                or len(lifecycle_events) != len(expected_lifecycle)
+            ):
+                failures.append("D1A_CONTAINER_LIFECYCLE")
             published_ports = item.get("published_ports")
             if role == "gateway":
                 valid_ports = (

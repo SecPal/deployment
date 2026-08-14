@@ -371,13 +371,40 @@ def validate_document(document: object) -> dict[str, object]:
             {
                 "id", "role", "name", "state", "pid", "exit_code", "health", "oci_runtime",
                 "rootless", "privileged", "pid_mode", "userns_mode",
-                "ipc_mode", "uts_mode", "network_mode", "cap_add", "devices_present",
-                "podman_socket_mount", "remote_api_environment", "security_opt",
-                "networks", "published_ports", "auto_update", "systemd_unit",
-                "service_managed", "service_correlation", "image",
+                "ipc_mode", "uts_mode", "network_mode", "cap_add",
+                "effective_caps", "bounding_caps", "devices_present",
+                "mounts", "tmpfs", "remote_api_environment", "security_opt",
+                "lifecycle_events", "networks", "published_ports", "auto_update", "systemd_unit",
+                "container_cgroup", "lifecycle_service_invocation", "image",
             },
             f"$.workload.live.containers[{index}]",
         )
+        for mount_index, mount in enumerate(
+            container["mounts"] if isinstance(container["mounts"], list) else []
+        ):
+            exact_keys(
+                mount,
+                {"type", "source", "destination", "rw"},
+                f"$.workload.live.containers[{index}].mounts[{mount_index}]",
+            )
+        for event_index, event in enumerate(
+            container["lifecycle_events"]
+            if isinstance(container["lifecycle_events"], list)
+            else []
+        ):
+            exact_keys(
+                event,
+                {"status", "time_nano"},
+                f"$.workload.live.containers[{index}].lifecycle_events[{event_index}]",
+            )
+        for tmpfs_index, tmpfs in enumerate(
+            container["tmpfs"] if isinstance(container["tmpfs"], list) else []
+        ):
+            exact_keys(
+                tmpfs,
+                {"destination", "size_bytes", "mode", "uid", "gid", "flags"},
+                f"$.workload.live.containers[{index}].tmpfs[{tmpfs_index}]",
+            )
     exact_keys(platform["os_release"], {"ID", "VERSION_ID", "VERSION_CODENAME", "PRETTY_NAME"}, "$.platform.os_release")
     exact_keys(platform["cpu"], {"vendor", "model"}, "$.platform.cpu")
     exact_keys(test["provider_image"], {"slug", "id"}, "$.test.provider_image")

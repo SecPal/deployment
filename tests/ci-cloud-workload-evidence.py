@@ -42,6 +42,79 @@ ROLE_NETWORKS = {
     "frontend": ("edge",),
     "gateway": ("edge",),
 }
+ROLE_VOLUME_MOUNTS = {
+    "secrets-init": (
+        ("secrets", "/run/secpal-secrets", True),
+        ("postgres", "/var/lib/postgresql/data", True),
+        ("private-storage", "/mnt/secpal-private-storage", True),
+    ),
+    "postgres": (
+        ("secrets", "/run/secpal-secrets", False),
+        ("postgres", "/var/lib/postgresql/data", True),
+    ),
+    "valkey": (("secrets", "/run/secpal-secrets", False),),
+    **{
+        role: (
+            ("secrets", "/run/secpal-secrets", False),
+            ("private-storage", "/app/storage/app/private", True),
+        )
+        for role in (
+            "migrate", "api", "worker-general", "worker-hash-chain", "scheduler"
+        )
+    },
+    "frontend": (),
+    "gateway": (),
+}
+API_BINDS = (
+    ("container-entrypoint.sh", "/run/secpal/container-entrypoint.sh"),
+    ("phase-b-runtime-probe.php", "/run/secpal/phase-b-runtime-probe.php"),
+)
+ROLE_BINDS = {
+    "secrets-init": (
+        ("init-local-secrets.sh", "/run/secpal/init-local-secrets.sh"),
+        ("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
+    ),
+    "postgres": (),
+    "valkey": (("valkey-entrypoint.sh", "/run/secpal/valkey-entrypoint.sh"),),
+    "migrate": API_BINDS
+    + (("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),),
+    "api": API_BINDS,
+    "worker-general": API_BINDS,
+    "worker-hash-chain": API_BINDS,
+    "scheduler": API_BINDS,
+    "frontend": (),
+    "gateway": (("Caddyfile", "/etc/caddy/Caddyfile"),),
+}
+API_TMPFS = (
+    ("/tmp", 32, "0700", True),
+    ("/config", 16, "0700", True),
+    ("/data", 16, "0700", True),
+    ("/app/storage/app/public", 32, "0750", False),
+    ("/app/storage/framework/cache/data", 32, "0750", True),
+    ("/app/storage/framework/sessions", 32, "0750", True),
+    ("/app/storage/framework/views", 32, "0750", True),
+    ("/app/storage/logs", 32, "0750", True),
+    ("/app/bootstrap/cache", 16, "0750", True),
+)
+ROLE_TMPFS = {
+    "secrets-init": (("/tmp", 16, "0700", True),),
+    "postgres": (("/tmp", 32, "0700", True), ("/run/postgresql", 16, "0750", True)),
+    "valkey": (("/tmp", 16, "0700", True), ("/data", 32, "0700", True)),
+    "migrate": API_TMPFS,
+    "api": API_TMPFS,
+    "worker-general": API_TMPFS,
+    "worker-hash-chain": API_TMPFS,
+    "scheduler": API_TMPFS,
+    "frontend": (("/tmp", 32, "0700", True),),
+    "gateway": (("/tmp", 16, "0700", True), ("/config", 16, "0700", True), ("/data", 32, "0700", True)),
+}
+ROLE_IDENTITIES = {
+    "secrets-init": (0, 0), "postgres": (999, 999), "valkey": (10002, 10002),
+    "migrate": (10001, 10001), "api": (10001, 10001),
+    "worker-general": (10001, 10001), "worker-hash-chain": (10001, 10001),
+    "scheduler": (10001, 10001), "frontend": (101, 101),
+    "gateway": (10003, 10003),
+}
 HEALTHY_ROLES = {"postgres", "valkey", "api", "frontend", "gateway"}
 
 
@@ -137,6 +210,54 @@ def valid_observations() -> dict[str, object]:
     containers = []
     for role_index, role in enumerate(ROLES, start=1):
         one_shot = role in {"secrets-init", "migrate"}
+        mounts = sorted(
+            [
+                {
+                    "type": "volume",
+                    "source": f"{prefix}-{kind}",
+                    "destination": destination,
+                    "rw": writable,
+                }
+                for kind, destination, writable in ROLE_VOLUME_MOUNTS[role]
+            ]
+            + [
+                {
+                    "type": "bind",
+                    "source": (
+                        f"/home/secpal-ci/quadlet-fixture/{instance}/assets/"
+                        f"{asset_name}"
+                    ),
+                    "destination": destination,
+                    "rw": False,
+                }
+                for asset_name, destination in ROLE_BINDS[role]
+            ],
+            key=lambda item: item["destination"],
+        )
+        uid, gid = ROLE_IDENTITIES[role]
+        tmpfs = sorted(
+            [
+                {
+                    "destination": destination,
+                    "size_bytes": size_mib * 1024 * 1024,
+                    "mode": mode,
+                    "uid": uid,
+                    "gid": gid,
+                    "flags": sorted(
+                        ["rprivate", "tmpcopyup", "nosuid", "nodev"]
+                        + (["noexec"] if noexec else [])
+                    ),
+                }
+                for destination, size_mib, mode, noexec in ROLE_TMPFS[role]
+            ],
+            key=lambda item: item["destination"],
+        )
+        lifecycle_statuses = (
+            ("create", "start", "died") if one_shot else ("create", "start")
+        )
+        capabilities = (
+            ["CAP_CHOWN", "CAP_FOWNER"] if role == "secrets-init" else []
+        )
         containers.append(
             {
                 "id": f"{role_index + 1:064x}",
@@ -154,17 +275,33 @@ def valid_observations() -> dict[str, object]:
                 "ipc_mode": "private",
                 "uts_mode": "private",
                 "network_mode": "private",
-                "cap_add": [],
+                "cap_add": capabilities,
+                "effective_caps": capabilities,
+                "bounding_caps": capabilities,
                 "devices_present": False,
-                "podman_socket_mount": False,
+                "mounts": mounts,
+                "tmpfs": tmpfs,
                 "remote_api_environment": False,
                 "security_opt": ["no-new-privileges"],
+                "lifecycle_events": [
+                    {"status": status, "time_nano": role_index * 10 + index}
+                    for index, status in enumerate(lifecycle_statuses, start=1)
+                ],
                 "networks": [f"{prefix}-{network}" for network in ROLE_NETWORKS[role]],
                 "published_ports": ["127.0.0.1:18443:8443/tcp"] if role == "gateway" else [],
                 "auto_update": False,
                 "systemd_unit": f"{prefix}-{role}.service",
-                "service_managed": True,
-                "service_correlation": "journal" if one_shot else "cgroup",
+                "container_cgroup": (
+                    ""
+                    if one_shot
+                    else (
+                        "/user.slice/user-20000.slice/user@20000.service/"
+                        f"app.slice/{prefix}-{role}.service/container"
+                    )
+                ),
+                "lifecycle_service_invocation": (
+                    f"{generated_names.index(role) + 1:032x}" if one_shot else ""
+                ),
                 "image": (
                     f"localhost/secpal-ci-{role}@sha256:{role_index:064x}"
                 ),
@@ -527,7 +664,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
     def test_each_container_is_bound_to_its_generated_systemd_service(self) -> None:
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][4].__setitem__(
-                "service_managed", False
+                "container_cgroup", "/user.slice/unrelated.service/container"
+            ),
+            "D1A_SERVICE_BINDING",
+        )
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
+                "lifecycle_service_invocation", "f" * 32
             ),
             "D1A_SERVICE_BINDING",
         )
@@ -579,12 +722,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ):
             bound, complete = self.collector.bind_container_services(
                 services, containers
-            )
+        )
         self.assertTrue(complete)
-        self.assertTrue(bound[0]["service_managed"])
-        self.assertEqual("cgroup", bound[0]["service_correlation"])
+        self.assertEqual(
+            f"{control_group}/container", bound[0]["container_cgroup"]
+        )
+        self.assertEqual("", bound[0]["lifecycle_service_invocation"])
 
-    def test_exited_container_binding_requires_journal_execution_identity(self) -> None:
+    def test_exited_container_binding_requires_lifecycle_execution_identity(self) -> None:
         unit = "secpal-int-aaaaaaaaaaaa-migrate.service"
         services = [
             {
@@ -623,18 +768,31 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertEqual(unit, correlated_service["unit"])
         self.assertEqual("b" * 64, correlated_container["id"])
         self.assertTrue(complete)
-        self.assertFalse(bound[0]["service_managed"])
+        self.assertEqual("", bound[0]["container_cgroup"])
+        self.assertEqual("", bound[0]["lifecycle_service_invocation"])
 
     def test_exited_container_execution_identity_is_exact_and_unique(self) -> None:
         service = {
             "unit": "secpal-int-aaaaaaaaaaaa-migrate.service",
             "invocation_id": "a" * 32,
         }
-        container = {"id": "b" * 64}
+        container = {
+            "id": "b" * 64,
+            "name": "secpal-int-aaaaaaaaaaaa-migrate",
+            "lifecycle_events": [
+                {"status": "create", "time_nano": 1},
+                {"status": "start", "time_nano": 2},
+                {"status": "died", "time_nano": 3},
+            ],
+        }
         matching_record = json.dumps(
             {
                 "_SYSTEMD_INVOCATION_ID": "a" * 32,
                 "_EXE": "/usr/bin/podman",
+                "_CMDLINE": (
+                    "/usr/bin/podman run --name "
+                    "secpal-int-aaaaaaaaaaaa-migrate fixture-image"
+                ),
                 "MESSAGE": "b" * 64,
             }
         )
@@ -665,6 +823,42 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         service, container
                     ),
                 )
+
+    def test_podman_inspect_output_cannot_prove_a_service_launch(self) -> None:
+        service = {
+            "unit": "secpal-int-aaaaaaaaaaaa-migrate.service",
+            "invocation_id": "a" * 32,
+        }
+        container = {
+            "id": "b" * 64,
+            "name": "secpal-int-aaaaaaaaaaaa-migrate",
+            "lifecycle_events": [
+                {"status": "create", "time_nano": 1},
+                {"status": "start", "time_nano": 2},
+                {"status": "died", "time_nano": 3},
+            ],
+        }
+        inspect_record = json.dumps(
+            {
+                "_SYSTEMD_INVOCATION_ID": "a" * 32,
+                "_EXE": "/usr/bin/podman",
+                "_CMDLINE": (
+                    "/usr/bin/podman inspect --format {{.Id}} " + "b" * 64
+                ),
+                "MESSAGE": "b" * 64,
+            }
+        )
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            return_value=(0, inspect_record, True),
+        ):
+            self.assertEqual(
+                (False, True),
+                self.collector.exited_container_execution_matches(
+                    service, container
+                ),
+            )
 
     def test_command_output_limit_terminates_a_noisy_child_early(self) -> None:
         program = (
@@ -813,6 +1007,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "D1A_PRIVILEGE_BOUNDARY",
         )
         self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][0].__setitem__(
+                "effective_caps", ["CAP_CHOWN", "CAP_FOWNER", "CAP_SYS_ADMIN"]
+            ),
+            "D1A_PRIVILEGE_BOUNDARY",
+        )
+        self.assert_failure(
             lambda evidence: evidence["live"]["containers"][4].__setitem__(
                 "image", "docker.io/secpal/api:latest"
             ),
@@ -828,6 +1028,21 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
             "D1A_IMAGE_ROLE_SEPARATION",
         )
+
+    def test_secrets_initializer_requires_exact_bounded_capabilities(self) -> None:
+        observations = valid_observations()
+        self.assertNotIn(
+            "D1A_PRIVILEGE_BOUNDARY",
+            self.collector.workload_admission_failures(observations),
+        )
+        for field in ("cap_add", "effective_caps", "bounding_caps"):
+            with self.subTest(field=field):
+                self.assert_failure(
+                    lambda evidence, field=field: evidence["live"]["containers"][
+                        0
+                    ].__setitem__(field, ["CAP_CHOWN"]),
+                    "D1A_PRIVILEGE_BOUNDARY",
+                )
 
     def test_each_container_requires_its_exact_fixture_network(self) -> None:
         self.assert_failure(
@@ -884,6 +1099,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "SecurityOpt": ["no-new-privileges"],
                 "CapAdd": [],
                 "Devices": [],
+                "Tmpfs": {},
             },
             "NetworkSettings": {
                 "Networks": {"secpal-int-aaaaaaaaaaaa-application": {}},
@@ -891,16 +1107,21 @@ class WorkloadEvidenceTests(unittest.TestCase):
             },
             "Mounts": [],
             "OCIRuntime": "crun",
+            "EffectiveCaps": [],
+            "BoundingCaps": [],
             "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
         }
         required_fields = (
             (inspection, "Id"),
             (inspection, "OCIRuntime"),
             (inspection, "Mounts"),
+            (inspection, "EffectiveCaps"),
+            (inspection, "BoundingCaps"),
             (inspection["State"], "Pid"),
             (inspection["Config"], "Env"),
             (inspection["HostConfig"], "CapAdd"),
             (inspection["HostConfig"], "Devices"),
+            (inspection["HostConfig"], "Tmpfs"),
             (inspection["NetworkSettings"], "Ports"),
         )
         for owner, field in required_fields:
@@ -922,6 +1143,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
                 ), mock.patch.object(
                     self.collector, "json_array", return_value=([candidate], True)
+                ), mock.patch.object(
+                    self.collector,
+                    "container_lifecycle_events",
+                    return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
                 ):
                     _, complete = self.collector.container_facts(
                         "aaaaaaaaaaaa", rootless=True
@@ -955,6 +1180,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "SecurityOpt": ["no-new-privileges"],
                 "CapAdd": [],
                 "Devices": [],
+                "Tmpfs": {},
             },
             "NetworkSettings": {
                 "Networks": {"secpal-int-aaaaaaaaaaaa-application": {}},
@@ -962,6 +1188,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             },
             "Mounts": [],
             "OCIRuntime": "crun",
+            "EffectiveCaps": [],
+            "BoundingCaps": [],
             "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
         }
         with mock.patch.object(
@@ -970,6 +1198,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
         ), mock.patch.object(
             self.collector, "json_array", return_value=([inspection], True)
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
         ):
             facts, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True
@@ -984,6 +1216,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
         ), mock.patch.object(
             self.collector, "json_array", return_value=([inspection], True)
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
         ):
             facts, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True
@@ -1001,6 +1237,173 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "D1A_SECURITY_OPTIONS",
         )
 
+    def test_no_new_privileges_does_not_admit_a_custom_seccomp_profile(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+                "security_opt",
+                ["no-new-privileges", "seccomp=/tmp/allow-all.json"],
+            ),
+            "D1A_SECURITY_OPTIONS",
+        )
+
+    def test_control_volume_cannot_be_consumed_by_a_fixture_container(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+                "mounts",
+                [
+                    {
+                        "type": "volume",
+                        "source": "secpal-ci-unrelated-control-volume",
+                        "destination": "/data",
+                        "rw": True,
+                    }
+                ],
+            ),
+            "D1A_VOLUME_TOPOLOGY",
+        )
+
+    def test_role_mount_topology_is_closed(self) -> None:
+        mutations = {
+            "missing": lambda mounts: mounts.pop(),
+            "unexpected": lambda mounts: mounts.append(
+                {
+                    **copy.deepcopy(mounts[0]),
+                    "source": "secpal-int-aaaaaaaaaaaa-unexpected",
+                    "destination": "/unexpected",
+                }
+            ),
+            "wrong-access": lambda mounts: mounts[0].__setitem__(
+                "rw", not mounts[0]["rw"]
+            ),
+            "wrong-type": lambda mounts: mounts[0].__setitem__("type", "bind"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                observations = valid_observations()
+                mounts = observations["live"]["containers"][4]["mounts"]
+                mutate(mounts)
+                self.assertIn(
+                    "D1A_VOLUME_TOPOLOGY",
+                    self.collector.workload_admission_failures(observations),
+                )
+
+        observations = valid_observations()
+        api_bind = next(
+            mount
+            for mount in observations["live"]["containers"][4]["mounts"]
+            if mount["type"] == "bind"
+        )
+        api_bind["source"] = "/tmp/target-selected-entrypoint.sh"
+        self.assertIn(
+            "D1A_VOLUME_TOPOLOGY",
+            self.collector.workload_admission_failures(observations),
+        )
+
+    def test_role_tmpfs_topology_is_closed(self) -> None:
+        mutations = {
+            "missing": lambda tmpfs: tmpfs.pop(),
+            "wrong-size": lambda tmpfs: tmpfs[0].__setitem__("size_bytes", 1),
+            "wrong-identity": lambda tmpfs: tmpfs[0].__setitem__("uid", 0),
+            "privilege-option": lambda tmpfs: tmpfs[0]["flags"].remove("nosuid"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                observations = valid_observations()
+                tmpfs = observations["live"]["containers"][4]["tmpfs"]
+                mutate(tmpfs)
+                self.assertIn(
+                    "D1A_TMPFS_TOPOLOGY",
+                    self.collector.workload_admission_failures(observations),
+                )
+
+        observations = valid_observations()
+        observations["live"]["containers"][4]["tmpfs"][0]["flags"].append("rw")
+        observations["live"]["containers"][4]["tmpfs"][0]["flags"].sort()
+        self.assertNotIn(
+            "D1A_TMPFS_TOPOLOGY",
+            self.collector.workload_admission_failures(observations),
+        )
+
+    def test_tmpfs_options_are_typed_and_reject_unknown_flags(self) -> None:
+        options = {
+            "/tmp": (
+                "rw,rprivate,tmpcopyup,nosuid,nodev,noexec,"
+                "size=32m,mode=0700,uid=10001,gid=10001"
+            )
+        }
+        facts, complete = self.collector.normalized_tmpfs(options)
+        self.assertTrue(complete)
+        self.assertEqual(32 * 1024 * 1024, facts[0]["size_bytes"])
+        self.assertEqual("0700", facts[0]["mode"])
+        self.assertEqual(10001, facts[0]["uid"])
+        self.assertIn("rw", facts[0]["flags"])
+
+        invalid = dict(options)
+        invalid["/tmp"] += ",suid"
+        self.assertEqual(([], False), self.collector.normalized_tmpfs(invalid))
+
+    def test_container_lifecycle_is_exact_and_ordered(self) -> None:
+        mutations = {
+            "missing-start": lambda events: events.pop(1),
+            "duplicate-start": lambda events: events.insert(
+                1, copy.deepcopy(events[1])
+            ),
+            "wrong-order": lambda events: events.reverse(),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                observations = valid_observations()
+                events = observations["live"]["containers"][3][
+                    "lifecycle_events"
+                ]
+                mutate(events)
+                self.assertIn(
+                    "D1A_CONTAINER_LIFECYCLE",
+                    self.collector.workload_admission_failures(observations),
+                )
+
+    def test_lifecycle_event_collection_is_bounded_and_exact(self) -> None:
+        container_id = "b" * 64
+        valid = "\n".join(
+            json.dumps(
+                {
+                    "Type": "container",
+                    "status": status,
+                    "id": container_id,
+                    "timeNano": index,
+                }
+            )
+            for index, status in enumerate(
+                ("create", "init", "start", "died"), start=1
+            )
+        )
+        with mock.patch.object(
+            self.collector, "command_result", return_value=(0, valid, True)
+        ) as command:
+            events, complete = self.collector.container_lifecycle_events(
+                container_id
+            )
+        self.assertTrue(complete)
+        self.assertIn("--since=4h", command.call_args.args[0])
+        self.assertEqual(["create", "start", "died"], [e["status"] for e in events])
+
+        duplicate = valid + "\n" + json.dumps(
+            {
+                "Type": "container",
+                "status": "start",
+                "id": container_id,
+                "timeNano": 5,
+            }
+        )
+        with mock.patch.object(
+            self.collector, "command_result", return_value=(0, duplicate, True)
+        ):
+            events, _ = self.collector.container_lifecycle_events(container_id)
+        self.assertEqual(
+            ["create", "start", "died", "start"],
+            [event["status"] for event in events],
+        )
+
     def test_remote_or_socket_api_evidence_is_rejected(self) -> None:
         observations = valid_observations()
         observations["live"]["podman_api"] = True
@@ -1009,8 +1412,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector.workload_admission_failures(observations),
         )
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
-                "podman_socket_mount", True
+            lambda evidence: evidence["live"]["containers"][4]["mounts"].append(
+                {
+                    "type": "bind",
+                    "source": "/run/user/20000/podman/podman.sock",
+                    "destination": "/run/podman/podman.sock",
+                    "rw": True,
+                }
             ),
             "D1A_PODMAN_API_DISABLED",
         )
