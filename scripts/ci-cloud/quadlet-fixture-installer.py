@@ -14,10 +14,10 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import subprocess
 import sys
-import tempfile
 from typing import Callable
 
 
@@ -381,16 +381,21 @@ def parse_request(
 
 
 def atomic_bytes(path: Path, content: bytes, mode: int) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
+    temporary = path.parent / f".{path.name}.{secrets.token_hex(16)}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(temporary, flags, 0o600)
     try:
-        os.fchmod(descriptor, mode)
+        os.fchmod(descriptor, 0o600)
         offset = 0
         while offset < len(content):
             written = os.write(descriptor, content[offset:])
             if written <= 0:
                 raise OSError("unable to complete atomic fixture write")
             offset += written
+        os.fsync(descriptor)
+        os.fchmod(descriptor, mode)
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
@@ -402,6 +407,39 @@ def atomic_bytes(path: Path, content: bytes, mode: int) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def remove_interrupted_atomic_writes(path: Path, layout: Layout) -> None:
+    prefix = f".{path.name}."
+    candidate_pattern = re.compile(
+        rf"{re.escape(prefix)}(?:[a-z0-9_]{{8}}|[0-9a-f]{{32}})\Z"
+    )
+    try:
+        candidates = tuple(
+            candidate
+            for candidate in path.parent.iterdir()
+            if candidate_pattern.fullmatch(candidate.name)
+        )
+    except OSError as error:
+        raise RequestError("fixture-file-changed") from error
+    for candidate in candidates:
+        try:
+            metadata = candidate.lstat()
+        except OSError as error:
+            raise RequestError("fixture-file-changed") from error
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != layout.trusted_uid
+            or metadata.st_gid != layout.trusted_gid
+            or stat.S_IMODE(metadata.st_mode) not in {0o600, 0o644}
+            or metadata.st_nlink != 1
+        ):
+            raise RequestError("fixture-file-changed")
+        try:
+            candidate.unlink()
+        except OSError as error:
+            raise RequestError("fixture-file-changed") from error
 
 
 def canonical_json(document: dict[str, object]) -> bytes:
@@ -578,6 +616,7 @@ def remove(request: Request, layout: Layout) -> None:
     existing: list[Path] = []
     for name in names:
         destination = layout.destination(name)
+        remove_interrupted_atomic_writes(destination, layout)
         if not destination.exists() and not destination.is_symlink():
             if state["state"] == "active":
                 raise RequestError("fixture-file-missing")

@@ -1698,7 +1698,7 @@ AllowUsers secpal-ci"""
     require(
         "MAX_UNIT_BYTES = 64 * 1024" in quadlet_fixture_installer
         and "MAX_TOTAL_BYTES = 512 * 1024" in quadlet_fixture_installer
-        and quadlet_fixture_installer.count("flags |= os.O_NOFOLLOW") == 3
+        and quadlet_fixture_installer.count("flags |= os.O_NOFOLLOW") == 4
         and "fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)"
         in quadlet_fixture_installer
         and 'state["state"] = "removing"' in quadlet_fixture_installer

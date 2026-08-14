@@ -52,9 +52,6 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
-- Recorded one successful same-SHA foundation matrix across DigitalOcean Intel,
-  DigitalOcean AMD, and GCP Axion, including passed target admission and exact
-  cleanup for all three runs.
 - Updated the cloud-conformance evidence record after the first successful GCP
   Axion lifecycle, including verified absence of a VM cloud identity, bounded
   evidence publication, and exact cleanup. All three implemented provider/CPU

@@ -874,21 +874,11 @@ The GCP evidence records the official Debian 13 arm64 image on
 cloud-identity probe, and no attached VM cloud identity. Its target entrypoint
 passed, bounded evidence uploaded, and the independent exact cleanup completed.
 
-The foundation was subsequently repeated against one identical target SHA,
-`c6adf7cf9b66ae793eaef4ac4ed9c8a67c88726c`, across the complete matrix:
-
-| Profile              | Successful same-SHA run                                                      |
-| -------------------- | ---------------------------------------------------------------------------- |
-| DigitalOcean / Intel | [31734492022](https://github.com/SecPal/deployment/actions/runs/31734492022) |
-| DigitalOcean / AMD   | [31734512140](https://github.com/SecPal/deployment/actions/runs/31734512140) |
-| GCP / Axion          | [31734518859](https://github.com/SecPal/deployment/actions/runs/31734518859) |
-
-All three evidence artifacts report `target_exit_status=0`, no failed admission
-invariant, the selected effective CPU/architecture, and a passed result. Each
-independent exact cleanup job also passed. This establishes reproducibility of
-the current production-host foundation across the three representative
-profiles; it still does not prove universal hardware compatibility or PR #22's
-rootless workload lifecycle.
+These foundation runs did not all test the same target SHA: the DigitalOcean
+proofs predate the final GCP identity correction. They establish that each
+closed provider profile can complete its lifecycle, but they are not a claim
+that one identical reviewed revision has passed the full three-profile matrix.
+A deliberate same-SHA matrix run is the next reproducibility check.
 
 ## Primary references
 

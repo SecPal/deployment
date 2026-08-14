@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -248,6 +249,62 @@ class QuadletFixtureTests(unittest.TestCase):
                 for name in self.installer.expected_unit_names(instance)
             )
         )
+
+    def test_cleanup_removes_interrupted_atomic_write_before_reinstall(self) -> None:
+        instance = "a1b2c3d4"
+        source = self.source_units(instance)
+        self.stage("install", instance, source)
+        self.assertTrue(
+            self.installer.handle_request("install", self.layout, lambda _: None)
+        )
+        self.client.clear_request(
+            "install", self.client.Layout(self.layout.staging_root)
+        )
+        state = json.loads(self.layout.active_state.read_text(encoding="utf-8"))
+        state["state"] = "installing"
+        self.layout.active_state.chmod(0o600)
+        self.layout.active_state.write_bytes(self.installer.canonical_json(state))
+        self.layout.active_state.chmod(0o400)
+        first = self.layout.destination(
+            self.installer.expected_unit_names(instance)[0]
+        )
+        orphan = first.parent / f".{first.name}.{'0' * 32}"
+        orphan.write_bytes(b"partial")
+        orphan.chmod(0o600)
+        target = self.layout.destination(f"secpal-int-{instance}.target")
+        unrelated = target.parent / f".{target.name}.backup"
+        unrelated.write_bytes(b"unrelated\n")
+        unrelated.chmod(0o600)
+
+        self.stage("remove", instance)
+        self.assertTrue(
+            self.installer.handle_request("remove", self.layout, lambda _: None)
+        )
+        self.assertFalse(orphan.exists())
+        self.assertTrue(unrelated.exists())
+
+        self.client.clear_request(
+            "remove", self.client.Layout(self.layout.staging_root)
+        )
+        self.stage("install", instance, source)
+        self.assertTrue(
+            self.installer.handle_request("install", self.layout, lambda _: None)
+        )
+
+    def test_atomic_write_keeps_temporary_file_private_until_complete(self) -> None:
+        destination = self.layout.state_root / "public-result.json"
+        observed_modes: list[int] = []
+        original_write = os.write
+
+        def observe_mode(descriptor: int, content: bytes) -> int:
+            observed_modes.append(stat.S_IMODE(os.fstat(descriptor).st_mode))
+            return original_write(descriptor, content)
+
+        with mock.patch.object(os, "write", side_effect=observe_mode):
+            self.installer.atomic_bytes(destination, b"published\n", 0o444)
+
+        self.assertEqual([0o600], observed_modes)
+        self.assertEqual(0o444, stat.S_IMODE(destination.stat().st_mode))
 
     def test_cleanup_publishes_removing_state_before_the_first_unlink(self) -> None:
         instance = "a1b2c3d4"
