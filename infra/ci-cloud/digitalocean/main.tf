@@ -52,15 +52,17 @@ resource "digitalocean_droplet" "conformance" {
   tags              = [for tag in digitalocean_tag.ownership : tag.name]
   depends_on        = [digitalocean_firewall.conformance]
   user_data = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-conformance-host.tftpl", {
-    cloud_identity_gate           = ":"
-    ssh_public_key                = trimspace(var.ssh_public_key)
-    runner_ipv4                   = var.runner_ipv4
-    run_id                        = var.run_id
-    run_attempt                   = var.run_attempt
-    diagnostic_ssh_installer      = trimspace(file("${path.module}/../../../scripts/ci-cloud/install-diagnostic-ssh.sh"))
-    host_setup_script             = trimspace(file("${path.module}/../../../scripts/ci-cloud/configure-conformance-host.sh"))
-    host_setup_failure_script     = trimspace(file("${path.module}/../../../scripts/ci-cloud/host-setup-failure.py"))
-    bootstrap_continuation_script = trimspace(file("${path.module}/../../../scripts/ci-cloud/continue-conformance-bootstrap.sh"))
+    cloud_identity_gate                  = ":"
+    ssh_public_key                       = trimspace(var.ssh_public_key)
+    runner_ipv4                          = var.runner_ipv4
+    run_id                               = var.run_id
+    run_attempt                          = var.run_attempt
+    diagnostic_ssh_installer             = trimspace(file("${path.module}/../../../scripts/ci-cloud/install-diagnostic-ssh.sh"))
+    host_setup_script_base64gzip         = base64gzip(file("${path.module}/../../../scripts/ci-cloud/configure-conformance-host.sh"))
+    host_setup_failure_script            = trimspace(file("${path.module}/../../../scripts/ci-cloud/host-setup-failure.py"))
+    bootstrap_continuation_script        = trimspace(file("${path.module}/../../../scripts/ci-cloud/continue-conformance-bootstrap.sh"))
+    quadlet_fixture_installer_base64gzip = base64gzip(file("${path.module}/../../../scripts/ci-cloud/quadlet-fixture-installer.py"))
+    quadlet_fixture_client_base64gzip    = base64gzip(file("${path.module}/../../../scripts/ci-cloud/quadlet-fixture-client.py"))
   })
 }
 

@@ -460,8 +460,9 @@ if [[ "$#" -ne 1 ]] || ! is_ipv4 "$runner_ipv4"; then
 fi
 install -d -o root -g root -m 0755 "$diagnostic_dir"
 rm -f -- "$diagnostic_dir/host-setup-failure.json"
-install -d -o root -g root -m 0755 /etc/containers/systemd/users/20000
+install -d -o root -g root -m 0755 /etc/containers/systemd/users
 install -d -o secpal-ci -g secpal-ci -m 0700 /srv/secpal-ci
+/usr/local/sbin/secpal-ci-quadlet-fixture-installer setup
 if [[ "$(id -G secpal-ci)" != "$(id -g secpal-ci)" ]]; then
   printf 'ERROR: disposable operator has unexpected supplementary groups.\n' >&2
   exit 1

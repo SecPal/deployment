@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import ast
+import base64
+import gzip
 import json
 import re
 import sys
@@ -590,6 +592,18 @@ def validate_opentofu(root: Path) -> None:
     )
     continuation = read(root, "scripts/ci-cloud/continue-conformance-bootstrap.sh")
     host_setup = read(root, "scripts/ci-cloud/configure-conformance-host.sh")
+    quadlet_fixture_installer = read(
+        root, "scripts/ci-cloud/quadlet-fixture-installer.py"
+    )
+    quadlet_fixture_client = read(
+        root, "scripts/ci-cloud/quadlet-fixture-client.py"
+    )
+    quadlet_fixture_handler = required_block(
+        quadlet_fixture_installer,
+        "def handle_request(\n",
+        "\n\ndef systemd_unit_documents(",
+        "Quadlet fixture request handler",
+    )
     diagnostic_ssh = read(root, "scripts/ci-cloud/install-diagnostic-ssh.sh")
     host_setup_failure = read(root, "scripts/ci-cloud/host-setup-failure.py")
     collector = read(root, "scripts/ci-cloud/collect-host-evidence.py")
@@ -764,9 +778,26 @@ def validate_opentofu(root: Path) -> None:
         ("${run_attempt}", "9" * 3),
         ("${cloud_identity_gate}", ":"),
         ("${diagnostic_ssh_installer}", diagnostic_ssh.strip()),
-        ("${host_setup_script}", host_setup.strip()),
+        (
+            "${host_setup_script_base64gzip}",
+            base64.b64encode(
+                gzip.compress(host_setup.encode("utf-8"), mtime=0)
+            ).decode("ascii"),
+        ),
         ("${host_setup_failure_script}", host_setup_failure.strip()),
         ("${bootstrap_continuation_script}", continuation.strip()),
+        (
+            "${quadlet_fixture_installer_base64gzip}",
+            base64.b64encode(
+                gzip.compress(quadlet_fixture_installer.encode("utf-8"), mtime=0)
+            ).decode("ascii"),
+        ),
+        (
+            "${quadlet_fixture_client_base64gzip}",
+            base64.b64encode(
+                gzip.compress(quadlet_fixture_client.encode("utf-8"), mtime=0)
+            ).decode("ascii"),
+        ),
     ):
         maximum_bootstrap = maximum_bootstrap.replace(placeholder, replacement)
     require(
@@ -838,6 +869,9 @@ AllowUsers secpal-ci"""
         "secpal-ci-configure-conformance-host",
         "secpal-ci-host-setup-failure",
         "${host_setup_failure_script}",
+        "${host_setup_script_base64gzip}",
+        "${quadlet_fixture_installer_base64gzip}",
+        "${quadlet_fixture_client_base64gzip}",
         "${bootstrap_continuation_script}",
     ):
         require(required in bootstrap, "native bootstrap omitted required D.1 host policy")
@@ -1454,7 +1488,8 @@ AllowUsers secpal-ci"""
         and "set -euo pipefail" in bootstrap
         and "export LC_ALL=C" in bootstrap
         and "${diagnostic_ssh_installer}" in bootstrap
-        and "${host_setup_script}" in bootstrap
+        and "${host_setup_script_base64gzip}" in bootstrap
+        and "${quadlet_fixture_installer_base64gzip}" in bootstrap
         and "${host_setup_failure_script}" in bootstrap
         and "${bootstrap_continuation_script}" in bootstrap
         and 'install -o root -g root -m 0755 /dev/null "$failure_writer"'
@@ -1643,6 +1678,91 @@ AllowUsers secpal-ci"""
     gcp_variables = read(root, "infra/ci-cloud/gcp/variables.tf")
     gcp_outputs = read(root, "infra/ci-cloud/gcp/outputs.tf")
     read(root, "infra/ci-cloud/gcp/.terraform.lock.hcl")
+    require(
+        main.count("quadlet_fixture_installer_base64gzip") == 1
+        and gcp_main.count("quadlet_fixture_installer_base64gzip") == 1
+        and main.count("quadlet_fixture_client_base64gzip") == 1
+        and gcp_main.count("quadlet_fixture_client_base64gzip") == 1
+        and 'base64gzip(file("${path.module}/../../../scripts/ci-cloud/'
+        'quadlet-fixture-installer.py"))' in main
+        and 'base64gzip(file("${path.module}/../../../scripts/ci-cloud/'
+        'quadlet-fixture-installer.py"))' in gcp_main
+        and 'base64gzip(file("${path.module}/../../../scripts/ci-cloud/'
+        'quadlet-fixture-client.py"))' in main
+        and 'base64gzip(file("${path.module}/../../../scripts/ci-cloud/'
+        'quadlet-fixture-client.py"))' in gcp_main
+        and "/usr/local/sbin/secpal-ci-quadlet-fixture-installer setup"
+        in host_setup,
+        "both providers must install the same trusted Quadlet fixture bridge and client",
+    )
+    require(
+        "MAX_UNIT_BYTES = 64 * 1024" in quadlet_fixture_installer
+        and "MAX_TOTAL_BYTES = 512 * 1024" in quadlet_fixture_installer
+        and quadlet_fixture_installer.count("flags |= os.O_NOFOLLOW") == 4
+        and "fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)"
+        in quadlet_fixture_installer
+        and 'state["state"] = "removing"' in quadlet_fixture_installer
+        and 'state["state"] not in {"installing", "active", "removing"}'
+        in quadlet_fixture_installer
+        and "object_pairs_hook=reject_duplicate_keys" in quadlet_fixture_installer
+        and 'type(manifest["schema_version"]) is not int'
+        in quadlet_fixture_installer
+        and quadlet_fixture_installer.count(
+            "flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK"
+        )
+        == 2
+        and '"reason": reason' in quadlet_fixture_installer
+        and '"retrying"' in quadlet_fixture_installer
+        and '"operation-busy"' in quadlet_fixture_installer
+        and 'observed_names != set(names)' in quadlet_fixture_installer
+        and 'set(manifest) != {' in quadlet_fixture_installer
+        and 'state["files"]' in quadlet_fixture_installer
+        and 'if not trusted_file_matches(destination, state["files"][name], layout):'
+        in quadlet_fixture_installer
+        and 'if operation == "install":\n            stop_path_trigger(trigger, stop_trigger)'
+        in quadlet_fixture_handler
+        and quadlet_fixture_handler.index("stop_path_trigger(trigger, stop_trigger)")
+        < quadlet_fixture_handler.index("parse_request(operation, layout")
+        and 'retrying = read_active_state(layout)["state"] == "removing"'
+        in quadlet_fixture_handler
+        and '"retrying",\n                    "internal-error"'
+        in quadlet_fixture_handler
+        and "Type=oneshot" in quadlet_fixture_installer
+        and "NoNewPrivileges=true" in quadlet_fixture_installer
+        and "PrivateNetwork=true" in quadlet_fixture_installer
+        and "ProtectHome=true" in quadlet_fixture_installer
+        and "ProtectSystem=strict" in quadlet_fixture_installer
+        and "PathExists={layout.ready_path(operation)}" in quadlet_fixture_installer
+        and "TriggerLimitIntervalSec=60s" in quadlet_fixture_installer
+        and "TriggerLimitBurst=3" in quadlet_fixture_installer
+        and 'os.unlink("ready"' not in quadlet_fixture_installer
+        and "-{layout.request_path(operation)}" not in quadlet_fixture_installer
+        and '["systemctl", "start", INSTALL_PATH_UNIT, REMOVE_PATH_UNIT]'
+        in quadlet_fixture_installer
+        and '"systemctl", "enable"' not in quadlet_fixture_installer
+        and "rmtree" not in quadlet_fixture_installer
+        and ".glob(" not in quadlet_fixture_installer
+        and "shell=True" not in quadlet_fixture_installer
+        and "eval(" not in quadlet_fixture_installer
+        and "os.system" not in quadlet_fixture_installer,
+        "trusted Quadlet fixture installation must remain fixed, bounded, and fail closed",
+    )
+    require(
+        quadlet_fixture_client.count("flags |= os.O_NOFOLLOW") == 1
+        and "flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK"
+        in quadlet_fixture_client
+        and '"reason",' in quadlet_fixture_client
+        and 'type(result["schema_version"]) is int' in quadlet_fixture_client
+        and 'set(manifest) == {' not in quadlet_fixture_client
+        and '"source"' not in required_block(
+            quadlet_fixture_client,
+            "manifest = {\n",
+            "\n        }",
+            "Quadlet fixture client manifest",
+        )
+        and "sudo" not in quadlet_fixture_client,
+        "unprivileged Quadlet fixture requests must not carry paths or authority",
+    )
     require('required_version = "= 1.12.5"' in gcp_versions, "GCP OpenTofu version must be exact")
     require('version = "= 7.40.0"' in gcp_versions, "Google provider version must be exact")
     require("~>" not in gcp_versions and ">=" not in gcp_versions, "mutable Google provider constraints are forbidden")
@@ -1722,9 +1842,14 @@ AllowUsers secpal-ci"""
     require(
         '"startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-conformance-host.tftpl"'
         in gcp_main
-        and 'cloud_identity_gate           = trimspace(file("${path.module}/../../../scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh"))'
-        in gcp_main
-        and 'cloud_identity_gate           = ":"' in main
+        and re.search(
+            r'^\s*cloud_identity_gate\s+= trimspace\(file\("\$\{path\.module\}/\.\./\.\./\.\./scripts/ci-cloud/defer-bootstrap-for-gcp-identity\.sh"\)\)$',
+            gcp_main,
+            re.MULTILINE,
+        )
+        and re.search(
+            r'^\s*cloud_identity_gate\s+= ":"$', main, re.MULTILINE
+        )
         and "secpal-ci-cloud-identity-admitted" not in gcp_main
         and "user-data" not in gcp_main
         and "install-diagnostic-ssh.sh" in gcp_main,

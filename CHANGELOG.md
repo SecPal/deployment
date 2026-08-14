@@ -9,6 +9,13 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- A main-controlled, root-owned Quadlet fixture bridge for disposable cloud
+  hosts. Its separate fixed install and cleanup requests admit only one closed,
+  bounded filename set, snapshot regular files without following symlinks,
+  retain exact root-side digests, serialize crash-resumable state transitions,
+  publish only closed rejection reasons, bound the non-persistent trigger
+  lifecycle and removal retries, keep untrusted staging read-only to root, and
+  never execute target content as root.
 - A manual, protected Debian 13 cloud-conformance workflow for an immutable
   full target SHA with separate credentialed apply, uncredentialed remote test,
   bounded evidence, and independent exact cleanup phases.
