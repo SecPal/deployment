@@ -2015,20 +2015,38 @@ def validate(root: Path) -> None:
         "target entrypoint must reject arbitrary lifecycle commands and instances",
     )
     require(
-        remote.count("< scripts/ci-cloud/collect-workload-evidence.py") == 3
-        and '"baseline" "$target_sha" "$fixture_instance"' in remote
-        and '"live" "$target_sha" "$fixture_instance"' in remote
-        and '"post-cleanup" "$target_sha" "$fixture_instance"' in remote
+        remote.count("< scripts/ci-cloud/collect-workload-evidence.py") == 1
+        and '"$phase" "$target_sha" "$fixture_instance"' in remote
+        and "collect_workload_phase()" in remote
+        and "collect_workload_phase baseline" in remote
+        and "collect_workload_phase live" in remote
+        and "collect_workload_phase post-cleanup" in remote
         and remote.index('bootstrap_stage="collector-baseline"')
         < remote.index('bootstrap_stage="target-workload-prepare-start"')
         < remote.index('bootstrap_stage="collector-live"')
         < remote.index('bootstrap_stage="target-workload-cleanup"')
-        < remote.index('bootstrap_stage="collector-post-cleanup"')
         < remote.index('bootstrap_stage="target-host"')
+        < remote.index('bootstrap_stage="collector-post-cleanup"')
         and "trap collect_cleanup_after_interruption INT TERM HUP" in remote
         and "workload_evidence_finalized=true" in remote
         and "collect_host_and_assemble false" in remote,
-        "trusted orchestration must finalize workload evidence before the host phase",
+        "trusted orchestration must finalize workload evidence after every target phase",
+    )
+    require(
+        "run_control_resource()" in remote
+        and "create-network)" in remote
+        and "create-volume)" in remote
+        and "remove-network)" in remote
+        and "remove-volume)" in remote,
+        "control resources must use one closed bounded operation wrapper",
+    )
+    require(
+        remote.count('diff-index --quiet --no-ext-diff "$1" --') == 1
+        and remote.count('read-tree --reset "$1"') == 1
+        and remote.count("ls-files --others") == 1
+        and "run_target_phase()" in remote
+        and "GIT_NO_REPLACE_OBJECTS=1" in remote,
+        "the shared target wrapper must admit an exact clean selected worktree",
     )
     require(
         "CI_UID = 20000" in workload_collector

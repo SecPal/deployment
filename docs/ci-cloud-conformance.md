@@ -100,7 +100,7 @@ strict-host SSH from the trusted main orchestration script
         v
 trusted controls/baseline -> target prepare/start -> trusted live collector
         v
-target cleanup -> trusted post-cleanup collector -> target host
+target cleanup -> target host -> trusted post-cleanup collector
         |
         | bounded JSON + summary
         |
@@ -348,8 +348,13 @@ collector field, or additional argument. Every phase runs as UID/GID 20000
 with a phase-specific timeout and an empty environment containing only the
 fixed home, locale, path, exact SHA, and SHA-derived 12-hex fixture instance.
 The trusted wrapper also enters the literal checkout before target execution
-and applies a 32-MiB per-file process limit to every phase. The target cannot
-select either boundary.
+and applies a 32-MiB per-file process limit to every phase. Immediately before
+and after each target phase it verifies that `HEAD` still names the selected
+commit, that no tracked byte or mode differs from that commit, and that no
+untracked or ignored path has appeared. The trusted workload collectors repeat
+the clean-tree admission. Python bytecode generation is disabled so the fixed
+target suite does not dirty its own checkout. The target cannot select these
+boundaries.
 The target account has no sudo authority. The `host` phase retains the D.1
 contract suite. PR #22 owns the implementation of the two workload phases and
 may cross the root-owned publication boundary only through the fixed trusted
@@ -360,10 +365,12 @@ and records a main-controlled baseline of every rootless Podman container,
 network, volume, fixture migration invocation, and Podman API/socket activation
 state before any target code runs.
 It then invokes target prepare/start, streams the main-controlled live
-collector, requests target cleanup, and streams the main-controlled
-post-cleanup collector. Only after that D.1a evidence is finalized does the
-separate target `host` phase run for D.1 admission. Host-phase descendants can
-therefore neither prepare the observed workload nor race the earlier baseline.
+collector, requests target cleanup, and runs the separate target `host` phase
+for D.1 admission. Only after every target-controlled phase has returned does
+the trusted post-cleanup collector finalize D.1a evidence. Host-phase
+descendants can therefore neither prepare the observed workload nor race the
+earlier baseline, and a resource created or leaked by that final target phase
+cannot escape the final inventory.
 Live admission requires the baseline plus exactly the closed fixture resource
 set. The same trusted lifecycle guard remeasures the migration invocation count
 and Podman API/socket state during live and post-cleanup collection. A passing
@@ -376,10 +383,10 @@ disappear from the trusted inventory merely because it is outside the fixture
 prefix.
 It attempts cleanup and the post-cleanup observation even when prepare/start
 fails or a handled `INT`, `TERM`, or `HUP` arrives while the host remains
-reachable. Once D.1a evidence is finalized, an interruption during the later
-host phase preserves it instead of repeating target cleanup or replacing the
-post-cleanup observation. Target phase status is preserved but is never
-evidence that a workload existed or was removed. Every remote collection,
+reachable. An interruption during the host phase does not repeat an already
+completed target cleanup, but it still performs the single final post-cleanup
+observation. Target phase status is preserved but is never evidence that a
+workload existed or was removed. Every remote collection,
 including the final D.1 host collection, has an outer deadline. A missing,
 excessive, truncated, or malformed workload payload is normalized to a
 schema-closed incomplete observation so its collection status and the remaining
@@ -397,6 +404,12 @@ metadata semantics as the early bootstrap gate: HTTP 200 with a bounded empty
 records identity presence. It discards the body after classification and treats
 404, transport failure, truncation, or a malformed response as an unsuccessful
 probe rather than evidence of absence.
+
+Collector subprocess output is consumed incrementally and the whole process
+group is terminated as soon as the fixed byte or time limit is exceeded; an
+untrusted command cannot force the trusted collector to buffer unbounded
+output. The four fixed SSH operations that create and remove the unrelated
+control network and volume also have explicit outer deadlines.
 
 The provider image may already carry subordinate-ID policy when the trusted
 bootstrap creates `secpal-ci`. Before SSH is admitted, the root-owned host
@@ -809,7 +822,7 @@ so an early provider bootstrap failure does not collapse into an ambiguous
 closed orchestration-stage set: `host-key`, `bootstrap`, `root-ssh`,
 `target-checkout`, `control-resources`, `collector-baseline`,
 `target-workload-prepare-start`, `collector-live`,
-`target-workload-cleanup`, `collector-post-cleanup`, `target-host`, and
+`target-workload-cleanup`, `target-host`, `collector-post-cleanup`, and
 `collector`. A host-key-stage failure instead records only counters for
 the closed categories `connection_refused`, `connection_timeout`, `no_key`,
 `multiple_keys`, `changed_key`, and `other`. Refused and timed-out connections
@@ -882,18 +895,25 @@ Evidence includes:
   immutable local image references with distinct API and frontend content
   digests, the exact `PODMAN_SYSTEMD_UNIT` binding from each container to its
   generated service, and—for every running role—the container process cgroup
-  nested beneath that effective service cgroup; one exited zero-status migration
-  systemd invocation established from
-  a journal query restricted to invocation-ID fields, healthy state for every
-  health-bearing role, and running state for the remaining long-lived roles;
+  nested beneath that effective service cgroup; for each exited one-shot role,
+  exactly one journal record from `/usr/bin/podman` in the generated service's
+  exact systemd invocation that reports the independently inspected full
+  container ID; one exited zero-status migration systemd invocation established
+  from a separate journal query restricted to invocation-ID fields, healthy
+  state for every health-bearing role, and running state for the remaining
+  long-lived roles;
   and
 - a pre-workload full rootless Podman inventory, zero-invocation migration
   baseline, and disabled Podman API/socket boundary, plus a distinct post-cleanup
   observation requiring exactly one migration invocation, the still-disabled API
   boundary, and exact restoration of that inventory, including absence of every
-  target-added container, network, and volume regardless of its name;
+  target-added container, network, and volume regardless of its name; exact
+  restoration of the baseline active systemd user-unit and pending-job sets,
+  measured both before and after the final inventory so a cleanup- or host-phase
+  transient service, timer, or queued job fails closed;
   exact `no-new-privileges` admission and Podman 5.4 `Healthcheck`/network-name
-  field interpretation; and
+  field interpretation; an empty Podman 5.4 `UsernsMode` is retained as the
+  documented `host` mode and rejected rather than rewritten as `private`; and
 - exact absence of every integration unit, generated service and nested
   generated drop-in artifact across the user manager's `generator.early`,
   `generator`, and `generator.late` outputs, plus container, network, and volume

@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -129,6 +130,7 @@ def valid_observations() -> dict[str, object]:
                     f"{prefix}-{logical_name}.service"
                 )
             ),
+            "invocation_id": f"{generated_names.index(logical_name) + 1:032x}",
         }
         for logical_name in generated_names
     ]
@@ -137,6 +139,7 @@ def valid_observations() -> dict[str, object]:
         one_shot = role in {"secrets-init", "migrate"}
         containers.append(
             {
+                "id": f"{role_index + 1:064x}",
                 "role": role,
                 "name": f"{prefix}-{role}",
                 "state": "exited" if one_shot else "running",
@@ -161,6 +164,7 @@ def valid_observations() -> dict[str, object]:
                 "auto_update": False,
                 "systemd_unit": f"{prefix}-{role}.service",
                 "service_managed": True,
+                "service_correlation": "journal" if one_shot else "cgroup",
                 "image": (
                     f"localhost/secpal-ci-{role}@sha256:{role_index:064x}"
                 ),
@@ -179,6 +183,10 @@ def valid_observations() -> dict[str, object]:
             "complete": True,
             "migration_invocation_count": 0,
             "podman_api": False,
+            "user_work": {
+                "active_units": ["dbus.service", "dbus.socket"],
+                "jobs": [],
+            },
             "containers": [],
             "networks": ["podman", "secpal-ci-unrelated-control-network"],
             "volumes": ["secpal-ci-unrelated-control-volume"],
@@ -252,6 +260,10 @@ def valid_observations() -> dict[str, object]:
             "all_volumes": ["secpal-ci-unrelated-control-volume"],
             "migration_invocation_count": 1,
             "podman_api": False,
+            "user_work": {
+                "active_units": ["dbus.service", "dbus.socket"],
+                "jobs": [],
+            },
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
@@ -347,6 +359,17 @@ class WorkloadEvidenceTests(unittest.TestCase):
         with mock.patch.object(os, "getuid", return_value=20000), mock.patch.object(
             os, "getgid", return_value=20000
         ), mock.patch.object(
+            self.collector, "checked_output", return_value="a" * 40
+        ), mock.patch.object(
+            self.collector, "checkout_tree_clean", return_value=False
+        ):
+            with self.assertRaisesRegex(ValueError, "clean target tree"):
+                self.collector.admit_collection_context(
+                    "live", "a" * 40, "aaaaaaaaaaaa", self.collector.CHECKOUT
+                )
+        with mock.patch.object(os, "getuid", return_value=20000), mock.patch.object(
+            os, "getgid", return_value=20000
+        ), mock.patch.object(
             self.collector, "checked_output", return_value="b" * 40
         ):
             with self.assertRaisesRegex(ValueError, "exact target SHA"):
@@ -363,6 +386,32 @@ class WorkloadEvidenceTests(unittest.TestCase):
             with self.subTest(phase=phase, instance=instance, checkout=checkout):
                 with self.assertRaises(ValueError):
                     self.collector.admit_collection_context(phase, sha, instance, checkout)
+
+    def test_checkout_tree_admission_rejects_tracked_and_untracked_changes(self) -> None:
+        clean = ((0, "", True), (0, "", True), (0, "", True))
+        dirty_cases = (
+            ((1, "", True), (0, "", True), (0, "", True)),
+            ((0, "", True), (1, "", True), (0, "", True)),
+            ((0, "", True), (0, "", True), (0, "generated.py", True)),
+            ((0, "", True), (0, "", True), (0, "", False)),
+        )
+        with mock.patch.object(self.collector, "command_result", side_effect=clean):
+            self.assertTrue(
+                self.collector.checkout_tree_clean(Path("/checkout"), "a" * 40)
+            )
+        for results in dirty_cases:
+            with self.subTest(results=results), mock.patch.object(
+                self.collector, "command_result", side_effect=results
+            ):
+                self.assertFalse(
+                    self.collector.checkout_tree_clean(Path("/checkout"), "a" * 40)
+                )
+
+    def test_collector_git_ignores_target_global_config_and_replace_refs(self) -> None:
+        environment = self.collector.command_environment()
+        self.assertEqual("/dev/null", environment["GIT_CONFIG_GLOBAL"])
+        self.assertEqual("1", environment["GIT_CONFIG_NOSYSTEM"])
+        self.assertEqual("1", environment["GIT_NO_REPLACE_OBJECTS"])
 
     def test_network_listing_accepts_podman_lowercase_name(self) -> None:
         with mock.patch.object(
@@ -510,10 +559,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "exec_main_status": 0,
                 "main_pid": 123,
                 "control_group": control_group,
+                "invocation_id": "a" * 32,
             }
         ]
         containers = [
             {
+                "id": "b" * 64,
                 "role": "api",
                 "name": "secpal-int-aaaaaaaaaaaa-api",
                 "state": "running",
@@ -531,6 +582,105 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
         self.assertTrue(complete)
         self.assertTrue(bound[0]["service_managed"])
+        self.assertEqual("cgroup", bound[0]["service_correlation"])
+
+    def test_exited_container_binding_requires_journal_execution_identity(self) -> None:
+        unit = "secpal-int-aaaaaaaaaaaa-migrate.service"
+        services = [
+            {
+                "logical_name": "migrate",
+                "unit": unit,
+                "active_state": "active",
+                "sub_state": "exited",
+                "result": "success",
+                "exec_main_status": 0,
+                "main_pid": 0,
+                "control_group": "",
+                "invocation_id": "a" * 32,
+            }
+        ]
+        containers = [
+            {
+                "id": "b" * 64,
+                "role": "migrate",
+                "name": "secpal-int-aaaaaaaaaaaa-migrate",
+                "state": "exited",
+                "pid": 0,
+                "systemd_unit": unit,
+            }
+        ]
+        with mock.patch.object(
+            self.collector,
+            "exited_container_execution_matches",
+            create=True,
+            return_value=(False, True),
+        ) as correlate:
+            bound, complete = self.collector.bind_container_services(
+                services, containers
+            )
+        correlate.assert_called_once()
+        correlated_service, correlated_container = correlate.call_args.args
+        self.assertEqual(unit, correlated_service["unit"])
+        self.assertEqual("b" * 64, correlated_container["id"])
+        self.assertTrue(complete)
+        self.assertFalse(bound[0]["service_managed"])
+
+    def test_exited_container_execution_identity_is_exact_and_unique(self) -> None:
+        service = {
+            "unit": "secpal-int-aaaaaaaaaaaa-migrate.service",
+            "invocation_id": "a" * 32,
+        }
+        container = {"id": "b" * 64}
+        matching_record = json.dumps(
+            {
+                "_SYSTEMD_INVOCATION_ID": "a" * 32,
+                "_EXE": "/usr/bin/podman",
+                "MESSAGE": "b" * 64,
+            }
+        )
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            return_value=(0, matching_record, True),
+        ):
+            self.assertEqual(
+                (True, True),
+                self.collector.exited_container_execution_matches(
+                    service, container
+                ),
+            )
+        for output in (
+            "",
+            f"{matching_record}\n{matching_record}",
+            matching_record.replace("/usr/bin/podman", "/usr/bin/false"),
+        ):
+            with self.subTest(output=output), mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(0, output, True),
+            ):
+                self.assertEqual(
+                    (False, True),
+                    self.collector.exited_container_execution_matches(
+                        service, container
+                    ),
+                )
+
+    def test_command_output_limit_terminates_a_noisy_child_early(self) -> None:
+        program = (
+            "import sys,time;"
+            f"sys.stdout.write('x'*{self.collector.MAX_OUTPUT + 1});"
+            "sys.stdout.flush();time.sleep(10)"
+        )
+        started = time.monotonic()
+        status, output, complete = self.collector.command_result(
+            ["/usr/bin/python3", "-c", program], timeout=2
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(255, status)
+        self.assertEqual("", output)
+        self.assertFalse(complete)
+        self.assertLess(elapsed, 1.5)
 
     def test_cleanup_scans_generated_drop_in_directories_and_files(self) -> None:
         prefix = "secpal-int-aaaaaaaaaaaa-api.service"
@@ -709,6 +859,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_container_inspection_missing_security_facts_is_incomplete(self) -> None:
         inspection = {
+            "Id": "c" * 64,
             "Name": "secpal-int-aaaaaaaaaaaa-api",
             "State": {
                 "Status": "running",
@@ -743,6 +894,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
         }
         required_fields = (
+            (inspection, "Id"),
             (inspection, "OCIRuntime"),
             (inspection, "Mounts"),
             (inspection["State"], "Pid"),
@@ -778,6 +930,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_podman_healthcheck_and_global_rootless_fact_are_used(self) -> None:
         inspection = {
+            "Id": "c" * 64,
             "Name": "secpal-int-aaaaaaaaaaaa-api",
             "State": {
                 "Status": "running",
@@ -823,6 +976,20 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
         self.assertTrue(complete)
         self.assertEqual("healthy", facts[0]["health"])
+
+        inspection["HostConfig"]["UsernsMode"] = ""
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([inspection], True)
+        ):
+            facts, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True
+            )
+        self.assertTrue(complete)
+        self.assertEqual("host", facts[0]["userns_mode"])
         self.assertTrue(facts[0]["rootless"])
 
     def test_no_new_privileges_requires_the_exact_security_option(self) -> None:
@@ -948,6 +1115,25 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "podman_api", True
             ),
             "D1A_PODMAN_API_DISABLED",
+        )
+
+    def test_post_cleanup_rejects_target_scheduled_user_work(self) -> None:
+        observations = valid_observations()
+        observations["baseline"]["user_work"] = {
+            "active_units": ["dbus.service", "dbus.socket"],
+            "jobs": [],
+        }
+        observations["post_cleanup"]["user_work"] = {
+            "active_units": [
+                "dbus.service",
+                "dbus.socket",
+                "delayed-migration.timer",
+            ],
+            "jobs": [],
+        }
+        self.assertIn(
+            "D1A_PENDING_USER_WORK",
+            self.collector.workload_admission_failures(observations),
         )
 
     def test_cleanup_collector_uses_the_shared_lifecycle_guard(self) -> None:
@@ -1087,29 +1273,42 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertNotIn("SECPAL_TARGET_COMMAND", runner)
         self.assertNotIn("sudo", runner)
         self.assertIn("collect-workload-evidence.py", runner)
+        self.assertIn("collect_workload_phase()", runner)
+        self.assertEqual(
+            1,
+            runner.count("< scripts/ci-cloud/collect-workload-evidence.py"),
+        )
         self.assertLess(
             runner.index('bootstrap_stage="collector-baseline"'),
             runner.index('bootstrap_stage="target-workload-prepare-start"'),
         )
         self.assertLess(
-            runner.index('bootstrap_stage="collector-post-cleanup"'),
             runner.index('bootstrap_stage="target-host"'),
+            runner.index('bootstrap_stage="collector-post-cleanup"'),
         )
         self.assertIn("workload_evidence_finalized=true", runner)
-        self.assertLess(
-            runner.index("v1 workload-prepare-start"),
-            runner.index('"live"'),
+        self.assertIn(
+            "collect_workload_live() { collect_workload_phase live; }",
+            runner,
         )
-        self.assertLess(
-            runner.index("v1 workload-cleanup"),
-            runner.rindex('"post-cleanup"'),
+        self.assertIn(
+            "collect_workload_post_cleanup() { "
+            "collect_workload_phase post-cleanup; }",
+            runner,
         )
         self.assertIn("trap collect_cleanup_after_interruption INT TERM HUP", runner)
-        self.assertEqual(3, runner.count("ulimit -f 32768"))
+        self.assertIn("run_target_phase()", runner)
+        self.assertEqual(1, runner.count("ulimit -f 32768"))
         self.assertEqual(
-            3,
+            1,
             runner.count("cd /home/secpal-ci/deployment-target"),
         )
+        self.assertEqual(
+            1,
+            runner.count('diff-index --quiet --no-ext-diff "$1" --'),
+        )
+        self.assertEqual(1, runner.count('read-tree --reset "$1"'))
+        self.assertEqual(1, runner.count("ls-files --others"))
         host_collection = runner.split("collect_host_and_assemble()", 1)[1]
         host_collection = host_collection.split(
             "collect_cleanup_after_interruption()", 1
@@ -1119,6 +1318,28 @@ class WorkloadEvidenceTests(unittest.TestCase):
             host_collection,
         )
         self.assertNotIn("write_incomplete_", runner)
+
+    def test_control_resource_ssh_operations_have_outer_deadlines(self) -> None:
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        self.assertIn("run_control_resource()", runner)
+        helper = runner.split("run_control_resource()", 1)[1].split(
+            "run_target_phase()", 1
+        )[0]
+        self.assertEqual(
+            1,
+            helper.count("timeout --signal=TERM --kill-after=15s 3m"),
+        )
+        for operation in (
+            "create-network",
+            "create-volume",
+            "remove-network",
+            "remove-volume",
+        ):
+            self.assertIn(
+                f"{operation})",
+                helper,
+                operation,
+            )
 
     def test_namespace_sharing_network_modes_are_rejected_by_prefix(self) -> None:
         for network_mode in ("container:deadbeef", "ns:/proc/1/ns/net"):

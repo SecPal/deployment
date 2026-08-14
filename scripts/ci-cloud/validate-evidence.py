@@ -276,7 +276,8 @@ def validate_document(document: object) -> dict[str, object]:
         {
             "phase", "target_admitted", "collector_uid", "collector_gid",
             "complete", "containers", "networks", "volumes",
-            "migration_invocation_count", "podman_api", "control_resources",
+            "migration_invocation_count", "podman_api", "user_work",
+            "control_resources",
         },
         "$.workload.baseline",
     )
@@ -299,7 +300,7 @@ def validate_document(document: object) -> dict[str, object]:
             "complete", "owned_units", "generated_services", "containers",
             "networks", "volumes", "all_containers", "all_networks",
             "all_volumes", "migration_invocation_count", "podman_api",
-            "control_resources",
+            "user_work", "control_resources",
         },
         "$.workload.post_cleanup",
     )
@@ -314,6 +315,16 @@ def validate_document(document: object) -> dict[str, object]:
         "$.workload.live.migration",
     )
     exact_keys(live["readiness"], {"observed", "ready_roles"}, "$.workload.live.readiness")
+    exact_keys(
+        baseline["user_work"],
+        {"active_units", "jobs"},
+        "$.workload.baseline.user_work",
+    )
+    exact_keys(
+        post_cleanup["user_work"],
+        {"active_units", "jobs"},
+        "$.workload.post_cleanup.user_work",
+    )
     for path, controls in (
         ("$.workload.baseline.control_resources", baseline["control_resources"]),
         ("$.workload.live.control_resources", live["control_resources"]),
@@ -342,6 +353,7 @@ def validate_document(document: object) -> dict[str, object]:
                 "logical_name", "unit", "fragment_path", "fragment_uid", "fragment_gid",
                 "fragment_mode", "drop_in_paths", "drop_in_owners", "active_state",
                 "sub_state", "result", "exec_main_status", "main_pid", "control_group",
+                "invocation_id",
             },
             f"$.workload.live.generated_services[{index}]",
         )
@@ -357,12 +369,12 @@ def validate_document(document: object) -> dict[str, object]:
         exact_keys(
             container,
             {
-                "role", "name", "state", "pid", "exit_code", "health", "oci_runtime",
+                "id", "role", "name", "state", "pid", "exit_code", "health", "oci_runtime",
                 "rootless", "privileged", "pid_mode", "userns_mode",
                 "ipc_mode", "uts_mode", "network_mode", "cap_add", "devices_present",
                 "podman_socket_mount", "remote_api_environment", "security_opt",
                 "networks", "published_ports", "auto_update", "systemd_unit",
-                "service_managed", "image",
+                "service_managed", "service_correlation", "image",
             },
             f"$.workload.live.containers[{index}]",
         )

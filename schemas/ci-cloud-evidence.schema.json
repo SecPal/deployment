@@ -669,7 +669,8 @@
         "result",
         "exec_main_status",
         "main_pid",
-        "control_group"
+        "control_group",
+        "invocation_id"
       ],
       "properties": {
         "logical_name": {
@@ -736,6 +737,10 @@
           "type": "string",
           "pattern": "^$|^/",
           "maxLength": 256
+        },
+        "invocation_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
         }
       }
     },
@@ -757,6 +762,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "id",
         "role",
         "name",
         "state",
@@ -781,9 +787,11 @@
         "auto_update",
         "systemd_unit",
         "service_managed",
+        "service_correlation",
         "image"
       ],
       "properties": {
+        "id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "role": { "$ref": "#/$defs/workloadRole" },
         "name": {
           "type": "string",
@@ -818,7 +826,33 @@
           "maxLength": 96
         },
         "service_managed": { "type": "boolean" },
+        "service_correlation": { "enum": ["none", "cgroup", "journal"] },
         "image": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "userWork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active_units", "jobs"],
+      "properties": {
+        "active_units": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
+          }
+        },
+        "jobs": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
+          }
+        }
       }
     },
     "baselineObservation": {
@@ -835,6 +869,7 @@
         "volumes",
         "migration_invocation_count",
         "podman_api",
+        "user_work",
         "control_resources"
       ],
       "properties": {
@@ -848,6 +883,7 @@
         "volumes": { "$ref": "#/$defs/stringArray" },
         "migration_invocation_count": { "const": 0 },
         "podman_api": { "type": "boolean" },
+        "user_work": { "$ref": "#/$defs/userWork" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -983,6 +1019,7 @@
         "all_volumes",
         "migration_invocation_count",
         "podman_api",
+        "user_work",
         "control_resources"
       ],
       "properties": {
@@ -1005,6 +1042,7 @@
           "maximum": 16
         },
         "podman_api": { "type": "boolean" },
+        "user_work": { "$ref": "#/$defs/userWork" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },

@@ -395,74 +395,126 @@ if [[ "$checkout_status" -ne 0 ]]; then
 fi
 checkout_admitted=true
 
-run_target_host() {
-  (
-    timeout --signal=TERM --kill-after=30s 22m \
-      ssh "${ssh_options[@]}" "secpal-ci@$address" \
-      /bin/bash -s -- "$target_sha" "$fixture_instance" host <<'REMOTE'
-set -euo pipefail
-[[ "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" && "$3" == host ]]
-cd /home/secpal-ci/deployment-target
-ulimit -f 32768
-exec /usr/bin/env -i \
-  HOME=/home/secpal-ci \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  SECPAL_TARGET_SHA="$1" \
-  SECPAL_FIXTURE_INSTANCE="$2" \
-  /usr/bin/timeout --signal=TERM --kill-after=15s 20m \
-  /bin/bash /home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh \
-  v1 host
-REMOTE
-  ) >/dev/null 2>&1
+run_control_resource() {
+  local operation="$1"
+  local -a podman_arguments
+  case "$operation" in
+    create-network)
+      podman_arguments=(network create secpal-ci-unrelated-control-network)
+      ;;
+    create-volume)
+      podman_arguments=(volume create secpal-ci-unrelated-control-volume)
+      ;;
+    remove-network)
+      podman_arguments=(network rm secpal-ci-unrelated-control-network)
+      ;;
+    remove-volume)
+      podman_arguments=(volume rm secpal-ci-unrelated-control-volume)
+      ;;
+    *) return 125 ;;
+  esac
+  timeout --signal=TERM --kill-after=15s 3m \
+    ssh "${ssh_options[@]}" "secpal-ci@$address" \
+    /usr/bin/env -i \
+    HOME=/home/secpal-ci \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/bin/podman "${podman_arguments[@]}"
 }
 
-run_target_prepare_start() {
-  timeout --signal=TERM --kill-after=30s 12m \
+run_target_phase() {
+  local outer_timeout
+  local phase="$1"
+  case "$phase" in
+    host) outer_timeout=22m ;;
+    workload-prepare-start) outer_timeout=12m ;;
+    workload-cleanup) outer_timeout=7m ;;
+    *) return 125 ;;
+  esac
+  timeout --signal=TERM --kill-after=30s "$outer_timeout" \
     ssh "${ssh_options[@]}" "secpal-ci@$address" \
-    /bin/bash -s -- "$target_sha" "$fixture_instance" workload-prepare-start \
+    /bin/bash -s -- "$target_sha" "$fixture_instance" "$phase" \
     <<'REMOTE' >/dev/null 2>&1
 set -euo pipefail
-[[ "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" && "$3" == workload-prepare-start ]]
+[[ "$#" -eq 3 && "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" ]]
+case "$3" in
+  host)
+    phase_timeout=20m
+    phase_arguments=(v1 host)
+    ;;
+  workload-prepare-start)
+    phase_timeout=10m
+    phase_arguments=(v1 workload-prepare-start)
+    ;;
+  workload-cleanup)
+    phase_timeout=5m
+    phase_arguments=(v1 workload-cleanup)
+    ;;
+  *) exit 125 ;;
+esac
 cd /home/secpal-ci/deployment-target
+git_config_digest="$(/usr/bin/sha256sum -- .git/config)"
+git_config_digest="${git_config_digest%% *}"
+admit_target_tree() {
+  local observed_git_config_digest
+  observed_git_config_digest="$(/usr/bin/sha256sum -- .git/config)"
+  observed_git_config_digest="${observed_git_config_digest%% *}"
+  [[ "$observed_git_config_digest" == "$git_config_digest" ]]
+  [[ "$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 /usr/bin/git \
+    --git-dir="$PWD/.git" --work-tree="$PWD" \
+    rev-parse --verify 'HEAD^{commit}')" == "$1" ]]
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 /usr/bin/git \
+    --git-dir="$PWD/.git" --work-tree="$PWD" \
+    -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+    read-tree --reset "$1"
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 /usr/bin/git \
+    --git-dir="$PWD/.git" --work-tree="$PWD" \
+    -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+    diff-index --quiet --no-ext-diff "$1" --
+  [[ -z "$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 /usr/bin/git \
+    --git-dir="$PWD/.git" --work-tree="$PWD" \
+    -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+    ls-files --others)" ]]
+}
+admit_target_tree "$1"
 ulimit -f 32768
-exec /usr/bin/env -i \
+set +e
+/usr/bin/env -i \
   HOME=/home/secpal-ci \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  PYTHONDONTWRITEBYTECODE=1 \
   SECPAL_TARGET_SHA="$1" \
   SECPAL_FIXTURE_INSTANCE="$2" \
-  /usr/bin/timeout --signal=TERM --kill-after=15s 10m \
+  /usr/bin/timeout --signal=TERM --kill-after=15s "$phase_timeout" \
   /bin/bash /home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh \
-  v1 workload-prepare-start
+  "${phase_arguments[@]}"
+target_status=$?
+set -e
+admit_target_tree "$1"
+exit "$target_status"
 REMOTE
 }
 
-run_target_cleanup() {
-  timeout --signal=TERM --kill-after=30s 7m \
-    ssh "${ssh_options[@]}" "secpal-ci@$address" \
-    /bin/bash -s -- "$target_sha" "$fixture_instance" workload-cleanup \
-    <<'REMOTE' >/dev/null 2>&1
-set -euo pipefail
-[[ "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" && "$3" == workload-cleanup ]]
-cd /home/secpal-ci/deployment-target
-ulimit -f 32768
-exec /usr/bin/env -i \
-  HOME=/home/secpal-ci \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  SECPAL_TARGET_SHA="$1" \
-  SECPAL_FIXTURE_INSTANCE="$2" \
-  /usr/bin/timeout --signal=TERM --kill-after=15s 5m \
-  /bin/bash /home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh \
-  v1 workload-cleanup
-REMOTE
-}
+run_target_host() { run_target_phase host; }
+run_target_prepare_start() { run_target_phase workload-prepare-start; }
+run_target_cleanup() { run_target_phase workload-cleanup; }
 
-collect_workload_live() {
+collect_workload_phase() {
+  local evidence_path
+  local phase="$1"
+  case "$phase" in
+    baseline) evidence_path="$baseline_evidence_json" ;;
+    live) evidence_path="$live_evidence_json" ;;
+    post-cleanup) evidence_path="$cleanup_evidence_json" ;;
+    *) return 125 ;;
+  esac
   timeout --signal=TERM --kill-after=15s 3m \
     ssh "${ssh_options[@]}" "secpal-ci@$address" \
     /usr/bin/env -i \
@@ -470,33 +522,13 @@ collect_workload_live() {
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    /usr/bin/python3 -I - "live" "$target_sha" "$fixture_instance" \
-    < scripts/ci-cloud/collect-workload-evidence.py >"$live_evidence_json"
+    /usr/bin/python3 -I - "$phase" "$target_sha" "$fixture_instance" \
+    < scripts/ci-cloud/collect-workload-evidence.py >"$evidence_path"
 }
 
-collect_workload_baseline() {
-  timeout --signal=TERM --kill-after=15s 3m \
-    ssh "${ssh_options[@]}" "secpal-ci@$address" \
-    /usr/bin/env -i \
-    HOME=/home/secpal-ci \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
-    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    /usr/bin/python3 -I - "baseline" "$target_sha" "$fixture_instance" \
-    < scripts/ci-cloud/collect-workload-evidence.py >"$baseline_evidence_json"
-}
-
-collect_workload_post_cleanup() {
-  timeout --signal=TERM --kill-after=15s 3m \
-    ssh "${ssh_options[@]}" "secpal-ci@$address" \
-    /usr/bin/env -i \
-    HOME=/home/secpal-ci \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
-    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    /usr/bin/python3 -I - "post-cleanup" "$target_sha" "$fixture_instance" \
-    < scripts/ci-cloud/collect-workload-evidence.py >"$cleanup_evidence_json"
-}
+collect_workload_live() { collect_workload_phase live; }
+collect_workload_baseline() { collect_workload_phase baseline; }
+collect_workload_post_cleanup() { collect_workload_phase post-cleanup; }
 
 collect_host_and_assemble() {
   local require_passed="$1"
@@ -569,22 +601,8 @@ collect_cleanup_after_interruption() {
 trap collect_cleanup_after_interruption INT TERM HUP
 
 bootstrap_stage="control-resources"
-ssh "${ssh_options[@]}" "secpal-ci@$address" \
-  /usr/bin/env -i \
-  HOME=/home/secpal-ci \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  /usr/bin/podman network create secpal-ci-unrelated-control-network \
-  >/dev/null
-ssh "${ssh_options[@]}" "secpal-ci@$address" \
-  /usr/bin/env -i \
-  HOME=/home/secpal-ci \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  /usr/bin/podman volume create secpal-ci-unrelated-control-volume \
-  >/dev/null
+run_control_resource create-network >/dev/null
+run_control_resource create-volume >/dev/null
 
 bootstrap_stage="collector-baseline"
 set +e
@@ -613,6 +631,12 @@ if [[ "$cleanup_status" -eq 0 ]]; then
   cleanup_completed=true
 fi
 
+bootstrap_stage="target-host"
+set +e
+run_target_host
+host_status=$?
+set -e
+
 bootstrap_stage="collector-post-cleanup"
 set +e
 collect_workload_post_cleanup
@@ -621,18 +645,8 @@ set -e
 workload_evidence_finalized=true
 
 set +e
-ssh "${ssh_options[@]}" "secpal-ci@$address" \
-  /usr/bin/env -i HOME=/home/secpal-ci PATH=/usr/bin:/bin \
-  /usr/bin/podman network rm secpal-ci-unrelated-control-network >/dev/null 2>&1
-ssh "${ssh_options[@]}" "secpal-ci@$address" \
-  /usr/bin/env -i HOME=/home/secpal-ci PATH=/usr/bin:/bin \
-  /usr/bin/podman volume rm secpal-ci-unrelated-control-volume >/dev/null 2>&1
-set -e
-
-bootstrap_stage="target-host"
-set +e
-run_target_host
-host_status=$?
+run_control_resource remove-network >/dev/null 2>&1
+run_control_resource remove-volume >/dev/null 2>&1
 set -e
 
 trap - INT TERM HUP

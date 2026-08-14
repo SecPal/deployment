@@ -180,10 +180,10 @@ expected_sequence() {
     target:workload-prepare-start \
     collector:live \
     target:workload-cleanup \
+    target:host \
     collector:post-cleanup \
     control:remove-network \
     control:remove-volume \
-    target:host \
     collector:host
 }
 
