@@ -86,6 +86,7 @@ TRUSTED_USER_UNIT_PACKAGES = {
     "gpg-agent-ssh.socket": "gpg-agent",
     "gpg-agent.socket": "gpg-agent",
     "gpg-agent.service": "gpg-agent",
+    # Debian 13 (trixie) ships Keyboxd and both user units in binary package gpg.
     "keyboxd.socket": "gpg",
     "keyboxd.service": "gpg",
     "ssh-agent.socket": "openssh-client",
