@@ -25,6 +25,9 @@ COLLECTOR_PATH = ROOT / "scripts" / "ci-cloud" / "collect-workload-evidence.py"
 ASSEMBLER_PATH = ROOT / "scripts" / "ci-cloud" / "assemble-evidence.py"
 RUNNER_PATH = ROOT / "scripts" / "ci-cloud" / "run-remote-conformance.sh"
 TARGET_PATH = ROOT / "scripts" / "ci-cloud" / "target-conformance.sh"
+PODMAN_54_USERNS_FIXTURE = (
+    ROOT / "tests" / "fixtures" / "podman-5.4.2-rootless-userns.json"
+)
 
 ROLES = (
     "secrets-init", "postgres", "valkey", "migrate", "api",
@@ -225,6 +228,7 @@ def valid_observations() -> dict[str, object]:
             "drop_in_paths": [],
             "drop_in_owners": [],
             "drop_in_sha256": [],
+            "environment": [],
             "active_state": "active",
             "sub_state": (
                 "exited"
@@ -307,6 +311,13 @@ def valid_observations() -> dict[str, object]:
         capabilities = (
             ["CAP_CHOWN", "CAP_FOWNER"] if role == "secrets-init" else []
         )
+        collector_map = [
+            {"container_id": 0, "host_id": 0, "size": 4_294_967_295}
+        ]
+        process_map = [
+            {"container_id": 0, "host_id": 20_000, "size": 1},
+            {"container_id": 1, "host_id": 200_000, "size": 65_536},
+        ]
         containers.append(
             {
                 "id": f"{role_index + 1:064x}",
@@ -330,7 +341,22 @@ def valid_observations() -> dict[str, object]:
                 "command": list(command),
                 "healthcheck_command": list(healthcheck),
                 "pid_mode": "private",
-                "userns_mode": "private",
+                "user_namespace": {
+                    "compat_mode": "",
+                    "create_options": [],
+                    "process_identity": (
+                        "" if one_shot else f"user:[{4_026_540_000 + role_index}]"
+                    ),
+                    "collector_identity": "user:[4026531837]",
+                    "uid_map": [] if one_shot else copy.deepcopy(process_map),
+                    "gid_map": [] if one_shot else copy.deepcopy(process_map),
+                    "collector_uid_map": copy.deepcopy(collector_map),
+                    "collector_gid_map": copy.deepcopy(collector_map),
+                    "configured_uid_map": [],
+                    "configured_gid_map": [],
+                    "podman_uid_map": copy.deepcopy(process_map),
+                    "podman_gid_map": copy.deepcopy(process_map),
+                },
                 "ipc_mode": "private",
                 "uts_mode": "private",
                 "network_mode": "private",
@@ -1104,7 +1130,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ("oci_runtime", "runc", "D1A_OCI_RUNTIME"),
             ("privileged", True, "D1A_PRIVILEGE_BOUNDARY"),
             ("pid_mode", "host", "D1A_HOST_NAMESPACES"),
-            ("userns_mode", "host", "D1A_HOST_NAMESPACES"),
             ("ipc_mode", "host", "D1A_HOST_NAMESPACES"),
             ("uts_mode", "host", "D1A_HOST_NAMESPACES"),
             ("network_mode", "host", "D1A_HOST_NETWORK"),
@@ -1133,6 +1158,240 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "image", "docker.io/secpal/api:latest"
             ),
             "D1A_IMAGE_PROVENANCE",
+        )
+
+    def test_effective_user_namespace_facts_fail_closed(self) -> None:
+        mutations = (
+            lambda fact: fact.__setitem__(
+                "process_identity", fact["collector_identity"]
+            ),
+            lambda fact: fact.__setitem__("process_identity", ""),
+            lambda fact: fact.__setitem__("uid_map", []),
+            lambda fact: fact.__setitem__("gid_map", []),
+            lambda fact: fact["uid_map"].append(
+                {"container_id": 10_000, "host_id": 240_000, "size": 10}
+            ),
+            lambda fact: fact.__setitem__(
+                "uid_map",
+                [{"container_id": 0, "host_id": 20_000, "size": 10_001}],
+            ),
+            lambda fact: fact.__setitem__(
+                "gid_map",
+                [{"container_id": 0, "host_id": 20_000, "size": 10_001}],
+            ),
+            lambda fact: fact.__setitem__(
+                "uid_map",
+                [
+                    {"container_id": index, "host_id": 200_000 + index, "size": 1}
+                    for index in range(17)
+                ],
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                self.assert_failure(
+                    lambda evidence, mutate=mutate: mutate(
+                        evidence["live"]["containers"][4]["user_namespace"]
+                    ),
+                    "D1A_HOST_NAMESPACES",
+                )
+
+    def test_explicit_user_namespace_joins_are_rejected(self) -> None:
+        for mode in ("host", "container:0123456789abcdef", "ns:/proc/1/ns/user"):
+            with self.subTest(mode=mode):
+                self.assert_failure(
+                    lambda evidence, mode=mode: evidence["live"]["containers"][4][
+                        "user_namespace"
+                    ].__setitem__("create_options", [mode]),
+                    "D1A_HOST_NAMESPACES",
+                )
+                self.assert_failure(
+                    lambda evidence, mode=mode: evidence["live"]["containers"][4][
+                        "user_namespace"
+                    ].__setitem__("compat_mode", mode),
+                    "D1A_HOST_NAMESPACES",
+                )
+
+    def test_service_environment_cannot_supply_user_namespace_defaults(self) -> None:
+        for assignment in (
+            "PODMAN_USERNS=host",
+            "PODMAN_USERNS=container:0123456789abcdef",
+            "CONTAINERS_CONF=/tmp/target-controlled.conf",
+            "CONTAINERS_CONF_OVERRIDE=/tmp/target-controlled.conf",
+            "XDG_CONFIG_HOME=/tmp/target-controlled-config",
+            "HOME=/tmp/target-controlled-home",
+        ):
+            with self.subTest(assignment=assignment):
+                self.assert_failure(
+                    lambda evidence, assignment=assignment: evidence["live"]
+                    ["generated_services"][4].__setitem__("environment", [assignment]),
+                    "D1A_HOST_NAMESPACES",
+                )
+
+    def test_configured_mapping_must_match_the_effective_kernel_mapping(self) -> None:
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][4]["user_namespace"].update(
+                {
+                    "configured_uid_map": [
+                        {"container_id": 0, "host_id": 3_000_000_000, "size": 65_536}
+                    ],
+                    "configured_gid_map": [
+                        {"container_id": 0, "host_id": 3_000_000_000, "size": 65_536}
+                    ],
+                }
+            ),
+            "D1A_HOST_NAMESPACES",
+        )
+
+    def test_auto_mapping_uses_kernel_derived_host_process_identity(self) -> None:
+        observations = valid_observations()
+        container = observations["live"]["containers"][4]
+        service = observations["live"]["generated_services"][4]
+        namespace = container["user_namespace"]
+        auto_map = [{"container_id": 0, "host_id": 200_000, "size": 65_536}]
+        namespace["create_options"] = ["auto"]
+        namespace["uid_map"] = copy.deepcopy(auto_map)
+        namespace["gid_map"] = copy.deepcopy(auto_map)
+        observations["live"]["processes"] = [
+            {
+                "executable": "/usr/bin/php",
+                "control_group": service["control_group"] + "/container",
+                "uid": 210_001,
+                "gid": 210_001,
+                "count": 1,
+            }
+        ]
+        self.assertEqual([], self.collector.workload_admission_failures(observations))
+
+    def test_exited_user_namespace_requires_immutable_default_configuration_and_lifecycle(self) -> None:
+        for mutate in (
+            lambda container: container["user_namespace"].__setitem__(
+                "create_options", ["unknown"]
+            ),
+            lambda container: container["user_namespace"].__setitem__(
+                "create_options", ["auto"]
+            ),
+            lambda container: container["user_namespace"].__setitem__(
+                "configured_uid_map",
+                [{"container_id": 0, "host_id": 1, "size": 10_001}],
+            ),
+            lambda container: container.__setitem__(
+                "lifecycle_service_invocation", ""
+            ),
+        ):
+            with self.subTest(mutate=mutate):
+                self.assert_failure(
+                    lambda evidence, mutate=mutate: mutate(
+                        evidence["live"]["containers"][3]
+                    ),
+                    "D1A_HOST_NAMESPACES",
+                )
+
+    def test_podman_54_empty_compatibility_mode_is_not_host_evidence(self) -> None:
+        capture = json.loads(PODMAN_54_USERNS_FIXTURE.read_text(encoding="utf-8"))
+        self.assertIn("local rootless Podman 5.4.2 capture", capture["capture_source"])
+        self.assertEqual("5.4.2", capture["podman_version"])
+        self.assertTrue(capture["rootless"])
+        self.assertEqual("", capture["default"]["HostConfig.UsernsMode"])
+        self.assertEqual("", capture["auto"]["HostConfig.UsernsMode"])
+        self.assertFalse(capture["default"]["HostConfig.IDMappings_present"])
+        self.assertFalse(capture["auto"]["HostConfig.IDMappings_present"])
+        self.assertEqual(
+            (["auto"], True),
+            self.collector.configured_userns_options(
+                capture["auto"]["Config.CreateCommand"]
+            ),
+        )
+        self.assertEqual(
+            (
+                capture["rootless_outer_kernel_maps"]["uid_map"],
+                True,
+            ),
+            self.collector.parse_id_map(
+                b"0 1000 1\n1 100000 65536\n"
+            ),
+        )
+
+        for create_options in ([], ["auto"]):
+            observations = valid_observations()
+            namespace = observations["live"]["containers"][4]["user_namespace"]
+            namespace["compat_mode"] = ""
+            namespace["create_options"] = create_options
+            if create_options:
+                auto_map = [
+                    {"container_id": 0, "host_id": 200_000, "size": 65_536}
+                ]
+                namespace["uid_map"] = copy.deepcopy(auto_map)
+                namespace["gid_map"] = copy.deepcopy(auto_map)
+            self.assertNotIn(
+                "D1A_HOST_NAMESPACES",
+                self.collector.workload_admission_failures(observations),
+            )
+
+    def test_id_map_parser_rejects_malformed_and_incomplete_kernel_maps(self) -> None:
+        valid = b"         0      20000          1\n         1     200000      65536\n"
+        expected = [
+            {"container_id": 0, "host_id": 20_000, "size": 1},
+            {"container_id": 1, "host_id": 200_000, "size": 65_536},
+        ]
+        self.assertEqual((expected, True), self.collector.parse_id_map(valid))
+        for value in (
+            b"",
+            b"0 20000\n",
+            b"0 x 1\n",
+            b"0 20000 0\n",
+            b"0 20000 10\n5 20010 10\n",
+            b"0 20000 10\n10 20005 10\n",
+            valid + b"1",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(self.collector.parse_id_map(value)[1])
+
+    def test_podman_57_configured_mapping_shape_is_supported(self) -> None:
+        expected = [{"container_id": 0, "host_id": 1, "size": 65_536}]
+        self.assertEqual(
+            (expected, expected, True),
+            self.collector.configured_id_maps(
+                {"UidMap": ["0:1:65536"], "GidMap": ["0:1:65536"]}
+            ),
+        )
+
+    def test_configured_mapping_composes_through_rootless_outer_mapping(self) -> None:
+        outer = [
+            {"container_id": 0, "host_id": 20_000, "size": 1},
+            {"container_id": 1, "host_id": 200_000, "size": 65_536},
+        ]
+        self.assertEqual(
+            [{"container_id": 0, "host_id": 200_000, "size": 65_536}],
+            self.collector.compose_id_maps(
+                [{"container_id": 0, "host_id": 1, "size": 65_536}], outer
+            ),
+        )
+        self.assertIsNone(
+            self.collector.compose_id_maps(
+                [{"container_id": 0, "host_id": 3_000_000_000, "size": 65_536}],
+                outer,
+            )
+        )
+
+    def test_user_namespace_creation_options_are_derived_from_runtime_command(self) -> None:
+        for command in (
+            ["/usr/bin/podman", "create", "--userns=auto", "fixture"],
+            ["/usr/bin/podman", "run", "--userns", "auto", "fixture"],
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    (["auto"], True),
+                    self.collector.configured_userns_options(command),
+                )
+        self.assertEqual(
+            (["auto", "host"], False),
+            self.collector.configured_userns_options(
+                [
+                    "/usr/bin/podman", "run", "--userns=auto",
+                    "--userns=host", "fixture",
+                ]
+            ),
         )
 
     def test_api_and_frontend_require_distinct_image_identities(self) -> None:
@@ -1231,6 +1490,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Entrypoint": list(API_ENTRYPOINT),
                 "Cmd": list(ROLE_EXECUTION["api"][1]),
                 "Healthcheck": {"Test": list(ROLE_EXECUTION["api"][2])},
+                "CreateCommand": ["/usr/bin/podman", "run"],
             },
             "HostConfig": {
                 "Privileged": False,
@@ -1268,6 +1528,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             (inspection["Config"], "Entrypoint"),
             (inspection["Config"], "Cmd"),
             (inspection["Config"], "Healthcheck"),
+            (inspection["Config"], "CreateCommand"),
             (inspection["HostConfig"], "CapAdd"),
             (inspection["HostConfig"], "GroupAdd"),
             (inspection["HostConfig"], "Devices"),
@@ -1300,11 +1561,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
                 ), mock.patch.object(
                     self.collector,
-                    "effective_process_identity",
-                    return_value=(10001, 10001, [10001], True),
+                    "effective_user_namespace_facts",
+                    return_value=({}, 10001, 10001, [10001], True),
                 ):
                     _, complete = self.collector.container_facts(
-                        "aaaaaaaaaaaa", rootless=True
+                        "aaaaaaaaaaaa", rootless=True,
+                        podman_uid_map=[], podman_gid_map=[],
                     )
                 self.assertFalse(complete)
 
@@ -1328,6 +1590,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Entrypoint": list(API_ENTRYPOINT),
                 "Cmd": list(ROLE_EXECUTION["api"][1]),
                 "Healthcheck": {"Test": list(ROLE_EXECUTION["api"][2])},
+                "CreateCommand": ["/usr/bin/podman", "run"],
             },
             "HostConfig": {
                 "Privileged": False,
@@ -1353,6 +1616,24 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "BoundingCaps": [],
             "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
         }
+        namespace_facts = {
+            "process_identity": "user:[4026540001]",
+            "collector_identity": "user:[4026531837]",
+            "uid_map": [
+                {"container_id": 0, "host_id": 20_000, "size": 1},
+                {"container_id": 1, "host_id": 200_000, "size": 65_536},
+            ],
+            "gid_map": [
+                {"container_id": 0, "host_id": 20_000, "size": 1},
+                {"container_id": 1, "host_id": 200_000, "size": 65_536},
+            ],
+            "collector_uid_map": [
+                {"container_id": 0, "host_id": 0, "size": 4_294_967_295}
+            ],
+            "collector_gid_map": [
+                {"container_id": 0, "host_id": 0, "size": 4_294_967_295}
+            ],
+        }
         with mock.patch.object(
             self.collector,
             "names_from_listing",
@@ -1365,11 +1646,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
         ), mock.patch.object(
             self.collector,
-            "effective_process_identity",
-            return_value=(10001, 10001, [10001], True),
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
         ):
             facts, complete = self.collector.container_facts(
-                "aaaaaaaaaaaa", rootless=True
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
             )
         self.assertTrue(complete)
         self.assertEqual("healthy", facts[0]["health"])
@@ -1387,14 +1670,20 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
         ), mock.patch.object(
             self.collector,
-            "effective_process_identity",
-            return_value=(10001, 10001, [10001], True),
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
         ):
             facts, complete = self.collector.container_facts(
-                "aaaaaaaaaaaa", rootless=True
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
             )
         self.assertTrue(complete)
-        self.assertEqual("host", facts[0]["userns_mode"])
+        self.assertEqual("", facts[0]["user_namespace"]["compat_mode"])
+        self.assertEqual(
+            "user:[4026540001]",
+            facts[0]["user_namespace"]["process_identity"],
+        )
         self.assertTrue(facts[0]["rootless"])
 
     def test_no_new_privileges_requires_the_exact_security_option(self) -> None:
@@ -2067,6 +2356,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "podman_runtime_facts",
             return_value=(True, "crun", True),
         ), mock.patch.object(
+            self.collector,
+            "podman_outer_id_maps",
+            return_value=(
+                [{"container_id": 0, "host_id": 0, "size": 4_294_967_295}],
+                [{"container_id": 0, "host_id": 0, "size": 4_294_967_295}],
+                True,
+            ),
+        ), mock.patch.object(
             self.collector, "container_facts", return_value=([], True)
         ), mock.patch.object(
             self.collector, "bind_container_services", return_value=([], True)
@@ -2089,28 +2386,70 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertFalse(observation["complete"])
         self.assertEqual(hidden, observation["processes"])
 
-    def test_container_identity_is_read_from_the_live_process_status(self) -> None:
-        status = (
-            b"Name:\tphp\n"
-            b"Uid:\t210000\t210000\t210000\t210000\n"
-            b"Gid:\t210000\t210000\t210000\t210000\n"
-            b"Groups:\t210000\n"
-        )
+    def test_container_identity_is_derived_from_live_kernel_namespace_maps(self) -> None:
+        collector_map = [
+            {"container_id": 0, "host_id": 0, "size": 4_294_967_295}
+        ]
+        process_map = [
+            {"container_id": 0, "host_id": 20_000, "size": 1},
+            {"container_id": 1, "host_id": 200_000, "size": 65_536},
+        ]
         with mock.patch.object(
-            self.collector.Path, "open", return_value=io.BytesIO(status)
+            self.collector,
+            "user_namespace_identity",
+            side_effect=(
+                ("user:[4026531837]", True),
+                ("user:[4026540001]", True),
+                ("user:[4026540001]", True),
+            ),
+        ), mock.patch.object(
+            self.collector,
+            "read_id_map",
+            side_effect=(
+                (collector_map, True),
+                (collector_map, True),
+                (process_map, True),
+                (process_map, True),
+            ),
+        ), mock.patch.object(
+            self.collector,
+            "process_status_facts",
+            return_value=(210_000, 210_000, [210_000], True),
         ):
-            self.assertEqual(
-                (10001, 10001, [10001], True),
-                self.collector.effective_process_identity(1234),
+            facts, uid, gid, groups, complete = (
+                self.collector.effective_user_namespace_facts(1234)
             )
-        malformed = status.replace(b"210000\t210000\t210000\t210000", b"210000\t0\t210000\t210000", 1)
+        self.assertTrue(complete)
+        self.assertEqual((10001, 10001, [10001]), (uid, gid, groups))
+        self.assertEqual("user:[4026540001]", facts["process_identity"])
+
         with mock.patch.object(
-            self.collector.Path, "open", return_value=io.BytesIO(malformed)
+            self.collector,
+            "user_namespace_identity",
+            side_effect=(
+                ("user:[4026531837]", True),
+                ("user:[4026531837]", True),
+                ("user:[4026531837]", True),
+            ),
+        ), mock.patch.object(
+            self.collector,
+            "read_id_map",
+            side_effect=(
+                (collector_map, True),
+                (collector_map, True),
+                (collector_map, True),
+                (collector_map, True),
+            ),
+        ), mock.patch.object(
+            self.collector,
+            "process_status_facts",
+            return_value=(20_000, 20_000, [20_000], True),
         ):
-            self.assertEqual(
-                (-1, -1, [], False),
-                self.collector.effective_process_identity(1234),
+            facts, _, _, _, complete = (
+                self.collector.effective_user_namespace_facts(1234)
             )
+        self.assertTrue(complete)
+        self.assertEqual(facts["collector_identity"], facts["process_identity"])
 
     def test_supplementary_groups_are_inside_the_exact_identity_boundary(self) -> None:
         observations = valid_observations()

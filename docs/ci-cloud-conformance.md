@@ -916,7 +916,19 @@ Evidence includes:
   rootless/crun/security facts, the configured container user, the running
   process's effective container UID/GID and bounded supplementary GID set, an
   empty configured `GroupAdd` set, a read-only root filesystem, and private
-  PID, user, IPC, UTS, and network namespace modes,
+  PID, IPC, UTS, and network namespace modes; user-namespace admission instead
+  retains the raw Docker-compatible mode and normalized immutable creation
+  option, compares each running process's kernel user-namespace identity with
+  the collector/service-account namespace, and records bounded kernel UID/GID
+  maps for both namespaces plus the rootless Podman outer mapping; explicit
+  configured mappings must compose through that outer mapping to exactly the
+  observed process mapping. The derived host UID/GID used for service-cgroup
+  process admission also comes from that observed mapping, not a fixed
+  subordinate-ID offset. Service-level `PODMAN_USERNS`, containers.conf
+  overrides, and HOME/XDG configuration redirects fail closed. Those maps must
+  be non-overlapping, remain inside the service-account namespace, and cover
+  the role's configured and effective UID/GID plus every admitted supplementary
+  GID,
   the closed role-to-network topology, the complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
   `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
@@ -940,7 +952,11 @@ Evidence includes:
   `/usr/bin/podman run` command naming that exact container in the generated
   service's exact systemd invocation; `inspect`, another Podman subcommand, a
   different name, a duplicate lifecycle, or a bare container-ID message cannot
-  establish this binding, and any Podman `exec`/`exec_died` event for an
+  establish this binding; the exited container's immutable creation option and
+  configured ID mappings must either compose to a bounded map covering the
+  configured identity or describe the trusted rootless default mapping with no
+  user-namespace override, and exited evidence deliberately records no process
+  namespace identity or `/proc` UID/GID map; any Podman `exec`/`exec_died` event for an
   integration container makes lifecycle collection incomplete; one exited
   zero-status migration systemd invocation
   correlated with the exact configured migration command and established from
@@ -964,9 +980,8 @@ Evidence includes:
   exact singleton `no-new-privileges` admission with every target-selected
   seccomp or other additional security option rejected; exact added, effective,
   and bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the
-  secrets initializer, empty for every other role); and Podman 5.4 `Healthcheck`/network-name
-  field interpretation; an empty Podman 5.4 `UsernsMode` is retained as the
-  documented `host` mode and rejected rather than rewritten as `private`; and
+  secrets initializer, empty for every other role); and Podman 5.4
+  `Healthcheck`/network-name field interpretation; and
 - exact absence of every integration unit, generated service and nested
   generated drop-in artifact across the user manager's `generator.early`,
   `generator`, and `generator.late` outputs, plus container, network, and volume
@@ -976,6 +991,26 @@ Evidence includes:
 
 The Unix-listener admission recognizes listeners in the rootful and rootless
 Podman runtime directories and listeners owned by an actual `podman` process.
+Podman 5.4's Docker-compatible `HostConfig.UsernsMode` is not an effective
+rootless-namespace observation. It is empty for both the default rootless mode
+and `--userns=auto`, because Podman's outer rootless user namespace is created
+outside libpod and is intentionally not represented by that compatibility
+field. The collector therefore retains the empty string without rewriting it
+to either `host` or `private`. Running-role admission comes from the kernel
+namespace link and UID/GID maps read from the independently inspected process,
+with the collector's own namespace link and maps as the comparison boundary.
+It also records the rootless Podman outer UID/GID maps: configured maps must
+compose through them to the effective process map, while a default rootless
+process must use the outer map directly. The service's effective environment
+must not override Podman's namespace or containers.conf lookup inputs.
+Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
+still fail closed. For an exited one-shot, admission instead requires the exact
+existing systemd/Podman lifecycle correlation and the immutable Podman creation
+option/configured mapping. A default exited container is admitted only when the
+trusted outer mapping covers its configured identity; a non-default mode needs
+a bounded configured map that composes through that outer mapping. It never
+presents those configuration facts as live `/proc` evidence.
+
 Workload admission additionally requires the active user socket-unit set to be
 exactly the trusted root-owned `dbus.socket`, with its standard trigger and no
 drop-ins. A target-created socket-activation path is therefore rejected even
