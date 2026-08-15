@@ -70,6 +70,7 @@ host_key_multiple_keys=0
 host_key_changed_key=0
 host_key_other=0
 last_host_key_observation=""
+target_diagnostic_paths=()
 
 record_host_key_observation() {
   local observation="$1"
@@ -145,6 +146,9 @@ record_remote_failure() {
   set +e
   [[ -z "$first_scan" ]] || rm -f -- "$first_scan"
   [[ -z "$second_scan" ]] || rm -f -- "$second_scan"
+  if ((${#target_diagnostic_paths[@]})); then
+    rm -f -- "${target_diagnostic_paths[@]}"
+  fi
   if [[ "$bootstrap_stage" == host-key ]]; then
     render_host_key_observations
   fi
@@ -443,6 +447,7 @@ run_target_phase() {
   )"; then
     return 125
   fi
+  target_diagnostic_paths+=("$target_diagnostic")
   timeout --signal=TERM --kill-after=30s "$outer_timeout" \
     ssh "${ssh_options[@]}" "secpal-ci@$address" \
     /bin/bash -s -- "$target_sha" "$fixture_instance" "$phase" \

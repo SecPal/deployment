@@ -15,8 +15,9 @@ from pathlib import Path
 
 
 MAX_CAPTURE_BYTES = 16 * 1024
-MAX_EMITTED_CHARACTERS = 8 * 1024
+MAX_EMITTED_BYTES = 8 * 1024
 PHASES = frozenset({"host", "workload-prepare-start", "workload-cleanup"})
+OUTPUT_PREFIX = "Target phase diagnostic: "
 
 
 def admitted_file(path: Path, *, require_empty: bool) -> os.stat_result:
@@ -41,13 +42,23 @@ def capture(path: Path) -> None:
         tail.extend(chunk)
         if len(tail) > MAX_CAPTURE_BYTES:
             del tail[:-MAX_CAPTURE_BYTES]
-    descriptor = os.open(path, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW)
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
     try:
-        os.write(descriptor, tail)
+        remaining = memoryview(tail)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("target diagnostic write made no progress")
+            remaining = remaining[written:]
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-    admitted_file(path, require_empty=False)
+    metadata = admitted_file(path, require_empty=False)
+    if metadata.st_size != len(tail):
+        raise ValueError("target diagnostic write was incomplete")
 
 
 def sanitized_output(path: Path) -> str:
@@ -62,7 +73,37 @@ def sanitized_output(path: Path) -> str:
     )
     value = re.sub(r"[ \t]+", " ", value)
     value = re.sub(r"\n{3,}", "\n\n", value).strip()
-    return value[-MAX_EMITTED_CHARACTERS:]
+    return value
+
+
+def rendered_diagnostic(path: Path, phase: str, status: int) -> str:
+    output = sanitized_output(path)
+
+    def candidate(length: int) -> str:
+        retained = "" if length == 0 else output[-length:]
+        document = {
+            "phase": phase,
+            "status": status,
+            "output": retained,
+        }
+        return OUTPUT_PREFIX + json.dumps(
+            document,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+
+    lower = 0
+    upper = len(output)
+    while lower < upper:
+        midpoint = (lower + upper + 1) // 2
+        if len((candidate(midpoint) + "\n").encode("utf-8")) <= MAX_EMITTED_BYTES:
+            lower = midpoint
+        else:
+            upper = midpoint - 1
+    rendered = candidate(lower)
+    if len((rendered + "\n").encode("utf-8")) > MAX_EMITTED_BYTES:
+        raise ValueError("target diagnostic metadata exceeds its byte limit")
+    return rendered
 
 
 def emit(path: Path, phase: str, status_value: str) -> None:
@@ -71,15 +112,7 @@ def emit(path: Path, phase: str, status_value: str) -> None:
     status = int(status_value)
     if status > 255:
         raise ValueError("target diagnostic status is outside the closed contract")
-    document = {
-        "phase": phase,
-        "status": status,
-        "output": sanitized_output(path),
-    }
-    print(
-        "Target phase diagnostic: "
-        + json.dumps(document, separators=(",", ":"))
-    )
+    print(rendered_diagnostic(path, phase, status))
 
 
 def main() -> int:

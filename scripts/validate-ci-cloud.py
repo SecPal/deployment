@@ -2000,10 +2000,14 @@ def validate(root: Path) -> None:
         and "bounded-target-diagnostic.py" in remote
         and 'pipeline_statuses=("${PIPESTATUS[@]}")' in remote
         and 'return "$target_status"' in remote
+        and "target_diagnostic_paths=()" in remote
+        and 'target_diagnostic_paths+=("$target_diagnostic")' in remote
+        and 'rm -f -- "${target_diagnostic_paths[@]}"' in remote
         and "<<'REMOTE' >/dev/null 2>&1" not in remote
         and "MAX_CAPTURE_BYTES = 16 * 1024" in target_diagnostic
-        and "MAX_EMITTED_CHARACTERS = 8 * 1024" in target_diagnostic
+        and "MAX_EMITTED_BYTES = 8 * 1024" in target_diagnostic
         and "os.O_NOFOLLOW" in target_diagnostic
+        and "while remaining:" in target_diagnostic
         and '"Target phase diagnostic: "' in target_diagnostic
         and "json.dumps" in target_diagnostic,
         "target failures need bounded inert diagnostics in a private run path",

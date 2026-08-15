@@ -214,6 +214,15 @@ run_fixture() {
     s-4vcpu-8gb-intel >"$command_output" 2>&1
 }
 
+assert_no_target_diagnostics() {
+  local evidence_dir="$1"
+  if find "$evidence_dir" -maxdepth 1 -type f \
+    -name '.target-phase-diagnostic.*' -print -quit | grep -q .; then
+    printf 'FAIL: private target diagnostic remained after orchestration.\n' >&2
+    exit 1
+  fi
+}
+
 SUCCESS_LOG="$TEMP_DIR/success.log"
 run_fixture "$TEMP_DIR/success-evidence" "$SUCCESS_LOG"
 diff -u <(expected_sequence) "$SUCCESS_LOG"
@@ -257,6 +266,7 @@ fi
 grep -Fxq 'target:workload-cleanup' "$INTERRUPT_LOG"
 grep -Fxq 'collector:normalize' "$INTERRUPT_LOG"
 grep -Fxq 'collector:post-cleanup' "$INTERRUPT_LOG"
+assert_no_target_diagnostics "$TEMP_DIR/interrupt-evidence"
 
 HOST_INTERRUPT_LOG="$TEMP_DIR/host-interrupt.log"
 set +e
@@ -276,5 +286,6 @@ if [[ "$(grep -Fxc 'target:workload-cleanup' "$HOST_INTERRUPT_LOG")" -ne 1 ||
   exit 1
 fi
 grep -Fxq 'collector:host' "$HOST_INTERRUPT_LOG"
+assert_no_target_diagnostics "$TEMP_DIR/host-interrupt-evidence"
 
 printf 'Cloud workload orchestration fixture passed.\n'

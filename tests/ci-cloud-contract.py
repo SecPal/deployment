@@ -2182,6 +2182,8 @@ class CloudCIContractTests(unittest.TestCase):
             'mktemp "$evidence_dir/.target-phase-diagnostic.XXXXXX"',
             remote,
         )
+        self.assertIn('target_diagnostic_paths+=("$target_diagnostic")', remote)
+        self.assertIn('rm -f -- "${target_diagnostic_paths[@]}"', remote)
         self.assertIn("bounded-target-diagnostic.py", remote)
         self.assertNotIn("<<'REMOTE' >/dev/null 2>&1", remote)
 
