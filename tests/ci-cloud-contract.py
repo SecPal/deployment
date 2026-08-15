@@ -126,6 +126,20 @@ class CloudCIContractTests(unittest.TestCase):
 
         self.assertIn("  catatonit \\\n", bootstrap)
 
+    def test_native_bootstrap_publishes_target_admitted_quadlet_policy(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "/etc/environment.d/90-secpal-quadlet.conf",
+            bootstrap,
+        )
+        self.assertNotIn(
+            "/etc/environment.d/90-secpal-ci-quadlet.conf",
+            bootstrap,
+        )
+
     def test_native_bootstrap_reboots_once_into_authenticated_current_kernel(
         self,
     ) -> None:
