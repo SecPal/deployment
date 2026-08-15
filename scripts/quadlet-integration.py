@@ -3794,13 +3794,7 @@ def main() -> int:
             else:
                 execute_cloud_cleanup(lifecycle)
         except IntegrationInterrupted as interruption:
-            lifecycle.cloud_diagnostic_failure(
-                IntegrationError(
-                    "cloud lifecycle was interrupted",
-                    diagnostic_reason="interrupted",
-                )
-            )
-            return 128 + interruption.signal_number
+            lifecycle.signal_number = interruption.signal_number
         except IntegrationError as error:
             lifecycle.cloud_diagnostic_failure(error)
             print(f"ERROR: {error}", file=sys.stderr)
@@ -3815,6 +3809,12 @@ def main() -> int:
             print("ERROR: unexpected cloud lifecycle failure", file=sys.stderr)
             return 1
         if lifecycle.signal_number is not None:
+            lifecycle.cloud_diagnostic_failure(
+                IntegrationError(
+                    "cloud lifecycle was interrupted",
+                    diagnostic_reason="interrupted",
+                )
+            )
             return 128 + lifecycle.signal_number
         print(f"Cloud Quadlet fixture {arguments.cloud_phase} passed.")
         return 0

@@ -586,6 +586,46 @@ class QuadletLifecycleContract(unittest.TestCase):
             output.getvalue(),
         )
 
+    def test_cloud_main_reports_signal_deferred_during_cleanup(self) -> None:
+        arguments = mock.Mock(cloud_phase="cleanup")
+        output = io.StringIO()
+
+        def defer_signal_during_cleanup(lifecycle) -> None:
+            lifecycle.cleanup_active = True
+            self.module.handle_signal(lifecycle, signal.SIGTERM)
+            lifecycle.cleanup_active = False
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(self.module, "parse_arguments", return_value=arguments),
+            mock.patch.object(
+                self.module,
+                "cloud_fixture_root",
+                return_value=Path(directory) / "fixture",
+            ),
+            mock.patch.object(self.module, "cloud_fixture_port", return_value=18443),
+            mock.patch.object(self.module.signal, "signal"),
+            mock.patch.object(
+                self.module,
+                "execute_cloud_cleanup",
+                side_effect=defer_signal_during_cleanup,
+            ),
+            mock.patch.dict(
+                self.module.os.environ,
+                {"SECPAL_FIXTURE_INSTANCE": "0123456789ab"},
+            ),
+            contextlib.redirect_stderr(output),
+        ):
+            status = self.module.main()
+
+        self.assertEqual(128 + signal.SIGTERM, status)
+        self.assertEqual(
+            "SECPAL_TARGET_DIAGNOSTIC_V1:workload-cleanup\n"
+            "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            "workload-cleanup:interrupted:none\n",
+            output.getvalue(),
+        )
+
     def test_command_failure_retains_only_closed_reason_and_status(self) -> None:
         runner = mock.Mock()
         runner.run.side_effect = subprocess.CalledProcessError(
