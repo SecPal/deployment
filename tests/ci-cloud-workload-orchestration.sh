@@ -126,7 +126,10 @@ if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
   fi
   if [[ "$phase" == workload-prepare-start &&
     "${SECPAL_TEST_FAIL_PREPARE:-false}" == true ]]; then
+    printf 'SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-attestation-fetch\n' >&2
     printf '%020000d\n' 0 >&2
+    printf '%s\n' \
+      'SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:workload-api-attestation-fetch:registry-request-failed:none' >&2
     printf 'ERROR: synthetic prepare failure\n' >&2
     printf 'PASSWORD=synthetic-workload-password-never-log\n' >&2
     printf '::error::must not become a workflow command\n' >&2
@@ -242,6 +245,9 @@ if [[ "$failure_status" -ne 1 ]]; then
 fi
 diff -u <(expected_sequence) "$FAILURE_LOG"
 grep -Fq 'Target phase diagnostic: {"phase":"workload-prepare-start","status":7,' \
+  "$FAILURE_OUTPUT"
+grep -Fq '"stage":"workload-api-attestation-fetch"' "$FAILURE_OUTPUT"
+grep -Fq '"failure_reason":"registry-request-failed","command_status":null' \
   "$FAILURE_OUTPUT"
 if grep -Fq 'synthetic-workload-password-never-log' "$FAILURE_OUTPUT"; then
   printf 'FAIL: target output secret reached the workflow log.\n' >&2

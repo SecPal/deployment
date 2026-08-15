@@ -87,9 +87,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
-- Cloud target-phase failures now retain one bounded, content-free diagnostic
-  summary in the Actions log without exposing arbitrary target output
-  before exact VM cleanup.
+- Cloud target-phase failures now retain one bounded diagnostic summary with
+  the last closed runtime, attestation, dependency-image, gateway, Quadlet,
+  host, or cleanup stage plus a closed failure reason and optional command
+  status in the Actions log. Arbitrary target output remains private and is
+  discarded before exact VM cleanup.
 - D.1a workload evidence admits the fixed root-owned Debian 13 GnuPG and
   OpenSSH agent socket/service pairs with exact `dpkg-query` owning-package
   provenance (including Keyboxd's Debian `gpg` ownership) while

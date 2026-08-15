@@ -1924,6 +1924,8 @@ def validate(root: Path) -> None:
     target_diagnostic = read(
         root, "scripts/ci-cloud/bounded-target-diagnostic.py"
     )
+    quadlet_harness = read(root, "scripts/quadlet-integration.py")
+    attestation_fetcher = read(root, "scripts/fetch-oci-attestation.py")
     workload_collector = read(
         root, "scripts/ci-cloud/collect-workload-evidence.py"
     )
@@ -2008,15 +2010,48 @@ def validate(root: Path) -> None:
         and "MAX_EMITTED_BYTES = 8 * 1024" in target_diagnostic
         and "os.O_NOFOLLOW" in target_diagnostic
         and "while remaining:" in target_diagnostic
-        and 'metadata = f"{observed_bytes} {int(truncated)}\\n".encode("ascii")'
+        and 'f"{failure_reason} {status_token}\\n"'
         in target_diagnostic
         and '"output_bytes": output_bytes' in target_diagnostic
         and '"output_truncated": output_truncated' in target_diagnostic
+        and '"stage": stage' in target_diagnostic
+        and '"failure_reason": failure_reason' in target_diagnostic
+        and '"command_status": command_status' in target_diagnostic
+        and "TARGET_STAGE_PREFIX" in target_diagnostic
+        and "TARGET_FAILURE_PREFIX" in target_diagnostic
+        and "ADMITTED_STAGES" in target_diagnostic
+        and "FAILURE_REASONS" in target_diagnostic
+        and "UNREPORTED_STAGE" in target_diagnostic
+        and "UNREPORTED_REASON" in target_diagnostic
         and "tail_sha256" not in target_diagnostic
         and '"output"' not in target_diagnostic
         and '"Target phase diagnostic: "' in target_diagnostic
         and "json.dumps" in target_diagnostic,
         "target failures need bounded inert diagnostics in a private run path",
+    )
+    require(
+        "SECPAL_TARGET_DIAGNOSTIC_V1:host-contract" in target
+        and "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:" in target
+        and "CLOUD_DIAGNOSTIC_STAGES" in quadlet_harness
+        and "CLOUD_DIAGNOSTIC_FAILURE_REASONS" in quadlet_harness
+        and "cloud_diagnostic_stage" in quadlet_harness
+        and "cloud_diagnostic_failure" in quadlet_harness
+        and "workload-postgres-image-pull" in quadlet_harness
+        and "workload-valkey-image-pull" in quadlet_harness
+        and "workload-caddy-image-pull" in quadlet_harness
+        and "workload-gateway-build" in quadlet_harness
+        and "workload-postgres-attestation-fetch" not in quadlet_harness
+        and "workload-valkey-attestation-fetch" not in quadlet_harness,
+        "target phases must publish only closed stages and failure reasons",
+    )
+    require(
+        "DIAGNOSTIC_STAGES" in attestation_fetcher
+        and "DIAGNOSTIC_FAILURE_REASONS" in attestation_fetcher
+        and "closed_failure_reason" in attestation_fetcher
+        and "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:" in attestation_fetcher
+        and '"--diagnostic-stage"' in attestation_fetcher
+        and 'f"workload-{label}-attestation-fetch"' in quadlet_harness,
+        "attestation fetch failures need closed stage-specific reasons",
     )
     require(
         remote.count("v1 host") == 1

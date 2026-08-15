@@ -209,6 +209,22 @@ class QuadletContract(unittest.TestCase):
             "python3 scripts/quadlet-integration.py --cloud-phase cleanup",
             target,
         )
+        self.assertIn(
+            "SECPAL_TARGET_DIAGNOSTIC_V1:host-contract",
+            target,
+        )
+        self.assertIn(
+            "SECPAL_TARGET_DIAGNOSTIC_V1:workload-target-entrypoint",
+            target,
+        )
+        self.assertIn(
+            "SECPAL_TARGET_DIAGNOSTIC_V1:workload-cleanup",
+            target,
+        )
+        self.assertIn(
+            "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:",
+            target,
+        )
         self.assertNotIn(
             "this target does not implement the fixed D.1a lifecycle phase",
             target,

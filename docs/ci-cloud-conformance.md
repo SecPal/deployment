@@ -434,8 +434,17 @@ absolute path under an empty environment and Python isolated mode. The
 collector retains only the fixed operator home needed to observe effective
 rootless Podman state; Python user-site startup hooks are disabled, and the GCP
 metadata probe disables curl configuration before any other curl option. Target
-output is discarded without creating a shared temporary file. Target-owned
-Python or curl startup configuration therefore cannot replace the collector or
+phases emit only allowlisted diagnostic stage markers for runtime admission,
+GitHub CLI staging, API/frontend attestation fetch and verification, every
+product and dependency image pull and admission, image aliasing, the gateway
+build and admission, Quadlet publication, host admission, and cleanup. A failed
+operation additionally emits only a closed failure reason and, for a failed
+subprocess, its numeric exit status. The trusted runner retains the last
+phase-compatible marker, failure reason, command status, target exit status,
+and bounded output metadata. It discards every byte of arbitrary target output
+without creating a shared temporary file; an unknown stage, failure reason, or
+wrong-phase marker becomes `unreported`. Target-owned Python or curl startup
+configuration therefore cannot replace the collector or
 suppress cloud-identity evidence. The final GCP collector applies the same
 metadata semantics as the early bootstrap gate: HTTP 200 with a bounded empty
 `service-accounts/` directory proves identity absence, while a non-empty body

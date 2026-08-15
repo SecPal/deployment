@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -49,6 +50,9 @@ class RecordingLifecycle:
         self.events.append(name)
         if self.fail_at == name:
             raise self.module.IntegrationError(f"fixture failed at {name}")
+
+    def cloud_diagnostic_stage(self, stage: str) -> None:
+        self.events.append(f"diagnostic:{stage}")
 
     def validate_repository_and_runtime(self) -> None:
         self._phase("admission")
@@ -361,15 +365,291 @@ class QuadletLifecycleContract(unittest.TestCase):
         self.module.execute_cloud_prepare(lifecycle)
         self.assertEqual(
             lifecycle.events,
-            ["admission", "verify-stage", "quadlets"],
+            [
+                "diagnostic:workload-runtime-admission",
+                "admission",
+                "diagnostic:workload-gh-cli-staging",
+                "verify-stage",
+                "diagnostic:workload-quadlet-render-publish",
+                "quadlets",
+            ],
         )
         self.assertEqual(lifecycle.cleanup_calls, 0)
 
     def test_cloud_cleanup_is_a_separate_reconstructible_phase(self) -> None:
         lifecycle = RecordingCloudCleanupLifecycle(self.module)
         self.module.execute_cloud_cleanup(lifecycle)
-        self.assertEqual(lifecycle.events, ["cleanup-admission", "cleanup"])
+        self.assertEqual(
+            lifecycle.events,
+            ["diagnostic:workload-cleanup", "cleanup-admission", "cleanup"],
+        )
         self.assertEqual(lifecycle.cleanup_calls, 1)
+
+    def test_cloud_product_staging_emits_only_closed_diagnostic_stages(self) -> None:
+        digest = "sha256:" + "a" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            lifecycle.cloud_diagnostic_stage = mock.Mock()
+            lifecycle.command = mock.Mock(
+                return_value=subprocess.CompletedProcess([], 0, "", "")
+            )
+            lifecycle.anonymous_pull = mock.Mock()
+            lifecycle.verify_staged_image = mock.Mock()
+            lifecycle.stage_cloud_image_alias = mock.Mock()
+
+            lifecycle.verify_and_stage_product(
+                "api",
+                f"ghcr.io/secpal/api@{digest}",
+                digest,
+                "SecPal/api",
+                "build.yml",
+                "b" * 40,
+                "secpal/api",
+            )
+
+            self.assertEqual(
+                lifecycle.cloud_diagnostic_stage.call_args_list,
+                [
+                    mock.call("workload-api-attestation-fetch"),
+                    mock.call("workload-api-attestation-verify"),
+                    mock.call("workload-api-image-pull"),
+                    mock.call("workload-api-image-admission"),
+                    mock.call("workload-api-image-alias"),
+                ],
+            )
+
+    def test_cloud_prepare_diagnostics_cover_every_real_image_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            lifecycle.cloud_diagnostic_stage = mock.Mock()
+            lifecycle.validate_repository_and_runtime = mock.Mock()
+            lifecycle.stage_cloud_gh_cli = mock.Mock()
+            lifecycle.command = mock.Mock(
+                return_value=subprocess.CompletedProcess([], 0, "", "")
+            )
+            lifecycle.anonymous_pull = mock.Mock()
+            lifecycle.verify_staged_image = mock.Mock()
+            lifecycle.stage_cloud_image_alias = mock.Mock()
+            lifecycle.local_image_digest = mock.Mock(
+                return_value="sha256:" + "f" * 64
+            )
+            lifecycle.render_validate_and_install_units = mock.Mock()
+
+            self.module.execute_cloud_prepare(lifecycle)
+
+            self.assertEqual(
+                lifecycle.cloud_diagnostic_stage.call_args_list,
+                [
+                    mock.call("workload-runtime-admission"),
+                    mock.call("workload-gh-cli-staging"),
+                    mock.call("workload-api-attestation-fetch"),
+                    mock.call("workload-api-attestation-verify"),
+                    mock.call("workload-api-image-pull"),
+                    mock.call("workload-api-image-admission"),
+                    mock.call("workload-api-image-alias"),
+                    mock.call("workload-frontend-attestation-fetch"),
+                    mock.call("workload-frontend-attestation-verify"),
+                    mock.call("workload-frontend-image-pull"),
+                    mock.call("workload-frontend-image-admission"),
+                    mock.call("workload-frontend-image-alias"),
+                    mock.call("workload-postgres-image-pull"),
+                    mock.call("workload-postgres-image-admission"),
+                    mock.call("workload-postgres-image-alias"),
+                    mock.call("workload-valkey-image-pull"),
+                    mock.call("workload-valkey-image-admission"),
+                    mock.call("workload-valkey-image-alias"),
+                    mock.call("workload-caddy-image-pull"),
+                    mock.call("workload-caddy-image-admission"),
+                    mock.call("workload-gateway-build"),
+                    mock.call("workload-gateway-image-admission"),
+                    mock.call("workload-quadlet-render-publish"),
+                ],
+            )
+
+    def test_cloud_failure_diagnostic_is_closed_and_omits_error_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            output = io.StringIO()
+            error = self.module.IntegrationError(
+                "synthetic-secret-never-emit",
+                diagnostic_reason="command-exit",
+                command_status=17,
+            )
+            with contextlib.redirect_stderr(output):
+                lifecycle.cloud_diagnostic_stage("workload-api-image-pull")
+                lifecycle.cloud_diagnostic_failure(error)
+
+            self.assertEqual(
+                "SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-image-pull\n"
+                "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+                "workload-api-image-pull:command-exit:17\n",
+                output.getvalue(),
+            )
+            self.assertNotIn("synthetic-secret-never-emit", output.getvalue())
+
+    def test_cloud_stage_is_retained_when_emission_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            with (
+                mock.patch.object(
+                    self.module,
+                    "emit_cloud_diagnostic_stage",
+                    side_effect=self.module.IntegrationInterrupted(signal.SIGTERM),
+                ),
+                self.assertRaises(self.module.IntegrationInterrupted),
+            ):
+                lifecycle.cloud_diagnostic_stage("workload-runtime-admission")
+
+            output = io.StringIO()
+            with contextlib.redirect_stderr(output):
+                lifecycle.cloud_diagnostic_failure(
+                    self.module.IntegrationError(
+                        "cloud lifecycle was interrupted",
+                        diagnostic_reason="interrupted",
+                    )
+                )
+
+            self.assertEqual(
+                "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+                "workload-runtime-admission:interrupted:none\n",
+                output.getvalue(),
+            )
+
+    def test_cloud_main_retains_initial_stage_before_first_lifecycle_step(self) -> None:
+        arguments = mock.Mock(cloud_phase="prepare")
+        output = io.StringIO()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(self.module, "parse_arguments", return_value=arguments),
+            mock.patch.object(
+                self.module,
+                "cloud_fixture_root",
+                return_value=Path(directory) / "fixture",
+            ),
+            mock.patch.object(self.module, "prepare_cloud_fixture_directory"),
+            mock.patch.object(self.module, "cloud_fixture_port", return_value=18443),
+            mock.patch.object(self.module.signal, "signal"),
+            mock.patch.object(
+                self.module,
+                "execute_cloud_prepare",
+                side_effect=self.module.IntegrationInterrupted(signal.SIGTERM),
+            ),
+            mock.patch.dict(
+                self.module.os.environ,
+                {"SECPAL_FIXTURE_INSTANCE": "0123456789ab"},
+            ),
+            contextlib.redirect_stderr(output),
+        ):
+            status = self.module.main()
+
+        self.assertEqual(128 + signal.SIGTERM, status)
+        self.assertEqual(
+            "SECPAL_TARGET_DIAGNOSTIC_V1:workload-fixture-initialization\n"
+            "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            "workload-fixture-initialization:interrupted:none\n",
+            output.getvalue(),
+        )
+
+    def test_cloud_main_reports_signal_deferred_during_cleanup(self) -> None:
+        arguments = mock.Mock(cloud_phase="cleanup")
+        output = io.StringIO()
+
+        def defer_signal_during_cleanup(lifecycle) -> None:
+            lifecycle.cleanup_active = True
+            self.module.handle_signal(lifecycle, signal.SIGTERM)
+            lifecycle.cleanup_active = False
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(self.module, "parse_arguments", return_value=arguments),
+            mock.patch.object(
+                self.module,
+                "cloud_fixture_root",
+                return_value=Path(directory) / "fixture",
+            ),
+            mock.patch.object(self.module, "cloud_fixture_port", return_value=18443),
+            mock.patch.object(self.module.signal, "signal"),
+            mock.patch.object(
+                self.module,
+                "execute_cloud_cleanup",
+                side_effect=defer_signal_during_cleanup,
+            ),
+            mock.patch.dict(
+                self.module.os.environ,
+                {"SECPAL_FIXTURE_INSTANCE": "0123456789ab"},
+            ),
+            contextlib.redirect_stderr(output),
+        ):
+            status = self.module.main()
+
+        self.assertEqual(128 + signal.SIGTERM, status)
+        self.assertEqual(
+            "SECPAL_TARGET_DIAGNOSTIC_V1:workload-cleanup\n"
+            "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            "workload-cleanup:interrupted:none\n",
+            output.getvalue(),
+        )
+
+    def test_command_failure_retains_only_closed_reason_and_status(self) -> None:
+        runner = mock.Mock()
+        runner.run.side_effect = subprocess.CalledProcessError(
+            23,
+            ["synthetic-command", "synthetic-secret-argument"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=runner,
+                cloud_mode=True,
+            )
+            with self.assertRaises(self.module.IntegrationError) as raised:
+                lifecycle.command(
+                    ["synthetic-command", "synthetic-secret-argument"]
+                )
+
+        self.assertEqual("command-exit", raised.exception.diagnostic_reason)
+        self.assertEqual(23, raised.exception.command_status)
 
     def test_cloud_phase_cli_rejects_runtime_escape_hatches(self) -> None:
         accepted = self.module.parse_arguments(["--cloud-phase", "prepare"])

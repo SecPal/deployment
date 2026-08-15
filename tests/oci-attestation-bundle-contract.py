@@ -730,6 +730,52 @@ class OciAttestationBundleContractTest(unittest.TestCase):
             )
         )
 
+    def test_cloud_failure_reasons_are_closed_and_actionable(self) -> None:
+        cases = (
+            (RuntimeError("public registry request failed"), "registry-request-failed"),
+            (ValueError("public registry returned an unapproved redirect"), "registry-policy-rejected"),
+            (ValueError("anonymous registry bearer was missing or malformed"), "registry-response-rejected"),
+            (ValueError("subject index digest was not the reviewed image digest"), "attestation-content-rejected"),
+            (FileExistsError("synthetic-secret-path"), "filesystem-error"),
+        )
+        for error, expected in cases:
+            with self.subTest(error=type(error).__name__):
+                self.assertEqual(expected, self.fetcher.closed_failure_reason(error))
+
+    def test_cloud_main_emits_only_the_closed_failure_marker(self) -> None:
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                self.fetcher,
+                "fetch_bundle",
+                side_effect=ValueError(
+                    "subject index digest was not the reviewed image digest"
+                ),
+            ),
+            mock.patch.object(sys, "stderr", output),
+        ):
+            status = self.fetcher.main(
+                [
+                    "fetch-oci-attestation.py",
+                    "subject.json",
+                    "bundle.json",
+                    "ghcr.io/secpal/api",
+                    f"sha256:{'a' * 64}",
+                    "secpal/api",
+                    "--diagnostic-stage",
+                    "workload-api-attestation-fetch",
+                ]
+            )
+
+        self.assertEqual(1, status)
+        self.assertIn(
+            "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            "workload-api-attestation-fetch:attestation-content-rejected:none\n",
+            output.getvalue(),
+        )
+        marker = output.getvalue().splitlines()[0]
+        self.assertNotIn("digest was not", marker)
+
 
 if __name__ == "__main__":
     unittest.main()
