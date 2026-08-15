@@ -844,9 +844,16 @@ class QuadletContract(unittest.TestCase):
             if line.startswith("ExecStart=/usr/bin/podman run ")
             and f"--name secpal-int-{INSTANCE}-api " in line
         )
+        health_command = re.search(
+            r' --health-cmd "([^"]+)" ', api_start
+        )
+        self.assertIsNotNone(health_command)
         self.assertIn(
-            '--health-cmd "CMD /usr/local/bin/secpal-http-live"',
-            api_start,
+            health_command.group(1),
+            (
+                "CMD /usr/local/bin/secpal-http-live",
+                r"CMD\x20/usr/local/bin/secpal-http-live",
+            ),
         )
 
     def test_quadlet_generator_version_gate_matches_runtime_contract(self) -> None:
