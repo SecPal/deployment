@@ -695,6 +695,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_collector_git_ignores_target_global_config_and_replace_refs(self) -> None:
         environment = self.collector.command_environment()
+        self.assertEqual("/dev/null", environment["CONTAINERS_CONF"])
         self.assertEqual("/dev/null", environment["GIT_CONFIG_GLOBAL"])
         self.assertEqual("1", environment["GIT_CONFIG_NOSYSTEM"])
         self.assertEqual("1", environment["GIT_NO_REPLACE_OBJECTS"])
@@ -1224,6 +1225,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "PODMAN_USERNS",
             "CONTAINERS_CONF",
             "CONTAINERS_CONF_OVERRIDE",
+            "CONTAINERS_CONF_MODULES",
             "XDG_CONFIG_HOME",
             "HOME",
         ):
@@ -1241,6 +1243,35 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "PATH=/usr/bin DB_PASSWORD=synthetic-placeholder"
             ),
         )
+
+    def test_generated_service_cannot_drop_or_replace_the_trusted_config_pin(self) -> None:
+        self.assertTrue(
+            self.collector.service_environment_controls_are_trusted("", "", "")
+        )
+        for values in (
+            ("/home/secpal-ci/target.env", "", ""),
+            ("", "CONTAINERS_CONF", ""),
+            ("", "", "CONTAINERS_CONF"),
+        ):
+            with self.subTest(values=values):
+                self.assertFalse(
+                    self.collector.service_environment_controls_are_trusted(*values)
+                )
+
+        direct = (
+            "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run --name fixture ; "
+            "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
+            "code=(null) ; status=0/0 }"
+        )
+        self.assertTrue(self.collector.direct_podman_exec_start(direct))
+        for value in (
+            "",
+            direct + " " + direct,
+            direct.replace("path=/usr/bin/podman", "path=/usr/bin/env"),
+            direct.replace("argv[]=/usr/bin/podman", "argv[]=/usr/bin/env"),
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(self.collector.direct_podman_exec_start(value))
 
     def test_configured_mapping_must_match_the_effective_kernel_mapping(self) -> None:
         self.assert_failure(
@@ -1413,6 +1444,24 @@ class WorkloadEvidenceTests(unittest.TestCase):
         for command in (
             ["/usr/bin/podman", "--module=target.conf", "run", "fixture"],
             ["/usr/bin/podman", "--module", "target.conf", "run", "fixture"],
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    ([], False),
+                    self.collector.configured_userns_options(command),
+                )
+
+    def test_user_namespace_creation_options_match_the_evidence_schema_bound(self) -> None:
+        bounded = "a" * 256
+        self.assertEqual(
+            ([bounded], True),
+            self.collector.configured_userns_options(
+                ["/usr/bin/podman", "create", f"--userns={bounded}", "fixture"]
+            ),
+        )
+        for command in (
+            ["/usr/bin/podman", "create", f"--userns={'a' * 257}", "fixture"],
+            ["/usr/bin/podman", "create", "--userns", "a" * 257, "fixture"],
         ):
             with self.subTest(command=command):
                 self.assertEqual(
@@ -2234,6 +2283,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         calls = []
         original_environment = "PATH=/target/bin\nATTACKER_VALUE=present\n"
         trusted_environment = (
+            "CONTAINERS_CONF=/dev/null\n"
             "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus\n"
             "HOME=/home/secpal-ci\nLANG=C.UTF-8\nLC_ALL=C.UTF-8\n"
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
@@ -2269,6 +2319,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 ], {}),
                 ([
                     "systemctl", "--user", "set-environment",
+                    "CONTAINERS_CONF=/dev/null",
                     "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
                     "HOME=/home/secpal-ci",
                     "LANG=C.UTF-8",

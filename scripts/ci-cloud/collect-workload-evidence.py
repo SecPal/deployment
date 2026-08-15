@@ -213,6 +213,7 @@ CLEANUP_OBSERVATION_FIELDS = frozenset(
     }
 )
 TRUSTED_MANAGER_ENVIRONMENT = (
+    "CONTAINERS_CONF=/dev/null",
     "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
     "HOME=/home/secpal-ci",
     "LANG=C.UTF-8",
@@ -279,6 +280,7 @@ def incomplete_observation(phase: str) -> dict[str, object]:
 
 def command_environment() -> dict[str, str]:
     return {
+        "CONTAINERS_CONF": "/dev/null",
         "HOME": "/home/secpal-ci",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
@@ -587,6 +589,30 @@ def generated_file_fact(path: Path) -> tuple[int, int, str, str] | None:
     )
 
 
+def service_environment_controls_are_trusted(
+    environment_files: object,
+    pass_environment: object,
+    unset_environment: object,
+) -> bool:
+    return all(
+        isinstance(value, str) and value == ""
+        for value in (environment_files, pass_environment, unset_environment)
+    )
+
+
+def direct_podman_exec_start(value: object) -> bool:
+    return bool(
+        isinstance(value, str)
+        and len(value) <= 65_536
+        and "\x00" not in value
+        and value.count("{ path=") == 1
+        and re.match(
+            r"^\{ path=/usr/bin/podman ; argv\[\]=/usr/bin/podman run(?: | ;)",
+            value,
+        )
+    )
+
+
 def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
     facts: list[dict[str, object]] = []
     complete = True
@@ -594,7 +620,8 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
     expected_properties = {
         "FragmentPath", "DropInPaths", "ActiveState", "SubState", "Result",
         "ExecMainStatus", "MainPID", "ControlGroup", "InvocationID",
-        "SourcePath", "Environment",
+        "SourcePath", "Environment", "EnvironmentFiles", "PassEnvironment",
+        "UnsetEnvironment", "ExecStart",
     }
     for logical_name in GENERATED_LOGICAL_NAMES:
         unit = f"{prefix}-{logical_name}.service"
@@ -606,7 +633,9 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                 "--property=Result", "--property=ExecMainStatus",
                 "--property=MainPID", "--property=ControlGroup",
                 "--property=InvocationID", "--property=SourcePath",
-                "--property=Environment",
+                "--property=Environment", "--property=EnvironmentFiles",
+                "--property=PassEnvironment", "--property=UnsetEnvironment",
+                "--property=ExecStart",
             ]
         )
         properties: dict[str, str] = {}
@@ -656,6 +685,12 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
             or "\x00" in source_path
             or re.fullmatch(r"[0-9a-f]{32}", invocation_id) is None
             or not environment_complete
+            or not service_environment_controls_are_trusted(
+                properties.get("EnvironmentFiles"),
+                properties.get("PassEnvironment"),
+                properties.get("UnsetEnvironment"),
+            )
+            or not direct_podman_exec_start(properties.get("ExecStart"))
         ):
             complete = False
             continue
@@ -998,14 +1033,18 @@ def configured_userns_options(value: object) -> tuple[list[str], bool]:
         if argument == "--module" or argument.startswith("--module="):
             return [], False
         if argument == "--userns":
-            if index + 1 >= len(value) or value[index + 1].startswith("-"):
+            if (
+                index + 1 >= len(value)
+                or value[index + 1].startswith("-")
+                or len(value[index + 1]) > 256
+            ):
                 return [], False
             options.append(value[index + 1])
             index += 2
             continue
         if argument.startswith("--userns="):
             option = argument.split("=", 1)[1]
-            if not option:
+            if not option or len(option) > 256:
                 return [], False
             options.append(option)
         index += 1
@@ -2669,7 +2708,7 @@ def service_userns_environment_is_trusted(service: object) -> bool:
         return False
     prohibited = {
         "PODMAN_USERNS", "CONTAINERS_CONF", "CONTAINERS_CONF_OVERRIDE",
-        "XDG_CONFIG_HOME", "HOME",
+        "CONTAINERS_CONF_MODULES", "XDG_CONFIG_HOME", "HOME",
     }
     names: set[str] = set()
     for name in environment:

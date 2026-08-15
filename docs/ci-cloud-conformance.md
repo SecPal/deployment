@@ -373,8 +373,13 @@ state before any target code runs.
 It then invokes target fixture publication and has the trusted unprivileged collector
 replace the complete bounded user-manager environment with the fixed home,
 runtime directory, bus, locale, executable path, and sole Quadlet path, perform
-a bounded `daemon-reload`, synchronously stop the exact fixture target and every
-generated service, and start the exact fixture target from the newly loaded
+a bounded `daemon-reload`, and pin `CONTAINERS_CONF=/dev/null` so Podman ignores
+the service account's writable default configuration path. Generated services
+must invoke `/usr/bin/podman` directly and may not use environment files,
+`PassEnvironment=`, or `UnsetEnvironment=` to replace or remove that pin. The
+collector uses the same pinned configuration for its own Podman inspection and
+mapping commands. It synchronously stops the exact fixture target and every
+generated service, and starts the exact fixture target from the newly loaded
 root-owned definitions. The collector verifies the exact manager environment
 after this activation. A target-controlled earlier invocation therefore cannot
 survive while acquiring the regenerated fragment's provenance. The runner then
@@ -1005,7 +1010,12 @@ compose through them to the effective process map, while a default rootless
 process must use the outer map directly. Service evidence retains only
 environment-variable names, and the effective environment must not override
 Podman's namespace or containers.conf lookup inputs. Immutable creation
-commands that load containers.conf modules fail closed.
+commands that load containers.conf modules fail closed. Both the service-manager
+activation path and the collector's own Podman subprocesses use the fixed empty
+`/dev/null` containers.conf, so a target-created per-user config cannot select an
+otherwise invisible user-namespace default. Service-level environment files,
+environment unsetting/passing controls, and non-direct Podman `ExecStart=`
+commands also fail collection rather than bypassing that pin.
 Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
 still fail closed. For an exited one-shot, admission instead requires the exact
 existing systemd/Podman lifecycle correlation and an explicit immutable
