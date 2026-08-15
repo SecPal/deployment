@@ -32,12 +32,12 @@ REQUIRED_TOOLS = {
     "systemd-detect-virt", "systemctl", "timedatectl", "uname",
 }
 RUNTIME_PACKAGES = {
-    "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
+    "podman", "conmon", "crun", "catatonit", "netavark", "aardvark-dns", "passt",
     "uidmap", "dbus-user-session", "dirmngr", "gpg", "gpg-agent",
     "openssh-client",
 }
 BOOTSTRAP_PACKAGES = {
-    "aardvark-dns", "apparmor", "apparmor-utils", "crun", "curl",
+    "aardvark-dns", "apparmor", "apparmor-utils", "catatonit", "crun", "curl",
     "dbus-user-session", "dirmngr", "git", "gh", "gpg", "gpg-agent", "jq",
     "netavark", "openssh-client", "passt", "podman", "python3",
     "python3-jsonschema", "python3-yaml", "uidmap", "unattended-upgrades",
@@ -1387,6 +1387,7 @@ Unattended-Upgrade::Automatic-Reboot "false";
 Unattended-Upgrade::Package-Blacklist:: "podman";
 Unattended-Upgrade::Package-Blacklist:: "conmon";
 Unattended-Upgrade::Package-Blacklist:: "crun";
+Unattended-Upgrade::Package-Blacklist:: "catatonit";
 Unattended-Upgrade::Package-Blacklist:: "netavark";
 Unattended-Upgrade::Package-Blacklist:: "aardvark-dns";
 Unattended-Upgrade::Package-Blacklist:: "passt";
