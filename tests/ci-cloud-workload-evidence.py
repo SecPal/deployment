@@ -3020,6 +3020,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertNotIn("write_incomplete_", runner)
 
+    def test_target_phases_restore_the_fixed_user_bus_environment(self) -> None:
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        helper = runner.split("run_target_phase()", 1)[1].split(
+            "run_target_host()", 1
+        )[0]
+        self.assertIn('[[ -S /run/user/20000/bus ]]', helper)
+        self.assertIn("XDG_RUNTIME_DIR=/run/user/20000", helper)
+        self.assertIn(
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
+            helper,
+        )
+
     def test_control_resource_ssh_operations_have_outer_deadlines(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
         self.assertIn("run_control_resource()", runner)

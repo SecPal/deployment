@@ -485,8 +485,10 @@ admit_target_tree() {
 }
 admit_target_tree "$1"
 ulimit -f 32768
+[[ -S /run/user/20000/bus ]]
 set +e
 /usr/bin/env -i \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus \
   HOME=/home/secpal-ci \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
@@ -494,6 +496,7 @@ set +e
   PYTHONDONTWRITEBYTECODE=1 \
   SECPAL_TARGET_SHA="$1" \
   SECPAL_FIXTURE_INSTANCE="$2" \
+  XDG_RUNTIME_DIR=/run/user/20000 \
   /usr/bin/timeout --signal=TERM --kill-after=15s "$phase_timeout" \
   /bin/bash /home/secpal-ci/deployment-target/scripts/ci-cloud/target-conformance.sh \
   "${phase_arguments[@]}"
