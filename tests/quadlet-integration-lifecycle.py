@@ -551,6 +551,41 @@ class QuadletLifecycleContract(unittest.TestCase):
                 output.getvalue(),
             )
 
+    def test_cloud_main_retains_initial_stage_before_first_lifecycle_step(self) -> None:
+        arguments = mock.Mock(cloud_phase="prepare")
+        output = io.StringIO()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(self.module, "parse_arguments", return_value=arguments),
+            mock.patch.object(
+                self.module,
+                "cloud_fixture_root",
+                return_value=Path(directory) / "fixture",
+            ),
+            mock.patch.object(self.module, "prepare_cloud_fixture_directory"),
+            mock.patch.object(self.module, "cloud_fixture_port", return_value=18443),
+            mock.patch.object(self.module.signal, "signal"),
+            mock.patch.object(
+                self.module,
+                "execute_cloud_prepare",
+                side_effect=self.module.IntegrationInterrupted(signal.SIGTERM),
+            ),
+            mock.patch.dict(
+                self.module.os.environ,
+                {"SECPAL_FIXTURE_INSTANCE": "0123456789ab"},
+            ),
+            contextlib.redirect_stderr(output),
+        ):
+            status = self.module.main()
+
+        self.assertEqual(128 + signal.SIGTERM, status)
+        self.assertEqual(
+            "SECPAL_TARGET_DIAGNOSTIC_V1:workload-fixture-initialization\n"
+            "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            "workload-fixture-initialization:interrupted:none\n",
+            output.getvalue(),
+        )
+
     def test_command_failure_retains_only_closed_reason_and_status(self) -> None:
         runner = mock.Mock()
         runner.run.side_effect = subprocess.CalledProcessError(

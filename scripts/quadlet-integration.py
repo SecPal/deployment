@@ -1589,7 +1589,15 @@ class IntegrationLifecycle:
         failure_case: str | None = None,
         runner: Runner | None = None,
         cloud_mode: bool = False,
+        cloud_diagnostic_initial_stage: str | None = None,
     ) -> None:
+        if cloud_diagnostic_initial_stage is not None and (
+            not cloud_mode
+            or cloud_diagnostic_initial_stage not in CLOUD_DIAGNOSTIC_STAGES
+        ):
+            raise IntegrationError(
+                "cloud diagnostic stage is outside the closed contract"
+            )
         self.root = root
         self.instance = instance
         self.port = port
@@ -1619,7 +1627,7 @@ class IntegrationLifecycle:
         self.preexisting_resources: dict[str, set[str]] = {}
         self.expected_failure_observed = False
         self.injected_health_failure_observed = False
-        self.cloud_diagnostic_current_stage: str | None = None
+        self.cloud_diagnostic_current_stage = cloud_diagnostic_initial_stage
 
     def cloud_diagnostic_stage(self, stage: str) -> None:
         if not self.cloud_mode:
@@ -3771,6 +3779,7 @@ def main() -> int:
             fixture_root=fixture_root,
             output=fixture_root / "quadlets",
             cloud_mode=True,
+            cloud_diagnostic_initial_stage=initial_stage,
         )
         for signal_number in HANDLED_SIGNALS:
             signal.signal(

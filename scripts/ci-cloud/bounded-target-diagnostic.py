@@ -20,7 +20,15 @@ PHASES = frozenset({"host", "workload-prepare-start", "workload-cleanup"})
 OUTPUT_PREFIX = "Target phase diagnostic: "
 TARGET_STAGE_PREFIX = b"SECPAL_TARGET_DIAGNOSTIC_V1:"
 TARGET_FAILURE_PREFIX = b"SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
-MAX_STAGE_LINE_BYTES = len(TARGET_FAILURE_PREFIX) + 64 + 1 + 64 + 1 + 3
+NO_COMMAND_STATUS = "none"
+MAX_STAGE_LINE_BYTES = (
+    len(TARGET_FAILURE_PREFIX)
+    + 64
+    + 1
+    + 64
+    + 1
+    + max(3, len(NO_COMMAND_STATUS.encode("ascii")))
+)
 PHASE_STAGES = {
     "host": frozenset({"host-contract"}),
     "workload-prepare-start": frozenset(
@@ -71,7 +79,6 @@ FAILURE_REASONS = frozenset(
 )
 UNREPORTED_STAGE = "unreported"
 UNREPORTED_REASON = "unreported"
-NO_COMMAND_STATUS = "none"
 
 
 def admitted_stage(line: bytes) -> str | None:

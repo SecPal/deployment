@@ -204,6 +204,28 @@ class TargetDiagnosticTests(unittest.TestCase):
         self.assertEqual("registry-request-failed", document["failure_reason"])
         self.assertIsNone(document["command_status"])
 
+    def test_maximum_closed_failure_marker_accepts_none_status(self) -> None:
+        stage = "s" * 64
+        reason = "r" * 64
+        payload = (
+            f"SECPAL_TARGET_DIAGNOSTIC_V1:{stage}\n"
+            f"SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            f"{stage}:{reason}:none\n"
+        ).encode("ascii")
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.private_file(directory)
+            stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+            with (
+                mock.patch.object(self.helper.sys, "stdin", stdin),
+                mock.patch.object(self.helper, "ADMITTED_STAGES", {stage}),
+                mock.patch.object(self.helper, "FAILURE_REASONS", {reason}),
+            ):
+                self.helper.capture(path)
+            self.assertEqual(
+                f"{len(payload)} 0 {stage} {reason} none\n".encode("ascii"),
+                path.read_bytes(),
+            )
+
     def test_target_harness_and_trusted_helper_share_the_closed_stage_set(self) -> None:
         harness_stages = runpy.run_path(os.fspath(HARNESS))[
             "CLOUD_DIAGNOSTIC_STAGES"
