@@ -10,6 +10,7 @@ cd "$ROOT_DIR"
 failures=0
 spdx_license_marker="SPDX-License"
 spdx_license_marker="${spdx_license_marker}-Identifier:"
+plain_agpl_identifier="$spdx_license_marker AGPL-3.0-or-later"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -33,6 +34,7 @@ require_text() {
 
 required_files=(
   AGENTS.md
+  .github/copilot-instructions.md
   README.md
   LICENSE
   REUSE.toml
@@ -132,13 +134,17 @@ required_files=(
   .github/workflows/cloud-janitor.yml
   LICENSES/AGPL-3.0-or-later.txt
   LICENSES/CC0-1.0.txt
-  LICENSES/LicenseRef-SecPal-Attribution.txt
   LICENSES/MIT.txt
 )
 
 for path in "${required_files[@]}"; do
   require_file "$path"
 done
+
+if [ -e LICENSES/LicenseRef-SecPal-Attribution.txt ] \
+  || [ -L LICENSES/LicenseRef-SecPal-Attribution.txt ]; then
+  fail "obsolete SecPal attribution license must not be restored after the AI-instruction rollout"
+fi
 
 require_text README.md "It is not a production-ready deployment."
 require_text README.md "./scripts/preflight.sh"
@@ -169,7 +175,27 @@ require_text .github/actionlint.yaml 'label "ubuntu-26\.04(-arm)?" is unknown'
 require_text AGENTS.md "Docker socket"
 require_text AGENTS.md "activity-hash-chain worker: exactly one"
 require_text AGENTS.md "scheduler: exactly one"
+require_text AGENTS.md "Never add or restore \`LicenseRef-SecPal-Attribution\`"
+require_text AGENTS.md "Preserve each file's first-publication year"
+require_text AGENTS.md "Powered by SecPal – A guard's best friend"
+require_text .github/copilot-instructions.md \
+  "Reject instruction metadata that adds or restores"
+require_text .github/copilot-instructions.md \
+  "LicenseRef-SecPal-Attribution"
 require_text CHANGELOG.md "## 2026-08-01 - Bootstrap Deployment Repository"
+
+for instruction_file in AGENTS.md .github/copilot-instructions.md; do
+  if [ ! -f "$instruction_file" ]; then
+    continue
+  fi
+  identifier_count="$(grep -cF "$spdx_license_marker" "$instruction_file" || true)"
+  if [ "$identifier_count" -ne 1 ]; then
+    fail "$instruction_file must contain exactly one SPDX license identifier"
+  elif ! head -n 10 "$instruction_file" | grep -Fxq \
+    "$plain_agpl_identifier"; then
+    fail "$instruction_file must use exactly AGPL-3.0-or-later"
+  fi
+done
 
 while IFS= read -r -d '' script; do
   if ! head -n 6 "$script" | grep -Fq 'SPDX-FileCopyrightText:'; then
