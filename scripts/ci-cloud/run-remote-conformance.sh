@@ -70,6 +70,7 @@ host_key_multiple_keys=0
 host_key_changed_key=0
 host_key_other=0
 last_host_key_observation=""
+target_diagnostic_paths=()
 
 record_host_key_observation() {
   local observation="$1"
@@ -145,6 +146,9 @@ record_remote_failure() {
   set +e
   [[ -z "$first_scan" ]] || rm -f -- "$first_scan"
   [[ -z "$second_scan" ]] || rm -f -- "$second_scan"
+  if ((${#target_diagnostic_paths[@]})); then
+    rm -f -- "${target_diagnostic_paths[@]}"
+  fi
   if [[ "$bootstrap_stage" == host-key ]]; then
     render_host_key_observations
   fi
@@ -428,16 +432,28 @@ run_control_resource() {
 run_target_phase() {
   local outer_timeout
   local phase="$1"
+  local target_diagnostic
+  local target_status
+  local diagnostic_status
+  local -a pipeline_statuses
   case "$phase" in
     host) outer_timeout=22m ;;
     workload-prepare-start) outer_timeout=12m ;;
     workload-cleanup) outer_timeout=7m ;;
     *) return 125 ;;
   esac
+  if ! target_diagnostic="$(
+    mktemp "$evidence_dir/.target-phase-diagnostic.XXXXXX"
+  )"; then
+    return 125
+  fi
+  target_diagnostic_paths+=("$target_diagnostic")
   timeout --signal=TERM --kill-after=30s "$outer_timeout" \
     ssh "${ssh_options[@]}" "secpal-ci@$address" \
     /bin/bash -s -- "$target_sha" "$fixture_instance" "$phase" \
-    <<'REMOTE' >/dev/null 2>&1
+    2>&1 <<'REMOTE' | \
+    python3 scripts/ci-cloud/bounded-target-diagnostic.py \
+      capture "$target_diagnostic"
 set -euo pipefail
 [[ "$#" -eq 3 && "$1" =~ ^[0-9a-f]{40}$ && "$2" == "${1:0:12}" ]]
 case "$3" in
@@ -505,6 +521,23 @@ set -e
 admit_target_tree "$1"
 exit "$target_status"
 REMOTE
+  pipeline_statuses=("${PIPESTATUS[@]}")
+  target_status="${pipeline_statuses[0]}"
+  diagnostic_status="${pipeline_statuses[1]}"
+  if [[ "$diagnostic_status" -ne 0 ]]; then
+    rm -f -- "$target_diagnostic"
+    printf 'ERROR: unable to capture bounded target phase diagnostic.\n' >&2
+    return 125
+  fi
+  if [[ "$target_status" -ne 0 ]]; then
+    if ! python3 scripts/ci-cloud/bounded-target-diagnostic.py \
+      emit "$target_diagnostic" "$phase" "$target_status" >&2; then
+      rm -f -- "$target_diagnostic"
+      return 125
+    fi
+  fi
+  rm -f -- "$target_diagnostic"
+  return "$target_status"
 }
 
 run_target_host() { run_target_phase host; }

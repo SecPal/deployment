@@ -33,13 +33,14 @@ REQUIRED_TOOLS = {
 }
 RUNTIME_PACKAGES = {
     "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
-    "uidmap", "dbus-user-session",
+    "uidmap", "dbus-user-session", "dirmngr", "gpg", "gpg-agent",
+    "openssh-client",
 }
 BOOTSTRAP_PACKAGES = {
     "aardvark-dns", "apparmor", "apparmor-utils", "crun", "curl",
-    "dbus-user-session", "git", "gh", "jq", "netavark", "passt", "podman",
-    "python3", "python3-jsonschema", "python3-yaml", "uidmap",
-    "unattended-upgrades",
+    "dbus-user-session", "dirmngr", "git", "gh", "gpg", "gpg-agent", "jq",
+    "netavark", "openssh-client", "passt", "podman", "python3",
+    "python3-jsonschema", "python3-yaml", "uidmap", "unattended-upgrades",
 }
 
 
@@ -217,6 +218,11 @@ class CloudHostAdmissionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.collector = load_collector()
+
+    def test_agent_socket_packages_have_closed_runtime_provenance(self) -> None:
+        packages = {"dirmngr", "gpg", "gpg-agent", "openssh-client"}
+        self.assertTrue(packages.issubset(self.collector.RUNTIME_PACKAGES))
+        self.assertTrue(packages.issubset(self.collector.BOOTSTRAP_PACKAGES))
 
     def test_gcp_metadata_probe_records_only_bounded_identity_booleans(self) -> None:
         probe = self.collector.subprocess.CompletedProcess(
@@ -1137,6 +1143,14 @@ location = "backup.example.invalid"
         facts["apt"]["runtime_packages"]["podman"]["suite"] = "trixie-backports"
         self.assertIn("D1_RUNTIME_PACKAGE_PROVENANCE", self.collector.admission_failures(facts, "intel"))
 
+    def test_rejects_agent_socket_package_without_debian_provenance(self) -> None:
+        facts = valid_facts()
+        facts["apt"]["runtime_packages"]["gpg-agent"]["origin"] = ""
+        self.assertIn(
+            "D1_RUNTIME_PACKAGE_PROVENANCE",
+            self.collector.admission_failures(facts, "intel"),
+        )
+
     def test_rejects_bootstrap_package_without_debian_provenance(self) -> None:
         facts = valid_facts()
         facts["apt"]["bootstrap_packages"]["apparmor"]["origin"] = ""
@@ -1378,6 +1392,10 @@ Unattended-Upgrade::Package-Blacklist:: "aardvark-dns";
 Unattended-Upgrade::Package-Blacklist:: "passt";
 Unattended-Upgrade::Package-Blacklist:: "uidmap";
 Unattended-Upgrade::Package-Blacklist:: "dbus-user-session";
+Unattended-Upgrade::Package-Blacklist:: "dirmngr";
+Unattended-Upgrade::Package-Blacklist:: "gpg";
+Unattended-Upgrade::Package-Blacklist:: "gpg-agent";
+Unattended-Upgrade::Package-Blacklist:: "openssh-client";
 '''
 
         def checked_output(
