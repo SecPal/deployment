@@ -76,6 +76,21 @@ TRUSTED_USER_SERVICE_UNITS = {
         "ssh-agent.service",
     }
 }
+TRUSTED_USER_UNIT_PACKAGES = {
+    "dbus.socket": "dbus-user-session",
+    "dbus.service": "dbus-user-session",
+    "dirmngr.socket": "dirmngr",
+    "dirmngr.service": "dirmngr",
+    "gpg-agent-browser.socket": "gpg-agent",
+    "gpg-agent-extra.socket": "gpg-agent",
+    "gpg-agent-ssh.socket": "gpg-agent",
+    "gpg-agent.socket": "gpg-agent",
+    "gpg-agent.service": "gpg-agent",
+    "keyboxd.socket": "gpg",
+    "keyboxd.service": "gpg",
+    "ssh-agent.socket": "openssh-client",
+    "ssh-agent.service": "openssh-client",
+}
 CONTROL_NETWORK = "secpal-ci-unrelated-control-network"
 CONTROL_VOLUME = "secpal-ci-unrelated-control-volume"
 ROLES = (
@@ -2172,6 +2187,27 @@ def root_owned_systemd_unit(path: Path) -> bool:
     )
 
 
+def systemd_unit_owned_by_package(path: Path, package: str) -> bool:
+    if (
+        path.parent not in {
+            Path("/usr/lib/systemd/user"),
+            Path("/lib/systemd/user"),
+        }
+        or re.fullmatch(r"[a-z0-9@_.-]+\.(?:service|socket)", path.name) is None
+        or re.fullmatch(r"[a-z0-9][a-z0-9+.-]+", package) is None
+    ):
+        return False
+    canonical = Path("/usr/lib/systemd/user") / path.name
+    status_code, output, complete = command_result(
+        ["dpkg-query", "-S", str(canonical)]
+    )
+    return (
+        status_code == 0
+        and complete
+        and output == f"{package}: {canonical}"
+    )
+
+
 def user_socket_activation_facts() -> tuple[bool, bool]:
     status_code, output, complete = command_result(
         [
@@ -2218,9 +2254,12 @@ def user_socket_activation_facts() -> tuple[bool, bool]:
             return True, False
         fragments, trigger = TRUSTED_USER_SOCKET_UNITS[unit]
         fragment = Path(properties["FragmentPath"])
+        package = TRUSTED_USER_UNIT_PACKAGES.get(unit)
         if (
             fragment not in fragments
             or not root_owned_systemd_unit(fragment)
+            or package is None
+            or not systemd_unit_owned_by_package(fragment, package)
             or properties["DropInPaths"] != ""
             or properties["Triggers"] != trigger
         ):
@@ -2249,9 +2288,14 @@ def user_socket_activation_facts() -> tuple[bool, bool]:
         if set(service_properties) != {"FragmentPath", "DropInPaths"}:
             return True, False
         service_fragment = Path(service_properties["FragmentPath"])
+        service_package = TRUSTED_USER_UNIT_PACKAGES.get(trigger)
         if (
             service_fragment not in service_fragments
             or not root_owned_systemd_unit(service_fragment)
+            or service_package is None
+            or not systemd_unit_owned_by_package(
+                service_fragment, service_package
+            )
             or service_properties["DropInPaths"] != ""
         ):
             return True, True

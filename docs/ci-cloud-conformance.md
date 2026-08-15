@@ -1049,7 +1049,9 @@ the root-owned Debian D-Bus, GnuPG, and OpenSSH agent sockets. Each socket and
 its effective triggered service must use the fixed vendor fragment, mode, and
 ownership with no drop-ins; their owning packages are installed explicitly,
 recorded with exact versions and Debian provenance, and excluded from upgrades
-during the run. A target-created socket or service activation path is therefore
+during the run. The live workload collector additionally requires every
+fragment's exact `dpkg-query -S` owner, including Debian's `gpg` ownership of
+the Keyboxd units. A target-created socket or service activation path is therefore
 rejected even while no Podman service process exists. The exact Debian Netavark
 `/run/podman/nv-proxy.sock` path is the sole Podman-runtime pathname exception:
 it is network plumbing and remains independently covered by the admitted

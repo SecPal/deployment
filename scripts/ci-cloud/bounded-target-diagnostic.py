@@ -37,17 +37,20 @@ def admitted_file(path: Path, *, require_empty: bool) -> os.stat_result:
 
 def capture(path: Path) -> None:
     admitted_file(path, require_empty=True)
-    tail = bytearray()
+    observed_bytes = 0
+    truncated = False
     while chunk := sys.stdin.buffer.read(64 * 1024):
-        tail.extend(chunk)
-        if len(tail) > MAX_CAPTURE_BYTES:
-            del tail[:-MAX_CAPTURE_BYTES]
+        remaining = MAX_CAPTURE_BYTES - observed_bytes
+        observed_bytes += min(len(chunk), remaining)
+        if len(chunk) > remaining:
+            truncated = True
+    metadata = f"{observed_bytes} {int(truncated)}\n".encode("ascii")
     descriptor = os.open(
         path,
         os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC,
     )
     try:
-        remaining = memoryview(tail)
+        remaining = memoryview(metadata)
         while remaining:
             written = os.write(descriptor, remaining)
             if written <= 0:
@@ -56,51 +59,39 @@ def capture(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-    metadata = admitted_file(path, require_empty=False)
-    if metadata.st_size != len(tail):
+    written_metadata = admitted_file(path, require_empty=False)
+    if written_metadata.st_size != len(metadata):
         raise ValueError("target diagnostic write was incomplete")
 
 
-def sanitized_output(path: Path) -> str:
+def captured_metadata(path: Path) -> tuple[int, bool]:
     admitted_file(path, require_empty=False)
     payload = path.read_bytes()
-    value = payload.decode("utf-8", errors="replace")
-    value = "".join(
-        character
-        if character in "\n\t" or ord(character) >= 0x20
-        else " "
-        for character in value
-    )
-    value = re.sub(r"[ \t]+", " ", value)
-    value = re.sub(r"\n{3,}", "\n\n", value).strip()
-    return value
+    match = re.fullmatch(rb"(0|[1-9][0-9]{0,4}) ([01])\n", payload)
+    if match is None:
+        raise ValueError("target diagnostic metadata is malformed")
+    observed_bytes = int(match.group(1))
+    truncated = match.group(2) == b"1"
+    if observed_bytes > MAX_CAPTURE_BYTES or (
+        truncated and observed_bytes != MAX_CAPTURE_BYTES
+    ):
+        raise ValueError("target diagnostic metadata is outside its bound")
+    return observed_bytes, truncated
 
 
 def rendered_diagnostic(path: Path, phase: str, status: int) -> str:
-    output = sanitized_output(path)
-
-    def candidate(length: int) -> str:
-        retained = "" if length == 0 else output[-length:]
-        document = {
-            "phase": phase,
-            "status": status,
-            "output": retained,
-        }
-        return OUTPUT_PREFIX + json.dumps(
-            document,
-            ensure_ascii=True,
-            separators=(",", ":"),
-        )
-
-    lower = 0
-    upper = len(output)
-    while lower < upper:
-        midpoint = (lower + upper + 1) // 2
-        if len((candidate(midpoint) + "\n").encode("utf-8")) <= MAX_EMITTED_BYTES:
-            lower = midpoint
-        else:
-            upper = midpoint - 1
-    rendered = candidate(lower)
+    output_bytes, output_truncated = captured_metadata(path)
+    document = {
+        "phase": phase,
+        "status": status,
+        "output_bytes": output_bytes,
+        "output_truncated": output_truncated,
+    }
+    rendered = OUTPUT_PREFIX + json.dumps(
+        document,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
     if len((rendered + "\n").encode("utf-8")) > MAX_EMITTED_BYTES:
         raise ValueError("target diagnostic metadata exceeds its byte limit")
     return rendered

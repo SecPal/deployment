@@ -128,6 +128,7 @@ if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
     "${SECPAL_TEST_FAIL_PREPARE:-false}" == true ]]; then
     printf '%020000d\n' 0 >&2
     printf 'ERROR: synthetic prepare failure\n' >&2
+    printf 'PASSWORD=synthetic-workload-password-never-log\n' >&2
     printf '::error::must not become a workflow command\n' >&2
     exit 7
   fi
@@ -242,7 +243,10 @@ fi
 diff -u <(expected_sequence) "$FAILURE_LOG"
 grep -Fq 'Target phase diagnostic: {"phase":"workload-prepare-start","status":7,' \
   "$FAILURE_OUTPUT"
-grep -Fq 'ERROR: synthetic prepare failure' "$FAILURE_OUTPUT"
+if grep -Fq 'synthetic-workload-password-never-log' "$FAILURE_OUTPUT"; then
+  printf 'FAIL: target output secret reached the workflow log.\n' >&2
+  exit 1
+fi
 if grep -q '^::' "$FAILURE_OUTPUT"; then
   printf 'FAIL: target output became an active workflow command.\n' >&2
   exit 1

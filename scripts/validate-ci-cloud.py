@@ -2008,6 +2008,12 @@ def validate(root: Path) -> None:
         and "MAX_EMITTED_BYTES = 8 * 1024" in target_diagnostic
         and "os.O_NOFOLLOW" in target_diagnostic
         and "while remaining:" in target_diagnostic
+        and 'metadata = f"{observed_bytes} {int(truncated)}\\n".encode("ascii")'
+        in target_diagnostic
+        and '"output_bytes": output_bytes' in target_diagnostic
+        and '"output_truncated": output_truncated' in target_diagnostic
+        and "tail_sha256" not in target_diagnostic
+        and '"output"' not in target_diagnostic
         and '"Target phase diagnostic: "' in target_diagnostic
         and "json.dumps" in target_diagnostic,
         "target failures need bounded inert diagnostics in a private run path",
@@ -2113,7 +2119,10 @@ def validate(root: Path) -> None:
     require(
         "TRUSTED_USER_SOCKET_UNITS" in workload_collector
         and "TRUSTED_USER_SERVICE_UNITS" in workload_collector
+        and "TRUSTED_USER_UNIT_PACKAGES" in workload_collector
         and "def root_owned_systemd_unit(path: Path) -> bool:"
+        in workload_collector
+        and "def systemd_unit_owned_by_package(path: Path, package: str) -> bool:"
         in workload_collector
         and "metadata.st_uid == 0" in workload_collector
         and "metadata.st_gid == 0" in workload_collector
@@ -2121,6 +2130,13 @@ def validate(root: Path) -> None:
         and '"systemctl", "--user", "show", trigger,' in workload_collector
         and "service_fragment not in service_fragments" in workload_collector
         and "not root_owned_systemd_unit(service_fragment)" in workload_collector
+        and '"keyboxd.socket": "gpg"' in workload_collector
+        and '"keyboxd.service": "gpg"' in workload_collector
+        and 'not systemd_unit_owned_by_package(fragment, package)'
+        in workload_collector
+        and "not systemd_unit_owned_by_package(\n"
+        "                service_fragment, service_package\n"
+        "            )" in workload_collector
         and 'service_properties["DropInPaths"] != ""' in workload_collector,
         "every admitted user socket and triggered service must remain root-owned and fixed",
     )

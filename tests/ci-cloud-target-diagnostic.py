@@ -62,13 +62,17 @@ class TargetDiagnosticTests(unittest.TestCase):
                 self.helper.os, "write", side_effect=short_write
             ):
                 self.helper.capture(path)
-            self.assertEqual(payload, path.read_bytes())
+            self.assertEqual(f"{len(payload)} 0\n".encode("ascii"), path.read_bytes())
 
-    def test_emitted_json_line_obeys_the_byte_limit(self) -> None:
-        payload = (b"\xff" * (16 * 1024 - 32)) + b"\nERROR: final failure\n"
+    def test_emitted_json_line_is_content_free_and_byte_bounded(self) -> None:
+        secret = b"synthetic-workload-password-never-log"
+        payload = (b"\xff" * (20 * 1024)) + b"\nPASSWORD=" + secret + b"\n"
         with tempfile.TemporaryDirectory() as directory:
             path = self.private_file(directory)
-            path.write_bytes(payload)
+            stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+            with mock.patch.object(self.helper.sys, "stdin", stdin):
+                self.helper.capture(path)
+            self.assertNotIn(secret, path.read_bytes())
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 self.helper.emit(path, "workload-prepare-start", "7")
@@ -81,9 +85,15 @@ class TargetDiagnosticTests(unittest.TestCase):
         prefix = "Target phase diagnostic: "
         self.assertTrue(rendered.startswith(prefix))
         document = json.loads(rendered.removeprefix(prefix))
+        self.assertEqual(
+            {"phase", "status", "output_bytes", "output_truncated"},
+            set(document),
+        )
         self.assertEqual("workload-prepare-start", document["phase"])
         self.assertEqual(7, document["status"])
-        self.assertTrue(document["output"].endswith("ERROR: final failure"))
+        self.assertEqual(self.helper.MAX_CAPTURE_BYTES, document["output_bytes"])
+        self.assertTrue(document["output_truncated"])
+        self.assertNotIn(secret.decode("ascii"), rendered)
 
 
 if __name__ == "__main__":

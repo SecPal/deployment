@@ -2216,6 +2216,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector, "command_result", side_effect=command_result
         ), mock.patch.object(
             self.collector, "root_owned_systemd_unit", return_value=True
+        ), mock.patch.object(
+            self.collector, "systemd_unit_owned_by_package", return_value=True
         ):
             unsafe, complete = self.collector.user_socket_activation_facts()
         self.assertTrue(complete)
@@ -2302,6 +2304,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     self.collector,
                     "root_owned_systemd_unit",
                     return_value=True,
+                ), mock.patch.object(
+                    self.collector,
+                    "systemd_unit_owned_by_package",
+                    return_value=True,
                 ):
                     unsafe, complete = self.collector.user_socket_activation_facts()
                 self.assertTrue(complete)
@@ -2373,6 +2379,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     side_effect=command_result,
                 ), mock.patch.object(
                     self.collector, "root_owned_systemd_unit", return_value=True
+                ), mock.patch.object(
+                    self.collector,
+                    "systemd_unit_owned_by_package",
+                    return_value=True,
                 ):
                     unsafe, complete = self.collector.user_socket_activation_facts()
                 self.assertTrue(complete)
@@ -2392,6 +2402,36 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 self.collector.root_owned_systemd_unit(
                     Path("/usr/lib/systemd/user/gpg-agent.service")
                 )
+            )
+
+    def test_keyboxd_units_are_bound_to_the_debian_gpg_package(self) -> None:
+        self.assertEqual(
+            "gpg",
+            self.collector.TRUSTED_USER_UNIT_PACKAGES["keyboxd.socket"],
+        )
+        self.assertEqual(
+            "gpg",
+            self.collector.TRUSTED_USER_UNIT_PACKAGES["keyboxd.service"],
+        )
+
+    def test_systemd_unit_package_admission_requires_exact_owner(self) -> None:
+        fragment = Path("/lib/systemd/user/keyboxd.socket")
+        expected = "/usr/lib/systemd/user/keyboxd.socket"
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            return_value=(0, f"keyboxd: {expected}", True),
+        ):
+            self.assertFalse(
+                self.collector.systemd_unit_owned_by_package(fragment, "gpg")
+            )
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            return_value=(0, f"gpg: {expected}", True),
+        ):
+            self.assertTrue(
+                self.collector.systemd_unit_owned_by_package(fragment, "gpg")
             )
 
     def test_migration_and_readiness_are_derived_from_raw_facts(self) -> None:
