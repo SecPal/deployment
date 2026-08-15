@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 SecPal Contributors
-SPDX-License-Identifier: AGPL-3.0-or-later AND LicenseRef-SecPal-Attribution
+SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 # SecPal/deployment agent instructions
@@ -51,6 +51,27 @@ Never print secret values to logs.
   and current Debian packages only when it is isolated from production, records
   the resolved provider image ID and exact installed package versions in closed
   schema-validated evidence, and re-admits their expected Debian provenance.
+
+## Licensing, REUSE, and Branding
+
+- Use `AGPL-3.0-or-later` for SecPal-owned material intentionally covered by
+  the AGPL. Never add or restore `LicenseRef-SecPal-Attribution` after the
+  licensing rollout.
+- Preserve deliberately different licenses, including `CC0-1.0`, `MIT`,
+  `Apache-2.0`, third-party and generated-file licenses, and unrelated custom
+  license references. Do not rewrite third-party copyright or license metadata.
+- Use `SecPal Contributors` where the project copyright convention applies.
+  Preserve each file's first-publication year and extend its year range through
+  the current year when an edited file requires a copyright-year update.
+- Run the relevant REUSE or license validation after changing copyright or
+  license metadata.
+- On user-facing official SecPal product surfaces, preserve
+  `Powered by SecPal – A guard's best friend` where it is intentionally present.
+  A licensing change must not remove, weaken, parameterize, genericize, or make
+  that SecPal branding optional.
+- Do not add fork-oriented `Based on SecPal` guidance to AI instructions, and
+  do not introduce white-label or fork-branding configuration as part of a
+  licensing change.
 
 ## Future deployment invariants
 
