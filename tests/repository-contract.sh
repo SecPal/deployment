@@ -72,6 +72,7 @@ required_files=(
   scripts/quadlet-oneshot-entrypoint.sh
   scripts/render-integration-quadlets.py
   scripts/valkey-entrypoint.sh
+  scripts/ci-cloud/bounded-target-diagnostic.py
   scripts/ci-cloud/collect-host-evidence.py
   scripts/ci-cloud/bootstrap-conformance-host.tftpl
   scripts/ci-cloud/continue-conformance-bootstrap.sh

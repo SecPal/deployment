@@ -40,9 +40,27 @@ PODMAN_NETWORK_ONLINE_UNIT = "podman-user-wait-network-online.service"
 PODMAN_NETWORK_ONLINE_FRAGMENT = (
     Path("/usr/lib/systemd/user") / PODMAN_NETWORK_ONLINE_UNIT
 )
-DBUS_SOCKET_FRAGMENTS = frozenset(
-    {Path("/usr/lib/systemd/user/dbus.socket"), Path("/lib/systemd/user/dbus.socket")}
-)
+TRUSTED_USER_SOCKET_UNITS = {
+    name: (
+        frozenset(
+            {
+                Path("/usr/lib/systemd/user") / name,
+                Path("/lib/systemd/user") / name,
+            }
+        ),
+        service,
+    )
+    for name, service in {
+        "dbus.socket": "dbus.service",
+        "dirmngr.socket": "dirmngr.service",
+        "gpg-agent-browser.socket": "gpg-agent.service",
+        "gpg-agent-extra.socket": "gpg-agent.service",
+        "gpg-agent-ssh.socket": "gpg-agent.service",
+        "gpg-agent.socket": "gpg-agent.service",
+        "keyboxd.socket": "keyboxd.service",
+        "ssh-agent.socket": "ssh-agent.service",
+    }.items()
+}
 CONTROL_NETWORK = "secpal-ci-unrelated-control-network"
 CONTROL_VOLUME = "secpal-ci-unrelated-control-volume"
 ROLES = (
@@ -2140,35 +2158,42 @@ def user_socket_activation_facts() -> tuple[bool, bool]:
         if not fields or re.fullmatch(r"[A-Za-z0-9:_.@-]+\.socket", fields[0]) is None:
             return True, False
         units.append(fields[0])
-    if len(units) != len(set(units)) or len(units) > 16:
+    if (
+        len(units) != len(set(units))
+        or len(units) > 16
+        or "dbus.socket" not in units
+    ):
         return True, False
-    if units != ["dbus.socket"]:
+    if any(unit not in TRUSTED_USER_SOCKET_UNITS for unit in units):
         return True, True
-    status_code, output, complete = command_result(
-        [
-            "systemctl", "--user", "show", "dbus.socket",
-            "--property=FragmentPath", "--property=DropInPaths",
-            "--property=Triggers",
-        ]
-    )
-    if status_code != 0 or not complete:
-        return True, False
-    properties: dict[str, str] = {}
-    for line in output.splitlines():
-        if "=" not in line:
+    for unit in units:
+        status_code, output, complete = command_result(
+            [
+                "systemctl", "--user", "show", unit,
+                "--property=FragmentPath", "--property=DropInPaths",
+                "--property=Triggers",
+            ]
+        )
+        if status_code != 0 or not complete:
             return True, False
-        key, value = line.split("=", 1)
-        if key in properties:
+        properties: dict[str, str] = {}
+        for line in output.splitlines():
+            if "=" not in line:
+                return True, False
+            key, value = line.split("=", 1)
+            if key in properties:
+                return True, False
+            properties[key] = value
+        if set(properties) != {"FragmentPath", "DropInPaths", "Triggers"}:
             return True, False
-        properties[key] = value
-    if set(properties) != {"FragmentPath", "DropInPaths", "Triggers"}:
-        return True, False
-    trusted = (
-        Path(properties["FragmentPath"]) in DBUS_SOCKET_FRAGMENTS
-        and properties["DropInPaths"] == ""
-        and properties["Triggers"] == "dbus.service"
-    )
-    return not trusted, True
+        fragments, trigger = TRUSTED_USER_SOCKET_UNITS[unit]
+        if (
+            Path(properties["FragmentPath"]) not in fragments
+            or properties["DropInPaths"] != ""
+            or properties["Triggers"] != trigger
+        ):
+            return True, True
+    return False, True
 
 
 def podman_api_facts() -> tuple[bool, bool]:

@@ -126,6 +126,9 @@ if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
   fi
   if [[ "$phase" == workload-prepare-start &&
     "${SECPAL_TEST_FAIL_PREPARE:-false}" == true ]]; then
+    printf '%020000d\n' 0 >&2
+    printf 'ERROR: synthetic prepare failure\n' >&2
+    printf '::error::must not become a workflow command\n' >&2
     exit 7
   fi
   exit 0
@@ -196,6 +199,7 @@ expected_sequence() {
 run_fixture() {
   local evidence_dir="$1"
   local sequence_log="$2"
+  local command_output="${3:-/dev/null}"
   PATH="$FAKE_BIN:$PATH" \
     SECPAL_TEST_REAL_PYTHON="$REAL_PYTHON" \
     SECPAL_TEST_SEQUENCE_LOG="$sequence_log" \
@@ -207,7 +211,7 @@ run_fixture() {
     digitalocean fra1 intel 1.1.1.1 \
     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 12345 1 \
     "$PRIVATE_KEY" "$evidence_dir" debian-13-x64 234194767 \
-    s-4vcpu-8gb-intel >/dev/null 2>&1
+    s-4vcpu-8gb-intel >"$command_output" 2>&1
 }
 
 SUCCESS_LOG="$TEMP_DIR/success.log"
@@ -215,9 +219,10 @@ run_fixture "$TEMP_DIR/success-evidence" "$SUCCESS_LOG"
 diff -u <(expected_sequence) "$SUCCESS_LOG"
 
 FAILURE_LOG="$TEMP_DIR/failure.log"
+FAILURE_OUTPUT="$TEMP_DIR/failure-output.log"
 set +e
 SECPAL_TEST_FAIL_PREPARE=true \
-  run_fixture "$TEMP_DIR/failure-evidence" "$FAILURE_LOG"
+  run_fixture "$TEMP_DIR/failure-evidence" "$FAILURE_LOG" "$FAILURE_OUTPUT"
 failure_status=$?
 set -e
 if [[ "$failure_status" -ne 1 ]]; then
@@ -226,6 +231,17 @@ if [[ "$failure_status" -ne 1 ]]; then
   exit 1
 fi
 diff -u <(expected_sequence) "$FAILURE_LOG"
+grep -Fq 'Target phase diagnostic: {"phase":"workload-prepare-start","status":7,' \
+  "$FAILURE_OUTPUT"
+grep -Fq 'ERROR: synthetic prepare failure' "$FAILURE_OUTPUT"
+if grep -q '^::' "$FAILURE_OUTPUT"; then
+  printf 'FAIL: target output became an active workflow command.\n' >&2
+  exit 1
+fi
+if [[ "$(wc -c <"$FAILURE_OUTPUT")" -gt 20000 ]]; then
+  printf 'FAIL: bounded target failure diagnostic is excessive.\n' >&2
+  exit 1
+fi
 
 INTERRUPT_LOG="$TEMP_DIR/interrupt.log"
 set +e

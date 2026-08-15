@@ -1921,6 +1921,9 @@ def validate(root: Path) -> None:
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
     target = read(root, "scripts/ci-cloud/target-conformance.sh")
+    target_diagnostic = read(
+        root, "scripts/ci-cloud/bounded-target-diagnostic.py"
+    )
     workload_collector = read(
         root, "scripts/ci-cloud/collect-workload-evidence.py"
     )
@@ -1992,8 +1995,18 @@ def validate(root: Path) -> None:
     )
     require(
         "/tmp/secpal-target-conformance.log" not in remote
-        and remote.count(">/dev/null 2>&1") >= 3,
-        "target output must not use a shared temporary path",
+        and 'mktemp "$evidence_dir/.target-phase-diagnostic.XXXXXX"'
+        in remote
+        and "bounded-target-diagnostic.py" in remote
+        and 'pipeline_statuses=("${PIPESTATUS[@]}")' in remote
+        and 'return "$target_status"' in remote
+        and "<<'REMOTE' >/dev/null 2>&1" not in remote
+        and "MAX_CAPTURE_BYTES = 16 * 1024" in target_diagnostic
+        and "MAX_EMITTED_CHARACTERS = 8 * 1024" in target_diagnostic
+        and "os.O_NOFOLLOW" in target_diagnostic
+        and '"Target phase diagnostic: "' in target_diagnostic
+        and "json.dumps" in target_diagnostic,
+        "target failures need bounded inert diagnostics in a private run path",
     )
     require(
         remote.count("v1 host") == 1
