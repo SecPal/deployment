@@ -2401,6 +2401,34 @@ class WorkloadEvidenceTests(unittest.TestCase):
             runner.index('bootstrap_stage="collector-post-cleanup"'),
         )
 
+    def test_target_activation_rejects_overrides_and_injected_dependencies(self) -> None:
+        instance = "aaaaaaaaaaaa"
+        prefix = f"secpal-int-{instance}"
+        required = " ".join(
+            f"{prefix}-{role}.service"
+            for role in ("gateway", "worker-general", "worker-hash-chain", "scheduler")
+        )
+        trusted = (
+            f"FragmentPath=/etc/systemd/user/{prefix}.target\n"
+            "DropInPaths=\nWants=\n"
+            f"Requires={required}\n"
+        )
+        for properties, expected in (
+            (trusted, True),
+            (trusted.replace("Wants=\n", "Wants=unreviewed.service\n"), False),
+            (trusted.replace("Requires=", "Requires=unreviewed.service "), False),
+            (trusted.replace("/etc/systemd/user", "/home/secpal-ci/.config/systemd/user"), False),
+        ):
+            with self.subTest(properties=properties), mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(0, properties, True),
+            ):
+                self.assertEqual(
+                    self.collector.target_activation_is_trusted(instance),
+                    expected,
+                )
+
     def test_quadlet_normalization_uses_only_the_fixed_user_manager_contract(self) -> None:
         calls = []
         original_environment = "PATH=/target/bin\nATTACKER_VALUE=present\n"
@@ -2425,6 +2453,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "ExecStopPost={ path=/usr/bin/podman ; "
             "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
         )
+        target_properties = (
+            "FragmentPath=/etc/systemd/user/secpal-int-aaaaaaaaaaaa.target\n"
+            "DropInPaths=\nWants=\n"
+            "Requires=secpal-int-aaaaaaaaaaaa-gateway.service "
+            "secpal-int-aaaaaaaaaaaa-worker-general.service "
+            "secpal-int-aaaaaaaaaaaa-worker-hash-chain.service "
+            "secpal-int-aaaaaaaaaaaa-scheduler.service\n"
+        )
         environment_reads = 0
 
         def command_result(arguments, **kwargs):
@@ -2439,6 +2475,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 )
                 return 0, output, True
             if arguments[:3] == ["systemctl", "--user", "show"]:
+                if arguments[3].endswith(".target"):
+                    return 0, target_properties, True
                 properties = service_properties
                 if any(
                     arguments[3].endswith(f"-{name}-network.service")
@@ -2509,6 +2547,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "XDG_RUNTIME_DIR=/run/user/20000",
                 ], {}),
                 (["systemctl", "--user", "daemon-reload"], {"timeout": 60}),
+                ([
+                    "systemctl", "--user", "show",
+                    "secpal-int-aaaaaaaaaaaa.target",
+                    "--property=FragmentPath", "--property=DropInPaths",
+                    "--property=Wants", "--property=Requires",
+                ], {}),
                 *[
                     ([
                         "systemctl", "--user", "show",

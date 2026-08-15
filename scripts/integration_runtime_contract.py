@@ -380,6 +380,12 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
 )
 
 CONTAINER_ROLES = tuple(ROLE_SPECS)
+TARGET_REQUIRED_ROLES = (
+    "gateway",
+    "worker-general",
+    "worker-hash-chain",
+    "scheduler",
+)
 REQUIRED_CONTAINER_UIDS = frozenset(spec.uid for spec in ROLE_SPECS.values())
 REQUIRED_CONTAINER_GIDS = frozenset(spec.gid for spec in ROLE_SPECS.values())
 

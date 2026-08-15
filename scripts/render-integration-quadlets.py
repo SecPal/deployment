@@ -29,6 +29,7 @@ from integration_runtime_contract import (
     GATEWAY_HEALTH_FAILURE_SPEC,
     INTERNAL_NETWORKS,
     POSTGRES_IMAGE,
+    TARGET_REQUIRED_ROLES,
     VALKEY_IMAGE,
     VOLUME_NAMES,
     health_lines,
@@ -480,10 +481,7 @@ def build_units(
     )
 
     target_dependencies = [
-        f"{prefix}-gateway.service",
-        f"{prefix}-worker-general.service",
-        f"{prefix}-worker-hash-chain.service",
-        f"{prefix}-scheduler.service",
+        f"{prefix}-{role}.service" for role in TARGET_REQUIRED_ROLES
     ]
     units[f"{prefix}.target"] = unit_description(
         f"SecPal rootless Podman integration fixture ({instance})",

@@ -52,6 +52,7 @@ from integration_runtime_contract import (
     PROXY_ENVIRONMENT_NAMES,
     REQUIRED_CONTAINER_GIDS,
     REQUIRED_CONTAINER_UIDS,
+    TARGET_REQUIRED_ROLES,
     TmpfsSpec,
     VALKEY_IMAGE,
     VOLUME_NAMES,
@@ -596,6 +597,11 @@ def validate_container_security(
         )
     if str(host.get("NetworkMode", "")).lower() == "host":
         raise IntegrationError("a runtime container uses host networking")
+    if any(
+        str(host.get(name) or "private").lower() != "private"
+        for name in ("PidMode", "IpcMode", "UTSMode")
+    ):
+        raise IntegrationError("a runtime container shares a host namespace")
     bindings = host.get("Binds") or []
     if any("podman.sock" in str(binding) or "docker.sock" in str(binding) for binding in bindings):
         raise IntegrationError("a runtime socket is mounted into a container")
@@ -610,15 +616,11 @@ def validate_container_security(
     }
     if effective != allowed_capabilities or bounding != allowed_capabilities:
         raise IntegrationError("effective runtime capabilities differ from the reviewed contract")
-    security_options = {str(value).lower() for value in host.get("SecurityOpt") or []}
-    if not any("no-new-privileges" in option for option in security_options):
-        raise IntegrationError("no-new-privileges is not effective")
-    if any(
-        forbidden in option
-        for option in security_options
-        for forbidden in ("seccomp=unconfined", "seccomp:unconfined", "apparmor=unconfined", "label=disable")
-    ):
-        raise IntegrationError("a runtime confinement policy is disabled")
+    security_options = host.get("SecurityOpt")
+    if security_options != ["no-new-privileges"]:
+        raise IntegrationError(
+            "effective runtime security options differ from the reviewed contract"
+        )
     if apparmor_available and inspect.get("AppArmorProfile") in (None, "", "unconfined"):
         raise IntegrationError("AppArmor is available but the container is unconfined")
     if expected_mounts is not None:
@@ -767,6 +769,34 @@ def validate_effective_systemd_unit(properties: str, expected_fragment: Path) ->
     }
     if values != expected:
         raise IntegrationError("effective systemd unit is overridden or has drop-ins")
+
+
+def validate_effective_systemd_target(
+    properties: str,
+    expected_fragment: Path,
+    expected_requires: set[str],
+) -> None:
+    values: dict[str, str] = {}
+    for line in properties.splitlines():
+        if "=" not in line:
+            raise IntegrationError("effective systemd target identity is malformed")
+        name, value = line.split("=", 1)
+        if name in values:
+            raise IntegrationError("effective systemd target identity is malformed")
+        values[name] = value
+    if set(values) != {"FragmentPath", "DropInPaths", "Wants", "Requires"}:
+        raise IntegrationError("effective systemd target identity is malformed")
+    wants = set(values["Wants"].split())
+    requires = set(values["Requires"].split())
+    if (
+        values["FragmentPath"] != os.fspath(expected_fragment)
+        or values["DropInPaths"]
+        or wants
+        or requires != expected_requires
+    ):
+        raise IntegrationError(
+            "effective systemd target dependencies differ from the reviewed contract"
+        )
 
 
 def validate_effective_health_service(properties: str) -> None:
@@ -2031,14 +2061,27 @@ class IntegrationLifecycle:
         )
         self.command(["systemctl", "--user", "daemon-reload"])
         generator_root = Path(f"/run/user/{self.uid}/systemd/generator")
-        effective_units = [
-            (self.resources.target, self.resources.systemd_target_file),
-            *(
-                (service, generator_root / service)
-                for service in generated_service_names(self.resources)
-            ),
-        ]
-        for unit, expected_fragment in effective_units:
+        target_properties = self.captured(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                self.resources.target,
+                "--property=FragmentPath",
+                "--property=DropInPaths",
+                "--property=Wants",
+                "--property=Requires",
+            ]
+        )
+        validate_effective_systemd_target(
+            target_properties,
+            self.resources.systemd_target_file,
+            {
+                f"{self.resources.prefix}-{role}.service"
+                for role in TARGET_REQUIRED_ROLES
+            },
+        )
+        for unit in generated_service_names(self.resources):
             properties = self.captured(
                 [
                     "systemctl",
@@ -2049,7 +2092,7 @@ class IntegrationLifecycle:
                     "--property=DropInPaths",
                 ]
             )
-            validate_effective_systemd_unit(properties, expected_fragment)
+            validate_effective_systemd_unit(properties, generator_root / unit)
         for role in (
             item for item in CONTAINER_ROLES if role_spec(item).health is not None
         ):
@@ -2769,10 +2812,11 @@ class IntegrationLifecycle:
         if type(allow_http_error) is not bool:
             raise IntegrationError("curl HTTP-error policy is outside the closed contract")
         host = "app.secpal.example.invalid" if origin == "app" else "api.secpal.example.invalid"
+        failure_option = "--fail-with-body" if allow_http_error else "--fail"
         result = self.command(
             [
                 "curl",
-                "--fail",
+                failure_option,
                 "--silent",
                 "--show-error",
                 "--max-time",

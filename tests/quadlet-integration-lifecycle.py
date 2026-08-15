@@ -1148,6 +1148,8 @@ class QuadletLifecycleContract(unittest.TestCase):
             command = run.call_args_list[0].args[0]
             timeout_index = command.index("--max-time")
             self.assertEqual(command[timeout_index + 1], "7")
+            self.assertIn("--fail-with-body", command)
+            self.assertNotIn("--fail", command)
             self.assertFalse(run.call_args_list[0].kwargs["check"])
 
     def test_foreign_origin_probe_explicitly_allows_http_rejection(self) -> None:
@@ -1365,6 +1367,9 @@ class QuadletLifecycleContract(unittest.TestCase):
                 "Privileged": False,
                 "ReadonlyRootfs": True,
                 "NetworkMode": "secpal-int-contract01-edge",
+                "PidMode": "private",
+                "IpcMode": "private",
+                "UTSMode": "private",
                 "CapAdd": [],
                 "CapDrop": ["CAP_ALL"],
                 "SecurityOpt": ["no-new-privileges"],
@@ -1408,6 +1413,9 @@ class QuadletLifecycleContract(unittest.TestCase):
             ("privileged", ("HostConfig", "Privileged"), True),
             ("writable-root", ("HostConfig", "ReadonlyRootfs"), False),
             ("host-network", ("HostConfig", "NetworkMode"), "host"),
+            ("host-pid", ("HostConfig", "PidMode"), "host"),
+            ("host-ipc", ("HostConfig", "IpcMode"), "host"),
+            ("host-uts", ("HostConfig", "UTSMode"), "host"),
             ("socket", ("HostConfig", "Binds"), ["/run/podman/podman.sock:/run/podman/podman.sock"]),
             ("capability", ("HostConfig", "CapAdd"), ["CAP_SYS_ADMIN"]),
             ("process-limit", ("HostConfig", "PidsLimit"), 0),
@@ -1415,6 +1423,8 @@ class QuadletLifecycleContract(unittest.TestCase):
             ("wrong-log-driver", ("HostConfig", "LogConfig"), {"Type": "k8s-file"}),
             ("wrong-stop-timeout", ("Config", "StopTimeout"), 10),
             ("seccomp-unconfined", ("HostConfig", "SecurityOpt"), ["no-new-privileges", "seccomp=unconfined"]),
+            ("custom-seccomp", ("HostConfig", "SecurityOpt"), ["no-new-privileges", "seccomp=/tmp/custom.json"]),
+            ("duplicate-security-option", ("HostConfig", "SecurityOpt"), ["no-new-privileges", "no-new-privileges"]),
             ("unconfined", ("AppArmorProfile",), "unconfined"),
         ):
             with self.subTest(label=label):
@@ -2420,6 +2430,39 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 self.module.validate_effective_systemd_unit(
                     properties, Path(fragment)
+                )
+
+    def test_effective_systemd_target_rejects_injected_dependencies(self) -> None:
+        fragment = "/etc/systemd/user/secpal-int-contract01.target"
+        required = {
+            "secpal-int-contract01-gateway.service",
+            "secpal-int-contract01-worker-general.service",
+            "secpal-int-contract01-worker-hash-chain.service",
+            "secpal-int-contract01-scheduler.service",
+        }
+        properties = (
+            f"FragmentPath={fragment}\n"
+            "DropInPaths=\n"
+            "Wants=\n"
+            f"Requires={' '.join(sorted(required))}\n"
+        )
+        self.module.validate_effective_systemd_target(
+            properties, Path(fragment), required
+        )
+        for mutation in (
+            properties.replace("Wants=\n", "Wants=unreviewed.service\n"),
+            properties.replace(
+                "Requires=", "Requires=unreviewed.service ", 1
+            ),
+            properties.replace(
+                "secpal-int-contract01-scheduler.service", "", 1
+            ),
+        ):
+            with self.subTest(properties=mutation), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.validate_effective_systemd_target(
+                    mutation, Path(fragment), required
                 )
 
     def test_cleanup_refuses_same_named_resources_without_ownership_labels(self) -> None:

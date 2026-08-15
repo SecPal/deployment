@@ -52,6 +52,9 @@ GENERATED_LOGICAL_NAMES = (
     *(f"{kind}-network" for kind in NETWORK_KINDS),
     *(f"{kind}-volume" for kind in VOLUME_KINDS),
 )
+TARGET_REQUIRED_ROLES = (
+    "gateway", "worker-general", "worker-hash-chain", "scheduler",
+)
 AUXILIARY_EXEC_PROPERTIES = frozenset(
     {
         "ExecCondition",
@@ -529,7 +532,10 @@ def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
     if reload_status != 0 or not reload_complete:
         return False
     if activate:
-        if not generated_service_activation_is_trusted(instance):
+        if (
+            not target_activation_is_trusted(instance)
+            or not generated_service_activation_is_trusted(instance)
+        ):
             return False
         start_status, _, start_complete = command_result(
             ["systemctl", "--user", "start", target], timeout=600
@@ -811,6 +817,42 @@ def generated_service_activation_is_trusted(instance: str) -> bool:
         ):
             return False
     return True
+
+
+def target_activation_is_trusted(instance: str) -> bool:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return False
+    prefix = f"secpal-int-{instance}"
+    target = f"{prefix}.target"
+    status_code, output, bounded = command_result(
+        [
+            "systemctl", "--user", "show", target,
+            "--property=FragmentPath", "--property=DropInPaths",
+            "--property=Wants", "--property=Requires",
+        ]
+    )
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" not in line:
+            return False
+        name, value = line.split("=", 1)
+        if name in properties:
+            return False
+        properties[name] = value
+    expected_requires = {
+        f"{prefix}-{role}.service" for role in TARGET_REQUIRED_ROLES
+    }
+    return bool(
+        status_code == 0
+        and bounded
+        and set(properties) == {
+            "FragmentPath", "DropInPaths", "Wants", "Requires",
+        }
+        and properties["FragmentPath"] == str(SYSTEMD_ROOT / target)
+        and properties["DropInPaths"] == ""
+        and properties["Wants"] == ""
+        and set(properties["Requires"].split()) == expected_requires
+    )
 
 
 def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
