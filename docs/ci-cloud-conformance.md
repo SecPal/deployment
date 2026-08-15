@@ -370,20 +370,34 @@ The trusted runner creates one unrelated rootless control network and volume
 and records a main-controlled baseline of every rootless Podman container,
 network, volume, fixture migration invocation, and Podman API/socket activation
 state before any target code runs.
-It then invokes target fixture publication and has the trusted unprivileged collector
-replace the complete bounded user-manager environment with the fixed home,
-runtime directory, bus, locale, executable path, and sole Quadlet path, perform
-a bounded `daemon-reload`, and pin `CONTAINERS_CONF=/dev/null` so Podman ignores
-the service account's writable default configuration path. Generated services
-must invoke `/usr/bin/podman` directly and may not use environment files,
-`PassEnvironment=`, or `UnsetEnvironment=` to replace or remove that pin. The
-collector uses the same pinned configuration for its own Podman inspection and
-mapping commands. It synchronously stops the exact fixture target and every
-generated service, and starts the exact fixture target from the newly loaded
-root-owned definitions. The collector verifies the exact manager environment
-after this activation. A target-controlled earlier invocation therefore cannot
-survive while acquiring the regenerated fragment's provenance. The runner then
-streams the main-controlled live collector and requests target cleanup,
+It then invokes target fixture publication and has the trusted unprivileged
+collector synchronously stop the exact fixture target and every generated
+service before replacing the complete bounded user-manager environment. Any
+old `ExecStop=` therefore runs before the collector establishes the environment
+used for the new activation. The collector sets the fixed home, runtime
+directory, bus, locale, executable path, sole Quadlet path, and
+`CONTAINERS_CONF=/dev/null`, then performs a bounded `daemon-reload`. Before
+starting the target it rejects every target-authored `ExecCondition=`,
+`ExecStartPre=`, `ExecStartPost=`, `ExecReload=`, `ExecStop=`, or
+`ExecStopPost=` directive in the root-owned Quadlet sources. Generated
+auxiliary commands are restricted to Quadlet's bounded, role-appropriate direct
+`/usr/bin/podman` removal hooks; shells, `systemctl`, and unknown paths fail
+closed. The main command must use the role-appropriate direct
+`/usr/bin/podman` operation: container roles use `run`, network roles use
+`network create`, and volume roles use `volume create`. Environment files,
+`PassEnvironment=`, and `UnsetEnvironment=` remain forbidden. Every generated
+unit must additionally carry effective service-local
+`CONTAINERS_CONF=/dev/null`, `CONTAINERS_CONF_OVERRIDE=/dev/null`, empty
+`CONTAINERS_CONF_MODULES`, and empty `PODMAN_USERNS` assignments. These fixed
+assignments override a manager-environment mutation by an indirectly activated
+unit without placing environment values in evidence. The collector uses the
+same pinned configuration for its own Podman inspection and mapping commands.
+It starts the exact fixture target only after the pre-activation checks and
+repeats them during live collection. The collector verifies the exact manager
+environment after activation. A target-controlled earlier invocation therefore
+cannot survive while acquiring the regenerated fragment's provenance. The
+runner then streams the main-controlled live collector and requests target
+cleanup,
 runs the separate target `host` phase for D.1 admission, and repeats the same
 fixed Quadlet normalization before post-cleanup collection. Both normalization
 results are explicit phase statuses and are required to pass. Only after every
@@ -930,8 +944,10 @@ Evidence includes:
   observed process mapping. The derived host UID/GID used for service-cgroup
   process admission also comes from that observed mapping, not a fixed
   subordinate-ID offset. Evidence retains only service-environment variable
-  names, never their values. Service-level `PODMAN_USERNS`, containers.conf
-  overrides or modules, and HOME/XDG configuration redirects fail closed. Those
+  names, never their values. The fixed service-local `PODMAN_USERNS` and
+  containers.conf pin names are mandatory, while the trusted collector checks
+  their exact non-secret values before activation and during collection. Any
+  contradictory pin or HOME/XDG configuration redirect fails closed. Those
   maps must be non-overlapping, remain inside the service-account namespace,
   and cover the role's configured and effective UID/GID plus every admitted
   supplementary GID,
@@ -1014,8 +1030,11 @@ commands that load containers.conf modules fail closed. Both the service-manager
 activation path and the collector's own Podman subprocesses use the fixed empty
 `/dev/null` containers.conf, so a target-created per-user config cannot select an
 otherwise invisible user-namespace default. Service-level environment files,
-environment unsetting/passing controls, and non-direct Podman `ExecStart=`
-commands also fail collection rather than bypassing that pin.
+environment unsetting/passing controls, missing or contradictory service-local
+configuration pins, every target-authored auxiliary systemd execution phase,
+unknown generated lifecycle executables, and non-direct or role-inconsistent
+Podman `ExecStart=` commands fail before activation and again during collection
+rather than bypassing that pin.
 Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
 still fail closed. For an exited one-shot, admission instead requires the exact
 existing systemd/Podman lifecycle correlation and an explicit immutable

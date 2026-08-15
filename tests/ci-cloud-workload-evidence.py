@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -228,7 +229,14 @@ def valid_observations() -> dict[str, object]:
             "drop_in_paths": [],
             "drop_in_owners": [],
             "drop_in_sha256": [],
-            "environment": [],
+            "environment": sorted(
+                {
+                    "CONTAINERS_CONF",
+                    "CONTAINERS_CONF_OVERRIDE",
+                    "CONTAINERS_CONF_MODULES",
+                    "PODMAN_USERNS",
+                }
+            ),
             "active_state": "active",
             "sub_state": (
                 "exited"
@@ -1244,6 +1252,31 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
         )
 
+    def test_generated_service_requires_effective_local_config_pins(self) -> None:
+        trusted = (
+            "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
+            "CONTAINERS_CONF_MODULES= PODMAN_USERNS= PATH=/usr/bin"
+        )
+        self.assertTrue(
+            self.collector.service_config_environment_is_trusted(trusted)
+        )
+        for value in (
+            trusted.replace("CONTAINERS_CONF=/dev/null ", ""),
+            trusted.replace(
+                "CONTAINERS_CONF_OVERRIDE=/dev/null",
+                "CONTAINERS_CONF_OVERRIDE=/tmp/target.conf",
+            ),
+            trusted.replace(
+                "CONTAINERS_CONF_MODULES=",
+                "CONTAINERS_CONF_MODULES=target",
+            ),
+            trusted.replace("PODMAN_USERNS=", "PODMAN_USERNS=host"),
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(
+                    self.collector.service_config_environment_is_trusted(value)
+                )
+
     def test_generated_service_cannot_drop_or_replace_the_trusted_config_pin(self) -> None:
         self.assertTrue(
             self.collector.service_environment_controls_are_trusted("", "", "")
@@ -1263,7 +1296,23 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
             "code=(null) ; status=0/0 }"
         )
-        self.assertTrue(self.collector.direct_podman_exec_start(direct))
+        network = direct.replace("podman run", "podman network create")
+        volume = direct.replace("podman run", "podman volume create")
+        self.assertTrue(self.collector.direct_podman_exec_start(direct, "api"))
+        self.assertTrue(
+            self.collector.direct_podman_exec_start(
+                network, "application-network"
+            )
+        )
+        self.assertTrue(
+            self.collector.direct_podman_exec_start(volume, "secrets-volume")
+        )
+        self.assertFalse(
+            self.collector.direct_podman_exec_start(network, "api")
+        )
+        self.assertFalse(
+            self.collector.direct_podman_exec_start(network, "target-network")
+        )
         for value in (
             "",
             direct + " " + direct,
@@ -1271,7 +1320,80 @@ class WorkloadEvidenceTests(unittest.TestCase):
             direct.replace("argv[]=/usr/bin/podman", "argv[]=/usr/bin/env"),
         ):
             with self.subTest(value=value):
-                self.assertFalse(self.collector.direct_podman_exec_start(value))
+                self.assertFalse(
+                    self.collector.direct_podman_exec_start(value, "api")
+                )
+
+    def test_generated_service_rejects_non_quadlet_auxiliary_commands(self) -> None:
+        properties = {
+            name: "" for name in (
+                "ExecCondition", "ExecStartPre", "ExecStartPost", "ExecReload",
+                "ExecStop", "ExecStopPost",
+            )
+        }
+        properties["ExecStop"] = (
+            "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm -v -f -i ; "
+            "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
+            "code=(null) ; status=0/0 }"
+        )
+        properties["ExecStopPost"] = (
+            "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm -v -f -i ; }"
+        )
+        self.assertTrue(
+            self.collector.service_execution_controls_are_trusted(
+                properties, "api"
+            )
+        )
+        for name in properties:
+            with self.subTest(name=name):
+                overridden = dict(properties)
+                overridden[name] = (
+                    "{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl "
+                    "--user set-environment CONTAINERS_CONF=/tmp/target.conf ; }"
+                )
+                self.assertFalse(
+                    self.collector.service_execution_controls_are_trusted(
+                        overridden, "api"
+                    )
+                )
+
+        incomplete = dict(properties)
+        incomplete.pop("ExecStop")
+        self.assertFalse(
+            self.collector.service_execution_controls_are_trusted(
+                incomplete, "api"
+            )
+        )
+        no_hooks = {name: "" for name in properties}
+        self.assertTrue(
+            self.collector.service_execution_controls_are_trusted(
+                no_hooks, "application-network"
+            )
+        )
+        self.assertTrue(
+            self.collector.service_execution_controls_are_trusted(
+                no_hooks, "secrets-volume"
+            )
+        )
+
+    def test_target_quadlet_source_cannot_add_auxiliary_commands(self) -> None:
+        safe = b"[Container]\nImage=example.invalid/image@sha256:synthetic\n"
+        self.assertTrue(
+            self.collector.quadlet_content_has_no_auxiliary_execution_directives(
+                safe
+            )
+        )
+        for directive in (
+            "ExecCondition", "ExecStartPre", "ExecStartPost", "ExecReload",
+            "ExecStop", "ExecStopPost",
+        ):
+            with self.subTest(directive=directive):
+                self.assertFalse(
+                    self.collector.quadlet_content_has_no_auxiliary_execution_directives(
+                        safe
+                        + f"[Service]\n{directive}=/usr/bin/true\n".encode()
+                    )
+                )
 
     def test_configured_mapping_must_match_the_effective_kernel_mapping(self) -> None:
         self.assert_failure(
@@ -2290,12 +2412,58 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000\n"
             "XDG_RUNTIME_DIR=/run/user/20000\n"
         )
+        service_properties = (
+            "Environment=CONTAINERS_CONF=/dev/null "
+            "CONTAINERS_CONF_OVERRIDE=/dev/null CONTAINERS_CONF_MODULES= "
+            "PODMAN_USERNS=\n"
+            "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
+            "ExecCondition=\nExecStartPre=\n"
+            "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"
+            "ExecStartPost=\nExecReload=\n"
+            "ExecStop={ path=/usr/bin/podman ; "
+            "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
+            "ExecStopPost={ path=/usr/bin/podman ; "
+            "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
+        )
+        environment_reads = 0
 
         def command_result(arguments, **kwargs):
+            nonlocal environment_reads
             calls.append((arguments, kwargs))
-            if arguments[-1] == "show-environment":
-                output = original_environment if len(calls) == 1 else trusted_environment
+            if arguments == ["systemctl", "--user", "show-environment"]:
+                environment_reads += 1
+                output = (
+                    original_environment
+                    if environment_reads == 1
+                    else trusted_environment
+                )
                 return 0, output, True
+            if arguments[:3] == ["systemctl", "--user", "show"]:
+                properties = service_properties
+                if any(
+                    arguments[3].endswith(f"-{name}-network.service")
+                    for name in ("application", "edge")
+                ):
+                    properties = properties.replace(
+                        "podman run", "podman network create"
+                    )
+                elif any(
+                    arguments[3].endswith(f"-{name}-volume.service")
+                    for name in ("secrets", "private-storage", "postgres")
+                ):
+                    properties = properties.replace(
+                        "podman run", "podman volume create"
+                    )
+                if (
+                    "-network.service" in arguments[3]
+                    or "-volume.service" in arguments[3]
+                ):
+                    properties = re.sub(
+                        r"ExecStop=.*\nExecStopPost=.*\n",
+                        "ExecStop=\nExecStopPost=\n",
+                        properties,
+                    )
+                return 0, properties, True
             return 0, "", True
 
         with mock.patch.object(
@@ -2304,6 +2472,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "quadlet_search_paths",
             return_value=["/etc/containers/systemd/users/20000"],
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_source_execution_controls_are_trusted",
+            return_value=True,
         ):
             self.assertTrue(
                 self.collector.normalize_quadlet_runtime(
@@ -2312,6 +2484,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
         self.assertEqual(
             [
+                ([
+                    "systemctl", "--user", "stop",
+                    "secpal-int-aaaaaaaaaaaa.target",
+                    *[
+                        f"secpal-int-aaaaaaaaaaaa-{logical_name}.service"
+                        for logical_name in self.collector.GENERATED_LOGICAL_NAMES
+                    ],
+                ], {"timeout": 120}),
                 (["systemctl", "--user", "show-environment"], {}),
                 ([
                     "systemctl", "--user", "unset-environment",
@@ -2329,14 +2509,17 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "XDG_RUNTIME_DIR=/run/user/20000",
                 ], {}),
                 (["systemctl", "--user", "daemon-reload"], {"timeout": 60}),
-                ([
-                    "systemctl", "--user", "stop",
-                    "secpal-int-aaaaaaaaaaaa.target",
-                    *[
-                        f"secpal-int-aaaaaaaaaaaa-{logical_name}.service"
-                        for logical_name in self.collector.GENERATED_LOGICAL_NAMES
-                    ],
-                ], {"timeout": 120}),
+                *[
+                    ([
+                        "systemctl", "--user", "show",
+                        f"secpal-int-aaaaaaaaaaaa-{logical_name}.service",
+                        *(
+                            f"--property={name}"
+                            for name in self.collector.SERVICE_ACTIVATION_PROPERTIES
+                        ),
+                    ], {})
+                    for logical_name in self.collector.GENERATED_LOGICAL_NAMES
+                ],
                 ([
                     "systemctl", "--user", "start",
                     "secpal-int-aaaaaaaaaaaa.target",
@@ -2360,12 +2543,81 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "quadlet_search_paths",
             return_value=["/etc/containers/systemd/users/20000"],
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_source_execution_controls_are_trusted",
+            return_value=True,
         ):
             self.assertFalse(
                 self.collector.normalize_quadlet_runtime(
                     "aaaaaaaaaaaa", activate=False
                 )
             )
+
+    def test_quadlet_normalization_rejects_hooks_before_start(self) -> None:
+        calls = []
+        original_environment = "PATH=/target/bin\n"
+        trusted_environment = (
+            "CONTAINERS_CONF=/dev/null\n"
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus\n"
+            "HOME=/home/secpal-ci\nLANG=C.UTF-8\nLC_ALL=C.UTF-8\n"
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+            "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000\n"
+            "XDG_RUNTIME_DIR=/run/user/20000\n"
+        )
+        service_properties = (
+            "Environment=CONTAINERS_CONF=/dev/null "
+            "CONTAINERS_CONF_OVERRIDE=/dev/null CONTAINERS_CONF_MODULES= "
+            "PODMAN_USERNS=\n"
+            "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
+            "ExecCondition=\nExecStartPre=\n"
+            "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"
+            "ExecStartPost={ path=/usr/bin/systemctl ; "
+            "argv[]=/usr/bin/systemctl --user set-environment "
+            "CONTAINERS_CONF=/tmp/target.conf ; }\n"
+            "ExecReload=\nExecStop=\nExecStopPost=\n"
+        )
+
+        def command_result(arguments, **kwargs):
+            calls.append((arguments, kwargs))
+            if arguments == ["systemctl", "--user", "show-environment"]:
+                seen = sum(
+                    item == ["systemctl", "--user", "show-environment"]
+                    for item, _ in calls
+                )
+                output = (
+                    original_environment if seen == 1 else trusted_environment
+                )
+                return 0, output, True
+            if arguments[:3] == ["systemctl", "--user", "show"]:
+                return 0, service_properties, True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=["/etc/containers/systemd/users/20000"],
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_source_execution_controls_are_trusted",
+            return_value=True,
+        ):
+            self.assertFalse(
+                self.collector.normalize_quadlet_runtime(
+                    "aaaaaaaaaaaa", activate=True
+                )
+            )
+        self.assertFalse(
+            any(
+                arguments == [
+                    "systemctl", "--user", "start",
+                    "secpal-int-aaaaaaaaaaaa.target",
+                ]
+                for arguments, _ in calls
+            )
+        )
 
     def test_process_census_records_bounded_identity_and_cgroup_facts(self) -> None:
         process = Path("/proc/1234")

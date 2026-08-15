@@ -52,6 +52,35 @@ GENERATED_LOGICAL_NAMES = (
     *(f"{kind}-network" for kind in NETWORK_KINDS),
     *(f"{kind}-volume" for kind in VOLUME_KINDS),
 )
+AUXILIARY_EXEC_PROPERTIES = frozenset(
+    {
+        "ExecCondition",
+        "ExecStartPre",
+        "ExecStartPost",
+        "ExecReload",
+        "ExecStop",
+        "ExecStopPost",
+    }
+)
+TRUSTED_SERVICE_CONFIG_ENVIRONMENT = {
+    "CONTAINERS_CONF": "/dev/null",
+    "CONTAINERS_CONF_OVERRIDE": "/dev/null",
+    "CONTAINERS_CONF_MODULES": "",
+    "PODMAN_USERNS": "",
+}
+SERVICE_ACTIVATION_PROPERTIES = (
+    "Environment",
+    "EnvironmentFiles",
+    "PassEnvironment",
+    "UnsetEnvironment",
+    "ExecCondition",
+    "ExecStartPre",
+    "ExecStart",
+    "ExecStartPost",
+    "ExecReload",
+    "ExecStop",
+    "ExecStopPost",
+)
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
 class RoleContract(NamedTuple):
@@ -467,6 +496,18 @@ def manager_environment() -> dict[str, str] | None:
 def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
     if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
         return False
+    prefix = f"secpal-int-{instance}"
+    target = f"{prefix}.target"
+    services = [
+        f"{prefix}-{logical_name}.service"
+        for logical_name in GENERATED_LOGICAL_NAMES
+    ]
+    if activate:
+        stop_status, _, stop_complete = command_result(
+            ["systemctl", "--user", "stop", target, *services], timeout=120
+        )
+        if stop_status != 0 or not stop_complete:
+            return False
     existing = manager_environment()
     if existing is None:
         return False
@@ -488,16 +529,7 @@ def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
     if reload_status != 0 or not reload_complete:
         return False
     if activate:
-        prefix = f"secpal-int-{instance}"
-        target = f"{prefix}.target"
-        services = [
-            f"{prefix}-{logical_name}.service"
-            for logical_name in GENERATED_LOGICAL_NAMES
-        ]
-        stop_status, _, stop_complete = command_result(
-            ["systemctl", "--user", "stop", target, *services], timeout=120
-        )
-        if stop_status != 0 or not stop_complete:
+        if not generated_service_activation_is_trusted(instance):
             return False
         start_status, _, start_complete = command_result(
             ["systemctl", "--user", "start", target], timeout=600
@@ -512,7 +544,9 @@ def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
     )
 
 
-def file_fact(path: Path, name: str) -> dict[str, object] | None:
+def bounded_regular_file(
+    path: Path,
+) -> tuple[bytes, os.stat_result] | None:
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -539,14 +573,57 @@ def file_fact(path: Path, name: str) -> dict[str, object] | None:
         or identity(before) != identity(after)
     ):
         return None
+    return content, before
+
+
+def file_fact(path: Path, name: str) -> dict[str, object] | None:
+    observation = bounded_regular_file(path)
+    if observation is None:
+        return None
+    content, metadata = observation
     return {
         "name": name,
         "path": str(path),
-        "uid": before.st_uid,
-        "gid": before.st_gid,
-        "mode": f"0{stat.S_IMODE(before.st_mode):03o}",
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": f"0{stat.S_IMODE(metadata.st_mode):03o}",
         "sha256": hashlib.sha256(content).hexdigest(),
     }
+
+
+def quadlet_content_has_no_auxiliary_execution_directives(
+    content: object,
+) -> bool:
+    if (
+        not isinstance(content, bytes)
+        or len(content) > 64 * 1024
+        or b"\x00" in content
+    ):
+        return False
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    directives = "|".join(sorted(AUXILIARY_EXEC_PROPERTIES))
+    return re.search(
+        rf"(?m)^[ \t]*(?:{directives})[ \t]*=", text
+    ) is None
+
+
+def quadlet_source_execution_controls_are_trusted(
+    instance: str, logical_name: str
+) -> bool:
+    try:
+        source = expected_generated_source(instance, logical_name)
+    except ValueError:
+        return False
+    observation = bounded_regular_file(source)
+    return bool(
+        observation is not None
+        and quadlet_content_has_no_auxiliary_execution_directives(
+            observation[0]
+        )
+    )
 
 
 def installed_unit_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
@@ -600,17 +677,140 @@ def service_environment_controls_are_trusted(
     )
 
 
-def direct_podman_exec_start(value: object) -> bool:
+def service_execution_controls_are_trusted(
+    properties: object, logical_name: str
+) -> bool:
+    if (
+        not isinstance(properties, dict)
+        or set(properties) != AUXILIARY_EXEC_PROPERTIES
+        or any(
+            not isinstance(value, str) or len(value) > 65_536 or "\x00" in value
+            for value in properties.values()
+        )
+        or any(
+            properties[name] != ""
+            for name in (
+                "ExecCondition", "ExecStartPre", "ExecStartPost", "ExecReload"
+            )
+        )
+    ):
+        return False
+    if logical_name in ROLES:
+        operation = "rm"
+        required = True
+    elif logical_name in {f"{kind}-network" for kind in NETWORK_KINDS}:
+        operation = "network rm"
+        required = False
+    elif logical_name in {f"{kind}-volume" for kind in VOLUME_KINDS}:
+        operation = None
+        required = False
+    else:
+        return False
+    return all(
+        podman_lifecycle_exec_is_trusted(
+            properties[name], operation, required=required
+        )
+        for name in ("ExecStop", "ExecStopPost")
+    )
+
+
+def podman_lifecycle_exec_is_trusted(
+    value: str, operation: str | None, *, required: bool
+) -> bool:
+    if value == "":
+        return not required
+    if operation is None:
+        return False
+    return bool(
+        value.count("{ path=") == 1
+        and value.count("argv[]=") == 1
+        and value.count(" }") == 1
+        and re.match(
+            r"^\{ path=/usr/bin/podman ; argv\[\]=/usr/bin/podman "
+            + re.escape(operation)
+            + r"(?: | ;)",
+            value,
+        )
+    )
+
+
+def direct_podman_exec_start(value: object, logical_name: str) -> bool:
+    if logical_name in ROLES:
+        operation = "run"
+    elif logical_name in {f"{kind}-network" for kind in NETWORK_KINDS}:
+        operation = "network create"
+    elif logical_name in {f"{kind}-volume" for kind in VOLUME_KINDS}:
+        operation = "volume create"
+    else:
+        return False
     return bool(
         isinstance(value, str)
         and len(value) <= 65_536
         and "\x00" not in value
         and value.count("{ path=") == 1
         and re.match(
-            r"^\{ path=/usr/bin/podman ; argv\[\]=/usr/bin/podman run(?: | ;)",
+            r"^\{ path=/usr/bin/podman ; argv\[\]=/usr/bin/podman "
+            + re.escape(operation)
+            + r"(?: | ;)",
             value,
         )
     )
+
+
+def service_runtime_controls_are_trusted(
+    properties: object, logical_name: str
+) -> bool:
+    return bool(
+        isinstance(properties, dict)
+        and set(properties) == set(SERVICE_ACTIVATION_PROPERTIES)
+        and service_config_environment_is_trusted(properties.get("Environment"))
+        and service_environment_controls_are_trusted(
+            properties.get("EnvironmentFiles"),
+            properties.get("PassEnvironment"),
+            properties.get("UnsetEnvironment"),
+        )
+        and service_execution_controls_are_trusted(
+            {
+                name: properties.get(name)
+                for name in AUXILIARY_EXEC_PROPERTIES
+            },
+            logical_name,
+        )
+        and direct_podman_exec_start(properties.get("ExecStart"), logical_name)
+    )
+
+
+def generated_service_activation_is_trusted(instance: str) -> bool:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return False
+    prefix = f"secpal-int-{instance}"
+    for logical_name in GENERATED_LOGICAL_NAMES:
+        if not quadlet_source_execution_controls_are_trusted(
+            instance, logical_name
+        ):
+            return False
+        status_code, output, bounded = command_result(
+            [
+                "systemctl", "--user", "show",
+                f"{prefix}-{logical_name}.service",
+                *(f"--property={name}" for name in SERVICE_ACTIVATION_PROPERTIES),
+            ]
+        )
+        properties: dict[str, str] = {}
+        for line in output.splitlines():
+            if "=" not in line:
+                return False
+            name, value = line.split("=", 1)
+            if name in properties:
+                return False
+            properties[name] = value
+        if (
+            status_code != 0
+            or not bounded
+            or not service_runtime_controls_are_trusted(properties, logical_name)
+        ):
+            return False
+    return True
 
 
 def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
@@ -621,7 +821,7 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
         "FragmentPath", "DropInPaths", "ActiveState", "SubState", "Result",
         "ExecMainStatus", "MainPID", "ControlGroup", "InvocationID",
         "SourcePath", "Environment", "EnvironmentFiles", "PassEnvironment",
-        "UnsetEnvironment", "ExecStart",
+        "UnsetEnvironment", "ExecStart", *AUXILIARY_EXEC_PROPERTIES,
     }
     for logical_name in GENERATED_LOGICAL_NAMES:
         unit = f"{prefix}-{logical_name}.service"
@@ -635,7 +835,10 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                 "--property=InvocationID", "--property=SourcePath",
                 "--property=Environment", "--property=EnvironmentFiles",
                 "--property=PassEnvironment", "--property=UnsetEnvironment",
-                "--property=ExecStart",
+                "--property=ExecCondition", "--property=ExecStartPre",
+                "--property=ExecStart", "--property=ExecStartPost",
+                "--property=ExecReload", "--property=ExecStop",
+                "--property=ExecStopPost",
             ]
         )
         properties: dict[str, str] = {}
@@ -662,8 +865,9 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
         main_pid = properties.get("MainPID", "")
         control_group = properties.get("ControlGroup", "")
         invocation_id = properties.get("InvocationID", "")
+        raw_environment = properties.get("Environment", "")
         environment, environment_complete = normalized_service_environment(
-            properties.get("Environment", "")
+            raw_environment
         )
         if (
             status_code != 0
@@ -685,12 +889,25 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
             or "\x00" in source_path
             or re.fullmatch(r"[0-9a-f]{32}", invocation_id) is None
             or not environment_complete
+            or not quadlet_source_execution_controls_are_trusted(
+                instance, logical_name
+            )
+            or not service_config_environment_is_trusted(raw_environment)
             or not service_environment_controls_are_trusted(
                 properties.get("EnvironmentFiles"),
                 properties.get("PassEnvironment"),
                 properties.get("UnsetEnvironment"),
             )
-            or not direct_podman_exec_start(properties.get("ExecStart"))
+            or not service_execution_controls_are_trusted(
+                {
+                    name: properties.get(name)
+                    for name in AUXILIARY_EXEC_PROPERTIES
+                },
+                logical_name,
+            )
+            or not direct_podman_exec_start(
+                properties.get("ExecStart"), logical_name
+            )
         ):
             complete = False
             continue
@@ -1051,32 +1268,50 @@ def configured_userns_options(value: object) -> tuple[list[str], bool]:
     return options, len(options) <= 1
 
 
-def normalized_service_environment(value: object) -> tuple[list[str], bool]:
+def service_environment_assignments(
+    value: object,
+) -> tuple[dict[str, str], bool]:
     if not isinstance(value, str) or len(value) > 65_536 or "\x00" in value:
-        return [], False
+        return {}, False
     try:
         assignments = shlex.split(value, posix=True)
     except ValueError:
-        return [], False
+        return {}, False
     if len(assignments) > 64 or sum(len(item) for item in assignments) > 16_384:
-        return [], False
-    names: set[str] = set()
+        return {}, False
+    parsed: dict[str, str] = {}
     for assignment in assignments:
         if (
             len(assignment) > 1024
             or "=" not in assignment
             or "\x00" in assignment
         ):
-            return [], False
+            return {}, False
         name, item = assignment.split("=", 1)
         if (
             re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) is None
-            or name in names
+            or name in parsed
             or any(ord(character) < 32 for character in item)
         ):
-            return [], False
-        names.add(name)
-    return sorted(names), True
+            return {}, False
+        parsed[name] = item
+    return parsed, True
+
+
+def normalized_service_environment(value: object) -> tuple[list[str], bool]:
+    assignments, complete = service_environment_assignments(value)
+    return sorted(assignments), complete
+
+
+def service_config_environment_is_trusted(value: object) -> bool:
+    assignments, complete = service_environment_assignments(value)
+    return bool(
+        complete
+        and all(
+            assignments.get(name) == expected
+            for name, expected in TRUSTED_SERVICE_CONFIG_ENVIRONMENT.items()
+        )
+    )
 
 
 def read_id_map(path: Path) -> tuple[list[dict[str, int]], bool]:
@@ -2706,10 +2941,8 @@ def service_userns_environment_is_trusted(service: object) -> bool:
     environment = service.get("environment")
     if not isinstance(environment, list):
         return False
-    prohibited = {
-        "PODMAN_USERNS", "CONTAINERS_CONF", "CONTAINERS_CONF_OVERRIDE",
-        "CONTAINERS_CONF_MODULES", "XDG_CONFIG_HOME", "HOME",
-    }
+    required = set(TRUSTED_SERVICE_CONFIG_ENVIRONMENT)
+    prohibited = {"XDG_CONFIG_HOME", "HOME"}
     names: set[str] = set()
     for name in environment:
         if (
@@ -2720,7 +2953,7 @@ def service_userns_environment_is_trusted(service: object) -> bool:
         if name in names or name in prohibited:
             return False
         names.add(name)
-    return True
+    return required <= names
 
 
 def workload_admission_failures(observations: object) -> list[str]:
