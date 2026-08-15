@@ -1626,8 +1626,12 @@ class IntegrationLifecycle:
             raise IntegrationError(
                 "cloud diagnostic stage is outside the closed contract"
             )
-        emit_cloud_diagnostic_stage(stage)
+        if stage not in CLOUD_DIAGNOSTIC_STAGES:
+            raise IntegrationError(
+                "cloud diagnostic stage is outside the closed contract"
+            )
         self.cloud_diagnostic_current_stage = stage
+        emit_cloud_diagnostic_stage(stage)
 
     def cloud_diagnostic_failure(self, error: IntegrationError) -> None:
         if not self.cloud_mode or self.cloud_diagnostic_current_stage is None:

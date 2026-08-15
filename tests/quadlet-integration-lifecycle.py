@@ -514,6 +514,43 @@ class QuadletLifecycleContract(unittest.TestCase):
             )
             self.assertNotIn("synthetic-secret-never-emit", output.getvalue())
 
+    def test_cloud_stage_is_retained_when_emission_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            with (
+                mock.patch.object(
+                    self.module,
+                    "emit_cloud_diagnostic_stage",
+                    side_effect=self.module.IntegrationInterrupted(signal.SIGTERM),
+                ),
+                self.assertRaises(self.module.IntegrationInterrupted),
+            ):
+                lifecycle.cloud_diagnostic_stage("workload-runtime-admission")
+
+            output = io.StringIO()
+            with contextlib.redirect_stderr(output):
+                lifecycle.cloud_diagnostic_failure(
+                    self.module.IntegrationError(
+                        "cloud lifecycle was interrupted",
+                        diagnostic_reason="interrupted",
+                    )
+                )
+
+            self.assertEqual(
+                "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+                "workload-runtime-admission:interrupted:none\n",
+                output.getvalue(),
+            )
+
     def test_command_failure_retains_only_closed_reason_and_status(self) -> None:
         runner = mock.Mock()
         runner.run.side_effect = subprocess.CalledProcessError(
