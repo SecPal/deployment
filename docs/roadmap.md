@@ -93,9 +93,9 @@ and API OCI index digest
 before runtime, then passed the gateway build, real Compose lifecycle,
 Playwright browser contract, and complete project cleanup.
 
-**Deferred:** Phase D has not started. Public reference deployment,
-production host automation, and managed-hosting automation remain outside
-Phase C.
+**Deferred at Phase C completion:** Phase D had not started. Public reference
+deployment, production host automation, and managed-hosting automation remain
+outside Phase C.
 
 ## Phase D — Public rootless Podman/Quadlet reference deployment
 
@@ -104,16 +104,21 @@ Phase C.
 **Implemented:** D.1 defines only the provider-neutral production host and
 versioned non-secret inventory admission contract for Debian 13/trixie,
 including its OS lifecycle, rootless Podman, systemd/Quadlet, subordinate-ID,
-and local runtime-storage boundaries. The historical Phase B/C Docker/Compose
-harness remains until [D.1a (#20)](https://github.com/SecPal/deployment/issues/20)
-transfers and re-proves those invariants on the new
-runtime. It provisions no host and implements no production orchestration. See
+and local runtime-storage boundaries. D.1a transfers the active disposable
+integration runtime to native rootless Podman and Quadlet, retaining the
+original Phase B/C Docker/Compose artifacts as historical evidence. It
+re-proves closed rendering, pre-execution image verification, service
+dependencies, security, health, browser behavior, signals, restart,
+parallel-run isolation, and exact cleanup. It provisions no host and
+implements no production orchestration. See
 [`production-host.md`](architecture/production-host.md) and
-[`production-inventory.md`](architecture/production-inventory.md).
+[`production-inventory.md`](architecture/production-inventory.md) for D.1 and
+[`quadlet-integration.md`](quadlet-integration.md) for D.1a.
 
-**Expected artifacts:** Native Quadlet orchestration, service dependencies,
-persistent-state contracts, secret mounts, health checks, and operator
-guidance after D.1a (#20) proves runtime parity.
+**Expected artifacts:** D.1a supplies integration-only native Quadlet
+orchestration, service dependencies, disposable secret mounts, and health
+checks. Production persistence, secret, edge, and operator contracts remain
+later Phase-D work.
 
 **Entry criteria:** Immutable image contracts exist.
 
@@ -131,8 +136,10 @@ D.1-oriented evidence, perform exact OpenTofu cleanup, and delete expired
 owned billable compute fixtures through bounded TTL janitors. GCP uses
 repository-, workflow-, branch-, and environment-scoped Workload Identity
 Federation without a JSON key or VM service account. This is test
-infrastructure for Phase D evidence, not production host provisioning and not
-completion evidence for D.1a or a later phase.
+infrastructure for Phase D evidence, not production host provisioning. Its
+target workload phases can exercise D.1a, but only independently admitted
+artifacts from the exact tested SHA count as evidence; the infrastructure or
+fixture publication alone does not complete D.1a or a later phase.
 
 ## Phase E — Public edge, TLS, and CrowdSec
 

@@ -10,8 +10,8 @@ integration, self-hosting, deployment contracts, container orchestration,
 edge and security integration, and operational procedures for backup,
 restore, and updates.
 
-> Phase B and the completed Phase C provide a runnable, test-only local
-> integration stack with reviewed API and frontend image consumption.
+> The active test-only integration stack uses rootless Podman, native Quadlet,
+> and systemd user services with reviewed API and frontend image consumption.
 > It is not a production-ready deployment.
 
 ## Architecture principles
@@ -41,8 +41,9 @@ local integration subset; later phases remain targets:
    commit `4fc2796409b7c37a541f515ccf29236f143fc132` passed post-merge
    Repository Quality run `31264563173` and Local Integration run
    `31264562902` on `main`.
-4. Public rootless Podman/Quadlet reference deployment: host contract only;
-   runtime integration remains to be migrated.
+4. Public rootless Podman/Quadlet reference deployment: the D.1 host contract
+   and D.1a integration-runtime parity are implemented; production
+   orchestration and later Phase-D work are not.
 5. Public edge, TLS, and CrowdSec: not implemented.
 6. Backup, restore, update, and rollback: not implemented.
 7. Private managed-hosting automation: permanently outside this public
@@ -51,9 +52,39 @@ local integration subset; later phases remain targets:
 See [the roadmap](docs/roadmap.md) for acceptance criteria and explicit
 non-goals.
 
-## Phase B local integration and Phase C image consumption
+## Active rootless Podman and Quadlet integration
 
-The public [`compose.yaml`](compose.yaml) consumes the verified API OCI index
+The active integration runtime is
+[`scripts/quadlet-integration.py`](scripts/quadlet-integration.py). It admits
+only rootless Podman `>=5.4.2,<6` with `crun`, `catatonit`, Netavark/Aardvark,
+`pasta`, and a systemd user manager using the D.1 root-owned Quadlet search
+path. It verifies both SecPal product OCI indexes and their fixed publisher
+identities before staging them in local Podman storage. The generated product
+units use the exact reviewed digest references and `Pull=never`, so systemd
+startup cannot perform an opportunistic pull.
+
+The constrained renderer creates separate PostgreSQL, Valkey, API, general
+worker, hash-chain singleton worker, scheduler singleton, frontend, and
+integration-gateway containers plus an explicit one-shot migration. Only the
+gateway publishes one controlled loopback port. Runtime inspection, real API
+and frontend health, Playwright, failure ordering, signal handling, parallel
+fixtures, restart behavior, resource observations, and exact cleanup are part
+of the active contract.
+
+Run it explicitly after installing the documented runtime prerequisites and
+root-owned search-path policy:
+
+```bash
+python3 scripts/quadlet-integration.py
+```
+
+See [the complete integration contract](docs/quadlet-integration.md) for the
+service map, supply-chain order, security invariants, lifecycle behavior,
+hosted-runner limits, and parallel-run inputs.
+
+## Historical Phase B/C Docker and Compose evidence
+
+The retained [`compose.yaml`](compose.yaml) consumed the verified API OCI index
 by this canonical digest reference:
 
 - `ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
@@ -84,7 +115,7 @@ origins on that port:
 
 API, frontend, workers, scheduler, and data services have no published ports.
 
-The intended explicit integration test requires Docker Engine, Docker Compose
+The historical explicit integration test requires Docker Engine, Docker Compose
 v2, GitHub CLI 2.97.0 with `gh attestation verify`, Python 3, `curl`, util-linux
 `setsid`, Node.js 22.22.2, npm dependencies installed with `npm ci`, Playwright
 Chromium installed, and anonymous registry access for the pinned inputs:
@@ -150,10 +181,13 @@ scheduler remains a guarded singleton. All API-based roles mount the same
 `private-storage` volume at `/app/storage/app/private`; this volume is
 disposable test state, not a production persistence contract.
 
-Pull requests also run the real lifecycle in the required check context
-`Local Integration / Compose Contract`. Phase B is complete: the technical
-implementation head passed that hosted check, and the check is enforced for
-`main`. Every subsequent pull-request head must pass it again.
+Phase B completed in the required check context
+`Local Integration / Compose Contract`: the technical implementation head
+passed that hosted check and the check was enforced for `main`. D.1a does not
+rewrite that evidence. The active checks are `Local Integration / Quadlet
+Contract (amd64)` and `Local Integration / Quadlet Contract (arm64)`; changing
+branch protection from the historical name is an explicit governance cutover
+when this migration merges.
 
 This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use
@@ -168,6 +202,14 @@ DigitalOcean Intel/AMD or Google C4A/Axion profile, run an exact 40-character
 deployment commit SHA without exposing cloud-control credentials to that
 commit, collect bounded host/runtime evidence, and destroy the exact OpenTofu
 state. Metadata-gated TTL janitors protect billable compute fixtures.
+
+The exact target implements only the fixed versioned `host`, workload
+publication, and workload cleanup phases. It derives the fixture identity and
+loopback port from the admitted commit, verifies the reviewed API and frontend
+attestations before staging immutable local digest identities, and crosses the
+root-owned Quadlet boundary only through the fixed unprivileged fixture
+client. Activation and evidence collection stay in the main-controlled
+collector; target code cannot choose either operation.
 
 This CI infrastructure is non-production. It contains no customer data,
 production inventory, DNS, certificate, backup, or service credential and is
@@ -186,10 +228,10 @@ only with the provider-neutral, contract-only
 definitions. Schema version 1 admits only Debian 13/trixie hosts and defines
 its security-update, controlled-reboot, reviewed major-upgrade, rootless
 Podman, systemd/Quadlet, subordinate-ID, and local runtime-storage boundaries.
-The Phase B/C Docker/Compose integration remains historical evidence while a
-dedicated [D.1a follow-up (#20)](https://github.com/SecPal/deployment/issues/20)
-migrates and re-proves runtime parity. Docker/Compose
-is not a supported production runtime. No production orchestration or
+The D.1a integration runtime now re-proves those behaviors on native rootless
+Podman/Quadlet. The Phase B/C Docker/Compose artifacts remain historical
+evidence and Docker/Compose is not a supported production runtime. D.1a is
+still disposable integration evidence: no production orchestration or
 infrastructure exists. Digest
 provenance, reviewed updates, and rollback are detailed in
 [`docs/api-image-consumption.md`](docs/api-image-consumption.md) and
@@ -212,8 +254,8 @@ Run deterministic repository checks without Docker or network access:
 ```
 
 The preflight requires the locally installed tools documented by its error
-messages; it never installs dependencies or starts the Phase B stack. The
-Docker-backed integration test is a separate, explicit command.
+messages; it never installs dependencies or starts the integration stack. The
+real rootless Podman/Quadlet integration is a separate, explicit command.
 
 ## Repository boundary
 

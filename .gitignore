@@ -32,6 +32,8 @@ __pycache__/
 node_modules/
 playwright-report/
 test-results/
+__pycache__/
+*.py[cod]
 *.log
 *.tmp
 *.temp

@@ -151,9 +151,9 @@ require_text package.json '"@playwright/test": "1.62.0"'
 require_text playwright.integration.config.js 'ignoreHTTPSErrors: true'
 require_text tests/e2e/local-integration.spec.js 'sanctum/csrf-cookie'
 require_text .github/workflows/local-integration.yml 'name: Local Integration'
-require_text .github/workflows/local-integration.yml 'name: Compose Contract'
+require_text .github/workflows/local-integration.yml 'name: Quadlet Contract'
 require_text .github/workflows/local-integration.yml 'contents: read'
-require_text .github/workflows/local-integration.yml './scripts/local-integration.sh'
+require_text .github/workflows/local-integration.yml 'python3 scripts/quadlet-integration.py'
 
 if [ -f compose.yaml ]; then
   if grep -Eq '(^|[[:space:]])privileged:[[:space:]]*true|network_mode:[[:space:]]*host|/var/run/docker\.sock|image:[[:space:]]*[^#[:space:]]*:latest([@[:space:]]|$)' compose.yaml; then

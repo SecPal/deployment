@@ -36,6 +36,10 @@ GENERATOR_ROOTS = tuple(
     for name in ("generator.early", "generator", "generator.late")
 )
 PODMAN_EXECUTABLE = Path("/usr/bin/podman")
+PODMAN_NETWORK_ONLINE_UNIT = "podman-user-wait-network-online.service"
+PODMAN_NETWORK_ONLINE_FRAGMENT = (
+    Path("/usr/lib/systemd/user") / PODMAN_NETWORK_ONLINE_UNIT
+)
 DBUS_SOCKET_FRAGMENTS = frozenset(
     {Path("/usr/lib/systemd/user/dbus.socket"), Path("/lib/systemd/user/dbus.socket")}
 )
@@ -51,6 +55,19 @@ GENERATED_LOGICAL_NAMES = (
     *ROLES,
     *(f"{kind}-network" for kind in NETWORK_KINDS),
     *(f"{kind}-volume" for kind in VOLUME_KINDS),
+)
+ROLE_PREDECESSORS = {
+    "postgres": ("secrets-init",),
+    "valkey": ("secrets-init",),
+    "migrate": ("postgres", "valkey"),
+    "api": ("migrate",),
+    "worker-general": ("migrate",),
+    "worker-hash-chain": ("migrate",),
+    "scheduler": ("migrate",),
+    "gateway": ("api", "frontend"),
+}
+TARGET_REQUIRED_ROLES = (
+    "gateway", "worker-general", "worker-hash-chain", "scheduler",
 )
 AUXILIARY_EXEC_PROPERTIES = frozenset(
     {
@@ -80,6 +97,8 @@ SERVICE_ACTIVATION_PROPERTIES = (
     "ExecReload",
     "ExecStop",
     "ExecStopPost",
+    "Requires",
+    "After",
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
@@ -432,6 +451,12 @@ def expected_unit_names(instance: str) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def expected_gateway_port(instance: str) -> int:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        raise ValueError("fixture instance is outside the closed contract")
+    return 20_000 + int(instance[:8], 16) % 40_000
+
+
 def expected_generated_source(instance: str, logical_name: str) -> Path:
     if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
         raise ValueError("fixture instance is outside the closed contract")
@@ -529,7 +554,10 @@ def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
     if reload_status != 0 or not reload_complete:
         return False
     if activate:
-        if not generated_service_activation_is_trusted(instance):
+        if (
+            not target_activation_is_trusted(instance)
+            or not generated_service_activation_is_trusted(instance)
+        ):
             return False
         start_status, _, start_complete = command_result(
             ["systemctl", "--user", "start", target], timeout=600
@@ -758,11 +786,27 @@ def direct_podman_exec_start(value: object, logical_name: str) -> bool:
 
 
 def service_runtime_controls_are_trusted(
-    properties: object, logical_name: str
+    properties: object,
+    logical_name: str,
+    instance: str,
 ) -> bool:
+    if not isinstance(properties, dict):
+        return False
+    generated_services = {
+        f"secpal-int-{instance}-{name}.service"
+        for name in GENERATED_LOGICAL_NAMES
+    }
+    expected_dependencies = expected_generated_service_dependencies(
+        instance, logical_name
+    )
+    requires = (
+        set(str(properties.get("Requires", "")).split()) & generated_services
+    )
+    after = set(str(properties.get("After", "")).split()) & generated_services
     return bool(
-        isinstance(properties, dict)
-        and set(properties) == set(SERVICE_ACTIVATION_PROPERTIES)
+        set(properties) == set(SERVICE_ACTIVATION_PROPERTIES)
+        and requires == expected_dependencies
+        and after == expected_dependencies
         and service_config_environment_is_trusted(properties.get("Environment"))
         and service_environment_controls_are_trusted(
             properties.get("EnvironmentFiles"),
@@ -780,8 +824,109 @@ def service_runtime_controls_are_trusted(
     )
 
 
-def generated_service_activation_is_trusted(instance: str) -> bool:
+def expected_generated_service_dependencies(
+    instance: str,
+    logical_name: str,
+) -> set[str]:
+    if (
+        re.fullmatch(r"[0-9a-f]{12}", instance) is None
+        or logical_name not in GENERATED_LOGICAL_NAMES
+    ):
+        return set()
+    contract = ROLE_CONTRACTS.get(logical_name)
+    if contract is None:
+        return set()
+    dependencies = set(ROLE_PREDECESSORS.get(logical_name, ()))
+    dependencies.update(f"{network}-network" for network in contract.networks)
+    dependencies.update(f"{volume[0]}-volume" for volume in contract.volumes)
+    return {
+        f"secpal-int-{instance}-{dependency}.service"
+        for dependency in dependencies
+    }
+
+
+def generated_dependency_companions_are_absent(instance: str) -> bool:
     if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return False
+    status_code, output, bounded = command_result(
+        ["systemctl", "--user", "show", "--property=UnitPath"]
+    )
+    if (
+        status_code != 0
+        or not bounded
+        or not output.startswith("UnitPath=")
+        or "\n" in output
+        or len(output) > 65_536
+    ):
+        return False
+    raw_paths = output.removeprefix("UnitPath=")
+    path_values = raw_paths.split(" ") if raw_paths else []
+    if (
+        not path_values
+        or len(path_values) > 64
+        or " ".join(path_values) != raw_paths
+    ):
+        return False
+    roots: list[Path] = []
+    for value in path_values:
+        if (
+            len(value) > 4_096
+            or "\x00" in value
+            or re.fullmatch(r"/[A-Za-z0-9._@+/-]*", value) is None
+            or os.path.normpath(value) != value
+        ):
+            return False
+        root = Path(value)
+        if root in roots:
+            return False
+        roots.append(root)
+    prefix = f"secpal-int-{instance}"
+    for root in roots:
+        for logical_name in GENERATED_LOGICAL_NAMES:
+            service_name = f"{prefix}-{logical_name}.service"
+            for suffix in ("wants", "requires"):
+                try:
+                    (root / f"{service_name}.{suffix}").lstat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    return False
+                return False
+    return True
+
+
+def podman_network_online_activation_is_trusted() -> bool:
+    status_code, output, bounded = command_result(
+        [
+            "systemctl", "--user", "show", PODMAN_NETWORK_ONLINE_UNIT,
+            "--property=FragmentPath", "--property=DropInPaths",
+        ]
+    )
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" not in line:
+            return False
+        name, value = line.split("=", 1)
+        if name in properties:
+            return False
+        properties[name] = value
+    return bool(
+        status_code == 0
+        and bounded
+        and properties
+        == {
+            "FragmentPath": str(PODMAN_NETWORK_ONLINE_FRAGMENT),
+            "DropInPaths": "",
+        }
+    )
+
+
+def generated_service_activation_is_trusted(instance: str) -> bool:
+    if (
+        re.fullmatch(r"[0-9a-f]{12}", instance) is None
+        or not podman_network_online_activation_is_trusted()
+        or not generated_dependency_companions_are_absent(instance)
+    ):
         return False
     prefix = f"secpal-int-{instance}"
     for logical_name in GENERATED_LOGICAL_NAMES:
@@ -807,10 +952,48 @@ def generated_service_activation_is_trusted(instance: str) -> bool:
         if (
             status_code != 0
             or not bounded
-            or not service_runtime_controls_are_trusted(properties, logical_name)
+            or not service_runtime_controls_are_trusted(
+                properties, logical_name, instance
+            )
         ):
             return False
     return True
+
+
+def target_activation_is_trusted(instance: str) -> bool:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return False
+    prefix = f"secpal-int-{instance}"
+    target = f"{prefix}.target"
+    status_code, output, bounded = command_result(
+        [
+            "systemctl", "--user", "show", target,
+            "--property=FragmentPath", "--property=DropInPaths",
+            "--property=Wants", "--property=Requires",
+        ]
+    )
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" not in line:
+            return False
+        name, value = line.split("=", 1)
+        if name in properties:
+            return False
+        properties[name] = value
+    expected_requires = {
+        f"{prefix}-{role}.service" for role in TARGET_REQUIRED_ROLES
+    }
+    return bool(
+        status_code == 0
+        and bounded
+        and set(properties) == {
+            "FragmentPath", "DropInPaths", "Wants", "Requires",
+        }
+        and properties["FragmentPath"] == str(SYSTEMD_ROOT / target)
+        and properties["DropInPaths"] == ""
+        and properties["Wants"] == ""
+        and set(properties["Requires"].split()) == expected_requires
+    )
 
 
 def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
@@ -2995,8 +3178,10 @@ def workload_admission_failures(observations: object) -> list[str]:
     instance = observations.get("instance")
     try:
         names = expected_unit_names(str(instance))
+        gateway_port = expected_gateway_port(str(instance))
     except ValueError:
         names = ()
+        gateway_port = None
         failures.append("D1A_OBSERVATION_SCHEMA")
     units = live.get("installed_units")
     if not isinstance(units, list) or len(units) != 16 or {
@@ -3256,15 +3441,9 @@ def workload_admission_failures(observations: object) -> list[str]:
                 failures.append("D1A_CONTAINER_LIFECYCLE")
             published_ports = item.get("published_ports")
             if role == "gateway":
-                valid_ports = (
-                    isinstance(published_ports, list)
-                    and len(published_ports) == 1
-                    and re.fullmatch(
-                        r"127\.0\.0\.1:([1-9][0-9]{0,4}):8443/tcp",
-                        str(published_ports[0]),
-                    ) is not None
-                    and int(str(published_ports[0]).split(":", 2)[1]) <= 65535
-                )
+                valid_ports = published_ports == [
+                    f"127.0.0.1:{gateway_port}:8443/tcp"
+                ]
             else:
                 valid_ports = published_ports == []
             if not valid_ports:

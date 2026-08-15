@@ -6,16 +6,18 @@ SPDX-License-Identifier: CC0-1.0
 # Deployment architecture scope
 
 This document defines ownership and trust boundaries for the SecPal deployment
-reference. Phase B implements the test-only local integration subset, and
-Phase C supplies its reviewed API and frontend digests and is complete. Phase
-D has not started.
+reference. Phase B implemented the original test-only local integration
+subset, Phase C supplied its reviewed API and frontend digests, and D.1a moves
+the active disposable runtime to native rootless Podman and Quadlet. D.1 and
+D.1a do not implement a production deployment.
 
 ## Repository responsibilities
 
 This repository owns:
 
 - integration contracts;
-- the Phase B local Compose orchestration;
+- the active D.1a rootless Podman/Quadlet integration orchestration;
+- the historical Phase B local Compose orchestration and evidence;
 - service dependencies;
 - service roles and singleton contracts;
 - local health checks;
@@ -23,9 +25,9 @@ This repository owns:
 - integration-test documentation.
 
 The reviewed immutable API and frontend images are already consumed here.
-Later phases will add the public reference deployment, the selected production
-edge and CrowdSec, persistent-volume contracts, backup/restore, update/rollback,
-and production operator guidance.
+Later Phase-D work will add production persistence and secret contracts, the
+selected production edge and CrowdSec, backup/restore, update/rollback, and
+production operator guidance.
 
 ## Out of scope
 
@@ -72,27 +74,30 @@ The architecture separates the following trust zones:
   deployment trust domain.
 
 The API, frontend, workers, scheduler, PostgreSQL, and Valkey publish no ports.
-Only the gateway joins the host-access bridge; the product-facing edge and
-application networks remain internal. Production traffic and public exposure
-are not implemented.
+In the active D.1a runtime the API, frontend, and gateway share the internal
+edge network, but only the gateway publishes the controlled loopback fixture
+port. The application and edge networks remain separate and internal. The
+retained Compose evidence used its historical host-access bridge. Production
+traffic and public exposure are not implemented.
 
 ## Singleton invariants
 
-The Phase B orchestration contract enforces:
+Both the historical Phase B and active D.1a contracts enforce:
 
 ```text
 activity-hash-chain worker: exactly one
 scheduler: exactly one
 ```
 
-The general worker may be scaled deliberately. Explicit container names make
-Compose reject attempts to scale either singleton role; the integration script
-derives project-scoped names so parallel canonical runs remain isolated. The
+The historical Compose contract allowed deliberate general-worker scaling and
+used explicit container names to reject singleton scaling. The active closed
+Quadlet set generates one instance of each role with run-scoped names so
+parallel canonical runs remain isolated. The
 `worker-hash-chain` singleton consumes only `activity-hash-chain`.
 `worker-general` consumes `merkle`, `opentimestamp`, and `default` and has no
-fixed container name or singleton label. Migrations are an explicit `tools`
-profile operation and run exactly once in the integration script, never from
-an entrypoint or health check.
+singleton label. In D.1a migration is an explicit one-shot systemd dependency
+and runs exactly once. Only that unit selects the migration command; the shared
+runtime-preparation wrapper and every health check never initiate migration.
 
 ## Step A bootstrap contract
 
@@ -103,7 +108,7 @@ certificates, infrastructure-as-code, and deployment automation forbidden.
 
 ## Phase B local integration contract
 
-Phase B:
+This section is the historical completion record. Phase B:
 
 - consumes the API from one reviewed GHCR OCI index digest;
 - consumes the frontend only from its reviewed public OCI index digest after
@@ -132,10 +137,30 @@ GitHub-hosted Ubuntu in
 public TLS, CrowdSec, durable storage, backups, updates, and rollback remain
 outside Phase B.
 
+## Active D.1a integration contract
+
+The active runner retains the Phase B/C behavioral proof while replacing the
+execution layer with rootless Podman, native Quadlet-generated user services,
+and a native systemd user target. Both product images pass the same exact OCI
+index and fixed-publisher attestation gates before either image can execute;
+then their Quadlets use `Pull=never`.
+
+PostgreSQL and Valkey readiness gates the one-shot migration, successful
+migration gates API-based application roles, and healthy API/frontend gates
+the integration gateway. Runtime inspection proves `crun`, exact non-root
+identities, read-only roots, bounded writable paths, dropped capabilities,
+`no-new-privileges`, AppArmor when available, exact network membership, and
+the absence of unintended host ports or sockets. Cleanup addresses only the
+run's deterministic names and labels and verifies unrelated resources survive.
+The full service, security, lifecycle, and hosted-evidence contract is in
+[`../quadlet-integration.md`](../quadlet-integration.md).
+
 ## Configuration classes
 
-- **Public template:** `compose.yaml`, the test Caddyfile, and validation
-  scripts.
+- **Active integration definitions:** constrained generated Quadlets, a native
+  systemd user target, the test Caddyfile, and validation scripts.
+- **Historical template:** `compose.yaml` and its original runner remain Phase
+  B/C evidence, not the active runtime.
 - **Local user configuration:** none is required by the canonical test; no
   `.env` file is read.
 - **Secrets:** generated at runtime in the `local-secrets` volume, rolled back
@@ -143,7 +168,7 @@ outside Phase B.
   long-running services.
 - **Runtime state:** the temporary PostgreSQL and shared private-storage
   volumes plus per-container tmpfs mounts.
-- **Generated artifacts:** the project-scoped locally built gateway image and
+- **Generated artifacts:** the run-scoped locally built gateway image and
   disposable internal CA, both outside Git history and removed by the explicit
   integration test. The published API and frontend digests are never treated
   as local cleanup artifacts.

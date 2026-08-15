@@ -15,6 +15,7 @@ readonly API_DIGEST='sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455
 readonly API_SOURCE_COMMIT='87d1432389adac3a02574b399322928a77c5e67f'
 readonly GH_VERSION='2.97.0'
 readonly GH_LINUX_AMD64_SHA256='a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112'
+readonly GH_LINUX_ARM64_SHA256='73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5'
 
 failures=0
 
@@ -232,10 +233,13 @@ if [ -f .github/workflows/local-integration.yml ]; then
     'packages:[[:space:]]*write|attestations:[[:space:]]*write|id-token:[[:space:]]*write|docker/login-action|docker[[:space:]]+(login|push)|(^|[[:space:]])secrets\.' \
     "the hosted integration workflow must remain credential-free and publishing-free"
   require_text .github/workflows/local-integration.yml "GH_VERSION: \"$GH_VERSION\""
-  require_text .github/workflows/local-integration.yml "GH_LINUX_AMD64_SHA256: \"$GH_LINUX_AMD64_SHA256\""
+  require_text .github/workflows/local-integration.yml "gh_sha256: $GH_LINUX_AMD64_SHA256"
+  require_text .github/workflows/local-integration.yml "gh_sha256: $GH_LINUX_ARM64_SHA256"
   # Workflow environment interpolation is intentional literal contract text.
   # shellcheck disable=SC2016
-  require_text .github/workflows/local-integration.yml 'https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz'
+  require_text .github/workflows/local-integration.yml 'release="gh_${GH_VERSION}_linux_${GH_LINUX_ARCH}.tar.gz"'
+  # shellcheck disable=SC2016
+  require_text .github/workflows/local-integration.yml 'https://github.com/cli/cli/releases/download/v${GH_VERSION}/$release'
   require_text .github/workflows/local-integration.yml 'sha256sum --check --strict'
   # Workflow environment interpolation is intentional literal contract text.
   # shellcheck disable=SC2016
@@ -252,8 +256,8 @@ require_text docs/api-image-consumption.md 'not a deployment reference, rollback
 require_text docs/api-image-consumption.md 'requires a new reviewed deployment pull request'
 require_text docs/api-image-consumption.md 'Rollback also requires a new reviewed pull request'
 require_text docs/api-image-consumption.md 'Phase C is complete.'
-require_text docs/api-image-consumption.md 'Phase D has not started.'
-require_text docs/api-image-consumption.md 'Production host automation remains outside this'
+require_text docs/api-image-consumption.md 'At Phase C completion, Phase D had not started.'
+require_text docs/api-image-consumption.md 'No production orchestration'
 require_text README.md "$API_IMAGE"
 require_text README.md 'Phase C is complete.'
 require_text README.md 'The runner does not provide a GitHub token to bypass'

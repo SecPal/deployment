@@ -389,7 +389,7 @@ def valid_observations() -> dict[str, object]:
                     for index, status in enumerate(lifecycle_statuses, start=1)
                 ],
                 "networks": [f"{prefix}-{network}" for network in ROLE_NETWORKS[role]],
-                "published_ports": ["127.0.0.1:18443:8443/tcp"] if role == "gateway" else [],
+                "published_ports": ["127.0.0.1:51530:8443/tcp"] if role == "gateway" else [],
                 "auto_update": False,
                 "systemd_unit": f"{prefix}-{role}.service",
                 "container_cgroup": (
@@ -1656,6 +1656,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][-1].__setitem__(
+                "published_ports", ["127.0.0.1:18443:8443/tcp"]
+            ),
+            "D1A_PUBLISHED_PORTS",
+        )
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][-1].__setitem__(
                 "published_ports", []
             ),
             "D1A_PUBLISHED_PORTS",
@@ -2401,6 +2407,136 @@ class WorkloadEvidenceTests(unittest.TestCase):
             runner.index('bootstrap_stage="collector-post-cleanup"'),
         )
 
+    def test_target_activation_rejects_overrides_and_injected_dependencies(self) -> None:
+        instance = "aaaaaaaaaaaa"
+        prefix = f"secpal-int-{instance}"
+        required = " ".join(
+            f"{prefix}-{role}.service"
+            for role in ("gateway", "worker-general", "worker-hash-chain", "scheduler")
+        )
+        trusted = (
+            f"FragmentPath=/etc/systemd/user/{prefix}.target\n"
+            "DropInPaths=\nWants=\n"
+            f"Requires={required}\n"
+        )
+        for properties, expected in (
+            (trusted, True),
+            (trusted.replace("Wants=\n", "Wants=unreviewed.service\n"), False),
+            (trusted.replace("Requires=", "Requires=unreviewed.service "), False),
+            (trusted.replace("/etc/systemd/user", "/home/secpal-ci/.config/systemd/user"), False),
+        ):
+            with self.subTest(properties=properties), mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(0, properties, True),
+            ):
+                self.assertEqual(
+                    self.collector.target_activation_is_trusted(instance),
+                    expected,
+                )
+
+    def test_generated_service_dependency_companions_are_rejected(self) -> None:
+        instance = "aaaaaaaaaaaa"
+        with tempfile.TemporaryDirectory() as directory:
+            unit_root = Path(directory)
+            trusted = (0, f"UnitPath={unit_root}", True)
+            with mock.patch.object(
+                self.collector, "command_result", return_value=trusted
+            ):
+                self.assertTrue(
+                    self.collector.generated_dependency_companions_are_absent(
+                        instance
+                    )
+                )
+                for suffix in ("wants", "requires"):
+                    companion = unit_root / (
+                        f"secpal-int-aaaaaaaaaaaa-api.service.{suffix}"
+                    )
+                    companion.mkdir()
+                    with self.subTest(suffix=suffix):
+                        self.assertFalse(
+                            self.collector.generated_dependency_companions_are_absent(
+                                instance
+                            )
+                        )
+                    companion.rmdir()
+            for result in (
+                (1, "", True),
+                (0, "UnitPath=relative/path", True),
+                (0, f"UnitPath={unit_root} {unit_root}", True),
+            ):
+                with self.subTest(result=result), mock.patch.object(
+                    self.collector, "command_result", return_value=result
+                ):
+                    self.assertFalse(
+                        self.collector.generated_dependency_companions_are_absent(
+                            instance
+                        )
+                    )
+
+    def test_generated_service_dependencies_are_role_exact(self) -> None:
+        instance = "aaaaaaaaaaaa"
+        expected = self.collector.expected_generated_service_dependencies(
+            instance, "api"
+        )
+        dependencies = " ".join(sorted(expected))
+        properties = {
+            "Environment": (
+                "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
+                "CONTAINERS_CONF_MODULES= PODMAN_USERNS="
+            ),
+            "EnvironmentFiles": "",
+            "PassEnvironment": "",
+            "UnsetEnvironment": "",
+            "ExecCondition": "",
+            "ExecStartPre": "",
+            "ExecStart": "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }",
+            "ExecStartPost": "",
+            "ExecReload": "",
+            "ExecStop": "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm ; }",
+            "ExecStopPost": "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm ; }",
+            "Requires": dependencies,
+            "After": f"podman-user-wait-network-online.service {dependencies}",
+        }
+        self.assertTrue(
+            self.collector.service_runtime_controls_are_trusted(
+                properties, "api", instance
+            )
+        )
+        for name, value in (
+            ("Requires", ""),
+            ("After", "podman-user-wait-network-online.service"),
+            ("Requires", dependencies + " secpal-int-aaaaaaaaaaaa-frontend.service"),
+        ):
+            mutated = dict(properties)
+            mutated[name] = value
+            with self.subTest(name=name, value=value):
+                self.assertFalse(
+                    self.collector.service_runtime_controls_are_trusted(
+                        mutated, "api", instance
+                    )
+                )
+
+    def test_podman_network_online_unit_rejects_user_overrides(self) -> None:
+        trusted = (
+            "FragmentPath=/usr/lib/systemd/user/"
+            "podman-user-wait-network-online.service\nDropInPaths=\n"
+        )
+        for properties, expected in (
+            (trusted, True),
+            (trusted.replace("/usr/lib/systemd/user", "/home/user/.config/systemd/user"), False),
+            (trusted.replace("DropInPaths=", "DropInPaths=/home/user/override.conf"), False),
+        ):
+            with self.subTest(properties=properties), mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(0, properties, True),
+            ):
+                self.assertEqual(
+                    self.collector.podman_network_online_activation_is_trusted(),
+                    expected,
+                )
+
     def test_quadlet_normalization_uses_only_the_fixed_user_manager_contract(self) -> None:
         calls = []
         original_environment = "PATH=/target/bin\nATTACKER_VALUE=present\n"
@@ -2425,6 +2561,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "ExecStopPost={ path=/usr/bin/podman ; "
             "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
         )
+        target_properties = (
+            "FragmentPath=/etc/systemd/user/secpal-int-aaaaaaaaaaaa.target\n"
+            "DropInPaths=\nWants=\n"
+            "Requires=secpal-int-aaaaaaaaaaaa-gateway.service "
+            "secpal-int-aaaaaaaaaaaa-worker-general.service "
+            "secpal-int-aaaaaaaaaaaa-worker-hash-chain.service "
+            "secpal-int-aaaaaaaaaaaa-scheduler.service\n"
+        )
+        podman_network_online_properties = (
+            "FragmentPath=/usr/lib/systemd/user/"
+            "podman-user-wait-network-online.service\nDropInPaths=\n"
+        )
         environment_reads = 0
 
         def command_result(arguments, **kwargs):
@@ -2438,8 +2586,33 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     else trusted_environment
                 )
                 return 0, output, True
+            if arguments == [
+                "systemctl", "--user", "show", "--property=UnitPath",
+            ]:
+                return 0, (
+                    "UnitPath=/run/user/20000/systemd/user.control "
+                    "/etc/systemd/user"
+                ), True
             if arguments[:3] == ["systemctl", "--user", "show"]:
+                if arguments[3].endswith(".target"):
+                    return 0, target_properties, True
+                if arguments[3] == self.collector.PODMAN_NETWORK_ONLINE_UNIT:
+                    return 0, podman_network_online_properties, True
                 properties = service_properties
+                logical_name = arguments[3].removeprefix(
+                    "secpal-int-aaaaaaaaaaaa-"
+                ).removesuffix(".service")
+                dependencies = " ".join(
+                    sorted(
+                        self.collector.expected_generated_service_dependencies(
+                            "aaaaaaaaaaaa", logical_name
+                        )
+                    )
+                )
+                after = "podman-user-wait-network-online.service"
+                if dependencies:
+                    after += f" {dependencies}"
+                properties += f"Requires={dependencies}\nAfter={after}\n"
                 if any(
                     arguments[3].endswith(f"-{name}-network.service")
                     for name in ("application", "edge")
@@ -2509,6 +2682,20 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "XDG_RUNTIME_DIR=/run/user/20000",
                 ], {}),
                 (["systemctl", "--user", "daemon-reload"], {"timeout": 60}),
+                ([
+                    "systemctl", "--user", "show",
+                    "secpal-int-aaaaaaaaaaaa.target",
+                    "--property=FragmentPath", "--property=DropInPaths",
+                    "--property=Wants", "--property=Requires",
+                ], {}),
+                ([
+                    "systemctl", "--user", "show",
+                    "podman-user-wait-network-online.service",
+                    "--property=FragmentPath", "--property=DropInPaths",
+                ], {}),
+                ([
+                    "systemctl", "--user", "show", "--property=UnitPath",
+                ], {}),
                 *[
                     ([
                         "systemctl", "--user", "show",
@@ -2575,7 +2762,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "ExecStartPost={ path=/usr/bin/systemctl ; "
             "argv[]=/usr/bin/systemctl --user set-environment "
             "CONTAINERS_CONF=/tmp/target.conf ; }\n"
-            "ExecReload=\nExecStop=\nExecStopPost=\n"
+            "ExecReload=\n"
+            "ExecStop={ path=/usr/bin/podman ; "
+            "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
+            "ExecStopPost={ path=/usr/bin/podman ; "
+            "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
+            "Requires=secpal-int-aaaaaaaaaaaa-secrets-volume.service "
+            "secpal-int-aaaaaaaaaaaa-postgres-volume.service "
+            "secpal-int-aaaaaaaaaaaa-private-storage-volume.service\n"
+            "After=podman-user-wait-network-online.service "
+            "secpal-int-aaaaaaaaaaaa-secrets-volume.service "
+            "secpal-int-aaaaaaaaaaaa-postgres-volume.service "
+            "secpal-int-aaaaaaaaaaaa-private-storage-volume.service\n"
         )
 
         def command_result(arguments, **kwargs):
@@ -3019,6 +3217,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
             host_collection,
         )
         self.assertNotIn("write_incomplete_", runner)
+
+    def test_target_phases_restore_the_fixed_user_bus_environment(self) -> None:
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        helper = runner.split("run_target_phase()", 1)[1].split(
+            "run_target_host()", 1
+        )[0]
+        self.assertIn('[[ -S /run/user/20000/bus ]]', helper)
+        self.assertIn("XDG_RUNTIME_DIR=/run/user/20000", helper)
+        self.assertIn(
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
+            helper,
+        )
 
     def test_control_resource_ssh_operations_have_outer_deadlines(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")

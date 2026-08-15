@@ -24,8 +24,9 @@ rootless Podman and systemd/Quadlet. The historical Phase B/C Docker/Compose
 integration proves the service relationships, one scheduler, one
 `activity-hash-chain` worker, and explicit one-shot migration role. D.1 does
 not claim Podman integration parity; [D.1a (#20)](https://github.com/SecPal/deployment/issues/20)
-owns that migration and proof before
-D.2 builds production state handling on the new runtime.
+now owns the separate disposable migration and parity proof before D.2 builds
+production state handling on the new runtime. The D.1 host contract itself
+still makes no runtime-parity claim.
 
 Multi-host and high availability are deferred and unsupported by schema
 version 1. Kubernetes, clustering, multi-region operation, automatic failover,
@@ -107,10 +108,11 @@ kernel supports AppArmor; admission still requires the effective AppArmor LSM
 to be enabled, at least one loaded profile to be in enforce mode, and the
 enforcing-profile count not to exceed the loaded-profile count. A future
 collector derives those
-counts from effective AppArmor status, not package presence. D.1a must later
-prove the profile applied to each SecPal workload; D.1 does not claim workload
-enforcement before those units exist. Seccomp must be reported as available to
-Podman from effective runtime facts rather than inferred from installation.
+counts from effective AppArmor status, not package presence. D.1a inspects the
+effective profile of each disposable integration workload when AppArmor is
+available; D.1 itself still does not claim production workload enforcement.
+Seccomp must be reported as available to Podman from effective runtime facts
+rather than inferred from installation.
 
 ## Operating-system lifecycle
 
@@ -238,10 +240,11 @@ unit content retains the stated root ownership and modes; its tree-wide access
 facts must prove that the service account cannot mutate any entry. A future
 collector must inspect the effective generator environment and dry-run output
 rather than accept an empty user directory as proof. This uses Podman 5.4.2's
-documented search-path restriction and administrator-managed rootless-user path. Later
-D.1a (#20)/D.8 work must keep the search-path policy, unit files, and drop-ins
-root-owned so a product process cannot rewrite its future production
-definition. D.1 defines only this capability and does not add Quadlet files.
+documented search-path restriction and administrator-managed rootless-user path. D.1a
+keeps its disposable active Quadlets root-owned, and later D.8 work must keep
+the search-path policy, production unit files, and drop-ins root-owned so a
+product process cannot rewrite its definition. D.1 defines only this
+capability and does not add production Quadlet files.
 
 The rootless network contract is Netavark with Aardvark DNS and `pasta` from
 Debian packages. Host networking is forbidden. D.1 does not change

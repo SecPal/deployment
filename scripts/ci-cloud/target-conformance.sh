@@ -50,16 +50,20 @@ for forbidden_name in \
   fi
 done
 
-if [[ "$phase" != host ]]; then
-  printf 'ERROR: this target does not implement the fixed D.1a lifecycle phase.\n' >&2
-  exit 64
-fi
-
-timeout --signal=TERM --kill-after=15s 8m \
-  python3 tests/production-contract-regressions.py
-timeout --signal=TERM --kill-after=15s 8m \
-  python3 tests/production-inventory-contract.py
-timeout --signal=TERM --kill-after=15s 3m \
-  bash tests/production-host-contract.sh
-
-printf 'Exact target SHA completed the bounded production-host contract suite.\n'
+case "$phase" in
+  workload-prepare-start)
+    python3 scripts/quadlet-integration.py --cloud-phase prepare
+    ;;
+  workload-cleanup)
+    python3 scripts/quadlet-integration.py --cloud-phase cleanup
+    ;;
+  host)
+    timeout --signal=TERM --kill-after=15s 8m \
+      python3 tests/production-contract-regressions.py
+    timeout --signal=TERM --kill-after=15s 8m \
+      python3 tests/production-inventory-contract.py
+    timeout --signal=TERM --kill-after=15s 3m \
+      bash tests/production-host-contract.sh
+    printf 'Exact target SHA completed the bounded production-host contract suite.\n'
+    ;;
+esac
