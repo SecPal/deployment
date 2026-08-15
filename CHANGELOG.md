@@ -91,6 +91,10 @@ SPDX-License-Identifier: CC0-1.0
   cloud hosts so D.1a runtime admission no longer fails before image staging
   because the required init binary is missing. The local integration runtime
   continues to require the same component.
+- Corrected the disposable cloud host's root-owned Quadlet search-path policy
+  filename to match the exact target admission path after DigitalOcean Intel
+  run `31913150786` exposed the mismatch following successful `catatonit`
+  admission.
 - Cloud target-phase failures now retain one bounded diagnostic summary with
   the last closed runtime, attestation, dependency-image, gateway, Quadlet,
   host, or cleanup stage plus a closed failure reason and optional command

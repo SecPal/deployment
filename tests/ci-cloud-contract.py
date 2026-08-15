@@ -140,6 +140,13 @@ class CloudCIContractTests(unittest.TestCase):
             bootstrap,
         )
 
+    def test_static_contract_rejects_unadmitted_quadlet_policy_path(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "/etc/environment.d/90-secpal-quadlet.conf",
+            "/etc/environment.d/90-secpal-ci-quadlet.conf",
+        )
+
     def test_native_bootstrap_reboots_once_into_authenticated_current_kernel(
         self,
     ) -> None:

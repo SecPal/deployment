@@ -865,6 +865,8 @@ AllowUsers secpal-ci"""
         "#clear Unattended-Upgrade::Origins-Pattern;",
         "#clear Unattended-Upgrade::Package-Blacklist;",
         "Unattended-Upgrade::Automatic-Reboot \"false\";",
+        "cat > /etc/environment.d/90-secpal-quadlet.conf "
+        "<<'SECPAL_QUADLET'",
         "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000",
         "secpal-ci-configure-conformance-host",
         "secpal-ci-host-setup-failure",
