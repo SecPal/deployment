@@ -806,6 +806,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             "CONTAINERS_REGISTRIES_CONF_DIR",
             "CONTAINERS_STORAGE_CONF",
             "CONTAINERS_POLICY",
+            "SYSTEMD_UNIT_PATH",
         ):
             with self.subTest(environment=name), self.assertRaises(self.module.IntegrationError):
                 self.module.validate_runtime_info(
@@ -2097,6 +2098,21 @@ class QuadletLifecycleContract(unittest.TestCase):
             self.assertNotIn("secpal-int-contract01-migrate", removed)
             self.assertNotIn("secpal-int-contract01-postgres", removed)
             self.assertNotIn("secpal-int-contract01-valkey", removed)
+            self.assertIn(
+                (
+                    "systemctl",
+                    "--user",
+                    "stop",
+                    "--job-mode=ignore-dependencies",
+                    "secpal-int-contract01-api.service",
+                    "secpal-int-contract01-worker-general.service",
+                    "secpal-int-contract01-worker-hash-chain.service",
+                    "secpal-int-contract01-scheduler.service",
+                    "secpal-int-contract01-frontend.service",
+                    "secpal-int-contract01-gateway.service",
+                ),
+                runner.commands,
+            )
             self.assertEqual(lifecycle.migration_invocation, invocation)
             self.assertIsNone(lifecycle.port)
             self.assertFalse(output.exists())
@@ -2415,35 +2431,122 @@ class QuadletLifecycleContract(unittest.TestCase):
 
     def test_effective_systemd_units_reject_override_fragments_and_dropins(self) -> None:
         fragment = "/run/user/1000/systemd/generator/secpal-int-contract01-api.service"
-        allowed_dependencies = {
-            "secpal-int-contract01-api.service",
-            "secpal-int-contract01-application-network.service",
-            "podman-user-wait-network-online.service",
+        generated_services = {
+            f"secpal-int-contract01-{name}.service"
+            for name in self.module.GENERATED_LOGICAL_NAMES
         }
+        expected_dependencies = self.module.expected_generated_service_dependencies(
+            "secpal-int-contract01", "api"
+        )
+        dependencies = " ".join(sorted(expected_dependencies))
         self.module.validate_effective_systemd_unit(
             f"FragmentPath={fragment}\nDropInPaths=\n"
-            "Wants=podman-user-wait-network-online.service\n"
-            "Requires=secpal-int-contract01-application-network.service\n",
+            f"Requires={dependencies}\n"
+            f"After=podman-user-wait-network-online.service {dependencies}\n",
             Path(fragment),
-            allowed_dependencies,
+            generated_services,
+            expected_dependencies,
         )
         for properties in (
             "FragmentPath=/home/user/.config/systemd/user/"
-            "secpal-int-contract01-api.service\nDropInPaths=\nWants=\nRequires=\n",
+            "secpal-int-contract01-api.service\nDropInPaths=\n"
+            f"Requires={dependencies}\nAfter={dependencies}\n",
             f"FragmentPath={fragment}\nDropInPaths=/home/user/.config/systemd/user/"
-            "secpal-int-contract01-api.service.d/override.conf\nWants=\nRequires=\n",
+            "secpal-int-contract01-api.service.d/override.conf\n"
+            f"Requires={dependencies}\nAfter={dependencies}\n",
             f"FragmentPath={fragment}\n",
+            f"FragmentPath={fragment}\nDropInPaths=\nRequires=\n"
+            f"After={dependencies}\n",
             f"FragmentPath={fragment}\nDropInPaths=\n"
-            "Wants=unreviewed.service\nRequires=\n",
-            f"FragmentPath={fragment}\nDropInPaths=\nWants=\n"
-            "Requires=unreviewed.service\n",
+            f"Requires={dependencies}\nAfter=\n",
+            f"FragmentPath={fragment}\nDropInPaths=\n"
+            f"Requires={dependencies} secpal-int-contract01-frontend.service\n"
+            f"After={dependencies}\n",
         ):
             with self.subTest(properties=properties), self.assertRaises(
                 self.module.IntegrationError
             ):
                 self.module.validate_effective_systemd_unit(
-                    properties, Path(fragment), allowed_dependencies
+                    properties,
+                    Path(fragment),
+                    generated_services,
+                    expected_dependencies,
                 )
+
+    def test_resource_evidence_never_reads_global_podman_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+            )
+            commands = []
+
+            def command(arguments, **_kwargs):
+                argv = tuple(arguments)
+                commands.append(argv)
+                if argv[:2] == ("podman", "stats"):
+                    return subprocess.CompletedProcess(argv, 0, "[]", "")
+                if argv[:3] == ("systemctl", "--user", "show"):
+                    return subprocess.CompletedProcess(
+                        argv,
+                        0,
+                        "CPUUsageNSec=1\nMemoryCurrent=2\nMemoryPeak=3\n",
+                        "",
+                    )
+                if argv[:3] == ("podman", "volume", "inspect"):
+                    return subprocess.CompletedProcess(argv, 1, "", "")
+                if argv[:3] == ("podman", "image", "inspect"):
+                    return subprocess.CompletedProcess(argv, 0, "123\n", "")
+                raise AssertionError(f"unexpected resource command: {argv}")
+
+            with mock.patch.object(
+                lifecycle, "command", side_effect=command
+            ), mock.patch("builtins.print"):
+                lifecycle.collect_resource_evidence()
+
+            evidence = json.loads(
+                (fixture / "resource-observations.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn("podman_storage", evidence)
+            self.assertFalse(
+                any(argv[:3] == ("podman", "system", "df") for argv in commands)
+            )
+
+    def test_generated_service_dependency_companions_are_rejected(self) -> None:
+        unit = "secpal-int-contract01-api.service"
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "user.control"
+            second = Path(directory) / "user"
+            first.mkdir()
+            second.mkdir()
+            unit_paths = f"UnitPath={first} {second}"
+            self.module.validate_no_dependency_companions(unit_paths, {unit})
+            for suffix in ("wants", "requires"):
+                companion = second / f"{unit}.{suffix}"
+                companion.mkdir()
+                with self.subTest(suffix=suffix), self.assertRaises(
+                    self.module.IntegrationError
+                ):
+                    self.module.validate_no_dependency_companions(
+                        unit_paths, {unit}
+                    )
+                companion.rmdir()
+            for malformed in (
+                "",
+                "UnitPath=relative/path",
+                f"UnitPath={first} {first}",
+            ):
+                with self.subTest(unit_paths=malformed), self.assertRaises(
+                    self.module.IntegrationError
+                ):
+                    self.module.validate_no_dependency_companions(
+                        malformed, {unit}
+                    )
 
     def test_podman_network_online_unit_rejects_user_overrides(self) -> None:
         fragment = "/usr/lib/systemd/user/podman-user-wait-network-online.service"

@@ -56,6 +56,16 @@ GENERATED_LOGICAL_NAMES = (
     *(f"{kind}-network" for kind in NETWORK_KINDS),
     *(f"{kind}-volume" for kind in VOLUME_KINDS),
 )
+ROLE_PREDECESSORS = {
+    "postgres": ("secrets-init",),
+    "valkey": ("secrets-init",),
+    "migrate": ("postgres", "valkey"),
+    "api": ("migrate",),
+    "worker-general": ("migrate",),
+    "worker-hash-chain": ("migrate",),
+    "scheduler": ("migrate",),
+    "gateway": ("api", "frontend"),
+}
 TARGET_REQUIRED_ROLES = (
     "gateway", "worker-general", "worker-hash-chain", "scheduler",
 )
@@ -87,8 +97,8 @@ SERVICE_ACTIVATION_PROPERTIES = (
     "ExecReload",
     "ExecStop",
     "ExecStopPost",
-    "Wants",
     "Requires",
+    "After",
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
@@ -778,18 +788,25 @@ def direct_podman_exec_start(value: object, logical_name: str) -> bool:
 def service_runtime_controls_are_trusted(
     properties: object,
     logical_name: str,
-    allowed_dependencies: set[str],
+    instance: str,
 ) -> bool:
-    dependencies = set()
-    if isinstance(properties, dict):
-        wants = properties.get("Wants")
-        requires = properties.get("Requires")
-        if isinstance(wants, str) and isinstance(requires, str):
-            dependencies = set(wants.split()) | set(requires.split())
+    if not isinstance(properties, dict):
+        return False
+    generated_services = {
+        f"secpal-int-{instance}-{name}.service"
+        for name in GENERATED_LOGICAL_NAMES
+    }
+    expected_dependencies = expected_generated_service_dependencies(
+        instance, logical_name
+    )
+    requires = (
+        set(str(properties.get("Requires", "")).split()) & generated_services
+    )
+    after = set(str(properties.get("After", "")).split()) & generated_services
     return bool(
-        isinstance(properties, dict)
-        and set(properties) == set(SERVICE_ACTIVATION_PROPERTIES)
-        and dependencies <= allowed_dependencies
+        set(properties) == set(SERVICE_ACTIVATION_PROPERTIES)
+        and requires == expected_dependencies
+        and after == expected_dependencies
         and service_config_environment_is_trusted(properties.get("Environment"))
         and service_environment_controls_are_trusted(
             properties.get("EnvironmentFiles"),
@@ -805,6 +822,77 @@ def service_runtime_controls_are_trusted(
         )
         and direct_podman_exec_start(properties.get("ExecStart"), logical_name)
     )
+
+
+def expected_generated_service_dependencies(
+    instance: str,
+    logical_name: str,
+) -> set[str]:
+    if (
+        re.fullmatch(r"[0-9a-f]{12}", instance) is None
+        or logical_name not in GENERATED_LOGICAL_NAMES
+    ):
+        return set()
+    contract = ROLE_CONTRACTS.get(logical_name)
+    if contract is None:
+        return set()
+    dependencies = set(ROLE_PREDECESSORS.get(logical_name, ()))
+    dependencies.update(f"{network}-network" for network in contract.networks)
+    dependencies.update(f"{volume[0]}-volume" for volume in contract.volumes)
+    return {
+        f"secpal-int-{instance}-{dependency}.service"
+        for dependency in dependencies
+    }
+
+
+def generated_dependency_companions_are_absent(instance: str) -> bool:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return False
+    status_code, output, bounded = command_result(
+        ["systemctl", "--user", "show", "--property=UnitPath"]
+    )
+    if (
+        status_code != 0
+        or not bounded
+        or not output.startswith("UnitPath=")
+        or "\n" in output
+        or len(output) > 65_536
+    ):
+        return False
+    raw_paths = output.removeprefix("UnitPath=")
+    path_values = raw_paths.split(" ") if raw_paths else []
+    if (
+        not path_values
+        or len(path_values) > 64
+        or " ".join(path_values) != raw_paths
+    ):
+        return False
+    roots: list[Path] = []
+    for value in path_values:
+        if (
+            len(value) > 4_096
+            or "\x00" in value
+            or re.fullmatch(r"/[A-Za-z0-9._@+/-]*", value) is None
+            or os.path.normpath(value) != value
+        ):
+            return False
+        root = Path(value)
+        if root in roots:
+            return False
+        roots.append(root)
+    prefix = f"secpal-int-{instance}"
+    for root in roots:
+        for logical_name in GENERATED_LOGICAL_NAMES:
+            service_name = f"{prefix}-{logical_name}.service"
+            for suffix in ("wants", "requires"):
+                try:
+                    (root / f"{service_name}.{suffix}").lstat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    return False
+                return False
+    return True
 
 
 def podman_network_online_activation_is_trusted() -> bool:
@@ -837,13 +925,10 @@ def generated_service_activation_is_trusted(instance: str) -> bool:
     if (
         re.fullmatch(r"[0-9a-f]{12}", instance) is None
         or not podman_network_online_activation_is_trusted()
+        or not generated_dependency_companions_are_absent(instance)
     ):
         return False
     prefix = f"secpal-int-{instance}"
-    allowed_dependencies = {
-        f"{prefix}-{logical_name}.service"
-        for logical_name in GENERATED_LOGICAL_NAMES
-    } | {PODMAN_NETWORK_ONLINE_UNIT}
     for logical_name in GENERATED_LOGICAL_NAMES:
         if not quadlet_source_execution_controls_are_trusted(
             instance, logical_name
@@ -868,7 +953,7 @@ def generated_service_activation_is_trusted(instance: str) -> bool:
             status_code != 0
             or not bounded
             or not service_runtime_controls_are_trusted(
-                properties, logical_name, allowed_dependencies
+                properties, logical_name, instance
             )
         ):
             return False

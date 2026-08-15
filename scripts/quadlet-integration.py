@@ -93,7 +93,33 @@ FORBIDDEN_RUNTIME_ENVIRONMENT = (
     "CONTAINERS_REGISTRIES_CONF_DIR",
     "CONTAINERS_STORAGE_CONF",
     "CONTAINERS_POLICY",
+    "SYSTEMD_UNIT_PATH",
 )
+GENERATED_LOGICAL_NAMES = (
+    *CONTAINER_ROLES,
+    *(f"{name}-network" for name in INTERNAL_NETWORKS),
+    *(f"{name}-volume" for name in VOLUME_NAMES),
+)
+ROLE_PREDECESSORS = {
+    "postgres": ("secrets-init",),
+    "valkey": ("secrets-init",),
+    "migrate": ("postgres", "valkey"),
+    "api": ("migrate",),
+    "worker-general": ("migrate",),
+    "worker-hash-chain": ("migrate",),
+    "scheduler": ("migrate",),
+    "gateway": ("api", "frontend"),
+}
+ROLE_VOLUME_DEPENDENCIES = {
+    "secrets-init": ("secrets", "postgres", "private-storage"),
+    "postgres": ("secrets", "postgres"),
+    "valkey": ("secrets",),
+    "migrate": ("secrets", "private-storage"),
+    "api": ("secrets", "private-storage"),
+    "worker-general": ("secrets", "private-storage"),
+    "worker-hash-chain": ("secrets", "private-storage"),
+    "scheduler": ("secrets", "private-storage"),
+}
 CLOUD_FIXTURE_CLIENT = Path("/usr/local/bin/secpal-ci-quadlet-fixture")
 CLOUD_FIXTURE_BASE = Path("/home/secpal-ci/quadlet-fixture")
 CLOUD_OPERATOR_UID = 20_000
@@ -761,7 +787,8 @@ def validate_removed_systemd_unit_state(properties: str) -> None:
 def validate_effective_systemd_unit(
     properties: str,
     expected_fragment: Path,
-    allowed_dependencies: set[str],
+    generated_services: set[str],
+    expected_dependencies: set[str],
 ) -> None:
     values: dict[str, str] = {}
     for line in properties.splitlines():
@@ -771,17 +798,94 @@ def validate_effective_systemd_unit(
         if name in values:
             raise IntegrationError("effective systemd unit identity is malformed")
         values[name] = value
-    if set(values) != {"FragmentPath", "DropInPaths", "Wants", "Requires"}:
+    if set(values) != {"FragmentPath", "DropInPaths", "Requires", "After"}:
         raise IntegrationError("effective systemd unit identity is malformed")
-    dependencies = set(values["Wants"].split()) | set(values["Requires"].split())
+    requires = set(values["Requires"].split()) & generated_services
+    after = set(values["After"].split()) & generated_services
     if (
         values["FragmentPath"] != os.fspath(expected_fragment)
         or values["DropInPaths"]
-        or not dependencies <= allowed_dependencies
+        or requires != expected_dependencies
+        or after != expected_dependencies
     ):
         raise IntegrationError(
-            "effective systemd unit differs from the reviewed dependency contract"
+            "effective systemd unit differs from the reviewed contract"
         )
+
+
+def expected_generated_service_dependencies(
+    prefix: str,
+    logical_name: str,
+) -> set[str]:
+    if logical_name not in GENERATED_LOGICAL_NAMES:
+        raise IntegrationError("generated systemd service name is malformed")
+    if logical_name not in CONTAINER_ROLES:
+        return set()
+    dependencies = set(ROLE_PREDECESSORS.get(logical_name, ()))
+    dependencies.update(
+        f"{network}-network"
+        for network in role_spec(logical_name).networks
+        if network != "none"
+    )
+    dependencies.update(
+        f"{volume}-volume"
+        for volume in ROLE_VOLUME_DEPENDENCIES.get(logical_name, ())
+    )
+    return {f"{prefix}-{dependency}.service" for dependency in dependencies}
+
+
+def validate_no_dependency_companions(
+    unit_path_property: str,
+    service_names: set[str],
+) -> None:
+    if (
+        not unit_path_property.startswith("UnitPath=")
+        or "\n" in unit_path_property
+        or len(unit_path_property) > 65_536
+    ):
+        raise IntegrationError("systemd user unit search path is malformed")
+    raw_paths = unit_path_property.removeprefix("UnitPath=")
+    path_values = raw_paths.split(" ") if raw_paths else []
+    if (
+        not path_values
+        or len(path_values) > 64
+        or " ".join(path_values) != raw_paths
+    ):
+        raise IntegrationError("systemd user unit search path is malformed")
+    roots: list[Path] = []
+    for value in path_values:
+        if (
+            len(value) > 4_096
+            or "\x00" in value
+            or SAFE_PATH_PATTERN.fullmatch(value) is None
+            or os.path.normpath(value) != value
+        ):
+            raise IntegrationError("systemd user unit search path is malformed")
+        root = Path(value)
+        if root in roots:
+            raise IntegrationError("systemd user unit search path is malformed")
+        roots.append(root)
+    if not service_names or any(
+        re.fullmatch(r"secpal-int-[a-z0-9]{8,24}-[a-z0-9-]+\.service", name)
+        is None
+        for name in service_names
+    ):
+        raise IntegrationError("generated systemd service name is malformed")
+    for root in roots:
+        for service_name in service_names:
+            for suffix in ("wants", "requires"):
+                companion = root / f"{service_name}.{suffix}"
+                try:
+                    companion.lstat()
+                except FileNotFoundError:
+                    continue
+                except OSError as error:
+                    raise IntegrationError(
+                        "unable to inspect systemd dependency companions"
+                    ) from error
+                raise IntegrationError(
+                    "generated systemd service has a dependency companion"
+                )
 
 
 def validate_podman_network_online_unit(properties: str) -> None:
@@ -2090,6 +2194,7 @@ class IntegrationLifecycle:
         )
         self.command(["systemctl", "--user", "daemon-reload"])
         generator_root = Path(f"/run/user/{self.uid}/systemd/generator")
+        generated_services = generated_service_names(self.resources)
         validate_podman_network_online_unit(
             self.captured(
                 [
@@ -2122,11 +2227,17 @@ class IntegrationLifecycle:
                 for role in TARGET_REQUIRED_ROLES
             },
         )
-        generated_services = generated_service_names(self.resources)
-        allowed_dependencies = set(generated_services) | {
-            PODMAN_NETWORK_ONLINE_UNIT
-        }
+        validate_no_dependency_companions(
+            self.captured(
+                ["systemctl", "--user", "show", "--property=UnitPath"]
+            ),
+            set(generated_services),
+        )
+        generated_service_set = set(generated_services)
         for unit in generated_services:
+            logical_name = unit.removeprefix(f"{self.resources.prefix}-").removesuffix(
+                ".service"
+            )
             properties = self.captured(
                 [
                     "systemctl",
@@ -2135,12 +2246,17 @@ class IntegrationLifecycle:
                     unit,
                     "--property=FragmentPath",
                     "--property=DropInPaths",
-                    "--property=Wants",
                     "--property=Requires",
+                    "--property=After",
                 ]
             )
             validate_effective_systemd_unit(
-                properties, generator_root / unit, allowed_dependencies
+                properties,
+                generator_root / unit,
+                generated_service_set,
+                expected_generated_service_dependencies(
+                    self.resources.prefix, logical_name
+                ),
             )
         for role in (
             item for item in CONTAINER_ROLES if role_spec(item).health is not None
@@ -2301,7 +2417,15 @@ class IntegrationLifecycle:
             "gateway",
         )
         services = [f"{self.resources.prefix}-{role}.service" for role in retry_roles]
-        self.command(["systemctl", "--user", "stop", *services])
+        self.command(
+            [
+                "systemctl",
+                "--user",
+                "stop",
+                "--job-mode=ignore-dependencies",
+                *services,
+            ]
+        )
         for role in reversed(retry_roles):
             name = f"{self.resources.prefix}-{role}"
             details = _inspect_resource(self.runner, "container", name)
@@ -3132,16 +3256,6 @@ class IntegrationLifecycle:
                 if values:
                     systemd_resources[role] = values
         observations["systemd_user_resources"] = systemd_resources
-        storage = self.command(
-            ["podman", "system", "df", "--format", "json"],
-            capture=True,
-            check=False,
-        )
-        if storage.returncode == 0:
-            try:
-                observations["podman_storage"] = json.loads(storage.stdout or "[]")
-            except json.JSONDecodeError:
-                observations["podman_storage"] = "unavailable"
         observations["fixture_bytes"] = directory_size(self.fixture_root)
         volume_sizes: dict[str, int | str] = {}
         for name in self.resources.volumes:
@@ -3376,12 +3490,10 @@ def is_integration_resource_name(kind: str, name: str) -> bool:
 
 
 def generated_service_names(resources: Resources) -> list[str]:
-    services = [f"{resources.prefix}-{role}.service" for role in CONTAINER_ROLES]
-    services.extend(
-        f"{resources.prefix}-{name}-network.service" for name in INTERNAL_NETWORKS
-    )
-    services.extend(f"{resources.prefix}-{name}-volume.service" for name in VOLUME_NAMES)
-    return services
+    return [
+        f"{resources.prefix}-{logical_name}.service"
+        for logical_name in GENERATED_LOGICAL_NAMES
+    ]
 
 
 def allocate_port() -> int:

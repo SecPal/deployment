@@ -2435,9 +2435,51 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     expected,
                 )
 
-    def test_generated_service_activation_rejects_injected_dependencies(self) -> None:
+    def test_generated_service_dependency_companions_are_rejected(self) -> None:
         instance = "aaaaaaaaaaaa"
-        prefix = f"secpal-int-{instance}"
+        with tempfile.TemporaryDirectory() as directory:
+            unit_root = Path(directory)
+            trusted = (0, f"UnitPath={unit_root}", True)
+            with mock.patch.object(
+                self.collector, "command_result", return_value=trusted
+            ):
+                self.assertTrue(
+                    self.collector.generated_dependency_companions_are_absent(
+                        instance
+                    )
+                )
+                for suffix in ("wants", "requires"):
+                    companion = unit_root / (
+                        f"secpal-int-aaaaaaaaaaaa-api.service.{suffix}"
+                    )
+                    companion.mkdir()
+                    with self.subTest(suffix=suffix):
+                        self.assertFalse(
+                            self.collector.generated_dependency_companions_are_absent(
+                                instance
+                            )
+                        )
+                    companion.rmdir()
+            for result in (
+                (1, "", True),
+                (0, "UnitPath=relative/path", True),
+                (0, f"UnitPath={unit_root} {unit_root}", True),
+            ):
+                with self.subTest(result=result), mock.patch.object(
+                    self.collector, "command_result", return_value=result
+                ):
+                    self.assertFalse(
+                        self.collector.generated_dependency_companions_are_absent(
+                            instance
+                        )
+                    )
+
+    def test_generated_service_dependencies_are_role_exact(self) -> None:
+        instance = "aaaaaaaaaaaa"
+        expected = self.collector.expected_generated_service_dependencies(
+            instance, "api"
+        )
+        dependencies = " ".join(sorted(expected))
         properties = {
             "Environment": (
                 "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
@@ -2448,35 +2490,32 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "UnsetEnvironment": "",
             "ExecCondition": "",
             "ExecStartPre": "",
-            "ExecStart": (
-                "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }"
-            ),
+            "ExecStart": "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }",
             "ExecStartPost": "",
             "ExecReload": "",
-            "ExecStop": (
-                "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm -v -f -i ; }"
-            ),
-            "ExecStopPost": (
-                "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm -v -f -i ; }"
-            ),
-            "Wants": "podman-user-wait-network-online.service",
-            "Requires": f"{prefix}-application-network.service",
+            "ExecStop": "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm ; }",
+            "ExecStopPost": "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm ; }",
+            "Requires": dependencies,
+            "After": f"podman-user-wait-network-online.service {dependencies}",
         }
-        allowed = {
-            f"{prefix}-{logical_name}.service"
-            for logical_name in self.collector.GENERATED_LOGICAL_NAMES
-        } | {self.collector.PODMAN_NETWORK_ONLINE_UNIT}
         self.assertTrue(
             self.collector.service_runtime_controls_are_trusted(
-                properties, "api", allowed
+                properties, "api", instance
             )
         )
-        properties["Wants"] = "unreviewed.service"
-        self.assertFalse(
-            self.collector.service_runtime_controls_are_trusted(
-                properties, "api", allowed
-            )
-        )
+        for name, value in (
+            ("Requires", ""),
+            ("After", "podman-user-wait-network-online.service"),
+            ("Requires", dependencies + " secpal-int-aaaaaaaaaaaa-frontend.service"),
+        ):
+            mutated = dict(properties)
+            mutated[name] = value
+            with self.subTest(name=name, value=value):
+                self.assertFalse(
+                    self.collector.service_runtime_controls_are_trusted(
+                        mutated, "api", instance
+                    )
+                )
 
     def test_podman_network_online_unit_rejects_user_overrides(self) -> None:
         trusted = (
@@ -2521,7 +2560,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
             "ExecStopPost={ path=/usr/bin/podman ; "
             "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
-            "Wants=podman-user-wait-network-online.service\nRequires=\n"
         )
         target_properties = (
             "FragmentPath=/etc/systemd/user/secpal-int-aaaaaaaaaaaa.target\n"
@@ -2548,12 +2586,33 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     else trusted_environment
                 )
                 return 0, output, True
+            if arguments == [
+                "systemctl", "--user", "show", "--property=UnitPath",
+            ]:
+                return 0, (
+                    "UnitPath=/run/user/20000/systemd/user.control "
+                    "/etc/systemd/user"
+                ), True
             if arguments[:3] == ["systemctl", "--user", "show"]:
                 if arguments[3].endswith(".target"):
                     return 0, target_properties, True
                 if arguments[3] == self.collector.PODMAN_NETWORK_ONLINE_UNIT:
                     return 0, podman_network_online_properties, True
                 properties = service_properties
+                logical_name = arguments[3].removeprefix(
+                    "secpal-int-aaaaaaaaaaaa-"
+                ).removesuffix(".service")
+                dependencies = " ".join(
+                    sorted(
+                        self.collector.expected_generated_service_dependencies(
+                            "aaaaaaaaaaaa", logical_name
+                        )
+                    )
+                )
+                after = "podman-user-wait-network-online.service"
+                if dependencies:
+                    after += f" {dependencies}"
+                properties += f"Requires={dependencies}\nAfter={after}\n"
                 if any(
                     arguments[3].endswith(f"-{name}-network.service")
                     for name in ("application", "edge")
@@ -2634,6 +2693,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "podman-user-wait-network-online.service",
                     "--property=FragmentPath", "--property=DropInPaths",
                 ], {}),
+                ([
+                    "systemctl", "--user", "show", "--property=UnitPath",
+                ], {}),
                 *[
                     ([
                         "systemctl", "--user", "show",
@@ -2700,7 +2762,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "ExecStartPost={ path=/usr/bin/systemctl ; "
             "argv[]=/usr/bin/systemctl --user set-environment "
             "CONTAINERS_CONF=/tmp/target.conf ; }\n"
-            "ExecReload=\nExecStop=\nExecStopPost=\nWants=\nRequires=\n"
+            "ExecReload=\n"
+            "ExecStop={ path=/usr/bin/podman ; "
+            "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
+            "ExecStopPost={ path=/usr/bin/podman ; "
+            "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
+            "Requires=secpal-int-aaaaaaaaaaaa-secrets-volume.service "
+            "secpal-int-aaaaaaaaaaaa-postgres-volume.service "
+            "secpal-int-aaaaaaaaaaaa-private-storage-volume.service\n"
+            "After=podman-user-wait-network-online.service "
+            "secpal-int-aaaaaaaaaaaa-secrets-volume.service "
+            "secpal-int-aaaaaaaaaaaa-postgres-volume.service "
+            "secpal-int-aaaaaaaaaaaa-private-storage-volume.service\n"
         )
 
         def command_result(arguments, **kwargs):
