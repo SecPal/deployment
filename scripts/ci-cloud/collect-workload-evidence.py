@@ -36,6 +36,10 @@ GENERATOR_ROOTS = tuple(
     for name in ("generator.early", "generator", "generator.late")
 )
 PODMAN_EXECUTABLE = Path("/usr/bin/podman")
+PODMAN_NETWORK_ONLINE_UNIT = "podman-user-wait-network-online.service"
+PODMAN_NETWORK_ONLINE_FRAGMENT = (
+    Path("/usr/lib/systemd/user") / PODMAN_NETWORK_ONLINE_UNIT
+)
 DBUS_SOCKET_FRAGMENTS = frozenset(
     {Path("/usr/lib/systemd/user/dbus.socket"), Path("/lib/systemd/user/dbus.socket")}
 )
@@ -83,6 +87,8 @@ SERVICE_ACTIVATION_PROPERTIES = (
     "ExecReload",
     "ExecStop",
     "ExecStopPost",
+    "Wants",
+    "Requires",
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
@@ -435,6 +441,12 @@ def expected_unit_names(instance: str) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def expected_gateway_port(instance: str) -> int:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        raise ValueError("fixture instance is outside the closed contract")
+    return 20_000 + int(instance[:8], 16) % 40_000
+
+
 def expected_generated_source(instance: str, logical_name: str) -> Path:
     if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
         raise ValueError("fixture instance is outside the closed contract")
@@ -764,11 +776,20 @@ def direct_podman_exec_start(value: object, logical_name: str) -> bool:
 
 
 def service_runtime_controls_are_trusted(
-    properties: object, logical_name: str
+    properties: object,
+    logical_name: str,
+    allowed_dependencies: set[str],
 ) -> bool:
+    dependencies = set()
+    if isinstance(properties, dict):
+        wants = properties.get("Wants")
+        requires = properties.get("Requires")
+        if isinstance(wants, str) and isinstance(requires, str):
+            dependencies = set(wants.split()) | set(requires.split())
     return bool(
         isinstance(properties, dict)
         and set(properties) == set(SERVICE_ACTIVATION_PROPERTIES)
+        and dependencies <= allowed_dependencies
         and service_config_environment_is_trusted(properties.get("Environment"))
         and service_environment_controls_are_trusted(
             properties.get("EnvironmentFiles"),
@@ -786,10 +807,43 @@ def service_runtime_controls_are_trusted(
     )
 
 
+def podman_network_online_activation_is_trusted() -> bool:
+    status_code, output, bounded = command_result(
+        [
+            "systemctl", "--user", "show", PODMAN_NETWORK_ONLINE_UNIT,
+            "--property=FragmentPath", "--property=DropInPaths",
+        ]
+    )
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" not in line:
+            return False
+        name, value = line.split("=", 1)
+        if name in properties:
+            return False
+        properties[name] = value
+    return bool(
+        status_code == 0
+        and bounded
+        and properties
+        == {
+            "FragmentPath": str(PODMAN_NETWORK_ONLINE_FRAGMENT),
+            "DropInPaths": "",
+        }
+    )
+
+
 def generated_service_activation_is_trusted(instance: str) -> bool:
-    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+    if (
+        re.fullmatch(r"[0-9a-f]{12}", instance) is None
+        or not podman_network_online_activation_is_trusted()
+    ):
         return False
     prefix = f"secpal-int-{instance}"
+    allowed_dependencies = {
+        f"{prefix}-{logical_name}.service"
+        for logical_name in GENERATED_LOGICAL_NAMES
+    } | {PODMAN_NETWORK_ONLINE_UNIT}
     for logical_name in GENERATED_LOGICAL_NAMES:
         if not quadlet_source_execution_controls_are_trusted(
             instance, logical_name
@@ -813,7 +867,9 @@ def generated_service_activation_is_trusted(instance: str) -> bool:
         if (
             status_code != 0
             or not bounded
-            or not service_runtime_controls_are_trusted(properties, logical_name)
+            or not service_runtime_controls_are_trusted(
+                properties, logical_name, allowed_dependencies
+            )
         ):
             return False
     return True
@@ -3037,8 +3093,10 @@ def workload_admission_failures(observations: object) -> list[str]:
     instance = observations.get("instance")
     try:
         names = expected_unit_names(str(instance))
+        gateway_port = expected_gateway_port(str(instance))
     except ValueError:
         names = ()
+        gateway_port = None
         failures.append("D1A_OBSERVATION_SCHEMA")
     units = live.get("installed_units")
     if not isinstance(units, list) or len(units) != 16 or {
@@ -3298,15 +3356,9 @@ def workload_admission_failures(observations: object) -> list[str]:
                 failures.append("D1A_CONTAINER_LIFECYCLE")
             published_ports = item.get("published_ports")
             if role == "gateway":
-                valid_ports = (
-                    isinstance(published_ports, list)
-                    and len(published_ports) == 1
-                    and re.fullmatch(
-                        r"127\.0\.0\.1:([1-9][0-9]{0,4}):8443/tcp",
-                        str(published_ports[0]),
-                    ) is not None
-                    and int(str(published_ports[0]).split(":", 2)[1]) <= 65535
-                )
+                valid_ports = published_ports == [
+                    f"127.0.0.1:{gateway_port}:8443/tcp"
+                ]
             else:
                 valid_ports = published_ports == []
             if not valid_ports:

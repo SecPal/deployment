@@ -78,6 +78,10 @@ QUADLET_USER_GENERATOR = Path(
     "/usr/lib/systemd/user-generators/podman-user-generator"
 )
 HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+PODMAN_NETWORK_ONLINE_UNIT = "podman-user-wait-network-online.service"
+PODMAN_NETWORK_ONLINE_FRAGMENT = (
+    Path("/usr/lib/systemd/user") / PODMAN_NETWORK_ONLINE_UNIT
+)
 FORBIDDEN_RUNTIME_ENVIRONMENT = (
     "CONTAINER_HOST",
     "CONTAINER_CONNECTION",
@@ -754,7 +758,11 @@ def validate_removed_systemd_unit_state(properties: str) -> None:
         raise IntegrationError("removed systemd unit remains loaded or active")
 
 
-def validate_effective_systemd_unit(properties: str, expected_fragment: Path) -> None:
+def validate_effective_systemd_unit(
+    properties: str,
+    expected_fragment: Path,
+    allowed_dependencies: set[str],
+) -> None:
     values: dict[str, str] = {}
     for line in properties.splitlines():
         if "=" not in line:
@@ -763,12 +771,33 @@ def validate_effective_systemd_unit(properties: str, expected_fragment: Path) ->
         if name in values:
             raise IntegrationError("effective systemd unit identity is malformed")
         values[name] = value
-    expected = {
-        "FragmentPath": os.fspath(expected_fragment),
+    if set(values) != {"FragmentPath", "DropInPaths", "Wants", "Requires"}:
+        raise IntegrationError("effective systemd unit identity is malformed")
+    dependencies = set(values["Wants"].split()) | set(values["Requires"].split())
+    if (
+        values["FragmentPath"] != os.fspath(expected_fragment)
+        or values["DropInPaths"]
+        or not dependencies <= allowed_dependencies
+    ):
+        raise IntegrationError(
+            "effective systemd unit differs from the reviewed dependency contract"
+        )
+
+
+def validate_podman_network_online_unit(properties: str) -> None:
+    values: dict[str, str] = {}
+    for line in properties.splitlines():
+        if "=" not in line:
+            raise IntegrationError("Podman network-online unit identity is malformed")
+        name, value = line.split("=", 1)
+        if name in values:
+            raise IntegrationError("Podman network-online unit identity is malformed")
+        values[name] = value
+    if values != {
+        "FragmentPath": os.fspath(PODMAN_NETWORK_ONLINE_FRAGMENT),
         "DropInPaths": "",
-    }
-    if values != expected:
-        raise IntegrationError("effective systemd unit is overridden or has drop-ins")
+    }:
+        raise IntegrationError("Podman network-online unit is overridden")
 
 
 def validate_effective_systemd_target(
@@ -2061,6 +2090,18 @@ class IntegrationLifecycle:
         )
         self.command(["systemctl", "--user", "daemon-reload"])
         generator_root = Path(f"/run/user/{self.uid}/systemd/generator")
+        validate_podman_network_online_unit(
+            self.captured(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    PODMAN_NETWORK_ONLINE_UNIT,
+                    "--property=FragmentPath",
+                    "--property=DropInPaths",
+                ]
+            )
+        )
         target_properties = self.captured(
             [
                 "systemctl",
@@ -2081,7 +2122,11 @@ class IntegrationLifecycle:
                 for role in TARGET_REQUIRED_ROLES
             },
         )
-        for unit in generated_service_names(self.resources):
+        generated_services = generated_service_names(self.resources)
+        allowed_dependencies = set(generated_services) | {
+            PODMAN_NETWORK_ONLINE_UNIT
+        }
+        for unit in generated_services:
             properties = self.captured(
                 [
                     "systemctl",
@@ -2090,9 +2135,13 @@ class IntegrationLifecycle:
                     unit,
                     "--property=FragmentPath",
                     "--property=DropInPaths",
+                    "--property=Wants",
+                    "--property=Requires",
                 ]
             )
-            validate_effective_systemd_unit(properties, generator_root / unit)
+            validate_effective_systemd_unit(
+                properties, generator_root / unit, allowed_dependencies
+            )
         for role in (
             item for item in CONTAINER_ROLES if role_spec(item).health is not None
         ):

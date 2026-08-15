@@ -257,11 +257,18 @@ class QuadletContract(unittest.TestCase):
         self.assertNotRegex(combined, r"(?i)(podman|docker)\.sock|tcp://")
 
         containers = {name: text for name, text in units.items() if name.endswith(".container")}
-        self.assertEqual(
-            combined.count("PodmanArgs=--http-proxy=false"),
-            len(containers),
-        )
-        self.assertEqual(combined.count("PodmanArgs="), len(containers))
+        for argument in (
+            "--http-proxy=false",
+            "--pid=private",
+            "--ipc=private",
+            "--uts=private",
+        ):
+            with self.subTest(podman_argument=argument):
+                self.assertEqual(
+                    combined.count(f"PodmanArgs={argument}"),
+                    len(containers),
+                )
+        self.assertEqual(combined.count("PodmanArgs="), len(containers) * 4)
         for name, text in containers.items():
             with self.subTest(name=name):
                 self.assertIn(f"PartOf=secpal-int-{INSTANCE}.target", text)
@@ -726,9 +733,16 @@ class QuadletContract(unittest.TestCase):
             if line.startswith("ExecStart=/usr/bin/podman run ")
         ]
         self.assertEqual(len(container_starts), 10)
-        self.assertTrue(
-            all(" --http-proxy=false " in line for line in container_starts)
-        )
+        for argument in (
+            "--http-proxy=false",
+            "--pid=private",
+            "--ipc=private",
+            "--uts=private",
+        ):
+            with self.subTest(translated_argument=argument):
+                self.assertTrue(
+                    all(f" {argument} " in line for line in container_starts)
+                )
         for option in (
             " --init ",
             " --log-driver journald ",

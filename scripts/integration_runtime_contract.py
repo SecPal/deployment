@@ -28,7 +28,12 @@ PRIVATE_STORAGE_MODE = 0o640
 CONTAINER_PIDS_LIMIT = 512
 CONTAINER_STOP_TIMEOUT = 30
 CONTAINER_LOG_DRIVER = "journald"
-CONTAINER_PODMAN_ARGS = ("--http-proxy=false",)
+CONTAINER_PODMAN_ARGS = (
+    "--http-proxy=false",
+    "--pid=private",
+    "--ipc=private",
+    "--uts=private",
+)
 PROXY_ENVIRONMENT_NAMES = frozenset(
     {
         "ALL_PROXY",

@@ -389,7 +389,7 @@ def valid_observations() -> dict[str, object]:
                     for index, status in enumerate(lifecycle_statuses, start=1)
                 ],
                 "networks": [f"{prefix}-{network}" for network in ROLE_NETWORKS[role]],
-                "published_ports": ["127.0.0.1:18443:8443/tcp"] if role == "gateway" else [],
+                "published_ports": ["127.0.0.1:51530:8443/tcp"] if role == "gateway" else [],
                 "auto_update": False,
                 "systemd_unit": f"{prefix}-{role}.service",
                 "container_cgroup": (
@@ -1656,6 +1656,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][-1].__setitem__(
+                "published_ports", ["127.0.0.1:18443:8443/tcp"]
+            ),
+            "D1A_PUBLISHED_PORTS",
+        )
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][-1].__setitem__(
                 "published_ports", []
             ),
             "D1A_PUBLISHED_PORTS",
@@ -2429,6 +2435,69 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_generated_service_activation_rejects_injected_dependencies(self) -> None:
+        instance = "aaaaaaaaaaaa"
+        prefix = f"secpal-int-{instance}"
+        properties = {
+            "Environment": (
+                "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
+                "CONTAINERS_CONF_MODULES= PODMAN_USERNS="
+            ),
+            "EnvironmentFiles": "",
+            "PassEnvironment": "",
+            "UnsetEnvironment": "",
+            "ExecCondition": "",
+            "ExecStartPre": "",
+            "ExecStart": (
+                "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }"
+            ),
+            "ExecStartPost": "",
+            "ExecReload": "",
+            "ExecStop": (
+                "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm -v -f -i ; }"
+            ),
+            "ExecStopPost": (
+                "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman rm -v -f -i ; }"
+            ),
+            "Wants": "podman-user-wait-network-online.service",
+            "Requires": f"{prefix}-application-network.service",
+        }
+        allowed = {
+            f"{prefix}-{logical_name}.service"
+            for logical_name in self.collector.GENERATED_LOGICAL_NAMES
+        } | {self.collector.PODMAN_NETWORK_ONLINE_UNIT}
+        self.assertTrue(
+            self.collector.service_runtime_controls_are_trusted(
+                properties, "api", allowed
+            )
+        )
+        properties["Wants"] = "unreviewed.service"
+        self.assertFalse(
+            self.collector.service_runtime_controls_are_trusted(
+                properties, "api", allowed
+            )
+        )
+
+    def test_podman_network_online_unit_rejects_user_overrides(self) -> None:
+        trusted = (
+            "FragmentPath=/usr/lib/systemd/user/"
+            "podman-user-wait-network-online.service\nDropInPaths=\n"
+        )
+        for properties, expected in (
+            (trusted, True),
+            (trusted.replace("/usr/lib/systemd/user", "/home/user/.config/systemd/user"), False),
+            (trusted.replace("DropInPaths=", "DropInPaths=/home/user/override.conf"), False),
+        ):
+            with self.subTest(properties=properties), mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=(0, properties, True),
+            ):
+                self.assertEqual(
+                    self.collector.podman_network_online_activation_is_trusted(),
+                    expected,
+                )
+
     def test_quadlet_normalization_uses_only_the_fixed_user_manager_contract(self) -> None:
         calls = []
         original_environment = "PATH=/target/bin\nATTACKER_VALUE=present\n"
@@ -2452,6 +2521,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
             "ExecStopPost={ path=/usr/bin/podman ; "
             "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
+            "Wants=podman-user-wait-network-online.service\nRequires=\n"
         )
         target_properties = (
             "FragmentPath=/etc/systemd/user/secpal-int-aaaaaaaaaaaa.target\n"
@@ -2460,6 +2530,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "secpal-int-aaaaaaaaaaaa-worker-general.service "
             "secpal-int-aaaaaaaaaaaa-worker-hash-chain.service "
             "secpal-int-aaaaaaaaaaaa-scheduler.service\n"
+        )
+        podman_network_online_properties = (
+            "FragmentPath=/usr/lib/systemd/user/"
+            "podman-user-wait-network-online.service\nDropInPaths=\n"
         )
         environment_reads = 0
 
@@ -2477,6 +2551,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             if arguments[:3] == ["systemctl", "--user", "show"]:
                 if arguments[3].endswith(".target"):
                     return 0, target_properties, True
+                if arguments[3] == self.collector.PODMAN_NETWORK_ONLINE_UNIT:
+                    return 0, podman_network_online_properties, True
                 properties = service_properties
                 if any(
                     arguments[3].endswith(f"-{name}-network.service")
@@ -2553,6 +2629,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "--property=FragmentPath", "--property=DropInPaths",
                     "--property=Wants", "--property=Requires",
                 ], {}),
+                ([
+                    "systemctl", "--user", "show",
+                    "podman-user-wait-network-online.service",
+                    "--property=FragmentPath", "--property=DropInPaths",
+                ], {}),
                 *[
                     ([
                         "systemctl", "--user", "show",
@@ -2619,7 +2700,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "ExecStartPost={ path=/usr/bin/systemctl ; "
             "argv[]=/usr/bin/systemctl --user set-environment "
             "CONTAINERS_CONF=/tmp/target.conf ; }\n"
-            "ExecReload=\nExecStop=\nExecStopPost=\n"
+            "ExecReload=\nExecStop=\nExecStopPost=\nWants=\nRequires=\n"
         )
 
         def command_result(arguments, **kwargs):

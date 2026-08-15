@@ -2415,22 +2415,51 @@ class QuadletLifecycleContract(unittest.TestCase):
 
     def test_effective_systemd_units_reject_override_fragments_and_dropins(self) -> None:
         fragment = "/run/user/1000/systemd/generator/secpal-int-contract01-api.service"
+        allowed_dependencies = {
+            "secpal-int-contract01-api.service",
+            "secpal-int-contract01-application-network.service",
+            "podman-user-wait-network-online.service",
+        }
         self.module.validate_effective_systemd_unit(
-            f"FragmentPath={fragment}\nDropInPaths=\n", Path(fragment)
+            f"FragmentPath={fragment}\nDropInPaths=\n"
+            "Wants=podman-user-wait-network-online.service\n"
+            "Requires=secpal-int-contract01-application-network.service\n",
+            Path(fragment),
+            allowed_dependencies,
         )
         for properties in (
             "FragmentPath=/home/user/.config/systemd/user/"
-            "secpal-int-contract01-api.service\nDropInPaths=\n",
+            "secpal-int-contract01-api.service\nDropInPaths=\nWants=\nRequires=\n",
             f"FragmentPath={fragment}\nDropInPaths=/home/user/.config/systemd/user/"
-            "secpal-int-contract01-api.service.d/override.conf\n",
+            "secpal-int-contract01-api.service.d/override.conf\nWants=\nRequires=\n",
             f"FragmentPath={fragment}\n",
+            f"FragmentPath={fragment}\nDropInPaths=\n"
+            "Wants=unreviewed.service\nRequires=\n",
+            f"FragmentPath={fragment}\nDropInPaths=\nWants=\n"
+            "Requires=unreviewed.service\n",
         ):
             with self.subTest(properties=properties), self.assertRaises(
                 self.module.IntegrationError
             ):
                 self.module.validate_effective_systemd_unit(
-                    properties, Path(fragment)
+                    properties, Path(fragment), allowed_dependencies
                 )
+
+    def test_podman_network_online_unit_rejects_user_overrides(self) -> None:
+        fragment = "/usr/lib/systemd/user/podman-user-wait-network-online.service"
+        self.module.validate_podman_network_online_unit(
+            f"FragmentPath={fragment}\nDropInPaths=\n"
+        )
+        for properties in (
+            "FragmentPath=/home/user/.config/systemd/user/"
+            "podman-user-wait-network-online.service\nDropInPaths=\n",
+            f"FragmentPath={fragment}\nDropInPaths=/home/user/.config/systemd/user/"
+            "podman-user-wait-network-online.service.d/override.conf\n",
+        ):
+            with self.subTest(properties=properties), self.assertRaises(
+                self.module.IntegrationError
+            ):
+                self.module.validate_podman_network_online_unit(properties)
 
     def test_effective_systemd_target_rejects_injected_dependencies(self) -> None:
         fragment = "/etc/systemd/user/secpal-int-contract01.target"
