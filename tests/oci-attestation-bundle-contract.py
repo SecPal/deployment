@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -245,6 +246,67 @@ class OciAttestationBundleContractTest(unittest.TestCase):
                 )
 
         return ErrorOpener()
+
+    def successful_response(self, url: str, body: bytes) -> Any:
+        class Response:
+            headers = {
+                "Content-Length": str(len(body)),
+                "Content-Type": "application/json",
+            }
+
+            def __enter__(_self) -> "Response":
+                return _self
+
+            def __exit__(_self, *_error: Any) -> None:
+                return None
+
+            def getcode(_self) -> int:
+                return 200
+
+            def geturl(_self) -> str:
+                return url
+
+            def read(_self, limit: int) -> bytes:
+                return body[:limit]
+
+        return Response()
+
+    def test_retries_one_remote_disconnect_then_validates_the_response(self) -> None:
+        body = b'{"token":"anonymous-fixture"}'
+        response = self.successful_response(self.fetcher.TOKEN_URL, body)
+        opener = mock.Mock()
+        opener.open.side_effect = [
+            http.client.RemoteDisconnected("fixture disconnect"),
+            response,
+        ]
+
+        with mock.patch.object(self.fetcher, "HTTPS_OPENER", opener):
+            result = self.fetcher._request_bytes(
+                self.fetcher.TOKEN_URL,
+                {"Accept": "application/json"},
+                self.fetcher.TOKEN_RESPONSE_LIMIT,
+                frozenset({200}),
+            )
+
+        self.assertEqual(result, (200, "application/json", "", body))
+        self.assertEqual(opener.open.call_count, 2)
+
+    def test_two_remote_disconnects_remain_fail_closed(self) -> None:
+        opener = mock.Mock()
+        opener.open.side_effect = [
+            http.client.RemoteDisconnected("fixture disconnect one"),
+            http.client.RemoteDisconnected("fixture disconnect two"),
+        ]
+
+        with mock.patch.object(self.fetcher, "HTTPS_OPENER", opener):
+            with self.assertRaisesRegex(RuntimeError, "public registry request failed"):
+                self.fetcher._request_bytes(
+                    self.fetcher.TOKEN_URL,
+                    {"Accept": "application/json"},
+                    self.fetcher.TOKEN_RESPONSE_LIMIT,
+                    frozenset({200}),
+                )
+        self.assertEqual(opener.open.call_count, 2)
 
     def test_fetches_fallback_referrer_and_writes_verified_private_bundle(self) -> None:
         fixture = RegistryFixture(self.fetcher)

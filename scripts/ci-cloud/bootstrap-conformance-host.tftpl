@@ -177,10 +177,14 @@ apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
   crun \
   curl \
   dbus-user-session \
+  dirmngr \
   gh \
   git \
+  gpg \
+  gpg-agent \
   jq \
   netavark \
+  openssh-client \
   passt \
   podman \
   python3 \
@@ -270,6 +274,10 @@ Unattended-Upgrade::Package-Blacklist {
   "passt";
   "uidmap";
   "dbus-user-session";
+  "dirmngr";
+  "gpg";
+  "gpg-agent";
+  "openssh-client";
 };
 SECPAL_UPGRADES
 

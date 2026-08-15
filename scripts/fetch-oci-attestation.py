@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -49,6 +50,7 @@ TOKEN_RESPONSE_LIMIT = 64 * 1024
 MANIFEST_RESPONSE_LIMIT = 1024 * 1024
 BUNDLE_RESPONSE_LIMIT = 16 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30
+REQUEST_ATTEMPTS = 2
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 BEARER_PATTERN = re.compile(r"[A-Za-z0-9._~+/-]{1,32768}={0,2}")
 REGISTRY_BLOB_PATH_PATTERN = re.compile(
@@ -170,7 +172,7 @@ def blob_url(digest: str) -> str:
     return f"{REGISTRY_BASE_URL}/blobs/{digest}"
 
 
-def _request_bytes(
+def _request_bytes_once(
     url: str,
     headers: dict[str, str],
     max_bytes: int,
@@ -183,8 +185,6 @@ def _request_bytes(
         if error.code not in allowed_statuses:
             raise RuntimeError(f"public registry request failed with HTTP {error.code}") from error
         response = error
-    except urllib.error.URLError as error:
-        raise RuntimeError("public registry request failed") from error
 
     with response:
         status = response.getcode()
@@ -209,6 +209,28 @@ def _request_bytes(
         content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
         registry_digest = response.headers.get("Docker-Content-Digest", "").strip()
         return status, content_type, registry_digest, body
+
+
+def _request_bytes(
+    url: str,
+    headers: dict[str, str],
+    max_bytes: int,
+    allowed_statuses: frozenset[int],
+) -> tuple[int, str, str, bytes]:
+    transient_errors = (
+        urllib.error.URLError,
+        ConnectionError,
+        TimeoutError,
+        ssl.SSLError,
+        http.client.IncompleteRead,
+    )
+    for attempt in range(REQUEST_ATTEMPTS):
+        try:
+            return _request_bytes_once(url, headers, max_bytes, allowed_statuses)
+        except transient_errors as error:
+            if attempt + 1 == REQUEST_ATTEMPTS:
+                raise RuntimeError("public registry request failed") from error
+    raise RuntimeError("public registry request failed")
 
 
 def _parse_object(body: bytes, label: str) -> dict[str, Any]:

@@ -72,6 +72,7 @@ required_files=(
   scripts/quadlet-oneshot-entrypoint.sh
   scripts/render-integration-quadlets.py
   scripts/valkey-entrypoint.sh
+  scripts/ci-cloud/bounded-target-diagnostic.py
   scripts/ci-cloud/collect-host-evidence.py
   scripts/ci-cloud/bootstrap-conformance-host.tftpl
   scripts/ci-cloud/continue-conformance-bootstrap.sh
@@ -109,6 +110,7 @@ required_files=(
   tests/ci-cloud-ssh-port-probe.py
   tests/ci-cloud-remote-bootstrap.sh
   tests/ci-cloud-systemd-reboot.py
+  tests/ci-cloud-target-diagnostic.py
   tests/phase-b-contract.sh
   tests/phase-c-api-image-contract.sh
   tests/production-contract-regressions.py

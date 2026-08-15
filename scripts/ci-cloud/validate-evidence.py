@@ -25,13 +25,14 @@ WORKLOAD_COLLECTOR_PATH = Path(__file__).with_name("collect-workload-evidence.py
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "ci-cloud-evidence.schema.json"
 RUNTIME_PACKAGE_NAMES = {
     "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
-    "uidmap", "dbus-user-session",
+    "uidmap", "dbus-user-session", "dirmngr", "gpg", "gpg-agent",
+    "openssh-client",
 }
 BOOTSTRAP_PACKAGE_NAMES = {
     "aardvark-dns", "apparmor", "apparmor-utils", "crun", "curl",
-    "dbus-user-session", "git", "gh", "jq", "netavark", "passt", "podman",
-    "python3", "python3-jsonschema", "python3-yaml", "uidmap",
-    "unattended-upgrades",
+    "dbus-user-session", "dirmngr", "git", "gh", "gpg", "gpg-agent", "jq",
+    "netavark", "openssh-client", "passt", "podman", "python3",
+    "python3-jsonschema", "python3-yaml", "uidmap", "unattended-upgrades",
 }
 FORBIDDEN_KEY = re.compile(r"(?:authorization|credential|password|private.?key|secret|token)", re.IGNORECASE)
 FORBIDDEN_VALUE = re.compile(

@@ -87,6 +87,15 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Cloud target-phase failures now retain one bounded, content-free diagnostic
+  summary in the Actions log without exposing arbitrary target output
+  before exact VM cleanup.
+- D.1a workload evidence admits the fixed root-owned Debian 13 GnuPG and
+  OpenSSH agent socket/service pairs with exact `dpkg-query` owning-package
+  provenance (including Keyboxd's Debian `gpg` ownership) while
+  continuing to reject unknown units, user-controlled drop-ins or services,
+  unexpected triggers, and every effective Podman API service, listener,
+  connection, or process.
 - Cloud cleanup now fails closed when the trusted fixture removal request is
   rejected or unavailable instead of treating that boundary as best effort.
 - Updated the cloud-conformance evidence record after the first successful GCP

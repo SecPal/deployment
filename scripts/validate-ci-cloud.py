@@ -1921,6 +1921,9 @@ def validate(root: Path) -> None:
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
     target = read(root, "scripts/ci-cloud/target-conformance.sh")
+    target_diagnostic = read(
+        root, "scripts/ci-cloud/bounded-target-diagnostic.py"
+    )
     workload_collector = read(
         root, "scripts/ci-cloud/collect-workload-evidence.py"
     )
@@ -1992,8 +1995,28 @@ def validate(root: Path) -> None:
     )
     require(
         "/tmp/secpal-target-conformance.log" not in remote
-        and remote.count(">/dev/null 2>&1") >= 3,
-        "target output must not use a shared temporary path",
+        and 'mktemp "$evidence_dir/.target-phase-diagnostic.XXXXXX"'
+        in remote
+        and "bounded-target-diagnostic.py" in remote
+        and 'pipeline_statuses=("${PIPESTATUS[@]}")' in remote
+        and 'return "$target_status"' in remote
+        and "target_diagnostic_paths=()" in remote
+        and 'target_diagnostic_paths+=("$target_diagnostic")' in remote
+        and 'rm -f -- "${target_diagnostic_paths[@]}"' in remote
+        and "<<'REMOTE' >/dev/null 2>&1" not in remote
+        and "MAX_CAPTURE_BYTES = 16 * 1024" in target_diagnostic
+        and "MAX_EMITTED_BYTES = 8 * 1024" in target_diagnostic
+        and "os.O_NOFOLLOW" in target_diagnostic
+        and "while remaining:" in target_diagnostic
+        and 'metadata = f"{observed_bytes} {int(truncated)}\\n".encode("ascii")'
+        in target_diagnostic
+        and '"output_bytes": output_bytes' in target_diagnostic
+        and '"output_truncated": output_truncated' in target_diagnostic
+        and "tail_sha256" not in target_diagnostic
+        and '"output"' not in target_diagnostic
+        and '"Target phase diagnostic: "' in target_diagnostic
+        and "json.dumps" in target_diagnostic,
+        "target failures need bounded inert diagnostics in a private run path",
     )
     require(
         remote.count("v1 host") == 1
@@ -2092,6 +2115,30 @@ def validate(root: Path) -> None:
         and "container_lifecycle_events" in workload_collector
         and 'item.get("effective_caps") != expected_caps' in workload_collector,
         "Podman evidence must use admitted v5 fields and exact inventory/security facts",
+    )
+    require(
+        "TRUSTED_USER_SOCKET_UNITS" in workload_collector
+        and "TRUSTED_USER_SERVICE_UNITS" in workload_collector
+        and "TRUSTED_USER_UNIT_PACKAGES" in workload_collector
+        and "def root_owned_systemd_unit(path: Path) -> bool:"
+        in workload_collector
+        and "def systemd_unit_owned_by_package(path: Path, package: str) -> bool:"
+        in workload_collector
+        and "metadata.st_uid == 0" in workload_collector
+        and "metadata.st_gid == 0" in workload_collector
+        and "stat.S_IMODE(metadata.st_mode) == 0o644" in workload_collector
+        and '"systemctl", "--user", "show", trigger,' in workload_collector
+        and "service_fragment not in service_fragments" in workload_collector
+        and "not root_owned_systemd_unit(service_fragment)" in workload_collector
+        and '"keyboxd.socket": "gpg"' in workload_collector
+        and '"keyboxd.service": "gpg"' in workload_collector
+        and 'not systemd_unit_owned_by_package(fragment, package)'
+        in workload_collector
+        and "not systemd_unit_owned_by_package(\n"
+        "                service_fragment, service_package\n"
+        "            )" in workload_collector
+        and 'service_properties["DropInPaths"] != ""' in workload_collector,
+        "every admitted user socket and triggered service must remain root-owned and fixed",
     )
     try:
         evidence_schema = json.loads(evidence_schema_text)

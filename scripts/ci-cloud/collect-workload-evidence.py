@@ -40,9 +40,58 @@ PODMAN_NETWORK_ONLINE_UNIT = "podman-user-wait-network-online.service"
 PODMAN_NETWORK_ONLINE_FRAGMENT = (
     Path("/usr/lib/systemd/user") / PODMAN_NETWORK_ONLINE_UNIT
 )
-DBUS_SOCKET_FRAGMENTS = frozenset(
-    {Path("/usr/lib/systemd/user/dbus.socket"), Path("/lib/systemd/user/dbus.socket")}
-)
+TRUSTED_USER_SOCKET_UNITS = {
+    name: (
+        frozenset(
+            {
+                Path("/usr/lib/systemd/user") / name,
+                Path("/lib/systemd/user") / name,
+            }
+        ),
+        service,
+    )
+    for name, service in {
+        "dbus.socket": "dbus.service",
+        "dirmngr.socket": "dirmngr.service",
+        "gpg-agent-browser.socket": "gpg-agent.service",
+        "gpg-agent-extra.socket": "gpg-agent.service",
+        "gpg-agent-ssh.socket": "gpg-agent.service",
+        "gpg-agent.socket": "gpg-agent.service",
+        "keyboxd.socket": "keyboxd.service",
+        "ssh-agent.socket": "ssh-agent.service",
+    }.items()
+}
+TRUSTED_USER_SERVICE_UNITS = {
+    name: frozenset(
+        {
+            Path("/usr/lib/systemd/user") / name,
+            Path("/lib/systemd/user") / name,
+        }
+    )
+    for name in {
+        "dbus.service",
+        "dirmngr.service",
+        "gpg-agent.service",
+        "keyboxd.service",
+        "ssh-agent.service",
+    }
+}
+TRUSTED_USER_UNIT_PACKAGES = {
+    "dbus.socket": "dbus-user-session",
+    "dbus.service": "dbus-user-session",
+    "dirmngr.socket": "dirmngr",
+    "dirmngr.service": "dirmngr",
+    "gpg-agent-browser.socket": "gpg-agent",
+    "gpg-agent-extra.socket": "gpg-agent",
+    "gpg-agent-ssh.socket": "gpg-agent",
+    "gpg-agent.socket": "gpg-agent",
+    "gpg-agent.service": "gpg-agent",
+    # Debian 13 (trixie) ships Keyboxd and both user units in binary package gpg.
+    "keyboxd.socket": "gpg",
+    "keyboxd.service": "gpg",
+    "ssh-agent.socket": "openssh-client",
+    "ssh-agent.service": "openssh-client",
+}
 CONTROL_NETWORK = "secpal-ci-unrelated-control-network"
 CONTROL_VOLUME = "secpal-ci-unrelated-control-volume"
 ROLES = (
@@ -2125,6 +2174,41 @@ def resource_inventory() -> tuple[dict[str, list[str]], bool]:
     )
 
 
+def root_owned_systemd_unit(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(metadata.st_mode)
+        and metadata.st_uid == 0
+        and metadata.st_gid == 0
+        and stat.S_IMODE(metadata.st_mode) == 0o644
+        and metadata.st_nlink == 1
+    )
+
+
+def systemd_unit_owned_by_package(path: Path, package: str) -> bool:
+    if (
+        path.parent not in {
+            Path("/usr/lib/systemd/user"),
+            Path("/lib/systemd/user"),
+        }
+        or re.fullmatch(r"[a-z0-9@_.-]+\.(?:service|socket)", path.name) is None
+        or re.fullmatch(r"[a-z0-9][a-z0-9+.-]+", package) is None
+    ):
+        return False
+    canonical = Path("/usr/lib/systemd/user") / path.name
+    status_code, output, complete = command_result(
+        ["dpkg-query", "-S", str(canonical)]
+    )
+    return (
+        status_code == 0
+        and complete
+        and output == f"{package}: {canonical}"
+    )
+
+
 def user_socket_activation_facts() -> tuple[bool, bool]:
     status_code, output, complete = command_result(
         [
@@ -2140,35 +2224,84 @@ def user_socket_activation_facts() -> tuple[bool, bool]:
         if not fields or re.fullmatch(r"[A-Za-z0-9:_.@-]+\.socket", fields[0]) is None:
             return True, False
         units.append(fields[0])
-    if len(units) != len(set(units)) or len(units) > 16:
+    if (
+        len(units) != len(set(units))
+        or len(units) > 16
+        or "dbus.socket" not in units
+    ):
         return True, False
-    if units != ["dbus.socket"]:
+    if any(unit not in TRUSTED_USER_SOCKET_UNITS for unit in units):
         return True, True
-    status_code, output, complete = command_result(
-        [
-            "systemctl", "--user", "show", "dbus.socket",
-            "--property=FragmentPath", "--property=DropInPaths",
-            "--property=Triggers",
-        ]
-    )
-    if status_code != 0 or not complete:
-        return True, False
-    properties: dict[str, str] = {}
-    for line in output.splitlines():
-        if "=" not in line:
+    admitted_services: set[str] = set()
+    for unit in units:
+        status_code, output, complete = command_result(
+            [
+                "systemctl", "--user", "show", unit,
+                "--property=FragmentPath", "--property=DropInPaths",
+                "--property=Triggers",
+            ]
+        )
+        if status_code != 0 or not complete:
             return True, False
-        key, value = line.split("=", 1)
-        if key in properties:
+        properties: dict[str, str] = {}
+        for line in output.splitlines():
+            if "=" not in line:
+                return True, False
+            key, value = line.split("=", 1)
+            if key in properties:
+                return True, False
+            properties[key] = value
+        if set(properties) != {"FragmentPath", "DropInPaths", "Triggers"}:
             return True, False
-        properties[key] = value
-    if set(properties) != {"FragmentPath", "DropInPaths", "Triggers"}:
-        return True, False
-    trusted = (
-        Path(properties["FragmentPath"]) in DBUS_SOCKET_FRAGMENTS
-        and properties["DropInPaths"] == ""
-        and properties["Triggers"] == "dbus.service"
-    )
-    return not trusted, True
+        fragments, trigger = TRUSTED_USER_SOCKET_UNITS[unit]
+        fragment = Path(properties["FragmentPath"])
+        package = TRUSTED_USER_UNIT_PACKAGES.get(unit)
+        if (
+            fragment not in fragments
+            or not root_owned_systemd_unit(fragment)
+            or package is None
+            or not systemd_unit_owned_by_package(fragment, package)
+            or properties["DropInPaths"] != ""
+            or properties["Triggers"] != trigger
+        ):
+            return True, True
+        if trigger in admitted_services:
+            continue
+        service_fragments = TRUSTED_USER_SERVICE_UNITS.get(trigger)
+        if service_fragments is None:
+            return True, True
+        status_code, output, complete = command_result(
+            [
+                "systemctl", "--user", "show", trigger,
+                "--property=FragmentPath", "--property=DropInPaths",
+            ]
+        )
+        if status_code != 0 or not complete:
+            return True, False
+        service_properties: dict[str, str] = {}
+        for line in output.splitlines():
+            if "=" not in line:
+                return True, False
+            key, value = line.split("=", 1)
+            if key in service_properties:
+                return True, False
+            service_properties[key] = value
+        if set(service_properties) != {"FragmentPath", "DropInPaths"}:
+            return True, False
+        service_fragment = Path(service_properties["FragmentPath"])
+        service_package = TRUSTED_USER_UNIT_PACKAGES.get(trigger)
+        if (
+            service_fragment not in service_fragments
+            or not root_owned_systemd_unit(service_fragment)
+            or service_package is None
+            or not systemd_unit_owned_by_package(
+                service_fragment, service_package
+            )
+            or service_properties["DropInPaths"] != ""
+        ):
+            return True, True
+        admitted_services.add(trigger)
+    return False, True
 
 
 def podman_api_facts() -> tuple[bool, bool]:
