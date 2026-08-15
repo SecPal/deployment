@@ -203,6 +203,14 @@ deployment commit SHA without exposing cloud-control credentials to that
 commit, collect bounded host/runtime evidence, and destroy the exact OpenTofu
 state. Metadata-gated TTL janitors protect billable compute fixtures.
 
+The exact target implements only the fixed versioned `host`, workload
+publication, and workload cleanup phases. It derives the fixture identity and
+loopback port from the admitted commit, verifies the reviewed API and frontend
+attestations before staging immutable local digest identities, and crosses the
+root-owned Quadlet boundary only through the fixed unprivileged fixture
+client. Activation and evidence collection stay in the main-controlled
+collector; target code cannot choose either operation.
+
 This CI infrastructure is non-production. It contains no customer data,
 production inventory, DNS, certificate, backup, or service credential and is
 not part of the production installation path. Google authentication uses

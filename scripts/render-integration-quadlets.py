@@ -18,11 +18,13 @@ import tempfile
 sys.dont_write_bytecode = True
 
 from integration_runtime_contract import (
+    API_DIGEST,
     API_IMAGE,
     CONTAINER_LOG_DRIVER,
     CONTAINER_PIDS_LIMIT,
     CONTAINER_PODMAN_ARGS,
     CONTAINER_STOP_TIMEOUT,
+    FRONTEND_DIGEST,
     FRONTEND_IMAGE,
     GATEWAY_HEALTH_FAILURE_SPEC,
     INTERNAL_NETWORKS,
@@ -38,6 +40,7 @@ from integration_runtime_contract import (
 INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 FAILURE_CASES = ("migration", "dependency", "health")
+DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 class ContractError(ValueError):
@@ -141,27 +144,63 @@ def api_environment(port: int) -> list[str]:
     return [f"Environment={name}={value}" for name, value in values.items()]
 
 
+def cloud_image_reference(label: str, digest: str) -> str:
+    if re.fullmatch(r"[a-z][a-z0-9-]{0,31}", label) is None:
+        raise ContractError("cloud image label is outside the closed contract")
+    if DIGEST_PATTERN.fullmatch(digest) is None:
+        raise ContractError("cloud image digest is outside the closed contract")
+    return f"localhost/secpal-ci-{label}@{digest}"
+
+
+def health_lines_for_runtime(role: str, cloud: bool) -> tuple[str, ...]:
+    lines = health_lines(role)
+    if cloud and role == "api":
+        return ("HealthCmd=CMD /usr/local/bin/secpal-http-live", *lines[1:])
+    return lines
+
+
+def cloud_oneshot_execution_lines(role: str) -> tuple[str, ...]:
+    if role == "secrets-init":
+        return (
+            'Entrypoint=["/bin/bash","/run/secpal/init-local-secrets.sh"]',
+        )
+    if role == "migrate":
+        return (
+            'Entrypoint=["/bin/bash","/run/secpal/container-entrypoint.sh"]',
+            "Exec=php artisan migrate --force",
+        )
+    raise ContractError("cloud one-shot role is outside the closed contract")
+
+
 def api_container(
     instance: str,
     port: int,
     fixture_root: Path,
     role: str,
     failure_case: str | None = None,
+    *,
+    image: str = API_IMAGE,
+    cloud: bool = False,
 ) -> str:
     prefix = f"secpal-int-{instance}"
     dependencies = [f"{prefix}-migrate.service"] if role != "migrate" else [
         f"{prefix}-postgres.service",
         f"{prefix}-valkey.service",
     ]
-    lines = common_container(instance, role, API_IMAGE)
+    lines = common_container(instance, role, image)
     lines.extend(api_environment(port))
     execution = role_execution_spec(role, failure_case)
     if execution is None:
         raise ContractError("API role execution contract is missing")
     oneshot = role == "migrate"
+    execution_lines = (
+        cloud_oneshot_execution_lines(role)
+        if cloud and oneshot
+        else execution.quadlet_lines()
+    )
     lines.extend(
         (
-            *execution.quadlet_lines(),
+            *execution_lines,
             f"Mount=type=bind,source={fixture_root}/assets/container-entrypoint.sh,target=/run/secpal/container-entrypoint.sh,ro=true",
             f"Mount=type=bind,source={fixture_root}/assets/phase-b-runtime-probe.php,target=/run/secpal/phase-b-runtime-probe.php,ro=true",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
@@ -170,13 +209,15 @@ def api_container(
         )
     )
     if oneshot:
+        if cloud:
+            lines.append("PodmanArgs=--rm=false")
         lines.append(
             f"Mount=type=bind,source={fixture_root}/assets/quadlet-oneshot-entrypoint.sh,target=/run/secpal/quadlet-oneshot-entrypoint.sh,ro=true"
         )
     lines.extend(network_lines(instance, role))
     lines.append(f"NetworkAlias={role}")
     if role_spec(role).health is not None:
-        lines.extend(health_lines(role))
+        lines.extend(health_lines_for_runtime(role, cloud))
     service_lines = ["Restart=no", "TimeoutStartSec=180"] if oneshot else [
         "Restart=on-failure",
         "RestartSec=2",
@@ -193,11 +234,34 @@ def api_container(
 
 
 def build_units(
-    instance: str, port: int, fixture_root: Path, failure_case: str | None = None
+    instance: str,
+    port: int,
+    fixture_root: Path,
+    failure_case: str | None = None,
+    cloud_gateway_digest: str | None = None,
 ) -> dict[str, str]:
     if failure_case is not None and failure_case not in FAILURE_CASES:
         raise ContractError("unsupported failure profile")
     prefix = f"secpal-int-{instance}"
+    cloud = cloud_gateway_digest is not None
+    if cloud and DIGEST_PATTERN.fullmatch(cloud_gateway_digest) is None:
+        raise ContractError("cloud gateway digest is outside the closed contract")
+    api_image = cloud_image_reference("api", API_DIGEST) if cloud else API_IMAGE
+    frontend_image = (
+        cloud_image_reference("frontend", FRONTEND_DIGEST)
+        if cloud
+        else FRONTEND_IMAGE
+    )
+    postgres_image = (
+        cloud_image_reference("postgres", POSTGRES_IMAGE.rsplit("@", 1)[1])
+        if cloud
+        else POSTGRES_IMAGE
+    )
+    valkey_image = (
+        cloud_image_reference("valkey", VALKEY_IMAGE.rsplit("@", 1)[1])
+        if cloud
+        else VALKEY_IMAGE
+    )
     labels = [
         "Label=org.secpal.integration=true",
         f"Label=org.secpal.integration.instance={instance}",
@@ -219,14 +283,18 @@ def build_units(
         ) + section("Volume", [f"VolumeName={prefix}-{name}", *labels])
 
     secret_dependencies: list[str] = []
-    secret_lines = common_container(instance, "secrets-init", API_IMAGE)
+    secret_lines = common_container(instance, "secrets-init", api_image)
     secret_execution = role_execution_spec("secrets-init")
     if secret_execution is None:
         raise ContractError("secret initialization execution contract is missing")
     secret_lines.extend(
         (
             "AddCapability=CHOWN FOWNER",
-            *secret_execution.quadlet_lines(),
+            *(
+                cloud_oneshot_execution_lines("secrets-init")
+                if cloud
+                else secret_execution.quadlet_lines()
+            ),
             "Environment=SECPAL_API_UID=10001",
             "Environment=SECPAL_API_GID=10001",
             "Environment=SECPAL_POSTGRES_UID=999",
@@ -243,6 +311,8 @@ def build_units(
             *network_lines(instance, "secrets-init"),
         )
     )
+    if cloud:
+        secret_lines.append("PodmanArgs=--rm=false")
     units[f"{prefix}-secrets-init.container"] = (
         unit_description(
             f"SecPal integration secret initialization ({instance})",
@@ -253,7 +323,7 @@ def build_units(
         + section("Service", ["Type=oneshot", "RemainAfterExit=yes", "Restart=no", "TimeoutStartSec=60"])
     )
 
-    postgres_lines = common_container(instance, "postgres", POSTGRES_IMAGE)
+    postgres_lines = common_container(instance, "postgres", postgres_image)
     postgres_lines.extend(
         (
             "Environment=POSTGRES_DB=secpal_local",
@@ -283,7 +353,7 @@ def build_units(
         + service("no" if failure_case == "dependency" else "on-failure")
     )
 
-    valkey_lines = common_container(instance, "valkey", VALKEY_IMAGE)
+    valkey_lines = common_container(instance, "valkey", valkey_image)
     valkey_execution = role_execution_spec("valkey")
     if valkey_execution is None:
         raise ContractError("Valkey execution contract is missing")
@@ -315,33 +385,43 @@ def build_units(
         fixture_root,
         "migrate",
         failure_case,
+        image=api_image,
+        cloud=cloud,
     )
     units[f"{prefix}-api.container"] = api_container(
         instance,
         port,
         fixture_root,
         "api",
+        image=api_image,
+        cloud=cloud,
     )
     units[f"{prefix}-worker-general.container"] = api_container(
         instance,
         port,
         fixture_root,
         "worker-general",
+        image=api_image,
+        cloud=cloud,
     )
     units[f"{prefix}-worker-hash-chain.container"] = api_container(
         instance,
         port,
         fixture_root,
         "worker-hash-chain",
+        image=api_image,
+        cloud=cloud,
     )
     units[f"{prefix}-scheduler.container"] = api_container(
         instance,
         port,
         fixture_root,
         "scheduler",
+        image=api_image,
+        cloud=cloud,
     )
 
-    frontend_lines = common_container(instance, "frontend", FRONTEND_IMAGE)
+    frontend_lines = common_container(instance, "frontend", frontend_image)
     frontend_lines.extend(
         (
             f"Environment=SECPAL_API_URL=https://api.secpal.example.invalid:{port}",
@@ -361,7 +441,11 @@ def build_units(
         + service()
     )
 
-    gateway_image = f"localhost/secpal-integration-gateway-{instance}:2.10.2"
+    gateway_image = (
+        cloud_image_reference(f"gateway-{instance}", cloud_gateway_digest)
+        if cloud_gateway_digest is not None
+        else f"localhost/secpal-integration-gateway-{instance}:2.10.2"
+    )
     gateway_health = (
         GATEWAY_HEALTH_FAILURE_SPEC
         if failure_case == "health"
@@ -493,6 +577,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--port", required=True)
         command.add_argument("--fixture-root", required=True)
         command.add_argument("--failure-case", choices=FAILURE_CASES)
+        command.add_argument("--cloud-gateway-digest")
         if action == "render":
             command.add_argument("--output", required=True)
         else:
@@ -508,7 +593,13 @@ def main() -> int:
         instance = validate_instance(arguments.instance)
         port = validate_port(arguments.port)
         fixture_root = validate_fixture_root(arguments.fixture_root)
-        expected = build_units(instance, port, fixture_root, arguments.failure_case)
+        expected = build_units(
+            instance,
+            port,
+            fixture_root,
+            arguments.failure_case,
+            arguments.cloud_gateway_digest,
+        )
         if arguments.action == "render":
             render(Path(arguments.output), fixture_root, expected)
         else:

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 import os
@@ -19,6 +20,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import tomllib
@@ -87,6 +89,26 @@ FORBIDDEN_RUNTIME_ENVIRONMENT = (
     "CONTAINERS_STORAGE_CONF",
     "CONTAINERS_POLICY",
 )
+CLOUD_FIXTURE_CLIENT = Path("/usr/local/bin/secpal-ci-quadlet-fixture")
+CLOUD_FIXTURE_BASE = Path("/home/secpal-ci/quadlet-fixture")
+CLOUD_OPERATOR_UID = 20_000
+CLOUD_OPERATOR_GID = 20_000
+CLOUD_IMAGE_TAGS = {
+    "api": "localhost/secpal-ci-api:verified",
+    "frontend": "localhost/secpal-ci-frontend:verified",
+    "postgres": "localhost/secpal-ci-postgres:verified",
+    "valkey": "localhost/secpal-ci-valkey:verified",
+}
+CLOUD_GH_RELEASES = {
+    "x86_64": (
+        "amd64",
+        "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
+    ),
+    "aarch64": (
+        "arm64",
+        "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
+    ),
+}
 
 
 class IntegrationError(RuntimeError):
@@ -189,12 +211,15 @@ class Resources:
     systemd_target_file: Path
 
     @classmethod
-    def for_instance(cls, instance: str, uid: int, active_root: Path) -> "Resources":
+    def for_instance(
+        cls, instance: str, uid: int, active_root: Path, cloud_mode: bool = False
+    ) -> "Resources":
         prefix = f"secpal-int-{instance}"
         unit_names = [f"{prefix}-{role}.container" for role in CONTAINER_ROLES]
         unit_names.extend(f"{prefix}-{name}.network" for name in INTERNAL_NETWORKS)
         unit_names.extend(f"{prefix}-{name}.volume" for name in VOLUME_NAMES)
-        unit_names.append(f"{prefix}.target")
+        if not cloud_mode:
+            unit_names.append(f"{prefix}.target")
         return cls(
             instance=instance,
             uid=uid,
@@ -204,7 +229,11 @@ class Resources:
             containers=tuple(f"{prefix}-{role}" for role in CONTAINER_ROLES),
             networks=tuple(f"{prefix}-{name}" for name in INTERNAL_NETWORKS),
             volumes=tuple(f"{prefix}-{name}" for name in VOLUME_NAMES),
-            gateway_image=f"localhost/secpal-integration-gateway-{instance}:2.10.2",
+            gateway_image=(
+                f"localhost/secpal-ci-gateway-{instance}:2.10.2"
+                if cloud_mode
+                else f"localhost/secpal-integration-gateway-{instance}:2.10.2"
+            ),
             unit_files=tuple(active_root / name for name in sorted(unit_names)),
             systemd_target_file=Path("/etc/systemd/user") / f"{prefix}.target",
         )
@@ -1006,7 +1035,9 @@ def _owned_unit_file(path: Path, resources: Resources) -> bool:
     return True
 
 
-def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
+def cleanup_resources(
+    runner: CommandRunner, resources: Resources, *, cloud_mode: bool = False
+) -> None:
     """Best-effort exact cleanup after a read-only ownership admission."""
 
     owned_units = [path for path in resources.unit_files if _owned_unit_file(path, resources)]
@@ -1077,17 +1108,37 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
     commands.extend(["podman", "volume", "rm", name] for name in owned_volumes)
     if gateway is not None:
         commands.append(["podman", "image", "rm", resources.gateway_image])
-    commands.extend(["sudo", "-n", "rm", "-f", "--", os.fspath(path)] for path in owned_units)
-    if owned_target:
-        commands.append(
-            ["sudo", "-n", "rm", "-f", "--", os.fspath(resources.systemd_target_file)]
+    fixture_remove_command = None
+    if cloud_mode and (owned_target or owned_units):
+        fixture_remove_command = [
+            os.fspath(CLOUD_FIXTURE_CLIENT),
+            "remove",
+            resources.instance,
+        ]
+        commands.append(fixture_remove_command)
+    else:
+        commands.extend(
+            ["sudo", "-n", "rm", "-f", "--", os.fspath(path)]
+            for path in owned_units
         )
+        if owned_target:
+            commands.append(
+                [
+                    "sudo",
+                    "-n",
+                    "rm",
+                    "-f",
+                    "--",
+                    os.fspath(resources.systemd_target_file),
+                ]
+            )
     commands.append(["systemctl", "--user", "daemon-reload"])
     generated_services = generated_service_names(resources)
     commands.append(
         ["systemctl", "--user", "reset-failed", resources.target, *generated_services]
     )
     reload_failed = False
+    fixture_remove_failed = False
     reload_command = ["systemctl", "--user", "daemon-reload"]
     for command in commands:
         try:
@@ -1101,11 +1152,17 @@ def cleanup_resources(runner: CommandRunner, resources: Resources) -> None:
         except OSError:
             if command == reload_command:
                 reload_failed = True
+            if command == fixture_remove_command:
+                fixture_remove_failed = True
             continue
         if command == reload_command and result.returncode != 0:
             reload_failed = True
+        if command == fixture_remove_command and result.returncode != 0:
+            fixture_remove_failed = True
     if reload_failed:
         raise IntegrationError("systemd user daemon reload failed during cleanup")
+    if fixture_remove_failed:
+        raise IntegrationError("trusted Quadlet fixture removal failed")
 
 
 def render_and_start_with_port_retries(lifecycle, start, port_allocator=None) -> None:
@@ -1179,6 +1236,21 @@ def execute_expected_failure_lifecycle(lifecycle, port_allocator=None) -> None:
         raise failure
 
 
+def execute_cloud_prepare(lifecycle) -> None:
+    """Verify, stage, render, and publish without activating target units."""
+
+    lifecycle.validate_repository_and_runtime()
+    lifecycle.retrieve_verify_and_stage_images()
+    lifecycle.render_validate_and_install_units()
+
+
+def execute_cloud_cleanup(lifecycle) -> None:
+    """Reconstruct the fixed fixture and remove only its owned resources."""
+
+    lifecycle.validate_cloud_cleanup_runtime()
+    lifecycle.cleanup()
+
+
 def allocate_distinct_port(port_allocator, previous_port: int | None) -> int:
     for _attempt in range(10):
         port = port_allocator()
@@ -1187,6 +1259,18 @@ def allocate_distinct_port(port_allocator, previous_port: int | None) -> int:
         if port != previous_port:
             return port
     raise IntegrationError("a new isolated loopback port could not be selected")
+
+
+def cloud_fixture_root(instance: str) -> Path:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        raise IntegrationError("cloud fixture instance is outside the closed contract")
+    return CLOUD_FIXTURE_BASE / instance
+
+
+def cloud_fixture_port(instance: str) -> int:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        raise IntegrationError("cloud fixture instance is outside the closed contract")
+    return 20_000 + int(instance[:8], 16) % 40_000
 
 
 def is_port_collision_log(output: str) -> bool:
@@ -1225,6 +1309,7 @@ class IntegrationLifecycle:
         output: Path,
         failure_case: str | None = None,
         runner: Runner | None = None,
+        cloud_mode: bool = False,
     ) -> None:
         self.root = root
         self.instance = instance
@@ -1233,9 +1318,12 @@ class IntegrationLifecycle:
         self.output = output
         self.failure_case = failure_case
         self.runner = runner or Runner()
+        self.cloud_mode = cloud_mode
         self.uid = os.getuid()
         self.active_root = Path(f"/etc/containers/systemd/users/{self.uid}")
-        self.resources = Resources.for_instance(instance, self.uid, self.active_root)
+        self.resources = Resources.for_instance(
+            instance, self.uid, self.active_root, cloud_mode
+        )
         self.assets = fixture_root / "assets"
         self.gh_config = fixture_root / "anonymous-gh-config"
         self.cleaned = False
@@ -1245,6 +1333,8 @@ class IntegrationLifecycle:
         self.graph_root: Path | None = None
         self.run_root: Path | None = None
         self.apparmor_available = False
+        self.cloud_gateway_digest: str | None = None
+        self.gh_executable = "gh"
         self.migration_invocation: tuple[str, str] | None = None
         self.inspected_oneshots: set[str] = set()
         self.preexisting_resources: dict[str, set[str]] = {}
@@ -1293,19 +1383,17 @@ class IntegrationLifecycle:
         )
 
     def validate_repository_and_runtime(self) -> None:
-        required = (
+        required = [
             "catatonit",
             "curl",
             "du",
-            "gh",
             "journalctl",
-            "node",
-            "npm",
             "podman",
             "python3",
-            "sudo",
             "systemctl",
-        )
+        ]
+        if not self.cloud_mode:
+            required.extend(("gh", "node", "npm", "sudo"))
         missing = [name for name in required if shutil.which(name) is None]
         if missing:
             raise IntegrationError(f"required command(s) missing: {' '.join(missing)}")
@@ -1318,16 +1406,29 @@ class IntegrationLifecycle:
         if stat_mode(self.fixture_root) != 0o700:
             raise IntegrationError("fixture root must have mode 0700")
 
-        version_line = required_first_line(
-            self.captured(["gh", "version"]), "GitHub CLI"
-        )
-        validate_gh_version_line(version_line)
-        self.command(["gh", "attestation", "verify", "--help"], capture=True)
-        self.command(playwright_admission_command(), capture=True)
-        # Authenticate once while the operator is present. Every later install
-        # and cleanup command remains non-interactive so failure paths cannot
-        # hang on a password prompt.
-        self.sudo("-S", "-v")
+        if self.cloud_mode:
+            if (
+                self.uid != CLOUD_OPERATOR_UID
+                or os.getgid() != CLOUD_OPERATOR_GID
+                or self.fixture_root != cloud_fixture_root(self.instance)
+                or self.port != cloud_fixture_port(self.instance)
+            ):
+                raise IntegrationError("cloud fixture identity or derived paths differ")
+            validate_trusted_executable(
+                CLOUD_FIXTURE_CLIENT, "trusted Quadlet fixture client"
+            )
+
+        if not self.cloud_mode:
+            version_line = required_first_line(
+                self.captured(["gh", "version"]), "GitHub CLI"
+            )
+            validate_gh_version_line(version_line)
+            self.command(["gh", "attestation", "verify", "--help"], capture=True)
+            self.command(playwright_admission_command(), capture=True)
+            # Authenticate once while the operator is present. Every later install
+            # and cleanup command remains non-interactive so failure paths cannot
+            # hang on a password prompt.
+            self.sudo("-S", "-v")
 
         info = parse_json_mapping(
             self.captured(["podman", "info", "--format", "json"]),
@@ -1372,10 +1473,40 @@ class IntegrationLifecycle:
         self.command(["systemctl", "--user", "is-active", "default.target"], capture=True)
         self.snapshot_unrelated_resources()
         self.runtime_admitted = True
-        cleanup_resources(self.runner, self.resources)
+        cleanup_resources(
+            self.runner, self.resources, cloud_mode=self.cloud_mode
+        )
         stale = self._owned_resource_errors()
         if stale:
             raise IntegrationError("stale integration resources could not be removed: " + "; ".join(stale))
+
+    def validate_cloud_cleanup_runtime(self) -> None:
+        if not self.cloud_mode:
+            raise IntegrationError("cloud cleanup requires the fixed cloud mode")
+        try:
+            identity_or_path_differs = (
+                self.uid != CLOUD_OPERATOR_UID
+                or os.getgid() != CLOUD_OPERATOR_GID
+                or self.fixture_root != cloud_fixture_root(self.instance)
+                or CLOUD_FIXTURE_BASE.resolve() != CLOUD_FIXTURE_BASE
+                or self.fixture_root.resolve() != self.fixture_root
+            )
+        except OSError:
+            identity_or_path_differs = True
+        if identity_or_path_differs:
+            raise IntegrationError("cloud cleanup identity or fixture path differs")
+        validate_trusted_executable(
+            CLOUD_FIXTURE_CLIENT, "trusted Quadlet fixture client"
+        )
+        info = parse_json_mapping(
+            self.captured(["podman", "info", "--format", "json"]),
+            "Podman runtime information",
+        )
+        self.graph_root, self.run_root = validate_runtime_info(
+            info, self.uid, os.environ
+        )
+        validate_user_container_configuration(Path.home(), os.environ)
+        self.runtime_admitted = True
 
     def _validate_registry_files(self) -> None:
         user_root = user_container_configuration_root(Path.home(), os.environ)
@@ -1536,7 +1667,75 @@ class IntegrationLifecycle:
             environment["REGISTRY_AUTH_FILE"] = os.fspath(auth_file)
         return environment
 
+    def stage_cloud_gh_cli(self) -> None:
+        if not self.cloud_mode:
+            return
+        release = CLOUD_GH_RELEASES.get(os.uname().machine)
+        if release is None:
+            raise IntegrationError("cloud GitHub CLI architecture is unsupported")
+        release_arch, expected_sha256 = release
+        archive_name = f"gh_{EXPECTED_GH_VERSION}_linux_{release_arch}.tar.gz"
+        archive = self.fixture_root / archive_name
+        executable = self.fixture_root / "tools" / "gh"
+        executable.parent.mkdir(mode=0o700)
+        self.command(
+            [
+                "curl",
+                "--disable",
+                "--proto",
+                "=https",
+                "--tlsv1.2",
+                "--fail",
+                "--location",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "180",
+                "--max-filesize",
+                "67108864",
+                "--output",
+                os.fspath(archive),
+                (
+                    "https://github.com/cli/cli/releases/download/"
+                    f"v{EXPECTED_GH_VERSION}/{archive_name}"
+                ),
+            ],
+            environment=self.anonymous_environment(),
+        )
+        try:
+            if hashlib.sha256(archive.read_bytes()).hexdigest() != expected_sha256:
+                raise IntegrationError("cloud GitHub CLI archive digest differs")
+            member_name = (
+                f"gh_{EXPECTED_GH_VERSION}_linux_{release_arch}/bin/gh"
+            )
+            with tarfile.open(archive, mode="r:gz") as bundle:
+                member = bundle.getmember(member_name)
+                if not member.isfile() or not 0 < member.size <= 64 * 1024 * 1024:
+                    raise IntegrationError("cloud GitHub CLI archive member is invalid")
+                source = bundle.extractfile(member)
+                if source is None:
+                    raise IntegrationError("cloud GitHub CLI archive member is missing")
+                content = source.read(64 * 1024 * 1024 + 1)
+                if len(content) != member.size:
+                    raise IntegrationError("cloud GitHub CLI archive member is truncated")
+            executable.write_bytes(content)
+            executable.chmod(0o700)
+        except (KeyError, OSError, tarfile.TarError) as error:
+            raise IntegrationError("cloud GitHub CLI staging failed") from error
+        finally:
+            archive.unlink(missing_ok=True)
+        self.gh_executable = os.fspath(executable)
+        version_line = required_first_line(
+            self.captured([self.gh_executable, "version"]), "GitHub CLI"
+        )
+        validate_gh_version_line(version_line)
+        self.command(
+            [self.gh_executable, "attestation", "verify", "--help"],
+            capture=True,
+        )
+
     def retrieve_verify_and_stage_images(self) -> None:
+        self.stage_cloud_gh_cli()
         self.gh_config.mkdir(mode=0o700)
         products = (
             (
@@ -1567,6 +1766,10 @@ class IntegrationLifecycle:
         ):
             self.anonymous_pull(label, image)
             self.verify_staged_image(image, image.rsplit("@", 1)[1])
+            if self.cloud_mode and label != "caddy":
+                self.stage_cloud_image_alias(
+                    label, image, image.rsplit("@", 1)[1]
+                )
         self.command(
             [
                 "podman",
@@ -1586,6 +1789,10 @@ class IntegrationLifecycle:
             environment=self.anonymous_environment(),
             cwd=self.root,
         )
+        if self.cloud_mode:
+            self.cloud_gateway_digest = self.local_image_digest(
+                self.resources.gateway_image
+            )
 
     def verify_and_stage_product(
         self,
@@ -1626,7 +1833,7 @@ class IntegrationLifecycle:
         )
         self.command(
             [
-                "gh",
+                self.gh_executable,
                 "attestation",
                 "verify",
                 os.fspath(subject),
@@ -1650,6 +1857,8 @@ class IntegrationLifecycle:
         )
         self.anonymous_pull(label, image)
         self.verify_staged_image(image, digest)
+        if self.cloud_mode:
+            self.stage_cloud_image_alias(label, image, digest)
         subject.unlink(missing_ok=True)
         bundle.unlink(missing_ok=True)
         print(f"Verified and staged {label} image: {image}")
@@ -1701,6 +1910,50 @@ class IntegrationLifecycle:
         if image not in repo_digests and observed.get("Digest") != digest:
             raise IntegrationError("staged image does not retain the reviewed digest")
 
+    def stage_cloud_image_alias(
+        self, label: str, source: str, digest: str
+    ) -> None:
+        tag = CLOUD_IMAGE_TAGS.get(label)
+        if tag is None or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+            raise IntegrationError("cloud image alias is outside the closed contract")
+        repository = tag.rsplit(":", 1)[0]
+        exact_reference = f"{repository}@{digest}"
+        self.command(["podman", "tag", source, tag])
+        observed = parse_single_json_object(
+            self.captured(
+                ["podman", "image", "inspect", exact_reference, "--format", "json"]
+            ),
+            "cloud image alias inspection",
+        )
+        repo_digests = observed.get("RepoDigests")
+        if (
+            observed.get("Digest") != digest
+            or not isinstance(repo_digests, list)
+            or not all(isinstance(item, str) for item in repo_digests)
+            or exact_reference not in repo_digests
+        ):
+            raise IntegrationError("cloud image alias lost the verified digest")
+
+    def local_image_digest(self, image: str) -> str:
+        observed = parse_single_json_object(
+            self.captured(
+                ["podman", "image", "inspect", image, "--format", "json"]
+            ),
+            "local gateway image inspection",
+        )
+        digest = observed.get("Digest")
+        exact_reference = f"{image.rsplit(':', 1)[0]}@{digest}"
+        repo_digests = observed.get("RepoDigests")
+        if (
+            not isinstance(digest, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+            or not isinstance(repo_digests, list)
+            or not all(isinstance(item, str) for item in repo_digests)
+            or exact_reference not in repo_digests
+        ):
+            raise IntegrationError("local gateway image has no immutable digest")
+        return digest
+
     def render_validate_and_install_units(self) -> None:
         if self.port is None:
             raise IntegrationError("integration port was not selected before rendering")
@@ -1733,8 +1986,96 @@ class IntegrationLifecycle:
         ]
         if self.failure_case is not None:
             base.extend(("--failure-case", self.failure_case))
+        if self.cloud_mode:
+            if self.cloud_gateway_digest is None:
+                raise IntegrationError("cloud gateway digest is missing before rendering")
+            base.extend(("--cloud-gateway-digest", self.cloud_gateway_digest))
         self.command(["python3", os.fspath(renderer), "render", *base, "--output", os.fspath(self.output)])
         self.command(["python3", os.fspath(renderer), "validate", *base, "--input", os.fspath(self.output)])
+        self.publish_rendered_units()
+        validate_active_root(self.active_root)
+        validate_active_root(self.resources.systemd_target_file.parent)
+        validate_active_quadlet_inputs(self.active_root)
+        for source in sorted(self.output.iterdir()):
+            destination = (
+                self.resources.systemd_target_file
+                if source.name == self.resources.target
+                else self.active_root / source.name
+            )
+            metadata = destination.lstat()
+            if (
+                not destination.is_file()
+                or destination.is_symlink()
+                or metadata.st_uid != 0
+                or metadata.st_gid != 0
+                or stat_mode(destination) != 0o644
+                or destination.read_text(encoding="utf-8")
+                != source.read_text(encoding="utf-8")
+            ):
+                raise IntegrationError(
+                    f"active unit differs from the reviewed contract: {source.name}"
+                )
+        if self.cloud_mode:
+            return
+        self.command(
+            [
+                "python3",
+                os.fspath(renderer),
+                "validate",
+                *base,
+                "--input",
+                os.fspath(self.active_root),
+                "--require-root-owned",
+                "--allow-unrelated",
+            ]
+        )
+        self.command(["systemctl", "--user", "daemon-reload"])
+        generator_root = Path(f"/run/user/{self.uid}/systemd/generator")
+        effective_units = [
+            (self.resources.target, self.resources.systemd_target_file),
+            *(
+                (service, generator_root / service)
+                for service in generated_service_names(self.resources)
+            ),
+        ]
+        for unit, expected_fragment in effective_units:
+            properties = self.captured(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    unit,
+                    "--property=FragmentPath",
+                    "--property=DropInPaths",
+                ]
+            )
+            validate_effective_systemd_unit(properties, expected_fragment)
+        for role in (
+            item for item in CONTAINER_ROLES if role_spec(item).health is not None
+        ):
+            properties = self.captured(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    f"{self.resources.prefix}-{role}.service",
+                    "--property=Type",
+                    "--property=NotifyAccess",
+                ]
+            )
+            validate_effective_health_service(properties)
+
+    def publish_rendered_units(self) -> None:
+        if self.cloud_mode:
+            self.command(
+                [
+                    os.fspath(CLOUD_FIXTURE_CLIENT),
+                    "install",
+                    self.instance,
+                    os.fspath(self.output),
+                ]
+            )
+            return
         self.sudo(
             "-n",
             "install",
@@ -1773,68 +2114,6 @@ class IntegrationLifecycle:
             os.fspath(target_source),
             os.fspath(self.resources.systemd_target_file),
         )
-        validate_active_root(self.active_root)
-        validate_active_root(self.resources.systemd_target_file.parent)
-        validate_active_quadlet_inputs(self.active_root)
-        self.command(
-            [
-                "python3",
-                os.fspath(renderer),
-                "validate",
-                *base,
-                "--input",
-                os.fspath(self.active_root),
-                "--require-root-owned",
-                "--allow-unrelated",
-            ]
-        )
-        self.command(["systemctl", "--user", "daemon-reload"])
-        installed_target = self.resources.systemd_target_file
-        target_metadata = installed_target.lstat()
-        if (
-            not installed_target.is_file()
-            or installed_target.is_symlink()
-            or target_metadata.st_uid != 0
-            or target_metadata.st_gid != 0
-            or stat_mode(installed_target) != 0o644
-            or installed_target.read_text(encoding="utf-8")
-            != target_source.read_text(encoding="utf-8")
-        ):
-            raise IntegrationError("active systemd target differs from the reviewed contract")
-        generator_root = Path(f"/run/user/{self.uid}/systemd/generator")
-        effective_units = [
-            (self.resources.target, self.resources.systemd_target_file),
-            *(
-                (service, generator_root / service)
-                for service in generated_service_names(self.resources)
-            ),
-        ]
-        for unit, expected_fragment in effective_units:
-            properties = self.captured(
-                [
-                    "systemctl",
-                    "--user",
-                    "show",
-                    unit,
-                    "--property=FragmentPath",
-                    "--property=DropInPaths",
-                ]
-            )
-            validate_effective_systemd_unit(properties, expected_fragment)
-        for role in (
-            item for item in CONTAINER_ROLES if role_spec(item).health is not None
-        ):
-            properties = self.captured(
-                [
-                    "systemctl",
-                    "--user",
-                    "show",
-                    f"{self.resources.prefix}-{role}.service",
-                    "--property=Type",
-                    "--property=NotifyAccess",
-                ]
-            )
-            validate_effective_health_service(properties)
 
     def start_target(self) -> None:
         if not self.inspected_oneshots:
@@ -2823,7 +3102,9 @@ class IntegrationLifecycle:
             errors: list[str] = []
             if self.runtime_admitted:
                 try:
-                    cleanup_resources(self.runner, self.resources)
+                    cleanup_resources(
+                        self.runner, self.resources, cloud_mode=self.cloud_mode
+                    )
                 except Exception:
                     errors.append("resource cleanup failed")
                 try:
@@ -2839,6 +3120,12 @@ class IntegrationLifecycle:
                     shutil.rmtree(self.fixture_root)
                 except OSError:
                     errors.append("fixture root could not be removed")
+            if self.cloud_mode and CLOUD_FIXTURE_BASE.exists():
+                try:
+                    if not any(CLOUD_FIXTURE_BASE.iterdir()):
+                        CLOUD_FIXTURE_BASE.rmdir()
+                except OSError:
+                    errors.append("cloud fixture parent could not be removed")
             if errors:
                 raise IntegrationError("incomplete exact cleanup: " + "; ".join(errors))
             self.cleaned = True
@@ -3018,12 +3305,94 @@ def parse_arguments(argv: Sequence[str] | None = None):
     parser.add_argument("--port", type=int)
     parser.add_argument("--fixture-root", type=Path)
     parser.add_argument("--failure-case", choices=("migration", "dependency", "health"))
-    return parser.parse_args(argv)
+    parser.add_argument("--cloud-phase", choices=("prepare", "cleanup"))
+    arguments = parser.parse_args(argv)
+    if arguments.cloud_phase is not None and any(
+        value is not None
+        for value in (
+            arguments.instance,
+            arguments.port,
+            arguments.fixture_root,
+            arguments.failure_case,
+        )
+    ):
+        parser.error("cloud phases accept no runtime override arguments")
+    return arguments
+
+
+def prepare_cloud_fixture_directory(fixture_root: Path) -> None:
+    if fixture_root.parent != CLOUD_FIXTURE_BASE:
+        raise IntegrationError("cloud fixture root is outside the fixed base")
+    try:
+        if (
+            CLOUD_FIXTURE_BASE.resolve() != CLOUD_FIXTURE_BASE
+            or fixture_root.resolve() != fixture_root
+        ):
+            raise IntegrationError(
+                "cloud fixture path is stale or has unsafe metadata"
+            )
+    except OSError as error:
+        raise IntegrationError(
+            "cloud fixture path is stale or has unsafe metadata"
+        ) from error
+    if not CLOUD_FIXTURE_BASE.exists():
+        CLOUD_FIXTURE_BASE.mkdir(mode=0o700)
+    parent_metadata = CLOUD_FIXTURE_BASE.lstat()
+    if (
+        not stat.S_ISDIR(parent_metadata.st_mode)
+        or CLOUD_FIXTURE_BASE.is_symlink()
+        or parent_metadata.st_uid != os.getuid()
+        or parent_metadata.st_gid != os.getgid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+        or fixture_root.exists()
+        or fixture_root.is_symlink()
+    ):
+        raise IntegrationError("cloud fixture path is stale or has unsafe metadata")
+    fixture_root.mkdir(mode=0o700)
 
 
 def main() -> int:
     arguments = parse_arguments()
     root = Path(__file__).resolve().parents[1]
+    if arguments.cloud_phase is not None:
+        instance = os.environ.get("SECPAL_FIXTURE_INSTANCE", "")
+        try:
+            fixture_root = cloud_fixture_root(instance)
+            if arguments.cloud_phase == "prepare":
+                prepare_cloud_fixture_directory(fixture_root)
+            port = cloud_fixture_port(instance)
+        except (IntegrationError, OSError) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+        lifecycle = IntegrationLifecycle(
+            root=root,
+            instance=instance,
+            port=port,
+            fixture_root=fixture_root,
+            output=fixture_root / "quadlets",
+            cloud_mode=True,
+        )
+        for signal_number in HANDLED_SIGNALS:
+            signal.signal(
+                signal_number,
+                lambda _signum, _frame, number=signal_number: handle_signal(
+                    lifecycle, number
+                ),
+            )
+        try:
+            if arguments.cloud_phase == "prepare":
+                execute_cloud_prepare(lifecycle)
+            else:
+                execute_cloud_cleanup(lifecycle)
+        except IntegrationInterrupted as interruption:
+            return 128 + interruption.signal_number
+        except IntegrationError as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+        if lifecycle.signal_number is not None:
+            return 128 + lifecycle.signal_number
+        print(f"Cloud Quadlet fixture {arguments.cloud_phase} passed.")
+        return 0
     instance = (
         secrets.token_hex(6) if arguments.instance is None else arguments.instance
     )

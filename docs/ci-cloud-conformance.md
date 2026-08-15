@@ -356,9 +356,9 @@ the clean-tree admission. Python bytecode generation is disabled so the fixed
 target suite does not dirty its own checkout. The target cannot select these
 boundaries.
 The target account has no sudo authority. The `host` phase retains the D.1
-contract suite. PR #22 owns the implementation of the two workload phases and
-may cross the root-owned publication boundary only through the fixed trusted
-fixture client. Its future fixed client path may stage runtime assets only below
+contract suite. The two workload phases cross the root-owned publication
+boundary only through the fixed trusted fixture client. The target stages
+runtime assets only below
 `/home/secpal-ci/quadlet-fixture/<instance>/assets`; this location is derived
 from the admitted SHA prefix, is not a phase argument, and every effective bind
 source outside its closed filename set fails trusted live admission. The stable
@@ -509,14 +509,14 @@ provider payload transport so DigitalOcean's 64-KiB user-data ceiling retains
 explicit headroom; each decoded root-owned file is byte-for-byte the reviewed
 main-controlled source. Compression does not move trust to the tested revision.
 
-This prerequisite supplies the trusted protocol and independent observations;
-it does not implement the PR #22 product runtime. After this change merges,
-PR #22 must update from that merged `main` commit, adopt the unprivileged
-fixture client for its fixed cloud phases, and only then run one exact updated
-PR #22 SHA on DigitalOcean Intel, DigitalOcean AMD, and GCP Axion. All three
-bounded artifacts require review before a workload-conformance claim. This
-prerequisite by itself does not prove that PR #22, a SecPal product image, or
-any product container ran in cloud.
+The target implementation adopts this trusted protocol without moving its
+authority: it verifies and stages the reviewed images, publishes the closed
+unit set through the unprivileged client, and later requests exact cleanup.
+It cannot activate units or write the active definitions directly. One exact
+target SHA must still run on DigitalOcean Intel, DigitalOcean AMD, and GCP
+Axion, and all three bounded artifacts require review before a
+workload-conformance claim. The protocol or implementation by itself does not
+prove that a SecPal product container ran successfully in cloud.
 
 ## Ephemeral SSH and initial host identity
 

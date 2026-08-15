@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -14,6 +15,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
@@ -83,6 +85,11 @@ class RecordingExpectedFailureLifecycle(RecordingLifecycle):
 
     def prove_expected_failure(self) -> None:
         self._phase("failure-prove")
+
+
+class RecordingCloudCleanupLifecycle(RecordingLifecycle):
+    def validate_cloud_cleanup_runtime(self) -> None:
+        self._phase("cleanup-admission")
 
 
 class PortRetryLifecycle(RecordingLifecycle):
@@ -348,6 +355,398 @@ class QuadletLifecycleContract(unittest.TestCase):
         runner.active_process_group = False
         runner.terminate_active()
         process.terminate.assert_called_once_with()
+
+    def test_cloud_prepare_publishes_without_start_proof_or_cleanup(self) -> None:
+        lifecycle = RecordingLifecycle(self.module)
+        self.module.execute_cloud_prepare(lifecycle)
+        self.assertEqual(
+            lifecycle.events,
+            ["admission", "verify-stage", "quadlets"],
+        )
+        self.assertEqual(lifecycle.cleanup_calls, 0)
+
+    def test_cloud_cleanup_is_a_separate_reconstructible_phase(self) -> None:
+        lifecycle = RecordingCloudCleanupLifecycle(self.module)
+        self.module.execute_cloud_cleanup(lifecycle)
+        self.assertEqual(lifecycle.events, ["cleanup-admission", "cleanup"])
+        self.assertEqual(lifecycle.cleanup_calls, 1)
+
+    def test_cloud_phase_cli_rejects_runtime_escape_hatches(self) -> None:
+        accepted = self.module.parse_arguments(["--cloud-phase", "prepare"])
+        self.assertEqual(accepted.cloud_phase, "prepare")
+        for arguments in (
+            ["--cloud-phase", "invalid"],
+            ["--cloud-phase", "prepare", "--instance", "attacker01"],
+            ["--cloud-phase", "prepare", "--port", "18443"],
+            ["--cloud-phase", "prepare", "--fixture-root", "/tmp/escape"],
+            ["--cloud-phase", "cleanup", "--failure-case", "migration"],
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(SystemExit):
+                self.module.parse_arguments(arguments)
+
+    def test_cloud_fixture_values_are_derived_from_the_admitted_instance(self) -> None:
+        instance = "0123456789ab"
+        self.assertEqual(
+            self.module.cloud_fixture_root(instance),
+            Path(f"/home/secpal-ci/quadlet-fixture/{instance}"),
+        )
+        port = self.module.cloud_fixture_port(instance)
+        self.assertGreaterEqual(port, 20_000)
+        self.assertLessEqual(port, 59_999)
+        self.assertEqual(port, self.module.cloud_fixture_port(instance))
+
+    def test_cloud_publication_uses_only_the_fixed_unprivileged_client(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            output = fixture / "quadlets"
+            output.mkdir()
+            runner = FakeRunner()
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=fixture,
+                output=output,
+                runner=runner,
+                cloud_mode=True,
+            )
+            lifecycle.publish_rendered_units()
+            self.assertEqual(
+                runner.commands,
+                [
+                    (
+                        "/usr/local/bin/secpal-ci-quadlet-fixture",
+                        "install",
+                        "contract01",
+                        os.fspath(output),
+                    )
+                ],
+            )
+            self.assertFalse(any(command[0] == "sudo" for command in runner.commands))
+
+    def test_cloud_github_cli_archive_is_digest_bound_and_privately_staged(
+        self,
+    ) -> None:
+        content = b"#!/bin/sh\nexit 0\n"
+        archive_buffer = io.BytesIO()
+        with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
+            member = tarfile.TarInfo(
+                "gh_2.97.0_linux_amd64/bin/gh"
+            )
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+        archive_bytes = archive_buffer.getvalue()
+        expected_digest = hashlib.sha256(archive_bytes).hexdigest()
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            commands = []
+
+            def command(arguments, **kwargs):
+                commands.append((tuple(arguments), kwargs))
+                if arguments[0] == "curl":
+                    destination = Path(
+                        arguments[arguments.index("--output") + 1]
+                    )
+                    destination.write_bytes(archive_bytes)
+                    return subprocess.CompletedProcess(arguments, 0, "", "")
+                if arguments[1:] == ["version"]:
+                    return subprocess.CompletedProcess(
+                        arguments, 0, "gh version 2.97.0 (test)\n", ""
+                    )
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            lifecycle.command = command
+            with mock.patch.object(
+                self.module.os,
+                "uname",
+                return_value=mock.Mock(machine="x86_64"),
+            ), mock.patch.object(
+                self.module,
+                "CLOUD_GH_RELEASES",
+                {"x86_64": ("amd64", expected_digest)},
+            ):
+                lifecycle.stage_cloud_gh_cli()
+
+            executable = fixture / "tools" / "gh"
+            self.assertEqual(executable.read_bytes(), content)
+            self.assertEqual(executable.stat().st_mode & 0o7777, 0o700)
+            self.assertEqual(lifecycle.gh_executable, os.fspath(executable))
+            curl = commands[0][0]
+            self.assertIn("--max-filesize", curl)
+            self.assertIn(
+                "https://github.com/cli/cli/releases/download/v2.97.0/"
+                "gh_2.97.0_linux_amd64.tar.gz",
+                curl,
+            )
+            self.assertFalse(
+                (fixture / "gh_2.97.0_linux_amd64.tar.gz").exists()
+            )
+
+    def test_cloud_github_cli_archive_rejects_a_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+
+            def command(arguments, **_kwargs):
+                destination = Path(
+                    arguments[arguments.index("--output") + 1]
+                )
+                destination.write_bytes(b"not the reviewed archive")
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            lifecycle.command = command
+            with mock.patch.object(
+                self.module.os,
+                "uname",
+                return_value=mock.Mock(machine="x86_64"),
+            ), mock.patch.object(
+                self.module,
+                "CLOUD_GH_RELEASES",
+                {"x86_64": ("amd64", "0" * 64)},
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "archive digest differs",
+            ):
+                lifecycle.stage_cloud_gh_cli()
+            self.assertFalse(
+                (fixture / "gh_2.97.0_linux_amd64.tar.gz").exists()
+            )
+
+    def test_cloud_image_alias_requires_consistent_exact_digest_evidence(
+        self,
+    ) -> None:
+        digest = "sha256:" + "a" * 64
+        exact_reference = f"localhost/secpal-ci-api@{digest}"
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            lifecycle.captured = mock.Mock(
+                return_value=json.dumps(
+                    [{"Digest": digest, "RepoDigests": [exact_reference]}]
+                )
+            )
+            lifecycle.stage_cloud_image_alias(
+                "api", "ghcr.io/secpal/api@" + digest, digest
+            )
+            self.assertIn(
+                (
+                    "podman",
+                    "tag",
+                    "ghcr.io/secpal/api@" + digest,
+                    "localhost/secpal-ci-api:verified",
+                ),
+                lifecycle.runner.commands,
+            )
+        mutations = (
+            {"Digest": "sha256:" + "b" * 64, "RepoDigests": [exact_reference]},
+            {"Digest": digest, "RepoDigests": exact_reference},
+            {"Digest": digest, "RepoDigests": []},
+        )
+        for observed in mutations:
+            with self.subTest(observed=observed), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                lifecycle = self.module.IntegrationLifecycle(
+                    root=ROOT,
+                    instance="0123456789ab",
+                    port=18443,
+                    fixture_root=fixture,
+                    output=fixture / "quadlets",
+                    runner=FakeRunner(),
+                    cloud_mode=True,
+                )
+                lifecycle.captured = mock.Mock(
+                    return_value=json.dumps([observed])
+                )
+                with self.assertRaisesRegex(
+                    self.module.IntegrationError,
+                    "cloud image alias lost the verified digest",
+                ):
+                    lifecycle.stage_cloud_image_alias(
+                        "api", "ghcr.io/secpal/api@" + digest, digest
+                    )
+
+    def test_cloud_gateway_digest_requires_a_typed_exact_repo_digest(self) -> None:
+        digest = "sha256:" + "a" * 64
+        image = "localhost/secpal-ci-gateway-0123456789ab:2.10.2"
+        exact_reference = f"localhost/secpal-ci-gateway-0123456789ab@{digest}"
+        valid = {"Digest": digest, "RepoDigests": [exact_reference]}
+        mutations = (
+            {"Digest": digest, "RepoDigests": exact_reference},
+            {"Digest": digest, "RepoDigests": []},
+            {"Digest": "", "RepoDigests": [exact_reference]},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            lifecycle.captured = mock.Mock(return_value=json.dumps([valid]))
+            self.assertEqual(lifecycle.local_image_digest(image), digest)
+            for observed in mutations:
+                with self.subTest(observed=observed):
+                    lifecycle.captured = mock.Mock(
+                        return_value=json.dumps([observed])
+                    )
+                    with self.assertRaisesRegex(
+                        self.module.IntegrationError,
+                        "local gateway image has no immutable digest",
+                    ):
+                        lifecycle.local_image_digest(image)
+
+    def test_cloud_fixture_rejects_a_symlinked_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            real_home = temporary / "real-home"
+            real_home.mkdir(mode=0o700)
+            linked_home = temporary / "linked-home"
+            linked_home.symlink_to(real_home, target_is_directory=True)
+            fixture_base = linked_home / "quadlet-fixture"
+            fixture_root = fixture_base / "0123456789ab"
+            with mock.patch.object(
+                self.module, "CLOUD_FIXTURE_BASE", fixture_base
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "cloud fixture path is stale or has unsafe metadata",
+            ):
+                self.module.prepare_cloud_fixture_directory(fixture_root)
+
+    def test_cloud_fixture_rejects_stale_or_unsafe_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_base = Path(directory) / "quadlet-fixture"
+            fixture_base.mkdir(mode=0o755)
+            fixture_base.chmod(0o755)
+            fixture_root = fixture_base / "0123456789ab"
+            with mock.patch.object(
+                self.module, "CLOUD_FIXTURE_BASE", fixture_base
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "cloud fixture path is stale or has unsafe metadata",
+            ):
+                self.module.prepare_cloud_fixture_directory(fixture_root)
+
+            fixture_base.chmod(0o700)
+            fixture_root.mkdir(mode=0o700)
+            with mock.patch.object(
+                self.module, "CLOUD_FIXTURE_BASE", fixture_base
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "cloud fixture path is stale or has unsafe metadata",
+            ):
+                self.module.prepare_cloud_fixture_directory(fixture_root)
+
+    def test_cloud_fixture_creation_preserves_a_parallel_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_base = Path(directory) / "quadlet-fixture"
+            fixture_base.mkdir(mode=0o700)
+            sibling = fixture_base / "abcdef012345"
+            sibling.mkdir(mode=0o700)
+            fixture_root = fixture_base / "0123456789ab"
+            with mock.patch.object(
+                self.module, "CLOUD_FIXTURE_BASE", fixture_base
+            ):
+                self.module.prepare_cloud_fixture_directory(fixture_root)
+            self.assertTrue(fixture_root.is_dir())
+            self.assertTrue(sibling.is_dir())
+
+    def test_cloud_cleanup_admission_rejects_wrong_identity_or_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_base = Path(directory) / "quadlet-fixture"
+            fixture_root = fixture_base / "0123456789ab"
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture_root,
+                output=fixture_root / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            with mock.patch.object(
+                self.module, "CLOUD_FIXTURE_BASE", fixture_base
+            ), mock.patch.object(
+                self.module.os, "getuid", return_value=20_001
+            ), mock.patch.object(
+                self.module.os, "getgid", return_value=20_000
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "cloud cleanup identity or fixture path differs",
+            ):
+                lifecycle.validate_cloud_cleanup_runtime()
+
+    def test_cloud_cleanup_admission_rejects_a_symlinked_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            real_home = temporary / "real-home"
+            real_home.mkdir(mode=0o700)
+            linked_home = temporary / "linked-home"
+            linked_home.symlink_to(real_home, target_is_directory=True)
+            fixture_base = linked_home / "quadlet-fixture"
+            fixture_root = fixture_base / "0123456789ab"
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture_root,
+                output=fixture_root / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            with mock.patch.object(
+                self.module, "CLOUD_FIXTURE_BASE", fixture_base
+            ), mock.patch.object(
+                self.module.os, "getuid", return_value=20_000
+            ), mock.patch.object(
+                self.module.os, "getgid", return_value=20_000
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "cloud cleanup identity or fixture path differs",
+            ):
+                lifecycle.validate_cloud_cleanup_runtime()
+
+            lifecycle.fixture_root = fixture_base / "different-instance"
+            with mock.patch.object(
+                self.module, "CLOUD_FIXTURE_BASE", fixture_base
+            ), mock.patch.object(
+                self.module.os, "getuid", return_value=20_000
+            ), mock.patch.object(
+                self.module.os, "getgid", return_value=20_000
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "cloud cleanup identity or fixture path differs",
+            ):
+                lifecycle.validate_cloud_cleanup_runtime()
 
     def test_runtime_admission_accepts_only_the_d1_runtime(self) -> None:
         self.assertEqual(
@@ -1933,6 +2332,61 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 self.module.cleanup_resources(runner, resources)
             self.assertTrue(any("reset-failed" in command for command in runner.commands))
+
+    def test_cloud_cleanup_rejects_a_failed_fixture_removal_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = FakeRunner()
+            original_run = runner.run
+
+            def fail_remove(command, **kwargs):
+                result = original_run(command, **kwargs)
+                if tuple(command) == (
+                    "/usr/local/bin/secpal-ci-quadlet-fixture",
+                    "remove",
+                    "contract01",
+                ):
+                    return subprocess.CompletedProcess(command, 1, "", "")
+                return result
+
+            runner.run = fail_remove
+            resources = self.module.Resources.for_instance(
+                "contract01",
+                uid=20_000,
+                active_root=Path(directory),
+                cloud_mode=True,
+            )
+            with mock.patch.object(
+                self.module, "_owned_unit_file", return_value=True
+            ), self.assertRaisesRegex(
+                self.module.IntegrationError,
+                "trusted Quadlet fixture removal failed",
+            ):
+                self.module.cleanup_resources(runner, resources, cloud_mode=True)
+
+    def test_cloud_cleanup_skips_an_unnecessary_fixture_removal_request(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = ResourceStateRunner(
+                {("systemctl", "--user", "daemon-reload"): 0}
+            )
+            resources = self.module.Resources.for_instance(
+                "contract01",
+                uid=20_000,
+                active_root=Path(directory),
+                cloud_mode=True,
+            )
+            self.module.cleanup_resources(runner, resources, cloud_mode=True)
+            self.assertFalse(
+                any(
+                    command[:2]
+                    == (
+                        "/usr/local/bin/secpal-ci-quadlet-fixture",
+                        "remove",
+                    )
+                    for command in runner.commands
+                )
+            )
 
     def test_removed_systemd_units_must_be_unloaded(self) -> None:
         self.module.validate_removed_systemd_unit_state(

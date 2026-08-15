@@ -146,6 +146,32 @@ evidence. An unavailable volume observation is reported explicitly rather than
 as a false zero. Those observations do not change the D.1 production resource
 floors.
 
+## Exact-target Debian 13 fixture
+
+The manual cloud-conformance protocol invokes only two workload operations in
+target code. `workload-prepare-start` derives the fixture identifier and port
+from the already admitted commit, installs a checksum-pinned GitHub CLI in the
+private fixture, repeats both product attestation gates, stages immutable
+`localhost/secpal-ci-…@sha256:…` identities, renders the closed unit set, and
+publishes it through `/usr/local/bin/secpal-ci-quadlet-fixture`. It does not
+start a service. The main-controlled collector replaces the complete user
+manager environment, reloads the root-owned definitions, starts the target,
+and independently observes the result.
+
+For that evidence boundary only, the secret initializer and migration use
+their direct reviewed entrypoint and command. Quadlet's generated `--rm` is
+overridden by the fixed `--rm=false` argument so the completed one-shot
+containers remain inspectable while their systemd services are active/exited.
+The separate `workload-cleanup` phase removes only the deterministic fixture
+resources and submits the fixed root-owned removal request. Rejection of that
+request is a cleanup failure. The published product images are deliberately
+not removed.
+
+This disposable provider evidence is separate from the Ubuntu browser matrix
+and from D.1 production-host admission. A cloud artifact is evidence only
+after the independent collector and closed schema both admit it; provisioning
+a Debian host or publishing Quadlets is not itself a passing claim.
+
 ## Running the integration
 
 The runtime requires a non-root user, Podman `>=5.4.2,<6`, `crun`, `catatonit`,

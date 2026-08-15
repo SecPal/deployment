@@ -61,6 +61,14 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Changed
 
+- The exact-target Debian 13 conformance protocol now implements its closed
+  workload prepare and cleanup phases. Target code verifies and stages both
+  product images before publishing the fixed root-owned Quadlet set through
+  the trusted fixture client; the main-controlled collector remains the sole
+  activator and evidence authority.
+- Cloud-only one-shot units use direct reviewed process identities and retain
+  their completed containers until exact cleanup, allowing the independent
+  collector to bind one migration execution to Podman and systemd evidence.
 - The active required integration workflow uses explicit Ubuntu 26.04 amd64
   and arm64 hosted evidence for Podman 5 and native Quadlet. The completed
   Compose workflow and stack remain historical evidence.
@@ -79,6 +87,8 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Fixed
 
+- Cloud cleanup now fails closed when the trusted fixture removal request is
+  rejected or unavailable instead of treating that boundary as best effort.
 - Updated the cloud-conformance evidence record after the first successful GCP
   Axion lifecycle, including verified absence of a VM cloud identity, bounded
   evidence publication, and exact cleanup. All three implemented provider/CPU

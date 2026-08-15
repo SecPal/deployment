@@ -136,8 +136,10 @@ D.1-oriented evidence, perform exact OpenTofu cleanup, and delete expired
 owned billable compute fixtures through bounded TTL janitors. GCP uses
 repository-, workflow-, branch-, and environment-scoped Workload Identity
 Federation without a JSON key or VM service account. This is test
-infrastructure for Phase D evidence, not production host provisioning and not
-completion evidence for D.1a or a later phase.
+infrastructure for Phase D evidence, not production host provisioning. Its
+target workload phases can exercise D.1a, but only independently admitted
+artifacts from the exact tested SHA count as evidence; the infrastructure or
+fixture publication alone does not complete D.1a or a later phase.
 
 ## Phase E — Public edge, TLS, and CrowdSec
 

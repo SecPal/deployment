@@ -21,7 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.fspath(ROOT / "scripts"))
 
 from integration_runtime_contract import (
+    API_DIGEST,
     API_IMAGE,
+    FRONTEND_DIGEST,
+    POSTGRES_IMAGE,
+    VALKEY_IMAGE,
     podman_version_supported as quadlet_generator_version_supported,
 )
 
@@ -31,8 +35,10 @@ GATEWAY_CONFIG = ROOT / "config" / "quadlet" / "Caddyfile"
 ONESHOT_WRAPPER = ROOT / "scripts" / "quadlet-oneshot-entrypoint.sh"
 HARNESS = ROOT / "scripts" / "quadlet-integration.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "local-integration.yml"
+TARGET_CONFORMANCE = ROOT / "scripts" / "ci-cloud" / "target-conformance.sh"
 INSTANCE = "contract01"
 PORT = "18443"
+GATEWAY_DIGEST = "sha256:" + "a" * 64
 EXPECTED_FILES = {
     f"secpal-int-{INSTANCE}-api.container",
     f"secpal-int-{INSTANCE}-application.network",
@@ -115,6 +121,97 @@ class QuadletContract(unittest.TestCase):
             cwd=ROOT,
             text=True,
             capture_output=True,
+        )
+
+    def render_cloud(self) -> dict[str, str]:
+        result = self.run_renderer(
+            "--cloud-gateway-digest", GATEWAY_DIGEST, check=True
+        )
+        self.assertEqual(result.stdout, "")
+        return {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted(self.output.iterdir())
+        }
+
+    def test_cloud_renderer_uses_only_closed_local_digest_identities(self) -> None:
+        units = self.render_cloud()
+        api_reference = f"localhost/secpal-ci-api@{API_DIGEST}"
+        frontend_reference = f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}"
+        postgres_digest = POSTGRES_IMAGE.rsplit("@", 1)[1]
+        valkey_digest = VALKEY_IMAGE.rsplit("@", 1)[1]
+        expected = {
+            "api": api_reference,
+            "migrate": api_reference,
+            "secrets-init": api_reference,
+            "worker-general": api_reference,
+            "worker-hash-chain": api_reference,
+            "scheduler": api_reference,
+            "frontend": frontend_reference,
+            "postgres": f"localhost/secpal-ci-postgres@{postgres_digest}",
+            "valkey": f"localhost/secpal-ci-valkey@{valkey_digest}",
+            "gateway": (
+                f"localhost/secpal-ci-gateway-{INSTANCE}@{GATEWAY_DIGEST}"
+            ),
+        }
+        for role, image in expected.items():
+            with self.subTest(role=role):
+                unit = units[f"secpal-int-{INSTANCE}-{role}.container"]
+                self.assertIn(f"Image={image}\n", unit)
+                repository, separator, digest = image.partition("@")
+                self.assertEqual(separator, "@")
+                self.assertNotIn(":", repository)
+                self.assertRegex(
+                    repository, r"^localhost/secpal-ci-[a-z0-9-]+$"
+                )
+                self.assertRegex(digest, r"^sha256:[0-9a-f]{64}$")
+        api = units[f"secpal-int-{INSTANCE}-api.container"]
+        self.assertIn(
+            "HealthCmd=CMD /usr/local/bin/secpal-http-live\n", api
+        )
+        secrets_init = units[f"secpal-int-{INSTANCE}-secrets-init.container"]
+        self.assertIn(
+            'Entrypoint=["/bin/bash","/run/secpal/init-local-secrets.sh"]\n',
+            secrets_init,
+        )
+        self.assertNotIn("Exec=", secrets_init)
+        migrate = units[f"secpal-int-{INSTANCE}-migrate.container"]
+        self.assertIn(
+            'Entrypoint=["/bin/bash","/run/secpal/container-entrypoint.sh"]\n',
+            migrate,
+        )
+        self.assertIn("Exec=php artisan migrate --force\n", migrate)
+        for role in ("secrets-init", "migrate"):
+            with self.subTest(retained_oneshot=role):
+                unit = units[f"secpal-int-{INSTANCE}-{role}.container"]
+                self.assertIn("PodmanArgs=--rm=false\n", unit)
+                self.assertIn("quadlet-oneshot-entrypoint.sh", unit)
+
+    def test_cloud_renderer_rejects_non_digest_gateway_identity(self) -> None:
+        for value in (
+            "latest",
+            "sha256:" + "a" * 63,
+            "sha256:" + "A" * 64,
+            "sha256:" + "a" * 64 + "\nPodmanArgs=--privileged",
+        ):
+            with self.subTest(value=value):
+                result = self.run_renderer(
+                    "--cloud-gateway-digest", value, check=False
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_cloud_target_phases_delegate_only_to_the_fixed_harness_modes(self) -> None:
+        target = TARGET_CONFORMANCE.read_text(encoding="utf-8")
+        self.assertIn(
+            "python3 scripts/quadlet-integration.py --cloud-phase prepare",
+            target,
+        )
+        self.assertIn(
+            "python3 scripts/quadlet-integration.py --cloud-phase cleanup",
+            target,
+        )
+        self.assertNotIn(
+            "this target does not implement the fixed D.1a lifecycle phase",
+            target,
         )
 
     def test_complete_native_unit_set_and_security_contract(self) -> None:
@@ -640,6 +737,7 @@ class QuadletContract(unittest.TestCase):
         ):
             with self.subTest(translated_option=option.strip()):
                 self.assertTrue(all(option in line for line in container_starts))
+
         scheduler = generated.split(
             f"---secpal-int-{INSTANCE}-scheduler.service---", 1
         )[1].split("\n---", 1)[0]
@@ -689,6 +787,67 @@ class QuadletContract(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_cloud_generator_retains_completed_oneshot_evidence(self) -> None:
+        generator = Path(
+            "/usr/lib/systemd/user-generators/podman-user-generator"
+        )
+        if not generator.is_file():
+            self.skipTest("native Podman user generator is not installed")
+        self.render_cloud()
+        environment = dict(os.environ)
+        environment["QUADLET_UNIT_DIRS"] = os.fspath(self.output)
+        result = subprocess.run(
+            [os.fspath(generator), "-user", "-dryrun"],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = result.stdout + result.stderr
+        starts = {
+            role: next(
+                line
+                for line in generated.splitlines()
+                if line.startswith("ExecStart=/usr/bin/podman run ")
+                and f"--name secpal-int-{INSTANCE}-{role} " in line
+            )
+            for role in ("secrets-init", "migrate")
+        }
+        for role, command in starts.items():
+            with self.subTest(role=role):
+                self.assertLess(
+                    command.index(" --rm "), command.index(" --rm=false ")
+                )
+                self.assertNotIn(
+                    '--entrypoint "[\\"/bin/sh\\",\\"/run/secpal/'
+                    'quadlet-oneshot-entrypoint.sh\\"]"',
+                    command,
+                )
+        self.assertIn(
+            '--entrypoint "[\\"/bin/bash\\",\\"/run/secpal/'
+            'init-local-secrets.sh\\"]"',
+            starts["secrets-init"],
+        )
+        self.assertIn(
+            '--entrypoint "[\\"/bin/bash\\",\\"/run/secpal/'
+            'container-entrypoint.sh\\"]"',
+            starts["migrate"],
+        )
+        self.assertTrue(
+            starts["migrate"].endswith(" php artisan migrate --force")
+        )
+        api_start = next(
+            line
+            for line in generated.splitlines()
+            if line.startswith("ExecStart=/usr/bin/podman run ")
+            and f"--name secpal-int-{INSTANCE}-api " in line
+        )
+        self.assertIn(
+            '--health-cmd "CMD /usr/local/bin/secpal-http-live"',
+            api_start,
+        )
 
     def test_quadlet_generator_version_gate_matches_runtime_contract(self) -> None:
         self.assertFalse(quadlet_generator_version_supported("4.9.3"))
