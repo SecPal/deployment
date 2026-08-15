@@ -24,12 +24,12 @@ COLLECTOR_PATH = Path(__file__).with_name("collect-host-evidence.py")
 WORKLOAD_COLLECTOR_PATH = Path(__file__).with_name("collect-workload-evidence.py")
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "ci-cloud-evidence.schema.json"
 RUNTIME_PACKAGE_NAMES = {
-    "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
+    "podman", "conmon", "crun", "catatonit", "netavark", "aardvark-dns", "passt",
     "uidmap", "dbus-user-session", "dirmngr", "gpg", "gpg-agent",
     "openssh-client",
 }
 BOOTSTRAP_PACKAGE_NAMES = {
-    "aardvark-dns", "apparmor", "apparmor-utils", "crun", "curl",
+    "aardvark-dns", "apparmor", "apparmor-utils", "catatonit", "crun", "curl",
     "dbus-user-session", "dirmngr", "git", "gh", "gpg", "gpg-agent", "jq",
     "netavark", "openssh-client", "passt", "podman", "python3",
     "python3-jsonschema", "python3-yaml", "uidmap", "unattended-upgrades",

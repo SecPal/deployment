@@ -119,6 +119,13 @@ class CloudCIContractTests(unittest.TestCase):
             continuation,
         )
 
+    def test_native_bootstrap_installs_required_catatonit_runtime(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("  catatonit \\\n", bootstrap)
+
     def test_native_bootstrap_reboots_once_into_authenticated_current_kernel(
         self,
     ) -> None:

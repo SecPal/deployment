@@ -42,12 +42,12 @@ def valid_workload() -> dict[str, object]:
 
 def valid_document() -> dict[str, object]:
     runtime_package_names = {
-        "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
+        "podman", "conmon", "crun", "catatonit", "netavark", "aardvark-dns", "passt",
         "uidmap", "dbus-user-session", "dirmngr", "gpg", "gpg-agent",
         "openssh-client",
     }
     bootstrap_package_names = {
-        "aardvark-dns", "apparmor", "apparmor-utils", "crun", "curl",
+        "aardvark-dns", "apparmor", "apparmor-utils", "catatonit", "crun", "curl",
         "dbus-user-session", "dirmngr", "git", "gh", "gpg", "gpg-agent", "jq",
         "netavark", "openssh-client", "passt", "podman", "python3",
         "python3-jsonschema", "python3-yaml", "uidmap", "unattended-upgrades",
