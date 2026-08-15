@@ -2187,6 +2187,18 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("bounded-target-diagnostic.py", remote)
         self.assertNotIn("<<'REMOTE' >/dev/null 2>&1", remote)
 
+    def test_static_contract_rejects_unadmitted_socket_trigger_services(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-workload-evidence.py",
+            '"systemctl", "--user", "show", trigger,',
+            '"systemctl", "--user", "show", unit,',
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-workload-evidence.py",
+            "or not root_owned_systemd_unit(service_fragment)",
+            "or False",
+        )
+
     def test_early_remote_failure_writes_bounded_structured_evidence(self) -> None:
         remote = (
             ROOT / "scripts/ci-cloud/run-remote-conformance.sh"

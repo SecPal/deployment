@@ -91,9 +91,10 @@ SPDX-License-Identifier: CC0-1.0
   in the Actions log instead of discarding the only error output before exact
   VM cleanup.
 - D.1a workload evidence admits the fixed root-owned Debian 13 GnuPG and
-  OpenSSH agent socket units while continuing to reject unknown units,
-  user-controlled drop-ins, unexpected triggers, and every effective Podman
-  API service, listener, connection, or process.
+  OpenSSH agent socket/service pairs with exact owning-package provenance while
+  continuing to reject unknown units, user-controlled drop-ins or services,
+  unexpected triggers, and every effective Podman API service, listener,
+  connection, or process.
 - Cloud cleanup now fails closed when the trusted fixture removal request is
   rejected or unavailable instead of treating that boundary as best effort.
 - Updated the cloud-conformance evidence record after the first successful GCP

@@ -2175,6 +2175,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "keyboxd.socket": "keyboxd.service",
             "ssh-agent.socket": "ssh-agent.service",
         }
+        trusted_services = set(trusted.values())
         listing = "\n".join(
             f"{name} loaded active listening trusted fixture"
             for name in trusted
@@ -2191,6 +2192,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 return 0, listing, True
             if arguments[:3] == ["systemctl", "--user", "show"]:
                 name = arguments[3]
+                if name in trusted_services:
+                    return (
+                        0,
+                        f"FragmentPath=/usr/lib/systemd/user/{name}\n"
+                        "DropInPaths=",
+                        True,
+                    )
                 return (
                     0,
                     "\n".join(
@@ -2206,10 +2214,98 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
         with mock.patch.object(
             self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector, "root_owned_systemd_unit", return_value=True
         ):
             unsafe, complete = self.collector.user_socket_activation_facts()
         self.assertTrue(complete)
         self.assertFalse(unsafe)
+
+    def test_podman_api_rejects_user_controlled_agent_service(self) -> None:
+        listing = "\n".join(
+            (
+                "dbus.socket loaded active listening trusted fixture",
+                "gpg-agent.socket loaded active listening trusted fixture",
+            )
+        )
+        valid_service = {
+            "FragmentPath": "/usr/lib/systemd/user/gpg-agent.service",
+            "DropInPaths": "",
+        }
+        mutations = {
+            "FragmentPath": (
+                "/home/secpal-ci/.config/systemd/user/gpg-agent.service"
+            ),
+            "DropInPaths": (
+                "/home/secpal-ci/.config/systemd/user/"
+                "gpg-agent.service.d/override.conf"
+            ),
+        }
+
+        for field, value in mutations.items():
+            with self.subTest(field=field):
+                observed_service = {**valid_service, field: value}
+
+                def command_result(
+                    arguments: list[str], timeout: int = 20
+                ) -> tuple[int, str, bool]:
+                    del timeout
+                    if arguments[:5] == [
+                        "systemctl", "--user", "list-units", "--type=socket",
+                        "--state=active",
+                    ]:
+                        return 0, listing, True
+                    if arguments[:4] == [
+                        "systemctl", "--user", "show", "dbus.socket",
+                    ]:
+                        return (
+                            0,
+                            "FragmentPath=/usr/lib/systemd/user/dbus.socket\n"
+                            "DropInPaths=\nTriggers=dbus.service",
+                            True,
+                        )
+                    if arguments[:4] == [
+                        "systemctl", "--user", "show", "gpg-agent.socket",
+                    ]:
+                        return (
+                            0,
+                            "FragmentPath=/usr/lib/systemd/user/"
+                            "gpg-agent.socket\nDropInPaths=\n"
+                            "Triggers=gpg-agent.service",
+                            True,
+                        )
+                    if arguments[:4] == [
+                        "systemctl", "--user", "show", "dbus.service",
+                    ]:
+                        return (
+                            0,
+                            "FragmentPath=/usr/lib/systemd/user/dbus.service\n"
+                            "DropInPaths=",
+                            True,
+                        )
+                    if arguments[:4] == [
+                        "systemctl", "--user", "show", "gpg-agent.service",
+                    ]:
+                        return (
+                            0,
+                            "\n".join(
+                                f"{name}={item}"
+                                for name, item in observed_service.items()
+                            ),
+                            True,
+                        )
+                    raise AssertionError(f"unexpected command: {arguments}")
+
+                with mock.patch.object(
+                    self.collector, "command_result", side_effect=command_result
+                ), mock.patch.object(
+                    self.collector,
+                    "root_owned_systemd_unit",
+                    return_value=True,
+                ):
+                    unsafe, complete = self.collector.user_socket_activation_facts()
+                self.assertTrue(complete)
+                self.assertTrue(unsafe)
 
     def test_podman_api_rejects_modified_debian_agent_socket_units(self) -> None:
         listing = "\n".join(
@@ -2251,6 +2347,15 @@ class WorkloadEvidenceTests(unittest.TestCase):
                             True,
                         )
                     if arguments[:4] == [
+                        "systemctl", "--user", "show", "dbus.service",
+                    ]:
+                        return (
+                            0,
+                            "FragmentPath=/usr/lib/systemd/user/dbus.service\n"
+                            "DropInPaths=",
+                            True,
+                        )
+                    if arguments[:4] == [
                         "systemctl", "--user", "show", "gpg-agent.socket",
                     ]:
                         return (
@@ -2266,10 +2371,28 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     self.collector,
                     "command_result",
                     side_effect=command_result,
+                ), mock.patch.object(
+                    self.collector, "root_owned_systemd_unit", return_value=True
                 ):
                     unsafe, complete = self.collector.user_socket_activation_facts()
                 self.assertTrue(complete)
                 self.assertTrue(unsafe)
+
+    def test_systemd_unit_admission_requires_root_ownership(self) -> None:
+        metadata = types.SimpleNamespace(
+            st_mode=self.collector.stat.S_IFREG | 0o644,
+            st_uid=20000,
+            st_gid=20000,
+            st_nlink=1,
+        )
+        with mock.patch.object(
+            self.collector.Path, "lstat", return_value=metadata
+        ):
+            self.assertFalse(
+                self.collector.root_owned_systemd_unit(
+                    Path("/usr/lib/systemd/user/gpg-agent.service")
+                )
+            )
 
     def test_migration_and_readiness_are_derived_from_raw_facts(self) -> None:
         self.assert_failure(

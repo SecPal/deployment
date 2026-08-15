@@ -2110,6 +2110,20 @@ def validate(root: Path) -> None:
         and 'item.get("effective_caps") != expected_caps' in workload_collector,
         "Podman evidence must use admitted v5 fields and exact inventory/security facts",
     )
+    require(
+        "TRUSTED_USER_SOCKET_UNITS" in workload_collector
+        and "TRUSTED_USER_SERVICE_UNITS" in workload_collector
+        and "def root_owned_systemd_unit(path: Path) -> bool:"
+        in workload_collector
+        and "metadata.st_uid == 0" in workload_collector
+        and "metadata.st_gid == 0" in workload_collector
+        and "stat.S_IMODE(metadata.st_mode) == 0o644" in workload_collector
+        and '"systemctl", "--user", "show", trigger,' in workload_collector
+        and "service_fragment not in service_fragments" in workload_collector
+        and "not root_owned_systemd_unit(service_fragment)" in workload_collector
+        and 'service_properties["DropInPaths"] != ""' in workload_collector,
+        "every admitted user socket and triggered service must remain root-owned and fixed",
+    )
     try:
         evidence_schema = json.loads(evidence_schema_text)
         Draft202012Validator.check_schema(evidence_schema)

@@ -61,6 +61,21 @@ TRUSTED_USER_SOCKET_UNITS = {
         "ssh-agent.socket": "ssh-agent.service",
     }.items()
 }
+TRUSTED_USER_SERVICE_UNITS = {
+    name: frozenset(
+        {
+            Path("/usr/lib/systemd/user") / name,
+            Path("/lib/systemd/user") / name,
+        }
+    )
+    for name in {
+        "dbus.service",
+        "dirmngr.service",
+        "gpg-agent.service",
+        "keyboxd.service",
+        "ssh-agent.service",
+    }
+}
 CONTROL_NETWORK = "secpal-ci-unrelated-control-network"
 CONTROL_VOLUME = "secpal-ci-unrelated-control-volume"
 ROLES = (
@@ -2143,6 +2158,20 @@ def resource_inventory() -> tuple[dict[str, list[str]], bool]:
     )
 
 
+def root_owned_systemd_unit(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(metadata.st_mode)
+        and metadata.st_uid == 0
+        and metadata.st_gid == 0
+        and stat.S_IMODE(metadata.st_mode) == 0o644
+        and metadata.st_nlink == 1
+    )
+
+
 def user_socket_activation_facts() -> tuple[bool, bool]:
     status_code, output, complete = command_result(
         [
@@ -2166,6 +2195,7 @@ def user_socket_activation_facts() -> tuple[bool, bool]:
         return True, False
     if any(unit not in TRUSTED_USER_SOCKET_UNITS for unit in units):
         return True, True
+    admitted_services: set[str] = set()
     for unit in units:
         status_code, output, complete = command_result(
             [
@@ -2187,12 +2217,45 @@ def user_socket_activation_facts() -> tuple[bool, bool]:
         if set(properties) != {"FragmentPath", "DropInPaths", "Triggers"}:
             return True, False
         fragments, trigger = TRUSTED_USER_SOCKET_UNITS[unit]
+        fragment = Path(properties["FragmentPath"])
         if (
-            Path(properties["FragmentPath"]) not in fragments
+            fragment not in fragments
+            or not root_owned_systemd_unit(fragment)
             or properties["DropInPaths"] != ""
             or properties["Triggers"] != trigger
         ):
             return True, True
+        if trigger in admitted_services:
+            continue
+        service_fragments = TRUSTED_USER_SERVICE_UNITS.get(trigger)
+        if service_fragments is None:
+            return True, True
+        status_code, output, complete = command_result(
+            [
+                "systemctl", "--user", "show", trigger,
+                "--property=FragmentPath", "--property=DropInPaths",
+            ]
+        )
+        if status_code != 0 or not complete:
+            return True, False
+        service_properties: dict[str, str] = {}
+        for line in output.splitlines():
+            if "=" not in line:
+                return True, False
+            key, value = line.split("=", 1)
+            if key in service_properties:
+                return True, False
+            service_properties[key] = value
+        if set(service_properties) != {"FragmentPath", "DropInPaths"}:
+            return True, False
+        service_fragment = Path(service_properties["FragmentPath"])
+        if (
+            service_fragment not in service_fragments
+            or not root_owned_systemd_unit(service_fragment)
+            or service_properties["DropInPaths"] != ""
+        ):
+            return True, True
+        admitted_services.add(trigger)
     return False, True
 
 

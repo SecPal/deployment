@@ -230,7 +230,11 @@
             "aardvark-dns",
             "passt",
             "uidmap",
-            "dbus-user-session"
+            "dbus-user-session",
+            "dirmngr",
+            "gpg",
+            "gpg-agent",
+            "openssh-client"
           ],
           "properties": {
             "podman": { "$ref": "#/$defs/packageFact" },
@@ -240,7 +244,11 @@
             "aardvark-dns": { "$ref": "#/$defs/packageFact" },
             "passt": { "$ref": "#/$defs/packageFact" },
             "uidmap": { "$ref": "#/$defs/packageFact" },
-            "dbus-user-session": { "$ref": "#/$defs/packageFact" }
+            "dbus-user-session": { "$ref": "#/$defs/packageFact" },
+            "dirmngr": { "$ref": "#/$defs/packageFact" },
+            "gpg": { "$ref": "#/$defs/packageFact" },
+            "gpg-agent": { "$ref": "#/$defs/packageFact" },
+            "openssh-client": { "$ref": "#/$defs/packageFact" }
           }
         },
         "bootstrap_packages": {
@@ -253,10 +261,14 @@
             "crun",
             "curl",
             "dbus-user-session",
+            "dirmngr",
             "git",
             "gh",
+            "gpg",
+            "gpg-agent",
             "jq",
             "netavark",
+            "openssh-client",
             "passt",
             "podman",
             "python3",
@@ -272,10 +284,14 @@
             "crun": { "$ref": "#/$defs/packageFact" },
             "curl": { "$ref": "#/$defs/packageFact" },
             "dbus-user-session": { "$ref": "#/$defs/packageFact" },
+            "dirmngr": { "$ref": "#/$defs/packageFact" },
             "git": { "$ref": "#/$defs/packageFact" },
             "gh": { "$ref": "#/$defs/packageFact" },
+            "gpg": { "$ref": "#/$defs/packageFact" },
+            "gpg-agent": { "$ref": "#/$defs/packageFact" },
             "jq": { "$ref": "#/$defs/packageFact" },
             "netavark": { "$ref": "#/$defs/packageFact" },
+            "openssh-client": { "$ref": "#/$defs/packageFact" },
             "passt": { "$ref": "#/$defs/packageFact" },
             "podman": { "$ref": "#/$defs/packageFact" },
             "python3": { "$ref": "#/$defs/packageFact" },
