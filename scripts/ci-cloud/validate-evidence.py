@@ -356,7 +356,7 @@ def validate_document(document: object) -> dict[str, object]:
                 "fragment_mode", "drop_in_paths", "drop_in_owners", "active_state",
                 "sub_state", "result", "exec_main_status", "main_pid", "control_group",
                 "invocation_id", "source_path", "fragment_sha256",
-                "drop_in_sha256",
+                "drop_in_sha256", "environment",
             },
             f"$.workload.live.generated_services[{index}]",
         )
@@ -376,7 +376,7 @@ def validate_document(document: object) -> dict[str, object]:
                 "rootless", "privileged", "configured_user", "effective_uid",
                 "effective_gid", "effective_supplementary_gids",
                 "read_only_rootfs", "entrypoint", "command",
-                "healthcheck_command", "pid_mode", "userns_mode",
+                "healthcheck_command", "pid_mode", "user_namespace",
                 "ipc_mode", "uts_mode", "network_mode", "cap_add", "group_add",
                 "effective_caps", "bounding_caps", "devices_present",
                 "mounts", "tmpfs", "remote_api_environment", "security_opt",
@@ -385,6 +385,34 @@ def validate_document(document: object) -> dict[str, object]:
             },
             f"$.workload.live.containers[{index}]",
         )
+        namespace = exact_keys(
+            container["user_namespace"],
+            {
+                "compat_mode", "create_options", "process_identity",
+                "collector_identity", "uid_map", "gid_map",
+                "collector_uid_map", "collector_gid_map",
+                "configured_uid_map", "configured_gid_map", "podman_uid_map",
+                "podman_gid_map",
+            },
+            f"$.workload.live.containers[{index}].user_namespace",
+        )
+        for map_name in (
+            "uid_map", "gid_map", "collector_uid_map", "collector_gid_map",
+            "configured_uid_map", "configured_gid_map", "podman_uid_map",
+            "podman_gid_map",
+        ):
+            for map_index, mapping in enumerate(
+                namespace[map_name]
+                if isinstance(namespace[map_name], list) else []
+            ):
+                exact_keys(
+                    mapping,
+                    {"container_id", "host_id", "size"},
+                    (
+                        f"$.workload.live.containers[{index}].user_namespace."
+                        f"{map_name}[{map_index}]"
+                    ),
+                )
         for mount_index, mount in enumerate(
             container["mounts"] if isinstance(container["mounts"], list) else []
         ):

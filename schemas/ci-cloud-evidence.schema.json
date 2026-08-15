@@ -677,6 +677,7 @@
         "drop_in_paths",
         "drop_in_owners",
         "drop_in_sha256",
+        "environment",
         "active_state",
         "sub_state",
         "result",
@@ -750,6 +751,16 @@
             "pattern": "^[0-9a-f]{64}$"
           }
         },
+        "environment": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+            "maxLength": 128
+          }
+        },
         "active_state": { "$ref": "#/$defs/shortString" },
         "sub_state": { "$ref": "#/$defs/shortString" },
         "result": { "$ref": "#/$defs/shortString" },
@@ -788,6 +799,75 @@
         "gateway"
       ]
     },
+    "idMapEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container_id", "host_id", "size"],
+      "properties": {
+        "container_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "host_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "idMap": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/idMapEntry" }
+    },
+    "userNamespaceFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compat_mode",
+        "create_options",
+        "process_identity",
+        "collector_identity",
+        "uid_map",
+        "gid_map",
+        "collector_uid_map",
+        "collector_gid_map",
+        "configured_uid_map",
+        "configured_gid_map",
+        "podman_uid_map",
+        "podman_gid_map"
+      ],
+      "properties": {
+        "compat_mode": { "type": "string", "maxLength": 64 },
+        "create_options": {
+          "type": "array",
+          "maxItems": 1,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "process_identity": {
+          "type": "string",
+          "pattern": "^$|^user:\\[[0-9]{1,20}\\]$"
+        },
+        "collector_identity": {
+          "type": "string",
+          "pattern": "^user:\\[[0-9]{1,20}\\]$"
+        },
+        "uid_map": { "$ref": "#/$defs/idMap" },
+        "gid_map": { "$ref": "#/$defs/idMap" },
+        "collector_uid_map": { "$ref": "#/$defs/idMap" },
+        "collector_gid_map": { "$ref": "#/$defs/idMap" },
+        "configured_uid_map": { "$ref": "#/$defs/idMap" },
+        "configured_gid_map": { "$ref": "#/$defs/idMap" },
+        "podman_uid_map": { "$ref": "#/$defs/idMap" },
+        "podman_gid_map": { "$ref": "#/$defs/idMap" }
+      }
+    },
     "containerFact": {
       "type": "object",
       "additionalProperties": false,
@@ -811,7 +891,7 @@
         "command",
         "healthcheck_command",
         "pid_mode",
-        "userns_mode",
+        "user_namespace",
         "ipc_mode",
         "uts_mode",
         "network_mode",
@@ -879,7 +959,7 @@
         "command": { "$ref": "#/$defs/commandArray" },
         "healthcheck_command": { "$ref": "#/$defs/commandArray" },
         "pid_mode": { "$ref": "#/$defs/shortString" },
-        "userns_mode": { "$ref": "#/$defs/shortString" },
+        "user_namespace": { "$ref": "#/$defs/userNamespaceFact" },
         "ipc_mode": { "$ref": "#/$defs/shortString" },
         "uts_mode": { "$ref": "#/$defs/shortString" },
         "network_mode": { "$ref": "#/$defs/shortString" },
@@ -920,7 +1000,53 @@
           "pattern": "^$|^[0-9a-f]{32}$"
         },
         "image": { "type": "string", "maxLength": 512 }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "const": "running" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "user_namespace": {
+                "properties": {
+                  "process_identity": {
+                    "pattern": "^user:\\[[0-9]{1,20}\\]$"
+                  },
+                  "uid_map": { "minItems": 1 },
+                  "gid_map": { "minItems": 1 },
+                  "collector_uid_map": { "minItems": 1 },
+                  "collector_gid_map": { "minItems": 1 },
+                  "podman_uid_map": { "minItems": 1 },
+                  "podman_gid_map": { "minItems": 1 }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "state": { "const": "exited" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "user_namespace": {
+                "properties": {
+                  "process_identity": { "const": "" },
+                  "uid_map": { "maxItems": 0 },
+                  "gid_map": { "maxItems": 0 },
+                  "collector_uid_map": { "minItems": 1 },
+                  "collector_gid_map": { "minItems": 1 },
+                  "podman_uid_map": { "minItems": 1 },
+                  "podman_gid_map": { "minItems": 1 }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "containerMount": {
       "type": "object",
