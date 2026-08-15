@@ -19,7 +19,8 @@ MAX_EMITTED_BYTES = 8 * 1024
 PHASES = frozenset({"host", "workload-prepare-start", "workload-cleanup"})
 OUTPUT_PREFIX = "Target phase diagnostic: "
 TARGET_STAGE_PREFIX = b"SECPAL_TARGET_DIAGNOSTIC_V1:"
-MAX_STAGE_LINE_BYTES = len(TARGET_STAGE_PREFIX) + 64
+TARGET_FAILURE_PREFIX = b"SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+MAX_STAGE_LINE_BYTES = len(TARGET_FAILURE_PREFIX) + 64 + 1 + 64 + 1 + 3
 PHASE_STAGES = {
     "host": frozenset({"host-contract"}),
     "workload-prepare-start": frozenset(
@@ -38,34 +39,91 @@ PHASE_STAGES = {
             "workload-frontend-image-pull",
             "workload-frontend-image-admission",
             "workload-frontend-image-alias",
-            "workload-postgres-attestation-fetch",
-            "workload-postgres-attestation-verify",
             "workload-postgres-image-pull",
             "workload-postgres-image-admission",
             "workload-postgres-image-alias",
-            "workload-valkey-attestation-fetch",
-            "workload-valkey-attestation-verify",
             "workload-valkey-image-pull",
             "workload-valkey-image-admission",
             "workload-valkey-image-alias",
+            "workload-caddy-image-pull",
+            "workload-caddy-image-admission",
+            "workload-gateway-build",
+            "workload-gateway-image-admission",
             "workload-quadlet-render-publish",
         }
     ),
     "workload-cleanup": frozenset({"workload-cleanup"}),
 }
 ADMITTED_STAGES = frozenset().union(*PHASE_STAGES.values())
+FAILURE_REASONS = frozenset(
+    {
+        "command-exit",
+        "command-unavailable",
+        "contract-rejected",
+        "filesystem-error",
+        "interrupted",
+        "attestation-content-rejected",
+        "registry-policy-rejected",
+        "registry-request-failed",
+        "registry-response-rejected",
+        "unexpected-error",
+    }
+)
 UNREPORTED_STAGE = "unreported"
+UNREPORTED_REASON = "unreported"
+NO_COMMAND_STATUS = "none"
 
 
-def admitted_stage(line: bytes, current: str) -> str:
+def admitted_stage(line: bytes) -> str | None:
     if not line.startswith(TARGET_STAGE_PREFIX):
-        return current
+        return None
     value = line.removeprefix(TARGET_STAGE_PREFIX)
     try:
         candidate = value.decode("ascii")
     except UnicodeDecodeError:
-        return current
-    return candidate if candidate in ADMITTED_STAGES else current
+        return None
+    return candidate if candidate in ADMITTED_STAGES else None
+
+
+def admitted_command_status(value: bytes) -> int | None:
+    if value == NO_COMMAND_STATUS.encode("ascii"):
+        return None
+    if re.fullmatch(rb"[1-9][0-9]{0,2}", value) is None:
+        raise ValueError("target diagnostic command status is malformed")
+    status = int(value)
+    if status > 255:
+        raise ValueError("target diagnostic command status is outside the closed contract")
+    return status
+
+
+def scanned_diagnostic(
+    line: bytes,
+    stage: str,
+    failure_reason: str,
+    command_status: int | None,
+) -> tuple[str, str, int | None]:
+    candidate_stage = admitted_stage(line)
+    if candidate_stage is not None:
+        return candidate_stage, UNREPORTED_REASON, None
+    if not line.startswith(TARGET_FAILURE_PREFIX):
+        return stage, failure_reason, command_status
+    parts = line.removeprefix(TARGET_FAILURE_PREFIX).split(b":")
+    if len(parts) != 3:
+        return stage, failure_reason, command_status
+    try:
+        failed_stage = parts[0].decode("ascii")
+        candidate_reason = parts[1].decode("ascii")
+        candidate_status = admitted_command_status(parts[2])
+    except (UnicodeDecodeError, ValueError):
+        return stage, failure_reason, command_status
+    if (
+        failed_stage != stage
+        or candidate_reason not in FAILURE_REASONS
+        or failure_reason != UNREPORTED_REASON
+        or (candidate_reason == "command-exit") != (candidate_status is not None)
+    ):
+        return stage, failure_reason, command_status
+    return stage, candidate_reason, candidate_status
 
 
 def admitted_file(path: Path, *, require_empty: bool) -> os.stat_result:
@@ -88,6 +146,8 @@ def capture(path: Path) -> None:
     observed_bytes = 0
     truncated = False
     stage = UNREPORTED_STAGE
+    failure_reason = UNREPORTED_REASON
+    command_status: int | None = None
     stage_line = b""
     discarding_stage_line = False
     while chunk := sys.stdin.buffer.read(64 * 1024):
@@ -106,12 +166,26 @@ def capture(path: Path) -> None:
                     discarding_stage_line = True
             if line_complete:
                 if not discarding_stage_line:
-                    stage = admitted_stage(stage_line, stage)
+                    stage, failure_reason, command_status = scanned_diagnostic(
+                        stage_line,
+                        stage,
+                        failure_reason,
+                        command_status,
+                    )
                 stage_line = b""
                 discarding_stage_line = False
     if stage_line and not discarding_stage_line:
-        stage = admitted_stage(stage_line, stage)
-    metadata = f"{observed_bytes} {int(truncated)} {stage}\n".encode("ascii")
+        stage, failure_reason, command_status = scanned_diagnostic(
+            stage_line,
+            stage,
+            failure_reason,
+            command_status,
+        )
+    status_token = NO_COMMAND_STATUS if command_status is None else str(command_status)
+    metadata = (
+        f"{observed_bytes} {int(truncated)} {stage} "
+        f"{failure_reason} {status_token}\n"
+    ).encode("ascii")
     descriptor = os.open(
         path,
         os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -131,11 +205,12 @@ def capture(path: Path) -> None:
         raise ValueError("target diagnostic write was incomplete")
 
 
-def captured_metadata(path: Path) -> tuple[int, bool, str]:
+def captured_metadata(path: Path) -> tuple[int, bool, str, str, int | None]:
     admitted_file(path, require_empty=False)
     payload = path.read_bytes()
     match = re.fullmatch(
-        rb"(0|[1-9][0-9]{0,4}) ([01]) ([a-z0-9-]{1,64})\n",
+        rb"(0|[1-9][0-9]{0,4}) ([01]) ([a-z0-9-]{1,64}) "
+        rb"([a-z0-9-]{1,64}) (none|[1-9][0-9]{0,2})\n",
         payload,
     )
     if match is None:
@@ -149,20 +224,37 @@ def captured_metadata(path: Path) -> tuple[int, bool, str]:
     stage = match.group(3).decode("ascii")
     if stage != UNREPORTED_STAGE and stage not in ADMITTED_STAGES:
         raise ValueError("target diagnostic stage is outside the closed contract")
-    return observed_bytes, truncated, stage
+    failure_reason = match.group(4).decode("ascii")
+    if failure_reason != UNREPORTED_REASON and failure_reason not in FAILURE_REASONS:
+        raise ValueError("target diagnostic failure reason is outside the closed contract")
+    command_status = admitted_command_status(match.group(5))
+    if (
+        (stage == UNREPORTED_STAGE and failure_reason != UNREPORTED_REASON)
+        or (failure_reason == UNREPORTED_REASON and command_status is not None)
+        or (failure_reason == "command-exit") != (command_status is not None)
+    ):
+        raise ValueError("target diagnostic failure metadata is inconsistent")
+    return observed_bytes, truncated, stage, failure_reason, command_status
 
 
 def rendered_diagnostic(path: Path, phase: str, status: int) -> str:
-    output_bytes, output_truncated, captured_stage = captured_metadata(path)
-    stage = (
-        captured_stage
-        if captured_stage in PHASE_STAGES.get(phase, frozenset())
-        else UNREPORTED_STAGE
-    )
+    (
+        output_bytes,
+        output_truncated,
+        captured_stage,
+        captured_reason,
+        captured_command_status,
+    ) = captured_metadata(path)
+    phase_compatible = captured_stage in PHASE_STAGES.get(phase, frozenset())
+    stage = captured_stage if phase_compatible else UNREPORTED_STAGE
+    failure_reason = captured_reason if phase_compatible else UNREPORTED_REASON
+    command_status = captured_command_status if phase_compatible else None
     document = {
         "phase": phase,
         "status": status,
         "stage": stage,
+        "failure_reason": failure_reason,
+        "command_status": command_status,
         "output_bytes": output_bytes,
         "output_truncated": output_truncated,
     }

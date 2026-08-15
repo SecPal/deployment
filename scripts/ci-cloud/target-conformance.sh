@@ -50,6 +50,22 @@ for forbidden_name in \
   fi
 done
 
+run_host_contract_command() {
+  local command_status
+  local phase_timeout="$1"
+  shift
+  set +e
+  timeout --signal=TERM --kill-after=15s "$phase_timeout" "$@"
+  command_status=$?
+  set -e
+  if [[ "$command_status" -ne 0 ]]; then
+    printf '%s%s:%s:%s\n' \
+      'SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:' \
+      'host-contract' 'command-exit' "$command_status" >&2
+    return "$command_status"
+  fi
+}
+
 case "$phase" in
   workload-prepare-start)
     printf 'SECPAL_TARGET_DIAGNOSTIC_V1:workload-target-entrypoint\n' >&2
@@ -61,11 +77,11 @@ case "$phase" in
     ;;
   host)
     printf 'SECPAL_TARGET_DIAGNOSTIC_V1:host-contract\n' >&2
-    timeout --signal=TERM --kill-after=15s 8m \
+    run_host_contract_command 8m \
       python3 tests/production-contract-regressions.py
-    timeout --signal=TERM --kill-after=15s 8m \
+    run_host_contract_command 8m \
       python3 tests/production-inventory-contract.py
-    timeout --signal=TERM --kill-after=15s 3m \
+    run_host_contract_command 3m \
       bash tests/production-host-contract.sh
     printf 'Exact target SHA completed the bounded production-host contract suite.\n'
     ;;

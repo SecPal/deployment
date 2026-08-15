@@ -123,25 +123,49 @@ ROLE_VOLUME_DEPENDENCIES = {
 CLOUD_FIXTURE_CLIENT = Path("/usr/local/bin/secpal-ci-quadlet-fixture")
 CLOUD_FIXTURE_BASE = Path("/home/secpal-ci/quadlet-fixture")
 CLOUD_DIAGNOSTIC_PREFIX = "SECPAL_TARGET_DIAGNOSTIC_V1:"
+CLOUD_DIAGNOSTIC_FAILURE_PREFIX = "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
 CLOUD_DIAGNOSTIC_STAGES = frozenset(
     {
         "workload-target-entrypoint",
         "workload-fixture-initialization",
         "workload-runtime-admission",
         "workload-gh-cli-staging",
+        "workload-api-attestation-fetch",
+        "workload-api-attestation-verify",
+        "workload-api-image-pull",
+        "workload-api-image-admission",
+        "workload-api-image-alias",
+        "workload-frontend-attestation-fetch",
+        "workload-frontend-attestation-verify",
+        "workload-frontend-image-pull",
+        "workload-frontend-image-admission",
+        "workload-frontend-image-alias",
+        "workload-postgres-image-pull",
+        "workload-postgres-image-admission",
+        "workload-postgres-image-alias",
+        "workload-valkey-image-pull",
+        "workload-valkey-image-admission",
+        "workload-valkey-image-alias",
+        "workload-caddy-image-pull",
+        "workload-caddy-image-admission",
+        "workload-gateway-build",
+        "workload-gateway-image-admission",
         "workload-quadlet-render-publish",
         "workload-cleanup",
-        *(
-            f"workload-{product}-{operation}"
-            for product in ("api", "frontend", "postgres", "valkey")
-            for operation in (
-                "attestation-fetch",
-                "attestation-verify",
-                "image-pull",
-                "image-admission",
-                "image-alias",
-            )
-        ),
+    }
+)
+CLOUD_DIAGNOSTIC_FAILURE_REASONS = frozenset(
+    {
+        "command-exit",
+        "command-unavailable",
+        "contract-rejected",
+        "filesystem-error",
+        "interrupted",
+        "attestation-content-rejected",
+        "registry-policy-rejected",
+        "registry-request-failed",
+        "registry-response-rejected",
+        "unexpected-error",
     }
 )
 CLOUD_OPERATOR_UID = 20_000
@@ -167,6 +191,25 @@ CLOUD_GH_RELEASES = {
 class IntegrationError(RuntimeError):
     """A fail-closed integration admission or lifecycle failure."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic_reason: str = "contract-rejected",
+        command_status: int | None = None,
+    ) -> None:
+        if diagnostic_reason not in CLOUD_DIAGNOSTIC_FAILURE_REASONS:
+            raise ValueError("integration diagnostic reason is outside the closed contract")
+        if (diagnostic_reason == "command-exit") != (command_status is not None):
+            raise ValueError("integration diagnostic command status is inconsistent")
+        if command_status is not None and (
+            isinstance(command_status, bool) or not 1 <= command_status <= 255
+        ):
+            raise ValueError("integration diagnostic command status is outside the closed contract")
+        super().__init__(message)
+        self.diagnostic_reason = diagnostic_reason
+        self.command_status = command_status
+
 
 def emit_cloud_diagnostic_stage(stage: str) -> None:
     if stage not in CLOUD_DIAGNOSTIC_STAGES:
@@ -174,6 +217,45 @@ def emit_cloud_diagnostic_stage(stage: str) -> None:
             "cloud diagnostic stage is outside the closed contract"
         )
     print(f"{CLOUD_DIAGNOSTIC_PREFIX}{stage}", file=sys.stderr, flush=True)
+
+
+def emit_cloud_diagnostic_failure(
+    stage: str,
+    reason: str,
+    command_status: int | None,
+) -> None:
+    if stage not in CLOUD_DIAGNOSTIC_STAGES:
+        raise IntegrationError(
+            "cloud diagnostic stage is outside the closed contract"
+        )
+    if reason not in CLOUD_DIAGNOSTIC_FAILURE_REASONS:
+        raise IntegrationError(
+            "cloud diagnostic failure reason is outside the closed contract"
+        )
+    if (reason == "command-exit") != (command_status is not None):
+        raise IntegrationError("cloud diagnostic command status is inconsistent")
+    if command_status is not None and (
+        isinstance(command_status, bool) or not 1 <= command_status <= 255
+    ):
+        raise IntegrationError(
+            "cloud diagnostic command status is outside the closed contract"
+        )
+    status_token = "none" if command_status is None else str(command_status)
+    print(
+        f"{CLOUD_DIAGNOSTIC_FAILURE_PREFIX}{stage}:{reason}:{status_token}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def closed_command_status(returncode: int) -> int | None:
+    if isinstance(returncode, bool):
+        return None
+    if 1 <= returncode <= 255:
+        return returncode
+    if -127 <= returncode <= -1:
+        return 128 + abs(returncode)
+    return None
 
 
 class PortCollisionError(IntegrationError):
@@ -1537,6 +1619,7 @@ class IntegrationLifecycle:
         self.preexisting_resources: dict[str, set[str]] = {}
         self.expected_failure_observed = False
         self.injected_health_failure_observed = False
+        self.cloud_diagnostic_current_stage: str | None = None
 
     def cloud_diagnostic_stage(self, stage: str) -> None:
         if not self.cloud_mode:
@@ -1544,6 +1627,18 @@ class IntegrationLifecycle:
                 "cloud diagnostic stage is outside the closed contract"
             )
         emit_cloud_diagnostic_stage(stage)
+        self.cloud_diagnostic_current_stage = stage
+
+    def cloud_diagnostic_failure(self, error: IntegrationError) -> None:
+        if not self.cloud_mode or self.cloud_diagnostic_current_stage is None:
+            raise IntegrationError(
+                "cloud diagnostic failure has no admitted stage"
+            )
+        emit_cloud_diagnostic_failure(
+            self.cloud_diagnostic_current_stage,
+            error.diagnostic_reason,
+            error.command_status,
+        )
 
     def select_port(self, port: int) -> None:
         if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
@@ -1573,9 +1668,22 @@ class IntegrationLifecycle:
             detail = ""
             if capture and error.stderr:
                 detail = f": {str(error.stderr).strip()[:400]}"
-            raise IntegrationError(f"command failed ({argv[0]}){detail}") from error
+            command_status = closed_command_status(error.returncode)
+            if command_status is None:
+                raise IntegrationError(
+                    f"command failed ({argv[0]}){detail}",
+                    diagnostic_reason="unexpected-error",
+                ) from error
+            raise IntegrationError(
+                f"command failed ({argv[0]}){detail}",
+                diagnostic_reason="command-exit",
+                command_status=command_status,
+            ) from error
         except OSError as error:
-            raise IntegrationError(f"unable to execute required command: {argv[0]}") from error
+            raise IntegrationError(
+                f"unable to execute required command: {argv[0]}",
+                diagnostic_reason="command-unavailable",
+            ) from error
 
     def captured(self, argv: Sequence[str], **kwargs) -> str:
         return (self.command(argv, capture=True, **kwargs).stdout or "").strip()
@@ -1968,12 +2076,9 @@ class IntegrationLifecycle:
             ("valkey", VALKEY_IMAGE),
             ("caddy", CADDY_IMAGE),
         ):
-            self.anonymous_pull(label, image)
-            self.verify_staged_image(image, image.rsplit("@", 1)[1])
-            if self.cloud_mode and label != "caddy":
-                self.stage_cloud_image_alias(
-                    label, image, image.rsplit("@", 1)[1]
-                )
+            self.verify_and_stage_dependency(label, image)
+        if self.cloud_mode:
+            self.cloud_diagnostic_stage("workload-gateway-build")
         self.command(
             [
                 "podman",
@@ -1994,9 +2099,24 @@ class IntegrationLifecycle:
             cwd=self.root,
         )
         if self.cloud_mode:
+            self.cloud_diagnostic_stage("workload-gateway-image-admission")
             self.cloud_gateway_digest = self.local_image_digest(
                 self.resources.gateway_image
             )
+
+    def verify_and_stage_dependency(self, label: str, image: str) -> None:
+        if label not in {"postgres", "valkey", "caddy"}:
+            raise IntegrationError("unreviewed dependency image role")
+        digest = image.rsplit("@", 1)[1]
+        if self.cloud_mode:
+            self.cloud_diagnostic_stage(f"workload-{label}-image-pull")
+        self.anonymous_pull(label, image)
+        if self.cloud_mode:
+            self.cloud_diagnostic_stage(f"workload-{label}-image-admission")
+        self.verify_staged_image(image, digest)
+        if self.cloud_mode and label != "caddy":
+            self.cloud_diagnostic_stage(f"workload-{label}-image-alias")
+            self.stage_cloud_image_alias(label, image, digest)
 
     def verify_and_stage_product(
         self,
@@ -2024,6 +2144,8 @@ class IntegrationLifecycle:
                 canonical_name,
                 digest,
                 registry_path,
+                "--diagnostic-stage",
+                f"workload-{label}-attestation-fetch",
             ],
             environment=self.anonymous_environment(),
         )
@@ -3611,14 +3733,31 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     if arguments.cloud_phase is not None:
         instance = os.environ.get("SECPAL_FIXTURE_INSTANCE", "")
+        initial_stage = (
+            "workload-fixture-initialization"
+            if arguments.cloud_phase == "prepare"
+            else "workload-cleanup"
+        )
+        emit_cloud_diagnostic_stage(initial_stage)
         try:
-            if arguments.cloud_phase == "prepare":
-                emit_cloud_diagnostic_stage("workload-fixture-initialization")
             fixture_root = cloud_fixture_root(instance)
             if arguments.cloud_phase == "prepare":
                 prepare_cloud_fixture_directory(fixture_root)
             port = cloud_fixture_port(instance)
-        except (IntegrationError, OSError) as error:
+        except IntegrationError as error:
+            emit_cloud_diagnostic_failure(
+                initial_stage,
+                error.diagnostic_reason,
+                error.command_status,
+            )
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+        except OSError as error:
+            emit_cloud_diagnostic_failure(
+                initial_stage,
+                "filesystem-error",
+                None,
+            )
             print(f"ERROR: {error}", file=sys.stderr)
             return 1
         lifecycle = IntegrationLifecycle(
@@ -3642,9 +3781,25 @@ def main() -> int:
             else:
                 execute_cloud_cleanup(lifecycle)
         except IntegrationInterrupted as interruption:
+            lifecycle.cloud_diagnostic_failure(
+                IntegrationError(
+                    "cloud lifecycle was interrupted",
+                    diagnostic_reason="interrupted",
+                )
+            )
             return 128 + interruption.signal_number
         except IntegrationError as error:
+            lifecycle.cloud_diagnostic_failure(error)
             print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+        except Exception:
+            lifecycle.cloud_diagnostic_failure(
+                IntegrationError(
+                    "unexpected cloud lifecycle failure",
+                    diagnostic_reason="unexpected-error",
+                )
+            )
+            print("ERROR: unexpected cloud lifecycle failure", file=sys.stderr)
             return 1
         if lifecycle.signal_number is not None:
             return 128 + lifecycle.signal_number

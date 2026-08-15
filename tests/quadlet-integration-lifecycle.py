@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -425,6 +426,118 @@ class QuadletLifecycleContract(unittest.TestCase):
                     mock.call("workload-api-image-alias"),
                 ],
             )
+
+    def test_cloud_prepare_diagnostics_cover_every_real_image_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            lifecycle.cloud_diagnostic_stage = mock.Mock()
+            lifecycle.validate_repository_and_runtime = mock.Mock()
+            lifecycle.stage_cloud_gh_cli = mock.Mock()
+            lifecycle.command = mock.Mock(
+                return_value=subprocess.CompletedProcess([], 0, "", "")
+            )
+            lifecycle.anonymous_pull = mock.Mock()
+            lifecycle.verify_staged_image = mock.Mock()
+            lifecycle.stage_cloud_image_alias = mock.Mock()
+            lifecycle.local_image_digest = mock.Mock(
+                return_value="sha256:" + "f" * 64
+            )
+            lifecycle.render_validate_and_install_units = mock.Mock()
+
+            self.module.execute_cloud_prepare(lifecycle)
+
+            self.assertEqual(
+                lifecycle.cloud_diagnostic_stage.call_args_list,
+                [
+                    mock.call("workload-runtime-admission"),
+                    mock.call("workload-gh-cli-staging"),
+                    mock.call("workload-api-attestation-fetch"),
+                    mock.call("workload-api-attestation-verify"),
+                    mock.call("workload-api-image-pull"),
+                    mock.call("workload-api-image-admission"),
+                    mock.call("workload-api-image-alias"),
+                    mock.call("workload-frontend-attestation-fetch"),
+                    mock.call("workload-frontend-attestation-verify"),
+                    mock.call("workload-frontend-image-pull"),
+                    mock.call("workload-frontend-image-admission"),
+                    mock.call("workload-frontend-image-alias"),
+                    mock.call("workload-postgres-image-pull"),
+                    mock.call("workload-postgres-image-admission"),
+                    mock.call("workload-postgres-image-alias"),
+                    mock.call("workload-valkey-image-pull"),
+                    mock.call("workload-valkey-image-admission"),
+                    mock.call("workload-valkey-image-alias"),
+                    mock.call("workload-caddy-image-pull"),
+                    mock.call("workload-caddy-image-admission"),
+                    mock.call("workload-gateway-build"),
+                    mock.call("workload-gateway-image-admission"),
+                    mock.call("workload-quadlet-render-publish"),
+                ],
+            )
+
+    def test_cloud_failure_diagnostic_is_closed_and_omits_error_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            output = io.StringIO()
+            error = self.module.IntegrationError(
+                "synthetic-secret-never-emit",
+                diagnostic_reason="command-exit",
+                command_status=17,
+            )
+            with contextlib.redirect_stderr(output):
+                lifecycle.cloud_diagnostic_stage("workload-api-image-pull")
+                lifecycle.cloud_diagnostic_failure(error)
+
+            self.assertEqual(
+                "SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-image-pull\n"
+                "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+                "workload-api-image-pull:command-exit:17\n",
+                output.getvalue(),
+            )
+            self.assertNotIn("synthetic-secret-never-emit", output.getvalue())
+
+    def test_command_failure_retains_only_closed_reason_and_status(self) -> None:
+        runner = mock.Mock()
+        runner.run.side_effect = subprocess.CalledProcessError(
+            23,
+            ["synthetic-command", "synthetic-secret-argument"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=runner,
+                cloud_mode=True,
+            )
+            with self.assertRaises(self.module.IntegrationError) as raised:
+                lifecycle.command(
+                    ["synthetic-command", "synthetic-secret-argument"]
+                )
+
+        self.assertEqual("command-exit", raised.exception.diagnostic_reason)
+        self.assertEqual(23, raised.exception.command_status)
 
     def test_cloud_phase_cli_rejects_runtime_escape_hatches(self) -> None:
         accepted = self.module.parse_arguments(["--cloud-phase", "prepare"])

@@ -57,10 +57,46 @@ REGISTRY_BLOB_PATH_PATTERN = re.compile(
     rf"/v2/{re.escape(REPOSITORY)}/blobs/sha256:[0-9a-f]{{64}}"
 )
 GITHUB_BLOB_PATH_PATTERN = re.compile(r"/ghcrblobs[0-9]+/blobs/sha256:[0-9a-f]{64}")
+DIAGNOSTIC_FAILURE_PREFIX = "SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+DIAGNOSTIC_STAGES = frozenset(
+    {
+        "workload-api-attestation-fetch",
+        "workload-frontend-attestation-fetch",
+    }
+)
+DIAGNOSTIC_FAILURE_REASONS = frozenset(
+    {
+        "attestation-content-rejected",
+        "contract-rejected",
+        "filesystem-error",
+        "registry-policy-rejected",
+        "registry-request-failed",
+        "registry-response-rejected",
+    }
+)
 
 RequestBytes = Callable[
     [str, dict[str, str], int, frozenset[int]], tuple[int, str, str, bytes]
 ]
+
+
+def closed_failure_reason(error: OSError | RuntimeError | ValueError) -> str:
+    if isinstance(error, OSError):
+        return "filesystem-error"
+    if isinstance(error, RuntimeError):
+        return "registry-request-failed"
+    message = str(error)
+    if message in {
+        "expected registry path was not canonical",
+        "canonical image did not match the expected registry path",
+        "canonical image digest was not a canonical SHA-256 value",
+    }:
+        return "contract-rejected"
+    if "redirect" in message:
+        return "registry-policy-rejected"
+    if "response" in message or "registry bearer" in message:
+        return "registry-response-rejected"
+    return "attestation-content-rejected"
 
 
 def configure_identity(
@@ -517,10 +553,16 @@ def fetch_bundle(
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 6:
+    diagnostic_stage: str | None = None
+    if len(argv) == 8 and argv[6] == "--diagnostic-stage":
+        diagnostic_stage = argv[7]
+    if len(argv) not in {6, 8} or (
+        len(argv) == 8 and diagnostic_stage not in DIAGNOSTIC_STAGES
+    ):
         print(
             f"Usage: {Path(argv[0]).name} SUBJECT_OUTPUT_PATH BUNDLE_OUTPUT_PATH "
-            "CANONICAL_IMAGE CANONICAL_DIGEST EXPECTED_REGISTRY_PATH",
+            "CANONICAL_IMAGE CANONICAL_DIGEST EXPECTED_REGISTRY_PATH "
+            "[--diagnostic-stage CLOSED_STAGE]",
             file=sys.stderr,
         )
         return 2
@@ -528,6 +570,12 @@ def main(argv: list[str]) -> int:
         configure_identity(argv[3], argv[4], argv[5])
         fetch_bundle(Path(argv[2]), subject_output_path=Path(argv[1]))
     except (OSError, RuntimeError, ValueError) as error:
+        if diagnostic_stage is not None:
+            reason = closed_failure_reason(error)
+            print(
+                f"{DIAGNOSTIC_FAILURE_PREFIX}{diagnostic_stage}:{reason}:none",
+                file=sys.stderr,
+            )
         print(f"ERROR: anonymous OCI attestation bundle retrieval failed: {error}", file=sys.stderr)
         return 1
     return 0
