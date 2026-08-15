@@ -448,6 +448,14 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workload admission failures"):
             self.validator.validate_document(document)
 
+    def test_service_environment_evidence_cannot_contain_values(self) -> None:
+        document = valid_document()
+        document["workload"]["live"]["generated_services"][0]["environment"] = [
+            "DB_PASSWORD=synthetic-placeholder"
+        ]
+        with self.assertRaises(ValueError):
+            self.validator.validate_document(document)
+
     def test_unprefixed_resource_cannot_survive_validator_recomputation(self) -> None:
         document = valid_document()
         document["workload"]["live"]["all_containers"].append(

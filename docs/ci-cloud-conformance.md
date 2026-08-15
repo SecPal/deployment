@@ -924,11 +924,12 @@ Evidence includes:
   configured mappings must compose through that outer mapping to exactly the
   observed process mapping. The derived host UID/GID used for service-cgroup
   process admission also comes from that observed mapping, not a fixed
-  subordinate-ID offset. Service-level `PODMAN_USERNS`, containers.conf
-  overrides, and HOME/XDG configuration redirects fail closed. Those maps must
-  be non-overlapping, remain inside the service-account namespace, and cover
-  the role's configured and effective UID/GID plus every admitted supplementary
-  GID,
+  subordinate-ID offset. Evidence retains only service-environment variable
+  names, never their values. Service-level `PODMAN_USERNS`, containers.conf
+  overrides or modules, and HOME/XDG configuration redirects fail closed. Those
+  maps must be non-overlapping, remain inside the service-account namespace,
+  and cover the role's configured and effective UID/GID plus every admitted
+  supplementary GID,
   the closed role-to-network topology, the complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
   `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
@@ -952,10 +953,10 @@ Evidence includes:
   `/usr/bin/podman run` command naming that exact container in the generated
   service's exact systemd invocation; `inspect`, another Podman subcommand, a
   different name, a duplicate lifecycle, or a bare container-ID message cannot
-  establish this binding; the exited container's immutable creation option and
-  configured ID mappings must either compose to a bounded map covering the
-  configured identity or describe the trusted rootless default mapping with no
-  user-namespace override, and exited evidence deliberately records no process
+  establish this binding; the exited container must have explicit immutable
+  configured ID mappings that compose to a bounded map covering the configured
+  identity, with containers.conf modules rejected rather than treated as part
+  of a trusted default; exited evidence deliberately records no process
   namespace identity or `/proc` UID/GID map; any Podman `exec`/`exec_died` event for an
   integration container makes lifecycle collection incomplete; one exited
   zero-status migration systemd invocation
@@ -1001,14 +1002,17 @@ namespace link and UID/GID maps read from the independently inspected process,
 with the collector's own namespace link and maps as the comparison boundary.
 It also records the rootless Podman outer UID/GID maps: configured maps must
 compose through them to the effective process map, while a default rootless
-process must use the outer map directly. The service's effective environment
-must not override Podman's namespace or containers.conf lookup inputs.
+process must use the outer map directly. Service evidence retains only
+environment-variable names, and the effective environment must not override
+Podman's namespace or containers.conf lookup inputs. Immutable creation
+commands that load containers.conf modules fail closed.
 Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
 still fail closed. For an exited one-shot, admission instead requires the exact
-existing systemd/Podman lifecycle correlation and the immutable Podman creation
-option/configured mapping. A default exited container is admitted only when the
-trusted outer mapping covers its configured identity; a non-default mode needs
-a bounded configured map that composes through that outer mapping. It never
+existing systemd/Podman lifecycle correlation and an explicit immutable
+configured mapping. The bounded configured map must compose through the trusted
+outer mapping and cover the configured identity; an implicit default is
+insufficient because an exited process has no independently observable kernel
+map. It never
 presents those configuration facts as live `/proc` evidence.
 
 Workload admission additionally requires the active user socket-unit set to be

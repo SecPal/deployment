@@ -318,6 +318,9 @@ def valid_observations() -> dict[str, object]:
             {"container_id": 0, "host_id": 20_000, "size": 1},
             {"container_id": 1, "host_id": 200_000, "size": 65_536},
         ]
+        configured_map = [
+            {"container_id": 0, "host_id": 0, "size": 65_537}
+        ]
         containers.append(
             {
                 "id": f"{role_index + 1:064x}",
@@ -352,8 +355,12 @@ def valid_observations() -> dict[str, object]:
                     "gid_map": [] if one_shot else copy.deepcopy(process_map),
                     "collector_uid_map": copy.deepcopy(collector_map),
                     "collector_gid_map": copy.deepcopy(collector_map),
-                    "configured_uid_map": [],
-                    "configured_gid_map": [],
+                    "configured_uid_map": (
+                        copy.deepcopy(configured_map) if one_shot else []
+                    ),
+                    "configured_gid_map": (
+                        copy.deepcopy(configured_map) if one_shot else []
+                    ),
                     "podman_uid_map": copy.deepcopy(process_map),
                     "podman_gid_map": copy.deepcopy(process_map),
                 },
@@ -1213,20 +1220,27 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 )
 
     def test_service_environment_cannot_supply_user_namespace_defaults(self) -> None:
-        for assignment in (
-            "PODMAN_USERNS=host",
-            "PODMAN_USERNS=container:0123456789abcdef",
-            "CONTAINERS_CONF=/tmp/target-controlled.conf",
-            "CONTAINERS_CONF_OVERRIDE=/tmp/target-controlled.conf",
-            "XDG_CONFIG_HOME=/tmp/target-controlled-config",
-            "HOME=/tmp/target-controlled-home",
+        for name in (
+            "PODMAN_USERNS",
+            "CONTAINERS_CONF",
+            "CONTAINERS_CONF_OVERRIDE",
+            "XDG_CONFIG_HOME",
+            "HOME",
         ):
-            with self.subTest(assignment=assignment):
+            with self.subTest(name=name):
                 self.assert_failure(
-                    lambda evidence, assignment=assignment: evidence["live"]
-                    ["generated_services"][4].__setitem__("environment", [assignment]),
+                    lambda evidence, name=name: evidence["live"]
+                    ["generated_services"][4].__setitem__("environment", [name]),
                     "D1A_HOST_NAMESPACES",
                 )
+
+    def test_service_environment_values_are_discarded_from_evidence(self) -> None:
+        self.assertEqual(
+            (["DB_PASSWORD", "PATH"], True),
+            self.collector.normalized_service_environment(
+                "PATH=/usr/bin DB_PASSWORD=synthetic-placeholder"
+            ),
+        )
 
     def test_configured_mapping_must_match_the_effective_kernel_mapping(self) -> None:
         self.assert_failure(
@@ -1263,8 +1277,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ]
         self.assertEqual([], self.collector.workload_admission_failures(observations))
 
-    def test_exited_user_namespace_requires_immutable_default_configuration_and_lifecycle(self) -> None:
+    def test_exited_user_namespace_requires_explicit_mapping_and_lifecycle(self) -> None:
         for mutate in (
+            lambda container: container["user_namespace"].update(
+                {"configured_uid_map": [], "configured_gid_map": []}
+            ),
             lambda container: container["user_namespace"].__setitem__(
                 "create_options", ["unknown"]
             ),
@@ -1393,6 +1410,15 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 ]
             ),
         )
+        for command in (
+            ["/usr/bin/podman", "--module=target.conf", "run", "fixture"],
+            ["/usr/bin/podman", "--module", "target.conf", "run", "fixture"],
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    ([], False),
+                    self.collector.configured_userns_options(command),
+                )
 
     def test_api_and_frontend_require_distinct_image_identities(self) -> None:
         self.assert_failure(

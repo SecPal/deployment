@@ -995,6 +995,8 @@ def configured_userns_options(value: object) -> tuple[list[str], bool]:
     index = 0
     while index < len(value):
         argument = value[index]
+        if argument == "--module" or argument.startswith("--module="):
+            return [], False
         if argument == "--userns":
             if index + 1 >= len(value) or value[index + 1].startswith("-"):
                 return [], False
@@ -1035,7 +1037,7 @@ def normalized_service_environment(value: object) -> tuple[list[str], bool]:
         ):
             return [], False
         names.add(name)
-    return sorted(assignments), True
+    return sorted(names), True
 
 
 def read_id_map(path: Path) -> tuple[list[dict[str, int]], bool]:
@@ -2633,14 +2635,8 @@ def user_namespace_contract_matches(
         and value["process_identity"] == ""
         and value["uid_map"] == []
         and value["gid_map"] == []
-        and (
-            create_options == []
-            or (
-                bool(configured_uid_map)
-                and expected_uid_map is not None
-                and expected_gid_map is not None
-            )
-        )
+        and create_options == []
+        and bool(configured_uid_map)
         and expected_uid_map is not None
         and expected_gid_map is not None
         and (
@@ -2676,10 +2672,12 @@ def service_userns_environment_is_trusted(service: object) -> bool:
         "XDG_CONFIG_HOME", "HOME",
     }
     names: set[str] = set()
-    for assignment in environment:
-        if not isinstance(assignment, str) or "=" not in assignment:
+    for name in environment:
+        if (
+            not isinstance(name, str)
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) is None
+        ):
             return False
-        name, _ = assignment.split("=", 1)
         if name in names or name in prohibited:
             return False
         names.add(name)
