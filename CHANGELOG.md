@@ -88,8 +88,9 @@ SPDX-License-Identifier: CC0-1.0
 ### Fixed
 
 - Installed and admitted the required `catatonit` package in disposable Debian
-  cloud hosts so D.1a runtime admission cannot fail before image staging while
-  the local integration runtime continues to require the same component.
+  cloud hosts so D.1a runtime admission no longer fails before image staging
+  because the required init binary is missing. The local integration runtime
+  continues to require the same component.
 - Cloud target-phase failures now retain one bounded diagnostic summary with
   the last closed runtime, attestation, dependency-image, gateway, Quadlet,
   host, or cleanup stage plus a closed failure reason and optional command
