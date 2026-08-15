@@ -864,6 +864,7 @@ class CloudCIContractTests(unittest.TestCase):
             "infra/ci-cloud/gcp",
             "schemas",
             "scripts/ci-cloud",
+            "scripts/quadlet-integration.py",
         ):
             source = ROOT / path
             destination = temporary / path

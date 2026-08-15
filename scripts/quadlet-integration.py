@@ -122,6 +122,28 @@ ROLE_VOLUME_DEPENDENCIES = {
 }
 CLOUD_FIXTURE_CLIENT = Path("/usr/local/bin/secpal-ci-quadlet-fixture")
 CLOUD_FIXTURE_BASE = Path("/home/secpal-ci/quadlet-fixture")
+CLOUD_DIAGNOSTIC_PREFIX = "SECPAL_TARGET_DIAGNOSTIC_V1:"
+CLOUD_DIAGNOSTIC_STAGES = frozenset(
+    {
+        "workload-target-entrypoint",
+        "workload-fixture-initialization",
+        "workload-runtime-admission",
+        "workload-gh-cli-staging",
+        "workload-quadlet-render-publish",
+        "workload-cleanup",
+        *(
+            f"workload-{product}-{operation}"
+            for product in ("api", "frontend", "postgres", "valkey")
+            for operation in (
+                "attestation-fetch",
+                "attestation-verify",
+                "image-pull",
+                "image-admission",
+                "image-alias",
+            )
+        ),
+    }
+)
 CLOUD_OPERATOR_UID = 20_000
 CLOUD_OPERATOR_GID = 20_000
 CLOUD_IMAGE_TAGS = {
@@ -144,6 +166,14 @@ CLOUD_GH_RELEASES = {
 
 class IntegrationError(RuntimeError):
     """A fail-closed integration admission or lifecycle failure."""
+
+
+def emit_cloud_diagnostic_stage(stage: str) -> None:
+    if stage not in CLOUD_DIAGNOSTIC_STAGES:
+        raise IntegrationError(
+            "cloud diagnostic stage is outside the closed contract"
+        )
+    print(f"{CLOUD_DIAGNOSTIC_PREFIX}{stage}", file=sys.stderr, flush=True)
 
 
 class PortCollisionError(IntegrationError):
@@ -1402,14 +1432,18 @@ def execute_expected_failure_lifecycle(lifecycle, port_allocator=None) -> None:
 def execute_cloud_prepare(lifecycle) -> None:
     """Verify, stage, render, and publish without activating target units."""
 
+    lifecycle.cloud_diagnostic_stage("workload-runtime-admission")
     lifecycle.validate_repository_and_runtime()
+    lifecycle.cloud_diagnostic_stage("workload-gh-cli-staging")
     lifecycle.retrieve_verify_and_stage_images()
+    lifecycle.cloud_diagnostic_stage("workload-quadlet-render-publish")
     lifecycle.render_validate_and_install_units()
 
 
 def execute_cloud_cleanup(lifecycle) -> None:
     """Reconstruct the fixed fixture and remove only its owned resources."""
 
+    lifecycle.cloud_diagnostic_stage("workload-cleanup")
     lifecycle.validate_cloud_cleanup_runtime()
     lifecycle.cleanup()
 
@@ -1503,6 +1537,13 @@ class IntegrationLifecycle:
         self.preexisting_resources: dict[str, set[str]] = {}
         self.expected_failure_observed = False
         self.injected_health_failure_observed = False
+
+    def cloud_diagnostic_stage(self, stage: str) -> None:
+        if not self.cloud_mode:
+            raise IntegrationError(
+                "cloud diagnostic stage is outside the closed contract"
+            )
+        emit_cloud_diagnostic_stage(stage)
 
     def select_port(self, port: int) -> None:
         if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
@@ -1972,6 +2013,8 @@ class IntegrationLifecycle:
             raise IntegrationError(f"unreviewed {label} image identity")
         subject = self.fixture_root / f"{label}-image-index.json"
         bundle = self.fixture_root / f"{label}-attestation.json"
+        if self.cloud_mode:
+            self.cloud_diagnostic_stage(f"workload-{label}-attestation-fetch")
         self.command(
             [
                 "python3",
@@ -1994,6 +2037,8 @@ class IntegrationLifecycle:
                 "GH_TELEMETRY": "false",
             }
         )
+        if self.cloud_mode:
+            self.cloud_diagnostic_stage(f"workload-{label}-attestation-verify")
         self.command(
             [
                 self.gh_executable,
@@ -2018,9 +2063,14 @@ class IntegrationLifecycle:
             ],
             environment=gh_environment,
         )
+        if self.cloud_mode:
+            self.cloud_diagnostic_stage(f"workload-{label}-image-pull")
         self.anonymous_pull(label, image)
+        if self.cloud_mode:
+            self.cloud_diagnostic_stage(f"workload-{label}-image-admission")
         self.verify_staged_image(image, digest)
         if self.cloud_mode:
+            self.cloud_diagnostic_stage(f"workload-{label}-image-alias")
             self.stage_cloud_image_alias(label, image, digest)
         subject.unlink(missing_ok=True)
         bundle.unlink(missing_ok=True)
@@ -3562,6 +3612,8 @@ def main() -> int:
     if arguments.cloud_phase is not None:
         instance = os.environ.get("SECPAL_FIXTURE_INSTANCE", "")
         try:
+            if arguments.cloud_phase == "prepare":
+                emit_cloud_diagnostic_stage("workload-fixture-initialization")
             fixture_root = cloud_fixture_root(instance)
             if arguments.cloud_phase == "prepare":
                 prepare_cloud_fixture_directory(fixture_root)

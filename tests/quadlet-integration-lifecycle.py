@@ -50,6 +50,9 @@ class RecordingLifecycle:
         if self.fail_at == name:
             raise self.module.IntegrationError(f"fixture failed at {name}")
 
+    def cloud_diagnostic_stage(self, stage: str) -> None:
+        self.events.append(f"diagnostic:{stage}")
+
     def validate_repository_and_runtime(self) -> None:
         self._phase("admission")
 
@@ -361,15 +364,67 @@ class QuadletLifecycleContract(unittest.TestCase):
         self.module.execute_cloud_prepare(lifecycle)
         self.assertEqual(
             lifecycle.events,
-            ["admission", "verify-stage", "quadlets"],
+            [
+                "diagnostic:workload-runtime-admission",
+                "admission",
+                "diagnostic:workload-gh-cli-staging",
+                "verify-stage",
+                "diagnostic:workload-quadlet-render-publish",
+                "quadlets",
+            ],
         )
         self.assertEqual(lifecycle.cleanup_calls, 0)
 
     def test_cloud_cleanup_is_a_separate_reconstructible_phase(self) -> None:
         lifecycle = RecordingCloudCleanupLifecycle(self.module)
         self.module.execute_cloud_cleanup(lifecycle)
-        self.assertEqual(lifecycle.events, ["cleanup-admission", "cleanup"])
+        self.assertEqual(
+            lifecycle.events,
+            ["diagnostic:workload-cleanup", "cleanup-admission", "cleanup"],
+        )
         self.assertEqual(lifecycle.cleanup_calls, 1)
+
+    def test_cloud_product_staging_emits_only_closed_diagnostic_stages(self) -> None:
+        digest = "sha256:" + "a" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            lifecycle.cloud_diagnostic_stage = mock.Mock()
+            lifecycle.command = mock.Mock(
+                return_value=subprocess.CompletedProcess([], 0, "", "")
+            )
+            lifecycle.anonymous_pull = mock.Mock()
+            lifecycle.verify_staged_image = mock.Mock()
+            lifecycle.stage_cloud_image_alias = mock.Mock()
+
+            lifecycle.verify_and_stage_product(
+                "api",
+                f"ghcr.io/secpal/api@{digest}",
+                digest,
+                "SecPal/api",
+                "build.yml",
+                "b" * 40,
+                "secpal/api",
+            )
+
+            self.assertEqual(
+                lifecycle.cloud_diagnostic_stage.call_args_list,
+                [
+                    mock.call("workload-api-attestation-fetch"),
+                    mock.call("workload-api-attestation-verify"),
+                    mock.call("workload-api-image-pull"),
+                    mock.call("workload-api-image-admission"),
+                    mock.call("workload-api-image-alias"),
+                ],
+            )
 
     def test_cloud_phase_cli_rejects_runtime_escape_hatches(self) -> None:
         accepted = self.module.parse_arguments(["--cloud-phase", "prepare"])

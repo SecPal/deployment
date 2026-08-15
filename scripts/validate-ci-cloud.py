@@ -2008,15 +2008,29 @@ def validate(root: Path) -> None:
         and "MAX_EMITTED_BYTES = 8 * 1024" in target_diagnostic
         and "os.O_NOFOLLOW" in target_diagnostic
         and "while remaining:" in target_diagnostic
-        and 'metadata = f"{observed_bytes} {int(truncated)}\\n".encode("ascii")'
+        and 'metadata = f"{observed_bytes} {int(truncated)} {stage}\\n".encode("ascii")'
         in target_diagnostic
         and '"output_bytes": output_bytes' in target_diagnostic
         and '"output_truncated": output_truncated' in target_diagnostic
+        and '"stage": stage' in target_diagnostic
+        and "TARGET_STAGE_PREFIX" in target_diagnostic
+        and "ADMITTED_STAGES" in target_diagnostic
+        and "UNREPORTED_STAGE" in target_diagnostic
         and "tail_sha256" not in target_diagnostic
         and '"output"' not in target_diagnostic
         and '"Target phase diagnostic: "' in target_diagnostic
         and "json.dumps" in target_diagnostic,
         "target failures need bounded inert diagnostics in a private run path",
+    )
+    require(
+        "SECPAL_TARGET_DIAGNOSTIC_V1:host-contract" in target
+        and "CLOUD_DIAGNOSTIC_STAGES" in read(
+            root, "scripts/quadlet-integration.py"
+        )
+        and "cloud_diagnostic_stage" in read(
+            root, "scripts/quadlet-integration.py"
+        ),
+        "target phases must publish only closed diagnostic stages",
     )
     require(
         remote.count("v1 host") == 1

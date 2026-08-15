@@ -18,6 +18,54 @@ MAX_CAPTURE_BYTES = 16 * 1024
 MAX_EMITTED_BYTES = 8 * 1024
 PHASES = frozenset({"host", "workload-prepare-start", "workload-cleanup"})
 OUTPUT_PREFIX = "Target phase diagnostic: "
+TARGET_STAGE_PREFIX = b"SECPAL_TARGET_DIAGNOSTIC_V1:"
+MAX_STAGE_LINE_BYTES = len(TARGET_STAGE_PREFIX) + 64
+PHASE_STAGES = {
+    "host": frozenset({"host-contract"}),
+    "workload-prepare-start": frozenset(
+        {
+            "workload-target-entrypoint",
+            "workload-fixture-initialization",
+            "workload-runtime-admission",
+            "workload-gh-cli-staging",
+            "workload-api-attestation-fetch",
+            "workload-api-attestation-verify",
+            "workload-api-image-pull",
+            "workload-api-image-admission",
+            "workload-api-image-alias",
+            "workload-frontend-attestation-fetch",
+            "workload-frontend-attestation-verify",
+            "workload-frontend-image-pull",
+            "workload-frontend-image-admission",
+            "workload-frontend-image-alias",
+            "workload-postgres-attestation-fetch",
+            "workload-postgres-attestation-verify",
+            "workload-postgres-image-pull",
+            "workload-postgres-image-admission",
+            "workload-postgres-image-alias",
+            "workload-valkey-attestation-fetch",
+            "workload-valkey-attestation-verify",
+            "workload-valkey-image-pull",
+            "workload-valkey-image-admission",
+            "workload-valkey-image-alias",
+            "workload-quadlet-render-publish",
+        }
+    ),
+    "workload-cleanup": frozenset({"workload-cleanup"}),
+}
+ADMITTED_STAGES = frozenset().union(*PHASE_STAGES.values())
+UNREPORTED_STAGE = "unreported"
+
+
+def admitted_stage(line: bytes, current: str) -> str:
+    if not line.startswith(TARGET_STAGE_PREFIX):
+        return current
+    value = line.removeprefix(TARGET_STAGE_PREFIX)
+    try:
+        candidate = value.decode("ascii")
+    except UnicodeDecodeError:
+        return current
+    return candidate if candidate in ADMITTED_STAGES else current
 
 
 def admitted_file(path: Path, *, require_empty: bool) -> os.stat_result:
@@ -39,12 +87,31 @@ def capture(path: Path) -> None:
     admitted_file(path, require_empty=True)
     observed_bytes = 0
     truncated = False
+    stage = UNREPORTED_STAGE
+    stage_line = b""
+    discarding_stage_line = False
     while chunk := sys.stdin.buffer.read(64 * 1024):
-        remaining = MAX_CAPTURE_BYTES - observed_bytes
+        remaining = max(0, MAX_CAPTURE_BYTES - observed_bytes)
         observed_bytes += min(len(chunk), remaining)
         if len(chunk) > remaining:
             truncated = True
-    metadata = f"{observed_bytes} {int(truncated)}\n".encode("ascii")
+        segments = chunk.split(b"\n")
+        for index, segment in enumerate(segments):
+            line_complete = index < len(segments) - 1
+            if not discarding_stage_line:
+                if len(stage_line) + len(segment) <= MAX_STAGE_LINE_BYTES:
+                    stage_line += segment
+                else:
+                    stage_line = b""
+                    discarding_stage_line = True
+            if line_complete:
+                if not discarding_stage_line:
+                    stage = admitted_stage(stage_line, stage)
+                stage_line = b""
+                discarding_stage_line = False
+    if stage_line and not discarding_stage_line:
+        stage = admitted_stage(stage_line, stage)
+    metadata = f"{observed_bytes} {int(truncated)} {stage}\n".encode("ascii")
     descriptor = os.open(
         path,
         os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -64,10 +131,13 @@ def capture(path: Path) -> None:
         raise ValueError("target diagnostic write was incomplete")
 
 
-def captured_metadata(path: Path) -> tuple[int, bool]:
+def captured_metadata(path: Path) -> tuple[int, bool, str]:
     admitted_file(path, require_empty=False)
     payload = path.read_bytes()
-    match = re.fullmatch(rb"(0|[1-9][0-9]{0,4}) ([01])\n", payload)
+    match = re.fullmatch(
+        rb"(0|[1-9][0-9]{0,4}) ([01]) ([a-z0-9-]{1,64})\n",
+        payload,
+    )
     if match is None:
         raise ValueError("target diagnostic metadata is malformed")
     observed_bytes = int(match.group(1))
@@ -76,14 +146,23 @@ def captured_metadata(path: Path) -> tuple[int, bool]:
         truncated and observed_bytes != MAX_CAPTURE_BYTES
     ):
         raise ValueError("target diagnostic metadata is outside its bound")
-    return observed_bytes, truncated
+    stage = match.group(3).decode("ascii")
+    if stage != UNREPORTED_STAGE and stage not in ADMITTED_STAGES:
+        raise ValueError("target diagnostic stage is outside the closed contract")
+    return observed_bytes, truncated, stage
 
 
 def rendered_diagnostic(path: Path, phase: str, status: int) -> str:
-    output_bytes, output_truncated = captured_metadata(path)
+    output_bytes, output_truncated, captured_stage = captured_metadata(path)
+    stage = (
+        captured_stage
+        if captured_stage in PHASE_STAGES.get(phase, frozenset())
+        else UNREPORTED_STAGE
+    )
     document = {
         "phase": phase,
         "status": status,
+        "stage": stage,
         "output_bytes": output_bytes,
         "output_truncated": output_truncated,
     }

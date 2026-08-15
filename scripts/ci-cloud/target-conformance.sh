@@ -52,12 +52,15 @@ done
 
 case "$phase" in
   workload-prepare-start)
+    printf 'SECPAL_TARGET_DIAGNOSTIC_V1:workload-target-entrypoint\n' >&2
     python3 scripts/quadlet-integration.py --cloud-phase prepare
     ;;
   workload-cleanup)
+    printf 'SECPAL_TARGET_DIAGNOSTIC_V1:workload-cleanup\n' >&2
     python3 scripts/quadlet-integration.py --cloud-phase cleanup
     ;;
   host)
+    printf 'SECPAL_TARGET_DIAGNOSTIC_V1:host-contract\n' >&2
     timeout --signal=TERM --kill-after=15s 8m \
       python3 tests/production-contract-regressions.py
     timeout --signal=TERM --kill-after=15s 8m \
