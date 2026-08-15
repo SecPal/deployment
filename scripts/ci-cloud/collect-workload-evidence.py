@@ -52,6 +52,35 @@ GENERATED_LOGICAL_NAMES = (
     *(f"{kind}-network" for kind in NETWORK_KINDS),
     *(f"{kind}-volume" for kind in VOLUME_KINDS),
 )
+AUXILIARY_EXEC_PROPERTIES = frozenset(
+    {
+        "ExecCondition",
+        "ExecStartPre",
+        "ExecStartPost",
+        "ExecReload",
+        "ExecStop",
+        "ExecStopPost",
+    }
+)
+TRUSTED_SERVICE_CONFIG_ENVIRONMENT = {
+    "CONTAINERS_CONF": "/dev/null",
+    "CONTAINERS_CONF_OVERRIDE": "/dev/null",
+    "CONTAINERS_CONF_MODULES": "",
+    "PODMAN_USERNS": "",
+}
+SERVICE_ACTIVATION_PROPERTIES = (
+    "Environment",
+    "EnvironmentFiles",
+    "PassEnvironment",
+    "UnsetEnvironment",
+    "ExecCondition",
+    "ExecStartPre",
+    "ExecStart",
+    "ExecStartPost",
+    "ExecReload",
+    "ExecStop",
+    "ExecStopPost",
+)
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
 class RoleContract(NamedTuple):
@@ -213,6 +242,7 @@ CLEANUP_OBSERVATION_FIELDS = frozenset(
     }
 )
 TRUSTED_MANAGER_ENVIRONMENT = (
+    "CONTAINERS_CONF=/dev/null",
     "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
     "HOME=/home/secpal-ci",
     "LANG=C.UTF-8",
@@ -279,6 +309,7 @@ def incomplete_observation(phase: str) -> dict[str, object]:
 
 def command_environment() -> dict[str, str]:
     return {
+        "CONTAINERS_CONF": "/dev/null",
         "HOME": "/home/secpal-ci",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
@@ -465,6 +496,18 @@ def manager_environment() -> dict[str, str] | None:
 def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
     if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
         return False
+    prefix = f"secpal-int-{instance}"
+    target = f"{prefix}.target"
+    services = [
+        f"{prefix}-{logical_name}.service"
+        for logical_name in GENERATED_LOGICAL_NAMES
+    ]
+    if activate:
+        stop_status, _, stop_complete = command_result(
+            ["systemctl", "--user", "stop", target, *services], timeout=120
+        )
+        if stop_status != 0 or not stop_complete:
+            return False
     existing = manager_environment()
     if existing is None:
         return False
@@ -486,16 +529,7 @@ def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
     if reload_status != 0 or not reload_complete:
         return False
     if activate:
-        prefix = f"secpal-int-{instance}"
-        target = f"{prefix}.target"
-        services = [
-            f"{prefix}-{logical_name}.service"
-            for logical_name in GENERATED_LOGICAL_NAMES
-        ]
-        stop_status, _, stop_complete = command_result(
-            ["systemctl", "--user", "stop", target, *services], timeout=120
-        )
-        if stop_status != 0 or not stop_complete:
+        if not generated_service_activation_is_trusted(instance):
             return False
         start_status, _, start_complete = command_result(
             ["systemctl", "--user", "start", target], timeout=600
@@ -510,7 +544,9 @@ def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
     )
 
 
-def file_fact(path: Path, name: str) -> dict[str, object] | None:
+def bounded_regular_file(
+    path: Path,
+) -> tuple[bytes, os.stat_result] | None:
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -537,14 +573,57 @@ def file_fact(path: Path, name: str) -> dict[str, object] | None:
         or identity(before) != identity(after)
     ):
         return None
+    return content, before
+
+
+def file_fact(path: Path, name: str) -> dict[str, object] | None:
+    observation = bounded_regular_file(path)
+    if observation is None:
+        return None
+    content, metadata = observation
     return {
         "name": name,
         "path": str(path),
-        "uid": before.st_uid,
-        "gid": before.st_gid,
-        "mode": f"0{stat.S_IMODE(before.st_mode):03o}",
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": f"0{stat.S_IMODE(metadata.st_mode):03o}",
         "sha256": hashlib.sha256(content).hexdigest(),
     }
+
+
+def quadlet_content_has_no_auxiliary_execution_directives(
+    content: object,
+) -> bool:
+    if (
+        not isinstance(content, bytes)
+        or len(content) > 64 * 1024
+        or b"\x00" in content
+    ):
+        return False
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    directives = "|".join(sorted(AUXILIARY_EXEC_PROPERTIES))
+    return re.search(
+        rf"(?m)^[ \t]*(?:{directives})[ \t]*=", text
+    ) is None
+
+
+def quadlet_source_execution_controls_are_trusted(
+    instance: str, logical_name: str
+) -> bool:
+    try:
+        source = expected_generated_source(instance, logical_name)
+    except ValueError:
+        return False
+    observation = bounded_regular_file(source)
+    return bool(
+        observation is not None
+        and quadlet_content_has_no_auxiliary_execution_directives(
+            observation[0]
+        )
+    )
 
 
 def installed_unit_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
@@ -587,6 +666,153 @@ def generated_file_fact(path: Path) -> tuple[int, int, str, str] | None:
     )
 
 
+def service_environment_controls_are_trusted(
+    environment_files: object,
+    pass_environment: object,
+    unset_environment: object,
+) -> bool:
+    return all(
+        isinstance(value, str) and value == ""
+        for value in (environment_files, pass_environment, unset_environment)
+    )
+
+
+def service_execution_controls_are_trusted(
+    properties: object, logical_name: str
+) -> bool:
+    if (
+        not isinstance(properties, dict)
+        or set(properties) != AUXILIARY_EXEC_PROPERTIES
+        or any(
+            not isinstance(value, str) or len(value) > 65_536 or "\x00" in value
+            for value in properties.values()
+        )
+        or any(
+            properties[name] != ""
+            for name in (
+                "ExecCondition", "ExecStartPre", "ExecStartPost", "ExecReload"
+            )
+        )
+    ):
+        return False
+    if logical_name in ROLES:
+        operation = "rm"
+        required = True
+    elif logical_name in {f"{kind}-network" for kind in NETWORK_KINDS}:
+        operation = "network rm"
+        required = False
+    elif logical_name in {f"{kind}-volume" for kind in VOLUME_KINDS}:
+        operation = None
+        required = False
+    else:
+        return False
+    return all(
+        podman_lifecycle_exec_is_trusted(
+            properties[name], operation, required=required
+        )
+        for name in ("ExecStop", "ExecStopPost")
+    )
+
+
+def podman_lifecycle_exec_is_trusted(
+    value: str, operation: str | None, *, required: bool
+) -> bool:
+    if value == "":
+        return not required
+    if operation is None:
+        return False
+    return bool(
+        value.count("{ path=") == 1
+        and value.count("argv[]=") == 1
+        and value.count(" }") == 1
+        and re.match(
+            r"^\{ path=/usr/bin/podman ; argv\[\]=/usr/bin/podman "
+            + re.escape(operation)
+            + r"(?: | ;)",
+            value,
+        )
+    )
+
+
+def direct_podman_exec_start(value: object, logical_name: str) -> bool:
+    if logical_name in ROLES:
+        operation = "run"
+    elif logical_name in {f"{kind}-network" for kind in NETWORK_KINDS}:
+        operation = "network create"
+    elif logical_name in {f"{kind}-volume" for kind in VOLUME_KINDS}:
+        operation = "volume create"
+    else:
+        return False
+    return bool(
+        isinstance(value, str)
+        and len(value) <= 65_536
+        and "\x00" not in value
+        and value.count("{ path=") == 1
+        and re.match(
+            r"^\{ path=/usr/bin/podman ; argv\[\]=/usr/bin/podman "
+            + re.escape(operation)
+            + r"(?: | ;)",
+            value,
+        )
+    )
+
+
+def service_runtime_controls_are_trusted(
+    properties: object, logical_name: str
+) -> bool:
+    return bool(
+        isinstance(properties, dict)
+        and set(properties) == set(SERVICE_ACTIVATION_PROPERTIES)
+        and service_config_environment_is_trusted(properties.get("Environment"))
+        and service_environment_controls_are_trusted(
+            properties.get("EnvironmentFiles"),
+            properties.get("PassEnvironment"),
+            properties.get("UnsetEnvironment"),
+        )
+        and service_execution_controls_are_trusted(
+            {
+                name: properties.get(name)
+                for name in AUXILIARY_EXEC_PROPERTIES
+            },
+            logical_name,
+        )
+        and direct_podman_exec_start(properties.get("ExecStart"), logical_name)
+    )
+
+
+def generated_service_activation_is_trusted(instance: str) -> bool:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return False
+    prefix = f"secpal-int-{instance}"
+    for logical_name in GENERATED_LOGICAL_NAMES:
+        if not quadlet_source_execution_controls_are_trusted(
+            instance, logical_name
+        ):
+            return False
+        status_code, output, bounded = command_result(
+            [
+                "systemctl", "--user", "show",
+                f"{prefix}-{logical_name}.service",
+                *(f"--property={name}" for name in SERVICE_ACTIVATION_PROPERTIES),
+            ]
+        )
+        properties: dict[str, str] = {}
+        for line in output.splitlines():
+            if "=" not in line:
+                return False
+            name, value = line.split("=", 1)
+            if name in properties:
+                return False
+            properties[name] = value
+        if (
+            status_code != 0
+            or not bounded
+            or not service_runtime_controls_are_trusted(properties, logical_name)
+        ):
+            return False
+    return True
+
+
 def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
     facts: list[dict[str, object]] = []
     complete = True
@@ -594,7 +820,8 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
     expected_properties = {
         "FragmentPath", "DropInPaths", "ActiveState", "SubState", "Result",
         "ExecMainStatus", "MainPID", "ControlGroup", "InvocationID",
-        "SourcePath",
+        "SourcePath", "Environment", "EnvironmentFiles", "PassEnvironment",
+        "UnsetEnvironment", "ExecStart", *AUXILIARY_EXEC_PROPERTIES,
     }
     for logical_name in GENERATED_LOGICAL_NAMES:
         unit = f"{prefix}-{logical_name}.service"
@@ -606,6 +833,12 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                 "--property=Result", "--property=ExecMainStatus",
                 "--property=MainPID", "--property=ControlGroup",
                 "--property=InvocationID", "--property=SourcePath",
+                "--property=Environment", "--property=EnvironmentFiles",
+                "--property=PassEnvironment", "--property=UnsetEnvironment",
+                "--property=ExecCondition", "--property=ExecStartPre",
+                "--property=ExecStart", "--property=ExecStartPost",
+                "--property=ExecReload", "--property=ExecStop",
+                "--property=ExecStopPost",
             ]
         )
         properties: dict[str, str] = {}
@@ -632,6 +865,10 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
         main_pid = properties.get("MainPID", "")
         control_group = properties.get("ControlGroup", "")
         invocation_id = properties.get("InvocationID", "")
+        raw_environment = properties.get("Environment", "")
+        environment, environment_complete = normalized_service_environment(
+            raw_environment
+        )
         if (
             status_code != 0
             or not bounded
@@ -651,6 +888,26 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
             or not source_path.startswith("/")
             or "\x00" in source_path
             or re.fullmatch(r"[0-9a-f]{32}", invocation_id) is None
+            or not environment_complete
+            or not quadlet_source_execution_controls_are_trusted(
+                instance, logical_name
+            )
+            or not service_config_environment_is_trusted(raw_environment)
+            or not service_environment_controls_are_trusted(
+                properties.get("EnvironmentFiles"),
+                properties.get("PassEnvironment"),
+                properties.get("UnsetEnvironment"),
+            )
+            or not service_execution_controls_are_trusted(
+                {
+                    name: properties.get(name)
+                    for name in AUXILIARY_EXEC_PROPERTIES
+                },
+                logical_name,
+            )
+            or not direct_podman_exec_start(
+                properties.get("ExecStart"), logical_name
+            )
         ):
             complete = False
             continue
@@ -673,6 +930,7 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                 "drop_in_sha256": [
                     item[3] for item in drop_in_metadata if item is not None
                 ],
+                "environment": environment,
                 "active_state": active_state,
                 "sub_state": sub_state,
                 "result": result,
@@ -903,16 +1161,392 @@ def normalized_command(value: object) -> tuple[list[str], bool]:
     return list(values), True
 
 
-def container_identity_from_host(value: int) -> int:
-    if value == CI_UID:
-        return 0
-    if 200_000 <= value <= 265_535:
-        return value - 199_999
-    return -1
+def parse_id_map(content: bytes) -> tuple[list[dict[str, int]], bool]:
+    if not content or len(content) > 4096:
+        return [], False
+    try:
+        lines = content.decode("ascii").splitlines()
+    except UnicodeDecodeError:
+        return [], False
+    if not 1 <= len(lines) <= 16:
+        return [], False
+    mappings: list[dict[str, int]] = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) != 3 or any(not field.isdigit() for field in fields):
+            return [], False
+        container_id, host_id, size = (int(field) for field in fields)
+        if (
+            size <= 0
+            or container_id > 2**32 - 1
+            or host_id > 2**32 - 1
+            or container_id + size > 2**32
+            or host_id + size > 2**32
+        ):
+            return [], False
+        mappings.append(
+            {"container_id": container_id, "host_id": host_id, "size": size}
+        )
+    mappings.sort(key=lambda item: (item["container_id"], item["host_id"]))
+    if not id_map_is_bounded(mappings, allow_empty=False):
+        return [], False
+    return mappings, True
 
 
-def container_identity_on_host(value: int) -> int:
-    return CI_UID if value == 0 else 199_999 + value
+def configured_id_maps(value: object) -> tuple[
+    list[dict[str, int]], list[dict[str, int]], bool
+]:
+    if value is None:
+        return [], [], True
+    if not isinstance(value, dict) or set(value) != {"UidMap", "GidMap"}:
+        return [], [], False
+    parsed: list[list[dict[str, int]]] = []
+    for field in ("UidMap", "GidMap"):
+        items = value[field]
+        if not isinstance(items, list) or len(items) > 16 or any(
+            not isinstance(item, str)
+            or not item
+            or len(item) > 64
+            for item in items
+        ):
+            return [], [], False
+        if not items:
+            parsed.append([])
+            continue
+        try:
+            content = (
+                "\n".join(item.replace(":", " ") for item in items) + "\n"
+            ).encode("ascii", errors="strict")
+        except UnicodeEncodeError:
+            return [], [], False
+        mapping, complete = parse_id_map(content)
+        if not complete:
+            return [], [], False
+        parsed.append(mapping)
+    uid_map, gid_map = parsed
+    if bool(uid_map) != bool(gid_map):
+        return [], [], False
+    return uid_map, gid_map, True
+
+
+def configured_userns_options(value: object) -> tuple[list[str], bool]:
+    if (
+        not isinstance(value, list)
+        or not 2 <= len(value) <= 256
+        or any(
+            not isinstance(item, str)
+            or not item
+            or len(item) > 4096
+            or "\x00" in item
+            for item in value
+        )
+        or sum(len(item) for item in value) > 65_536
+    ):
+        return [], False
+    options: list[str] = []
+    index = 0
+    while index < len(value):
+        argument = value[index]
+        if argument == "--module" or argument.startswith("--module="):
+            return [], False
+        if argument == "--userns":
+            if (
+                index + 1 >= len(value)
+                or value[index + 1].startswith("-")
+                or len(value[index + 1]) > 256
+            ):
+                return [], False
+            options.append(value[index + 1])
+            index += 2
+            continue
+        if argument.startswith("--userns="):
+            option = argument.split("=", 1)[1]
+            if not option or len(option) > 256:
+                return [], False
+            options.append(option)
+        index += 1
+    return options, len(options) <= 1
+
+
+def service_environment_assignments(
+    value: object,
+) -> tuple[dict[str, str], bool]:
+    if not isinstance(value, str) or len(value) > 65_536 or "\x00" in value:
+        return {}, False
+    try:
+        assignments = shlex.split(value, posix=True)
+    except ValueError:
+        return {}, False
+    if len(assignments) > 64 or sum(len(item) for item in assignments) > 16_384:
+        return {}, False
+    parsed: dict[str, str] = {}
+    for assignment in assignments:
+        if (
+            len(assignment) > 1024
+            or "=" not in assignment
+            or "\x00" in assignment
+        ):
+            return {}, False
+        name, item = assignment.split("=", 1)
+        if (
+            re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) is None
+            or name in parsed
+            or any(ord(character) < 32 for character in item)
+        ):
+            return {}, False
+        parsed[name] = item
+    return parsed, True
+
+
+def normalized_service_environment(value: object) -> tuple[list[str], bool]:
+    assignments, complete = service_environment_assignments(value)
+    return sorted(assignments), complete
+
+
+def service_config_environment_is_trusted(value: object) -> bool:
+    assignments, complete = service_environment_assignments(value)
+    return bool(
+        complete
+        and all(
+            assignments.get(name) == expected
+            for name, expected in TRUSTED_SERVICE_CONFIG_ENVIRONMENT.items()
+        )
+    )
+
+
+def read_id_map(path: Path) -> tuple[list[dict[str, int]], bool]:
+    try:
+        with path.open("rb") as stream:
+            content = stream.read(4097)
+    except OSError:
+        return [], False
+    return parse_id_map(content)
+
+
+def user_namespace_identity(path: Path) -> tuple[str, bool]:
+    try:
+        identity = os.readlink(path)
+    except OSError:
+        return "", False
+    return (
+        identity,
+        re.fullmatch(r"user:\[[0-9]{1,20}\]", identity) is not None,
+    )
+
+
+def id_from_host(mapping: list[dict[str, int]], host_id: int) -> int:
+    matches = [
+        item["container_id"] + host_id - item["host_id"]
+        for item in mapping
+        if item["host_id"] <= host_id < item["host_id"] + item["size"]
+    ]
+    return matches[0] if len(matches) == 1 else -1
+
+
+def id_to_host(mapping: list[dict[str, int]], container_id: int) -> int:
+    matches = [
+        item["host_id"] + container_id - item["container_id"]
+        for item in mapping
+        if item["container_id"] <= container_id < item["container_id"] + item["size"]
+    ]
+    return matches[0] if len(matches) == 1 else -1
+
+
+def compose_id_maps(
+    inner: list[dict[str, int]], outer: list[dict[str, int]]
+) -> list[dict[str, int]] | None:
+    composed: list[dict[str, int]] = []
+    for item in inner:
+        remaining = item["size"]
+        container_id = item["container_id"]
+        outer_id = item["host_id"]
+        while remaining:
+            match = next(
+                (
+                    candidate
+                    for candidate in outer
+                    if candidate["container_id"] <= outer_id
+                    < candidate["container_id"] + candidate["size"]
+                ),
+                None,
+            )
+            if match is None:
+                return None
+            size = min(
+                remaining,
+                match["container_id"] + match["size"] - outer_id,
+            )
+            composed.append(
+                {
+                    "container_id": container_id,
+                    "host_id": match["host_id"] + outer_id - match["container_id"],
+                    "size": size,
+                }
+            )
+            remaining -= size
+            container_id += size
+            outer_id += size
+            if len(composed) > 16:
+                return None
+    composed.sort(key=lambda item: (item["container_id"], item["host_id"]))
+    return composed if id_map_is_bounded(composed, allow_empty=False) else None
+
+
+def podman_outer_id_maps() -> tuple[list[dict[str, int]], list[dict[str, int]], bool]:
+    uid_status, uid_value, uid_complete = command_result(
+        ["podman", "unshare", "cat", "/proc/self/uid_map"]
+    )
+    gid_status, gid_value, gid_complete = command_result(
+        ["podman", "unshare", "cat", "/proc/self/gid_map"]
+    )
+    try:
+        uid_map, uid_valid = parse_id_map(uid_value.encode("ascii"))
+        gid_map, gid_valid = parse_id_map(gid_value.encode("ascii"))
+    except UnicodeEncodeError:
+        return [], [], False
+    return (
+        uid_map,
+        gid_map,
+        uid_status == 0 and gid_status == 0 and uid_complete and gid_complete
+        and uid_valid and gid_valid,
+    )
+
+
+def effective_user_namespace_facts(
+    pid: int,
+) -> tuple[dict[str, object], int, int, list[int], bool]:
+    empty = {
+        "process_identity": "",
+        "collector_identity": "",
+        "uid_map": [],
+        "gid_map": [],
+        "collector_uid_map": [],
+        "collector_gid_map": [],
+    }
+    if pid <= 0 or pid > 4_194_304:
+        return empty, -1, -1, [], False
+    collector_identity, collector_identity_complete = user_namespace_identity(
+        Path("/proc/self/ns/user")
+    )
+    collector_uid_map, collector_uid_complete = read_id_map(
+        Path("/proc/self/uid_map")
+    )
+    collector_gid_map, collector_gid_complete = read_id_map(
+        Path("/proc/self/gid_map")
+    )
+    process_namespace_path = Path(f"/proc/{pid}/ns/user")
+    process_identity_before, process_identity_before_complete = (
+        user_namespace_identity(process_namespace_path)
+    )
+    uid_map, uid_complete = read_id_map(Path(f"/proc/{pid}/uid_map"))
+    gid_map, gid_complete = read_id_map(Path(f"/proc/{pid}/gid_map"))
+    host_uid, host_gid, host_groups, identity_complete = process_status_facts(
+        pid, require_all_ids_equal=True
+    )
+    process_identity_after, process_identity_after_complete = (
+        user_namespace_identity(process_namespace_path)
+    )
+    process_identity = (
+        process_identity_before
+        if process_identity_before == process_identity_after
+        else ""
+    )
+    effective_uid = id_from_host(uid_map, host_uid)
+    effective_gid = id_from_host(gid_map, host_gid)
+    effective_groups = sorted(id_from_host(gid_map, value) for value in host_groups)
+    complete = all(
+        (
+            collector_identity_complete,
+            collector_uid_complete,
+            collector_gid_complete,
+            process_identity_before_complete,
+            process_identity_after_complete,
+            bool(process_identity),
+            uid_complete,
+            gid_complete,
+            identity_complete,
+            effective_uid >= 0,
+            effective_gid >= 0,
+            all(value >= 0 for value in effective_groups),
+        )
+    )
+    facts = {
+        "process_identity": process_identity,
+        "collector_identity": collector_identity,
+        "uid_map": uid_map,
+        "gid_map": gid_map,
+        "collector_uid_map": collector_uid_map,
+        "collector_gid_map": collector_gid_map,
+    }
+    if not complete:
+        return facts, -1, -1, [], False
+    return facts, effective_uid, effective_gid, effective_groups, True
+
+
+def collector_user_namespace_facts() -> tuple[dict[str, object], bool]:
+    identity, identity_complete = user_namespace_identity(Path("/proc/self/ns/user"))
+    uid_map, uid_complete = read_id_map(Path("/proc/self/uid_map"))
+    gid_map, gid_complete = read_id_map(Path("/proc/self/gid_map"))
+    return (
+        {
+            "process_identity": "",
+            "collector_identity": identity,
+            "uid_map": [],
+            "gid_map": [],
+            "collector_uid_map": uid_map,
+            "collector_gid_map": gid_map,
+        },
+        identity_complete and uid_complete and gid_complete,
+    )
+
+
+def effective_host_identity(
+    container: object, expected_uid: int, expected_gid: int
+) -> tuple[int, int] | None:
+    if not isinstance(container, dict):
+        return None
+    namespace = container.get("user_namespace")
+    if not isinstance(namespace, dict):
+        return None
+    uid_map = namespace.get("uid_map")
+    gid_map = namespace.get("gid_map")
+    if (
+        not id_map_is_bounded(uid_map, allow_empty=False)
+        or not id_map_is_bounded(gid_map, allow_empty=False)
+    ):
+        return None
+    host_uid = id_to_host(uid_map, expected_uid)
+    host_gid = id_to_host(gid_map, expected_gid)
+    return (host_uid, host_gid) if host_uid >= 0 and host_gid >= 0 else None
+
+
+def allowed_service_process_groups(
+    services: object, containers: object
+) -> dict[str, set[tuple[int, int]]]:
+    if not isinstance(services, list) or not isinstance(containers, list):
+        return {}
+    containers_by_role = {
+        str(container.get("role")): container
+        for container in containers
+        if isinstance(container, dict)
+    }
+    allowed: dict[str, set[tuple[int, int]]] = {}
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+        role = str(service.get("logical_name"))
+        control_group = service.get("control_group")
+        contract = ROLE_CONTRACTS.get(role)
+        if not isinstance(control_group, str) or not control_group or contract is None:
+            continue
+        identities = {(CI_UID, CI_GID)}
+        container_identity = effective_host_identity(
+            containers_by_role.get(role), *contract.identity
+        )
+        if container_identity is not None:
+            identities.add(container_identity)
+        allowed[control_group] = identities
+    return allowed
 
 
 def process_status_facts(
@@ -969,28 +1603,12 @@ def process_status_identity(
     return uid, gid, complete
 
 
-def effective_process_identity(pid: int) -> tuple[int, int, list[int], bool]:
-    uid, gid, supplementary_groups, complete = process_status_facts(
-        pid, require_all_ids_equal=True
-    )
-    if not complete:
-        return -1, -1, [], False
-    container_uid = container_identity_from_host(uid)
-    container_gid = container_identity_from_host(gid)
-    container_groups = [
-        container_identity_from_host(value) for value in supplementary_groups
-    ]
-    if (
-        container_uid < 0
-        or container_gid < 0
-        or any(value < 0 for value in container_groups)
-    ):
-        return -1, -1, [], False
-    return container_uid, container_gid, sorted(container_groups), True
-
-
 def container_facts(
-    instance: str, *, rootless: bool
+    instance: str,
+    *,
+    rootless: bool,
+    podman_uid_map: list[dict[str, int]],
+    podman_gid_map: list[dict[str, int]],
 ) -> tuple[list[dict[str, object]], bool]:
     prefix = f"secpal-int-{instance}-"
     all_names, complete = names_from_listing(
@@ -1027,7 +1645,7 @@ def container_facts(
         required_state = {"Status", "ExitCode", "Pid"}
         required_config = {
             "Labels", "Env", "Image", "User", "Entrypoint", "Cmd",
-            "Healthcheck",
+            "Healthcheck", "CreateCommand",
         }
         required_host_config = {
             "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
@@ -1049,6 +1667,7 @@ def container_facts(
             or not isinstance(item["BoundingCaps"], list)
             or not isinstance(config["Labels"], dict)
             or not isinstance(config["Env"], list)
+            or not isinstance(config["CreateCommand"], list)
             or not isinstance(config["User"], str)
             or re.fullmatch(r"[0-9]{1,10}:[0-9]{1,10}", config["User"])
             is None
@@ -1062,6 +1681,13 @@ def container_facts(
             or not isinstance(host_config["Devices"], list)
             or not isinstance(host_config["Tmpfs"], dict)
             or not isinstance(host_config["ReadonlyRootfs"], bool)
+            or any(
+                not isinstance(host_config[field], str)
+                for field in (
+                    "PidMode", "UsernsMode", "IpcMode", "UTSMode",
+                    "NetworkMode",
+                )
+            )
             or not isinstance(network_settings["Networks"], dict)
             or not isinstance(network_settings["Ports"], dict)
         ):
@@ -1117,10 +1743,32 @@ def container_facts(
             )
         else:
             healthcheck_command, healthcheck_complete = [], False
-        effective_uid, effective_gid, effective_groups, identity_complete = (
-            effective_process_identity(state["Pid"])
-            if str(state.get("Status", "")) == "running"
-            else (-1, -1, [], True)
+        create_options, create_options_complete = configured_userns_options(
+            config["CreateCommand"]
+        )
+        configured_uid_map, configured_gid_map, configured_maps_complete = (
+            configured_id_maps(host_config.get("IDMappings"))
+        )
+        if str(state.get("Status", "")) == "running":
+            (
+                user_namespace,
+                effective_uid,
+                effective_gid,
+                effective_groups,
+                identity_complete,
+            ) = effective_user_namespace_facts(state["Pid"])
+        else:
+            user_namespace, identity_complete = collector_user_namespace_facts()
+            effective_uid, effective_gid, effective_groups = -1, -1, []
+        user_namespace.update(
+            {
+                "compat_mode": host_config["UsernsMode"],
+                "create_options": create_options,
+                "configured_uid_map": configured_uid_map,
+                "configured_gid_map": configured_gid_map,
+                "podman_uid_map": podman_uid_map,
+                "podman_gid_map": podman_gid_map,
+            }
         )
         if any(not isinstance(value, str) for value in environment) or any(
             not isinstance(value, str)
@@ -1135,7 +1783,8 @@ def container_facts(
             (
                 mounts_complete, tmpfs_complete, events_complete,
                 entrypoint_complete, command_complete, healthcheck_complete,
-                identity_complete,
+                identity_complete, create_options_complete,
+                configured_maps_complete,
             )
         )
         remote_api_environment = any(
@@ -1164,7 +1813,7 @@ def container_facts(
                 "command": command,
                 "healthcheck_command": healthcheck_command,
                 "pid_mode": str(host_config["PidMode"] or "private"),
-                "userns_mode": str(host_config["UsernsMode"] or "host"),
+                "user_namespace": user_namespace,
                 "ipc_mode": str(host_config["IpcMode"] or "private"),
                 "uts_mode": str(host_config["UTSMode"] or "private"),
                 "network_mode": str(host_config["NetworkMode"] or "private"),
@@ -1859,8 +2508,12 @@ def collect_live(instance: str) -> dict[str, object]:
     units, units_complete = installed_unit_facts(instance)
     services, services_complete = generated_service_facts(instance)
     podman_rootless, oci_runtime, runtime_complete = podman_runtime_facts()
+    podman_uid_map, podman_gid_map, podman_maps_complete = podman_outer_id_maps()
     containers, containers_complete = container_facts(
-        instance, rootless=podman_rootless
+        instance,
+        rootless=podman_rootless,
+        podman_uid_map=podman_uid_map,
+        podman_gid_map=podman_gid_map,
     )
     containers, bindings_complete = bind_container_services(services, containers)
     inventory, inventory_complete = resource_inventory()
@@ -1880,6 +2533,7 @@ def collect_live(instance: str) -> dict[str, object]:
             (
                 units_complete, services_complete, containers_complete,
                 bindings_complete, inventory_complete, runtime_complete,
+                podman_maps_complete,
                 lifecycle_complete, controls_complete,
                 user_work_before_complete, user_work_after_complete,
                 user_work_before == user_work_after,
@@ -2048,6 +2702,229 @@ def exact_process_map(
     return facts
 
 
+def id_map_is_bounded(value: object, *, allow_empty: bool) -> bool:
+    if (
+        not isinstance(value, list)
+        or len(value) > 16
+        or (not allow_empty and not value)
+    ):
+        return False
+    ranges: list[tuple[int, int, int]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {
+            "container_id", "host_id", "size"
+        }:
+            return False
+        container_id = item["container_id"]
+        host_id = item["host_id"]
+        size = item["size"]
+        if (
+            type(container_id) is not int
+            or type(host_id) is not int
+            or type(size) is not int
+            or not 0 <= container_id <= 2**32 - 1
+            or not 0 <= host_id <= 2**32 - 1
+            or not 1 <= size <= 2**32 - 1
+            or container_id + size > 2**32
+            or host_id + size > 2**32
+        ):
+            return False
+        ranges.append((container_id, host_id, size))
+    if ranges != sorted(ranges, key=lambda item: (item[0], item[1])):
+        return False
+    for index, (container_id, host_id, size) in enumerate(ranges):
+        for other_container_id, other_host_id, other_size in ranges[index + 1:]:
+            if (
+                container_id < other_container_id + other_size
+                and other_container_id < container_id + size
+            ) or (
+                host_id < other_host_id + other_size
+                and other_host_id < host_id + size
+            ):
+                return False
+    return True
+
+
+def id_map_covers(value: list[dict[str, int]], identity: int) -> bool:
+    return sum(
+        item["container_id"] <= identity < item["container_id"] + item["size"]
+        for item in value
+    ) == 1
+
+
+def id_map_is_within_collector(
+    value: list[dict[str, int]], collector_map: list[dict[str, int]]
+) -> bool:
+    return all(
+        sum(
+            outer["container_id"] <= item["host_id"]
+            and item["host_id"] + item["size"]
+            <= outer["container_id"] + outer["size"]
+            for outer in collector_map
+        )
+        == 1
+        for item in value
+    )
+
+
+def user_namespace_contract_matches(
+    container: dict[str, object], expected_uid: int, expected_gid: int
+) -> bool:
+    value = container.get("user_namespace")
+    expected_fields = {
+        "compat_mode", "create_options", "process_identity",
+        "collector_identity", "uid_map", "gid_map", "collector_uid_map",
+        "collector_gid_map", "configured_uid_map", "configured_gid_map",
+        "podman_uid_map", "podman_gid_map",
+    }
+    if not isinstance(value, dict) or set(value) != expected_fields:
+        return False
+    compat_mode = value["compat_mode"]
+    create_options = value["create_options"]
+    if compat_mode not in {"", "private"} or not isinstance(
+        create_options, list
+    ) or len(create_options) > 1 or any(
+        not isinstance(option, str)
+        or re.fullmatch(
+            r"(?:private|nomap|auto(?::[a-z0-9=,@:+-]{1,256})?|"
+            r"keep-id(?::[a-z0-9=,@:+-]{1,256})?)",
+            option,
+        )
+        is None
+        for option in create_options
+    ):
+        return False
+    if compat_mode == "private" and create_options not in ([], ["private"]):
+        return False
+
+    configured_user = container.get("configured_user")
+    if not isinstance(configured_user, str) or re.fullmatch(
+        r"[0-9]{1,10}:[0-9]{1,10}", configured_user
+    ) is None:
+        return False
+    configured_uid, configured_gid = (
+        int(identity) for identity in configured_user.split(":", 1)
+    )
+    if (configured_uid, configured_gid) != (expected_uid, expected_gid):
+        return False
+
+    configured_uid_map = value["configured_uid_map"]
+    configured_gid_map = value["configured_gid_map"]
+    podman_uid_map = value["podman_uid_map"]
+    podman_gid_map = value["podman_gid_map"]
+    if (
+        not id_map_is_bounded(configured_uid_map, allow_empty=True)
+        or not id_map_is_bounded(configured_gid_map, allow_empty=True)
+        or bool(configured_uid_map) != bool(configured_gid_map)
+        or not id_map_is_bounded(podman_uid_map, allow_empty=False)
+        or not id_map_is_bounded(podman_gid_map, allow_empty=False)
+        or (
+            bool(configured_uid_map)
+            and (
+                not id_map_covers(configured_uid_map, configured_uid)
+                or not id_map_covers(configured_gid_map, configured_gid)
+            )
+        )
+    ):
+        return False
+
+    collector_identity = value["collector_identity"]
+    collector_uid_map = value["collector_uid_map"]
+    collector_gid_map = value["collector_gid_map"]
+    if (
+        not isinstance(collector_identity, str)
+        or re.fullmatch(r"user:\[[0-9]{1,20}\]", collector_identity) is None
+        or not id_map_is_bounded(collector_uid_map, allow_empty=False)
+        or not id_map_is_bounded(collector_gid_map, allow_empty=False)
+    ):
+        return False
+
+    if container.get("state") == "running":
+        process_identity = value["process_identity"]
+        uid_map = value["uid_map"]
+        gid_map = value["gid_map"]
+        effective_uid = container.get("effective_uid")
+        effective_gid = container.get("effective_gid")
+        effective_groups = container.get("effective_supplementary_gids")
+        expected_uid_map = compose_id_maps(
+            configured_uid_map, podman_uid_map
+        ) if configured_uid_map else None
+        expected_gid_map = compose_id_maps(
+            configured_gid_map, podman_gid_map
+        ) if configured_gid_map else None
+        default_mode = create_options == [] and not configured_uid_map
+        return bool(
+            isinstance(process_identity, str)
+            and re.fullmatch(r"user:\[[0-9]{1,20}\]", process_identity)
+            and process_identity != collector_identity
+            and id_map_is_bounded(uid_map, allow_empty=False)
+            and id_map_is_bounded(gid_map, allow_empty=False)
+            and uid_map != collector_uid_map
+            and gid_map != collector_gid_map
+            and id_map_is_within_collector(uid_map, collector_uid_map)
+            and id_map_is_within_collector(gid_map, collector_gid_map)
+            and (
+                (default_mode and uid_map == podman_uid_map)
+                or (
+                    bool(configured_uid_map)
+                    and uid_map == expected_uid_map
+                )
+                or (
+                    not default_mode
+                    and not configured_uid_map
+                    and uid_map != podman_uid_map
+                )
+            )
+            and (
+                (default_mode and gid_map == podman_gid_map)
+                or (
+                    bool(configured_gid_map)
+                    and gid_map == expected_gid_map
+                )
+                or (
+                    not default_mode
+                    and not configured_gid_map
+                    and gid_map != podman_gid_map
+                )
+            )
+            and type(effective_uid) is int
+            and type(effective_gid) is int
+            and (effective_uid, effective_gid) == (expected_uid, expected_gid)
+            and id_map_covers(uid_map, configured_uid)
+            and id_map_covers(gid_map, configured_gid)
+            and id_map_covers(uid_map, effective_uid)
+            and id_map_covers(gid_map, effective_gid)
+            and isinstance(effective_groups, list)
+            and all(id_map_covers(gid_map, gid) for gid in effective_groups)
+        )
+
+    expected_uid_map = compose_id_maps(
+        configured_uid_map, podman_uid_map
+    ) if configured_uid_map else podman_uid_map
+    expected_gid_map = compose_id_maps(
+        configured_gid_map, podman_gid_map
+    ) if configured_gid_map else podman_gid_map
+    return bool(
+        container.get("state") == "exited"
+        and value["process_identity"] == ""
+        and value["uid_map"] == []
+        and value["gid_map"] == []
+        and create_options == []
+        and bool(configured_uid_map)
+        and expected_uid_map is not None
+        and expected_gid_map is not None
+        and (
+            id_map_covers(expected_uid_map, configured_uid)
+            and id_map_covers(expected_gid_map, configured_gid)
+        )
+        and re.fullmatch(
+            r"[0-9a-f]{32}",
+            str(container.get("lifecycle_service_invocation", "")),
+        )
+        is not None
+    )
+
+
 def generated_source_matches(instance: str, service: dict[str, object]) -> bool:
     try:
         expected = expected_generated_source(
@@ -2056,6 +2933,27 @@ def generated_source_matches(instance: str, service: dict[str, object]) -> bool:
     except ValueError:
         return False
     return service.get("source_path") == str(expected)
+
+
+def service_userns_environment_is_trusted(service: object) -> bool:
+    if not isinstance(service, dict):
+        return False
+    environment = service.get("environment")
+    if not isinstance(environment, list):
+        return False
+    required = set(TRUSTED_SERVICE_CONFIG_ENVIRONMENT)
+    prohibited = {"XDG_CONFIG_HOME", "HOME"}
+    names: set[str] = set()
+    for name in environment:
+        if (
+            not isinstance(name, str)
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) is None
+        ):
+            return False
+        if name in names or name in prohibited:
+            return False
+        names.add(name)
+    return required <= names
 
 
 def workload_admission_failures(observations: object) -> list[str]:
@@ -2131,7 +3029,7 @@ def workload_admission_failures(observations: object) -> list[str]:
             "fragment_mode", "drop_in_paths", "drop_in_owners", "active_state",
             "sub_state", "result", "exec_main_status", "main_pid", "control_group",
             "invocation_id", "source_path", "fragment_sha256",
-            "drop_in_sha256",
+            "drop_in_sha256", "environment",
         }
         or not str(service["fragment_path"]).startswith(f"{GENERATOR_ROOT}/")
         or service["fragment_uid"] != CI_UID
@@ -2165,6 +3063,11 @@ def workload_admission_failures(observations: object) -> list[str]:
         for service in services
     ):
         failures.append("D1A_GENERATED_PROVENANCE")
+    if isinstance(services, list) and any(
+        not service_userns_environment_is_trusted(service)
+        for service in services
+    ):
+        failures.append("D1A_HOST_NAMESPACES")
     if isinstance(services, list):
         for service in services:
             if not isinstance(service, dict):
@@ -2269,7 +3172,12 @@ def workload_admission_failures(observations: object) -> list[str]:
                 failures.append("D1A_PODMAN_API_DISABLED")
             if any(
                 item.get(field) != "private"
-                for field in ("pid_mode", "userns_mode", "ipc_mode", "uts_mode")
+                for field in ("pid_mode", "ipc_mode", "uts_mode")
+            ) or (
+                role_contract is None
+                or not user_namespace_contract_matches(
+                    item, *role_contract.identity
+                )
             ):
                 failures.append("D1A_HOST_NAMESPACES")
             network_mode = str(item.get("network_mode", ""))
@@ -2444,25 +3352,7 @@ def workload_admission_failures(observations: object) -> list[str]:
     baseline_processes = exact_process_map(baseline.get("processes"))
     live_processes = exact_process_map(live.get("processes"))
     cleanup_processes = exact_process_map(cleanup.get("processes"))
-    allowed_groups = {
-        str(service.get("control_group")): {
-            (CI_UID, CI_GID),
-            (
-                container_identity_on_host(
-                    ROLE_CONTRACTS[str(service.get("logical_name"))].identity[0]
-                ),
-                container_identity_on_host(
-                    ROLE_CONTRACTS[str(service.get("logical_name"))].identity[1]
-                ),
-            ),
-        }
-        for service in services
-        if (
-            isinstance(service, dict)
-            and service.get("control_group")
-            and str(service.get("logical_name")) in ROLE_CONTRACTS
-        )
-    } if isinstance(services, list) else {}
+    allowed_groups = allowed_service_process_groups(services, containers)
     if (
         baseline_processes is None
         or live_processes is None

@@ -390,6 +390,72 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown|declared schema"):
             self.validator.validate_document(document)
 
+    def test_schema_rejects_missing_or_state_contradictory_user_namespace_facts(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        schema_validator = jsonschema.Draft202012Validator(schema)
+        mutations = (
+            lambda namespace: namespace.pop("process_identity"),
+            lambda namespace: namespace.__setitem__("uid_map", []),
+            lambda namespace: namespace.__setitem__("podman_uid_map", []),
+            lambda namespace: namespace["uid_map"][0].__setitem__(
+                "target_claimed_safe", True
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                document = valid_document()
+                mutate(
+                    document["workload"]["live"]["containers"][4][
+                        "user_namespace"
+                    ]
+                )
+                with self.assertRaises(jsonschema.ValidationError):
+                    schema_validator.validate(document)
+                with self.assertRaises(ValueError):
+                    self.validator.validate_document(document)
+
+        document = valid_document()
+        exited = document["workload"]["live"]["containers"][3]
+        exited["user_namespace"]["process_identity"] = "user:[4026540999]"
+        with self.assertRaises(jsonschema.ValidationError):
+            schema_validator.validate(document)
+        with self.assertRaises(ValueError):
+            self.validator.validate_document(document)
+
+    def test_validator_recomputes_namespace_identity_separation(self) -> None:
+        document = valid_document()
+        namespace = document["workload"]["live"]["containers"][4][
+            "user_namespace"
+        ]
+        namespace["process_identity"] = namespace["collector_identity"]
+        with self.assertRaisesRegex(ValueError, "workload admission failures"):
+            self.validator.validate_document(document)
+
+    def test_validator_recomputes_configured_mapping_consistency(self) -> None:
+        document = valid_document()
+        namespace = document["workload"]["live"]["containers"][4][
+            "user_namespace"
+        ]
+        inconsistent = [
+            {"container_id": 0, "host_id": 3_000_000_000, "size": 65_536}
+        ]
+        namespace["configured_uid_map"] = copy.deepcopy(inconsistent)
+        namespace["configured_gid_map"] = copy.deepcopy(inconsistent)
+        with self.assertRaisesRegex(ValueError, "workload admission failures"):
+            self.validator.validate_document(document)
+
+    def test_service_environment_evidence_cannot_contain_values(self) -> None:
+        document = valid_document()
+        document["workload"]["live"]["generated_services"][0]["environment"] = [
+            "DB_PASSWORD=synthetic-placeholder"
+        ]
+        with self.assertRaises(ValueError):
+            self.validator.validate_document(document)
+
     def test_unprefixed_resource_cannot_survive_validator_recomputation(self) -> None:
         document = valid_document()
         document["workload"]["live"]["all_containers"].append(

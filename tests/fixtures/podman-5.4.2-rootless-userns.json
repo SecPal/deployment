@@ -1,0 +1,40 @@
+{
+  "capture_source": "local rootless Podman 5.4.2 capture on 2026-08-15",
+  "capture_scope": "bounded inspect fields and rootless outer kernel mappings; temporary --rootfs containers were removed by the capture trap",
+  "podman_version": "5.4.2",
+  "rootless": true,
+  "capture_command": "podman create --rootfs <temporary-rootfs> [--userns=auto] /bin/true; podman container inspect; podman unshare cat /proc/self/{uid,gid}_map",
+  "default": {
+    "Config.CreateCommand": [
+      "podman",
+      "create",
+      "--rootfs",
+      "<temporary-rootfs>",
+      "/bin/true"
+    ],
+    "HostConfig.UsernsMode": "",
+    "HostConfig.IDMappings_present": false
+  },
+  "auto": {
+    "Config.CreateCommand": [
+      "podman",
+      "create",
+      "--rootfs",
+      "<temporary-rootfs>",
+      "--userns=auto",
+      "/bin/true"
+    ],
+    "HostConfig.UsernsMode": "",
+    "HostConfig.IDMappings_present": false
+  },
+  "rootless_outer_kernel_maps": {
+    "uid_map": [
+      { "container_id": 0, "host_id": 1000, "size": 1 },
+      { "container_id": 1, "host_id": 100000, "size": 65536 }
+    ],
+    "gid_map": [
+      { "container_id": 0, "host_id": 1000, "size": 1 },
+      { "container_id": 1, "host_id": 100000, "size": 65536 }
+    ]
+  }
+}

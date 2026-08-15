@@ -370,15 +370,34 @@ The trusted runner creates one unrelated rootless control network and volume
 and records a main-controlled baseline of every rootless Podman container,
 network, volume, fixture migration invocation, and Podman API/socket activation
 state before any target code runs.
-It then invokes target fixture publication and has the trusted unprivileged collector
-replace the complete bounded user-manager environment with the fixed home,
-runtime directory, bus, locale, executable path, and sole Quadlet path, perform
-a bounded `daemon-reload`, synchronously stop the exact fixture target and every
-generated service, and start the exact fixture target from the newly loaded
-root-owned definitions. The collector verifies the exact manager environment
-after this activation. A target-controlled earlier invocation therefore cannot
-survive while acquiring the regenerated fragment's provenance. The runner then
-streams the main-controlled live collector and requests target cleanup,
+It then invokes target fixture publication and has the trusted unprivileged
+collector synchronously stop the exact fixture target and every generated
+service before replacing the complete bounded user-manager environment. Any
+old `ExecStop=` therefore runs before the collector establishes the environment
+used for the new activation. The collector sets the fixed home, runtime
+directory, bus, locale, executable path, sole Quadlet path, and
+`CONTAINERS_CONF=/dev/null`, then performs a bounded `daemon-reload`. Before
+starting the target it rejects every target-authored `ExecCondition=`,
+`ExecStartPre=`, `ExecStartPost=`, `ExecReload=`, `ExecStop=`, or
+`ExecStopPost=` directive in the root-owned Quadlet sources. Generated
+auxiliary commands are restricted to Quadlet's bounded, role-appropriate direct
+`/usr/bin/podman` removal hooks; shells, `systemctl`, and unknown paths fail
+closed. The main command must use the role-appropriate direct
+`/usr/bin/podman` operation: container roles use `run`, network roles use
+`network create`, and volume roles use `volume create`. Environment files,
+`PassEnvironment=`, and `UnsetEnvironment=` remain forbidden. Every generated
+unit must additionally carry effective service-local
+`CONTAINERS_CONF=/dev/null`, `CONTAINERS_CONF_OVERRIDE=/dev/null`, empty
+`CONTAINERS_CONF_MODULES`, and empty `PODMAN_USERNS` assignments. These fixed
+assignments override a manager-environment mutation by an indirectly activated
+unit without placing environment values in evidence. The collector uses the
+same pinned configuration for its own Podman inspection and mapping commands.
+It starts the exact fixture target only after the pre-activation checks and
+repeats them during live collection. The collector verifies the exact manager
+environment after activation. A target-controlled earlier invocation therefore
+cannot survive while acquiring the regenerated fragment's provenance. The
+runner then streams the main-controlled live collector and requests target
+cleanup,
 runs the separate target `host` phase for D.1 admission, and repeats the same
 fixed Quadlet normalization before post-cleanup collection. Both normalization
 results are explicit phase statuses and are required to pass. Only after every
@@ -916,7 +935,22 @@ Evidence includes:
   rootless/crun/security facts, the configured container user, the running
   process's effective container UID/GID and bounded supplementary GID set, an
   empty configured `GroupAdd` set, a read-only root filesystem, and private
-  PID, user, IPC, UTS, and network namespace modes,
+  PID, IPC, UTS, and network namespace modes; user-namespace admission instead
+  retains the raw Docker-compatible mode and normalized immutable creation
+  option, compares each running process's kernel user-namespace identity with
+  the collector/service-account namespace, and records bounded kernel UID/GID
+  maps for both namespaces plus the rootless Podman outer mapping; explicit
+  configured mappings must compose through that outer mapping to exactly the
+  observed process mapping. The derived host UID/GID used for service-cgroup
+  process admission also comes from that observed mapping, not a fixed
+  subordinate-ID offset. Evidence retains only service-environment variable
+  names, never their values. The fixed service-local `PODMAN_USERNS` and
+  containers.conf pin names are mandatory, while the trusted collector checks
+  their exact non-secret values before activation and during collection. Any
+  contradictory pin or HOME/XDG configuration redirect fails closed. Those
+  maps must be non-overlapping, remain inside the service-account namespace,
+  and cover the role's configured and effective UID/GID plus every admitted
+  supplementary GID,
   the closed role-to-network topology, the complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
   `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
@@ -940,7 +974,11 @@ Evidence includes:
   `/usr/bin/podman run` command naming that exact container in the generated
   service's exact systemd invocation; `inspect`, another Podman subcommand, a
   different name, a duplicate lifecycle, or a bare container-ID message cannot
-  establish this binding, and any Podman `exec`/`exec_died` event for an
+  establish this binding; the exited container must have explicit immutable
+  configured ID mappings that compose to a bounded map covering the configured
+  identity, with containers.conf modules rejected rather than treated as part
+  of a trusted default; exited evidence deliberately records no process
+  namespace identity or `/proc` UID/GID map; any Podman `exec`/`exec_died` event for an
   integration container makes lifecycle collection incomplete; one exited
   zero-status migration systemd invocation
   correlated with the exact configured migration command and established from
@@ -964,9 +1002,8 @@ Evidence includes:
   exact singleton `no-new-privileges` admission with every target-selected
   seccomp or other additional security option rejected; exact added, effective,
   and bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the
-  secrets initializer, empty for every other role); and Podman 5.4 `Healthcheck`/network-name
-  field interpretation; an empty Podman 5.4 `UsernsMode` is retained as the
-  documented `host` mode and rejected rather than rewritten as `private`; and
+  secrets initializer, empty for every other role); and Podman 5.4
+  `Healthcheck`/network-name field interpretation; and
 - exact absence of every integration unit, generated service and nested
   generated drop-in artifact across the user manager's `generator.early`,
   `generator`, and `generator.late` outputs, plus container, network, and volume
@@ -976,6 +1013,37 @@ Evidence includes:
 
 The Unix-listener admission recognizes listeners in the rootful and rootless
 Podman runtime directories and listeners owned by an actual `podman` process.
+Podman 5.4's Docker-compatible `HostConfig.UsernsMode` is not an effective
+rootless-namespace observation. It is empty for both the default rootless mode
+and `--userns=auto`, because Podman's outer rootless user namespace is created
+outside libpod and is intentionally not represented by that compatibility
+field. The collector therefore retains the empty string without rewriting it
+to either `host` or `private`. Running-role admission comes from the kernel
+namespace link and UID/GID maps read from the independently inspected process,
+with the collector's own namespace link and maps as the comparison boundary.
+It also records the rootless Podman outer UID/GID maps: configured maps must
+compose through them to the effective process map, while a default rootless
+process must use the outer map directly. Service evidence retains only
+environment-variable names, and the effective environment must not override
+Podman's namespace or containers.conf lookup inputs. Immutable creation
+commands that load containers.conf modules fail closed. Both the service-manager
+activation path and the collector's own Podman subprocesses use the fixed empty
+`/dev/null` containers.conf, so a target-created per-user config cannot select an
+otherwise invisible user-namespace default. Service-level environment files,
+environment unsetting/passing controls, missing or contradictory service-local
+configuration pins, every target-authored auxiliary systemd execution phase,
+unknown generated lifecycle executables, and non-direct or role-inconsistent
+Podman `ExecStart=` commands fail before activation and again during collection
+rather than bypassing that pin.
+Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
+still fail closed. For an exited one-shot, admission instead requires the exact
+existing systemd/Podman lifecycle correlation and an explicit immutable
+configured mapping. The bounded configured map must compose through the trusted
+outer mapping and cover the configured identity; an implicit default is
+insufficient because an exited process has no independently observable kernel
+map. It never
+presents those configuration facts as live `/proc` evidence.
+
 Workload admission additionally requires the active user socket-unit set to be
 exactly the trusted root-owned `dbus.socket`, with its standard trigger and no
 drop-ins. A target-created socket-activation path is therefore rejected even
