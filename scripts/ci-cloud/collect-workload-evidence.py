@@ -360,12 +360,14 @@ NORMALIZATION_STAGES = frozenset(
         "manager-environment-read",
         "manager-environment-unset",
         "manager-environment-set",
+        "user-environment-generator-admission",
         "daemon-reload",
+        "post-reload-manager-environment-admission",
         "target-unit-admission",
         "generated-unit-admission",
         "target-start",
         "post-manager-environment-read",
-        "manager-environment-admission",
+        "post-activation-manager-environment-admission",
         "quadlet-search-path-admission",
         "unreported",
     }
@@ -795,7 +797,9 @@ def normalize_quadlet_runtime(
         )
     if not trusted_user_environment_generator_is_admitted():
         return normalization_failure(
-            mode, "manager-environment-admission", "contract-rejected"
+            mode,
+            "user-environment-generator-admission",
+            "contract-rejected",
         )
     environment_failure = replace_manager_environment(existing)
     if environment_failure is not None:
@@ -819,7 +823,9 @@ def normalize_quadlet_runtime(
         )
     if observed != expected:
         return normalization_failure(
-            mode, "manager-environment-admission", "contract-rejected"
+            mode,
+            "post-reload-manager-environment-admission",
+            "contract-rejected",
         )
     if activate:
         if not target_activation_is_trusted(instance):
@@ -844,7 +850,9 @@ def normalize_quadlet_runtime(
             return environment_failure
         if observed != expected:
             return normalization_failure(
-                mode, "manager-environment-admission", "contract-rejected"
+                mode,
+                "post-activation-manager-environment-admission",
+                "contract-rejected",
             )
     if quadlet_search_paths() != [str(QUADLET_ROOT)]:
         return normalization_failure(

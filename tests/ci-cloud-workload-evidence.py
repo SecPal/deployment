@@ -3281,7 +3281,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "aaaaaaaaaaaa", activate=False
             )
         self.assertFalse(outcome)
-        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertEqual(
+            "post-reload-manager-environment-admission", outcome.stage
+        )
         self.assertEqual(
             1,
             sum(command[2] == "unset-environment" for command in commands),
@@ -3317,8 +3319,30 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "aaaaaaaaaaaa", activate=False
             )
         self.assertFalse(outcome)
-        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertEqual(
+            "post-reload-manager-environment-admission", outcome.stage
+        )
         self.assertFalse(any(command[2] == "start" for command in commands))
+
+    def test_quadlet_normalization_reports_generator_admission_checkpoint(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            return_value=(0, "OLD=value\n", True),
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
+            return_value=False,
+        ):
+            outcome = self.collector.normalize_quadlet_runtime(
+                "aaaaaaaaaaaa", activate=False
+            )
+        self.assertFalse(outcome)
+        self.assertEqual(
+            "user-environment-generator-admission", outcome.stage
+        )
 
     def test_quadlet_normalization_admits_loaded_units_before_stop(self) -> None:
         trusted_environment = "\n".join(
@@ -3448,7 +3472,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "aaaaaaaaaaaa", activate=True
             )
         self.assertFalse(outcome)
-        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertEqual(
+            "post-activation-manager-environment-admission", outcome.stage
+        )
         self.assertTrue(any(command[2] == "start" for command in commands))
 
     def test_quadlet_normalization_emits_only_closed_failure_diagnostics(self) -> None:
@@ -3606,9 +3632,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 {"second_environment": "malformed"},
             ),
             (
-                "manager-environment-admission",
+                "user-environment-generator-admission",
+                "aaaaaaaaaaaa",
+                {"generator_trusted": False},
+            ),
+            (
+                "post-reload-manager-environment-admission",
                 "aaaaaaaaaaaa",
                 {"second_environment": "HOME=/wrong\n"},
+            ),
+            (
+                "post-activation-manager-environment-admission",
+                "aaaaaaaaaaaa",
+                {"third_environment": "HOME=/wrong\n"},
             ),
             (
                 "quadlet-search-path-admission",
@@ -3631,11 +3667,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         ), True
                     if _command[2] == "show-environment":
                         show_count += 1
-                        key = (
-                            "first_environment"
-                            if show_count == 1
-                            else "second_environment"
-                        )
+                        key = {
+                            1: "first_environment",
+                            2: "second_environment",
+                        }.get(show_count, "third_environment")
                         return (
                             0,
                             controls.get(
@@ -3667,7 +3702,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 ), mock.patch.object(
                     self.collector,
                     "trusted_user_environment_generator_is_admitted",
-                    return_value=True,
+                    return_value=controls.get("generator_trusted", True),
                 ), mock.patch("sys.stderr", new_callable=io.StringIO):
                     outcome = self.collector.normalize_quadlet_runtime(
                         instance, activate=True

@@ -1460,12 +1460,14 @@
             "manager-environment-read",
             "manager-environment-unset",
             "manager-environment-set",
+            "user-environment-generator-admission",
             "daemon-reload",
+            "post-reload-manager-environment-admission",
             "target-unit-admission",
             "generated-unit-admission",
             "target-start",
             "post-manager-environment-read",
-            "manager-environment-admission",
+            "post-activation-manager-environment-admission",
             "quadlet-search-path-admission",
             "unreported"
           ]
