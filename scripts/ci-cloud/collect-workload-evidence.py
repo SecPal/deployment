@@ -656,47 +656,98 @@ def normalize_quadlet_runtime(
         for logical_name in GENERATED_LOGICAL_NAMES
     ]
     if activate:
-        stop_status, _, stop_complete = command_result(
-            ["systemctl", "--user", "stop", target, *services], timeout=120
-        )
-        if stop_status != 0 or not stop_complete:
-            return normalization_command_failure(
-                mode, "stop-existing-units", stop_status, stop_complete
+        loaded_units = []
+        for unit in (target, *services):
+            state_status, state_output, state_complete = command_result(
+                [
+                    "systemctl", "--user", "show", unit,
+                    "--property=LoadState", "--property=ActiveState",
+                ]
             )
-    environment_status, environment_output, environment_complete = command_result(
-        ["systemctl", "--user", "show-environment"]
-    )
-    if environment_status != 0 or not environment_complete:
-        return normalization_command_failure(
-            mode,
-            "manager-environment-read",
-            environment_status,
-            environment_complete,
+            if state_status != 0 or not state_complete:
+                return normalization_command_failure(
+                    mode, "stop-existing-units", state_status, state_complete
+                )
+            properties = parsed_manager_environment(state_output)
+            if properties == {
+                "LoadState": "not-found", "ActiveState": "inactive"
+            }:
+                continue
+            if (
+                properties is None
+                or set(properties) != {"LoadState", "ActiveState"}
+                or properties["LoadState"] != "loaded"
+                or properties["ActiveState"] not in {
+                    "active", "activating", "deactivating", "failed",
+                    "inactive", "reloading",
+                }
+            ):
+                return normalization_failure(
+                    mode, "stop-existing-units", "contract-rejected"
+                )
+            loaded_units.append(unit)
+        if loaded_units:
+            stop_status, _, stop_complete = command_result(
+                ["systemctl", "--user", "stop", *loaded_units], timeout=120
+            )
+            if stop_status != 0 or not stop_complete:
+                return normalization_command_failure(
+                    mode, "stop-existing-units", stop_status, stop_complete
+                )
+
+    def read_manager_environment(
+        stage: str,
+    ) -> tuple[dict[str, str] | None, NormalizationOutcome | None]:
+        environment_status, environment_output, environment_complete = command_result(
+            ["systemctl", "--user", "show-environment"]
         )
-    existing = parsed_manager_environment(environment_output)
+        if environment_status != 0 or not environment_complete:
+            return None, normalization_command_failure(
+                mode, stage, environment_status, environment_complete
+            )
+        environment = parsed_manager_environment(environment_output)
+        if environment is None:
+            return None, normalization_failure(
+                mode, stage, "contract-rejected"
+            )
+        return environment, None
+
+    def replace_manager_environment(
+        environment: dict[str, str],
+    ) -> NormalizationOutcome | None:
+        names = sorted(environment)
+        if names:
+            unset_status, _, unset_complete = command_result(
+                ["systemctl", "--user", "unset-environment", *names]
+            )
+            if unset_status != 0 or not unset_complete:
+                return normalization_command_failure(
+                    mode,
+                    "manager-environment-unset",
+                    unset_status,
+                    unset_complete,
+                )
+        set_status, _, set_complete = command_result(
+            ["systemctl", "--user", "set-environment", *TRUSTED_MANAGER_ENVIRONMENT]
+        )
+        if set_status != 0 or not set_complete:
+            return normalization_command_failure(
+                mode, "manager-environment-set", set_status, set_complete
+            )
+        return None
+
+    existing, environment_failure = read_manager_environment(
+        "manager-environment-read"
+    )
+    if environment_failure is not None:
+        return environment_failure
     if existing is None:
         return normalization_failure(
-            mode, "manager-environment-read", "contract-rejected"
+            mode, "manager-environment-read", "unexpected-error"
         )
-    names = sorted(existing)
-    if names:
-        unset_status, _, unset_complete = command_result(
-            ["systemctl", "--user", "unset-environment", *names]
-        )
-        if unset_status != 0 or not unset_complete:
-            return normalization_command_failure(
-                mode,
-                "manager-environment-unset",
-                unset_status,
-                unset_complete,
-            )
-    set_status, _, set_complete = command_result(
-        ["systemctl", "--user", "set-environment", *TRUSTED_MANAGER_ENVIRONMENT]
-    )
-    if set_status != 0 or not set_complete:
-        return normalization_command_failure(
-            mode, "manager-environment-set", set_status, set_complete
-        )
+    environment_failure = replace_manager_environment(existing)
+    if environment_failure is not None:
+        return environment_failure
     reload_status, _, reload_complete = command_result(
         ["systemctl", "--user", "daemon-reload"], timeout=60
     )
@@ -704,6 +755,29 @@ def normalize_quadlet_runtime(
         return normalization_command_failure(
             mode, "daemon-reload", reload_status, reload_complete
         )
+    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
+    observed, environment_failure = read_manager_environment(
+        "post-manager-environment-read"
+    )
+    if environment_failure is not None:
+        return environment_failure
+    if observed is None:
+        return normalization_failure(
+            mode, "post-manager-environment-read", "unexpected-error"
+        )
+    if observed != expected:
+        environment_failure = replace_manager_environment(observed)
+        if environment_failure is not None:
+            return environment_failure
+        observed, environment_failure = read_manager_environment(
+            "post-manager-environment-read"
+        )
+        if environment_failure is not None:
+            return environment_failure
+        if observed != expected:
+            return normalization_failure(
+                mode, "manager-environment-admission", "contract-rejected"
+            )
     if activate:
         if not target_activation_is_trusted(instance):
             return normalization_failure(
@@ -720,26 +794,15 @@ def normalize_quadlet_runtime(
             return normalization_command_failure(
                 mode, "target-start", start_status, start_complete
             )
-    observed_status, observed_output, observed_complete = command_result(
-        ["systemctl", "--user", "show-environment"]
-    )
-    if observed_status != 0 or not observed_complete:
-        return normalization_command_failure(
-            mode,
-            "post-manager-environment-read",
-            observed_status,
-            observed_complete,
+        observed, environment_failure = read_manager_environment(
+            "post-manager-environment-read"
         )
-    observed = parsed_manager_environment(observed_output)
-    if observed is None:
-        return normalization_failure(
-            mode, "post-manager-environment-read", "contract-rejected"
-        )
-    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
-    if observed != expected:
-        return normalization_failure(
-            mode, "manager-environment-admission", "contract-rejected"
-        )
+        if environment_failure is not None:
+            return environment_failure
+        if observed != expected:
+            return normalization_failure(
+                mode, "manager-environment-admission", "contract-rejected"
+            )
     if quadlet_search_paths() != [str(QUADLET_ROOT)]:
         return normalization_failure(
             mode, "quadlet-search-path-admission", "contract-rejected"

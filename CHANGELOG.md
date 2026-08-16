@@ -104,6 +104,9 @@ SPDX-License-Identifier: CC0-1.0
   class, and optional command status in schema-validated evidence and its
   summary after DigitalOcean Intel run `31948450941` exposed an otherwise
   undifferentiated status `1`. Command output remains discarded.
+- Trusted Quadlet normalization now skips exact expected units that are not yet
+  loaded and restores the closed manager environment after `daemon-reload`, as
+  diagnosed independently by DigitalOcean Intel run `31954465244`.
 - D.1a workload evidence admits the fixed root-owned Debian 13 GnuPG and
   OpenSSH agent socket/service pairs with exact `dpkg-query` owning-package
   provenance (including Keyboxd's Debian `gpg` ownership) while

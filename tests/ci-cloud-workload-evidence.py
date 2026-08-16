@@ -2962,6 +2962,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "UnitPath=/run/user/20000/systemd/user.control "
                     "/etc/systemd/user"
                 ), True
+            if (
+                arguments[:3] == ["systemctl", "--user", "show"]
+                and "--property=LoadState" in arguments
+            ):
+                return 0, "LoadState=not-found\nActiveState=inactive\n", True
             if arguments[:3] == ["systemctl", "--user", "show"]:
                 if arguments[3].endswith(".target"):
                     return 0, target_properties, True
@@ -3026,14 +3031,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
         self.assertEqual(
             [
-                ([
-                    "systemctl", "--user", "stop",
-                    "secpal-int-aaaaaaaaaaaa.target",
-                    *[
-                        f"secpal-int-aaaaaaaaaaaa-{logical_name}.service"
-                        for logical_name in self.collector.GENERATED_LOGICAL_NAMES
-                    ],
-                ], {"timeout": 120}),
+                *[
+                    ([
+                        "systemctl", "--user", "show", unit,
+                        "--property=LoadState", "--property=ActiveState",
+                    ], {})
+                    for unit in (
+                        "secpal-int-aaaaaaaaaaaa.target",
+                        *(
+                            f"secpal-int-aaaaaaaaaaaa-{logical_name}.service"
+                            for logical_name in self.collector.GENERATED_LOGICAL_NAMES
+                        ),
+                    )
+                ],
                 (["systemctl", "--user", "show-environment"], {}),
                 ([
                     "systemctl", "--user", "unset-environment",
@@ -3051,6 +3061,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "XDG_RUNTIME_DIR=/run/user/20000",
                 ], {}),
                 (["systemctl", "--user", "daemon-reload"], {"timeout": 60}),
+                (["systemctl", "--user", "show-environment"], {}),
                 ([
                     "systemctl", "--user", "show",
                     "secpal-int-aaaaaaaaaaaa.target",
@@ -3109,6 +3120,94 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "aaaaaaaaaaaa", activate=False
                 )
             )
+
+    def test_quadlet_normalization_skips_absent_expected_units_before_reload(self) -> None:
+        trusted_environment = "\n".join(
+            self.collector.TRUSTED_MANAGER_ENVIRONMENT
+        ) + "\n"
+        commands = []
+        environment_reads = 0
+
+        def command_result(arguments, **_kwargs):
+            nonlocal environment_reads
+            commands.append(arguments)
+            if (
+                arguments[2] == "show"
+                and "--property=LoadState" in arguments
+            ):
+                return 0, "LoadState=not-found\nActiveState=inactive\n", True
+            if arguments[2] == "stop":
+                return 5, "", True
+            if arguments[2] == "show-environment":
+                environment_reads += 1
+                return 0, (
+                    "OLD=value\n"
+                    if environment_reads == 1
+                    else trusted_environment
+                ), True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector, "target_activation_is_trusted", return_value=True
+        ), mock.patch.object(
+            self.collector,
+            "generated_service_activation_is_trusted",
+            return_value=True,
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=[str(self.collector.QUADLET_ROOT)],
+        ):
+            self.assertTrue(
+                self.collector.normalize_quadlet_runtime(
+                    "aaaaaaaaaaaa", activate=True
+                )
+            )
+        self.assertFalse(any(command[2] == "stop" for command in commands))
+
+    def test_quadlet_normalization_restores_environment_after_daemon_reload(self) -> None:
+        trusted_environment = "\n".join(
+            self.collector.TRUSTED_MANAGER_ENVIRONMENT
+        ) + "\n"
+        generator_environment = trusted_environment + "RESTORED=value\n"
+        environment_outputs = iter(
+            ("OLD=value\n", generator_environment, trusted_environment)
+        )
+        commands = []
+
+        def command_result(arguments, **_kwargs):
+            commands.append(arguments)
+            if arguments[2] == "show-environment":
+                return 0, next(environment_outputs), True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=[str(self.collector.QUADLET_ROOT)],
+        ):
+            self.assertTrue(
+                self.collector.normalize_quadlet_runtime(
+                    "aaaaaaaaaaaa", activate=False
+                )
+            )
+        self.assertIn(
+            [
+                "systemctl", "--user", "unset-environment",
+                *sorted(
+                    dict(
+                        item.split("=", 1)
+                        for item in self.collector.TRUSTED_MANAGER_ENVIRONMENT
+                    )
+                    | {"RESTORED": "value"}
+                ),
+            ],
+            commands,
+        )
 
     def test_quadlet_normalization_emits_only_closed_failure_diagnostics(self) -> None:
         cases = (
@@ -3194,6 +3293,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     nonlocal show_count
                     action = command[2]
                     key = action
+                    if action == "show" and "--property=LoadState" in command:
+                        if command[3].endswith(".target"):
+                            return 0, "LoadState=loaded\nActiveState=inactive\n", True
+                        return 0, (
+                            "LoadState=not-found\nActiveState=inactive\n"
+                        ), True
                     if action == "show-environment":
                         show_count += 1
                         key = f"show-environment:{'first' if show_count == 1 else 'second'}"
@@ -3271,6 +3376,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
                 def command_result(_command, **_kwargs):
                     nonlocal show_count
+                    if (
+                        _command[2] == "show"
+                        and "--property=LoadState" in _command
+                    ):
+                        return 0, (
+                            "LoadState=not-found\nActiveState=inactive\n"
+                        ), True
                     if _command[2] == "show-environment":
                         show_count += 1
                         key = (
@@ -3365,6 +3477,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     original_environment if seen == 1 else trusted_environment
                 )
                 return 0, output, True
+            if (
+                arguments[:3] == ["systemctl", "--user", "show"]
+                and "--property=LoadState" in arguments
+            ):
+                return 0, "LoadState=not-found\nActiveState=inactive\n", True
             if arguments[:3] == ["systemctl", "--user", "show"]:
                 return 0, service_properties, True
             return 0, "", True
