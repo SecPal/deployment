@@ -3490,10 +3490,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
     def test_target_file_limit_admits_bounded_cloud_github_cli_member(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
         limits = re.findall(r"^ulimit -f ([1-9][0-9]*)$", runner, re.MULTILINE)
-        github_cli_executable_bytes = 40_992_930
+        gh_2_97_0_linux_amd64_executable_bytes = 40_992_930
 
         self.assertEqual([64 * 1024], [int(limit) for limit in limits])
-        self.assertGreaterEqual(int(limits[0]) * 1024, github_cli_executable_bytes)
+        self.assertGreaterEqual(
+            int(limits[0]) * 1024,
+            gh_2_97_0_linux_amd64_executable_bytes,
+        )
 
     def test_target_phases_restore_the_fixed_user_bus_environment(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
