@@ -75,6 +75,19 @@ ROLE_NETWORKS = {
     "frontend": ("edge",),
     "gateway": ("edge",),
 }
+
+
+def normalization_environment_read_key(show_count: int) -> str:
+    checkpoint = {
+        1: "first",
+        2: "second",
+        3: "third",
+    }.get(show_count)
+    if checkpoint is None:
+        raise AssertionError("unexpected extra show-environment call")
+    return f"show-environment:{checkpoint}"
+
+
 ROLE_VOLUME_MOUNTS = {
     "secrets-init": (
         ("secrets", "/run/secpal-secrets", True),
@@ -3662,6 +3675,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 json.loads(diagnostic.split(": ", 1)[1]),
             )
 
+    def test_normalization_environment_read_key_rejects_extra_reads(self) -> None:
+        with self.assertRaisesRegex(
+            AssertionError, "unexpected extra show-environment call"
+        ):
+            normalization_environment_read_key(4)
+
     def test_every_quadlet_normalization_substage_emits_its_closed_stage(self) -> None:
         command_stages = {
             "stop": "stop-existing-units",
@@ -3694,7 +3713,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         ), True
                     if action == "show-environment":
                         show_count += 1
-                        key = f"show-environment:{('first', 'second', 'third')[show_count - 1]}"
+                        key = normalization_environment_read_key(show_count)
                     if key == failure_command:
                         return 17, "target-controlled output", True
                     if action == "show-environment":
