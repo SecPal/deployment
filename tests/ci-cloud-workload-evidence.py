@@ -3024,8 +3024,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 trusted.write_bytes(self.collector.TRUSTED_USER_ENVIRONMENT_GENERATOR)
                 trusted.chmod(0o755)
 
+                metadata = trusted.lstat()
+                root_owned_metadata = types.SimpleNamespace(
+                    st_uid=0,
+                    st_gid=0,
+                    st_mode=metadata.st_mode,
+                    st_nlink=metadata.st_nlink,
+                    st_size=metadata.st_size,
+                )
                 with mock.patch.object(
                     self.collector, "bounded_regular_file", return_value=None
+                ), mock.patch.object(
+                    Path, "lstat", return_value=root_owned_metadata
                 ):
                     self.assertEqual(
                         failure(
@@ -3034,6 +3044,35 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         ),
                         self.collector.trusted_user_environment_generator_admission_failure(),
                     )
+
+                metadata = trusted.lstat()
+                for uid, gid, mode in (
+                    (1, 0, 0o755),
+                    (0, 1, 0o755),
+                    (0, 0, 0o700),
+                ):
+                    with self.subTest(uid=uid, gid=gid, mode=mode):
+                        rejected_metadata = types.SimpleNamespace(
+                            st_uid=uid,
+                            st_gid=gid,
+                            st_mode=(metadata.st_mode & ~0o777) | mode,
+                            st_nlink=metadata.st_nlink,
+                            st_size=metadata.st_size,
+                        )
+                        with mock.patch.object(
+                            self.collector,
+                            "bounded_regular_file",
+                            return_value=None,
+                        ), mock.patch.object(
+                            Path, "lstat", return_value=rejected_metadata
+                        ):
+                            self.assertEqual(
+                                failure(
+                                    "user-environment-generator-metadata-admission",
+                                    "contract-rejected",
+                                ),
+                                self.collector.trusted_user_environment_generator_admission_failure(),
+                            )
 
                 trusted.write_text("#!/bin/sh\n", encoding="utf-8")
                 self.assertEqual(

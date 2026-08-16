@@ -929,6 +929,16 @@ def file_fact(path: Path, name: str) -> dict[str, object] | None:
     }
 
 
+def trusted_user_environment_generator_metadata_is_admitted(
+    metadata: os.stat_result,
+) -> bool:
+    return (
+        metadata.st_uid == 0
+        and metadata.st_gid == 0
+        and stat.S_IMODE(metadata.st_mode) == 0o755
+    )
+
+
 def rejected_user_environment_generator_file(
     path: Path,
 ) -> NormalizationAdmissionFailure:
@@ -945,6 +955,11 @@ def rejected_user_environment_generator_file(
     ):
         return NormalizationAdmissionFailure(
             "user-environment-generator-file-admission", "contract-rejected"
+        )
+    if not trusted_user_environment_generator_metadata_is_admitted(metadata):
+        return NormalizationAdmissionFailure(
+            "user-environment-generator-metadata-admission",
+            "contract-rejected",
         )
     return NormalizationAdmissionFailure(
         "user-environment-generator-file-read", "unexpected-error"
@@ -994,11 +1009,7 @@ def trusted_user_environment_generator_admission_failure(
             "user-environment-generator-content-admission",
             "contract-rejected",
         )
-    if not (
-        metadata.st_uid == 0
-        and metadata.st_gid == 0
-        and stat.S_IMODE(metadata.st_mode) == 0o755
-    ):
+    if not trusted_user_environment_generator_metadata_is_admitted(metadata):
         return NormalizationAdmissionFailure(
             "user-environment-generator-metadata-admission",
             "contract-rejected",
