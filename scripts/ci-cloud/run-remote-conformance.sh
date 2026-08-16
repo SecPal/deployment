@@ -500,7 +500,8 @@ admit_target_tree() {
     ls-files --others)" ]]
 }
 admit_target_tree "$1"
-ulimit -f 32768
+# Bash expresses `ulimit -f` in 1024-byte increments, so this is 64 MiB.
+ulimit -f 65536
 [[ -S /run/user/20000/bus ]]
 set +e
 /usr/bin/env -i \

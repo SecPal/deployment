@@ -3467,7 +3467,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertIn("trap collect_cleanup_after_interruption INT TERM HUP", runner)
         self.assertIn("run_target_phase()", runner)
-        self.assertEqual(1, runner.count("ulimit -f 32768"))
         self.assertEqual(
             1,
             runner.count("cd /home/secpal-ci/deployment-target"),
@@ -3487,6 +3486,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
             host_collection,
         )
         self.assertNotIn("write_incomplete_", runner)
+
+    def test_target_file_limit_admits_bounded_cloud_github_cli_member(self) -> None:
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        limits = re.findall(r"^ulimit -f ([1-9][0-9]*)$", runner, re.MULTILINE)
+        gh_2_97_0_linux_amd64_executable_bytes = 40_992_930
+
+        self.assertEqual([64 * 1024], [int(limit) for limit in limits])
+        bash_file_limit_kibibytes = int(limits[0])
+        self.assertGreaterEqual(
+            bash_file_limit_kibibytes * 1024,
+            gh_2_97_0_linux_amd64_executable_bytes,
+        )
 
     def test_target_phases_restore_the_fixed_user_bus_environment(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
