@@ -2850,6 +2850,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         dependencies = " ".join(sorted(expected))
         properties = {
+            "FragmentPath": (
+                "/run/user/20000/systemd/generator/"
+                "secpal-int-aaaaaaaaaaaa-api.service"
+            ),
+            "DropInPaths": "",
             "Environment": (
                 "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
                 "CONTAINERS_CONF_MODULES= PODMAN_USERNS="
@@ -2886,6 +2891,68 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     )
                 )
 
+        for name, value in (
+            ("FragmentPath", "/home/secpal-ci/.config/systemd/user/override.service"),
+            ("DropInPaths", "/home/secpal-ci/.config/systemd/user/override.conf"),
+        ):
+            mutated = dict(properties)
+            mutated[name] = value
+            with self.subTest(name=name, value=value):
+                self.assertFalse(
+                    self.collector.service_runtime_controls_are_trusted(
+                        mutated, "api", instance
+                    )
+                )
+
+    def test_closed_user_environment_generator_admission(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roots = tuple(root / name for name in ("run", "etc", "local", "vendor"))
+            for generator_root in roots:
+                generator_root.mkdir()
+            trusted = roots[1] / "30-systemd-environment-d-generator"
+            trusted.write_bytes(self.collector.TRUSTED_USER_ENVIRONMENT_GENERATOR)
+            trusted.chmod(0o755)
+            vendor = roots[3] / "30-systemd-environment-d-generator"
+            vendor.write_text("vendor generator\n", encoding="utf-8")
+            vendor.chmod(0o755)
+            original_bounded_regular_file = self.collector.bounded_regular_file
+
+            def bounded_regular_file(path):
+                observation = original_bounded_regular_file(path)
+                if observation is None:
+                    return None
+                content, metadata = observation
+                return content, types.SimpleNamespace(
+                    st_uid=0,
+                    st_gid=0,
+                    st_mode=metadata.st_mode,
+                )
+
+            with mock.patch.object(
+                self.collector, "USER_ENVIRONMENT_GENERATOR_ROOTS", roots
+            ), mock.patch.object(
+                self.collector, "TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH", trusted
+            ), mock.patch.object(
+                self.collector,
+                "bounded_regular_file",
+                side_effect=bounded_regular_file,
+            ):
+                self.assertTrue(
+                    self.collector.trusted_user_environment_generator_is_admitted()
+                )
+                unexpected = roots[3] / "40-unreviewed"
+                unexpected.write_text("#!/bin/sh\n", encoding="utf-8")
+                unexpected.chmod(0o755)
+                self.assertFalse(
+                    self.collector.trusted_user_environment_generator_is_admitted()
+                )
+                unexpected.unlink()
+                trusted.write_text("#!/bin/sh\n", encoding="utf-8")
+                self.assertFalse(
+                    self.collector.trusted_user_environment_generator_is_admitted()
+                )
+
     def test_podman_network_online_unit_rejects_user_overrides(self) -> None:
         trusted = (
             "FragmentPath=/usr/lib/systemd/user/"
@@ -2918,6 +2985,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "XDG_RUNTIME_DIR=/run/user/20000\n"
         )
         service_properties = (
+            "FragmentPath=/run/user/20000/systemd/generator/"
+            "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
             "Environment=CONTAINERS_CONF=/dev/null "
             "CONTAINERS_CONF_OVERRIDE=/dev/null CONTAINERS_CONF_MODULES= "
             "PODMAN_USERNS=\n"
@@ -2972,7 +3041,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     return 0, target_properties, True
                 if arguments[3] == self.collector.PODMAN_NETWORK_ONLINE_UNIT:
                     return 0, podman_network_online_properties, True
-                properties = service_properties
+                properties = service_properties.replace(
+                    "secpal-int-aaaaaaaaaaaa-api.service", arguments[3]
+                )
                 logical_name = arguments[3].removeprefix(
                     "secpal-int-aaaaaaaaaaaa-"
                 ).removesuffix(".service")
@@ -3022,6 +3093,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ), mock.patch.object(
             self.collector,
             "quadlet_source_execution_controls_are_trusted",
+            return_value=True,
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
             return_value=True,
         ):
             self.assertTrue(
@@ -3114,6 +3189,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "quadlet_source_execution_controls_are_trusted",
             return_value=True,
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
+            return_value=True,
         ), mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertFalse(
                 self.collector.normalize_quadlet_runtime(
@@ -3159,6 +3238,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "quadlet_search_paths",
             return_value=[str(self.collector.QUADLET_ROOT)],
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
+            return_value=True,
         ):
             self.assertTrue(
                 self.collector.normalize_quadlet_runtime(
@@ -3167,7 +3250,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
         self.assertFalse(any(command[2] == "stop" for command in commands))
 
-    def test_quadlet_normalization_restores_environment_after_daemon_reload(self) -> None:
+    def test_quadlet_normalization_rejects_environment_drift_after_daemon_reload(self) -> None:
         trusted_environment = "\n".join(
             self.collector.TRUSTED_MANAGER_ENVIRONMENT
         ) + "\n"
@@ -3189,25 +3272,184 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "quadlet_search_paths",
             return_value=[str(self.collector.QUADLET_ROOT)],
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
+            return_value=True,
+        ):
+            outcome = self.collector.normalize_quadlet_runtime(
+                "aaaaaaaaaaaa", activate=False
+            )
+        self.assertFalse(outcome)
+        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertEqual(
+            1,
+            sum(command[2] == "unset-environment" for command in commands),
+        )
+
+    def test_quadlet_normalization_rejects_generator_search_path_override(self) -> None:
+        trusted = dict(
+            item.split("=", 1) for item in self.collector.TRUSTED_MANAGER_ENVIRONMENT
+        )
+        trusted["QUADLET_UNIT_DIRS"] = "/tmp/untrusted-quadlets"
+        drifted = "".join(f"{name}={value}\n" for name, value in trusted.items())
+        environment_outputs = iter(("OLD=value\n", drifted, drifted))
+        commands = []
+
+        def command_result(arguments, **_kwargs):
+            commands.append(arguments)
+            if arguments[2] == "show-environment":
+                return 0, next(environment_outputs), True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=[str(self.collector.QUADLET_ROOT)],
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
+            return_value=True,
+        ):
+            outcome = self.collector.normalize_quadlet_runtime(
+                "aaaaaaaaaaaa", activate=False
+            )
+        self.assertFalse(outcome)
+        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertFalse(any(command[2] == "start" for command in commands))
+
+    def test_quadlet_normalization_admits_loaded_units_before_stop(self) -> None:
+        trusted_environment = "\n".join(
+            self.collector.TRUSTED_MANAGER_ENVIRONMENT
+        ) + "\n"
+        loaded_service = "secpal-int-aaaaaaaaaaaa-api.service"
+        loaded_target = "secpal-int-aaaaaaaaaaaa.target"
+        commands = []
+        events = []
+        environment_reads = 0
+
+        def command_result(arguments, **_kwargs):
+            nonlocal environment_reads
+            commands.append(arguments)
+            events.append(("command", arguments[2]))
+            if arguments[2] == "show" and "--property=LoadState" in arguments:
+                if arguments[3] in {loaded_target, loaded_service}:
+                    return 0, "LoadState=loaded\nActiveState=inactive\n", True
+                return 0, "LoadState=not-found\nActiveState=inactive\n", True
+            if arguments[2] == "show-environment":
+                environment_reads += 1
+                return 0, (
+                    "OLD=value\n" if environment_reads == 1 else trusted_environment
+                ), True
+            return 0, "", True
+
+        def target_admission(_instance):
+            events.append(("admission", "target"))
+            return True
+
+        def service_admission(_instance, logical_name):
+            events.append(("admission", logical_name))
+            return True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "target_activation_is_trusted",
+            side_effect=target_admission,
+        ) as target_admission, mock.patch.object(
+            self.collector,
+            "generated_service_unit_activation_is_trusted",
+            side_effect=service_admission,
+            create=True,
+        ) as service_admission, mock.patch.object(
+            self.collector,
+            "generated_service_activation_is_trusted",
+            return_value=True,
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=[str(self.collector.QUADLET_ROOT)],
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
+            return_value=True,
         ):
             self.assertTrue(
                 self.collector.normalize_quadlet_runtime(
-                    "aaaaaaaaaaaa", activate=False
+                    "aaaaaaaaaaaa", activate=True
                 )
             )
-        self.assertIn(
-            [
-                "systemctl", "--user", "unset-environment",
-                *sorted(
-                    dict(
-                        item.split("=", 1)
-                        for item in self.collector.TRUSTED_MANAGER_ENVIRONMENT
-                    )
-                    | {"RESTORED": "value"}
-                ),
-            ],
-            commands,
+        self.assertEqual(2, target_admission.call_count)
+        service_admission.assert_called_once_with("aaaaaaaaaaaa", "api")
+        stop_index = commands.index(
+            ["systemctl", "--user", "stop", loaded_target, loaded_service]
         )
+        stop_event = events.index(("command", "stop"))
+        self.assertLess(events.index(("admission", "target")), stop_event)
+        self.assertLess(events.index(("admission", "api")), stop_event)
+        self.assertGreater(stop_index, 0)
+
+    def test_quadlet_normalization_rejects_malformed_loaded_unit_state(self) -> None:
+        commands = []
+
+        def command_result(arguments, **_kwargs):
+            commands.append(arguments)
+            return 0, "LoadState=loaded\n", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ):
+            outcome = self.collector.normalize_quadlet_runtime(
+                "aaaaaaaaaaaa", activate=True
+            )
+        self.assertFalse(outcome)
+        self.assertEqual("stop-existing-units", outcome.stage)
+        self.assertEqual("contract-rejected", outcome.failure_reason)
+        self.assertFalse(any(command[2] == "stop" for command in commands))
+
+    def test_quadlet_normalization_rejects_environment_drift_after_activation(self) -> None:
+        trusted_environment = "\n".join(
+            self.collector.TRUSTED_MANAGER_ENVIRONMENT
+        ) + "\n"
+        environment_outputs = iter(
+            ("OLD=value\n", trusted_environment, trusted_environment + "LATE=value\n")
+        )
+        commands = []
+
+        def command_result(arguments, **_kwargs):
+            commands.append(arguments)
+            if arguments[2] == "show" and "--property=LoadState" in arguments:
+                return 0, "LoadState=not-found\nActiveState=inactive\n", True
+            if arguments[2] == "show-environment":
+                return 0, next(environment_outputs), True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector, "target_activation_is_trusted", return_value=True
+        ), mock.patch.object(
+            self.collector,
+            "generated_service_activation_is_trusted",
+            return_value=True,
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=[str(self.collector.QUADLET_ROOT)],
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
+            return_value=True,
+        ):
+            outcome = self.collector.normalize_quadlet_runtime(
+                "aaaaaaaaaaaa", activate=True
+            )
+        self.assertFalse(outcome)
+        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertTrue(any(command[2] == "start" for command in commands))
 
     def test_quadlet_normalization_emits_only_closed_failure_diagnostics(self) -> None:
         cases = (
@@ -3324,6 +3566,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     self.collector,
                     "quadlet_search_paths",
                     return_value=[str(self.collector.QUADLET_ROOT)],
+                ), mock.patch.object(
+                    self.collector,
+                    "trusted_user_environment_generator_is_admitted",
+                    return_value=True,
                 ), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
                     outcome = self.collector.normalize_quadlet_runtime(
                         "aaaaaaaaaaaa", activate=True
@@ -3418,6 +3664,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     return_value=controls.get(
                         "search_paths", [str(self.collector.QUADLET_ROOT)]
                     ),
+                ), mock.patch.object(
+                    self.collector,
+                    "trusted_user_environment_generator_is_admitted",
+                    return_value=True,
                 ), mock.patch("sys.stderr", new_callable=io.StringIO):
                     outcome = self.collector.normalize_quadlet_runtime(
                         instance, activate=True
@@ -3443,6 +3693,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "XDG_RUNTIME_DIR=/run/user/20000\n"
         )
         service_properties = (
+            "FragmentPath=/run/user/20000/systemd/generator/"
+            "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
             "Environment=CONTAINERS_CONF=/dev/null "
             "CONTAINERS_CONF_OVERRIDE=/dev/null CONTAINERS_CONF_MODULES= "
             "PODMAN_USERNS=\n"
@@ -3495,6 +3747,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ), mock.patch.object(
             self.collector,
             "quadlet_source_execution_controls_are_trusted",
+            return_value=True,
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_is_admitted",
             return_value=True,
         ), mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertFalse(

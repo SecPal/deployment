@@ -140,6 +140,29 @@ class CloudCIContractTests(unittest.TestCase):
             bootstrap,
         )
 
+    def test_native_bootstrap_installs_closed_user_environment_generator(self) -> None:
+        bootstrap = (
+            ROOT / "scripts/ci-cloud/bootstrap-conformance-host.tftpl"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "/etc/systemd/user-environment-generators/"
+            "30-systemd-environment-d-generator",
+            bootstrap,
+        )
+        self.assertIn('[[ "$(/usr/bin/id -u)" == 20000 ]] || exit 0', bootstrap)
+        for assignment in (
+            "CONTAINERS_CONF=/dev/null",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
+            "HOME=/home/secpal-ci",
+            "LANG=C.UTF-8",
+            "LC_ALL=C.UTF-8",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000",
+            "XDG_RUNTIME_DIR=/run/user/20000",
+        ):
+            self.assertIn(f"'{assignment}'", bootstrap)
+
     def test_static_contract_rejects_unadmitted_quadlet_policy_path(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
@@ -147,11 +170,31 @@ class CloudCIContractTests(unittest.TestCase):
             "/etc/environment.d/90-secpal-ci-quadlet.conf",
         )
 
+    def test_static_contract_rejects_unadmitted_environment_generator_path(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            (
+                "/etc/systemd/user-environment-generators/"
+                "30-systemd-environment-d-generator"
+            ),
+            (
+                "/etc/systemd/user-environment-generators/"
+                "31-unreviewed-environment-generator"
+            ),
+        )
+
+    def test_static_contract_rejects_environment_generator_search_path_drift(self) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
+            "'QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000'",
+            "'QUADLET_UNIT_DIRS=/tmp/untrusted-quadlets'",
+        )
+
     def test_static_contract_rejects_unterminated_quadlet_policy(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/bootstrap-conformance-host.tftpl",
-            '\nSECPAL_QUADLET\n\nsetup_stage="kernel-admission"',
-            '\n\nsetup_stage="kernel-admission"',
+            "\nSECPAL_QUADLET\n\ninstall -d -o root -g root -m 0755 ",
+            "\n\ninstall -d -o root -g root -m 0755 ",
         )
 
     def test_native_bootstrap_reboots_once_into_authenticated_current_kernel(

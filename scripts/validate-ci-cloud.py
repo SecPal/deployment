@@ -852,6 +852,37 @@ AllowUsers secpal-ci"""
         bootstrap_ssh_policy == expected_bootstrap_ssh_policy,
         "native bootstrap SSH policy must match the closed operator contract",
     )
+    user_environment_generator = required_block(
+        bootstrap,
+        "<<'SECPAL_USER_ENVIRONMENT_GENERATOR'\n",
+        "\nSECPAL_USER_ENVIRONMENT_GENERATOR\n",
+        "native bootstrap user environment generator",
+    )
+    expected_user_environment_generator = """#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+[[ "$(/usr/bin/id -u)" == 20000 ]] || exit 0
+printf '%s\\n' \\
+  'CONTAINERS_CONF=/dev/null' \\
+  'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus' \\
+  'HOME=/home/secpal-ci' \\
+  'LANG=C.UTF-8' \\
+  'LC_ALL=C.UTF-8' \\
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \\
+  'QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000' \\
+  'XDG_RUNTIME_DIR=/run/user/20000'"""
+    require(
+        user_environment_generator == expected_user_environment_generator
+        and bootstrap.count(
+            "/etc/systemd/user-environment-generators/"
+            "30-systemd-environment-d-generator"
+        )
+        == 2,
+        "native bootstrap user environment generator must match the closed contract",
+    )
     for required in (
         "  gh \\\n",
         "  unattended-upgrades\n",
@@ -2131,7 +2162,12 @@ def validate(root: Path) -> None:
         and '"systemctl", "--user", "unset-environment", *names'
         in workload_collector
         and "TRUSTED_MANAGER_ENVIRONMENT" in workload_collector
+        and "TRUSTED_USER_ENVIRONMENT_GENERATOR" in workload_collector
+        and "trusted_user_environment_generator_is_admitted" in workload_collector
         and "observed != expected" in workload_collector
+        and '"FragmentPath"' in workload_collector
+        and '"DropInPaths"' in workload_collector
+        and "generated_service_unit_activation_is_trusted" in workload_collector
         and '["systemctl", "--user", "daemon-reload"]' in workload_collector
         and 'NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet '
         'normalization diagnostic: "' in workload_collector

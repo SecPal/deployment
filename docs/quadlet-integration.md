@@ -154,9 +154,11 @@ from the already admitted commit, installs a checksum-pinned GitHub CLI in the
 private fixture, repeats both product attestation gates, stages immutable
 `localhost/secpal-ci-…@sha256:…` identities, renders the closed unit set, and
 publishes it through `/usr/local/bin/secpal-ci-quadlet-fixture`. It does not
-start a service. The main-controlled collector replaces the complete user
-manager environment, reloads the root-owned definitions, starts the target,
-and independently observes the result.
+start a service. The main-controlled collector admits the closed root-owned
+user environment generator, replaces the complete user-manager environment,
+rejects any drift caused while reloading the root-owned definitions, admits the
+generated unit provenance, starts the target, and independently observes the
+result.
 
 For that evidence boundary only, the secret initializer and migration use
 their direct reviewed entrypoint and command. Quadlet's generated `--rm` is
