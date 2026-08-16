@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import runpy
 import subprocess
 import tempfile
 import time
@@ -28,6 +29,34 @@ RUNNER_PATH = ROOT / "scripts" / "ci-cloud" / "run-remote-conformance.sh"
 TARGET_PATH = ROOT / "scripts" / "ci-cloud" / "target-conformance.sh"
 PODMAN_54_USERNS_FIXTURE = (
     ROOT / "tests" / "fixtures" / "podman-5.4.2-rootless-userns.json"
+)
+REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE = (
+    {
+        "kind": "compressed-blob",
+        "image": (
+            "docker.io/library/postgres@sha256:"
+            "38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
+        ),
+        "architecture": "amd64",
+        "layer_digest": (
+            "sha256:db8bf9a4f43b1b58570eb4a58c307cf1d954fa26134ccbc0c0b5304fb0f9a01f"
+        ),
+        "member_path": None,
+        "size_bytes": 111_678_527,
+    },
+    {
+        "kind": "unpacked-member",
+        "image": (
+            "docker.io/library/postgres@sha256:"
+            "38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
+        ),
+        "architecture": "amd64",
+        "layer_digest": (
+            "sha256:db8bf9a4f43b1b58570eb4a58c307cf1d954fa26134ccbc0c0b5304fb0f9a01f"
+        ),
+        "member_path": "usr/lib/x86_64-linux-gnu/libLLVM.so.19.1",
+        "size_bytes": 129_271_672,
+    },
 )
 
 ROLES = (
@@ -3487,16 +3516,91 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertNotIn("write_incomplete_", runner)
 
-    def test_target_file_limit_admits_bounded_cloud_github_cli_member(self) -> None:
+    def test_target_file_limits_admit_reviewed_cloud_artifacts(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
-        limits = re.findall(r"^ulimit -f ([1-9][0-9]*)$", runner, re.MULTILINE)
-        gh_2_97_0_linux_amd64_executable_bytes = 40_992_930
+        helper = runner.split("run_target_phase()", 1)[1].split(
+            "run_target_host()", 1
+        )[0]
+        phase_limits = dict(
+            zip(
+                ("host", "workload-prepare-start", "workload-cleanup"),
+                (
+                    int(limit)
+                    for limit in re.findall(
+                        r"^    phase_file_limit_kibibytes=([1-9][0-9]*)$",
+                        helper,
+                        re.MULTILINE,
+                    )
+                ),
+                strict=True,
+            )
+        )
 
-        self.assertEqual([64 * 1024], [int(limit) for limit in limits])
-        bash_file_limit_kibibytes = int(limits[0])
+        gh_2_97_0_linux_amd64_executable_bytes = 40_992_930
+        largest_reviewed_cloud_blob_or_member_bytes = max(
+            int(item["size_bytes"])
+            for item in REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE
+        )
+
+        self.assertEqual(
+            {
+                "host": 64 * 1024,
+                "workload-prepare-start": 128 * 1024,
+                "workload-cleanup": 64 * 1024,
+            },
+            phase_limits,
+        )
         self.assertGreaterEqual(
-            bash_file_limit_kibibytes * 1024,
+            phase_limits["workload-prepare-start"] * 1024,
             gh_2_97_0_linux_amd64_executable_bytes,
+        )
+        self.assertGreaterEqual(
+            phase_limits["workload-prepare-start"] * 1024,
+            largest_reviewed_cloud_blob_or_member_bytes,
+        )
+        self.assertEqual(
+            1, helper.count('ulimit -f "$phase_file_limit_kibibytes"')
+        )
+
+    def test_reviewed_cloud_file_limit_evidence_tracks_pinned_image(self) -> None:
+        runtime_contract = runpy.run_path(
+            os.fspath(ROOT / "scripts" / "integration_runtime_contract.py")
+        )
+
+        self.assertEqual(
+            {runtime_contract["POSTGRES_IMAGE"]},
+            {
+                item["image"]
+                for item in REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE
+            },
+        )
+        self.assertEqual(
+            [
+                (
+                    "compressed-blob",
+                    "amd64",
+                    "sha256:db8bf9a4f43b1b58570eb4a58c307cf1d954fa26134ccbc0c0b5304fb0f9a01f",
+                    None,
+                    111_678_527,
+                ),
+                (
+                    "unpacked-member",
+                    "amd64",
+                    "sha256:db8bf9a4f43b1b58570eb4a58c307cf1d954fa26134ccbc0c0b5304fb0f9a01f",
+                    "usr/lib/x86_64-linux-gnu/libLLVM.so.19.1",
+                    129_271_672,
+                ),
+            ],
+            [
+                (
+                    item["kind"],
+                    item["architecture"],
+                    item["layer_digest"],
+                    item["member_path"],
+                    item["size_bytes"],
+                )
+                for item in REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE
+            ],
         )
 
     def test_target_phases_restore_the_fixed_user_bus_environment(self) -> None:
