@@ -67,22 +67,27 @@ ADMITTED_STAGES = frozenset().union(*PHASE_STAGES.values())
 PULL_STAGES = frozenset(
     stage for stage in ADMITTED_STAGES if stage.endswith("-image-pull")
 )
-FAILURE_REASONS = frozenset(
+TARGET_FAILURE_REASONS = frozenset(
     {
         "command-exit",
         "command-unavailable",
         "contract-rejected",
-        "file-size-limit-exceeded",
         "filesystem-error",
         "interrupted",
         "attestation-content-rejected",
         "registry-policy-rejected",
         "registry-request-failed",
         "registry-response-rejected",
-        "storage-write-failed",
         "unexpected-error",
     }
 )
+INFERRED_FAILURE_REASONS = frozenset(
+    {
+        "file-size-limit-exceeded",
+        "storage-write-failed",
+    }
+)
+FAILURE_REASONS = TARGET_FAILURE_REASONS | INFERRED_FAILURE_REASONS
 # Ordered from deterministic local failures to remote failures. The scanner
 # retains only these reason identities and a marker-sized overlap tail.
 PULL_FAILURE_MARKERS = (
@@ -190,7 +195,7 @@ def scanned_diagnostic(
         return stage, failure_reason, command_status
     if (
         failed_stage != stage
-        or candidate_reason not in FAILURE_REASONS
+        or candidate_reason not in TARGET_FAILURE_REASONS
         or failure_reason != UNREPORTED_REASON
         or (candidate_reason == "command-exit") != (candidate_status is not None)
     ):
