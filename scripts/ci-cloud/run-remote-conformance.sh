@@ -500,7 +500,7 @@ admit_target_tree() {
     ls-files --others)" ]]
 }
 admit_target_tree "$1"
-ulimit -f 32768
+ulimit -f 65536
 [[ -S /run/user/20000/bus ]]
 set +e
 /usr/bin/env -i \

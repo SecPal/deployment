@@ -112,7 +112,7 @@ if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
   phase="${6:-}"
   wrapper="$(cat)"
   grep -Fq 'cd /home/secpal-ci/deployment-target' <<<"$wrapper"
-  grep -Fq 'ulimit -f 32768' <<<"$wrapper"
+  grep -Fq 'ulimit -f 65536' <<<"$wrapper"
   printf 'target:%s\n' "$phase" >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
   if [[ "$phase" == host &&
     "${SECPAL_TEST_INTERRUPT_HOST:-false}" == true ]]; then
