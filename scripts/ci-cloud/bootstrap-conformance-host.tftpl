@@ -288,6 +288,30 @@ cat > /etc/environment.d/90-secpal-quadlet.conf <<'SECPAL_QUADLET'
 QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000
 SECPAL_QUADLET
 
+install -d -o root -g root -m 0755 \
+  /etc/systemd/user-environment-generators
+install -o root -g root -m 0755 /dev/null \
+  /etc/systemd/user-environment-generators/30-systemd-environment-d-generator
+cat > /etc/systemd/user-environment-generators/30-systemd-environment-d-generator \
+  <<'SECPAL_USER_ENVIRONMENT_GENERATOR'
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+[[ "$(/usr/bin/id -u)" == 20000 ]] || exit 0
+printf '%s\n' \
+  'CONTAINERS_CONF=/dev/null' \
+  'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus' \
+  'HOME=/home/secpal-ci' \
+  'LANG=C.UTF-8' \
+  'LC_ALL=C.UTF-8' \
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+  'QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000' \
+  'XDG_RUNTIME_DIR=/run/user/20000'
+SECPAL_USER_ENVIRONMENT_GENERATOR
+
 setup_stage="kernel-admission"
 [[ "$(dpkg-query -W -f '$${Status}' "$kernel_meta_package")" == \
   'install ok installed' ]]

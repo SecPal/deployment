@@ -35,6 +35,36 @@ GENERATOR_ROOTS = tuple(
     GENERATOR_BASE / name
     for name in ("generator.early", "generator", "generator.late")
 )
+USER_ENVIRONMENT_GENERATOR_ROOTS = tuple(
+    Path(root)
+    for root in (
+        "/run/systemd/user-environment-generators",
+        "/etc/systemd/user-environment-generators",
+        "/usr/local/lib/systemd/user-environment-generators",
+        "/usr/lib/systemd/user-environment-generators",
+    )
+)
+TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH = (
+    USER_ENVIRONMENT_GENERATOR_ROOTS[1]
+    / "30-systemd-environment-d-generator"
+)
+TRUSTED_USER_ENVIRONMENT_GENERATOR = b"""#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+[[ "$(/usr/bin/id -u)" == 20000 ]] || exit 0
+printf '%s\\n' \\
+  'CONTAINERS_CONF=/dev/null' \\
+  'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus' \\
+  'HOME=/home/secpal-ci' \\
+  'LANG=C.UTF-8' \\
+  'LC_ALL=C.UTF-8' \\
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \\
+  'QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000' \\
+  'XDG_RUNTIME_DIR=/run/user/20000'
+"""
 PODMAN_EXECUTABLE = Path("/usr/bin/podman")
 PODMAN_NETWORK_ONLINE_UNIT = "podman-user-wait-network-online.service"
 PODMAN_NETWORK_ONLINE_FRAGMENT = (
@@ -135,6 +165,8 @@ TRUSTED_SERVICE_CONFIG_ENVIRONMENT = {
     "PODMAN_USERNS": "",
 }
 SERVICE_ACTIVATION_PROPERTIES = (
+    "FragmentPath",
+    "DropInPaths",
     "Environment",
     "EnvironmentFiles",
     "PassEnvironment",
@@ -656,53 +688,138 @@ def normalize_quadlet_runtime(
         for logical_name in GENERATED_LOGICAL_NAMES
     ]
     if activate:
-        stop_status, _, stop_complete = command_result(
-            ["systemctl", "--user", "stop", target, *services], timeout=120
-        )
-        if stop_status != 0 or not stop_complete:
-            return normalization_command_failure(
-                mode, "stop-existing-units", stop_status, stop_complete
+        loaded_units: list[str] = []
+        loaded_service_names: list[str] = []
+        for unit in (target, *services):
+            state_status, state_output, state_complete = command_result(
+                [
+                    "systemctl", "--user", "show", unit,
+                    "--property=LoadState", "--property=ActiveState",
+                ]
             )
-    environment_status, environment_output, environment_complete = command_result(
-        ["systemctl", "--user", "show-environment"]
-    )
-    if environment_status != 0 or not environment_complete:
-        return normalization_command_failure(
-            mode,
-            "manager-environment-read",
-            environment_status,
-            environment_complete,
+            if state_status != 0 or not state_complete:
+                return normalization_command_failure(
+                    mode, "stop-existing-units", state_status, state_complete
+                )
+            properties = parsed_manager_environment(state_output)
+            if properties == {
+                "LoadState": "not-found", "ActiveState": "inactive"
+            }:
+                continue
+            if (
+                properties is None
+                or set(properties) != {"LoadState", "ActiveState"}
+                or properties["LoadState"] != "loaded"
+                or properties["ActiveState"] not in {
+                    "active", "activating", "deactivating", "failed",
+                    "inactive", "reloading",
+                }
+            ):
+                return normalization_failure(
+                    mode, "stop-existing-units", "contract-rejected"
+                )
+            loaded_units.append(unit)
+            if unit != target:
+                loaded_service_names.append(
+                    unit.removeprefix(f"{prefix}-").removesuffix(".service")
+                )
+        if target in loaded_units and not target_activation_is_trusted(instance):
+            return normalization_failure(
+                mode, "stop-existing-units", "contract-rejected"
+            )
+        for logical_name in loaded_service_names:
+            if not generated_service_unit_activation_is_trusted(
+                instance, logical_name
+            ):
+                return normalization_failure(
+                    mode, "stop-existing-units", "contract-rejected"
+                )
+        if loaded_units:
+            stop_status, _, stop_complete = command_result(
+                ["systemctl", "--user", "stop", *loaded_units], timeout=120
+            )
+            if stop_status != 0 or not stop_complete:
+                return normalization_command_failure(
+                    mode, "stop-existing-units", stop_status, stop_complete
+                )
+
+    def read_manager_environment(
+        stage: str,
+    ) -> tuple[dict[str, str] | None, NormalizationOutcome | None]:
+        environment_status, environment_output, environment_complete = command_result(
+            ["systemctl", "--user", "show-environment"]
         )
-    existing = parsed_manager_environment(environment_output)
+        if environment_status != 0 or not environment_complete:
+            return None, normalization_command_failure(
+                mode, stage, environment_status, environment_complete
+            )
+        environment = parsed_manager_environment(environment_output)
+        if environment is None:
+            return None, normalization_failure(
+                mode, stage, "contract-rejected"
+            )
+        return environment, None
+
+    def replace_manager_environment(
+        environment: dict[str, str],
+    ) -> NormalizationOutcome | None:
+        names = sorted(environment)
+        if names:
+            unset_status, _, unset_complete = command_result(
+                ["systemctl", "--user", "unset-environment", *names]
+            )
+            if unset_status != 0 or not unset_complete:
+                return normalization_command_failure(
+                    mode,
+                    "manager-environment-unset",
+                    unset_status,
+                    unset_complete,
+                )
+        set_status, _, set_complete = command_result(
+            ["systemctl", "--user", "set-environment", *TRUSTED_MANAGER_ENVIRONMENT]
+        )
+        if set_status != 0 or not set_complete:
+            return normalization_command_failure(
+                mode, "manager-environment-set", set_status, set_complete
+            )
+        return None
+
+    existing, environment_failure = read_manager_environment(
+        "manager-environment-read"
+    )
+    if environment_failure is not None:
+        return environment_failure
     if existing is None:
         return normalization_failure(
-            mode, "manager-environment-read", "contract-rejected"
+            mode, "manager-environment-read", "unexpected-error"
         )
-    names = sorted(existing)
-    if names:
-        unset_status, _, unset_complete = command_result(
-            ["systemctl", "--user", "unset-environment", *names]
+    if not trusted_user_environment_generator_is_admitted():
+        return normalization_failure(
+            mode, "manager-environment-admission", "contract-rejected"
         )
-        if unset_status != 0 or not unset_complete:
-            return normalization_command_failure(
-                mode,
-                "manager-environment-unset",
-                unset_status,
-                unset_complete,
-            )
-    set_status, _, set_complete = command_result(
-        ["systemctl", "--user", "set-environment", *TRUSTED_MANAGER_ENVIRONMENT]
-    )
-    if set_status != 0 or not set_complete:
-        return normalization_command_failure(
-            mode, "manager-environment-set", set_status, set_complete
-        )
+    environment_failure = replace_manager_environment(existing)
+    if environment_failure is not None:
+        return environment_failure
     reload_status, _, reload_complete = command_result(
         ["systemctl", "--user", "daemon-reload"], timeout=60
     )
     if reload_status != 0 or not reload_complete:
         return normalization_command_failure(
             mode, "daemon-reload", reload_status, reload_complete
+        )
+    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
+    observed, environment_failure = read_manager_environment(
+        "post-manager-environment-read"
+    )
+    if environment_failure is not None:
+        return environment_failure
+    if observed is None:
+        return normalization_failure(
+            mode, "post-manager-environment-read", "unexpected-error"
+        )
+    if observed != expected:
+        return normalization_failure(
+            mode, "manager-environment-admission", "contract-rejected"
         )
     if activate:
         if not target_activation_is_trusted(instance):
@@ -720,26 +837,15 @@ def normalize_quadlet_runtime(
             return normalization_command_failure(
                 mode, "target-start", start_status, start_complete
             )
-    observed_status, observed_output, observed_complete = command_result(
-        ["systemctl", "--user", "show-environment"]
-    )
-    if observed_status != 0 or not observed_complete:
-        return normalization_command_failure(
-            mode,
-            "post-manager-environment-read",
-            observed_status,
-            observed_complete,
+        observed, environment_failure = read_manager_environment(
+            "post-manager-environment-read"
         )
-    observed = parsed_manager_environment(observed_output)
-    if observed is None:
-        return normalization_failure(
-            mode, "post-manager-environment-read", "contract-rejected"
-        )
-    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
-    if observed != expected:
-        return normalization_failure(
-            mode, "manager-environment-admission", "contract-rejected"
-        )
+        if environment_failure is not None:
+            return environment_failure
+        if observed != expected:
+            return normalization_failure(
+                mode, "manager-environment-admission", "contract-rejected"
+            )
     if quadlet_search_paths() != [str(QUADLET_ROOT)]:
         return normalization_failure(
             mode, "quadlet-search-path-admission", "contract-rejected"
@@ -792,6 +898,38 @@ def file_fact(path: Path, name: str) -> dict[str, object] | None:
         "mode": f"0{stat.S_IMODE(metadata.st_mode):03o}",
         "sha256": hashlib.sha256(content).hexdigest(),
     }
+
+
+def trusted_user_environment_generator_is_admitted() -> bool:
+    generator_name = TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH.name
+    vendor_path = USER_ENVIRONMENT_GENERATOR_ROOTS[-1] / generator_name
+    allowed_paths = {TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH, vendor_path}
+    observed_paths: set[Path] = set()
+    for root in USER_ENVIRONMENT_GENERATOR_ROOTS:
+        try:
+            entries = tuple(root.iterdir())
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        if len(entries) > 16:
+            return False
+        for path in entries:
+            if path not in allowed_paths or path in observed_paths:
+                return False
+            observed_paths.add(path)
+    if TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH not in observed_paths:
+        return False
+    observation = bounded_regular_file(TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH)
+    if observation is None:
+        return False
+    content, metadata = observation
+    return bool(
+        content == TRUSTED_USER_ENVIRONMENT_GENERATOR
+        and metadata.st_uid == 0
+        and metadata.st_gid == 0
+        and stat.S_IMODE(metadata.st_mode) == 0o755
+    )
 
 
 def quadlet_content_has_no_auxiliary_execution_directives(
@@ -980,6 +1118,12 @@ def service_runtime_controls_are_trusted(
     after = set(str(properties.get("After", "")).split()) & generated_services
     return bool(
         set(properties) == set(SERVICE_ACTIVATION_PROPERTIES)
+        and properties.get("FragmentPath")
+        == str(
+            GENERATOR_ROOT
+            / f"secpal-int-{instance}-{logical_name}.service"
+        )
+        and properties.get("DropInPaths") == ""
         and requires == expected_dependencies
         and after == expected_dependencies
         and service_config_environment_is_trusted(properties.get("Environment"))
@@ -1096,6 +1240,41 @@ def podman_network_online_activation_is_trusted() -> bool:
     )
 
 
+def generated_service_unit_activation_is_trusted(
+    instance: str, logical_name: str
+) -> bool:
+    if (
+        re.fullmatch(r"[0-9a-f]{12}", instance) is None
+        or logical_name not in GENERATED_LOGICAL_NAMES
+        or not quadlet_source_execution_controls_are_trusted(
+            instance, logical_name
+        )
+    ):
+        return False
+    status_code, output, bounded = command_result(
+        [
+            "systemctl", "--user", "show",
+            f"secpal-int-{instance}-{logical_name}.service",
+            *(f"--property={name}" for name in SERVICE_ACTIVATION_PROPERTIES),
+        ]
+    )
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" not in line:
+            return False
+        name, value = line.split("=", 1)
+        if name in properties:
+            return False
+        properties[name] = value
+    return bool(
+        status_code == 0
+        and bounded
+        and service_runtime_controls_are_trusted(
+            properties, logical_name, instance
+        )
+    )
+
+
 def generated_service_activation_is_trusted(instance: str) -> bool:
     if (
         re.fullmatch(r"[0-9a-f]{12}", instance) is None
@@ -1103,33 +1282,9 @@ def generated_service_activation_is_trusted(instance: str) -> bool:
         or not generated_dependency_companions_are_absent(instance)
     ):
         return False
-    prefix = f"secpal-int-{instance}"
     for logical_name in GENERATED_LOGICAL_NAMES:
-        if not quadlet_source_execution_controls_are_trusted(
+        if not generated_service_unit_activation_is_trusted(
             instance, logical_name
-        ):
-            return False
-        status_code, output, bounded = command_result(
-            [
-                "systemctl", "--user", "show",
-                f"{prefix}-{logical_name}.service",
-                *(f"--property={name}" for name in SERVICE_ACTIVATION_PROPERTIES),
-            ]
-        )
-        properties: dict[str, str] = {}
-        for line in output.splitlines():
-            if "=" not in line:
-                return False
-            name, value = line.split("=", 1)
-            if name in properties:
-                return False
-            properties[name] = value
-        if (
-            status_code != 0
-            or not bounded
-            or not service_runtime_controls_are_trusted(
-                properties, logical_name, instance
-            )
         ):
             return False
     return True

@@ -371,13 +371,22 @@ and records a main-controlled baseline of every rootless Podman container,
 network, volume, fixture migration invocation, and Podman API/socket activation
 state before any target code runs.
 It then invokes target fixture publication and has the trusted unprivileged
-collector synchronously stop the exact fixture target and every generated
-service before replacing the complete bounded user-manager environment. Any
-old `ExecStop=` therefore runs before the collector establishes the environment
-used for the new activation. The collector sets the fixed home, runtime
-directory, bus, locale, executable path, sole Quadlet path, and
-`CONTAINERS_CONF=/dev/null`, then performs a bounded `daemon-reload`. Before
-starting the target it rejects every target-authored `ExecCondition=`,
+collector query the exact fixture target and generated services. Absent units
+are skipped. Before stopping any loaded unit, the collector admits its exact
+fragment, empty drop-in set, dependencies, environment controls, and all
+effective lifecycle hooks; an old unadmitted `ExecStop=` can therefore never
+run merely because its name matches the fixture. The collector then replaces
+the complete bounded user-manager environment. The disposable host overrides
+the generic Debian user environment generator with one exact root-owned
+generator for UID 20000, and the collector admits both that file and the closed
+effective generator inventory immediately before use. The generator emits the
+same fixed home, runtime directory, bus, locale, executable path, sole Quadlet
+path, and `CONTAINERS_CONF=/dev/null` environment that the collector installs.
+A bounded `daemon-reload` therefore runs both the environment and Quadlet unit
+generators under one closed state. Any post-reload difference is rejected
+before unit admission instead of being repaired after the generated fragments
+already exist. Before starting the target it rejects every target-authored
+`ExecCondition=`,
 `ExecStartPre=`, `ExecStartPost=`, `ExecReload=`, `ExecStop=`, or
 `ExecStopPost=` directive in the root-owned Quadlet sources. Generated
 auxiliary commands are restricted to Quadlet's bounded, role-appropriate direct
@@ -394,8 +403,9 @@ unit without placing environment values in evidence. The collector uses the
 same pinned configuration for its own Podman inspection and mapping commands.
 It starts the exact fixture target only after the pre-activation checks and
 repeats them during live collection. The collector verifies the exact manager
-environment after activation. A target-controlled earlier invocation therefore
-cannot survive while acquiring the regenerated fragment's provenance. The
+environment both after generation and after activation. A target-controlled
+earlier invocation therefore cannot survive while acquiring the regenerated
+fragment's provenance. The
 runner then streams the main-controlled live collector and requests target
 cleanup,
 runs the separate target `host` phase for D.1 admission, and repeats the same
