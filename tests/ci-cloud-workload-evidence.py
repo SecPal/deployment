@@ -272,13 +272,8 @@ def valid_observations() -> dict[str, object]:
             "drop_in_paths": [],
             "drop_in_owners": [],
             "drop_in_sha256": [],
-            "environment": sorted(
-                {
-                    "CONTAINERS_CONF",
-                    "CONTAINERS_CONF_OVERRIDE",
-                    "CONTAINERS_CONF_MODULES",
-                    "PODMAN_USERNS",
-                }
+            "environment": (
+                ["PODMAN_SYSTEMD_UNIT"] if logical_name in ROLES else []
             ),
             "active_state": "active",
             "sub_state": (
@@ -1365,29 +1360,21 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
         )
 
-    def test_generated_service_requires_effective_local_config_pins(self) -> None:
-        trusted = (
-            "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
-            "CONTAINERS_CONF_MODULES= PODMAN_USERNS= PATH=/usr/bin"
-        )
+    def test_generated_service_inherits_manager_config_without_unit_overrides(
+        self,
+    ) -> None:
+        trusted = "PODMAN_SYSTEMD_UNIT=%n"
         self.assertTrue(
             self.collector.service_config_environment_is_trusted(trusted)
         )
-        for value in (
-            trusted.replace("CONTAINERS_CONF=/dev/null ", ""),
-            trusted.replace(
-                "CONTAINERS_CONF_OVERRIDE=/dev/null",
-                "CONTAINERS_CONF_OVERRIDE=/tmp/target.conf",
-            ),
-            trusted.replace(
-                "CONTAINERS_CONF_MODULES=",
-                "CONTAINERS_CONF_MODULES=target",
-            ),
-            trusted.replace("PODMAN_USERNS=", "PODMAN_USERNS=host"),
+        for name in sorted(
+            self.collector.MANAGER_CONTROLLED_SERVICE_ENVIRONMENT
         ):
-            with self.subTest(value=value):
+            with self.subTest(name=name):
                 self.assertFalse(
-                    self.collector.service_config_environment_is_trusted(value)
+                    self.collector.service_config_environment_is_trusted(
+                        f"{trusted} {name}=/unreviewed"
+                    )
                 )
 
     def test_generated_service_cannot_drop_or_replace_the_trusted_config_pin(self) -> None:
@@ -2869,10 +2856,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "secpal-int-aaaaaaaaaaaa-api.service"
             ),
             "DropInPaths": "",
-            "Environment": (
-                "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
-                "CONTAINERS_CONF_MODULES= PODMAN_USERNS="
-            ),
+            "Environment": "PODMAN_SYSTEMD_UNIT=%n",
             "EnvironmentFiles": "",
             "PassEnvironment": "",
             "UnsetEnvironment": "",
@@ -3163,9 +3147,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         service_properties = (
             "FragmentPath=/run/user/20000/systemd/generator/"
             "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
-            "Environment=CONTAINERS_CONF=/dev/null "
-            "CONTAINERS_CONF_OVERRIDE=/dev/null CONTAINERS_CONF_MODULES= "
-            "PODMAN_USERNS=\n"
+            "Environment=PODMAN_SYSTEMD_UNIT=%n\n"
             "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
             "ExecCondition=\nExecStartPre=\n"
             "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"
@@ -4026,9 +4008,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         service_properties = (
             "FragmentPath=/run/user/20000/systemd/generator/"
             "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
-            "Environment=CONTAINERS_CONF=/dev/null "
-            "CONTAINERS_CONF_OVERRIDE=/dev/null CONTAINERS_CONF_MODULES= "
-            "PODMAN_USERNS=\n"
+            "Environment=PODMAN_SYSTEMD_UNIT=%n\n"
             "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
             "ExecCondition=\nExecStartPre=\n"
             "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"

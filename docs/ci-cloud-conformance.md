@@ -401,11 +401,10 @@ closed. The main command must use the role-appropriate direct
 `/usr/bin/podman` operation: container roles use `run`, network roles use
 `network create`, and volume roles use `volume create`. Environment files,
 `PassEnvironment=`, and `UnsetEnvironment=` remain forbidden. Every generated
-unit must additionally carry effective service-local
-`CONTAINERS_CONF=/dev/null`, `CONTAINERS_CONF_OVERRIDE=/dev/null`, empty
-`CONTAINERS_CONF_MODULES`, and empty `PODMAN_USERNS` assignments. These fixed
-assignments override a manager-environment mutation by an indirectly activated
-unit without placing environment values in evidence. The collector uses the
+unit must omit service-local assignments for the manager-controlled identity,
+path, locale, Quadlet, and Podman configuration names. User services inherit
+the separately admitted exact manager environment automatically, so a unit
+cannot replace that contract through `Environment=`. The collector uses the
 same pinned configuration for its own Podman inspection and mapping commands.
 It starts the exact fixture target only after the pre-activation checks and
 repeats them during live collection. The collector verifies the exact manager
@@ -969,10 +968,11 @@ Evidence includes:
   observed process mapping. The derived host UID/GID used for service-cgroup
   process admission also comes from that observed mapping, not a fixed
   subordinate-ID offset. Evidence retains only service-environment variable
-  names, never their values. The fixed service-local `PODMAN_USERNS` and
-  containers.conf pin names are mandatory, while the trusted collector checks
-  their exact non-secret values before activation and during collection. Any
-  contradictory pin or HOME/XDG configuration redirect fails closed. Those
+  names, never their values. Manager-controlled identity, path, locale,
+  Quadlet, `PODMAN_USERNS`, containers.conf, and HOME/XDG configuration names
+  are forbidden at unit level, while the trusted collector checks the exact
+  inherited manager values before activation and during collection. Any
+  contradictory unit-local assignment fails closed. Those
   maps must be non-overlapping, remain inside the service-account namespace,
   and cover the role's configured and effective UID/GID plus every admitted
   supplementary GID,

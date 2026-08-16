@@ -161,12 +161,6 @@ AUXILIARY_EXEC_PROPERTIES = frozenset(
         "ExecStopPost",
     }
 )
-TRUSTED_SERVICE_CONFIG_ENVIRONMENT = {
-    "CONTAINERS_CONF": "/dev/null",
-    "CONTAINERS_CONF_OVERRIDE": "/dev/null",
-    "CONTAINERS_CONF_MODULES": "",
-    "PODMAN_USERNS": "",
-}
 SERVICE_ACTIVATION_PROPERTIES = (
     "FragmentPath",
     "DropInPaths",
@@ -357,6 +351,14 @@ TRUSTED_MANAGER_ENVIRONMENT = (
     "USER=secpal-ci",
     "XDG_RUNTIME_DIR=/run/user/20000",
 )
+MANAGER_CONTROLLED_SERVICE_ENVIRONMENT = frozenset(
+    item.split("=", 1)[0] for item in TRUSTED_MANAGER_ENVIRONMENT
+) | {
+    "CONTAINERS_CONF_OVERRIDE",
+    "CONTAINERS_CONF_MODULES",
+    "PODMAN_USERNS",
+    "XDG_CONFIG_HOME",
+}
 NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet normalization diagnostic: "
 NORMALIZATION_MODES = frozenset({"live", "cleanup"})
 NORMALIZATION_STAGES = frozenset(
@@ -1932,10 +1934,7 @@ def service_config_environment_is_trusted(value: object) -> bool:
     assignments, complete = service_environment_assignments(value)
     return bool(
         complete
-        and all(
-            assignments.get(name) == expected
-            for name, expected in TRUSTED_SERVICE_CONFIG_ENVIRONMENT.items()
-        )
+        and set(assignments).isdisjoint(MANAGER_CONTROLLED_SERVICE_ENVIRONMENT)
     )
 
 
@@ -3650,8 +3649,6 @@ def service_userns_environment_is_trusted(service: object) -> bool:
     environment = service.get("environment")
     if not isinstance(environment, list):
         return False
-    required = set(TRUSTED_SERVICE_CONFIG_ENVIRONMENT)
-    prohibited = {"XDG_CONFIG_HOME", "HOME"}
     names: set[str] = set()
     for name in environment:
         if (
@@ -3659,10 +3656,10 @@ def service_userns_environment_is_trusted(service: object) -> bool:
             or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) is None
         ):
             return False
-        if name in names or name in prohibited:
+        if name in names or name in MANAGER_CONTROLLED_SERVICE_ENVIRONMENT:
             return False
         names.add(name)
-    return required <= names
+    return True
 
 
 def workload_admission_failures(observations: object) -> list[str]:
