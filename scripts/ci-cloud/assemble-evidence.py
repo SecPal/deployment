@@ -62,6 +62,66 @@ def status(value: str) -> int:
     return int(value)
 
 
+def read_normalization_diagnostic(
+    path: Path, mode: str, phase_status: int
+) -> dict[str, object]:
+    module = load_workload_collector()
+    try:
+        missing = path.stat().st_size == 0
+    except OSError:
+        missing = True
+    if missing:
+        if phase_status == 0:
+            raise ValueError("successful normalization diagnostic is missing")
+        return {
+            "mode": mode,
+            "status": 1,
+            "stage": "unreported",
+            "failure_reason": "unexpected-error",
+            "command_status": None,
+        }
+    document = read_document(path)
+    if not isinstance(document, dict) or set(document) != {
+        "mode", "status", "stage", "failure_reason", "command_status"
+    }:
+        raise ValueError("normalization diagnostic is malformed")
+    diagnostic_status = document["status"]
+    stage = document["stage"]
+    failure_reason = document["failure_reason"]
+    command_status = document["command_status"]
+    if (
+        document["mode"] != mode
+        or not isinstance(diagnostic_status, int)
+        or isinstance(diagnostic_status, bool)
+        or diagnostic_status not in {0, 1}
+        or not isinstance(stage, str)
+        or not isinstance(failure_reason, (str, type(None)))
+        or not isinstance(command_status, (int, type(None)))
+        or isinstance(command_status, bool)
+        or (
+            command_status is not None
+            and not 0 < command_status <= 255
+        )
+    ):
+        raise ValueError("normalization diagnostic is outside the closed contract")
+    if diagnostic_status == 0:
+        if (
+            phase_status != 0
+            or stage != "complete"
+            or failure_reason is not None
+            or command_status is not None
+        ):
+            raise ValueError("successful normalization diagnostic is inconsistent")
+    elif (
+        phase_status == 0
+        or stage not in module.NORMALIZATION_STAGES
+        or failure_reason not in module.NORMALIZATION_FAILURE_REASONS
+        or (failure_reason == "command-exit") != (command_status is not None)
+    ):
+        raise ValueError("failed normalization diagnostic is inconsistent")
+    return document
+
+
 def load_workload_collector():
     spec = importlib.util.spec_from_file_location(
         "trusted_workload_collector", WORKLOAD_COLLECTOR
@@ -78,6 +138,7 @@ def assemble(
     baseline: object,
     live: object,
     post_cleanup: object,
+    normalization_diagnostics: dict[str, dict[str, object]],
     phase_statuses: dict[str, int],
     collection_statuses: dict[str, int],
 ) -> dict[str, object]:
@@ -133,11 +194,12 @@ def assemble(
 
     overall_failures = list(dict.fromkeys([*host_failures, *workload_failures]))
     test.pop("target_exit_status", None)
+    test["normalization_diagnostics"] = normalization_diagnostics
     test["phase_exit_statuses"] = phase_statuses
     test["collection_exit_statuses"] = collection_statuses
     test["failed_admission_invariants"] = overall_failures
     test["result"] = "passed" if not overall_failures else "failed"
-    host_document["schema_version"] = 2
+    host_document["schema_version"] = 3
     host_document["host_admission"] = {
         "result": "passed" if not host_failures else "failed",
         "failed_admission_invariants": host_failures,
@@ -152,6 +214,8 @@ def main() -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("live", type=Path)
     parser.add_argument("post_cleanup", type=Path)
+    parser.add_argument("live_normalization", type=Path)
+    parser.add_argument("cleanup_normalization", type=Path)
     parser.add_argument("host_status")
     parser.add_argument("prepare_start_status")
     parser.add_argument("cleanup_status")
@@ -178,6 +242,18 @@ def main() -> int:
             "live": status(arguments.live_collection_status),
             "post_cleanup": status(arguments.cleanup_collection_status),
         }
+        normalization_diagnostics = {
+            "live": read_normalization_diagnostic(
+                arguments.live_normalization,
+                "live",
+                phase_statuses["trusted_quadlet_normalize_live"],
+            ),
+            "cleanup": read_normalization_diagnostic(
+                arguments.cleanup_normalization,
+                "cleanup",
+                phase_statuses["trusted_quadlet_normalize_cleanup"],
+            ),
+        }
         document = assemble(
             read_document(arguments.host),
             read_observation(
@@ -189,6 +265,7 @@ def main() -> int:
                 "post-cleanup",
                 collection_statuses["post_cleanup"],
             ),
+            normalization_diagnostics,
             phase_statuses,
             collection_statuses,
         )

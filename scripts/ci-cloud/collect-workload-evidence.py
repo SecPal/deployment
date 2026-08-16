@@ -319,6 +319,42 @@ TRUSTED_MANAGER_ENVIRONMENT = (
     f"QUADLET_UNIT_DIRS={QUADLET_ROOT}",
     "XDG_RUNTIME_DIR=/run/user/20000",
 )
+NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet normalization diagnostic: "
+NORMALIZATION_MODES = frozenset({"live", "cleanup"})
+NORMALIZATION_STAGES = frozenset(
+    {
+        "instance-admission",
+        "stop-existing-units",
+        "manager-environment-read",
+        "manager-environment-unset",
+        "manager-environment-set",
+        "daemon-reload",
+        "target-unit-admission",
+        "generated-unit-admission",
+        "target-start",
+        "post-manager-environment-read",
+        "manager-environment-admission",
+        "quadlet-search-path-admission",
+        "unreported",
+    }
+)
+NORMALIZATION_FAILURE_REASONS = frozenset(
+    {"command-exit", "contract-rejected", "unexpected-error"}
+)
+
+
+class NormalizationOutcome(NamedTuple):
+    mode: str
+    status: int
+    stage: str
+    failure_reason: str | None
+    command_status: int | None
+
+    def __bool__(self) -> bool:
+        return self.status == 0
+
+    def document(self) -> dict[str, object]:
+        return self._asdict()
 
 
 def incomplete_observation(phase: str) -> dict[str, object]:
@@ -545,11 +581,8 @@ def admit_collection_context(
         raise ValueError("collector did not admit a clean target tree")
 
 
-def manager_environment() -> dict[str, str] | None:
-    status, output, complete = command_result(
-        ["systemctl", "--user", "show-environment"]
-    )
-    if status != 0 or not complete or len(output.encode("utf-8")) > 16_384:
+def parsed_manager_environment(output: str) -> dict[str, str] | None:
+    if len(output.encode("utf-8")) > 16_384:
         return None
     environment: dict[str, str] = {}
     for line in output.splitlines():
@@ -567,9 +600,55 @@ def manager_environment() -> dict[str, str] | None:
     return environment
 
 
-def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
+def normalization_failure(
+    mode: str,
+    stage: str,
+    failure_reason: str,
+    command_status: int | None = None,
+) -> NormalizationOutcome:
+    if (
+        mode not in NORMALIZATION_MODES
+        or stage not in NORMALIZATION_STAGES
+        or failure_reason not in NORMALIZATION_FAILURE_REASONS
+        or (failure_reason == "command-exit") != (command_status is not None)
+        or (
+            command_status is not None
+            and not 0 < command_status <= 255
+        )
+    ):
+        raise ValueError("normalization diagnostic is outside the closed contract")
+    outcome = NormalizationOutcome(
+        mode, 1, stage, failure_reason, command_status
+    )
+    print(
+        NORMALIZATION_DIAGNOSTIC_PREFIX
+        + json.dumps(
+            outcome.document(), ensure_ascii=True, separators=(",", ":")
+        ),
+        file=sys.stderr,
+    )
+    return outcome
+
+
+def normalization_command_failure(
+    mode: str, stage: str, status: int, complete: bool
+) -> NormalizationOutcome:
+    return normalization_failure(
+        mode,
+        stage,
+        "command-exit" if complete and status != 0 else "unexpected-error",
+        status if complete and status != 0 else None,
+    )
+
+
+def normalize_quadlet_runtime(
+    instance: str, *, activate: bool
+) -> NormalizationOutcome:
+    mode = "live" if activate else "cleanup"
     if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
-        return False
+        return normalization_failure(
+            mode, "instance-admission", "contract-rejected"
+        )
     prefix = f"secpal-int-{instance}"
     target = f"{prefix}.target"
     services = [
@@ -581,44 +660,91 @@ def normalize_quadlet_runtime(instance: str, *, activate: bool) -> bool:
             ["systemctl", "--user", "stop", target, *services], timeout=120
         )
         if stop_status != 0 or not stop_complete:
-            return False
-    existing = manager_environment()
+            return normalization_command_failure(
+                mode, "stop-existing-units", stop_status, stop_complete
+            )
+    environment_status, environment_output, environment_complete = command_result(
+        ["systemctl", "--user", "show-environment"]
+    )
+    if environment_status != 0 or not environment_complete:
+        return normalization_command_failure(
+            mode,
+            "manager-environment-read",
+            environment_status,
+            environment_complete,
+        )
+    existing = parsed_manager_environment(environment_output)
     if existing is None:
-        return False
+        return normalization_failure(
+            mode, "manager-environment-read", "contract-rejected"
+        )
     names = sorted(existing)
     if names:
         unset_status, _, unset_complete = command_result(
             ["systemctl", "--user", "unset-environment", *names]
         )
         if unset_status != 0 or not unset_complete:
-            return False
+            return normalization_command_failure(
+                mode,
+                "manager-environment-unset",
+                unset_status,
+                unset_complete,
+            )
     set_status, _, set_complete = command_result(
         ["systemctl", "--user", "set-environment", *TRUSTED_MANAGER_ENVIRONMENT]
     )
     if set_status != 0 or not set_complete:
-        return False
+        return normalization_command_failure(
+            mode, "manager-environment-set", set_status, set_complete
+        )
     reload_status, _, reload_complete = command_result(
         ["systemctl", "--user", "daemon-reload"], timeout=60
     )
     if reload_status != 0 or not reload_complete:
-        return False
+        return normalization_command_failure(
+            mode, "daemon-reload", reload_status, reload_complete
+        )
     if activate:
-        if (
-            not target_activation_is_trusted(instance)
-            or not generated_service_activation_is_trusted(instance)
-        ):
-            return False
+        if not target_activation_is_trusted(instance):
+            return normalization_failure(
+                mode, "target-unit-admission", "contract-rejected"
+            )
+        if not generated_service_activation_is_trusted(instance):
+            return normalization_failure(
+                mode, "generated-unit-admission", "contract-rejected"
+            )
         start_status, _, start_complete = command_result(
             ["systemctl", "--user", "start", target], timeout=600
         )
         if start_status != 0 or not start_complete:
-            return False
-    observed = manager_environment()
-    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
-    return (
-        observed == expected
-        and quadlet_search_paths() == [str(QUADLET_ROOT)]
+            return normalization_command_failure(
+                mode, "target-start", start_status, start_complete
+            )
+    observed_status, observed_output, observed_complete = command_result(
+        ["systemctl", "--user", "show-environment"]
     )
+    if observed_status != 0 or not observed_complete:
+        return normalization_command_failure(
+            mode,
+            "post-manager-environment-read",
+            observed_status,
+            observed_complete,
+        )
+    observed = parsed_manager_environment(observed_output)
+    if observed is None:
+        return normalization_failure(
+            mode, "post-manager-environment-read", "contract-rejected"
+        )
+    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
+    if observed != expected:
+        return normalization_failure(
+            mode, "manager-environment-admission", "contract-rejected"
+        )
+    if quadlet_search_paths() != [str(QUADLET_ROOT)]:
+        return normalization_failure(
+            mode, "quadlet-search-path-admission", "contract-rejected"
+        )
+    return NormalizationOutcome(mode, 0, "complete", None, None)
 
 
 def bounded_regular_file(
@@ -3819,10 +3945,18 @@ def main() -> int:
         if arguments.phase == "baseline":
             observation = collect_baseline(arguments.instance)
         elif arguments.phase == "normalize":
-            return 0 if normalize_quadlet_runtime(
+            outcome = normalize_quadlet_runtime(
                 arguments.instance,
                 activate=arguments.normalization_mode == "live",
-            ) else 1
+            )
+            json.dump(
+                outcome.document(),
+                sys.stdout,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            sys.stdout.write("\n")
+            return outcome.status
         elif arguments.phase == "live":
             observation = collect_live(arguments.instance)
         else:

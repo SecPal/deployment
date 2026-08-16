@@ -2224,6 +2224,50 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn("bounded-target-diagnostic.py", remote)
         self.assertNotIn("<<'REMOTE' >/dev/null 2>&1", remote)
 
+    def test_static_contract_rejects_missing_quadlet_normalization_diagnostic(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/collect-workload-evidence.py",
+            'NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet '
+            'normalization diagnostic: "',
+            'NORMALIZATION_DIAGNOSTIC_PREFIX = ""',
+        )
+
+    def test_static_contract_rejects_broken_normalization_evidence_wiring(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "scripts/ci-cloud/run-remote-conformance.sh",
+                '< scripts/ci-cloud/collect-workload-evidence.py >"$diagnostic_path"',
+                '< scripts/ci-cloud/collect-workload-evidence.py >/dev/null',
+            ),
+            (
+                "scripts/ci-cloud/run-remote-conformance.sh",
+                '"$live_normalization_json" "$cleanup_normalization_json" \\\n',
+                "",
+            ),
+            (
+                "scripts/ci-cloud/assemble-evidence.py",
+                'test["normalization_diagnostics"] = normalization_diagnostics',
+                'test["normalization_diagnostics"] = {}',
+            ),
+            (
+                "schemas/ci-cloud-evidence.schema.json",
+                '        "normalization_diagnostics",\n',
+                "",
+            ),
+            (
+                "scripts/ci-cloud/validate-evidence.py",
+                "Trusted Quadlet normalization diagnostics",
+                "Trusted normalization result",
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
     def test_static_contract_rejects_unadmitted_socket_trigger_services(self) -> None:
         self.assert_mutation_rejected(
             "scripts/ci-cloud/collect-workload-evidence.py",

@@ -180,7 +180,7 @@ def validate_document(document: object) -> dict[str, object]:
         },
         "$",
     )
-    if root["schema_version"] != 2:
+    if root["schema_version"] != 3:
         fail("unsupported evidence schema version")
     workflow = exact_keys(root["workflow"], {"repository", "run_id", "run_attempt", "target_sha"}, "$.workflow")
     test = exact_keys(
@@ -193,6 +193,7 @@ def validate_document(document: object) -> dict[str, object]:
             "provider_image",
             "started_at",
             "ended_at",
+            "normalization_diagnostics",
             "phase_exit_statuses",
             "collection_exit_statuses",
             "result",
@@ -219,6 +220,54 @@ def validate_document(document: object) -> dict[str, object]:
         {"baseline", "live", "post_cleanup"},
         "$.test.collection_exit_statuses",
     )
+    normalization_diagnostics = exact_keys(
+        test["normalization_diagnostics"],
+        {"live", "cleanup"},
+        "$.test.normalization_diagnostics",
+    )
+    workload_module = load_trusted_module(
+        WORKLOAD_COLLECTOR_PATH, "ci_cloud_normalization_contract"
+    )
+    for mode, phase_name in (
+        ("live", "trusted_quadlet_normalize_live"),
+        ("cleanup", "trusted_quadlet_normalize_cleanup"),
+    ):
+        diagnostic = exact_keys(
+            normalization_diagnostics[mode],
+            {"mode", "status", "stage", "failure_reason", "command_status"},
+            f"$.test.normalization_diagnostics.{mode}",
+        )
+        diagnostic_status = diagnostic["status"]
+        command_status = diagnostic["command_status"]
+        if (
+            diagnostic["mode"] != mode
+            or type(diagnostic_status) is not int
+            or diagnostic_status not in {0, 1}
+            or type(diagnostic["stage"]) is not str
+            or not isinstance(diagnostic["failure_reason"], (str, type(None)))
+            or (
+                command_status is not None
+                and (type(command_status) is not int or not 0 < command_status <= 255)
+            )
+        ):
+            fail("normalization diagnostic is outside the closed contract")
+        if diagnostic_status == 0:
+            if (
+                phase_statuses[phase_name] != 0
+                or diagnostic["stage"] != "complete"
+                or diagnostic["failure_reason"] is not None
+                or command_status is not None
+            ):
+                fail("successful normalization diagnostic is inconsistent")
+        elif (
+            phase_statuses[phase_name] == 0
+            or diagnostic["stage"] not in workload_module.NORMALIZATION_STAGES
+            or diagnostic["failure_reason"]
+            not in workload_module.NORMALIZATION_FAILURE_REASONS
+            or (diagnostic["failure_reason"] == "command-exit")
+            != (command_status is not None)
+        ):
+            fail("failed normalization diagnostic is inconsistent")
     platform = exact_keys(
         root["platform"],
         {"os_release", "architecture", "uname", "kernel", "cpu", "virtualization", "logical_cpu", "memory_bytes", "root_filesystem_bytes"},
@@ -723,6 +772,7 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         f"- VM cloud identity present: `{cloud_identity['identity_present']}`",
         f"- Lifecycle phase statuses: `{json.dumps(test['phase_exit_statuses'], sort_keys=True, separators=(',', ':'))}`",
         f"- Collector phase statuses: `{json.dumps(test['collection_exit_statuses'], sort_keys=True, separators=(',', ':'))}`",
+        f"- Trusted Quadlet normalization diagnostics: `{json.dumps(test['normalization_diagnostics'], sort_keys=True, separators=(',', ':'))}`",
         f"- Workload instance: `{workload['instance']}`; baseline containers `{len(workload['baseline']['containers'])}`; live containers `{len(workload['live']['containers'])}`; post-cleanup containers `{len(workload['post_cleanup']['containers'])}`",
         f"- Failed admission invariants: `{', '.join(str(item) for item in failures) if failures else 'none'}`",
         "",

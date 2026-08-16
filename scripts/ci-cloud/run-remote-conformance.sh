@@ -58,6 +58,8 @@ host_evidence_json="$evidence_dir/.host-evidence.json"
 baseline_evidence_json="$evidence_dir/.workload-baseline.json"
 live_evidence_json="$evidence_dir/.workload-live.json"
 cleanup_evidence_json="$evidence_dir/.workload-post-cleanup.json"
+live_normalization_json="$evidence_dir/.normalization-live.json"
+cleanup_normalization_json="$evidence_dir/.normalization-cleanup.json"
 bootstrap_stage="host-key"
 host_setup_failure_json="null"
 host_key_observations_json="null"
@@ -575,11 +577,18 @@ collect_workload_baseline() { collect_workload_phase baseline; }
 collect_workload_post_cleanup() { collect_workload_phase post-cleanup; }
 
 normalize_quadlet_runtime() {
+  local diagnostic_path
   local mode="$1"
   local outer_timeout
   case "$mode" in
-    live) outer_timeout=12m ;;
-    cleanup) outer_timeout=3m ;;
+    live)
+      outer_timeout=12m
+      diagnostic_path="$live_normalization_json"
+      ;;
+    cleanup)
+      outer_timeout=3m
+      diagnostic_path="$cleanup_normalization_json"
+      ;;
     *) return 125 ;;
   esac
   timeout --signal=TERM --kill-after=15s "$outer_timeout" \
@@ -591,7 +600,7 @@ normalize_quadlet_runtime() {
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     /usr/bin/python3 -I - normalize "$target_sha" "$fixture_instance" \
     "$mode" \
-    < scripts/ci-cloud/collect-workload-evidence.py >/dev/null
+    < scripts/ci-cloud/collect-workload-evidence.py >"$diagnostic_path"
 }
 
 collect_host_and_assemble() {
@@ -614,6 +623,7 @@ collect_host_and_assemble() {
   python3 scripts/ci-cloud/assemble-evidence.py \
     "$host_evidence_json" "$baseline_evidence_json" \
     "$live_evidence_json" "$cleanup_evidence_json" \
+    "$live_normalization_json" "$cleanup_normalization_json" \
     "$host_status" "$prepare_start_status" "$cleanup_status" \
     "$live_normalization_status" "$cleanup_normalization_status" \
     "$baseline_collection_status" "$live_collection_status" \
@@ -634,7 +644,8 @@ collect_host_and_assemble() {
   fi
   rm -f -- "$host_evidence_json" "$baseline_evidence_json" \
     "$live_evidence_json" \
-    "$cleanup_evidence_json"
+    "$cleanup_evidence_json" "$live_normalization_json" \
+    "$cleanup_normalization_json"
   return "$validation_status"
 }
 

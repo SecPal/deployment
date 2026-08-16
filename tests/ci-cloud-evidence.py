@@ -63,7 +63,7 @@ def valid_document() -> dict[str, object]:
     }
     packages["dbus-user-session"]["architecture"] = "all"
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "workflow": {
             "repository": "SecPal/deployment",
             "run_id": "12345",
@@ -81,6 +81,16 @@ def valid_document() -> dict[str, object]:
             },
             "started_at": "2026-08-09T12:00:00Z",
             "ended_at": "2026-08-09T12:10:00Z",
+            "normalization_diagnostics": {
+                mode: {
+                    "mode": mode,
+                    "status": 0,
+                    "stage": "complete",
+                    "failure_reason": None,
+                    "command_status": None,
+                }
+                for mode in ("live", "cleanup")
+            },
             "phase_exit_statuses": {
                 "host": 0,
                 "workload_prepare_start": 0,
@@ -364,6 +374,74 @@ class EvidenceContractTests(unittest.TestCase):
             "TARGET_WORKLOAD_PREPARE_START"
         ]
         self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_normalization_failure_is_closed_and_bound_to_phase_status(self) -> None:
+        document = valid_document()
+        document["test"]["phase_exit_statuses"][
+            "trusted_quadlet_normalize_live"
+        ] = 1
+        document["test"]["normalization_diagnostics"]["live"] = {
+            "mode": "live",
+            "status": 1,
+            "stage": "daemon-reload",
+            "failure_reason": "command-exit",
+            "command_status": 1,
+        }
+        invariant = "TRUSTED_QUADLET_NORMALIZE_LIVE"
+        document["test"]["result"] = "failed"
+        document["test"]["failed_admission_invariants"] = [invariant]
+        document["workload"]["result"] = "failed"
+        document["workload"]["failed_admission_invariants"] = [invariant]
+        self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_normalization_diagnostic_rejects_open_or_inconsistent_values(self) -> None:
+        mutations = (
+            lambda document: document["test"]["normalization_diagnostics"][
+                "live"
+            ].__setitem__("mode", "cleanup"),
+            lambda document: document["test"]["normalization_diagnostics"][
+                "live"
+            ].__setitem__("stage", "target-controlled-stage"),
+            lambda document: document["test"]["normalization_diagnostics"][
+                "live"
+            ].__setitem__("failure_reason", "target-controlled-reason"),
+            lambda document: document["test"]["normalization_diagnostics"][
+                "live"
+            ].__setitem__("failure_reason", ["command-exit"]),
+            lambda document: document["test"]["normalization_diagnostics"][
+                "live"
+            ].__setitem__("status", True),
+            lambda document: document["test"]["normalization_diagnostics"][
+                "live"
+            ].__setitem__("command_status", 7),
+            lambda document: document["test"]["normalization_diagnostics"][
+                "live"
+            ].__setitem__("unknown", "field"),
+            lambda document: document["test"]["normalization_diagnostics"].pop(
+                "cleanup"
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                document = valid_document()
+                mutate(document)
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "normalization|unknown|incomplete|declared schema",
+                ):
+                    self.validator.validate_document(document)
+
+    def test_summary_contains_normalization_diagnostics(self) -> None:
+        document = self.validator.validate_document(valid_document())
+        with self.subTest("summary"):
+            from tempfile import TemporaryDirectory
+
+            with TemporaryDirectory() as directory:
+                summary = Path(directory) / "summary.md"
+                self.validator.write_summary(document, summary)
+                contents = summary.read_text(encoding="utf-8")
+        self.assertIn("Trusted Quadlet normalization diagnostics", contents)
+        self.assertIn('"stage":"complete"', contents)
 
     def test_host_phase_failure_forces_only_d1_host_admission_failure(self) -> None:
         document = valid_document()

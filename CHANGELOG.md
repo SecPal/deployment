@@ -100,6 +100,10 @@ SPDX-License-Identifier: CC0-1.0
   host, or cleanup stage plus a closed failure reason and optional command
   status in the Actions log. Arbitrary target output remains private and is
   discarded before exact VM cleanup.
+- Trusted Quadlet normalization now records one closed mode, substep, failure
+  class, and optional command status in schema-validated evidence and its
+  summary after DigitalOcean Intel run `31948450941` exposed an otherwise
+  undifferentiated status `1`. Command output remains discarded.
 - D.1a workload evidence admits the fixed root-owned Debian 13 GnuPG and
   OpenSSH agent socket/service pairs with exact `dpkg-query` owning-package
   provenance (including Keyboxd's Debian `gpg` ownership) while
