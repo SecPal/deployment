@@ -360,18 +360,33 @@ NORMALIZATION_STAGES = frozenset(
         "manager-environment-read",
         "manager-environment-unset",
         "manager-environment-set",
-        "user-environment-generator-admission",
+        "user-environment-generator-inventory-read",
+        "user-environment-generator-inventory-admission",
+        "user-environment-generator-presence-admission",
+        "user-environment-generator-file-read",
+        "user-environment-generator-file-admission",
+        "user-environment-generator-content-admission",
+        "user-environment-generator-metadata-admission",
         "daemon-reload",
+        "post-reload-manager-environment-read",
         "post-reload-manager-environment-admission",
         "target-unit-admission",
         "generated-unit-admission",
         "target-start",
-        "post-manager-environment-read",
+        "post-activation-manager-environment-read",
         "post-activation-manager-environment-admission",
         "quadlet-search-path-admission",
         "unreported",
     }
 )
+LEGACY_NORMALIZATION_STAGES = frozenset(
+    {
+        "manager-environment-admission",
+        "post-manager-environment-read",
+        "user-environment-generator-admission",
+    }
+)
+NORMALIZATION_EVIDENCE_STAGES = NORMALIZATION_STAGES | LEGACY_NORMALIZATION_STAGES
 NORMALIZATION_FAILURE_REASONS = frozenset(
     {"command-exit", "contract-rejected", "unexpected-error"}
 )
@@ -389,6 +404,11 @@ class NormalizationOutcome(NamedTuple):
 
     def document(self) -> dict[str, object]:
         return self._asdict()
+
+
+class NormalizationAdmissionFailure(NamedTuple):
+    stage: str
+    failure_reason: str
 
 
 def incomplete_observation(phase: str) -> dict[str, object]:
@@ -795,11 +815,12 @@ def normalize_quadlet_runtime(
         return normalization_failure(
             mode, "manager-environment-read", "unexpected-error"
         )
-    if not trusted_user_environment_generator_is_admitted():
+    generator_failure = trusted_user_environment_generator_admission_failure()
+    if generator_failure is not None:
         return normalization_failure(
             mode,
-            "user-environment-generator-admission",
-            "contract-rejected",
+            generator_failure.stage,
+            generator_failure.failure_reason,
         )
     environment_failure = replace_manager_environment(existing)
     if environment_failure is not None:
@@ -813,13 +834,13 @@ def normalize_quadlet_runtime(
         )
     expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
     observed, environment_failure = read_manager_environment(
-        "post-manager-environment-read"
+        "post-reload-manager-environment-read"
     )
     if environment_failure is not None:
         return environment_failure
     if observed is None:
         return normalization_failure(
-            mode, "post-manager-environment-read", "unexpected-error"
+            mode, "post-reload-manager-environment-read", "unexpected-error"
         )
     if observed != expected:
         return normalization_failure(
@@ -844,7 +865,7 @@ def normalize_quadlet_runtime(
                 mode, "target-start", start_status, start_complete
             )
         observed, environment_failure = read_manager_environment(
-            "post-manager-environment-read"
+            "post-activation-manager-environment-read"
         )
         if environment_failure is not None:
             return environment_failure
@@ -908,7 +929,30 @@ def file_fact(path: Path, name: str) -> dict[str, object] | None:
     }
 
 
-def trusted_user_environment_generator_is_admitted() -> bool:
+def rejected_user_environment_generator_file(
+    path: Path,
+) -> NormalizationAdmissionFailure:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return NormalizationAdmissionFailure(
+            "user-environment-generator-file-read", "unexpected-error"
+        )
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_size > 64 * 1024
+    ):
+        return NormalizationAdmissionFailure(
+            "user-environment-generator-file-admission", "contract-rejected"
+        )
+    return NormalizationAdmissionFailure(
+        "user-environment-generator-file-read", "unexpected-error"
+    )
+
+
+def trusted_user_environment_generator_admission_failure(
+) -> NormalizationAdmissionFailure | None:
     generator_name = TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH.name
     vendor_path = USER_ENVIRONMENT_GENERATOR_ROOTS[-1] / generator_name
     allowed_paths = {TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH, vendor_path}
@@ -919,25 +963,51 @@ def trusted_user_environment_generator_is_admitted() -> bool:
         except FileNotFoundError:
             continue
         except OSError:
-            return False
+            return NormalizationAdmissionFailure(
+                "user-environment-generator-inventory-read", "unexpected-error"
+            )
         if len(entries) > 16:
-            return False
+            return NormalizationAdmissionFailure(
+                "user-environment-generator-inventory-admission",
+                "contract-rejected",
+            )
         for path in entries:
             if path not in allowed_paths or path in observed_paths:
-                return False
+                return NormalizationAdmissionFailure(
+                    "user-environment-generator-inventory-admission",
+                    "contract-rejected",
+                )
             observed_paths.add(path)
     if TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH not in observed_paths:
-        return False
+        return NormalizationAdmissionFailure(
+            "user-environment-generator-presence-admission",
+            "contract-rejected",
+        )
     observation = bounded_regular_file(TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH)
     if observation is None:
-        return False
+        return rejected_user_environment_generator_file(
+            TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH
+        )
     content, metadata = observation
-    return bool(
-        content == TRUSTED_USER_ENVIRONMENT_GENERATOR
-        and metadata.st_uid == 0
+    if content != TRUSTED_USER_ENVIRONMENT_GENERATOR:
+        return NormalizationAdmissionFailure(
+            "user-environment-generator-content-admission",
+            "contract-rejected",
+        )
+    if not (
+        metadata.st_uid == 0
         and metadata.st_gid == 0
         and stat.S_IMODE(metadata.st_mode) == 0o755
-    )
+    ):
+        return NormalizationAdmissionFailure(
+            "user-environment-generator-metadata-admission",
+            "contract-rejected",
+        )
+    return None
+
+
+def trusted_user_environment_generator_is_admitted() -> bool:
+    return trusted_user_environment_generator_admission_failure() is None
 
 
 def quadlet_content_has_no_auxiliary_execution_directives(

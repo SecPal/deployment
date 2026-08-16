@@ -114,7 +114,7 @@ def read_normalization_diagnostic(
             raise ValueError("successful normalization diagnostic is inconsistent")
     elif (
         phase_status == 0
-        or stage not in module.NORMALIZATION_STAGES
+        or stage not in module.NORMALIZATION_EVIDENCE_STAGES
         or failure_reason not in module.NORMALIZATION_FAILURE_REASONS
         or (failure_reason == "command-exit") != (command_status is not None)
     ):

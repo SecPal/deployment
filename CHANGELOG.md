@@ -110,11 +110,12 @@ SPDX-License-Identifier: CC0-1.0
   environment generator so `daemon-reload` cannot regenerate units under a
   different manager environment. Reload or activation drift fails closed, as
   diagnosed independently by DigitalOcean Intel run `31954465244`.
-- Trusted Quadlet normalization now distinguishes environment-generator
-  admission, post-reload manager-environment drift, and post-activation drift
-  in its closed diagnostic stage after DigitalOcean Intel run `31967061955`
-  exposed that the former shared stage could not identify the failing
-  checkpoint.
+- Trusted Quadlet normalization now distinguishes closed generator inventory,
+  presence, file, content, and metadata failures as well as the separate
+  post-reload and post-activation manager-environment read and admission
+  checkpoints. Schema-version-3 evidence retains its legacy stage vocabulary
+  for existing artifacts after DigitalOcean Intel run `31967061955` exposed
+  that the former shared stages could not identify the failing checkpoint.
 - D.1a workload evidence admits the fixed root-owned Debian 13 GnuPG and
   OpenSSH agent socket/service pairs with exact `dpkg-query` owning-package
   provenance (including Keyboxd's Debian `gpg` ownership) while
