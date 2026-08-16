@@ -204,6 +204,196 @@ class TargetDiagnosticTests(unittest.TestCase):
         self.assertEqual("registry-request-failed", document["failure_reason"])
         self.assertIsNone(document["command_status"])
 
+    def test_pull_output_is_classified_without_persisting_content(self) -> None:
+        cases = (
+            (b"writing blob: file too large", "file-size-limit-exceeded"),
+            (b"copying layer: no space left on device", "storage-write-failed"),
+            (b"dial tcp: network is unreachable", "registry-request-failed"),
+            (b"reading manifest: unauthorized", "registry-response-rejected"),
+        )
+        for diagnostic, expected in cases:
+            with (
+                self.subTest(expected=expected),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                secret = b"synthetic-registry-secret-never-persist"
+                payload = (
+                    b"SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-image-pull\n"
+                    + diagnostic
+                    + b": "
+                    + secret
+                    + b"\nSECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+                    b"workload-api-image-pull:command-exit:125\n"
+                )
+                path = self.private_file(directory)
+                stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+                with mock.patch.object(self.helper.sys, "stdin", stdin):
+                    self.helper.capture(path)
+                self.assertNotIn(secret, path.read_bytes())
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.helper.emit(path, "workload-prepare-start", "1")
+
+            rendered = output.getvalue()
+            document = json.loads(
+                rendered.removeprefix("Target phase diagnostic: ")
+            )
+            self.assertEqual("workload-api-image-pull", document["stage"])
+            self.assertEqual(expected, document["failure_reason"])
+            self.assertIsNone(document["command_status"])
+            self.assertNotIn(secret.decode("ascii"), rendered)
+
+    def test_pull_classifier_spans_chunks_beyond_the_capture_limit(self) -> None:
+        stage = b"SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-image-pull\n"
+        split_prefix = b"writing blob: file too "
+        padding = b"x" * (64 * 1024 - len(stage) - len(split_prefix))
+        secret = b"synthetic-tail-secret-never-persist"
+        payload = (
+            stage
+            + padding
+            + split_prefix
+            + b"large: "
+            + secret
+            + b"\nSECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            b"workload-api-image-pull:command-exit:125\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.private_file(directory)
+            stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+            with mock.patch.object(self.helper.sys, "stdin", stdin):
+                self.helper.capture(path)
+            self.assertNotIn(secret, path.read_bytes())
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.helper.emit(path, "workload-prepare-start", "1")
+
+        document = json.loads(
+            output.getvalue().removeprefix("Target phase diagnostic: ")
+        )
+        self.assertEqual("file-size-limit-exceeded", document["failure_reason"])
+        self.assertIsNone(document["command_status"])
+        self.assertEqual(self.helper.MAX_CAPTURE_BYTES, document["output_bytes"])
+        self.assertTrue(document["output_truncated"])
+
+    def test_pull_sigxfsz_status_is_classified_without_command_output(self) -> None:
+        payload = (
+            b"SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-image-pull\n"
+            b"SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            b"workload-api-image-pull:command-exit:153\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.private_file(directory)
+            stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+            with mock.patch.object(self.helper.sys, "stdin", stdin):
+                self.helper.capture(path)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.helper.emit(path, "workload-prepare-start", "1")
+
+        document = json.loads(
+            output.getvalue().removeprefix("Target phase diagnostic: ")
+        )
+        self.assertEqual("file-size-limit-exceeded", document["failure_reason"])
+        self.assertIsNone(document["command_status"])
+
+    def test_target_cannot_claim_trusted_pull_classifications(self) -> None:
+        for claimed_reason in (
+            "file-size-limit-exceeded",
+            "storage-write-failed",
+        ):
+            with (
+                self.subTest(claimed_reason=claimed_reason),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                payload = (
+                    b"SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-image-pull\n"
+                    b"SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+                    b"workload-api-image-pull:"
+                    + claimed_reason.encode("ascii")
+                    + b":none\n"
+                )
+                path = self.private_file(directory)
+                stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+                with mock.patch.object(self.helper.sys, "stdin", stdin):
+                    self.helper.capture(path)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.helper.emit(path, "workload-prepare-start", "1")
+
+            document = json.loads(
+                output.getvalue().removeprefix("Target phase diagnostic: ")
+            )
+            self.assertEqual("workload-api-image-pull", document["stage"])
+            self.assertEqual("unreported", document["failure_reason"])
+            self.assertIsNone(document["command_status"])
+
+    def test_unknown_pull_output_retains_generic_command_exit(self) -> None:
+        payload = (
+            b"SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-image-pull\n"
+            b"unclassified podman pull failure\n"
+            b"SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            b"workload-api-image-pull:command-exit:125\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.private_file(directory)
+            stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+            with mock.patch.object(self.helper.sys, "stdin", stdin):
+                self.helper.capture(path)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.helper.emit(path, "workload-prepare-start", "1")
+
+        document = json.loads(
+            output.getvalue().removeprefix("Target phase diagnostic: ")
+        )
+        self.assertEqual("workload-api-image-pull", document["stage"])
+        self.assertEqual("command-exit", document["failure_reason"])
+        self.assertEqual(125, document["command_status"])
+
+    def test_explicit_pull_reason_precedes_output_classification(self) -> None:
+        payload = (
+            b"SECPAL_TARGET_DIAGNOSTIC_V1:workload-api-image-pull\n"
+            b"file too large\n"
+            b"SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            b"workload-api-image-pull:registry-request-failed:none\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.private_file(directory)
+            stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+            with mock.patch.object(self.helper.sys, "stdin", stdin):
+                self.helper.capture(path)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.helper.emit(path, "workload-prepare-start", "1")
+
+        document = json.loads(
+            output.getvalue().removeprefix("Target phase diagnostic: ")
+        )
+        self.assertEqual("registry-request-failed", document["failure_reason"])
+        self.assertIsNone(document["command_status"])
+
+    def test_pull_patterns_do_not_reclassify_other_stages(self) -> None:
+        payload = (
+            b"SECPAL_TARGET_DIAGNOSTIC_V1:workload-gh-cli-staging\n"
+            b"file too large\n"
+            b"SECPAL_TARGET_DIAGNOSTIC_FAILURE_V1:"
+            b"workload-gh-cli-staging:command-exit:153\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.private_file(directory)
+            stdin = SimpleNamespace(buffer=io.BytesIO(payload))
+            with mock.patch.object(self.helper.sys, "stdin", stdin):
+                self.helper.capture(path)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.helper.emit(path, "workload-prepare-start", "1")
+
+        document = json.loads(
+            output.getvalue().removeprefix("Target phase diagnostic: ")
+        )
+        self.assertEqual("command-exit", document["failure_reason"])
+        self.assertEqual(153, document["command_status"])
+
     def test_maximum_closed_failure_marker_accepts_none_status(self) -> None:
         stage = "s" * 64
         reason = "r" * 64
@@ -218,7 +408,7 @@ class TargetDiagnosticTests(unittest.TestCase):
             with (
                 mock.patch.object(self.helper.sys, "stdin", stdin),
                 mock.patch.object(self.helper, "ADMITTED_STAGES", {stage}),
-                mock.patch.object(self.helper, "FAILURE_REASONS", {reason}),
+                mock.patch.object(self.helper, "TARGET_FAILURE_REASONS", {reason}),
             ):
                 self.helper.capture(path)
             self.assertEqual(
@@ -237,7 +427,16 @@ class TargetDiagnosticTests(unittest.TestCase):
         harness_reasons = runpy.run_path(os.fspath(HARNESS))[
             "CLOUD_DIAGNOSTIC_FAILURE_REASONS"
         ]
-        self.assertEqual(harness_reasons, self.helper.FAILURE_REASONS)
+        self.assertEqual(harness_reasons, self.helper.TARGET_FAILURE_REASONS)
+        self.assertEqual(
+            {"file-size-limit-exceeded", "storage-write-failed"},
+            self.helper.INFERRED_FAILURE_REASONS,
+        )
+        self.assertEqual(
+            self.helper.TARGET_FAILURE_REASONS
+            | self.helper.INFERRED_FAILURE_REASONS,
+            self.helper.FAILURE_REASONS,
+        )
         fetcher = runpy.run_path(os.fspath(FETCHER))
         self.assertEqual(
             fetcher["DIAGNOSTIC_STAGES"],

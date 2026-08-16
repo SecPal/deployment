@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import stat
 import sys
 from pathlib import Path
@@ -63,7 +64,10 @@ PHASE_STAGES = {
     "workload-cleanup": frozenset({"workload-cleanup"}),
 }
 ADMITTED_STAGES = frozenset().union(*PHASE_STAGES.values())
-FAILURE_REASONS = frozenset(
+PULL_STAGES = frozenset(
+    stage for stage in ADMITTED_STAGES if stage.endswith("-image-pull")
+)
+TARGET_FAILURE_REASONS = frozenset(
     {
         "command-exit",
         "command-unavailable",
@@ -76,6 +80,72 @@ FAILURE_REASONS = frozenset(
         "registry-response-rejected",
         "unexpected-error",
     }
+)
+INFERRED_FAILURE_REASONS = frozenset(
+    {
+        "file-size-limit-exceeded",
+        "storage-write-failed",
+    }
+)
+FAILURE_REASONS = TARGET_FAILURE_REASONS | INFERRED_FAILURE_REASONS
+# Ordered from deterministic local failures to remote failures. The scanner
+# retains only these reason identities and a marker-sized overlap tail.
+PULL_FAILURE_MARKERS = (
+    (
+        "file-size-limit-exceeded",
+        (
+            b"file too large",
+            b"file size limit exceeded",
+            b"exceeded file size limit",
+        ),
+    ),
+    (
+        "storage-write-failed",
+        (
+            b"no space left on device",
+            b"read-only file system",
+            b"disk quota exceeded",
+            b"input/output error",
+        ),
+    ),
+    (
+        "registry-response-rejected",
+        (
+            b"unauthorized",
+            b"authentication required",
+            b"requested access to the resource is denied",
+            b"manifest unknown",
+            b"name unknown",
+            b"too many requests",
+            b"status code: 4",
+            b"status code: 5",
+            b"status code 4",
+            b"status code 5",
+            b"statuscode: 4",
+            b"statuscode: 5",
+        ),
+    ),
+    (
+        "registry-request-failed",
+        (
+            b"network is unreachable",
+            b"no such host",
+            b"connection refused",
+            b"connection reset",
+            b"connection timed out",
+            b"i/o timeout",
+            b"tls handshake timeout",
+            b"context deadline exceeded",
+            b"temporary failure in name resolution",
+            b"server misbehaving",
+            b"unexpected eof",
+        ),
+    ),
+)
+PULL_FAILURE_MARKER_BYTES = max(
+    len(marker)
+    for _reason, markers in PULL_FAILURE_MARKERS
+    for marker in markers
 )
 UNREPORTED_STAGE = "unreported"
 UNREPORTED_REASON = "unreported"
@@ -125,12 +195,31 @@ def scanned_diagnostic(
         return stage, failure_reason, command_status
     if (
         failed_stage != stage
-        or candidate_reason not in FAILURE_REASONS
+        or candidate_reason not in TARGET_FAILURE_REASONS
         or failure_reason != UNREPORTED_REASON
         or (candidate_reason == "command-exit") != (candidate_status is not None)
     ):
         return stage, failure_reason, command_status
     return stage, candidate_reason, candidate_status
+
+
+def scan_pull_output(
+    fragment: bytes,
+    tail: bytes,
+    observed: set[str],
+) -> bytes:
+    window = (tail + fragment).lower()
+    for reason, markers in PULL_FAILURE_MARKERS:
+        if any(marker in window for marker in markers):
+            observed.add(reason)
+    return window[-(PULL_FAILURE_MARKER_BYTES - 1) :]
+
+
+def classified_pull_failure(observed: set[str]) -> str | None:
+    return next(
+        (reason for reason, _markers in PULL_FAILURE_MARKERS if reason in observed),
+        None,
+    )
 
 
 def admitted_file(path: Path, *, require_empty: bool) -> os.stat_result:
@@ -157,6 +246,8 @@ def capture(path: Path) -> None:
     command_status: int | None = None
     stage_line = b""
     discarding_stage_line = False
+    pull_scan_tail = b""
+    pull_failures: set[str] = set()
     while chunk := sys.stdin.buffer.read(64 * 1024):
         remaining = max(0, MAX_CAPTURE_BYTES - observed_bytes)
         observed_bytes += min(len(chunk), remaining)
@@ -165,6 +256,12 @@ def capture(path: Path) -> None:
         segments = chunk.split(b"\n")
         for index, segment in enumerate(segments):
             line_complete = index < len(segments) - 1
+            if stage in PULL_STAGES:
+                pull_scan_tail = scan_pull_output(
+                    segment + (b"\n" if line_complete else b""),
+                    pull_scan_tail,
+                    pull_failures,
+                )
             if not discarding_stage_line:
                 if len(stage_line) + len(segment) <= MAX_STAGE_LINE_BYTES:
                     stage_line += segment
@@ -172,6 +269,7 @@ def capture(path: Path) -> None:
                     stage_line = b""
                     discarding_stage_line = True
             if line_complete:
+                previous_stage = stage
                 if not discarding_stage_line:
                     stage, failure_reason, command_status = scanned_diagnostic(
                         stage_line,
@@ -179,6 +277,9 @@ def capture(path: Path) -> None:
                         failure_reason,
                         command_status,
                     )
+                if stage != previous_stage:
+                    pull_scan_tail = b""
+                    pull_failures.clear()
                 stage_line = b""
                 discarding_stage_line = False
     if stage_line and not discarding_stage_line:
@@ -188,6 +289,20 @@ def capture(path: Path) -> None:
             failure_reason,
             command_status,
         )
+    classified_failure = classified_pull_failure(pull_failures)
+    if (
+        stage in PULL_STAGES
+        and failure_reason == "command-exit"
+        and command_status == 128 + signal.SIGXFSZ
+    ):
+        classified_failure = "file-size-limit-exceeded"
+    if (
+        stage in PULL_STAGES
+        and classified_failure is not None
+        and failure_reason in {UNREPORTED_REASON, "command-exit"}
+    ):
+        failure_reason = classified_failure
+        command_status = None
     status_token = NO_COMMAND_STATUS if command_status is None else str(command_status)
     metadata = (
         f"{observed_bytes} {int(truncated)} {stage} "
