@@ -3493,8 +3493,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
         gh_2_97_0_linux_amd64_executable_bytes = 40_992_930
 
         self.assertEqual([64 * 1024], [int(limit) for limit in limits])
+        bash_file_limit_kibibytes = int(limits[0])
         self.assertGreaterEqual(
-            int(limits[0]) * 1024,
+            bash_file_limit_kibibytes * 1024,
             gh_2_97_0_linux_amd64_executable_bytes,
         )
 
