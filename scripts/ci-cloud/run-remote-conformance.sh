@@ -459,14 +459,17 @@ set -euo pipefail
 case "$3" in
   host)
     phase_timeout=20m
+    phase_file_limit_kibibytes=65536
     phase_arguments=(v1 host)
     ;;
   workload-prepare-start)
     phase_timeout=10m
+    phase_file_limit_kibibytes=131072
     phase_arguments=(v1 workload-prepare-start)
     ;;
   workload-cleanup)
     phase_timeout=5m
+    phase_file_limit_kibibytes=65536
     phase_arguments=(v1 workload-cleanup)
     ;;
   *) exit 125 ;;
@@ -500,8 +503,9 @@ admit_target_tree() {
     ls-files --others)" ]]
 }
 admit_target_tree "$1"
-# Bash expresses `ulimit -f` in 1024-byte increments, so this is 64 MiB.
-ulimit -f 65536
+# Bash expresses `ulimit -f` in 1024-byte increments. The workload phase uses
+# 128 MiB to admit reviewed OCI blobs and members; other phases retain 64 MiB.
+ulimit -f "$phase_file_limit_kibibytes"
 [[ -S /run/user/20000/bus ]]
 set +e
 /usr/bin/env -i \

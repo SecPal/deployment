@@ -112,7 +112,9 @@ if [[ "${1:-}" == /bin/bash && "${2:-}" == -s ]]; then
   phase="${6:-}"
   wrapper="$(cat)"
   grep -Fq 'cd /home/secpal-ci/deployment-target' <<<"$wrapper"
-  grep -Fq 'ulimit -f 65536' <<<"$wrapper"
+  grep -Fq 'phase_file_limit_kibibytes=65536' <<<"$wrapper"
+  grep -Fq 'phase_file_limit_kibibytes=131072' <<<"$wrapper"
+  grep -Fq 'ulimit -f "$phase_file_limit_kibibytes"' <<<"$wrapper"
   printf 'target:%s\n' "$phase" >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
   if [[ "$phase" == host &&
     "${SECPAL_TEST_INTERRUPT_HOST:-false}" == true ]]; then

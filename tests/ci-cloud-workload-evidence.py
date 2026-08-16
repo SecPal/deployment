@@ -3487,16 +3487,47 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertNotIn("write_incomplete_", runner)
 
-    def test_target_file_limit_admits_bounded_cloud_github_cli_member(self) -> None:
+    def test_target_file_limits_admit_reviewed_cloud_artifacts(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
-        limits = re.findall(r"^ulimit -f ([1-9][0-9]*)$", runner, re.MULTILINE)
-        gh_2_97_0_linux_amd64_executable_bytes = 40_992_930
+        helper = runner.split("run_target_phase()", 1)[1].split(
+            "run_target_host()", 1
+        )[0]
+        phase_limits = dict(
+            zip(
+                ("host", "workload-prepare-start", "workload-cleanup"),
+                (
+                    int(limit)
+                    for limit in re.findall(
+                        r"^    phase_file_limit_kibibytes=([1-9][0-9]*)$",
+                        helper,
+                        re.MULTILINE,
+                    )
+                ),
+                strict=True,
+            )
+        )
 
-        self.assertEqual([64 * 1024], [int(limit) for limit in limits])
-        bash_file_limit_kibibytes = int(limits[0])
+        gh_2_97_0_linux_amd64_executable_bytes = 40_992_930
+        largest_reviewed_cloud_blob_or_member_bytes = 129_271_672
+
+        self.assertEqual(
+            {
+                "host": 64 * 1024,
+                "workload-prepare-start": 128 * 1024,
+                "workload-cleanup": 64 * 1024,
+            },
+            phase_limits,
+        )
         self.assertGreaterEqual(
-            bash_file_limit_kibibytes * 1024,
+            phase_limits["workload-prepare-start"] * 1024,
             gh_2_97_0_linux_amd64_executable_bytes,
+        )
+        self.assertGreaterEqual(
+            phase_limits["workload-prepare-start"] * 1024,
+            largest_reviewed_cloud_blob_or_member_bytes,
+        )
+        self.assertEqual(
+            1, helper.count('ulimit -f "$phase_file_limit_kibibytes"')
         )
 
     def test_target_phases_restore_the_fixed_user_bus_environment(self) -> None:
