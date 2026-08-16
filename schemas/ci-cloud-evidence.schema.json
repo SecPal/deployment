@@ -1460,6 +1460,8 @@
             "manager-environment-read",
             "manager-environment-unset",
             "manager-environment-set",
+            "pre-reload-manager-environment-read",
+            "pre-reload-manager-environment-admission",
             "manager-environment-admission",
             "user-environment-generator-admission",
             "user-environment-generator-inventory-read",

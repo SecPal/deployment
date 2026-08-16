@@ -80,8 +80,9 @@ ROLE_NETWORKS = {
 def normalization_environment_read_key(show_count: int) -> str:
     checkpoint = {
         1: "first",
-        2: "second",
-        3: "third",
+        2: "prepared",
+        3: "second",
+        4: "third",
     }.get(show_count)
     if checkpoint is None:
         raise AssertionError("unexpected extra show-environment call")
@@ -3153,8 +3154,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "CONTAINERS_CONF=/dev/null\n"
             "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus\n"
             "HOME=/home/secpal-ci\nLANG=C.UTF-8\nLC_ALL=C.UTF-8\n"
+            "LOGNAME=secpal-ci\n"
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
             "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000\n"
+            "SHELL=/bin/bash\nUSER=secpal-ci\n"
             "XDG_RUNTIME_DIR=/run/user/20000\n"
         )
         service_properties = (
@@ -3304,10 +3307,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "HOME=/home/secpal-ci",
                     "LANG=C.UTF-8",
                     "LC_ALL=C.UTF-8",
+                    "LOGNAME=secpal-ci",
                     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                     "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000",
+                    "SHELL=/bin/bash",
+                    "USER=secpal-ci",
                     "XDG_RUNTIME_DIR=/run/user/20000",
                 ], {}),
+                (["systemctl", "--user", "show-environment"], {}),
                 (["systemctl", "--user", "daemon-reload"], {"timeout": 60}),
                 (["systemctl", "--user", "show-environment"], {}),
                 ([
@@ -3429,7 +3436,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ) + "\n"
         generator_environment = trusted_environment + "RESTORED=value\n"
         environment_outputs = iter(
-            ("OLD=value\n", generator_environment, trusted_environment)
+            ("OLD=value\n", trusted_environment, generator_environment)
         )
         commands = []
 
@@ -3462,13 +3469,64 @@ class WorkloadEvidenceTests(unittest.TestCase):
             sum(command[2] == "unset-environment" for command in commands),
         )
 
+    def test_quadlet_normalization_admits_fixed_inherited_login_environment(
+        self,
+    ) -> None:
+        trusted_assignments = dict(
+            item.split("=", 1) for item in self.collector.TRUSTED_MANAGER_ENVIRONMENT
+        )
+        self.assertEqual("secpal-ci", trusted_assignments["LOGNAME"])
+        self.assertEqual("/bin/bash", trusted_assignments["SHELL"])
+        self.assertEqual("secpal-ci", trusted_assignments["USER"])
+        prepared_environment = (
+            "\n".join(self.collector.TRUSTED_MANAGER_ENVIRONMENT) + "\n"
+        )
+        environment_outputs = iter(
+            (
+                prepared_environment + "ATTACKER_VALUE=removed\n",
+                prepared_environment,
+                prepared_environment,
+            )
+        )
+        commands = []
+
+        def command_result(arguments, **_kwargs):
+            commands.append(arguments)
+            if arguments[2] == "show-environment":
+                return 0, next(environment_outputs), True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_search_paths",
+            return_value=[str(self.collector.QUADLET_ROOT)],
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
+        ):
+            self.assertTrue(
+                self.collector.normalize_quadlet_runtime(
+                    "aaaaaaaaaaaa", activate=False
+                )
+            )
+        unset_command = next(
+            command for command in commands if command[2] == "unset-environment"
+        )
+        self.assertIn("ATTACKER_VALUE", unset_command)
+
     def test_quadlet_normalization_rejects_generator_search_path_override(self) -> None:
         trusted = dict(
             item.split("=", 1) for item in self.collector.TRUSTED_MANAGER_ENVIRONMENT
         )
         trusted["QUADLET_UNIT_DIRS"] = "/tmp/untrusted-quadlets"
         drifted = "".join(f"{name}={value}\n" for name, value in trusted.items())
-        environment_outputs = iter(("OLD=value\n", drifted, drifted))
+        trusted_environment = "\n".join(
+            self.collector.TRUSTED_MANAGER_ENVIRONMENT
+        ) + "\n"
+        environment_outputs = iter(("OLD=value\n", trusted_environment, drifted))
         commands = []
 
         def command_result(arguments, **_kwargs):
@@ -3615,7 +3673,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector.TRUSTED_MANAGER_ENVIRONMENT
         ) + "\n"
         environment_outputs = iter(
-            ("OLD=value\n", trusted_environment, trusted_environment + "LATE=value\n")
+            (
+                "OLD=value\n",
+                trusted_environment,
+                trusted_environment,
+                trusted_environment + "LATE=value\n",
+            )
         )
         commands = []
 
@@ -3718,7 +3781,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(
             AssertionError, "unexpected extra show-environment call"
         ):
-            normalization_environment_read_key(4)
+            normalization_environment_read_key(5)
 
     def test_every_quadlet_normalization_substage_emits_its_closed_stage(self) -> None:
         command_stages = {
@@ -3726,6 +3789,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "show-environment:first": "manager-environment-read",
             "unset-environment": "manager-environment-unset",
             "set-environment": "manager-environment-set",
+            "show-environment:prepared": "pre-reload-manager-environment-read",
             "daemon-reload": "daemon-reload",
             "start": "target-start",
             "show-environment:second": "post-reload-manager-environment-read",
@@ -3808,6 +3872,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "generated-unit-admission",
                 "aaaaaaaaaaaa",
                 {"generated_trusted": False},
+            ),
+            (
+                "pre-reload-manager-environment-admission",
+                "aaaaaaaaaaaa",
+                {"prepared_environment": "HOME=/wrong\n"},
             ),
             (
                 "post-reload-manager-environment-read",
@@ -3893,7 +3962,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         show_count += 1
                         key = {
                             1: "first_environment",
-                            2: "second_environment",
+                            2: "prepared_environment",
+                            3: "second_environment",
                         }.get(show_count, "third_environment")
                         return (
                             0,
@@ -3947,8 +4017,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "CONTAINERS_CONF=/dev/null\n"
             "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus\n"
             "HOME=/home/secpal-ci\nLANG=C.UTF-8\nLC_ALL=C.UTF-8\n"
+            "LOGNAME=secpal-ci\n"
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
             "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000\n"
+            "SHELL=/bin/bash\nUSER=secpal-ci\n"
             "XDG_RUNTIME_DIR=/run/user/20000\n"
         )
         service_properties = (

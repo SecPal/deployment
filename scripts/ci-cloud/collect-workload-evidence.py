@@ -61,8 +61,11 @@ printf '%s\\n' \\
   'HOME=/home/secpal-ci' \\
   'LANG=C.UTF-8' \\
   'LC_ALL=C.UTF-8' \\
+  'LOGNAME=secpal-ci' \\
   'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \\
   'QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000' \\
+  'SHELL=/bin/bash' \\
+  'USER=secpal-ci' \\
   'XDG_RUNTIME_DIR=/run/user/20000'
 """
 PODMAN_EXECUTABLE = Path("/usr/bin/podman")
@@ -347,8 +350,11 @@ TRUSTED_MANAGER_ENVIRONMENT = (
     "HOME=/home/secpal-ci",
     "LANG=C.UTF-8",
     "LC_ALL=C.UTF-8",
+    "LOGNAME=secpal-ci",
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     f"QUADLET_UNIT_DIRS={QUADLET_ROOT}",
+    "SHELL=/bin/bash",
+    "USER=secpal-ci",
     "XDG_RUNTIME_DIR=/run/user/20000",
 )
 NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet normalization diagnostic: "
@@ -360,6 +366,8 @@ NORMALIZATION_STAGES = frozenset(
         "manager-environment-read",
         "manager-environment-unset",
         "manager-environment-set",
+        "pre-reload-manager-environment-read",
+        "pre-reload-manager-environment-admission",
         "user-environment-generator-inventory-read",
         "user-environment-generator-inventory-admission",
         "user-environment-generator-presence-admission",
@@ -825,6 +833,22 @@ def normalize_quadlet_runtime(
     environment_failure = replace_manager_environment(existing)
     if environment_failure is not None:
         return environment_failure
+    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
+    prepared, environment_failure = read_manager_environment(
+        "pre-reload-manager-environment-read"
+    )
+    if environment_failure is not None:
+        return environment_failure
+    if prepared is None:
+        return normalization_failure(
+            mode, "pre-reload-manager-environment-read", "unexpected-error"
+        )
+    if prepared != expected:
+        return normalization_failure(
+            mode,
+            "pre-reload-manager-environment-admission",
+            "contract-rejected",
+        )
     reload_status, _, reload_complete = command_result(
         ["systemctl", "--user", "daemon-reload"], timeout=60
     )
@@ -832,7 +856,6 @@ def normalize_quadlet_runtime(
         return normalization_command_failure(
             mode, "daemon-reload", reload_status, reload_complete
         )
-    expected = dict(item.split("=", 1) for item in TRUSTED_MANAGER_ENVIRONMENT)
     observed, environment_failure = read_manager_environment(
         "post-reload-manager-environment-read"
     )

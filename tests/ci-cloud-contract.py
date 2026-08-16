@@ -157,8 +157,11 @@ class CloudCIContractTests(unittest.TestCase):
             "HOME=/home/secpal-ci",
             "LANG=C.UTF-8",
             "LC_ALL=C.UTF-8",
+            "LOGNAME=secpal-ci",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000",
+            "SHELL=/bin/bash",
+            "USER=secpal-ci",
             "XDG_RUNTIME_DIR=/run/user/20000",
         ):
             self.assertIn(f"'{assignment}'", bootstrap)

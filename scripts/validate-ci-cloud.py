@@ -871,8 +871,11 @@ printf '%s\\n' \\
   'HOME=/home/secpal-ci' \\
   'LANG=C.UTF-8' \\
   'LC_ALL=C.UTF-8' \\
+  'LOGNAME=secpal-ci' \\
   'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \\
   'QUADLET_UNIT_DIRS=/etc/containers/systemd/users/20000' \\
+  'SHELL=/bin/bash' \\
+  'USER=secpal-ci' \\
   'XDG_RUNTIME_DIR=/run/user/20000'"""
     require(
         user_environment_generator == expected_user_environment_generator
@@ -2167,7 +2170,10 @@ def validate(root: Path) -> None:
         and "trusted_user_environment_generator_admission_failure"
         in workload_collector
         and "NORMALIZATION_EVIDENCE_STAGES" in workload_collector
-        and "observed != expected" in workload_collector
+        and "prepared != expected" in workload_collector
+        and workload_collector.count("observed != expected") == 2
+        and '"pre-reload-manager-environment-read"' in workload_collector
+        and '"pre-reload-manager-environment-admission"' in workload_collector
         and '"FragmentPath"' in workload_collector
         and '"DropInPaths"' in workload_collector
         and "generated_service_unit_activation_is_trusted" in workload_collector
