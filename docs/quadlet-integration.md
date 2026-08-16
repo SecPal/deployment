@@ -155,10 +155,13 @@ private fixture, repeats both product attestation gates, stages immutable
 `localhost/secpal-ci-…@sha256:…` identities, renders the closed unit set, and
 publishes it through `/usr/local/bin/secpal-ci-quadlet-fixture`. It does not
 start a service. The main-controlled collector admits the closed root-owned
-user environment generator, replaces the complete user-manager environment,
-rejects any drift caused while reloading the root-owned definitions, admits the
-generated unit provenance, starts the target, and independently observes the
-result.
+user environment generator, clears the mutable manager client environment for
+every observed name, and installs the fixed trusted assignments, including the
+service account's inherited login identity. It requires the prepared combined
+manager environment to equal that exact reviewed set without exposing values.
+It rejects any drift caused while reloading the
+root-owned definitions, admits the generated unit provenance, starts the
+target, and independently observes the result.
 
 For that evidence boundary only, the secret initializer and migration use
 their direct reviewed entrypoint and command. Quadlet's generated `--rm` is

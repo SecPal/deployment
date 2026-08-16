@@ -116,6 +116,11 @@ SPDX-License-Identifier: CC0-1.0
   checkpoints. Schema-version-3 evidence retains its legacy stage vocabulary
   for existing artifacts after DigitalOcean Intel run `31967061955` exposed
   that the former shared stages could not identify the failing checkpoint.
+- Trusted Quadlet normalization now includes the fixed `USER`, `LOGNAME`, and
+  `SHELL` login identity inherited by the user manager in its exact reviewed
+  environment. It admits that complete set before generation and after reload
+  and activation while still clearing mutable client overrides; DigitalOcean
+  Intel run `31974004519` exposed the previously omitted fixed assignments.
 - D.1a workload evidence admits the fixed root-owned Debian 13 GnuPG and
   OpenSSH agent socket/service pairs with exact `dpkg-query` owning-package
   provenance (including Keyboxd's Debian `gpg` ownership) while

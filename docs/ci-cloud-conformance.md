@@ -375,17 +375,23 @@ collector query the exact fixture target and generated services. Absent units
 are skipped. Before stopping any loaded unit, the collector admits its exact
 fragment, empty drop-in set, dependencies, environment controls, and all
 effective lifecycle hooks; an old unadmitted `ExecStop=` can therefore never
-run merely because its name matches the fixture. The collector then replaces
-the complete bounded user-manager environment. The disposable host overrides
+run merely because its name matches the fixture. The collector clears the
+mutable user-manager client environment for every observed name and installs
+the fixed trusted assignments, including the service account's inherited
+login identity. It then requires the prepared combined manager environment to
+equal that exact reviewed set without exposing any values. The disposable host
+overrides
 the generic Debian user environment generator with one exact root-owned
 generator for UID 20000, and the collector admits both that file and the closed
 effective generator inventory immediately before use. The generator emits the
-same fixed home, runtime directory, bus, locale, executable path, sole Quadlet
-path, and `CONTAINERS_CONF=/dev/null` environment that the collector installs.
+same fixed login identity, home, runtime directory, bus, locale, executable
+path, sole Quadlet path, and `CONTAINERS_CONF=/dev/null` environment that the
+collector installs.
 A bounded `daemon-reload` therefore runs both the environment and Quadlet unit
-generators under one closed state. Any post-reload difference is rejected
-before unit admission instead of being repaired after the generated fragments
-already exist. Before starting the target it rejects every target-authored
+generators under that exact admitted state. Any difference from the reviewed
+set is rejected before unit admission instead of being repaired after the
+generated fragments already exist. Before starting the target it rejects every
+target-authored
 `ExecCondition=`,
 `ExecStartPre=`, `ExecStartPost=`, `ExecReload=`, `ExecStop=`, or
 `ExecStopPost=` directive in the root-owned Quadlet sources. Generated
