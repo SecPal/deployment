@@ -159,10 +159,12 @@ user environment generator, clears the mutable manager client environment for
 every observed name, and installs the fixed trusted assignments, including the
 service account's inherited login identity. It requires the prepared combined
 manager environment to equal that exact reviewed set without exposing values.
-Generated services must inherit that contract without unit-local identity,
-path, locale, Quadlet, or Podman configuration overrides. It rejects any drift
-caused while reloading the root-owned definitions, admits the generated unit
-provenance, starts the target, and independently observes the result.
+Generated container services must inherit that contract and expose exactly the
+generator-owned `Environment=PODMAN_SYSTEMD_UNIT=%n`; generated network and
+volume services must have an empty unit-local environment, and every other
+assignment is rejected. It rejects any drift caused while reloading the
+root-owned definitions, admits the generated unit provenance, starts the
+target, and independently observes the result.
 
 For that evidence boundary only, the secret initializer and migration use
 their direct reviewed entrypoint and command. Quadlet's generated `--rm` is

@@ -401,11 +401,15 @@ closed. The main command must use the role-appropriate direct
 `/usr/bin/podman` operation: container roles use `run`, network roles use
 `network create`, and volume roles use `volume create`. Environment files,
 `PassEnvironment=`, and `UnsetEnvironment=` remain forbidden. Every generated
-unit must omit service-local assignments for the manager-controlled identity,
-path, locale, Quadlet, and Podman configuration names. User services inherit
-the separately admitted exact manager environment automatically, so a unit
-cannot replace that contract through `Environment=`. The collector uses the
-same pinned configuration for its own Podman inspection and mapping commands.
+container service must expose exactly the generator-owned
+`Environment=PODMAN_SYSTEMD_UNIT=%n`, while generated network and volume
+services must have an empty unit-local environment. Every other service-local
+assignment is rejected, including manager-controlled identity, path, locale,
+Quadlet, and Podman runtime controls. User services inherit the separately
+admitted exact manager environment automatically, so a unit cannot replace
+that contract or redirect its direct Podman command through `Environment=`.
+The collector uses the same pinned configuration for its own Podman inspection
+and mapping commands.
 It starts the exact fixture target only after the pre-activation checks and
 repeats them during live collection. The collector verifies the exact manager
 environment both after generation and after activation. A target-controlled

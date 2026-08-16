@@ -76,6 +76,34 @@ ROLE_NETWORKS = {
     "gateway": ("edge",),
 }
 
+UNREVIEWED_SERVICE_ENVIRONMENT_NAMES = frozenset(
+    {
+        "CONTAINER_CONNECTION",
+        "CONTAINER_HOST",
+        "CONTAINERS_CONF",
+        "CONTAINERS_CONF_MODULES",
+        "CONTAINERS_CONF_OVERRIDE",
+        "CONTAINERS_POLICY",
+        "CONTAINERS_REGISTRIES_CONF",
+        "CONTAINERS_REGISTRIES_CONF_DIR",
+        "CONTAINERS_STORAGE_CONF",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "DOCKER_HOST",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LOGNAME",
+        "PATH",
+        "PODMAN_USERNS",
+        "QUADLET_UNIT_DIRS",
+        "SHELL",
+        "SYSTEMD_UNIT_PATH",
+        "USER",
+        "XDG_CONFIG_HOME",
+        "XDG_RUNTIME_DIR",
+    }
+)
+
 
 def normalization_environment_read_key(show_count: int) -> str:
     checkpoint = {
@@ -1336,19 +1364,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "D1A_HOST_NAMESPACES",
                 )
 
-    def test_service_environment_cannot_supply_user_namespace_defaults(self) -> None:
-        for name in (
-            "PODMAN_USERNS",
-            "CONTAINERS_CONF",
-            "CONTAINERS_CONF_OVERRIDE",
-            "CONTAINERS_CONF_MODULES",
-            "XDG_CONFIG_HOME",
-            "HOME",
+    def test_service_environment_cannot_supply_unreviewed_values(self) -> None:
+        for name in sorted(
+            UNREVIEWED_SERVICE_ENVIRONMENT_NAMES | {"APP_FEATURE"}
         ):
             with self.subTest(name=name):
                 self.assert_failure(
                     lambda evidence, name=name: evidence["live"]
                     ["generated_services"][4].__setitem__("environment", [name]),
+                    "D1A_HOST_NAMESPACES",
+                )
+                self.assert_failure(
+                    lambda evidence, name=name: evidence["live"]
+                    ["generated_services"][10].__setitem__("environment", [name]),
                     "D1A_HOST_NAMESPACES",
                 )
 
@@ -1365,19 +1393,47 @@ class WorkloadEvidenceTests(unittest.TestCase):
     ) -> None:
         trusted = "PODMAN_SYSTEMD_UNIT=%n"
         self.assertTrue(
-            self.collector.service_config_environment_is_trusted(trusted)
+            self.collector.service_config_environment_is_trusted(trusted, "api")
+        )
+        self.assertTrue(
+            self.collector.service_config_environment_is_trusted(
+                "", "application-network"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted("", "api")
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                "PODMAN_SYSTEMD_UNIT=wrong", "api"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                trusted, "application-network"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                trusted, "unknown"
+            )
         )
         for name in sorted(
-            self.collector.MANAGER_CONTROLLED_SERVICE_ENVIRONMENT
+            UNREVIEWED_SERVICE_ENVIRONMENT_NAMES | {"APP_FEATURE"}
         ):
             with self.subTest(name=name):
                 self.assertFalse(
                     self.collector.service_config_environment_is_trusted(
-                        f"{trusted} {name}=/unreviewed"
+                        f"{trusted} {name}=/unreviewed", "api"
+                    )
+                )
+                self.assertFalse(
+                    self.collector.service_config_environment_is_trusted(
+                        f"{name}=/unreviewed", "application-network"
                     )
                 )
 
-    def test_generated_service_cannot_drop_or_replace_the_trusted_config_pin(self) -> None:
+    def test_generated_service_cannot_inject_environment_controls(self) -> None:
         self.assertTrue(
             self.collector.service_environment_controls_are_trusted("", "", "")
         )
@@ -3234,6 +3290,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "-network.service" in arguments[3]
                     or "-volume.service" in arguments[3]
                 ):
+                    properties = properties.replace(
+                        "Environment=PODMAN_SYSTEMD_UNIT=%n\n",
+                        "Environment=\n",
+                    )
                     properties = re.sub(
                         r"ExecStop=.*\nExecStopPost=.*\n",
                         "ExecStop=\nExecStopPost=\n",

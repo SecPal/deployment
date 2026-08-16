@@ -351,14 +351,7 @@ TRUSTED_MANAGER_ENVIRONMENT = (
     "USER=secpal-ci",
     "XDG_RUNTIME_DIR=/run/user/20000",
 )
-MANAGER_CONTROLLED_SERVICE_ENVIRONMENT = frozenset(
-    item.split("=", 1)[0] for item in TRUSTED_MANAGER_ENVIRONMENT
-) | {
-    "CONTAINERS_CONF_OVERRIDE",
-    "CONTAINERS_CONF_MODULES",
-    "PODMAN_USERNS",
-    "XDG_CONFIG_HOME",
-}
+TRUSTED_CONTAINER_SERVICE_ENVIRONMENT = {"PODMAN_SYSTEMD_UNIT": "%n"}
 NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet normalization diagnostic: "
 NORMALIZATION_MODES = frozenset({"live", "cleanup"})
 NORMALIZATION_STAGES = frozenset(
@@ -1240,7 +1233,9 @@ def service_runtime_controls_are_trusted(
         and properties.get("DropInPaths") == ""
         and requires == expected_dependencies
         and after == expected_dependencies
-        and service_config_environment_is_trusted(properties.get("Environment"))
+        and service_config_environment_is_trusted(
+            properties.get("Environment"), logical_name
+        )
         and service_environment_controls_are_trusted(
             properties.get("EnvironmentFiles"),
             properties.get("PassEnvironment"),
@@ -1519,7 +1514,9 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
             or not quadlet_source_execution_controls_are_trusted(
                 instance, logical_name
             )
-            or not service_config_environment_is_trusted(raw_environment)
+            or not service_config_environment_is_trusted(
+                raw_environment, logical_name
+            )
             or not service_environment_controls_are_trusted(
                 properties.get("EnvironmentFiles"),
                 properties.get("PassEnvironment"),
@@ -1930,12 +1927,18 @@ def normalized_service_environment(value: object) -> tuple[list[str], bool]:
     return sorted(assignments), complete
 
 
-def service_config_environment_is_trusted(value: object) -> bool:
+def service_config_environment_is_trusted(
+    value: object,
+    logical_name: str,
+) -> bool:
     assignments, complete = service_environment_assignments(value)
-    return bool(
-        complete
-        and set(assignments).isdisjoint(MANAGER_CONTROLLED_SERVICE_ENVIRONMENT)
-    )
+    if logical_name in ROLES:
+        expected = TRUSTED_CONTAINER_SERVICE_ENVIRONMENT
+    elif logical_name in GENERATED_LOGICAL_NAMES:
+        expected = {}
+    else:
+        return False
+    return complete and assignments == expected
 
 
 def read_id_map(path: Path) -> tuple[list[dict[str, int]], bool]:
@@ -3643,23 +3646,18 @@ def generated_source_matches(instance: str, service: dict[str, object]) -> bool:
     return service.get("source_path") == str(expected)
 
 
-def service_userns_environment_is_trusted(service: object) -> bool:
+def service_environment_names_are_trusted(service: object) -> bool:
     if not isinstance(service, dict):
         return False
     environment = service.get("environment")
-    if not isinstance(environment, list):
+    logical_name = service.get("logical_name")
+    if logical_name in ROLES:
+        expected = sorted(TRUSTED_CONTAINER_SERVICE_ENVIRONMENT)
+    elif logical_name in GENERATED_LOGICAL_NAMES:
+        expected = []
+    else:
         return False
-    names: set[str] = set()
-    for name in environment:
-        if (
-            not isinstance(name, str)
-            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) is None
-        ):
-            return False
-        if name in names or name in MANAGER_CONTROLLED_SERVICE_ENVIRONMENT:
-            return False
-        names.add(name)
-    return True
+    return environment == expected
 
 
 def workload_admission_failures(observations: object) -> list[str]:
@@ -3772,7 +3770,7 @@ def workload_admission_failures(observations: object) -> list[str]:
     ):
         failures.append("D1A_GENERATED_PROVENANCE")
     if isinstance(services, list) and any(
-        not service_userns_environment_is_trusted(service)
+        not service_environment_names_are_trusted(service)
         for service in services
     ):
         failures.append("D1A_HOST_NAMESPACES")
