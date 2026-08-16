@@ -2164,6 +2164,9 @@ def validate(root: Path) -> None:
         and "TRUSTED_MANAGER_ENVIRONMENT" in workload_collector
         and "TRUSTED_USER_ENVIRONMENT_GENERATOR" in workload_collector
         and "trusted_user_environment_generator_is_admitted" in workload_collector
+        and "trusted_user_environment_generator_admission_failure"
+        in workload_collector
+        and "NORMALIZATION_EVIDENCE_STAGES" in workload_collector
         and "observed != expected" in workload_collector
         and '"FragmentPath"' in workload_collector
         and '"DropInPaths"' in workload_collector

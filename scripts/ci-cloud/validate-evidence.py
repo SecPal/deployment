@@ -261,7 +261,8 @@ def validate_document(document: object) -> dict[str, object]:
                 fail("successful normalization diagnostic is inconsistent")
         elif (
             phase_statuses[phase_name] == 0
-            or diagnostic["stage"] not in workload_module.NORMALIZATION_STAGES
+            or diagnostic["stage"]
+            not in workload_module.NORMALIZATION_EVIDENCE_STAGES
             or diagnostic["failure_reason"]
             not in workload_module.NORMALIZATION_FAILURE_REASONS
             or (diagnostic["failure_reason"] == "command-exit")

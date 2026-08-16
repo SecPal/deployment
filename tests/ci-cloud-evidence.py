@@ -17,6 +17,7 @@ import jsonschema
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR_PATH = ROOT / "scripts" / "ci-cloud" / "validate-evidence.py"
+ASSEMBLER_PATH = ROOT / "scripts" / "ci-cloud" / "assemble-evidence.py"
 WORKLOAD_TEST_PATH = ROOT / "tests" / "ci-cloud-workload-evidence.py"
 
 
@@ -24,6 +25,15 @@ def load_validator():
     spec = importlib.util.spec_from_file_location("ci_cloud_evidence", VALIDATOR_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError("unable to load evidence validator")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_assembler():
+    spec = importlib.util.spec_from_file_location("ci_cloud_assembler", ASSEMBLER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load evidence assembler")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -393,6 +403,75 @@ class EvidenceContractTests(unittest.TestCase):
         document["workload"]["result"] = "failed"
         document["workload"]["failed_admission_invariants"] = [invariant]
         self.assertEqual(document, self.validator.validate_document(document))
+
+    def test_schema_three_keeps_legacy_normalization_stages_readable(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        for stage in (
+            "manager-environment-admission",
+            "post-manager-environment-read",
+            "user-environment-generator-admission",
+        ):
+            with self.subTest(stage=stage):
+                document = valid_document()
+                document["test"]["phase_exit_statuses"][
+                    "trusted_quadlet_normalize_cleanup"
+                ] = 1
+                document["test"]["normalization_diagnostics"]["cleanup"] = {
+                    "mode": "cleanup",
+                    "status": 1,
+                    "stage": stage,
+                    "failure_reason": "contract-rejected",
+                    "command_status": None,
+                }
+                invariant = "TRUSTED_QUADLET_NORMALIZE_CLEANUP"
+                document["test"]["result"] = "failed"
+                document["test"]["failed_admission_invariants"] = [invariant]
+                document["workload"]["result"] = "failed"
+                document["workload"]["failed_admission_invariants"] = [invariant]
+                self.assertEqual(
+                    document, self.validator.validate_document(document)
+                )
+
+                with TemporaryDirectory() as directory:
+                    diagnostic = Path(directory) / "normalization.json"
+                    diagnostic.write_text(
+                        json.dumps(
+                            document["test"]["normalization_diagnostics"][
+                                "cleanup"
+                            ]
+                        ),
+                        encoding="utf-8",
+                    )
+                    self.assertEqual(
+                        document["test"]["normalization_diagnostics"]["cleanup"],
+                        load_assembler().read_normalization_diagnostic(
+                            diagnostic, "cleanup", 1
+                        ),
+                    )
+
+    def test_normalization_stage_sets_match_schema_three(self) -> None:
+        collector = self.validator.load_trusted_module(
+            self.validator.WORKLOAD_COLLECTOR_PATH,
+            "ci_cloud_normalization_stage_contract",
+        )
+        schema = json.loads(
+            self.validator.SCHEMA_PATH.read_text(encoding="utf-8")
+        )
+        schema_stages = set(
+            schema["$defs"]["normalizationDiagnostic"]["properties"]["stage"][
+                "enum"
+            ]
+        )
+        self.assertEqual(
+            schema_stages - {"complete"},
+            set(collector.NORMALIZATION_EVIDENCE_STAGES),
+        )
+        self.assertTrue(
+            collector.NORMALIZATION_STAGES.isdisjoint(
+                collector.LEGACY_NORMALIZATION_STAGES
+            )
+        )
 
     def test_normalization_diagnostic_rejects_open_or_inconsistent_values(self) -> None:
         mutations = (

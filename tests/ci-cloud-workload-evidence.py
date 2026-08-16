@@ -75,6 +75,19 @@ ROLE_NETWORKS = {
     "frontend": ("edge",),
     "gateway": ("edge",),
 }
+
+
+def normalization_environment_read_key(show_count: int) -> str:
+    checkpoint = {
+        1: "first",
+        2: "second",
+        3: "third",
+    }.get(show_count)
+    if checkpoint is None:
+        raise AssertionError("unexpected extra show-environment call")
+    return f"show-environment:{checkpoint}"
+
+
 ROLE_VOLUME_MOUNTS = {
     "secrets-init": (
         ("secrets", "/run/secpal-secrets", True),
@@ -2953,6 +2966,166 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     self.collector.trusted_user_environment_generator_is_admitted()
                 )
 
+    def test_user_environment_generator_failures_identify_closed_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roots = tuple(root / name for name in ("run", "etc", "local", "vendor"))
+            for generator_root in roots:
+                generator_root.mkdir()
+            trusted = roots[1] / "30-systemd-environment-d-generator"
+            trusted.write_bytes(self.collector.TRUSTED_USER_ENVIRONMENT_GENERATOR)
+            trusted.chmod(0o755)
+            original_bounded_regular_file = self.collector.bounded_regular_file
+
+            def root_owned_file(path):
+                observation = original_bounded_regular_file(path)
+                if observation is None:
+                    return None
+                content, metadata = observation
+                return content, types.SimpleNamespace(
+                    st_uid=0,
+                    st_gid=0,
+                    st_mode=metadata.st_mode,
+                )
+
+            failure = self.collector.NormalizationAdmissionFailure
+            with mock.patch.object(
+                self.collector, "USER_ENVIRONMENT_GENERATOR_ROOTS", roots
+            ), mock.patch.object(
+                self.collector, "TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH", trusted
+            ), mock.patch.object(
+                self.collector,
+                "bounded_regular_file",
+                side_effect=root_owned_file,
+            ):
+                self.assertIsNone(
+                    self.collector.trusted_user_environment_generator_admission_failure()
+                )
+
+                unexpected = roots[3] / "40-unreviewed"
+                unexpected.write_text("#!/bin/sh\n", encoding="utf-8")
+                self.assertEqual(
+                    failure(
+                        "user-environment-generator-inventory-admission",
+                        "contract-rejected",
+                    ),
+                    self.collector.trusted_user_environment_generator_admission_failure(),
+                )
+                unexpected.unlink()
+
+                trusted.unlink()
+                self.assertEqual(
+                    failure(
+                        "user-environment-generator-presence-admission",
+                        "contract-rejected",
+                    ),
+                    self.collector.trusted_user_environment_generator_admission_failure(),
+                )
+                trusted.write_bytes(self.collector.TRUSTED_USER_ENVIRONMENT_GENERATOR)
+                trusted.chmod(0o755)
+
+                metadata = trusted.lstat()
+                root_owned_metadata = types.SimpleNamespace(
+                    st_uid=0,
+                    st_gid=0,
+                    st_mode=metadata.st_mode,
+                    st_nlink=metadata.st_nlink,
+                    st_size=metadata.st_size,
+                )
+                with mock.patch.object(
+                    self.collector, "bounded_regular_file", return_value=None
+                ), mock.patch.object(
+                    Path, "lstat", return_value=root_owned_metadata
+                ):
+                    self.assertEqual(
+                        failure(
+                            "user-environment-generator-file-read",
+                            "unexpected-error",
+                        ),
+                        self.collector.trusted_user_environment_generator_admission_failure(),
+                    )
+
+                metadata = trusted.lstat()
+                for uid, gid, mode in (
+                    (1, 0, 0o755),
+                    (0, 1, 0o755),
+                    (0, 0, 0o700),
+                ):
+                    with self.subTest(uid=uid, gid=gid, mode=mode):
+                        rejected_metadata = types.SimpleNamespace(
+                            st_uid=uid,
+                            st_gid=gid,
+                            st_mode=(metadata.st_mode & ~0o777) | mode,
+                            st_nlink=metadata.st_nlink,
+                            st_size=metadata.st_size,
+                        )
+                        with mock.patch.object(
+                            self.collector,
+                            "bounded_regular_file",
+                            return_value=None,
+                        ), mock.patch.object(
+                            Path, "lstat", return_value=rejected_metadata
+                        ):
+                            self.assertEqual(
+                                failure(
+                                    "user-environment-generator-metadata-admission",
+                                    "contract-rejected",
+                                ),
+                                self.collector.trusted_user_environment_generator_admission_failure(),
+                            )
+
+                trusted.write_text("#!/bin/sh\n", encoding="utf-8")
+                self.assertEqual(
+                    failure(
+                        "user-environment-generator-content-admission",
+                        "contract-rejected",
+                    ),
+                    self.collector.trusted_user_environment_generator_admission_failure(),
+                )
+
+                trusted.unlink()
+                source = root / "generator-source"
+                source.write_bytes(self.collector.TRUSTED_USER_ENVIRONMENT_GENERATOR)
+                trusted.symlink_to(source)
+                self.assertEqual(
+                    failure(
+                        "user-environment-generator-file-admission",
+                        "contract-rejected",
+                    ),
+                    self.collector.trusted_user_environment_generator_admission_failure(),
+                )
+
+            with mock.patch.object(
+                Path, "iterdir", side_effect=OSError("bounded inventory failure")
+            ):
+                self.assertEqual(
+                    failure(
+                        "user-environment-generator-inventory-read",
+                        "unexpected-error",
+                    ),
+                    self.collector.trusted_user_environment_generator_admission_failure(),
+                )
+
+            with mock.patch.object(
+                self.collector, "USER_ENVIRONMENT_GENERATOR_ROOTS", roots
+            ), mock.patch.object(
+                self.collector, "TRUSTED_USER_ENVIRONMENT_GENERATOR_PATH", trusted
+            ), mock.patch.object(
+                self.collector,
+                "bounded_regular_file",
+                return_value=(
+                    self.collector.TRUSTED_USER_ENVIRONMENT_GENERATOR,
+                    types.SimpleNamespace(st_uid=1, st_gid=0, st_mode=0o100755),
+                ),
+            ):
+                self.assertEqual(
+                    failure(
+                        "user-environment-generator-metadata-admission",
+                        "contract-rejected",
+                    ),
+                    self.collector.trusted_user_environment_generator_admission_failure(),
+                )
+
     def test_podman_network_online_unit_rejects_user_overrides(self) -> None:
         trusted = (
             "FragmentPath=/usr/lib/systemd/user/"
@@ -3096,8 +3269,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=True,
         ), mock.patch.object(
             self.collector,
-            "trusted_user_environment_generator_is_admitted",
-            return_value=True,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
         ):
             self.assertTrue(
                 self.collector.normalize_quadlet_runtime(
@@ -3191,8 +3364,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=True,
         ), mock.patch.object(
             self.collector,
-            "trusted_user_environment_generator_is_admitted",
-            return_value=True,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
         ), mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertFalse(
                 self.collector.normalize_quadlet_runtime(
@@ -3240,8 +3413,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=[str(self.collector.QUADLET_ROOT)],
         ), mock.patch.object(
             self.collector,
-            "trusted_user_environment_generator_is_admitted",
-            return_value=True,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
         ):
             self.assertTrue(
                 self.collector.normalize_quadlet_runtime(
@@ -3274,14 +3447,16 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=[str(self.collector.QUADLET_ROOT)],
         ), mock.patch.object(
             self.collector,
-            "trusted_user_environment_generator_is_admitted",
-            return_value=True,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
         ):
             outcome = self.collector.normalize_quadlet_runtime(
                 "aaaaaaaaaaaa", activate=False
             )
         self.assertFalse(outcome)
-        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertEqual(
+            "post-reload-manager-environment-admission", outcome.stage
+        )
         self.assertEqual(
             1,
             sum(command[2] == "unset-environment" for command in commands),
@@ -3310,15 +3485,40 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=[str(self.collector.QUADLET_ROOT)],
         ), mock.patch.object(
             self.collector,
-            "trusted_user_environment_generator_is_admitted",
-            return_value=True,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
         ):
             outcome = self.collector.normalize_quadlet_runtime(
                 "aaaaaaaaaaaa", activate=False
             )
         self.assertFalse(outcome)
-        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertEqual(
+            "post-reload-manager-environment-admission", outcome.stage
+        )
         self.assertFalse(any(command[2] == "start" for command in commands))
+
+    def test_quadlet_normalization_reports_generator_admission_checkpoint(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            return_value=(0, "OLD=value\n", True),
+        ), mock.patch.object(
+            self.collector,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=self.collector.NormalizationAdmissionFailure(
+                "user-environment-generator-presence-admission",
+                "contract-rejected",
+            ),
+        ):
+            outcome = self.collector.normalize_quadlet_runtime(
+                "aaaaaaaaaaaa", activate=False
+            )
+        self.assertFalse(outcome)
+        self.assertEqual(
+            "user-environment-generator-presence-admission", outcome.stage
+        )
 
     def test_quadlet_normalization_admits_loaded_units_before_stop(self) -> None:
         trusted_environment = "\n".join(
@@ -3374,8 +3574,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=[str(self.collector.QUADLET_ROOT)],
         ), mock.patch.object(
             self.collector,
-            "trusted_user_environment_generator_is_admitted",
-            return_value=True,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
         ):
             self.assertTrue(
                 self.collector.normalize_quadlet_runtime(
@@ -3441,14 +3641,16 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=[str(self.collector.QUADLET_ROOT)],
         ), mock.patch.object(
             self.collector,
-            "trusted_user_environment_generator_is_admitted",
-            return_value=True,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
         ):
             outcome = self.collector.normalize_quadlet_runtime(
                 "aaaaaaaaaaaa", activate=True
             )
         self.assertFalse(outcome)
-        self.assertEqual("manager-environment-admission", outcome.stage)
+        self.assertEqual(
+            "post-activation-manager-environment-admission", outcome.stage
+        )
         self.assertTrue(any(command[2] == "start" for command in commands))
 
     def test_quadlet_normalization_emits_only_closed_failure_diagnostics(self) -> None:
@@ -3512,6 +3714,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 json.loads(diagnostic.split(": ", 1)[1]),
             )
 
+    def test_normalization_environment_read_key_rejects_extra_reads(self) -> None:
+        with self.assertRaisesRegex(
+            AssertionError, "unexpected extra show-environment call"
+        ):
+            normalization_environment_read_key(4)
+
     def test_every_quadlet_normalization_substage_emits_its_closed_stage(self) -> None:
         command_stages = {
             "stop": "stop-existing-units",
@@ -3520,7 +3728,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "set-environment": "manager-environment-set",
             "daemon-reload": "daemon-reload",
             "start": "target-start",
-            "show-environment:second": "post-manager-environment-read",
+            "show-environment:second": "post-reload-manager-environment-read",
+            "show-environment:third": "post-activation-manager-environment-read",
         }
         observed_stages: set[str] = set()
         trusted_environment = "\n".join(
@@ -3543,7 +3752,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         ), True
                     if action == "show-environment":
                         show_count += 1
-                        key = f"show-environment:{'first' if show_count == 1 else 'second'}"
+                        key = normalization_environment_read_key(show_count)
                     if key == failure_command:
                         return 17, "target-controlled output", True
                     if action == "show-environment":
@@ -3568,8 +3777,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     return_value=[str(self.collector.QUADLET_ROOT)],
                 ), mock.patch.object(
                     self.collector,
-                    "trusted_user_environment_generator_is_admitted",
-                    return_value=True,
+                    "trusted_user_environment_generator_admission_failure",
+                    return_value=None,
                 ), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
                     outcome = self.collector.normalize_quadlet_runtime(
                         "aaaaaaaaaaaa", activate=True
@@ -3601,14 +3810,65 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 {"generated_trusted": False},
             ),
             (
-                "post-manager-environment-read",
+                "post-reload-manager-environment-read",
                 "aaaaaaaaaaaa",
                 {"second_environment": "malformed"},
             ),
+            *(
+                (
+                    stage,
+                    "aaaaaaaaaaaa",
+                    {
+                        "generator_failure": self.collector.NormalizationAdmissionFailure(
+                            stage, reason
+                        )
+                    },
+                )
+                for stage, reason in (
+                    (
+                        "user-environment-generator-inventory-read",
+                        "unexpected-error",
+                    ),
+                    (
+                        "user-environment-generator-inventory-admission",
+                        "contract-rejected",
+                    ),
+                    (
+                        "user-environment-generator-presence-admission",
+                        "contract-rejected",
+                    ),
+                    (
+                        "user-environment-generator-file-read",
+                        "unexpected-error",
+                    ),
+                    (
+                        "user-environment-generator-file-admission",
+                        "contract-rejected",
+                    ),
+                    (
+                        "user-environment-generator-content-admission",
+                        "contract-rejected",
+                    ),
+                    (
+                        "user-environment-generator-metadata-admission",
+                        "contract-rejected",
+                    ),
+                )
+            ),
             (
-                "manager-environment-admission",
+                "post-reload-manager-environment-admission",
                 "aaaaaaaaaaaa",
                 {"second_environment": "HOME=/wrong\n"},
+            ),
+            (
+                "post-activation-manager-environment-admission",
+                "aaaaaaaaaaaa",
+                {"third_environment": "HOME=/wrong\n"},
+            ),
+            (
+                "post-activation-manager-environment-read",
+                "aaaaaaaaaaaa",
+                {"third_environment": "malformed"},
             ),
             (
                 "quadlet-search-path-admission",
@@ -3631,11 +3891,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         ), True
                     if _command[2] == "show-environment":
                         show_count += 1
-                        key = (
-                            "first_environment"
-                            if show_count == 1
-                            else "second_environment"
-                        )
+                        key = {
+                            1: "first_environment",
+                            2: "second_environment",
+                        }.get(show_count, "third_environment")
                         return (
                             0,
                             controls.get(
@@ -3666,8 +3925,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     ),
                 ), mock.patch.object(
                     self.collector,
-                    "trusted_user_environment_generator_is_admitted",
-                    return_value=True,
+                    "trusted_user_environment_generator_admission_failure",
+                    return_value=controls.get("generator_failure"),
                 ), mock.patch("sys.stderr", new_callable=io.StringIO):
                     outcome = self.collector.normalize_quadlet_runtime(
                         instance, activate=True
@@ -3750,8 +4009,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             return_value=True,
         ), mock.patch.object(
             self.collector,
-            "trusted_user_environment_generator_is_admitted",
-            return_value=True,
+            "trusted_user_environment_generator_admission_failure",
+            return_value=None,
         ), mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertFalse(
                 self.collector.normalize_quadlet_runtime(
