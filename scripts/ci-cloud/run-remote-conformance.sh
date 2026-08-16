@@ -504,7 +504,8 @@ admit_target_tree() {
 }
 admit_target_tree "$1"
 # Bash expresses `ulimit -f` in 1024-byte increments. The workload phase uses
-# 128 MiB to admit reviewed OCI blobs and members; other phases retain 64 MiB.
+# 128 MiB to admit reviewed OCI blobs and members. The workload evidence test
+# binds their maxima to exact image and layer identities; other phases retain 64 MiB.
 ulimit -f "$phase_file_limit_kibibytes"
 [[ -S /run/user/20000/bus ]]
 set +e
