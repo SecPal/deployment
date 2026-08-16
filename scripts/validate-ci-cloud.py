@@ -1933,6 +1933,7 @@ def validate(root: Path) -> None:
         root, "scripts/ci-cloud/collect-workload-evidence.py"
     )
     evidence_assembler = read(root, "scripts/ci-cloud/assemble-evidence.py")
+    evidence_validator = read(root, "scripts/ci-cloud/validate-evidence.py")
     evidence_schema_text = read(root, "schemas/ci-cloud-evidence.schema.json")
     ssh_probe = read(root, "scripts/ci-cloud/probe-ssh-port.py")
     failure_writer = read(root, "scripts/ci-cloud/write-bootstrap-failure.py")
@@ -2130,8 +2131,15 @@ def validate(root: Path) -> None:
         and '"systemctl", "--user", "unset-environment", *names'
         in workload_collector
         and "TRUSTED_MANAGER_ENVIRONMENT" in workload_collector
-        and "observed == expected" in workload_collector
+        and "observed != expected" in workload_collector
         and '["systemctl", "--user", "daemon-reload"]' in workload_collector
+        and 'NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet '
+        'normalization diagnostic: "' in workload_collector
+        and "NORMALIZATION_STAGES = frozenset(" in workload_collector
+        and "NORMALIZATION_FAILURE_REASONS = frozenset(" in workload_collector
+        and "failure_reason: str | None" in workload_collector
+        and "command_status: int | None" in workload_collector
+        and "outcome.document()" in workload_collector
         and "workload_admission_failures" in workload_collector
         and "shell=True" not in workload_collector
         and "os.system" not in workload_collector
@@ -2187,7 +2195,7 @@ def validate(root: Path) -> None:
         evidence_schema.get("properties", {})
         .get("schema_version", {})
         .get("const")
-        == 2
+        == 3
         and {"host_admission", "workload"}.issubset(
             set(evidence_schema.get("required", []))
         )
@@ -2195,6 +2203,24 @@ def validate(root: Path) -> None:
         and "TARGET_WORKLOAD_PREPARE_START" in evidence_assembler
         and "TRUSTED_POST_CLEANUP_COLLECTION" in evidence_assembler,
         "D.1 and D.1a evidence must remain separate and jointly fail closed",
+    )
+    require(
+        'live_normalization_json="$evidence_dir/.normalization-live.json"'
+        in remote
+        and 'cleanup_normalization_json="$evidence_dir/.normalization-cleanup.json"'
+        in remote
+        and '< scripts/ci-cloud/collect-workload-evidence.py >"$diagnostic_path"'
+        in remote
+        and '"$live_normalization_json" "$cleanup_normalization_json"'
+        in remote
+        and "read_normalization_diagnostic(" in evidence_assembler
+        and 'test["normalization_diagnostics"] = normalization_diagnostics'
+        in evidence_assembler
+        and "normalization_diagnostics" in evidence_schema["properties"]["test"]["required"]
+        and "normalizationDiagnostic" in evidence_schema.get("$defs", {})
+        and 'test["normalization_diagnostics"]' in evidence_validator
+        and "Trusted Quadlet normalization diagnostics" in evidence_validator,
+        "trusted Quadlet normalization diagnostics must reach validated evidence and its summary",
     )
     require(
         'bootstrap_stage="host-key"' in remote

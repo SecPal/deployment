@@ -143,6 +143,8 @@ case " $* " in
   *' /usr/bin/python3 -I - normalize '*)
     cat >/dev/null
     printf 'collector:normalize\n' >>"${SECPAL_TEST_SEQUENCE_LOG:?}"
+    printf '{"command_status":null,"failure_reason":null,"mode":"%s","stage":"complete","status":0}\n' \
+      "${*: -1}"
     ;;
   *' /usr/bin/python3 -I - baseline '*)
     cat >/dev/null

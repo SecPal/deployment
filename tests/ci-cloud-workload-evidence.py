@@ -545,6 +545,19 @@ def valid_observations() -> dict[str, object]:
     }
 
 
+def valid_normalization_diagnostics() -> dict[str, dict[str, object]]:
+    return {
+        mode: {
+            "mode": mode,
+            "status": 0,
+            "stage": "complete",
+            "failure_reason": None,
+            "command_status": None,
+        }
+        for mode in ("live", "cleanup")
+    }
+
+
 class WorkloadEvidenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -567,6 +580,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             observations["baseline"],
             observations["live"],
             observations["post_cleanup"],
+            valid_normalization_diagnostics(),
             {
                 "host": 0,
                 "workload_prepare_start": 0,
@@ -582,6 +596,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "post-cleanup", document["workload"]["post_cleanup"]["phase"]
         )
         self.assertEqual([], document["workload"]["post_cleanup"]["containers"])
+        self.assertEqual(
+            valid_normalization_diagnostics(),
+            document["test"]["normalization_diagnostics"],
+        )
 
     def test_host_phase_failure_remains_in_d1_host_admission(self) -> None:
         observations = valid_observations()
@@ -601,6 +619,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             observations["baseline"],
             observations["live"],
             observations["post_cleanup"],
+            valid_normalization_diagnostics(),
             {
                 "host": 7,
                 "workload_prepare_start": 0,
@@ -645,11 +664,21 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "trusted_quadlet_normalize_cleanup": 0,
             }
             statuses[phase] = 1
+            diagnostics = valid_normalization_diagnostics()
+            mode = "live" if phase.endswith("_live") else "cleanup"
+            diagnostics[mode] = {
+                "mode": mode,
+                "status": 1,
+                "stage": "daemon-reload",
+                "failure_reason": "command-exit",
+                "command_status": 1,
+            }
             document = self.assembler.assemble(
                 host,
                 observations["baseline"],
                 observations["live"],
                 observations["post_cleanup"],
+                diagnostics,
                 statuses,
                 {"baseline": 0, "live": 0, "post_cleanup": 0},
             )
@@ -657,6 +686,47 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.assertIn(
                 invariant,
                 document["workload"]["failed_admission_invariants"],
+            )
+
+    def test_normalization_diagnostic_input_is_bounded_and_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "normalization.json"
+            with self.assertRaisesRegex(ValueError, "missing"):
+                self.assembler.read_normalization_diagnostic(path, "live", 0)
+            self.assertEqual(
+                {
+                    "mode": "live",
+                    "status": 1,
+                    "stage": "unreported",
+                    "failure_reason": "unexpected-error",
+                    "command_status": None,
+                },
+                self.assembler.read_normalization_diagnostic(path, "live", 124),
+            )
+            path.write_text("not-json\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "malformed"):
+                self.assembler.read_normalization_diagnostic(path, "live", 1)
+            malformed = {
+                "mode": "live",
+                "status": 1,
+                "stage": "daemon-reload",
+                "failure_reason": ["command-exit"],
+                "command_status": 17,
+            }
+            path.write_text(json.dumps(malformed) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "closed contract"):
+                self.assembler.read_normalization_diagnostic(path, "live", 1)
+            failed = {
+                "mode": "live",
+                "status": 1,
+                "stage": "daemon-reload",
+                "failure_reason": "command-exit",
+                "command_status": 17,
+            }
+            path.write_text(json.dumps(failed) + "\n", encoding="utf-8")
+            self.assertEqual(
+                failed,
+                self.assembler.read_normalization_diagnostic(path, "live", 17),
             )
 
     def assert_failure(self, mutation, expected: str) -> None:
@@ -3033,12 +3103,221 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "quadlet_source_execution_controls_are_trusted",
             return_value=True,
-        ):
+        ), mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertFalse(
                 self.collector.normalize_quadlet_runtime(
                     "aaaaaaaaaaaa", activate=False
                 )
             )
+
+    def test_quadlet_normalization_emits_only_closed_failure_diagnostics(self) -> None:
+        cases = (
+            (
+                "live",
+                True,
+                (23, "target-controlled output", True),
+                {
+                    "mode": "live",
+                    "status": 1,
+                    "stage": "stop-existing-units",
+                    "failure_reason": "command-exit",
+                    "command_status": 23,
+                },
+            ),
+            (
+                "cleanup",
+                False,
+                (0, "malformed-manager-environment", True),
+                {
+                    "mode": "cleanup",
+                    "status": 1,
+                    "stage": "manager-environment-read",
+                    "failure_reason": "contract-rejected",
+                    "command_status": None,
+                },
+            ),
+            (
+                "live-incomplete",
+                True,
+                (255, "target-controlled output", False),
+                {
+                    "mode": "live",
+                    "status": 1,
+                    "stage": "stop-existing-units",
+                    "failure_reason": "unexpected-error",
+                    "command_status": None,
+                },
+            ),
+        )
+        for mode, activate, command_result, expected in cases:
+            with self.subTest(mode=mode), mock.patch.object(
+                self.collector,
+                "command_result",
+                return_value=command_result,
+            ), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                self.assertFalse(
+                    self.collector.normalize_quadlet_runtime(
+                        "aaaaaaaaaaaa", activate=activate
+                    )
+                )
+            diagnostic = stderr.getvalue()
+            self.assertTrue(
+                diagnostic.startswith("Trusted Quadlet normalization diagnostic: ")
+            )
+            self.assertNotIn("target-controlled output", diagnostic)
+            self.assertNotIn("malformed-manager-environment", diagnostic)
+            self.assertEqual(
+                expected,
+                json.loads(diagnostic.split(": ", 1)[1]),
+            )
+
+    def test_every_quadlet_normalization_substage_emits_its_closed_stage(self) -> None:
+        command_stages = {
+            "stop": "stop-existing-units",
+            "show-environment:first": "manager-environment-read",
+            "unset-environment": "manager-environment-unset",
+            "set-environment": "manager-environment-set",
+            "daemon-reload": "daemon-reload",
+            "start": "target-start",
+            "show-environment:second": "post-manager-environment-read",
+        }
+        observed_stages: set[str] = set()
+        trusted_environment = "\n".join(
+            self.collector.TRUSTED_MANAGER_ENVIRONMENT
+        ) + "\n"
+
+        for failure_command, expected_stage in command_stages.items():
+            with self.subTest(stage=expected_stage, command=failure_command):
+                show_count = 0
+
+                def command_result(command, **_kwargs):
+                    nonlocal show_count
+                    action = command[2]
+                    key = action
+                    if action == "show-environment":
+                        show_count += 1
+                        key = f"show-environment:{'first' if show_count == 1 else 'second'}"
+                    if key == failure_command:
+                        return 17, "target-controlled output", True
+                    if action == "show-environment":
+                        return (
+                            0,
+                            "OLD=value\n" if show_count == 1 else trusted_environment,
+                            True,
+                        )
+                    return 0, "", True
+
+                with mock.patch.object(
+                    self.collector, "command_result", side_effect=command_result
+                ), mock.patch.object(
+                    self.collector, "target_activation_is_trusted", return_value=True
+                ), mock.patch.object(
+                    self.collector,
+                    "generated_service_activation_is_trusted",
+                    return_value=True,
+                ), mock.patch.object(
+                    self.collector,
+                    "quadlet_search_paths",
+                    return_value=[str(self.collector.QUADLET_ROOT)],
+                ), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    outcome = self.collector.normalize_quadlet_runtime(
+                        "aaaaaaaaaaaa", activate=True
+                    )
+                self.assertFalse(outcome)
+                self.assertEqual(expected_stage, outcome.stage)
+                self.assertNotIn("target-controlled output", stderr.getvalue())
+                observed_stages.add(outcome.stage)
+
+        contract_cases = (
+            (
+                "instance-admission",
+                "not-an-instance",
+                {},
+            ),
+            (
+                "manager-environment-read",
+                "aaaaaaaaaaaa",
+                {"first_environment": "malformed"},
+            ),
+            (
+                "target-unit-admission",
+                "aaaaaaaaaaaa",
+                {"target_trusted": False},
+            ),
+            (
+                "generated-unit-admission",
+                "aaaaaaaaaaaa",
+                {"generated_trusted": False},
+            ),
+            (
+                "post-manager-environment-read",
+                "aaaaaaaaaaaa",
+                {"second_environment": "malformed"},
+            ),
+            (
+                "manager-environment-admission",
+                "aaaaaaaaaaaa",
+                {"second_environment": "HOME=/wrong\n"},
+            ),
+            (
+                "quadlet-search-path-admission",
+                "aaaaaaaaaaaa",
+                {"search_paths": []},
+            ),
+        )
+        for expected_stage, instance, controls in contract_cases:
+            with self.subTest(stage=expected_stage, kind="contract"):
+                show_count = 0
+
+                def command_result(_command, **_kwargs):
+                    nonlocal show_count
+                    if _command[2] == "show-environment":
+                        show_count += 1
+                        key = (
+                            "first_environment"
+                            if show_count == 1
+                            else "second_environment"
+                        )
+                        return (
+                            0,
+                            controls.get(
+                                key,
+                                "OLD=value\n"
+                                if show_count == 1
+                                else trusted_environment,
+                            ),
+                            True,
+                        )
+                    return 0, "", True
+
+                with mock.patch.object(
+                    self.collector, "command_result", side_effect=command_result
+                ), mock.patch.object(
+                    self.collector,
+                    "target_activation_is_trusted",
+                    return_value=controls.get("target_trusted", True),
+                ), mock.patch.object(
+                    self.collector,
+                    "generated_service_activation_is_trusted",
+                    return_value=controls.get("generated_trusted", True),
+                ), mock.patch.object(
+                    self.collector,
+                    "quadlet_search_paths",
+                    return_value=controls.get(
+                        "search_paths", [str(self.collector.QUADLET_ROOT)]
+                    ),
+                ), mock.patch("sys.stderr", new_callable=io.StringIO):
+                    outcome = self.collector.normalize_quadlet_runtime(
+                        instance, activate=True
+                    )
+                self.assertFalse(outcome)
+                self.assertEqual(expected_stage, outcome.stage)
+                observed_stages.add(outcome.stage)
+
+        self.assertEqual(
+            set(self.collector.NORMALIZATION_STAGES) - {"unreported"},
+            observed_stages,
+        )
 
     def test_quadlet_normalization_rejects_hooks_before_start(self) -> None:
         calls = []
@@ -3100,7 +3379,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "quadlet_source_execution_controls_are_trusted",
             return_value=True,
-        ):
+        ), mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertFalse(
                 self.collector.normalize_quadlet_runtime(
                     "aaaaaaaaaaaa", activate=True

@@ -16,7 +16,7 @@
     "workload"
   ],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "const": 3 },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -39,6 +39,7 @@
         "provider_image",
         "started_at",
         "ended_at",
+        "normalization_diagnostics",
         "phase_exit_statuses",
         "collection_exit_statuses",
         "result",
@@ -67,6 +68,25 @@
         },
         "started_at": { "type": "string", "format": "date-time" },
         "ended_at": { "type": "string", "format": "date-time" },
+        "normalization_diagnostics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["live", "cleanup"],
+          "properties": {
+            "live": {
+              "allOf": [
+                { "$ref": "#/$defs/normalizationDiagnostic" },
+                { "properties": { "mode": { "const": "live" } } }
+              ]
+            },
+            "cleanup": {
+              "allOf": [
+                { "$ref": "#/$defs/normalizationDiagnostic" },
+                { "properties": { "mode": { "const": "cleanup" } } }
+              ]
+            }
+          }
+        },
         "phase_exit_statuses": {
           "type": "object",
           "additionalProperties": false,
@@ -1416,6 +1436,89 @@
               }
             }
           }
+        }
+      ]
+    },
+    "normalizationDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "status",
+        "stage",
+        "failure_reason",
+        "command_status"
+      ],
+      "properties": {
+        "mode": { "enum": ["live", "cleanup"] },
+        "status": { "enum": [0, 1] },
+        "stage": {
+          "enum": [
+            "complete",
+            "instance-admission",
+            "stop-existing-units",
+            "manager-environment-read",
+            "manager-environment-unset",
+            "manager-environment-set",
+            "daemon-reload",
+            "target-unit-admission",
+            "generated-unit-admission",
+            "target-start",
+            "post-manager-environment-read",
+            "manager-environment-admission",
+            "quadlet-search-path-admission",
+            "unreported"
+          ]
+        },
+        "failure_reason": {
+          "type": ["string", "null"],
+          "enum": [
+            "command-exit",
+            "contract-rejected",
+            "unexpected-error",
+            null
+          ]
+        },
+        "command_status": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 255
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": { "const": 0 },
+            "stage": { "const": "complete" },
+            "failure_reason": { "const": null },
+            "command_status": { "const": null }
+          }
+        },
+        {
+          "properties": {
+            "status": { "const": 1 },
+            "stage": { "not": { "const": "complete" } },
+            "failure_reason": {
+              "enum": ["command-exit", "contract-rejected", "unexpected-error"]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "failure_reason": { "const": "command-exit" }
+                }
+              },
+              "then": {
+                "properties": {
+                  "command_status": { "type": "integer" }
+                }
+              },
+              "else": {
+                "properties": { "command_status": { "const": null } }
+              }
+            }
+          ]
         }
       ]
     },
