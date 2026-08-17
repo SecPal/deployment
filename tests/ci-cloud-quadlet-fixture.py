@@ -204,6 +204,47 @@ class QuadletFixtureTests(unittest.TestCase):
         self.assertFalse(self.layout.active_state.exists())
         self.assertFalse(any(self.layout.quadlet_root.iterdir()))
 
+    def test_client_rejects_source_replaced_between_lstat_and_open(self) -> None:
+        source = Path(self.temporary.name) / "source.container"
+        source.write_bytes(b"[Container]\nImage=trusted\n")
+        source.chmod(0o600)
+        replacement = Path(self.temporary.name) / "replacement.container"
+        replacement.write_bytes(b"[Container]\nImage=swapped\n")
+        replacement.chmod(0o600)
+        displaced = Path(self.temporary.name) / "displaced.container"
+        original_open = os.open
+        replaced = False
+
+        def replace_before_open(path, flags, *args, **kwargs):
+            nonlocal replaced
+            if Path(path) == source and not replaced:
+                source.replace(displaced)
+                replacement.replace(source)
+                replaced = True
+            return original_open(path, flags, *args, **kwargs)
+
+        with mock.patch.object(os, "open", side_effect=replace_before_open):
+            with self.assertRaisesRegex(ValueError, "source unit changed"):
+                self.client.secure_read(source)
+
+    def test_client_rejects_source_metadata_changed_during_read(self) -> None:
+        source = Path(self.temporary.name) / "source.container"
+        source.write_bytes(b"[Container]\nImage=trusted\n")
+        source.chmod(0o600)
+        original_read = os.read
+        changed = False
+
+        def change_mode_before_read(descriptor, size):
+            nonlocal changed
+            if not changed:
+                source.chmod(0o640)
+                changed = True
+            return original_read(descriptor, size)
+
+        with mock.patch.object(os, "read", side_effect=change_mode_before_read):
+            with self.assertRaisesRegex(ValueError, "source unit changed"):
+                self.client.secure_read(source)
+
     def test_root_snapshot_independently_bounds_trusted_pin_expansion(self) -> None:
         instance = "a1b2c3d4"
         names = self.installer.expected_unit_names(instance)

@@ -76,6 +76,18 @@ def secure_read(source: Path) -> tuple[bytes, int]:
     descriptor = os.open(source, flags)
     try:
         before = os.fstat(descriptor)
+        if (
+            metadata.st_dev != before.st_dev
+            or metadata.st_ino != before.st_ino
+            or metadata.st_mode != before.st_mode
+            or metadata.st_uid != before.st_uid
+            or metadata.st_gid != before.st_gid
+            or metadata.st_nlink != before.st_nlink
+            or metadata.st_size != before.st_size
+            or metadata.st_mtime_ns != before.st_mtime_ns
+            or metadata.st_ctime_ns != before.st_ctime_ns
+        ):
+            raise ValueError("source unit changed or is not bounded text")
         chunks: list[bytes] = []
         remaining = MAX_UNIT_BYTES + 1
         while remaining:
@@ -92,8 +104,13 @@ def secure_read(source: Path) -> tuple[bytes, int]:
         len(content) > MAX_UNIT_BYTES
         or before.st_dev != after.st_dev
         or before.st_ino != after.st_ino
+        or before.st_mode != after.st_mode
+        or before.st_uid != after.st_uid
+        or before.st_gid != after.st_gid
+        or before.st_nlink != after.st_nlink
         or before.st_size != after.st_size
         or before.st_mtime_ns != after.st_mtime_ns
+        or before.st_ctime_ns != after.st_ctime_ns
         or b"\0" in content
         or not content.endswith(b"\n")
     ):
