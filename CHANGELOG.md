@@ -121,6 +121,15 @@ SPDX-License-Identifier: CC0-1.0
   environment. It admits that complete set before generation and after reload
   and activation while still clearing mutable client overrides; DigitalOcean
   Intel run `31974004519` exposed the previously omitted fixed assignments.
+- Generated-service admission now treats the exact user-manager environment as
+  inherited state while the trusted root-owned fixture installer appends the
+  exact `CONTAINERS_CONF`, override, modules, and `PODMAN_USERNS` execution-time
+  pins to every Quadlet source. Container services additionally admit only the
+  deterministic service name produced when systemd expands Quadlet's
+  generator-owned `PODMAN_SYSTEMD_UNIT=%n`. DigitalOcean Intel run
+  `31976423374` exposed the former impossible requirement that inherited
+  manager assignments also appear in systemd's unit-local `Environment`
+  property; every unreviewed unit-local assignment remains rejected.
 - D.1a workload evidence admits the fixed root-owned Debian 13 GnuPG and
   OpenSSH agent socket/service pairs with exact `dpkg-query` owning-package
   provenance (including Keyboxd's Debian `gpg` ownership) while

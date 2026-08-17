@@ -401,12 +401,20 @@ closed. The main command must use the role-appropriate direct
 `/usr/bin/podman` operation: container roles use `run`, network roles use
 `network create`, and volume roles use `volume create`. Environment files,
 `PassEnvironment=`, and `UnsetEnvironment=` remain forbidden. Every generated
-unit must additionally carry effective service-local
-`CONTAINERS_CONF=/dev/null`, `CONTAINERS_CONF_OVERRIDE=/dev/null`, empty
-`CONTAINERS_CONF_MODULES`, and empty `PODMAN_USERNS` assignments. These fixed
-assignments override a manager-environment mutation by an indirectly activated
-unit without placing environment values in evidence. The collector uses the
-same pinned configuration for its own Podman inspection and mapping commands.
+service must expose the exact root-installer-owned `CONTAINERS_CONF=/dev/null`,
+`CONTAINERS_CONF_OVERRIDE=/dev/null`, empty `CONTAINERS_CONF_MODULES`, and empty
+`PODMAN_USERNS` execution-time pins. Container services additionally expose
+only the deterministic `secpal-int-<instance>-<role>.service` value produced
+when systemd expands Quadlet's generator-owned `PODMAN_SYSTEMD_UNIT=%n`;
+generated network and volume services do not expose that assignment. The
+unexpanded `%n`, another unit name, and every other service-local assignment
+are rejected. User
+services inherit the separately admitted exact manager environment
+automatically, while the immutable unit-local pins prevent a detached target
+process from changing Podman configuration only during activation and restoring
+the manager environment before the post-activation check. The collector uses
+the same pinned configuration for its own Podman inspection and mapping
+commands.
 It starts the exact fixture target only after the pre-activation checks and
 repeats them during live collection. The collector verifies the exact manager
 environment both after generation and after activation. A target-controlled
@@ -969,10 +977,12 @@ Evidence includes:
   observed process mapping. The derived host UID/GID used for service-cgroup
   process admission also comes from that observed mapping, not a fixed
   subordinate-ID offset. Evidence retains only service-environment variable
-  names, never their values. The fixed service-local `PODMAN_USERNS` and
-  containers.conf pin names are mandatory, while the trusted collector checks
-  their exact non-secret values before activation and during collection. Any
-  contradictory pin or HOME/XDG configuration redirect fails closed. Those
+  names, never their values. The four root-installer-owned Podman configuration
+  pin names are mandatory at unit level, while the trusted collector checks
+  their exact non-secret values before activation and during collection.
+  Manager-controlled identity, path, locale, Quadlet, and HOME/XDG
+  configuration names remain inherited and forbidden as unit-local additions.
+  Any missing or contradictory pin fails closed. Those
   maps must be non-overlapping, remain inside the service-account namespace,
   and cover the role's configured and effective UID/GID plus every admitted
   supplementary GID,

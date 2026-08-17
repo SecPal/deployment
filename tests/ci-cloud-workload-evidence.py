@@ -76,6 +76,49 @@ ROLE_NETWORKS = {
     "gateway": ("edge",),
 }
 
+UNREVIEWED_SERVICE_ENVIRONMENT_NAMES = frozenset(
+    {
+        "CONTAINER_CONNECTION",
+        "CONTAINER_HOST",
+        "CONTAINERS_CONF",
+        "CONTAINERS_CONF_MODULES",
+        "CONTAINERS_CONF_OVERRIDE",
+        "CONTAINERS_POLICY",
+        "CONTAINERS_REGISTRIES_CONF",
+        "CONTAINERS_REGISTRIES_CONF_DIR",
+        "CONTAINERS_STORAGE_CONF",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "DOCKER_HOST",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LOGNAME",
+        "PATH",
+        "PODMAN_USERNS",
+        "QUADLET_UNIT_DIRS",
+        "SHELL",
+        "SYSTEMD_UNIT_PATH",
+        "USER",
+        "XDG_CONFIG_HOME",
+        "XDG_RUNTIME_DIR",
+    }
+)
+EXPECTED_SERVICE_CONFIG_ENVIRONMENT = {
+    "CONTAINERS_CONF": "/dev/null",
+    "CONTAINERS_CONF_MODULES": "",
+    "CONTAINERS_CONF_OVERRIDE": "/dev/null",
+    "PODMAN_USERNS": "",
+}
+
+
+def trusted_service_environment(logical_name: str) -> str:
+    assignments = dict(EXPECTED_SERVICE_CONFIG_ENVIRONMENT)
+    if logical_name in ROLES:
+        assignments["PODMAN_SYSTEMD_UNIT"] = (
+            f"secpal-int-aaaaaaaaaaaa-{logical_name}.service"
+        )
+    return " ".join(f"{name}={assignments[name]}" for name in sorted(assignments))
+
 
 def normalization_environment_read_key(show_count: int) -> str:
     checkpoint = {
@@ -273,12 +316,8 @@ def valid_observations() -> dict[str, object]:
             "drop_in_owners": [],
             "drop_in_sha256": [],
             "environment": sorted(
-                {
-                    "CONTAINERS_CONF",
-                    "CONTAINERS_CONF_OVERRIDE",
-                    "CONTAINERS_CONF_MODULES",
-                    "PODMAN_USERNS",
-                }
+                set(EXPECTED_SERVICE_CONFIG_ENVIRONMENT)
+                | ({"PODMAN_SYSTEMD_UNIT"} if logical_name in ROLES else set())
             ),
             "active_state": "active",
             "sub_state": (
@@ -1341,19 +1380,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "D1A_HOST_NAMESPACES",
                 )
 
-    def test_service_environment_cannot_supply_user_namespace_defaults(self) -> None:
-        for name in (
-            "PODMAN_USERNS",
-            "CONTAINERS_CONF",
-            "CONTAINERS_CONF_OVERRIDE",
-            "CONTAINERS_CONF_MODULES",
-            "XDG_CONFIG_HOME",
-            "HOME",
+    def test_service_environment_cannot_supply_unreviewed_values(self) -> None:
+        for name in sorted(
+            UNREVIEWED_SERVICE_ENVIRONMENT_NAMES | {"APP_FEATURE"}
         ):
             with self.subTest(name=name):
                 self.assert_failure(
                     lambda evidence, name=name: evidence["live"]
                     ["generated_services"][4].__setitem__("environment", [name]),
+                    "D1A_HOST_NAMESPACES",
+                )
+                self.assert_failure(
+                    lambda evidence, name=name: evidence["live"]
+                    ["generated_services"][10].__setitem__("environment", [name]),
                     "D1A_HOST_NAMESPACES",
                 )
 
@@ -1365,32 +1404,75 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
         )
 
-    def test_generated_service_requires_effective_local_config_pins(self) -> None:
-        trusted = (
-            "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
-            "CONTAINERS_CONF_MODULES= PODMAN_USERNS= PATH=/usr/bin"
+    def test_generated_service_requires_trusted_execution_time_pins(
+        self,
+    ) -> None:
+        pins = trusted_service_environment("application-network")
+        trusted = trusted_service_environment("api")
+        source_pins = trusted.replace(
+            "PODMAN_SYSTEMD_UNIT=secpal-int-aaaaaaaaaaaa-api.service",
+            "PODMAN_SYSTEMD_UNIT=%n",
         )
         self.assertTrue(
-            self.collector.service_config_environment_is_trusted(trusted)
+            self.collector.service_config_environment_is_trusted(
+                trusted, "api", "aaaaaaaaaaaa"
+            )
         )
-        for value in (
-            trusted.replace("CONTAINERS_CONF=/dev/null ", ""),
-            trusted.replace(
-                "CONTAINERS_CONF_OVERRIDE=/dev/null",
-                "CONTAINERS_CONF_OVERRIDE=/tmp/target.conf",
-            ),
-            trusted.replace(
-                "CONTAINERS_CONF_MODULES=",
-                "CONTAINERS_CONF_MODULES=target",
-            ),
-            trusted.replace("PODMAN_USERNS=", "PODMAN_USERNS=host"),
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                source_pins, "api", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertTrue(
+            self.collector.service_config_environment_is_trusted(
+                pins, "application-network", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                "", "api", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                "PODMAN_SYSTEMD_UNIT=wrong", "api", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                trusted, "application-network", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                trusted, "unknown", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                trusted, "api", "not-an-instance"
+            )
+        )
+        for name in sorted(
+            UNREVIEWED_SERVICE_ENVIRONMENT_NAMES | {"APP_FEATURE"}
         ):
-            with self.subTest(value=value):
+            with self.subTest(name=name):
                 self.assertFalse(
-                    self.collector.service_config_environment_is_trusted(value)
+                    self.collector.service_config_environment_is_trusted(
+                        f"{trusted} {name}=/unreviewed",
+                        "api",
+                        "aaaaaaaaaaaa",
+                    )
+                )
+                self.assertFalse(
+                    self.collector.service_config_environment_is_trusted(
+                        f"{name}=/unreviewed",
+                        "application-network",
+                        "aaaaaaaaaaaa",
+                    )
                 )
 
-    def test_generated_service_cannot_drop_or_replace_the_trusted_config_pin(self) -> None:
+    def test_generated_service_cannot_inject_environment_controls(self) -> None:
         self.assertTrue(
             self.collector.service_environment_controls_are_trusted("", "", "")
         )
@@ -2869,10 +2951,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "secpal-int-aaaaaaaaaaaa-api.service"
             ),
             "DropInPaths": "",
-            "Environment": (
-                "CONTAINERS_CONF=/dev/null CONTAINERS_CONF_OVERRIDE=/dev/null "
-                "CONTAINERS_CONF_MODULES= PODMAN_USERNS="
-            ),
+            "Environment": trusted_service_environment("api"),
             "EnvironmentFiles": "",
             "PassEnvironment": "",
             "UnsetEnvironment": "",
@@ -3163,9 +3242,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         service_properties = (
             "FragmentPath=/run/user/20000/systemd/generator/"
             "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
-            "Environment=CONTAINERS_CONF=/dev/null "
-            "CONTAINERS_CONF_OVERRIDE=/dev/null CONTAINERS_CONF_MODULES= "
-            "PODMAN_USERNS=\n"
+            f"Environment={trusted_service_environment('api')}\n"
             "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
             "ExecCondition=\nExecStartPre=\n"
             "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"
@@ -3252,6 +3329,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "-network.service" in arguments[3]
                     or "-volume.service" in arguments[3]
                 ):
+                    properties = properties.replace(
+                        f" PODMAN_SYSTEMD_UNIT={arguments[3]}",
+                        "",
+                    )
                     properties = re.sub(
                         r"ExecStop=.*\nExecStopPost=.*\n",
                         "ExecStop=\nExecStopPost=\n",
@@ -4026,9 +4107,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         service_properties = (
             "FragmentPath=/run/user/20000/systemd/generator/"
             "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
-            "Environment=CONTAINERS_CONF=/dev/null "
-            "CONTAINERS_CONF_OVERRIDE=/dev/null CONTAINERS_CONF_MODULES= "
-            "PODMAN_USERNS=\n"
+            f"Environment={trusted_service_environment('api')}\n"
             "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
             "ExecCondition=\nExecStartPre=\n"
             "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"
