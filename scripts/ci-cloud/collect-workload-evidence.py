@@ -357,10 +357,9 @@ TRUSTED_SERVICE_CONFIG_ENVIRONMENT = {
     "CONTAINERS_CONF_MODULES": "",
     "PODMAN_USERNS": "",
 }
-TRUSTED_CONTAINER_SERVICE_ENVIRONMENT = {
-    **TRUSTED_SERVICE_CONFIG_ENVIRONMENT,
-    "PODMAN_SYSTEMD_UNIT": "%n",
-}
+TRUSTED_CONTAINER_SERVICE_ENVIRONMENT_NAMES = frozenset(
+    {*TRUSTED_SERVICE_CONFIG_ENVIRONMENT, "PODMAN_SYSTEMD_UNIT"}
+)
 NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet normalization diagnostic: "
 NORMALIZATION_MODES = frozenset({"live", "cleanup"})
 NORMALIZATION_STAGES = frozenset(
@@ -1243,7 +1242,7 @@ def service_runtime_controls_are_trusted(
         and requires == expected_dependencies
         and after == expected_dependencies
         and service_config_environment_is_trusted(
-            properties.get("Environment"), logical_name
+            properties.get("Environment"), logical_name, instance
         )
         and service_environment_controls_are_trusted(
             properties.get("EnvironmentFiles"),
@@ -1524,7 +1523,7 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                 instance, logical_name
             )
             or not service_config_environment_is_trusted(
-                raw_environment, logical_name
+                raw_environment, logical_name, instance
             )
             or not service_environment_controls_are_trusted(
                 properties.get("EnvironmentFiles"),
@@ -1939,10 +1938,18 @@ def normalized_service_environment(value: object) -> tuple[list[str], bool]:
 def service_config_environment_is_trusted(
     value: object,
     logical_name: str,
+    instance: str,
 ) -> bool:
     assignments, complete = service_environment_assignments(value)
     if logical_name in ROLES:
-        expected = TRUSTED_CONTAINER_SERVICE_ENVIRONMENT
+        if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+            return False
+        expected = {
+            **TRUSTED_SERVICE_CONFIG_ENVIRONMENT,
+            "PODMAN_SYSTEMD_UNIT": (
+                f"secpal-int-{instance}-{logical_name}.service"
+            ),
+        }
     elif logical_name in GENERATED_LOGICAL_NAMES:
         expected = TRUSTED_SERVICE_CONFIG_ENVIRONMENT
     else:
@@ -3661,7 +3668,7 @@ def service_environment_names_are_trusted(service: object) -> bool:
     environment = service.get("environment")
     logical_name = service.get("logical_name")
     if logical_name in ROLES:
-        expected = sorted(TRUSTED_CONTAINER_SERVICE_ENVIRONMENT)
+        expected = sorted(TRUSTED_CONTAINER_SERVICE_ENVIRONMENT_NAMES)
     elif logical_name in GENERATED_LOGICAL_NAMES:
         expected = sorted(TRUSTED_SERVICE_CONFIG_ENVIRONMENT)
     else:

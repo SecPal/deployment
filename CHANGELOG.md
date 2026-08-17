@@ -125,6 +125,7 @@ SPDX-License-Identifier: CC0-1.0
   inherited state while the trusted root-owned fixture installer appends the
   exact `CONTAINERS_CONF`, override, modules, and `PODMAN_USERNS` execution-time
   pins to every Quadlet source. Container services additionally admit only the
+  deterministic service name produced when systemd expands Quadlet's
   generator-owned `PODMAN_SYSTEMD_UNIT=%n`. DigitalOcean Intel run
   `31976423374` exposed the former impossible requirement that inherited
   manager assignments also appear in systemd's unit-local `Environment`

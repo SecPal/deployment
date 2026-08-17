@@ -162,8 +162,10 @@ manager environment to equal that exact reviewed set without exposing values.
 The trusted root-owned fixture installer appends exact `CONTAINERS_CONF`,
 override, modules, and `PODMAN_USERNS` execution-time pins to every published
 Quadlet source. Generated container services must expose those pins plus the
-generator-owned `PODMAN_SYSTEMD_UNIT=%n`; generated network and volume services
-must expose only the pins, and every other assignment is rejected. The pins
+deterministic service name produced when systemd expands the generator-owned
+`PODMAN_SYSTEMD_UNIT=%n`; generated network and volume services must expose
+only the pins, and the unexpanded `%n`, another unit name, and every other
+assignment are rejected. The pins
 make activation immune to a detached target process temporarily changing the
 user-manager environment. Normalization still rejects manager drift before
 reload and after reload or activation, admits the generated unit provenance,

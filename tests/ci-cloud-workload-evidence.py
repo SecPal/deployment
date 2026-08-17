@@ -114,7 +114,9 @@ EXPECTED_SERVICE_CONFIG_ENVIRONMENT = {
 def trusted_service_environment(logical_name: str) -> str:
     assignments = dict(EXPECTED_SERVICE_CONFIG_ENVIRONMENT)
     if logical_name in ROLES:
-        assignments["PODMAN_SYSTEMD_UNIT"] = "%n"
+        assignments["PODMAN_SYSTEMD_UNIT"] = (
+            f"secpal-int-aaaaaaaaaaaa-{logical_name}.service"
+        )
     return " ".join(f"{name}={assignments[name]}" for name in sorted(assignments))
 
 
@@ -1407,30 +1409,48 @@ class WorkloadEvidenceTests(unittest.TestCase):
     ) -> None:
         pins = trusted_service_environment("application-network")
         trusted = trusted_service_environment("api")
-        self.assertTrue(
-            self.collector.service_config_environment_is_trusted(trusted, "api")
+        source_pins = trusted.replace(
+            "PODMAN_SYSTEMD_UNIT=secpal-int-aaaaaaaaaaaa-api.service",
+            "PODMAN_SYSTEMD_UNIT=%n",
         )
         self.assertTrue(
             self.collector.service_config_environment_is_trusted(
-                pins, "application-network"
-            )
-        )
-        self.assertFalse(
-            self.collector.service_config_environment_is_trusted("", "api")
-        )
-        self.assertFalse(
-            self.collector.service_config_environment_is_trusted(
-                "PODMAN_SYSTEMD_UNIT=wrong", "api"
+                trusted, "api", "aaaaaaaaaaaa"
             )
         )
         self.assertFalse(
             self.collector.service_config_environment_is_trusted(
-                trusted, "application-network"
+                source_pins, "api", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertTrue(
+            self.collector.service_config_environment_is_trusted(
+                pins, "application-network", "aaaaaaaaaaaa"
             )
         )
         self.assertFalse(
             self.collector.service_config_environment_is_trusted(
-                trusted, "unknown"
+                "", "api", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                "PODMAN_SYSTEMD_UNIT=wrong", "api", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                trusted, "application-network", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                trusted, "unknown", "aaaaaaaaaaaa"
+            )
+        )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                trusted, "api", "not-an-instance"
             )
         )
         for name in sorted(
@@ -1439,12 +1459,16 @@ class WorkloadEvidenceTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(
                     self.collector.service_config_environment_is_trusted(
-                        f"{trusted} {name}=/unreviewed", "api"
+                        f"{trusted} {name}=/unreviewed",
+                        "api",
+                        "aaaaaaaaaaaa",
                     )
                 )
                 self.assertFalse(
                     self.collector.service_config_environment_is_trusted(
-                        f"{name}=/unreviewed", "application-network"
+                        f"{name}=/unreviewed",
+                        "application-network",
+                        "aaaaaaaaaaaa",
                     )
                 )
 
@@ -3306,7 +3330,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     or "-volume.service" in arguments[3]
                 ):
                     properties = properties.replace(
-                        " PODMAN_SYSTEMD_UNIT=%n",
+                        f" PODMAN_SYSTEMD_UNIT={arguments[3]}",
                         "",
                     )
                     properties = re.sub(
