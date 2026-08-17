@@ -61,6 +61,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Changed
 
+- The Debian 13 fixture bridge now makes trusted service-pin augmentation part
+  of the target-visible published snapshot, preserving the target's exact
+  source-to-install comparison. The root installer independently ensures that
+  the exact trusted service-pin suffix is present and last without duplicating
+  it.
 - The exact-target Debian 13 conformance protocol now implements its closed
   workload prepare and cleanup phases. Target code verifies and stages both
   product images before publishing the fixed root-owned Quadlet set through

@@ -1453,6 +1453,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 trusted, "api", "not-an-instance"
             )
         )
+        self.assertFalse(
+            self.collector.service_config_environment_is_trusted(
+                f"{trusted} APP_DEBUG=false", "api", "aaaaaaaaaaaa"
+            )
+        )
         for name in sorted(
             UNREVIEWED_SERVICE_ENVIRONMENT_NAMES | {"APP_FEATURE"}
         ):

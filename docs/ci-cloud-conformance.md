@@ -495,6 +495,13 @@ The target account cannot write that directory. A main-controlled fixture
 bridge can promote one target-produced snapshot across that boundary without
 granting sudo or a general root file-copy interface.
 
+Before it submits the bounded snapshot, the trusted client adds the same exact
+service-pin suffix to the target-visible non-target source files. The root
+installer independently ensures that suffix is present and last without
+duplicating it. The target's post-publication byte comparison can therefore
+measure the complete installed contract, including the trusted pins, while a
+request that omits or trails the suffix is still normalized fail closed.
+
 The main-controlled bootstrap installs the root-owned client as a fixed
 executable for the disposable operator; it is not loaded from `target_sha`.
 That unprivileged client publishes only an operation, a bounded instance ID, a
