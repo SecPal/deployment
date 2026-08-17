@@ -63,11 +63,9 @@ SPDX-License-Identifier: CC0-1.0
 
 - The Debian 13 fixture bridge now makes trusted service-pin augmentation part
   of the target-visible published snapshot, preserving the target's exact
-  source-to-install comparison. Generated-service admission accepts only the
-  exact reviewed role-specific container environment that Podman 5.4.2 copies
-  from each Quadlet source, the fixed execution-time pins, and the exact
-  expanded `PODMAN_SYSTEMD_UNIT`; auxiliary network and volume services remain
-  limited to the pins.
+  source-to-install comparison. The root installer independently ensures that
+  the exact trusted service-pin suffix is present and last without duplicating
+  it.
 - The exact-target Debian 13 conformance protocol now implements its closed
   workload prepare and cleanup phases. Target code verifies and stages both
   product images before publishing the fixed root-owned Quadlet set through

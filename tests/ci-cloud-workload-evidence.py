@@ -109,89 +109,11 @@ EXPECTED_SERVICE_CONFIG_ENVIRONMENT = {
     "CONTAINERS_CONF_OVERRIDE": "/dev/null",
     "PODMAN_USERNS": "",
 }
-EXPECTED_API_SERVICE_ENVIRONMENT = {
-    "APP_DEBUG": "false",
-    "APP_ENV": "local",
-    "APP_NAME": "SecPal",
-    "CACHE_STORE": "redis",
-    "DB_CONNECTION": "pgsql",
-    "DB_DATABASE": "secpal_local",
-    "DB_HOST": "postgres",
-    "DB_PORT": "5432",
-    "DB_USERNAME": "secpal_local",
-    "FILESYSTEM_DISK": "local",
-    "LOG_CHANNEL": "stderr",
-    "QUEUE_CONNECTION": "redis",
-    "REDIS_CACHE_DB": "1",
-    "REDIS_CLIENT": "phpredis",
-    "REDIS_DB": "0",
-    "REDIS_HOST": "valkey",
-    "REDIS_PORT": "6379",
-    "REDIS_QUEUE": "default",
-    "REDIS_QUEUE_CONNECTION": "default",
-    "SESSION_DOMAIN": ".secpal.example.invalid",
-    "SESSION_DRIVER": "database",
-    "SESSION_HTTP_ONLY": "true",
-    "SESSION_SAME_SITE": "lax",
-    "SESSION_SECURE_COOKIE": "true",
-    "TRUSTED_PROXIES": "REMOTE_ADDR",
-}
-
-
-def expected_container_service_environment(
-    logical_name: str, instance: str = "aaaaaaaaaaaa"
-) -> dict[str, str]:
-    port = 20_000 + int(instance[:8], 16) % 40_000
-    if logical_name in {
-        "migrate", "api", "worker-general", "worker-hash-chain", "scheduler"
-    }:
-        return {
-            **EXPECTED_API_SERVICE_ENVIRONMENT,
-            "APP_URL": f"https://api.secpal.example.invalid:{port}",
-            "CORS_ALLOWED_HEADERS": (
-                "Content-Type,Authorization,X-Requested-With,X-XSRF-TOKEN"
-            ),
-            "CORS_ALLOWED_METHODS": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-            "CORS_ALLOWED_ORIGINS": (
-                f"https://app.secpal.example.invalid:{port}"
-            ),
-            "CORS_SUPPORTS_CREDENTIALS": "true",
-            "FRONTEND_URL": f"https://app.secpal.example.invalid:{port}",
-            "SANCTUM_STATEFUL_DOMAINS": (
-                f"app.secpal.example.invalid:{port}"
-            ),
-        }
-    return {
-        "secrets-init": {
-            "SECPAL_API_GID": "10001",
-            "SECPAL_API_UID": "10001",
-            "SECPAL_POSTGRES_DATA_DIR": "/var/lib/postgresql/data",
-            "SECPAL_POSTGRES_UID": "999",
-            "SECPAL_PRIVATE_STORAGE_DIR": "/mnt/secpal-private-storage",
-            "SECPAL_SECRET_DIR": "/run/secpal-secrets",
-            "SECPAL_VALKEY_UID": "10002",
-        },
-        "postgres": {
-            "POSTGRES_DB": "secpal_local",
-            "POSTGRES_PASSWORD_FILE": "/run/secpal-secrets/postgres-password",
-            "POSTGRES_USER": "secpal_local",
-        },
-        "valkey": {},
-        "frontend": {
-            "SECPAL_API_URL": f"https://api.secpal.example.invalid:{port}",
-        },
-        "gateway": {
-            "HOME": "/config",
-            "XDG_CONFIG_HOME": "/config",
-            "XDG_DATA_HOME": "/data",
-        },
-    }[logical_name]
 
 
 def trusted_service_environment(logical_name: str) -> str:
     assignments = dict(EXPECTED_SERVICE_CONFIG_ENVIRONMENT)
     if logical_name in ROLES:
-        assignments.update(expected_container_service_environment(logical_name))
         assignments["PODMAN_SYSTEMD_UNIT"] = (
             f"secpal-int-aaaaaaaaaaaa-{logical_name}.service"
         )
@@ -395,11 +317,7 @@ def valid_observations() -> dict[str, object]:
             "drop_in_sha256": [],
             "environment": sorted(
                 set(EXPECTED_SERVICE_CONFIG_ENVIRONMENT)
-                | (
-                    set(expected_container_service_environment(logical_name))
-                    | {"PODMAN_SYSTEMD_UNIT"}
-                    if logical_name in ROLES else set()
-                )
+                | ({"PODMAN_SYSTEMD_UNIT"} if logical_name in ROLES else set())
             ),
             "active_state": "active",
             "sub_state": (
@@ -1537,9 +1455,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertFalse(
             self.collector.service_config_environment_is_trusted(
-                trusted.replace("APP_DEBUG=false", "APP_DEBUG=true"),
-                "api",
-                "aaaaaaaaaaaa",
+                f"{trusted} APP_DEBUG=false", "api", "aaaaaaaaaaaa"
             )
         )
         for name in sorted(
@@ -3383,15 +3299,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     return 0, target_properties, True
                 if arguments[3] == self.collector.PODMAN_NETWORK_ONLINE_UNIT:
                     return 0, podman_network_online_properties, True
+                properties = service_properties.replace(
+                    "secpal-int-aaaaaaaaaaaa-api.service", arguments[3]
+                )
                 logical_name = arguments[3].removeprefix(
                     "secpal-int-aaaaaaaaaaaa-"
                 ).removesuffix(".service")
-                properties = service_properties.replace(
-                    trusted_service_environment("api"),
-                    trusted_service_environment(logical_name),
-                ).replace(
-                    "secpal-int-aaaaaaaaaaaa-api.service", arguments[3]
-                )
                 dependencies = " ".join(
                     sorted(
                         self.collector.expected_generated_service_dependencies(

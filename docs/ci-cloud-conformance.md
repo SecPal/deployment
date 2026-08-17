@@ -404,12 +404,10 @@ closed. The main command must use the role-appropriate direct
 service must expose the exact root-installer-owned `CONTAINERS_CONF=/dev/null`,
 `CONTAINERS_CONF_OVERRIDE=/dev/null`, empty `CONTAINERS_CONF_MODULES`, and empty
 `PODMAN_USERNS` execution-time pins. Container services additionally expose
-the exact role-specific assignments already reviewed in their source
-`[Container] Environment=` directives and the deterministic
-`secpal-int-<instance>-<role>.service` value produced when systemd expands
-Quadlet's generator-owned `PODMAN_SYSTEMD_UNIT=%n`. Generated network and
-volume services expose only the pins. The unexpanded `%n`, another unit name,
-an altered source-declared value, and every unknown service-local assignment
+only the deterministic `secpal-int-<instance>-<role>.service` value produced
+when systemd expands Quadlet's generator-owned `PODMAN_SYSTEMD_UNIT=%n`;
+generated network and volume services do not expose that assignment. The
+unexpanded `%n`, another unit name, and every other service-local assignment
 are rejected. User
 services inherit the separately admitted exact manager environment
 automatically, while the immutable unit-local pins prevent a detached target

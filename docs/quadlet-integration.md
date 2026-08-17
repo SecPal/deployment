@@ -164,12 +164,10 @@ The trusted client makes exact `CONTAINERS_CONF`, override, modules, and
 and the root-owned installer independently ensures that exact suffix is
 present and last without duplicating it. The post-publication byte comparison
 therefore covers the complete installed contract. Generated container
-services must expose those pins, their exact reviewed role-specific
-`[Container] Environment=` assignments, and the deterministic service name
-produced when systemd expands the generator-owned `PODMAN_SYSTEMD_UNIT=%n`.
-Generated network and volume services expose only the pins. The unexpanded
-`%n`, another unit name, changed reviewed values, and unknown assignments are
-rejected. The pins
+services must expose those pins plus the deterministic service name produced
+when systemd expands the generator-owned `PODMAN_SYSTEMD_UNIT=%n`; generated
+network and volume services must expose only the pins, and the unexpanded `%n`,
+another unit name, and every other assignment are rejected. The pins
 make activation immune to a detached target process temporarily changing the
 user-manager environment. Normalization still rejects manager drift before
 reload and after reload or activation, admits the generated unit provenance,
