@@ -136,9 +136,10 @@ class QuadletFixtureTests(unittest.TestCase):
             self.assertFalse(destination.is_symlink())
             self.assertEqual(0o644, destination.stat().st_mode & 0o777)
             expected = (source / name).read_bytes()
-            if not name.endswith(".target"):
-                expected += TRUSTED_SERVICE_SECTION
             self.assertEqual(expected, destination.read_bytes())
+            if not name.endswith(".target"):
+                self.assertTrue(expected.endswith(TRUSTED_SERVICE_SECTION))
+                self.assertEqual(1, expected.count(TRUSTED_SERVICE_SECTION))
         active = json.loads(self.layout.active_state.read_text())
         self.assertEqual("active", active["state"])
         self.assertEqual(
@@ -173,21 +174,48 @@ class QuadletFixtureTests(unittest.TestCase):
             installed.index(b"CONTAINERS_CONF_OVERRIDE=/tmp/target.conf"),
             installed.rindex(b"CONTAINERS_CONF_OVERRIDE=/dev/null"),
         )
+        self.assertEqual(installed, target.read_bytes())
+
+    def test_existing_exact_trusted_suffix_is_not_duplicated(self) -> None:
+        instance = "a1b2c3d4"
+        source = self.source_units(instance)
+        target = source / f"secpal-int-{instance}-api.container"
+        with target.open("ab") as stream:
+            stream.write(TRUSTED_SERVICE_SECTION)
+
+        self.stage("install", instance, source)
+        self.assertTrue(
+            self.installer.handle_request("install", self.layout, lambda _: None)
+        )
+
+        installed = self.layout.destination(target.name).read_bytes()
+        self.assertEqual(target.read_bytes(), installed)
+        self.assertEqual(1, installed.count(TRUSTED_SERVICE_SECTION))
 
     def test_trusted_pin_expansion_respects_the_unit_size_limit(self) -> None:
         instance = "a1b2c3d4"
         source = self.source_units(instance)
         target = source / f"secpal-int-{instance}-api.container"
         target.write_bytes(b"x" * (self.installer.MAX_UNIT_BYTES - 1) + b"\n")
-        self.stage("install", instance, source)
+        with self.assertRaisesRegex(ValueError, "expansion exceeds the size limit"):
+            self.stage("install", instance, source)
 
-        self.assertFalse(
-            self.installer.handle_request("install", self.layout, lambda _: None)
-        )
-        result = json.loads(self.layout.result_path("install").read_text())
-        self.assertEqual("size-limit", result["reason"])
+        self.assertFalse(self.layout.request_path("install").exists())
         self.assertFalse(self.layout.active_state.exists())
         self.assertFalse(any(self.layout.quadlet_root.iterdir()))
+
+    def test_root_snapshot_independently_bounds_trusted_pin_expansion(self) -> None:
+        instance = "a1b2c3d4"
+        names = self.installer.expected_unit_names(instance)
+        files = {name: b"[Unit]\n" for name in names}
+        expanded = next(name for name in names if not name.endswith(".target"))
+        files[expanded] = b"x" * (self.installer.MAX_UNIT_BYTES - 1) + b"\n"
+        request = self.installer.Request("install", instance, "a" * 32, files)
+
+        with self.assertRaisesRegex(
+            self.installer.RequestError, "size-limit"
+        ):
+            self.installer.trusted_snapshot_files(request)
 
     def test_cleanup_requires_and_removes_only_recorded_snapshot(self) -> None:
         instance = "a1b2c3d4"

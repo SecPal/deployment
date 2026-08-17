@@ -357,9 +357,69 @@ TRUSTED_SERVICE_CONFIG_ENVIRONMENT = {
     "CONTAINERS_CONF_MODULES": "",
     "PODMAN_USERNS": "",
 }
-TRUSTED_CONTAINER_SERVICE_ENVIRONMENT_NAMES = frozenset(
-    {*TRUSTED_SERVICE_CONFIG_ENVIRONMENT, "PODMAN_SYSTEMD_UNIT"}
-)
+TRUSTED_API_SERVICE_ENVIRONMENT = {
+    "APP_DEBUG": "false",
+    "APP_ENV": "local",
+    "APP_NAME": "SecPal",
+    "CACHE_STORE": "redis",
+    "DB_CONNECTION": "pgsql",
+    "DB_DATABASE": "secpal_local",
+    "DB_HOST": "postgres",
+    "DB_PORT": "5432",
+    "DB_USERNAME": "secpal_local",
+    "FILESYSTEM_DISK": "local",
+    "LOG_CHANNEL": "stderr",
+    "QUEUE_CONNECTION": "redis",
+    "REDIS_CACHE_DB": "1",
+    "REDIS_CLIENT": "phpredis",
+    "REDIS_DB": "0",
+    "REDIS_HOST": "valkey",
+    "REDIS_PORT": "6379",
+    "REDIS_QUEUE": "default",
+    "REDIS_QUEUE_CONNECTION": "default",
+    "SESSION_DOMAIN": ".secpal.example.invalid",
+    "SESSION_DRIVER": "database",
+    "SESSION_HTTP_ONLY": "true",
+    "SESSION_SAME_SITE": "lax",
+    "SESSION_SECURE_COOKIE": "true",
+    "TRUSTED_PROXIES": "REMOTE_ADDR",
+}
+TRUSTED_CONTAINER_SERVICE_ENVIRONMENT_NAMES = {
+    "secrets-init": frozenset(
+        {
+            "SECPAL_API_GID",
+            "SECPAL_API_UID",
+            "SECPAL_POSTGRES_DATA_DIR",
+            "SECPAL_POSTGRES_UID",
+            "SECPAL_PRIVATE_STORAGE_DIR",
+            "SECPAL_SECRET_DIR",
+            "SECPAL_VALKEY_UID",
+        }
+    ),
+    "postgres": frozenset(
+        {"POSTGRES_DB", "POSTGRES_PASSWORD_FILE", "POSTGRES_USER"}
+    ),
+    "valkey": frozenset(),
+    **{
+        role: frozenset(
+            {
+                *TRUSTED_API_SERVICE_ENVIRONMENT,
+                "APP_URL",
+                "CORS_ALLOWED_HEADERS",
+                "CORS_ALLOWED_METHODS",
+                "CORS_ALLOWED_ORIGINS",
+                "CORS_SUPPORTS_CREDENTIALS",
+                "FRONTEND_URL",
+                "SANCTUM_STATEFUL_DOMAINS",
+            }
+        )
+        for role in (
+            "migrate", "api", "worker-general", "worker-hash-chain", "scheduler"
+        )
+    },
+    "frontend": frozenset({"SECPAL_API_URL"}),
+    "gateway": frozenset({"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"}),
+}
 NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet normalization diagnostic: "
 NORMALIZATION_MODES = frozenset({"live", "cleanup"})
 NORMALIZATION_STAGES = frozenset(
@@ -1935,6 +1995,58 @@ def normalized_service_environment(value: object) -> tuple[list[str], bool]:
     return sorted(assignments), complete
 
 
+def expected_container_service_environment(
+    logical_name: str, instance: str
+) -> dict[str, str] | None:
+    if logical_name not in ROLES or re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return None
+    port = 20_000 + int(instance[:8], 16) % 40_000
+    if logical_name in {
+        "migrate", "api", "worker-general", "worker-hash-chain", "scheduler"
+    }:
+        return {
+            **TRUSTED_API_SERVICE_ENVIRONMENT,
+            "APP_URL": f"https://api.secpal.example.invalid:{port}",
+            "CORS_ALLOWED_HEADERS": (
+                "Content-Type,Authorization,X-Requested-With,X-XSRF-TOKEN"
+            ),
+            "CORS_ALLOWED_METHODS": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+            "CORS_ALLOWED_ORIGINS": (
+                f"https://app.secpal.example.invalid:{port}"
+            ),
+            "CORS_SUPPORTS_CREDENTIALS": "true",
+            "FRONTEND_URL": f"https://app.secpal.example.invalid:{port}",
+            "SANCTUM_STATEFUL_DOMAINS": (
+                f"app.secpal.example.invalid:{port}"
+            ),
+        }
+    return {
+        "secrets-init": {
+            "SECPAL_API_GID": "10001",
+            "SECPAL_API_UID": "10001",
+            "SECPAL_POSTGRES_DATA_DIR": "/var/lib/postgresql/data",
+            "SECPAL_POSTGRES_UID": "999",
+            "SECPAL_PRIVATE_STORAGE_DIR": "/mnt/secpal-private-storage",
+            "SECPAL_SECRET_DIR": "/run/secpal-secrets",
+            "SECPAL_VALKEY_UID": "10002",
+        },
+        "postgres": {
+            "POSTGRES_DB": "secpal_local",
+            "POSTGRES_PASSWORD_FILE": "/run/secpal-secrets/postgres-password",
+            "POSTGRES_USER": "secpal_local",
+        },
+        "valkey": {},
+        "frontend": {
+            "SECPAL_API_URL": f"https://api.secpal.example.invalid:{port}",
+        },
+        "gateway": {
+            "HOME": "/config",
+            "XDG_CONFIG_HOME": "/config",
+            "XDG_DATA_HOME": "/data",
+        },
+    }[logical_name]
+
+
 def service_config_environment_is_trusted(
     value: object,
     logical_name: str,
@@ -1942,10 +2054,14 @@ def service_config_environment_is_trusted(
 ) -> bool:
     assignments, complete = service_environment_assignments(value)
     if logical_name in ROLES:
-        if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        container_environment = expected_container_service_environment(
+            logical_name, instance
+        )
+        if container_environment is None:
             return False
         expected = {
             **TRUSTED_SERVICE_CONFIG_ENVIRONMENT,
+            **container_environment,
             "PODMAN_SYSTEMD_UNIT": (
                 f"secpal-int-{instance}-{logical_name}.service"
             ),
@@ -3668,7 +3784,13 @@ def service_environment_names_are_trusted(service: object) -> bool:
     environment = service.get("environment")
     logical_name = service.get("logical_name")
     if logical_name in ROLES:
-        expected = sorted(TRUSTED_CONTAINER_SERVICE_ENVIRONMENT_NAMES)
+        expected = sorted(
+            {
+                *TRUSTED_SERVICE_CONFIG_ENVIRONMENT,
+                *TRUSTED_CONTAINER_SERVICE_ENVIRONMENT_NAMES[logical_name],
+                "PODMAN_SYSTEMD_UNIT",
+            }
+        )
     elif logical_name in GENERATED_LOGICAL_NAMES:
         expected = sorted(TRUSTED_SERVICE_CONFIG_ENVIRONMENT)
     else:

@@ -404,10 +404,12 @@ closed. The main command must use the role-appropriate direct
 service must expose the exact root-installer-owned `CONTAINERS_CONF=/dev/null`,
 `CONTAINERS_CONF_OVERRIDE=/dev/null`, empty `CONTAINERS_CONF_MODULES`, and empty
 `PODMAN_USERNS` execution-time pins. Container services additionally expose
-only the deterministic `secpal-int-<instance>-<role>.service` value produced
-when systemd expands Quadlet's generator-owned `PODMAN_SYSTEMD_UNIT=%n`;
-generated network and volume services do not expose that assignment. The
-unexpanded `%n`, another unit name, and every other service-local assignment
+the exact role-specific assignments already reviewed in their source
+`[Container] Environment=` directives and the deterministic
+`secpal-int-<instance>-<role>.service` value produced when systemd expands
+Quadlet's generator-owned `PODMAN_SYSTEMD_UNIT=%n`. Generated network and
+volume services expose only the pins. The unexpanded `%n`, another unit name,
+an altered source-declared value, and every unknown service-local assignment
 are rejected. User
 services inherit the separately admitted exact manager environment
 automatically, while the immutable unit-local pins prevent a detached target
@@ -494,6 +496,13 @@ definition directory and restricts the effective generator search path to it.
 The target account cannot write that directory. A main-controlled fixture
 bridge can promote one target-produced snapshot across that boundary without
 granting sudo or a general root file-copy interface.
+
+Before it submits the bounded snapshot, the trusted client adds the same exact
+service-pin suffix to the target-visible non-target source files. The root
+installer independently ensures that suffix is present and last without
+duplicating it. The target's post-publication byte comparison can therefore
+measure the complete installed contract, including the trusted pins, while a
+request that omits or trails the suffix is still normalized fail closed.
 
 The main-controlled bootstrap installs the root-owned client as a fixed
 executable for the disposable operator; it is not loaded from `target_sha`.

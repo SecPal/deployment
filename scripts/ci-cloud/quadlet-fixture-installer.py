@@ -523,7 +523,10 @@ def trusted_snapshot_files(request: Request) -> dict[str, bytes]:
     total = 0
     for name in expected_unit_names(request.instance):
         content = request.files[name]
-        if not name.endswith(".target"):
+        if (
+            not name.endswith(".target")
+            and not content.endswith(TRUSTED_SERVICE_SECTION)
+        ):
             content += TRUSTED_SERVICE_SECTION
         total += len(content)
         if len(content) > MAX_UNIT_BYTES or total > MAX_TOTAL_BYTES:

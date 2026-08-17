@@ -28,6 +28,13 @@ CONTAINER_ROLES = (
 )
 NETWORKS = ("application", "edge")
 VOLUMES = ("secrets", "private-storage", "postgres")
+TRUSTED_SERVICE_SECTION = (
+    b"\n[Service]\n"
+    b"Environment=CONTAINERS_CONF=/dev/null\n"
+    b"Environment=CONTAINERS_CONF_OVERRIDE=/dev/null\n"
+    b"Environment=CONTAINERS_CONF_MODULES=\n"
+    b"Environment=PODMAN_USERNS=\n"
+)
 
 
 @dataclass(frozen=True)
@@ -53,7 +60,7 @@ def expected_unit_names(instance: str) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
-def secure_copy(source: Path, destination: Path) -> None:
+def secure_read(source: Path) -> tuple[bytes, int]:
     metadata = source.lstat()
     if (
         not stat.S_ISREG(metadata.st_mode)
@@ -92,8 +99,39 @@ def secure_copy(source: Path, destination: Path) -> None:
     ):
         raise ValueError("source unit changed or is not bounded text")
     content.decode("utf-8")
-    destination.write_bytes(content)
-    destination.chmod(0o600)
+    return content, stat.S_IMODE(before.st_mode)
+
+
+def canonical_unit_content(name: str, content: bytes) -> bytes:
+    if not name.endswith(".target") and not content.endswith(TRUSTED_SERVICE_SECTION):
+        content += TRUSTED_SERVICE_SECTION
+    if len(content) > MAX_UNIT_BYTES:
+        raise ValueError("trusted unit expansion exceeds the size limit")
+    return content
+
+
+def atomic_replace_owned_source(path: Path, content: bytes, mode: int) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def stage_request(
@@ -123,8 +161,21 @@ def stage_request(
                 raise ValueError("install source differs from the closed filename set")
             units = temporary / "units"
             units.mkdir(mode=0o700)
+            snapshots: dict[str, tuple[bytes, bytes, int]] = {}
             for name in names:
-                secure_copy(source / name, units / name)
+                content, mode = secure_read(source / name)
+                snapshots[name] = (
+                    content,
+                    canonical_unit_content(name, content),
+                    mode,
+                )
+            for name in names:
+                original, content, mode = snapshots[name]
+                if content != original:
+                    atomic_replace_owned_source(source / name, content, mode)
+                destination = units / name
+                destination.write_bytes(content)
+                destination.chmod(0o600)
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "operation": operation,
