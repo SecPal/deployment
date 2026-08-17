@@ -103,6 +103,19 @@ UNREVIEWED_SERVICE_ENVIRONMENT_NAMES = frozenset(
         "XDG_RUNTIME_DIR",
     }
 )
+EXPECTED_SERVICE_CONFIG_ENVIRONMENT = {
+    "CONTAINERS_CONF": "/dev/null",
+    "CONTAINERS_CONF_MODULES": "",
+    "CONTAINERS_CONF_OVERRIDE": "/dev/null",
+    "PODMAN_USERNS": "",
+}
+
+
+def trusted_service_environment(logical_name: str) -> str:
+    assignments = dict(EXPECTED_SERVICE_CONFIG_ENVIRONMENT)
+    if logical_name in ROLES:
+        assignments["PODMAN_SYSTEMD_UNIT"] = "%n"
+    return " ".join(f"{name}={assignments[name]}" for name in sorted(assignments))
 
 
 def normalization_environment_read_key(show_count: int) -> str:
@@ -300,8 +313,9 @@ def valid_observations() -> dict[str, object]:
             "drop_in_paths": [],
             "drop_in_owners": [],
             "drop_in_sha256": [],
-            "environment": (
-                ["PODMAN_SYSTEMD_UNIT"] if logical_name in ROLES else []
+            "environment": sorted(
+                set(EXPECTED_SERVICE_CONFIG_ENVIRONMENT)
+                | ({"PODMAN_SYSTEMD_UNIT"} if logical_name in ROLES else set())
             ),
             "active_state": "active",
             "sub_state": (
@@ -1388,16 +1402,17 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
         )
 
-    def test_generated_service_inherits_manager_config_without_unit_overrides(
+    def test_generated_service_requires_trusted_execution_time_pins(
         self,
     ) -> None:
-        trusted = "PODMAN_SYSTEMD_UNIT=%n"
+        pins = trusted_service_environment("application-network")
+        trusted = trusted_service_environment("api")
         self.assertTrue(
             self.collector.service_config_environment_is_trusted(trusted, "api")
         )
         self.assertTrue(
             self.collector.service_config_environment_is_trusted(
-                "", "application-network"
+                pins, "application-network"
             )
         )
         self.assertFalse(
@@ -2912,7 +2927,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "secpal-int-aaaaaaaaaaaa-api.service"
             ),
             "DropInPaths": "",
-            "Environment": "PODMAN_SYSTEMD_UNIT=%n",
+            "Environment": trusted_service_environment("api"),
             "EnvironmentFiles": "",
             "PassEnvironment": "",
             "UnsetEnvironment": "",
@@ -3203,7 +3218,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         service_properties = (
             "FragmentPath=/run/user/20000/systemd/generator/"
             "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
-            "Environment=PODMAN_SYSTEMD_UNIT=%n\n"
+            f"Environment={trusted_service_environment('api')}\n"
             "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
             "ExecCondition=\nExecStartPre=\n"
             "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"
@@ -3291,8 +3306,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     or "-volume.service" in arguments[3]
                 ):
                     properties = properties.replace(
-                        "Environment=PODMAN_SYSTEMD_UNIT=%n\n",
-                        "Environment=\n",
+                        " PODMAN_SYSTEMD_UNIT=%n",
+                        "",
                     )
                     properties = re.sub(
                         r"ExecStop=.*\nExecStopPost=.*\n",
@@ -4068,7 +4083,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         service_properties = (
             "FragmentPath=/run/user/20000/systemd/generator/"
             "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
-            "Environment=PODMAN_SYSTEMD_UNIT=%n\n"
+            f"Environment={trusted_service_environment('api')}\n"
             "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
             "ExecCondition=\nExecStartPre=\n"
             "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"

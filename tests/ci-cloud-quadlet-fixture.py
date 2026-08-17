@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -22,6 +23,13 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "ci-cloud" / "quadlet-fixture-installer.py"
 CLIENT = ROOT / "scripts" / "ci-cloud" / "quadlet-fixture-client.py"
+TRUSTED_SERVICE_SECTION = (
+    b"\n[Service]\n"
+    b"Environment=CONTAINERS_CONF=/dev/null\n"
+    b"Environment=CONTAINERS_CONF_OVERRIDE=/dev/null\n"
+    b"Environment=CONTAINERS_CONF_MODULES=\n"
+    b"Environment=PODMAN_USERNS=\n"
+)
 
 
 def load(path: Path, name: str):
@@ -127,13 +135,59 @@ class QuadletFixtureTests(unittest.TestCase):
             self.assertTrue(destination.is_file())
             self.assertFalse(destination.is_symlink())
             self.assertEqual(0o644, destination.stat().st_mode & 0o777)
-            self.assertEqual((source / name).read_bytes(), destination.read_bytes())
+            expected = (source / name).read_bytes()
+            if not name.endswith(".target"):
+                expected += TRUSTED_SERVICE_SECTION
+            self.assertEqual(expected, destination.read_bytes())
         active = json.loads(self.layout.active_state.read_text())
         self.assertEqual("active", active["state"])
         self.assertEqual(
             sorted(self.installer.expected_unit_names(instance)),
             sorted(active["files"]),
         )
+        for name, record in active["files"].items():
+            content = self.layout.destination(name).read_bytes()
+            self.assertEqual(len(content), record["size"])
+            self.assertEqual(
+                hashlib.sha256(content).hexdigest(), record["sha256"]
+            )
+
+    def test_trusted_pins_follow_target_authored_service_values(self) -> None:
+        instance = "a1b2c3d4"
+        source = self.source_units(instance)
+        target = source / f"secpal-int-{instance}-api.container"
+        with target.open("ab") as stream:
+            stream.write(
+                b"\n[Service]\n"
+                b"Environment=CONTAINERS_CONF_OVERRIDE=/tmp/target.conf\n"
+            )
+        self.stage("install", instance, source)
+
+        self.assertTrue(
+            self.installer.handle_request("install", self.layout, lambda _: None)
+        )
+
+        installed = self.layout.destination(target.name).read_bytes()
+        self.assertTrue(installed.endswith(TRUSTED_SERVICE_SECTION))
+        self.assertLess(
+            installed.index(b"CONTAINERS_CONF_OVERRIDE=/tmp/target.conf"),
+            installed.rindex(b"CONTAINERS_CONF_OVERRIDE=/dev/null"),
+        )
+
+    def test_trusted_pin_expansion_respects_the_unit_size_limit(self) -> None:
+        instance = "a1b2c3d4"
+        source = self.source_units(instance)
+        target = source / f"secpal-int-{instance}-api.container"
+        target.write_bytes(b"x" * (self.installer.MAX_UNIT_BYTES - 1) + b"\n")
+        self.stage("install", instance, source)
+
+        self.assertFalse(
+            self.installer.handle_request("install", self.layout, lambda _: None)
+        )
+        result = json.loads(self.layout.result_path("install").read_text())
+        self.assertEqual("size-limit", result["reason"])
+        self.assertFalse(self.layout.active_state.exists())
+        self.assertFalse(any(self.layout.quadlet_root.iterdir()))
 
     def test_cleanup_requires_and_removes_only_recorded_snapshot(self) -> None:
         instance = "a1b2c3d4"

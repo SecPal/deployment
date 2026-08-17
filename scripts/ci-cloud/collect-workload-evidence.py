@@ -351,7 +351,16 @@ TRUSTED_MANAGER_ENVIRONMENT = (
     "USER=secpal-ci",
     "XDG_RUNTIME_DIR=/run/user/20000",
 )
-TRUSTED_CONTAINER_SERVICE_ENVIRONMENT = {"PODMAN_SYSTEMD_UNIT": "%n"}
+TRUSTED_SERVICE_CONFIG_ENVIRONMENT = {
+    "CONTAINERS_CONF": "/dev/null",
+    "CONTAINERS_CONF_OVERRIDE": "/dev/null",
+    "CONTAINERS_CONF_MODULES": "",
+    "PODMAN_USERNS": "",
+}
+TRUSTED_CONTAINER_SERVICE_ENVIRONMENT = {
+    **TRUSTED_SERVICE_CONFIG_ENVIRONMENT,
+    "PODMAN_SYSTEMD_UNIT": "%n",
+}
 NORMALIZATION_DIAGNOSTIC_PREFIX = "Trusted Quadlet normalization diagnostic: "
 NORMALIZATION_MODES = frozenset({"live", "cleanup"})
 NORMALIZATION_STAGES = frozenset(
@@ -1935,7 +1944,7 @@ def service_config_environment_is_trusted(
     if logical_name in ROLES:
         expected = TRUSTED_CONTAINER_SERVICE_ENVIRONMENT
     elif logical_name in GENERATED_LOGICAL_NAMES:
-        expected = {}
+        expected = TRUSTED_SERVICE_CONFIG_ENVIRONMENT
     else:
         return False
     return complete and assignments == expected
@@ -3654,7 +3663,7 @@ def service_environment_names_are_trusted(service: object) -> bool:
     if logical_name in ROLES:
         expected = sorted(TRUSTED_CONTAINER_SERVICE_ENVIRONMENT)
     elif logical_name in GENERATED_LOGICAL_NAMES:
-        expected = []
+        expected = sorted(TRUSTED_SERVICE_CONFIG_ENVIRONMENT)
     else:
         return False
     return environment == expected

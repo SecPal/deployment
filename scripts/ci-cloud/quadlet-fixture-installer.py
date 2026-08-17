@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Install one bounded target-produced Quadlet snapshot as root-owned input."""
+"""Install one bounded Quadlet snapshot with root-owned execution-time pins."""
 
 from __future__ import annotations
 
@@ -71,6 +71,13 @@ CONTAINER_ROLES = (
 )
 NETWORKS = ("application", "edge")
 VOLUMES = ("secrets", "private-storage", "postgres")
+TRUSTED_SERVICE_SECTION = (
+    b"\n[Service]\n"
+    b"Environment=CONTAINERS_CONF=/dev/null\n"
+    b"Environment=CONTAINERS_CONF_OVERRIDE=/dev/null\n"
+    b"Environment=CONTAINERS_CONF_MODULES=\n"
+    b"Environment=PODMAN_USERNS=\n"
+)
 
 
 class RequestError(RuntimeError):
@@ -511,6 +518,20 @@ def install_trusted_document(path: Path, content: bytes, layout: Layout) -> None
     atomic_bytes(path, content, 0o644)
 
 
+def trusted_snapshot_files(request: Request) -> dict[str, bytes]:
+    files: dict[str, bytes] = {}
+    total = 0
+    for name in expected_unit_names(request.instance):
+        content = request.files[name]
+        if not name.endswith(".target"):
+            content += TRUSTED_SERVICE_SECTION
+        total += len(content)
+        if len(content) > MAX_UNIT_BYTES or total > MAX_TOTAL_BYTES:
+            raise RequestError("size-limit")
+        files[name] = content
+    return files
+
+
 def install(request: Request, layout: Layout) -> None:
     validate_trusted_directory(layout.quadlet_root, layout)
     validate_trusted_directory(layout.systemd_root, layout)
@@ -522,6 +543,7 @@ def install(request: Request, layout: Layout) -> None:
     names = expected_unit_names(request.instance)
     if set(request.files) != set(names):
         raise RequestError("snapshot-incomplete")
+    files = trusted_snapshot_files(request)
     for name in names:
         destination = layout.destination(name)
         if destination.exists() or destination.is_symlink():
@@ -530,14 +552,14 @@ def install(request: Request, layout: Layout) -> None:
         "schema_version": SCHEMA_VERSION,
         "state": "installing",
         "instance": request.instance,
-        "files": {name: file_record(request.files[name]) for name in names},
+        "files": {name: file_record(files[name]) for name in names},
     }
     atomic_bytes(layout.active_state, canonical_json(state), 0o400)
     installed: list[Path] = []
     try:
         for name in names:
             destination = layout.destination(name)
-            atomic_bytes(destination, request.files[name], 0o644)
+            atomic_bytes(destination, files[name], 0o644)
             installed.append(destination)
         state["state"] = "active"
         atomic_bytes(layout.active_state, canonical_json(state), 0o400)
