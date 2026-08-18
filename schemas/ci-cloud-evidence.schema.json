@@ -1136,28 +1136,52 @@
         }
       }
     },
+    "podmanHealthTimerFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container_id", "timer", "service", "interval_usec"],
+      "properties": {
+        "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "timer": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}-(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})\\.timer$"
+        },
+        "service": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}-(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})\\.service$"
+        },
+        "interval_usec": { "enum": [5000000, 10000000] }
+      }
+    },
+    "canonicalSystemdUnitName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?:[A-Za-z0-9_.@:-]|\\\\x[0-9a-f]{2})+$",
+      "not": { "pattern": "[\\u0000-\\u001f\\u007f\\u2028\\u2029]" }
+    },
     "userWork": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["active_units", "jobs"],
+      "required": ["active_units", "jobs", "podman_health_timers"],
       "properties": {
         "active_units": {
           "type": "array",
           "uniqueItems": true,
           "maxItems": 128,
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
-          }
+          "items": { "$ref": "#/$defs/canonicalSystemdUnitName" }
         },
         "jobs": {
           "type": "array",
           "uniqueItems": true,
           "maxItems": 128,
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
-          }
+          "items": { "$ref": "#/$defs/canonicalSystemdUnitName" }
+        },
+        "podman_health_timers": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/podmanHealthTimerFact" }
         }
       }
     },
@@ -1167,8 +1191,10 @@
       "required": ["executable", "control_group", "uid", "gid", "count"],
       "properties": {
         "executable": {
-          "type": "string",
-          "pattern": "^/[^\\u0000]{0,511}$"
+          "oneOf": [
+            { "const": "[permission-denied]" },
+            { "type": "string", "pattern": "^/[^\\u0000]{0,511}$" }
+          ]
         },
         "control_group": {
           "type": "string",

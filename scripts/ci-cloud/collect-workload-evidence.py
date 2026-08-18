@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -73,6 +74,16 @@ PODMAN_NETWORK_ONLINE_UNIT = "podman-user-wait-network-online.service"
 PODMAN_NETWORK_ONLINE_FRAGMENT = (
     Path("/usr/lib/systemd/user") / PODMAN_NETWORK_ONLINE_UNIT
 )
+PODMAN_NETWORK_RUN_ROOT = Path("/run/user/20000/containers/networks")
+PODMAN_ROOTLESS_NETWORK_ROOT = PODMAN_NETWORK_RUN_ROOT / "rootless-netns"
+PODMAN_ROOTLESS_NETWORK_NAMESPACE = (
+    PODMAN_ROOTLESS_NETWORK_ROOT / "rootless-netns"
+)
+PODMAN_ROOTLESS_NETWORK_PID = (
+    PODMAN_ROOTLESS_NETWORK_ROOT / "rootless-netns-conn.pid"
+)
+PODMAN_AARDVARK_CONFIG_ROOT = PODMAN_NETWORK_RUN_ROOT / "aardvark-dns"
+PODMAN_AARDVARK_PID = PODMAN_AARDVARK_CONFIG_ROOT / "aardvark.pid"
 TRUSTED_USER_SOCKET_UNITS = {
     name: (
         frozenset(
@@ -183,6 +194,33 @@ SERVICE_ACTIVATION_PROPERTIES = (
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
+HEALTH_INTERVAL_USEC = {
+    "postgres": 5_000_000,
+    "valkey": 5_000_000,
+    "api": 10_000_000,
+    "frontend": 10_000_000,
+    "gateway": 10_000_000,
+}
+# Podman 5.4 formats a non-negative 64-bit rand.Int() with "%x" for this
+# suffix: no leading zeroes, at most 16 hex digits, and a 16th digit <= 7.
+PODMAN_54_HEALTH_TIMER_SUFFIX = (
+    r"(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})"
+)
+PODMAN_HEALTH_TIMER_PROPERTIES = frozenset(
+    {
+        "FragmentPath", "DropInPaths", "Transient", "Triggers",
+        "AccuracyUSec", "TimersMonotonic",
+    }
+)
+PODMAN_HEALTH_SERVICE_PROPERTIES = frozenset(
+    {
+        "FragmentPath", "DropInPaths", "Transient", "Environment", "ExecStart",
+        *AUXILIARY_EXEC_PROPERTIES,
+    }
+)
+OPAQUE_PROCESS_EXECUTABLE = "[permission-denied]"
+
+
 class RoleContract(NamedTuple):
     identity: tuple[int, int]
     networks: tuple[str, ...] = ()
@@ -193,6 +231,35 @@ class RoleContract(NamedTuple):
     entrypoint: tuple[str, ...] | None = None
     command: tuple[str, ...] | None = None
     healthcheck: tuple[str, ...] | None = None
+
+
+class NetworkAddress(NamedTuple):
+    address: str
+    prefix_length: int
+
+
+class NetworkEndpoint(NamedTuple):
+    addresses: tuple[NetworkAddress, ...]
+    aliases: tuple[str, ...]
+    network_id: str
+    gateways: tuple[str, ...]
+
+
+class NetworkSubnet(NamedTuple):
+    network: str
+    gateway: str
+
+
+class NetworkMetadata(NamedTuple):
+    network_id: str
+    internal: bool
+    subnets: tuple[NetworkSubnet, ...]
+
+
+class ContainerCollection(NamedTuple):
+    facts: list[dict[str, object]]
+    network_endpoints: dict[str, dict[str, NetworkEndpoint]]
+    complete: bool
 
 
 API_VOLUMES = (
@@ -445,7 +512,9 @@ def incomplete_observation(phase: str) -> dict[str, object]:
     if phase == "baseline":
         common["migration_invocation_count"] = 0
         common["podman_api"] = True
-        common["user_work"] = {"active_units": [], "jobs": []}
+        common["user_work"] = {
+            "active_units": [], "jobs": [], "podman_health_timers": [],
+        }
         common["processes"] = []
         return common
     common.update(
@@ -460,7 +529,9 @@ def incomplete_observation(phase: str) -> dict[str, object]:
         common["owned_units"] = []
         common["migration_invocation_count"] = 0
         common["podman_api"] = True
-        common["user_work"] = {"active_units": [], "jobs": []}
+        common["user_work"] = {
+            "active_units": [], "jobs": [], "podman_health_timers": [],
+        }
         common["processes"] = []
         return common
     if phase != "live":
@@ -472,7 +543,9 @@ def incomplete_observation(phase: str) -> dict[str, object]:
             "podman_rootless": False,
             "oci_runtime": "",
             "podman_api": True,
-            "user_work": {"active_units": [], "jobs": []},
+            "user_work": {
+                "active_units": [], "jobs": [], "podman_health_timers": [],
+            },
             "processes": [],
         }
     )
@@ -1851,7 +1924,7 @@ def configured_id_maps(value: object) -> tuple[
     list[dict[str, int]], list[dict[str, int]], bool
 ]:
     if value is None:
-        return [], [], True
+        return [], [], False
     if not isinstance(value, dict) or set(value) != {"UidMap", "GidMap"}:
         return [], [], False
     parsed: list[list[dict[str, int]]] = []
@@ -1883,7 +1956,9 @@ def configured_id_maps(value: object) -> tuple[
     return uid_map, gid_map, True
 
 
-def configured_userns_options(value: object) -> tuple[list[str], bool]:
+def configured_userns_options(
+    value: object,
+) -> tuple[list[str], bool, bool]:
     if (
         not isinstance(value, list)
         or not 2 <= len(value) <= 256
@@ -1896,30 +1971,194 @@ def configured_userns_options(value: object) -> tuple[list[str], bool]:
         )
         or sum(len(item) for item in value) > 65_536
     ):
-        return [], False
+        return [], False, False
     options: list[str] = []
+    explicit_mapping_controls = False
+    mapping_options = {
+        "--uidmap", "--gidmap", "--subuidname", "--subgidname",
+    }
     index = 0
     while index < len(value):
         argument = value[index]
         if argument == "--module" or argument.startswith("--module="):
-            return [], False
+            return [], explicit_mapping_controls, False
+        if argument in mapping_options:
+            explicit_mapping_controls = True
+            if (
+                index + 1 >= len(value)
+                or value[index + 1].startswith("-")
+                or len(value[index + 1]) > 256
+            ):
+                return [], explicit_mapping_controls, False
+            index += 2
+            continue
+        if any(
+            argument.startswith(f"{option}=") for option in mapping_options
+        ):
+            explicit_mapping_controls = True
+            mapping_value = argument.split("=", 1)[1]
+            if not mapping_value or len(mapping_value) > 256:
+                return [], explicit_mapping_controls, False
+            index += 1
+            continue
         if argument == "--userns":
             if (
                 index + 1 >= len(value)
                 or value[index + 1].startswith("-")
                 or len(value[index + 1]) > 256
             ):
-                return [], False
+                return [], explicit_mapping_controls, False
             options.append(value[index + 1])
             index += 2
             continue
         if argument.startswith("--userns="):
             option = argument.split("=", 1)[1]
             if not option or len(option) > 256:
-                return [], False
+                return [], explicit_mapping_controls, False
             options.append(option)
         index += 1
-    return options, len(options) <= 1
+    return options, explicit_mapping_controls, len(options) <= 1
+
+
+def normalized_network_address(
+    value: object, version: int
+) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return None
+    if address.version != version or str(address) != value:
+        return None
+    return value
+
+
+def normalized_network_endpoints(
+    value: object, network_mode: object
+) -> tuple[list[str], dict[str, NetworkEndpoint], bool]:
+    if not isinstance(value, dict) or not isinstance(network_mode, str):
+        return [], {}, False
+    if network_mode == "none":
+        return (
+            [], {},
+            set(value) == {"none"} and isinstance(value.get("none"), dict),
+        )
+    if len(value) > 16:
+        return [], {}, False
+    endpoints: dict[str, NetworkEndpoint] = {}
+    required_endpoint = {
+        "IPAddress", "IPPrefixLen", "Gateway", "GlobalIPv6Address",
+        "GlobalIPv6PrefixLen", "IPv6Gateway", "NetworkID", "Aliases",
+    }
+    for network, endpoint in value.items():
+        if (
+            not isinstance(network, str)
+            or not network
+            or len(network) > 256
+            or "\x00" in network
+            or not isinstance(endpoint, dict)
+            or not required_endpoint.issubset(endpoint)
+            or endpoint.get("SecondaryIPAddresses", []) != []
+            or endpoint["GlobalIPv6Address"] != ""
+            or endpoint["GlobalIPv6PrefixLen"] != 0
+            or endpoint.get("SecondaryIPv6Addresses", []) != []
+            or endpoint["IPv6Gateway"] != ""
+            or not isinstance(endpoint["NetworkID"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", endpoint["NetworkID"]) is None
+            or not isinstance(endpoint["Aliases"], list)
+            or len(endpoint["Aliases"]) != 2
+            or any(
+                not isinstance(alias, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", alias)
+                is None
+                for alias in endpoint["Aliases"]
+            )
+            or len(endpoint["Aliases"]) != len(set(endpoint["Aliases"]))
+        ):
+            return [], {}, False
+        address = normalized_network_address(endpoint["IPAddress"], 4)
+        gateway = normalized_network_address(endpoint["Gateway"], 4)
+        prefix_length = endpoint["IPPrefixLen"]
+        if (
+            address is None
+            or gateway is None
+            or type(prefix_length) is not int
+            or not 1 <= prefix_length <= 30
+        ):
+            return [], {}, False
+        endpoints[network] = NetworkEndpoint(
+            addresses=(NetworkAddress(address, prefix_length),),
+            aliases=tuple(endpoint["Aliases"]),
+            network_id=endpoint["NetworkID"],
+            gateways=(gateway,),
+        )
+    return sorted(endpoints), endpoints, True
+
+
+def workload_network_metadata(
+    instance: str,
+) -> tuple[dict[str, NetworkMetadata], bool]:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return {}, False
+    prefix = f"secpal-int-{instance}-"
+    expected = [f"{prefix}application", f"{prefix}edge"]
+    inspections, inspections_complete = json_array(
+        ["podman", "network", "inspect", *expected], timeout=60
+    )
+    if not inspections_complete or len(inspections) != len(expected):
+        return {}, False
+    metadata: dict[str, NetworkMetadata] = {}
+    required = {
+        "name", "id", "driver", "subnets", "ipv6_enabled", "internal",
+        "dns_enabled",
+    }
+    for item in inspections:
+        if (
+            not isinstance(item, dict)
+            or not required.issubset(item)
+            or not isinstance(item["name"], str)
+            or item["name"] not in expected
+            or item["name"] in metadata
+            or not isinstance(item["id"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", item["id"]) is None
+            or item["driver"] != "bridge"
+            or item["internal"] is not True
+            or item["dns_enabled"] is not True
+            or item["ipv6_enabled"] is not False
+            or not isinstance(item["subnets"], list)
+            or len(item["subnets"]) != 1
+            or item.get("network_dns_servers", []) != []
+        ):
+            return {}, False
+        subnet = item["subnets"][0]
+        if (
+            not isinstance(subnet, dict)
+            or not {"subnet", "gateway"}.issubset(subnet)
+            or not isinstance(subnet["subnet"], str)
+        ):
+            return {}, False
+        try:
+            network = ipaddress.ip_network(subnet["subnet"], strict=True)
+        except ValueError:
+            return {}, False
+        gateway = normalized_network_address(subnet["gateway"], 4)
+        if (
+            network.version != 4
+            or not 1 <= network.prefixlen <= 30
+            or str(network) != subnet["subnet"]
+            or gateway is None
+            or ipaddress.ip_address(gateway) not in network
+            or ipaddress.ip_address(gateway)
+            in {network.network_address, network.broadcast_address}
+        ):
+            return {}, False
+        metadata[item["name"]] = NetworkMetadata(
+            network_id=item["id"],
+            internal=True,
+            subnets=(NetworkSubnet(str(network), gateway),),
+        )
+    return metadata, set(metadata) == set(expected)
 
 
 def service_environment_assignments(
@@ -2200,6 +2439,8 @@ def allowed_service_process_groups(
         if not isinstance(service, dict):
             continue
         role = str(service.get("logical_name"))
+        if role not in READY_ROLES:
+            continue
         control_group = service.get("control_group")
         contract = ROLE_CONTRACTS.get(role)
         if not isinstance(control_group, str) or not control_group or contract is None:
@@ -2274,7 +2515,7 @@ def container_facts(
     rootless: bool,
     podman_uid_map: list[dict[str, int]],
     podman_gid_map: list[dict[str, int]],
-) -> tuple[list[dict[str, object]], bool]:
+) -> ContainerCollection:
     prefix = f"secpal-int-{instance}-"
     all_names, complete = names_from_listing(
         ["podman", "ps", "--all", "--format", "json"]
@@ -2284,12 +2525,13 @@ def container_facts(
         names = names[:len(ROLES)]
         complete = False
     if not names:
-        return [], complete
+        return ContainerCollection([], {}, complete)
     inspections, inspection_complete = json_array(
         ["podman", "container", "inspect", *names], timeout=60
     )
     complete = complete and inspection_complete and len(inspections) == len(names)
     facts: list[dict[str, object]] = []
+    all_network_endpoints: dict[str, dict[str, NetworkEndpoint]] = {}
     for item in inspections:
         if not isinstance(item, dict):
             complete = False
@@ -2316,7 +2558,7 @@ def container_facts(
             "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
             "NetworkMode",
             "SecurityOpt", "CapAdd", "GroupAdd", "Devices", "Tmpfs",
-            "ReadonlyRootfs",
+            "ReadonlyRootfs", "Dns",
         }
         required_network_settings = {"Networks", "Ports"}
         if (
@@ -2352,6 +2594,7 @@ def container_facts(
             or not isinstance(host_config["Devices"], list)
             or not isinstance(host_config["Tmpfs"], dict)
             or not isinstance(host_config["ReadonlyRootfs"], bool)
+            or host_config["Dns"] != []
             or any(
                 not isinstance(host_config[field], str)
                 for field in (
@@ -2364,14 +2607,26 @@ def container_facts(
         ):
             complete = False
             continue
-        health_value = state.get("Health", {})
-        health = (
-            str(health_value.get("Status", "none"))
-            if isinstance(health_value, dict)
-            else "none"
-        )
+        if "Health" not in state:
+            health, health_complete = "none", True
+        else:
+            health_value = state["Health"]
+            health_complete = (
+                isinstance(health_value, dict)
+                and isinstance(health_value.get("Status"), str)
+                and bool(health_value["Status"])
+            )
+            health = (
+                health_value["Status"] if health_complete else "none"
+            )
         labels = config["Labels"]
         network_map = network_settings["Networks"]
+        network_mode = host_config["NetworkMode"] or "private"
+        networks, network_endpoints, network_endpoints_complete = (
+            normalized_network_endpoints(network_map, network_mode)
+        )
+        if network_endpoints_complete:
+            all_network_endpoints[item["Id"]] = network_endpoints
         port_map = network_settings["Ports"]
         published: list[str] = []
         port_fact_complete = True
@@ -2407,23 +2662,32 @@ def container_facts(
         environment = config["Env"]
         entrypoint, entrypoint_complete = normalized_command(config["Entrypoint"])
         command, command_complete = normalized_command(config["Cmd"])
-        configured_healthcheck = config.get("Healthcheck")
-        if configured_healthcheck is None:
+        if "Healthcheck" not in config:
             healthcheck_command, healthcheck_complete = [], True
-        elif isinstance(configured_healthcheck, dict) and set(
-            configured_healthcheck
-        ).issuperset({"Test"}):
-            healthcheck_command, healthcheck_complete = normalized_command(
-                configured_healthcheck["Test"]
-            )
         else:
-            healthcheck_command, healthcheck_complete = [], False
-        create_options, create_options_complete = configured_userns_options(
-            config["CreateCommand"]
-        )
-        configured_uid_map, configured_gid_map, configured_maps_complete = (
-            configured_id_maps(host_config.get("IDMappings"))
-        )
+            configured_healthcheck = config["Healthcheck"]
+            if isinstance(configured_healthcheck, dict) and set(
+                configured_healthcheck
+            ).issuperset({"Test"}):
+                healthcheck_command, healthcheck_complete = normalized_command(
+                    configured_healthcheck["Test"]
+                )
+            else:
+                healthcheck_command, healthcheck_complete = [], False
+        (
+            create_options,
+            explicit_mapping_controls,
+            create_options_complete,
+        ) = configured_userns_options(config["CreateCommand"])
+        if "IDMappings" not in host_config:
+            configured_uid_map, configured_gid_map = [], []
+            configured_maps_complete = not explicit_mapping_controls
+        else:
+            configured_uid_map, configured_gid_map, configured_maps_complete = (
+                configured_id_maps(host_config["IDMappings"])
+            )
+            if explicit_mapping_controls and not configured_uid_map:
+                configured_maps_complete = False
         if str(state.get("Status", "")) == "running":
             (
                 user_namespace,
@@ -2457,9 +2721,10 @@ def container_facts(
         complete = complete and all(
             (
                 mounts_complete, tmpfs_complete, events_complete,
-                entrypoint_complete, command_complete, healthcheck_complete,
+                entrypoint_complete, command_complete, health_complete,
+                healthcheck_complete,
                 identity_complete, create_options_complete,
-                configured_maps_complete,
+                configured_maps_complete, network_endpoints_complete,
             )
         )
         remote_api_environment = any(
@@ -2491,7 +2756,7 @@ def container_facts(
                 "user_namespace": user_namespace,
                 "ipc_mode": str(host_config["IpcMode"] or "private"),
                 "uts_mode": str(host_config["UTSMode"] or "private"),
-                "network_mode": str(host_config["NetworkMode"] or "private"),
+                "network_mode": str(network_mode),
                 "cap_add": sorted(
                     f"CAP_{str(value).upper().removeprefix('CAP_')}"
                     for value in cap_add
@@ -2511,14 +2776,18 @@ def container_facts(
                 "remote_api_environment": remote_api_environment,
                 "security_opt": sorted(str(value) for value in security_opt),
                 "lifecycle_events": lifecycle_events,
-                "networks": sorted(str(value) for value in network_map),
+                "networks": networks,
                 "published_ports": sorted(published),
                 "auto_update": "io.containers.autoupdate" in labels,
                 "systemd_unit": str(labels.get("PODMAN_SYSTEMD_UNIT", "")),
                 "image": str(item.get("ImageName", config.get("Image", ""))),
             }
         )
-    return sorted(facts, key=lambda fact: str(fact["role"])), complete
+    return ContainerCollection(
+        sorted(facts, key=lambda fact: str(fact["role"])),
+        all_network_endpoints,
+        complete,
+    )
 
 
 def quadlet_search_paths() -> list[str]:
@@ -2857,7 +3126,48 @@ def lifecycle_guard_facts(instance: str) -> tuple[dict[str, object], bool]:
     )
 
 
-def user_work_facts() -> tuple[dict[str, list[str]], bool]:
+def podman_health_exec_is_trusted(value: object, container_id: str) -> bool:
+    prefix = (
+        "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman healthcheck run "
+        f"{container_id} ;"
+    )
+    return bool(
+        isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", container_id)
+        and len(value) <= 65_536
+        and "\x00" not in value
+        and "\n" not in value
+        and value.count("{ path=") == 1
+        and value.count("argv[]=") == 1
+        and value.startswith(prefix)
+        and value.endswith(" }")
+    )
+
+
+def podman_health_timer_interval_usec(value: object) -> int | None:
+    if not isinstance(value, str) or len(value) > 256 or "\n" in value:
+        return None
+    match = re.fullmatch(
+        r"\{ OnUnitInactiveUSec=(5s|10s) ; "
+        r"next_elapse=[^{}\x00-\x1f]{1,128} \}",
+        value,
+    )
+    if match is None:
+        return None
+    return int(match.group(1).removesuffix("s")) * 1_000_000
+
+
+def podman_healthcheck_is_current(container_id: str) -> bool:
+    if re.fullmatch(r"[0-9a-f]{64}", container_id) is None:
+        return False
+    status_code, output, bounded = command_result(
+        [str(PODMAN_EXECUTABLE), "healthcheck", "run", container_id],
+        timeout=30,
+    )
+    return status_code == 0 and bounded and output == ""
+
+
+def user_work_facts() -> tuple[dict[str, object], bool]:
     units_status, units_output, units_complete = command_result(
         [
             "systemctl", "--user", "list-units", "--all",
@@ -2871,6 +3181,15 @@ def user_work_facts() -> tuple[dict[str, list[str]], bool]:
             "--no-legend", "--no-pager",
         ]
     )
+
+    def canonical_unit_name(value: str) -> bool:
+        return bool(
+            1 <= len(value) <= 128
+            and re.fullmatch(
+                r"(?:[A-Za-z0-9_.@:-]|\\x[0-9a-f]{2})+", value
+            )
+        )
+
     active_units: list[str] = []
     jobs: list[str] = []
     complete = (
@@ -2881,7 +3200,7 @@ def user_work_facts() -> tuple[dict[str, list[str]], bool]:
     )
     for line in units_output.splitlines():
         fields = line.split()
-        if not fields or re.fullmatch(r"[A-Za-z0-9_.@:-]{1,128}", fields[0]) is None:
+        if not fields or not canonical_unit_name(fields[0]):
             complete = False
             continue
         active_units.append(fields[0])
@@ -2890,21 +3209,132 @@ def user_work_facts() -> tuple[dict[str, list[str]], bool]:
         if (
             len(fields) < 2
             or re.fullmatch(r"[1-9][0-9]{0,9}", fields[0]) is None
-            or re.fullmatch(r"[A-Za-z0-9_.@:-]{1,128}", fields[1]) is None
+            or not canonical_unit_name(fields[1])
         ):
             complete = False
             continue
         jobs.append(fields[1])
+    if (
+        PODMAN_NETWORK_ONLINE_UNIT in active_units
+        and not podman_network_online_activation_is_trusted()
+    ):
+        complete = False
+    health_timers: list[dict[str, object]] = []
+    health_service_candidates = {
+        unit
+        for unit in active_units
+        if re.fullmatch(
+            rf"[0-9a-f]{{64}}-{PODMAN_54_HEALTH_TIMER_SUFFIX}\.service",
+            unit,
+        )
+    }
+    authenticated_active_health_services: set[str] = set()
+    trusted_path = next(
+        item for item in TRUSTED_MANAGER_ENVIRONMENT if item.startswith("PATH=")
+    )
+    for timer in active_units:
+        match = re.fullmatch(
+            rf"([0-9a-f]{{64}})-{PODMAN_54_HEALTH_TIMER_SUFFIX}\.timer",
+            timer,
+        )
+        if match is None:
+            continue
+        container_id = match.group(1)
+        service = timer.removesuffix(".timer") + ".service"
+        timer_status, timer_output, timer_complete = command_result(
+            [
+                "systemctl", "--user", "show", timer,
+                *(f"--property={name}" for name in sorted(
+                    PODMAN_HEALTH_TIMER_PROPERTIES
+                )),
+            ]
+        )
+        service_status, service_output, service_complete = command_result(
+            [
+                "systemctl", "--user", "show", service,
+                *(f"--property={name}" for name in sorted(
+                    PODMAN_HEALTH_SERVICE_PROPERTIES
+                )),
+            ]
+        )
+        timer_properties = exact_systemd_service_properties(
+            timer_output, PODMAN_HEALTH_TIMER_PROPERTIES
+        )
+        service_properties = exact_systemd_service_properties(
+            service_output, PODMAN_HEALTH_SERVICE_PROPERTIES
+        )
+        interval_usec = (
+            podman_health_timer_interval_usec(
+                timer_properties.get("TimersMonotonic")
+            )
+            if timer_properties is not None
+            else None
+        )
+        timer_trusted = bool(
+            timer_properties is not None
+            and timer_properties["FragmentPath"]
+            == f"/run/user/20000/systemd/transient/{timer}"
+            and timer_properties["DropInPaths"] == ""
+            and timer_properties["Transient"] == "yes"
+            and timer_properties["Triggers"] == service
+            and timer_properties["AccuracyUSec"] == "1s"
+            and interval_usec is not None
+        )
+        service_trusted = bool(
+            service_properties is not None
+            and service_properties["FragmentPath"]
+            == f"/run/user/20000/systemd/transient/{service}"
+            and service_properties["DropInPaths"] == ""
+            and service_properties["Transient"] == "yes"
+            and service_properties["Environment"] == trusted_path
+            and all(
+                service_properties[name] == ""
+                for name in AUXILIARY_EXEC_PROPERTIES
+            )
+            and podman_health_exec_is_trusted(
+                service_properties["ExecStart"], container_id
+            )
+        )
+        if (
+            timer_status != 0
+            or not timer_complete
+            or service_status != 0
+            or not service_complete
+            or not timer_trusted
+            or not service_trusted
+            or not podman_healthcheck_is_current(container_id)
+        ):
+            complete = False
+            continue
+        health_timers.append(
+            {
+                "container_id": container_id,
+                "timer": timer,
+                "service": service,
+                "interval_usec": interval_usec,
+            }
+        )
+        if service in health_service_candidates:
+            authenticated_active_health_services.add(service)
+    if health_service_candidates != authenticated_active_health_services:
+        complete = False
+    normalized_active_units = (
+        set(active_units) - authenticated_active_health_services
+    )
     return (
         {
-            "active_units": sorted(set(active_units))[:128],
+            "active_units": sorted(normalized_active_units)[:128],
             "jobs": sorted(set(jobs))[:128],
+            "podman_health_timers": sorted(
+                health_timers, key=lambda item: item["timer"]
+            )[:len(HEALTHY_ROLES)],
         },
         complete
         and len(active_units) <= 128
         and len(jobs) <= 128
         and len(active_units) == len(set(active_units))
-        and len(jobs) == len(set(jobs)),
+        and len(jobs) == len(set(jobs))
+        and len(health_timers) <= len(HEALTHY_ROLES)
     )
 
 
@@ -2932,6 +3362,334 @@ def process_control_group(pid: int) -> tuple[str, bool]:
 
 def process_host_identity(pid: int) -> tuple[int, int, bool]:
     return process_status_identity(pid, require_all_ids_equal=False)
+
+
+def bounded_process_arguments(pid: int) -> tuple[list[str], bool]:
+    if pid <= 0 or pid > 4_194_304:
+        return [], False
+    try:
+        with Path(f"/proc/{pid}/cmdline").open("rb") as stream:
+            content = stream.read(8193)
+    except OSError:
+        return [], False
+    if not content or len(content) > 8192 or not content.endswith(b"\0"):
+        return [], False
+    raw_arguments = content[:-1].split(b"\0")
+    if not raw_arguments or len(raw_arguments) > 128 or any(
+        not argument for argument in raw_arguments
+    ):
+        return [], False
+    try:
+        arguments = [argument.decode("utf-8") for argument in raw_arguments]
+    except UnicodeDecodeError:
+        return [], False
+    if any("\x00" in argument or len(argument) > 4096 for argument in arguments):
+        return [], False
+    return arguments, True
+
+
+def runtime_pid_file_matches(path: Path, pid: int) -> bool:
+    observation = bounded_regular_file(path)
+    if observation is None:
+        return False
+    content, metadata = observation
+    return bool(
+        len(content) <= 32
+        and metadata.st_uid == CI_UID
+        and metadata.st_gid == CI_GID
+        and re.fullmatch(rb"[1-9][0-9]{0,9}", content)
+        and content == str(pid).encode("ascii")
+    )
+
+
+def process_uses_network_namespace(pid: int, namespace_path: Path) -> bool:
+    if pid <= 0 or pid > 4_194_304:
+        return False
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(namespace_path, flags)
+        namespace = os.fstat(descriptor)
+        process_namespace = os.readlink(f"/proc/{pid}/ns/net")
+    except OSError:
+        return False
+    finally:
+        if "descriptor" in locals():
+            os.close(descriptor)
+    return process_namespace == f"net:[{namespace.st_ino}]"
+
+
+def podman_helper_process_is_bound(
+    pid: int, executable: str, control_group: str
+) -> bool:
+    arguments, arguments_complete = bounded_process_arguments(pid)
+    if not arguments_complete:
+        return False
+    if executable in {"/usr/bin/pasta", "/usr/bin/pasta.avx2"}:
+        expected_group = re.fullmatch(
+            r"/user\.slice/user-20000\.slice/user@20000\.service/"
+            r"user\.slice/rootless-netns-[0-9a-f]{8}\.scope",
+            control_group,
+        )
+        return bool(
+            expected_group is not None
+            and runtime_pid_file_matches(PODMAN_ROOTLESS_NETWORK_PID, pid)
+            and arguments == [
+                "/usr/bin/pasta",
+                "--config-net",
+                "--pid", str(PODMAN_ROOTLESS_NETWORK_PID),
+                "--dns-forward", "169.254.1.1",
+                "-t", "none",
+                "-u", "none",
+                "-T", "none",
+                "-U", "none",
+                "--no-map-gw",
+                "--quiet",
+                "--netns", str(PODMAN_ROOTLESS_NETWORK_NAMESPACE),
+                "--map-guest-addr", "169.254.1.2",
+            ]
+        )
+    if executable == "/usr/lib/podman/aardvark-dns":
+        return bool(
+            re.fullmatch(
+                r"/user\.slice/user-20000\.slice/user@20000\.service/"
+                r"app\.slice/run-p[1-9][0-9]{0,9}-i[1-9][0-9]{0,9}\.scope",
+                control_group,
+            )
+            and runtime_pid_file_matches(PODMAN_AARDVARK_PID, pid)
+            and arguments == [
+                "/usr/lib/podman/aardvark-dns",
+                "--config", str(PODMAN_AARDVARK_CONFIG_ROOT),
+                "-p", "53", "run",
+            ]
+            and process_uses_network_namespace(
+                pid, PODMAN_ROOTLESS_NETWORK_NAMESPACE
+            )
+        )
+    return False
+
+
+def normalized_aardvark_addresses(
+    value: str, version: int
+) -> tuple[tuple[str, ...], bool]:
+    if not value:
+        return (), True
+    items = value.split(",")
+    if not 1 <= len(items) <= 16:
+        return (), False
+    addresses: list[str] = []
+    for item in items:
+        address = normalized_network_address(item, version)
+        if address is None:
+            return (), False
+        addresses.append(address)
+    if len(addresses) != len(set(addresses)):
+        return (), False
+    return tuple(addresses), True
+
+
+def aardvark_configuration_matches_workload(
+    instance: str,
+    containers: object,
+    network_endpoints: object,
+    network_metadata: object,
+) -> bool:
+    if (
+        re.fullmatch(r"[0-9a-f]{12}", instance) is None
+        or not isinstance(containers, list)
+        or not isinstance(network_endpoints, dict)
+        or not isinstance(network_metadata, dict)
+    ):
+        return False
+    expected: dict[str, dict[str, tuple[str, NetworkEndpoint]]] = {}
+    prefix = f"secpal-int-{instance}-"
+    for container in containers:
+        if not isinstance(container, dict) or container.get("state") != "running":
+            continue
+        container_id = container.get("id")
+        name = container.get("name")
+        networks = container.get("networks")
+        if (
+            not isinstance(container_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
+            or not isinstance(name, str)
+            or not name.startswith(prefix)
+            or not isinstance(networks, list)
+            or any(not isinstance(network, str) for network in networks)
+        ):
+            return False
+        endpoints = network_endpoints.get(container_id)
+        if (
+            not isinstance(endpoints, dict)
+            or set(endpoints)
+            != {network for network in networks if network != "none"}
+        ):
+            return False
+        for network in networks:
+            if network == "none":
+                continue
+            if (
+                network not in {
+                    f"{prefix}application", f"{prefix}edge",
+                }
+            ):
+                return False
+            members = expected.setdefault(network, {})
+            endpoint = endpoints.get(network)
+            if (
+                container_id in members
+                or not isinstance(endpoint, NetworkEndpoint)
+            ):
+                return False
+            members[container_id] = (name, endpoint)
+    if set(expected) != {f"{prefix}application", f"{prefix}edge"}:
+        return False
+    if set(network_metadata) != set(expected):
+        return False
+    aardvark_files: dict[str, str] = {}
+    network_headers: dict[str, str] = {}
+    for network in expected:
+        metadata = network_metadata.get(network)
+        if (
+            not isinstance(metadata, NetworkMetadata)
+            or re.fullmatch(r"[0-9a-f]{64}", metadata.network_id) is None
+            or metadata.internal is not True
+            or len(metadata.subnets) != 1
+        ):
+            return False
+        subnet = metadata.subnets[0]
+        if not isinstance(subnet, NetworkSubnet):
+            return False
+        try:
+            subnet_network = ipaddress.ip_network(subnet.network, strict=True)
+        except ValueError:
+            return False
+        gateway = normalized_network_address(subnet.gateway, 4)
+        if (
+            subnet_network.version != 4
+            or not 1 <= subnet_network.prefixlen <= 30
+            or str(subnet_network) != subnet.network
+            or gateway is None
+            or ipaddress.ip_address(gateway) not in subnet_network
+            or ipaddress.ip_address(gateway)
+            in {subnet_network.network_address, subnet_network.broadcast_address}
+        ):
+            return False
+        observed_addresses: set[str] = set()
+        for container_id, (name, endpoint) in expected[network].items():
+            role = name.removeprefix(prefix)
+            if (
+                role not in ROLE_CONTRACTS
+                or endpoint.network_id != metadata.network_id
+                or endpoint.aliases != (role, container_id[:12])
+                or endpoint.gateways != (gateway,)
+                or len(endpoint.addresses) != 1
+                or not isinstance(endpoint.addresses[0], NetworkAddress)
+            ):
+                return False
+            address = endpoint.addresses[0]
+            normalized = normalized_network_address(address.address, 4)
+            parsed = (
+                ipaddress.ip_address(normalized)
+                if normalized is not None else None
+            )
+            if (
+                normalized is None
+                or address.prefix_length != subnet_network.prefixlen
+                or parsed not in subnet_network
+                or parsed
+                in {
+                    subnet_network.network_address,
+                    subnet_network.broadcast_address,
+                    ipaddress.ip_address(gateway),
+                }
+                or normalized in observed_addresses
+            ):
+                return False
+            observed_addresses.add(normalized)
+        aardvark_files[network] = f"{network}%int"
+        network_headers[network] = gateway
+    try:
+        directory_before = PODMAN_AARDVARK_CONFIG_ROOT.stat()
+        entries = tuple(PODMAN_AARDVARK_CONFIG_ROOT.iterdir())
+    except OSError:
+        return False
+    entry_names = {entry.name for entry in entries}
+    if len(entries) > 3 or entry_names != {
+        "aardvark.pid", *aardvark_files.values(),
+    }:
+        return False
+    for network, members in expected.items():
+        path = PODMAN_AARDVARK_CONFIG_ROOT / aardvark_files[network]
+        observation = bounded_regular_file(path)
+        if observation is None:
+            return False
+        content, metadata = observation
+        if not content or len(content) > 65_536 or not content.endswith(b"\n"):
+            return False
+        if metadata.st_uid != CI_UID or metadata.st_gid != CI_GID:
+            return False
+        try:
+            lines = content.decode("ascii").splitlines()
+        except UnicodeDecodeError:
+            return False
+        if (
+            len(lines) != len(members) + 1
+            or lines[0] != network_headers[network]
+        ):
+            return False
+        observed: set[str] = set()
+        for line in lines[1:]:
+            fields = line.split(" ")
+            if len(fields) != 4:
+                return False
+            container_id, ipv4_value, ipv6_value, names_value = fields[:4]
+            member = members.get(container_id)
+            if member is None:
+                return False
+            name, endpoint = member
+            ipv4, ipv4_complete = normalized_aardvark_addresses(ipv4_value, 4)
+            ipv6, ipv6_complete = normalized_aardvark_addresses(ipv6_value, 6)
+            names = tuple(names_value.split(","))
+            expected_ipv4 = tuple(
+                address.address
+                for address in endpoint.addresses
+                if ipaddress.ip_address(address.address).version == 4
+            )
+            expected_ipv6 = tuple(
+                address.address
+                for address in endpoint.addresses
+                if ipaddress.ip_address(address.address).version == 6
+            )
+            if (
+                container_id in observed
+                or len(line) > 4096
+                or not ipv4_complete
+                or not ipv6_complete
+                or (ipv4, ipv6) != (expected_ipv4, expected_ipv6)
+                or names != (name, *endpoint.aliases)
+            ):
+                return False
+            observed.add(container_id)
+        if observed != set(members):
+            return False
+    try:
+        directory_after = PODMAN_AARDVARK_CONFIG_ROOT.stat()
+        names_after = {
+            entry.name for entry in PODMAN_AARDVARK_CONFIG_ROOT.iterdir()
+        }
+    except OSError:
+        return False
+    directory_identity = lambda value: (
+        value.st_dev, value.st_ino, value.st_uid, value.st_gid,
+        value.st_mode, value.st_mtime_ns, value.st_ctime_ns,
+    )
+    if directory_identity(directory_before) != directory_identity(
+        directory_after
+    ) or names_after != entry_names:
+        return False
+    return True
 
 
 def user_process_facts() -> tuple[list[dict[str, object]], bool]:
@@ -2963,9 +3721,27 @@ def user_process_facts() -> tuple[list[dict[str, object]], bool]:
         uid, gid, identity_complete = process_host_identity(pid)
         try:
             executable = os.readlink(process / "exe")
-        except OSError:
-            if process.exists():
+        except OSError as error:
+            trusted_opaque_group = control_group in {
+                f"{user_slice_prefix}user@20000.service/init.scope",
+                (
+                    f"{user_slice_prefix}user@20000.service/app.slice/"
+                    "ssh-agent.service"
+                ),
+            }
+            reviewed_opaque = (
+                isinstance(error, PermissionError)
+                and trusted_opaque_group
+                and identity_complete
+                and (uid, gid) == (CI_UID, CI_GID)
+            )
+            if process.exists() and not reviewed_opaque:
                 complete = False
+            elif reviewed_opaque:
+                key = (OPAQUE_PROCESS_EXECUTABLE, control_group, uid, gid)
+                facts[key] = facts.get(key, 0) + 1
+                if facts[key] > 256 or len(facts) > 256:
+                    return [], False
             continue
         if (
             not identity_complete
@@ -2974,6 +3750,12 @@ def user_process_facts() -> tuple[list[dict[str, object]], bool]:
             or "\x00" in executable
             or executable.endswith(" (deleted)")
         ):
+            complete = False
+            continue
+        if executable in {
+            "/usr/bin/pasta", "/usr/bin/pasta.avx2",
+            "/usr/lib/podman/aardvark-dns",
+        } and not podman_helper_process_is_bound(pid, executable, control_group):
             complete = False
             continue
         key = (executable, control_group, uid, gid)
@@ -3016,11 +3798,23 @@ def service_state_matches_role(
             and isinstance(service.get("control_group"), str)
             and service["control_group"].endswith(f"/{unit}")
         )
+    one_shot_control_group = service.get("control_group")
+    workload_one_shot_group_matches = (
+        logical_name in {"secrets-init", "migrate"}
+        and one_shot_control_group
+        == (
+            "/user.slice/user-20000.slice/user@20000.service/"
+            f"app.slice/{unit}"
+        )
+    )
     return (
         common_state
         and service.get("sub_state") == "exited"
         and service["main_pid"] == 0
-        and service.get("control_group") == ""
+        and (
+            one_shot_control_group == ""
+            or workload_one_shot_group_matches
+        )
     )
 
 
@@ -3143,7 +3937,7 @@ def exited_container_execution_matches(
     )
     if status_code != 0 or not complete:
         return False, False
-    matches = 0
+    matched_statuses: list[str] = []
     try:
         for line in output.splitlines():
             if not line:
@@ -3166,19 +3960,45 @@ def exited_container_execution_matches(
                 for index, value in enumerate(command[:-1])
                 if value == "--name"
             )
+            message = record.get("MESSAGE")
+            event = (
+                re.fullmatch(
+                    r"[0-9]{4}-[0-9]{2}-[0-9]{2} "
+                    r"[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{1,9} "
+                    r"[+-][0-9]{4} UTC m=\+[0-9]+\.[0-9]+ "
+                    r"container (create|start|died) ([0-9a-f]{64}) "
+                    r"\(([^()\n]{1,2048})\)",
+                    message,
+                )
+                if isinstance(message, str) and len(message) <= 2304
+                else None
+            )
+            metadata = event.group(3).split(", ") if event is not None else []
             if (
                 record.get("_SYSTEMD_INVOCATION_ID") == invocation_id
                 and record.get("_EXE") == str(PODMAN_EXECUTABLE)
-                and record.get("MESSAGE") == container_id
                 and len(command) >= 2
                 and command[0] == str(PODMAN_EXECUTABLE)
                 and command[1] == "run"
                 and names == [container_name]
+                and event is not None
+                and event.group(2) == container_id
+                and sum(
+                    value == f"name={container_name}" for value in metadata
+                ) == 1
+                and sum(
+                    value == f"PODMAN_SYSTEMD_UNIT={unit}"
+                    for value in metadata
+                ) == 1
+                and sum(
+                    value.startswith("image=") and len(value) > len("image=")
+                    for value in metadata
+                ) == 1
             ):
-                matches += 1
+                matched_statuses.append(event.group(1))
     except json.JSONDecodeError:
         return False, False
-    return matches == 1, True
+    return matched_statuses == ["create", "start", "died"], True
 
 
 def bind_container_services(
@@ -3268,13 +4088,19 @@ def collect_live(instance: str) -> dict[str, object]:
     services, services_complete = generated_service_facts(instance)
     podman_rootless, oci_runtime, runtime_complete = podman_runtime_facts()
     podman_uid_map, podman_gid_map, podman_maps_complete = podman_outer_id_maps()
-    containers, containers_complete = container_facts(
+    containers, network_endpoints, containers_complete = container_facts(
         instance,
         rootless=podman_rootless,
         podman_uid_map=podman_uid_map,
         podman_gid_map=podman_gid_map,
     )
     containers, bindings_complete = bind_container_services(services, containers)
+    network_metadata, network_metadata_complete = workload_network_metadata(
+        instance
+    )
+    network_helpers_complete = aardvark_configuration_matches_workload(
+        instance, containers, network_endpoints, network_metadata
+    )
     inventory, inventory_complete = resource_inventory()
     prefix = f"secpal-int-{instance}-"
     networks = [name for name in inventory["networks"] if name.startswith(prefix)]
@@ -3291,7 +4117,9 @@ def collect_live(instance: str) -> dict[str, object]:
         "complete": all(
             (
                 units_complete, services_complete, containers_complete,
-                bindings_complete, inventory_complete, runtime_complete,
+                bindings_complete, network_metadata_complete,
+                network_helpers_complete,
+                inventory_complete, runtime_complete,
                 podman_maps_complete,
                 lifecycle_complete, controls_complete,
                 user_work_before_complete, user_work_after_complete,
@@ -3438,9 +4266,21 @@ def exact_process_map(
         uid = item.get("uid")
         gid = item.get("gid")
         count = item.get("count")
+        reviewed_opaque = (
+            executable == OPAQUE_PROCESS_EXECUTABLE
+            and isinstance(control_group, str)
+            and control_group in {
+                "/user.slice/user-20000.slice/user@20000.service/init.scope",
+                (
+                    "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+                    "ssh-agent.service"
+                ),
+            }
+            and (uid, gid) == (CI_UID, CI_GID)
+        )
         if (
             not isinstance(executable, str)
-            or not executable.startswith("/")
+            or (not executable.startswith("/") and not reviewed_opaque)
             or len(executable) > 512
             or "\x00" in executable
             or not isinstance(control_group, str)
@@ -3459,6 +4299,146 @@ def exact_process_map(
             return None
         facts[key] = count
     return facts
+
+
+def reviewed_podman_auxiliary_units(
+    active_units: set[str], health_timer_facts: object, containers: object
+) -> tuple[set[str], str, str] | None:
+    if (
+        not isinstance(containers, list)
+        or not isinstance(health_timer_facts, list)
+        or len(health_timer_facts) > len(HEALTHY_ROLES)
+    ):
+        return None
+    healthy_ids: set[str] = set()
+    for container in containers:
+        if not isinstance(container, dict):
+            return None
+        if container.get("role") not in HEALTHY_ROLES:
+            continue
+        container_id = container.get("id")
+        if not isinstance(container_id, str) or re.fullmatch(
+            r"[0-9a-f]{64}", container_id
+        ) is None:
+            return None
+        if container_id in healthy_ids:
+            return None
+        healthy_ids.add(container_id)
+    health_timer_candidates = {
+        unit
+        for unit in active_units
+        if re.fullmatch(
+            rf"[0-9a-f]{{64}}-{PODMAN_54_HEALTH_TIMER_SUFFIX}\.timer",
+            unit,
+        )
+    }
+    health_timers: set[str] = set()
+    observed_health_ids: set[str] = set()
+    previous_timer = ""
+    for fact in health_timer_facts:
+        if not isinstance(fact, dict) or set(fact) != {
+            "container_id", "timer", "service", "interval_usec"
+        }:
+            return None
+        container_id = fact.get("container_id")
+        timer = fact.get("timer")
+        service = fact.get("service")
+        interval_usec = fact.get("interval_usec")
+        role = next(
+            (
+                container.get("role")
+                for container in containers
+                if isinstance(container, dict)
+                and container.get("id") == container_id
+            ),
+            None,
+        )
+        if (
+            not isinstance(container_id, str)
+            or not isinstance(timer, str)
+            or not isinstance(service, str)
+            or container_id in observed_health_ids
+            or timer in health_timers
+            or timer <= previous_timer
+            or re.fullmatch(
+                rf"{re.escape(container_id)}-"
+                rf"{PODMAN_54_HEALTH_TIMER_SUFFIX}\.timer",
+                timer,
+            )
+            is None
+            or service != timer.removesuffix(".timer") + ".service"
+            or interval_usec != HEALTH_INTERVAL_USEC.get(str(role))
+        ):
+            return None
+        observed_health_ids.add(container_id)
+        health_timers.add(timer)
+        previous_timer = timer
+    if observed_health_ids != healthy_ids:
+        return None
+    for container_id in healthy_ids:
+        matches = {
+            unit
+            for unit in health_timers
+            if unit.startswith(f"{container_id}-")
+        }
+        if len(matches) != 1:
+            return None
+    if health_timers != health_timer_candidates:
+        return None
+    rootless_scopes = {
+        unit
+        for unit in active_units
+        if re.fullmatch(r"rootless-netns-[0-9a-f]{8}\.scope", unit)
+    }
+    dns_scopes = {
+        unit
+        for unit in active_units
+        if re.fullmatch(r"run-p[1-9][0-9]{0,9}-i[1-9][0-9]{0,9}\.scope", unit)
+    }
+    if (
+        len(rootless_scopes) != 1
+        or len(dns_scopes) != 1
+        or PODMAN_NETWORK_ONLINE_UNIT not in active_units
+    ):
+        return None
+    rootless_scope = next(iter(rootless_scopes))
+    dns_scope = next(iter(dns_scopes))
+    return (
+        health_timers
+        | rootless_scopes
+        | dns_scopes
+        | {PODMAN_NETWORK_ONLINE_UNIT},
+        rootless_scope,
+        dns_scope,
+    )
+
+
+def reviewed_podman_helper_process(
+    key: tuple[str, str, int, int], count: int,
+    rootless_scope: str, dns_scope: str,
+) -> str | None:
+    executable, control_group, uid, gid = key
+    if count != 1 or (uid, gid) != (CI_UID, CI_GID):
+        return None
+    if (
+        executable in {"/usr/bin/pasta", "/usr/bin/pasta.avx2"}
+        and control_group
+        == (
+            "/user.slice/user-20000.slice/user@20000.service/"
+            f"user.slice/{rootless_scope}"
+        )
+    ):
+        return "rootless-network"
+    if (
+        executable == "/usr/lib/podman/aardvark-dns"
+        and control_group
+        == (
+            "/user.slice/user-20000.slice/user@20000.service/"
+            f"app.slice/{dns_scope}"
+        )
+    ):
+        return "dns"
+    return None
 
 
 def id_map_is_bounded(value: object, *, allow_empty: bool) -> bool:
@@ -3669,9 +4649,10 @@ def user_namespace_contract_matches(
         and value["uid_map"] == []
         and value["gid_map"] == []
         and create_options == []
-        and bool(configured_uid_map)
         and expected_uid_map is not None
         and expected_gid_map is not None
+        and id_map_is_within_collector(expected_uid_map, collector_uid_map)
+        and id_map_is_within_collector(expected_gid_map, collector_gid_map)
         and (
             id_map_covers(expected_uid_map, configured_uid)
             and id_map_covers(expected_gid_map, configured_gid)
@@ -3855,7 +4836,7 @@ def workload_admission_failures(observations: object) -> list[str]:
             )
             if (
                 item.get("privileged") is not False
-                or item.get("cap_add") != expected_caps
+                or item.get("cap_add") not in ([], expected_caps)
                 or item.get("group_add") != []
                 or item.get("effective_caps") != expected_caps
                 or item.get("bounding_caps") != expected_caps
@@ -4057,25 +5038,45 @@ def workload_admission_failures(observations: object) -> list[str]:
     if cleanup.get("podman_api") is not False:
         failures.append("D1A_PODMAN_API_DISABLED")
     baseline_user_work = exact_keys(
-        baseline.get("user_work"), {"active_units", "jobs"}
+        baseline.get("user_work"),
+        {"active_units", "jobs", "podman_health_timers"},
     )
     cleanup_user_work = exact_keys(
-        cleanup.get("user_work"), {"active_units", "jobs"}
+        cleanup.get("user_work"),
+        {"active_units", "jobs", "podman_health_timers"},
+    )
+    baseline_units = (
+        exact_string_set(baseline_user_work.get("active_units"))
+        if baseline_user_work is not None
+        else None
+    )
+    cleanup_units = (
+        exact_string_set(cleanup_user_work.get("active_units"))
+        if cleanup_user_work is not None
+        else None
     )
     if (
         baseline_user_work is None
         or cleanup_user_work is None
-        or exact_string_set(baseline_user_work.get("active_units")) is None
+        or baseline_units is None
         or exact_string_set(baseline_user_work.get("jobs")) is None
-        or exact_string_set(cleanup_user_work.get("active_units")) is None
+        or cleanup_units is None
         or exact_string_set(cleanup_user_work.get("jobs")) is None
-        or cleanup_user_work != baseline_user_work
+        or baseline_user_work.get("podman_health_timers") != []
+        or cleanup_user_work.get("podman_health_timers") != []
+        or PODMAN_NETWORK_ONLINE_UNIT in baseline_units
+        or PODMAN_NETWORK_ONLINE_UNIT not in cleanup_units
+        or cleanup_units - {PODMAN_NETWORK_ONLINE_UNIT} != baseline_units
+        or cleanup_user_work.get("jobs") != baseline_user_work.get("jobs")
     ):
         failures.append("D1A_PENDING_USER_WORK")
-    live_user_work = exact_keys(live.get("user_work"), {"active_units", "jobs"})
-    expected_live_units = (
-        exact_string_set(baseline_user_work.get("active_units"))
-        if baseline_user_work is not None
+    live_user_work = exact_keys(
+        live.get("user_work"),
+        {"active_units", "jobs", "podman_health_timers"},
+    )
+    live_units = (
+        exact_string_set(live_user_work.get("active_units"))
+        if live_user_work is not None
         else None
     )
     generated_units = {
@@ -4088,11 +5089,24 @@ def workload_admission_failures(observations: object) -> list[str]:
         if re.fullmatch(r"[0-9a-f]{12}", str(instance)) is not None
         else set()
     )
+    auxiliary = (
+        reviewed_podman_auxiliary_units(
+            live_units, live_user_work.get("podman_health_timers"), containers
+        )
+        if live_units is not None
+        and live_user_work is not None
+        else None
+    )
+    auxiliary_units = auxiliary[0] if auxiliary is not None else set()
     if (
         live_user_work is None
-        or expected_live_units is None
-        or exact_string_set(live_user_work.get("active_units"))
-        != expected_live_units | generated_units | fixture_target
+        or live_units is None
+        or baseline_units is None
+        or auxiliary is None
+        or live_units
+        != (
+            baseline_units - {PODMAN_NETWORK_ONLINE_UNIT}
+        ) | generated_units | fixture_target | auxiliary_units
         or live_user_work.get("jobs")
         != (baseline_user_work.get("jobs") if baseline_user_work else None)
     ):
@@ -4101,6 +5115,29 @@ def workload_admission_failures(observations: object) -> list[str]:
     live_processes = exact_process_map(live.get("processes"))
     cleanup_processes = exact_process_map(cleanup.get("processes"))
     allowed_groups = allowed_service_process_groups(services, containers)
+    helper_kinds: list[str] = []
+    process_delta_valid = True
+    if live_processes is not None and baseline_processes is not None:
+        for key, count in live_processes.items():
+            delta = count - baseline_processes.get(key, 0)
+            if delta <= 0:
+                continue
+            service_process = any(
+                (key[1] == group or key[1].startswith(f"{group}/"))
+                and (key[2], key[3]) in identities
+                for group, identities in allowed_groups.items()
+            )
+            helper_kind = (
+                reviewed_podman_helper_process(
+                    key, delta, auxiliary[1], auxiliary[2]
+                )
+                if auxiliary is not None
+                else None
+            )
+            if helper_kind is not None:
+                helper_kinds.append(helper_kind)
+            elif not service_process:
+                process_delta_valid = False
     if (
         baseline_processes is None
         or live_processes is None
@@ -4109,15 +5146,8 @@ def workload_admission_failures(observations: object) -> list[str]:
             live_processes.get(key, 0) < count
             for key, count in baseline_processes.items()
         )
-        or any(
-            not any(
-                (key[1] == group or key[1].startswith(f"{group}/"))
-                and (key[2], key[3]) in identities
-                for group, identities in allowed_groups.items()
-            )
-            for key, count in live_processes.items()
-            if count > baseline_processes.get(key, 0)
-        )
+        or not process_delta_valid
+        or sorted(helper_kinds) != ["dns", "rootless-network"]
     ):
         failures.append("D1A_PROCESS_DELTA")
     migrate = next(

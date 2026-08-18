@@ -993,7 +993,24 @@ Evidence includes:
   maps must be non-overlapping, remain inside the service-account namespace,
   and cover the role's configured and effective UID/GID plus every admitted
   supplementary GID,
-  the closed role-to-network topology, the complete semantic role-to-mount
+  the closed role-to-network topology; every running container's canonical
+  single IPv4 endpoint, prefix, gateway, network ID, and exact role/short-ID
+  aliases remain private collector context from the same bounded Podman
+  inspect snapshot. Each endpoint must be a unique usable member of the sole
+  independently inspected IPv4 subnet, must not equal its network, broadcast,
+  or gateway address, and must exactly match its Aardvark network entry together
+  with the full container ID, expected container name, and aliases. Missing,
+  extra, duplicated, malformed, or different Aardvark facts make collection
+  incomplete rather than adding a new target-reported evidence field. The
+  collector also independently inspects both workload bridge networks and
+  requires their exact single-subnet, IPv4-only, internal, DNS-enabled contract
+  with no configured network-level DNS servers. Their Aardvark files
+  must use Netavark's reviewed `%int` suffix for internal networks, and each
+  first line must be exactly the inspected subnet gateway. The workload
+  configures no per-container DNS servers, so `HostConfig.Dns` must be empty
+  and the optional fifth Aardvark member field must be absent. Any broader DNS,
+  alias, address, or header representation makes collection incomplete; the
+  complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
   `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
   and read/write state), and the
@@ -1016,10 +1033,17 @@ Evidence includes:
   `/usr/bin/podman run` command naming that exact container in the generated
   service's exact systemd invocation; `inspect`, another Podman subcommand, a
   different name, a duplicate lifecycle, or a bare container-ID message cannot
-  establish this binding; the exited container must have explicit immutable
-  configured ID mappings that compose to a bounded map covering the configured
-  identity, with containers.conf modules rejected rather than treated as part
-  of a trusted default; exited evidence deliberately records no process
+  establish this binding; an exited container may use either explicit immutable
+  configured ID mappings or Podman 5.4's omitted `HostConfig.IDMappings`
+  representation for the reviewed default-rootless case only. The latter
+  requires no user-namespace or explicit mapping creation control,
+  independently collected bounded Podman outer UID/GID maps, exact lifecycle
+  correlation, and coverage of the configured identity. Explicit mapping
+  controls are admissible only when a present, populated `IDMappings` object
+  supplies valid immutable UID and GID maps. Present null or malformed mappings,
+  non-default creation modes, and containers.conf modules still fail closed;
+  exited evidence
+  deliberately records no process
   namespace identity or `/proc` UID/GID map; any Podman `exec`/`exec_died` event for an
   integration container makes lifecycle collection incomplete; one exited
   zero-status migration systemd invocation
@@ -1035,16 +1059,27 @@ Evidence includes:
   target-added container, network, and volume regardless of its name; exact
   restoration of the baseline active systemd user-unit and pending-job sets,
   measured both before and after the final inventory so a cleanup- or host-phase
-  transient service, timer, or queued job fails closed; a bounded census of
+  transient service, timer, or queued job fails closed. Unit and job names use
+  systemd's bounded canonical representation: ordinary unit-name characters or
+  lowercase `\xNN` hex escapes only, with the complete encoded name limited to
+  128 characters; malformed escapes fail closed. Evidence schema validation
+  enforces the same representation. A bounded census of
   executable, cgroup, effective host UID/GID, and count for every process in the
-  service account's complete UID-20000 user slice, including SSH session scopes,
-  requiring exact baseline restoration
+  service account's complete UID-20000 user slice, including SSH session scopes.
+  A permission-denied executable in the exact user-manager or SSH-agent cgroup
+  is retained as a bounded opaque process fact instead of being omitted; every
+  other unreadable executable makes collection incomplete. Admission requires
+  exact baseline restoration
   after cleanup and confining every live process delta to an independently
   observed generated-service cgroup;
   exact singleton `no-new-privileges` admission with every target-selected
-  seccomp or other additional security option rejected; exact added, effective,
-  and bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the
-  secrets initializer, empty for every other role); and Podman 5.4
+  seccomp or other additional security option rejected; exact effective and
+  bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the secrets
+  initializer, empty for every other role). Podman 5.4 may report its runtime
+  additions as an empty `HostConfig.CapAdd`; that representation is admitted
+  only while the effective and bounding sets still match the exact role
+  contract. Any nonempty configured additions must themselves equal that role
+  set. Podman 5.4
   `Healthcheck`/network-name field interpretation; and
 - exact absence of every integration unit, generated service and nested
   generated drop-in artifact across the user manager's `generator.early`,
@@ -1076,14 +1111,34 @@ environment unsetting/passing controls, missing or contradictory service-local
 configuration pins, every target-authored auxiliary systemd execution phase,
 unknown generated lifecycle executables, and non-direct or role-inconsistent
 Podman `ExecStart=` commands fail before activation and again during collection
-rather than bypassing that pin.
+rather than bypassing that pin. Podman health timers are not authenticated by
+their names alone: each admitted timer and triggered service must be transient,
+drop-in-free units under the exact user-manager transient path, the timer must
+trigger only its paired service, and that service must have the trusted PATH,
+no auxiliary execution phase, and exactly one direct
+`/usr/bin/podman healthcheck run <full-container-ID>` command.
+An authenticated paired healthcheck service that is active while the user-work
+snapshot is read is normalized out of the stable active-unit set only after all
+of those timer/service checks pass. An unpaired or unauthenticated active
+healthcheck-shaped service makes collection incomplete.
+The sole rootless-network `pasta` process is likewise admitted only with the
+exact Podman 5.4.2 argument vector produced under the pinned empty
+`containers.conf`: configuration, PID-file, DNS-forward, disabled pasta port
+auto-discovery, gateway-mapping, quiet, network-namespace, and guest-address
+options must appear once in their reviewed order with their exact values.
+Missing, reordered, changed, or additional arguments make collection
+incomplete. Podman's separate rootless port-forwarder remains responsible for
+the gateway container's explicitly published loopback TCP port; the reviewed
+`pasta -t none` setting disables pasta's automatic namespace-port discovery,
+not that explicit Podman mapping.
 Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
 still fail closed. For an exited one-shot, admission instead requires the exact
-existing systemd/Podman lifecycle correlation and an explicit immutable
-configured mapping. The bounded configured map must compose through the trusted
-outer mapping and cover the configured identity; an implicit default is
-insufficient because an exited process has no independently observable kernel
-map. It never
+existing systemd/Podman lifecycle correlation. An explicit immutable configured
+map must compose through the trusted outer mapping and cover the configured
+identity. When Podman 5.4 omits `HostConfig.IDMappings` for default-rootless
+mode, that absence is accepted only with no user-namespace creation option and
+the exact bounded outer mapping independently collected from Podman; present
+null, malformed, and non-default alternatives are rejected. It never
 presents those configuration facts as live `/proc` evidence.
 
 Workload admission additionally restricts the active user socket-unit set to

@@ -206,6 +206,13 @@ ROLE_IDENTITIES = {
     "gateway": (10003, 10003),
 }
 HEALTHY_ROLES = {"postgres", "valkey", "api", "frontend", "gateway"}
+HEALTH_INTERVAL_USEC = {
+    "postgres": 5_000_000,
+    "valkey": 5_000_000,
+    "api": 10_000_000,
+    "frontend": 10_000_000,
+    "gateway": 10_000_000,
+}
 API_ENTRYPOINT = ("/bin/bash", "/run/secpal/container-entrypoint.sh")
 ROLE_EXECUTION = {
     "secrets-init": (
@@ -507,6 +514,7 @@ def valid_observations() -> dict[str, object]:
             "user_work": {
                 "active_units": ["dbus.service", "dbus.socket"],
                 "jobs": [],
+                "podman_health_timers": [],
             },
             "processes": [],
             "containers": [],
@@ -556,10 +564,54 @@ def valid_observations() -> dict[str, object]:
                     ["dbus.service", "dbus.socket"]
                     + [service["unit"] for service in services]
                     + [f"{prefix}.target"]
+                    + ["podman-user-wait-network-online.service"]
+                    + [
+                        f"{container['id']}-abcdef123456.timer"
+                        for container in containers
+                        if container["role"] in HEALTHY_ROLES
+                    ]
+                    + [
+                        "rootless-netns-deadbeef.scope",
+                        "run-p123-i456.scope",
+                    ]
                 ),
                 "jobs": [],
+                "podman_health_timers": sorted(
+                    [
+                        {
+                            "container_id": container["id"],
+                            "timer": f"{container['id']}-abcdef123456.timer",
+                            "service": f"{container['id']}-abcdef123456.service",
+                            "interval_usec": HEALTH_INTERVAL_USEC[container["role"]],
+                        }
+                        for container in containers
+                        if container["role"] in HEALTHY_ROLES
+                    ],
+                    key=lambda item: item["timer"],
+                ),
             },
-            "processes": [],
+            "processes": [
+                {
+                    "executable": "/usr/bin/pasta.avx2",
+                    "control_group": (
+                        "/user.slice/user-20000.slice/user@20000.service/"
+                        "user.slice/rootless-netns-deadbeef.scope"
+                    ),
+                    "uid": 20000,
+                    "gid": 20000,
+                    "count": 1,
+                },
+                {
+                    "executable": "/usr/lib/podman/aardvark-dns",
+                    "control_group": (
+                        "/user.slice/user-20000.slice/user@20000.service/"
+                        "app.slice/run-p123-i456.scope"
+                    ),
+                    "uid": 20000,
+                    "gid": 20000,
+                    "count": 1,
+                },
+            ],
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
@@ -584,8 +636,12 @@ def valid_observations() -> dict[str, object]:
             "migration_invocation_count": 1,
             "podman_api": False,
             "user_work": {
-                "active_units": ["dbus.service", "dbus.socket"],
+                "active_units": [
+                    "dbus.service", "dbus.socket",
+                    "podman-user-wait-network-online.service",
+                ],
                 "jobs": [],
+                "podman_health_timers": [],
             },
             "processes": [],
             "control_resources": {
@@ -971,6 +1027,55 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "D1A_SERVICE_STATE",
                 )
 
+    def test_podman_54_delegated_workload_oneshots_are_admitted(self) -> None:
+        observations = valid_observations()
+        services = observations["live"]["generated_services"]
+        containers = observations["live"]["containers"]
+        for role in ("secrets-init", "migrate"):
+            service = next(
+                item for item in services if item["logical_name"] == role
+            )
+            service["control_group"] = (
+                "/user.slice/user-20000.slice/user@20000.service/"
+                f"app.slice/{service['unit']}"
+            )
+            container = next(item for item in containers if item["role"] == role)
+            container["user_namespace"]["configured_uid_map"] = []
+            container["user_namespace"]["configured_gid_map"] = []
+        secrets_init = next(
+            item for item in containers if item["role"] == "secrets-init"
+        )
+        secrets_init["cap_add"] = []
+        failures = self.collector.workload_admission_failures(observations)
+        for invariant in (
+            "D1A_SERVICE_STATE", "D1A_HOST_NAMESPACES",
+            "D1A_PRIVILEGE_BOUNDARY", "D1A_SERVICE_BINDING",
+        ):
+            self.assertNotIn(invariant, failures)
+
+        next(
+            item for item in services if item["logical_name"] == "migrate"
+        )["control_group"] += "/attacker.scope"
+        self.assertIn(
+            "D1A_SERVICE_STATE",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        wrong_prefix = valid_observations()
+        migrate_service = next(
+            item
+            for item in wrong_prefix["live"]["generated_services"]
+            if item["logical_name"] == "migrate"
+        )
+        migrate_service["control_group"] = (
+            "/user.slice/user-20000.slice/attacker.slice/"
+            f"{migrate_service['unit']}"
+        )
+        self.assertIn(
+            "D1A_SERVICE_STATE",
+            self.collector.workload_admission_failures(wrong_prefix),
+        )
+
     def test_each_container_is_bound_to_its_generated_systemd_service(self) -> None:
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][4].__setitem__(
@@ -1050,7 +1155,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "result": "success",
                 "exec_main_status": 0,
                 "main_pid": 0,
-                "control_group": "",
+                "control_group": (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    f"app.slice/{unit}"
+                ),
                 "invocation_id": "a" * 32,
             }
         ]
@@ -1095,21 +1203,31 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 {"status": "died", "time_nano": 3},
             ],
         }
-        matching_record = json.dumps(
-            {
-                "_SYSTEMD_INVOCATION_ID": "a" * 32,
-                "_EXE": "/usr/bin/podman",
-                "_CMDLINE": (
-                    "/usr/bin/podman run --name "
-                    "secpal-int-aaaaaaaaaaaa-migrate fixture-image"
-                ),
-                "MESSAGE": "b" * 64,
-            }
-        )
+        records = []
+        for status in ("create", "start", "died"):
+            records.append(json.dumps(
+                {
+                    "_SYSTEMD_INVOCATION_ID": "a" * 32,
+                    "_EXE": "/usr/bin/podman",
+                    "_CMDLINE": (
+                        "/usr/bin/podman run --name "
+                        "secpal-int-aaaaaaaaaaaa-migrate fixture-image"
+                    ),
+                    "MESSAGE": (
+                        "2026-08-18 07:20:56.854793053 +0000 UTC "
+                        f"m=+0.047590538 container {status} {'b' * 64} "
+                        "(image=fixture-image, "
+                        "name=secpal-int-aaaaaaaaaaaa-migrate, "
+                        "PODMAN_SYSTEMD_UNIT="
+                        "secpal-int-aaaaaaaaaaaa-migrate.service)"
+                    ),
+                }
+            ))
+        matching_records = "\n".join(records)
         with mock.patch.object(
             self.collector,
             "command_result",
-            return_value=(0, matching_record, True),
+            return_value=(0, matching_records, True),
         ):
             self.assertEqual(
                 (True, True),
@@ -1119,8 +1237,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
         for output in (
             "",
-            f"{matching_record}\n{matching_record}",
-            matching_record.replace("/usr/bin/podman", "/usr/bin/false"),
+            "\n".join(records[:-1]),
+            f"{matching_records}\n{records[-1]}",
+            matching_records.replace("/usr/bin/podman", "/usr/bin/false"),
+            matching_records.replace(
+                "PODMAN_SYSTEMD_UNIT=secpal-int-aaaaaaaaaaaa-migrate.service",
+                "PODMAN_SYSTEMD_UNIT=attacker.service",
+            ),
         ):
             with self.subTest(output=output), mock.patch.object(
                 self.collector,
@@ -1660,7 +1783,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         namespace["create_options"] = ["auto"]
         namespace["uid_map"] = copy.deepcopy(auto_map)
         namespace["gid_map"] = copy.deepcopy(auto_map)
-        observations["live"]["processes"] = [
+        observations["live"]["processes"].append(
             {
                 "executable": "/usr/bin/php",
                 "control_group": service["control_group"] + "/container",
@@ -1668,14 +1791,33 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "gid": 210_001,
                 "count": 1,
             }
-        ]
+        )
         self.assertEqual([], self.collector.workload_admission_failures(observations))
 
-    def test_exited_user_namespace_requires_explicit_mapping_and_lifecycle(self) -> None:
+    def test_exited_default_rootless_user_namespace_uses_podman_mapping(self) -> None:
+        observations = valid_observations()
+        container = next(
+            item
+            for item in observations["live"]["containers"]
+            if item["role"] == "migrate"
+        )
+        namespace = container["user_namespace"]
+        namespace["configured_uid_map"] = []
+        namespace["configured_gid_map"] = []
+        self.assertNotIn(
+            "D1A_HOST_NAMESPACES",
+            self.collector.workload_admission_failures(observations),
+        )
+        namespace["podman_uid_map"] = [
+            {"container_id": 0, "host_id": 200_000, "size": 10}
+        ]
+        self.assertIn(
+            "D1A_HOST_NAMESPACES",
+            self.collector.workload_admission_failures(observations),
+        )
+
+    def test_exited_user_namespace_rejects_unreviewed_mapping_and_lifecycle(self) -> None:
         for mutate in (
-            lambda container: container["user_namespace"].update(
-                {"configured_uid_map": [], "configured_gid_map": []}
-            ),
             lambda container: container["user_namespace"].__setitem__(
                 "create_options", ["unknown"]
             ),
@@ -1708,7 +1850,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertFalse(capture["default"]["HostConfig.IDMappings_present"])
         self.assertFalse(capture["auto"]["HostConfig.IDMappings_present"])
         self.assertEqual(
-            (["auto"], True),
+            (["auto"], False, True),
             self.collector.configured_userns_options(
                 capture["auto"]["Config.CreateCommand"]
             ),
@@ -1792,11 +1934,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertEqual(
-                    (["auto"], True),
+                    (["auto"], False, True),
                     self.collector.configured_userns_options(command),
                 )
         self.assertEqual(
-            (["auto", "host"], False),
+            (["auto", "host"], False, False),
             self.collector.configured_userns_options(
                 [
                     "/usr/bin/podman", "run", "--userns=auto",
@@ -1810,14 +1952,35 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertEqual(
-                    ([], False),
+                    ([], False, False),
+                    self.collector.configured_userns_options(command),
+                )
+
+        for flag in ("uidmap", "gidmap", "subuidname", "subgidname"):
+            for command in (
+                ["/usr/bin/podman", "run", f"--{flag}=explicit", "fixture"],
+                ["/usr/bin/podman", "run", f"--{flag}", "explicit", "fixture"],
+            ):
+                with self.subTest(flag=flag, command=command):
+                    self.assertEqual(
+                        ([], True, True),
+                        self.collector.configured_userns_options(command),
+                    )
+        for command in (
+            ["/usr/bin/podman", "run", "--uidmap=", "fixture"],
+            ["/usr/bin/podman", "run", "--uidmap"],
+            ["/usr/bin/podman", "run", "--uidmap", "--gidmap=explicit"],
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    ([], True, False),
                     self.collector.configured_userns_options(command),
                 )
 
     def test_user_namespace_creation_options_match_the_evidence_schema_bound(self) -> None:
         bounded = "a" * 256
         self.assertEqual(
-            ([bounded], True),
+            ([bounded], False, True),
             self.collector.configured_userns_options(
                 ["/usr/bin/podman", "create", f"--userns={bounded}", "fixture"]
             ),
@@ -1828,7 +1991,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertEqual(
-                    ([], False),
+                    ([], False, False),
                     self.collector.configured_userns_options(command),
                 )
 
@@ -1879,6 +2042,23 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     ].__setitem__(field, ["CAP_CHOWN"]),
                     "D1A_PRIVILEGE_BOUNDARY",
                 )
+
+        observations = valid_observations()
+        secrets_init = next(
+            item
+            for item in observations["live"]["containers"]
+            if item["role"] == "secrets-init"
+        )
+        secrets_init["cap_add"] = []
+        self.assertNotIn(
+            "D1A_PRIVILEGE_BOUNDARY",
+            self.collector.workload_admission_failures(observations),
+        )
+        secrets_init["bounding_caps"] = ["CAP_CHOWN"]
+        self.assertIn(
+            "D1A_PRIVILEGE_BOUNDARY",
+            self.collector.workload_admission_failures(observations),
+        )
 
     def test_each_container_requires_its_exact_fixture_network(self) -> None:
         self.assert_failure(
@@ -1951,9 +2131,23 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Devices": [],
                 "Tmpfs": {},
                 "ReadonlyRootfs": True,
+                "Dns": [],
             },
             "NetworkSettings": {
-                "Networks": {"secpal-int-aaaaaaaaaaaa-application": {}},
+                "Networks": {
+                    "secpal-int-aaaaaaaaaaaa-application": {
+                        "IPAddress": "10.89.0.2",
+                        "IPPrefixLen": 24,
+                        "SecondaryIPAddresses": [],
+                        "Gateway": "10.89.0.1",
+                        "GlobalIPv6Address": "",
+                        "GlobalIPv6PrefixLen": 0,
+                        "SecondaryIPv6Addresses": [],
+                        "IPv6Gateway": "",
+                        "NetworkID": "d" * 64,
+                        "Aliases": ["api", "c" * 12],
+                    }
+                },
                 "Ports": {},
             },
             "Mounts": [],
@@ -2009,6 +2203,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             (inspection["HostConfig"], "Devices"),
             (inspection["HostConfig"], "Tmpfs"),
             (inspection["HostConfig"], "ReadonlyRootfs"),
+            (inspection["HostConfig"], "Dns"),
             (inspection["NetworkSettings"], "Ports"),
         )
         for owner, field in required_fields:
@@ -2024,7 +2219,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     del candidate["HostConfig"][field]
                 else:
                     del candidate["NetworkSettings"][field]
-                _, complete = collect(candidate)
+                _, _, complete = collect(candidate)
                 self.assertFalse(complete)
 
         for field in ("EffectiveCaps", "BoundingCaps"):
@@ -2032,7 +2227,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 with self.subTest(field=field, invalid=invalid):
                     candidate = copy.deepcopy(inspection)
                     candidate[field] = invalid
-                    facts, complete = collect(candidate)
+                    facts, _, complete = collect(candidate)
                     self.assertEqual([], facts)
                     self.assertFalse(complete)
 
@@ -2071,9 +2266,23 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Devices": [],
                 "Tmpfs": {},
                 "ReadonlyRootfs": True,
+                "Dns": [],
             },
             "NetworkSettings": {
-                "Networks": {"secpal-int-aaaaaaaaaaaa-application": {}},
+                "Networks": {
+                    "secpal-int-aaaaaaaaaaaa-application": {
+                        "IPAddress": "10.89.0.2",
+                        "IPPrefixLen": 24,
+                        "SecondaryIPAddresses": [],
+                        "Gateway": "10.89.0.1",
+                        "GlobalIPv6Address": "",
+                        "GlobalIPv6PrefixLen": 0,
+                        "SecondaryIPv6Addresses": [],
+                        "IPv6Gateway": "",
+                        "NetworkID": "d" * 64,
+                        "Aliases": ["api", "c" * 12],
+                    }
+                },
                 "Ports": {},
             },
             "Mounts": [],
@@ -2115,7 +2324,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "effective_user_namespace_facts",
             return_value=(namespace_facts, 10001, 10001, [10001], True),
         ):
-            facts, complete = self.collector.container_facts(
+            facts, network_endpoints, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True,
                 podman_uid_map=namespace_facts["uid_map"],
                 podman_gid_map=namespace_facts["gid_map"],
@@ -2124,6 +2333,204 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertEqual("healthy", facts[0]["health"])
         self.assertEqual([], facts[0]["effective_caps"])
         self.assertEqual([], facts[0]["bounding_caps"])
+        self.assertNotIn("network_endpoints", facts[0])
+        self.assertEqual(
+            {
+                "c" * 64: {
+                    "secpal-int-aaaaaaaaaaaa-application": (
+                        self.collector.NetworkEndpoint(
+                            addresses=(
+                                self.collector.NetworkAddress(
+                                    "10.89.0.2", 24
+                                ),
+                            ),
+                            aliases=("api", "c" * 12),
+                            network_id="d" * 64,
+                            gateways=("10.89.0.1",),
+                        )
+                    )
+                }
+            },
+            network_endpoints,
+        )
+
+        configured_dns = copy.deepcopy(inspection)
+        configured_dns["HostConfig"]["Dns"] = ["192.0.2.53"]
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([configured_dns], True)
+        ):
+            _, _, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa",
+                rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertFalse(complete)
+
+        collector_namespace = {
+            **namespace_facts,
+            "process_identity": "",
+            "uid_map": [],
+            "gid_map": [],
+        }
+
+        def collect_mapping(candidate):
+            with mock.patch.object(
+                self.collector,
+                "names_from_listing",
+                return_value=([candidate["Name"]], True),
+            ), mock.patch.object(
+                self.collector, "json_array", return_value=([candidate], True)
+            ), mock.patch.object(
+                self.collector,
+                "container_lifecycle_events",
+                return_value=(
+                    [
+                        {"status": "create", "time_nano": 1},
+                        {"status": "start", "time_nano": 2},
+                    ],
+                    True,
+                ),
+            ), mock.patch.object(
+                self.collector,
+                "effective_user_namespace_facts",
+                return_value=(namespace_facts, 10001, 10001, [10001], True),
+            ), mock.patch.object(
+                self.collector,
+                "collector_user_namespace_facts",
+                return_value=(collector_namespace, True),
+            ):
+                return self.collector.container_facts(
+                    "aaaaaaaaaaaa",
+                    rootless=True,
+                    podman_uid_map=namespace_facts["uid_map"],
+                    podman_gid_map=namespace_facts["gid_map"],
+                )
+
+        mappings = {
+            "UidMap": ["0:1:65536"],
+            "GidMap": ["0:1:65536"],
+        }
+        for flag in ("uidmap", "gidmap", "subuidname", "subgidname"):
+            for arguments in ([f"--{flag}=explicit"], [f"--{flag}", "explicit"]):
+                with self.subTest(flag=flag, arguments=arguments):
+                    explicit = copy.deepcopy(inspection)
+                    explicit["Name"] = "secpal-int-aaaaaaaaaaaa-migrate"
+                    explicit["State"] = {
+                        "Status": "exited", "Pid": 0, "ExitCode": 0,
+                    }
+                    explicit["Config"]["CreateCommand"] = [
+                        "/usr/bin/podman", "run", *arguments, "fixture",
+                    ]
+                    explicit["HostConfig"]["IDMappings"] = mappings
+                    _, _, complete = collect_mapping(explicit)
+                    self.assertTrue(complete)
+                    explicit["HostConfig"]["IDMappings"] = {
+                        "UidMap": [], "GidMap": [],
+                    }
+                    _, _, complete = collect_mapping(explicit)
+                    self.assertFalse(complete)
+                    explicit["HostConfig"].pop("IDMappings")
+                    _, _, complete = collect_mapping(explicit)
+                    self.assertFalse(complete)
+
+        network_none = copy.deepcopy(inspection)
+        network_none["HostConfig"]["NetworkMode"] = "none"
+        network_none["NetworkSettings"]["Networks"] = {"none": {}}
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([network_none], True)
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ):
+            facts, _, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertTrue(complete)
+        self.assertEqual([], facts[0]["networks"])
+
+        network_none["NetworkSettings"]["Networks"]["hidden"] = {}
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([network_none], True)
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ):
+            _, _, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertFalse(complete)
+
+        malformed_network_none = copy.deepcopy(inspection)
+        malformed_network_none["HostConfig"]["NetworkMode"] = "none"
+        malformed_network_none["NetworkSettings"]["Networks"] = {"none": None}
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector,
+            "json_array",
+            return_value=([malformed_network_none], True),
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ):
+            _, _, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertFalse(complete)
+
+        unexpected_null_id_mappings = copy.deepcopy(inspection)
+        unexpected_null_id_mappings["HostConfig"]["IDMappings"] = None
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector,
+            "json_array",
+            return_value=([unexpected_null_id_mappings], True),
+        ):
+            facts, _, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertFalse(complete)
 
         no_healthcheck = copy.deepcopy(inspection)
         no_healthcheck["Name"] = "secpal-int-aaaaaaaaaaaa-scheduler"
@@ -2152,7 +2559,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "effective_user_namespace_facts",
             return_value=(namespace_facts, 10001, 10001, [10001], True),
         ):
-            facts, complete = self.collector.container_facts(
+            facts, _, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True,
                 podman_uid_map=namespace_facts["uid_map"],
                 podman_gid_map=namespace_facts["gid_map"],
@@ -2160,6 +2567,44 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertTrue(complete)
         self.assertEqual("none", facts[0]["health"])
         self.assertEqual([], facts[0]["healthcheck_command"])
+
+        malformed_empty_shapes = []
+        for state_health, config_healthcheck in (
+            (None, "missing"),
+            ({}, "missing"),
+            ({"Status": 1}, "missing"),
+            ("missing", None),
+        ):
+            candidate = copy.deepcopy(no_healthcheck)
+            if state_health != "missing":
+                candidate["State"]["Health"] = state_health
+            if config_healthcheck != "missing":
+                candidate["Config"]["Healthcheck"] = config_healthcheck
+            malformed_empty_shapes.append(candidate)
+        for candidate in malformed_empty_shapes:
+            with mock.patch.object(
+                self.collector,
+                "names_from_listing",
+                return_value=(["secpal-int-aaaaaaaaaaaa-scheduler"], True),
+            ), mock.patch.object(
+                self.collector,
+                "json_array",
+                return_value=([candidate], True),
+            ), mock.patch.object(
+                self.collector,
+                "container_lifecycle_events",
+                return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+            ), mock.patch.object(
+                self.collector,
+                "effective_user_namespace_facts",
+                return_value=(namespace_facts, 10001, 10001, [10001], True),
+            ):
+                _, _, complete = self.collector.container_facts(
+                    "aaaaaaaaaaaa", rootless=True,
+                    podman_uid_map=namespace_facts["uid_map"],
+                    podman_gid_map=namespace_facts["gid_map"],
+                )
+            self.assertFalse(complete)
 
         inspection["HostConfig"]["UsernsMode"] = ""
         with mock.patch.object(
@@ -2177,7 +2622,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "effective_user_namespace_facts",
             return_value=(namespace_facts, 10001, 10001, [10001], True),
         ):
-            facts, complete = self.collector.container_facts(
+            facts, _, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True,
                 podman_uid_map=namespace_facts["uid_map"],
                 podman_gid_map=namespace_facts["gid_map"],
@@ -2822,21 +3267,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_live_user_work_rejects_unrelated_target_services(self) -> None:
         observations = valid_observations()
-        baseline = observations["baseline"]["user_work"]
-        generated = [
-            service["unit"] for service in observations["live"]["generated_services"]
-        ]
-        observations["live"]["user_work"] = {
-            "active_units": sorted([
-                *baseline["active_units"],
-                *generated,
-                f"secpal-int-{observations['instance']}.target",
-            ]),
-            "jobs": [],
-        }
-        observations["live"]["processes"] = []
-        observations["baseline"]["processes"] = []
-        observations["post_cleanup"]["processes"] = []
         self.assertEqual(
             [], self.collector.workload_admission_failures(observations)
         )
@@ -2867,6 +3297,125 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector.workload_admission_failures(observations),
         )
 
+    def test_reviewed_podman_auxiliary_units_and_processes_are_exact(self) -> None:
+        def replace_health_timer_suffix(
+            candidate: dict[str, object], suffix: str
+        ) -> None:
+            user_work = candidate["live"]["user_work"]
+            user_work["active_units"] = [
+                re.sub(r"-[0-9a-f]+\.timer$", f"-{suffix}.timer", unit)
+                for unit in user_work["active_units"]
+            ]
+            for fact in user_work["podman_health_timers"]:
+                fact["timer"] = re.sub(
+                    r"-[0-9a-f]+\.timer$", f"-{suffix}.timer", fact["timer"]
+                )
+                fact["service"] = re.sub(
+                    r"-[0-9a-f]+\.service$",
+                    f"-{suffix}.service",
+                    fact["service"],
+                )
+
+        observations = valid_observations()
+        live = observations["live"]
+        failures = self.collector.workload_admission_failures(observations)
+        for invariant in (
+            "D1A_PENDING_USER_WORK", "D1A_LIVE_USER_WORK",
+            "D1A_PROCESS_DELTA",
+        ):
+            self.assertNotIn(invariant, failures)
+
+        for suffix in (
+            "0", "f" * 11, "a" * 13, "f" * 15, "7" + "f" * 15,
+        ):
+            candidate = valid_observations()
+            replace_health_timer_suffix(candidate, suffix)
+            self.assertNotIn(
+                "D1A_LIVE_USER_WORK",
+                self.collector.workload_admission_failures(candidate),
+            )
+
+        for suffix in ("00", "0a", "8" + "0" * 15, "g" * 12):
+            candidate = valid_observations()
+            replace_health_timer_suffix(candidate, suffix)
+            self.assertIn(
+                "D1A_LIVE_USER_WORK",
+                self.collector.workload_admission_failures(candidate),
+            )
+
+        live["processes"][0]["executable"] = "/usr/bin/attacker"
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        wrong_scope = valid_observations()
+        wrong_scope["live"]["processes"][0]["control_group"] = (
+            "/user.slice/user-20000.slice/attacker.slice/"
+            "rootless-netns-deadbeef.scope"
+        )
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(wrong_scope),
+        )
+        live["processes"][0]["executable"] = "/usr/bin/pasta.avx2"
+        live["user_work"]["active_units"].append(
+            f"{live['containers'][0]['id']}-1111111111111111.timer"
+        )
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
+    def test_podman_health_timers_reject_duplicate_container_ids(self) -> None:
+        observations = valid_observations()
+        live = observations["live"]
+        healthy = [
+            container
+            for container in live["containers"]
+            if container["role"] in HEALTHY_ROLES
+        ]
+        duplicate_id = healthy[0]["id"]
+        replaced_id = healthy[1]["id"]
+        healthy[1]["id"] = duplicate_id
+        live["user_work"]["active_units"] = [
+            unit
+            for unit in live["user_work"]["active_units"]
+            if not unit.startswith(f"{replaced_id}-")
+        ]
+        live["user_work"]["podman_health_timers"] = [
+            fact
+            for fact in live["user_work"]["podman_health_timers"]
+            if fact["container_id"] != replaced_id
+        ]
+
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
+    def test_podman_health_timers_require_collected_provenance(self) -> None:
+        observations = valid_observations()
+        self.assertNotIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        observations["live"]["user_work"]["podman_health_timers"][0][
+            "service"
+        ] = "attacker.service"
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        missing = valid_observations()
+        missing["live"]["user_work"]["podman_health_timers"].pop()
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(missing),
+        )
+
     def test_live_process_delta_is_confined_to_generated_service_cgroups(self) -> None:
         observations = valid_observations()
         baseline_process = {
@@ -2880,6 +3429,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations["post_cleanup"]["processes"] = [baseline_process]
         observations["live"]["processes"] = [
             baseline_process,
+            *observations["live"]["processes"],
             {
                 "executable": "/usr/bin/php",
                 "control_group": (
@@ -2891,20 +3441,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "count": 1,
             },
         ]
-        baseline = observations["baseline"]["user_work"]
-        observations["live"]["user_work"] = {
-            "active_units": sorted(
-                [
-                    *baseline["active_units"],
-                    *[
-                        service["unit"]
-                        for service in observations["live"]["generated_services"]
-                    ],
-                    f"secpal-int-{observations['instance']}.target",
-                ]
-            ),
-            "jobs": [],
-        }
         self.assertEqual(
             [], self.collector.workload_admission_failures(observations)
         )
@@ -2926,7 +3462,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
 
         wrong_identity = valid_observations()
-        wrong_identity["live"]["processes"] = [{
+        wrong_identity["live"]["processes"].append({
             "executable": "/usr/bin/php",
             "control_group": (
                 "/user.slice/user-20000.slice/user@20000.service/app.slice/"
@@ -2935,7 +3471,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "uid": 200001,
             "gid": 200001,
             "count": 1,
-        }]
+        })
         self.assertIn(
             "D1A_PROCESS_DELTA",
             self.collector.workload_admission_failures(wrong_identity),
@@ -2953,6 +3489,68 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "D1A_PROCESS_DELTA",
             self.collector.workload_admission_failures(cleanup_leak),
         )
+
+    def test_opaque_process_facts_remain_in_exact_census_comparisons(self) -> None:
+        opaque = {
+            "executable": "[permission-denied]",
+            "control_group": (
+                "/user.slice/user-20000.slice/user@20000.service/init.scope"
+            ),
+            "uid": 20000,
+            "gid": 20000,
+            "count": 1,
+        }
+        observations = valid_observations()
+        observations["baseline"]["processes"] = [opaque]
+        observations["live"]["processes"].append(opaque)
+        observations["post_cleanup"]["processes"] = [opaque]
+        self.assertNotIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        observations["live"]["processes"].remove(opaque)
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        malformed = valid_observations()
+        malformed["live"]["processes"].append(
+            {**opaque, "control_group": "/user.slice/user-20000.slice/hidden.scope"}
+        )
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(malformed),
+        )
+
+    def test_exited_oneshot_cgroups_cannot_retain_live_processes(self) -> None:
+        for role in ("secrets-init", "migrate"):
+            with self.subTest(role=role):
+                observations = valid_observations()
+                service = next(
+                    item
+                    for item in observations["live"]["generated_services"]
+                    if item["logical_name"] == role
+                )
+                service["control_group"] = (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    f"app.slice/{service['unit']}"
+                )
+                observations["live"]["processes"].append(
+                    {
+                        "executable": "/usr/bin/attacker",
+                        "control_group": service["control_group"]
+                        + "/attacker.scope",
+                        "uid": 20000,
+                        "gid": 20000,
+                        "count": 1,
+                    }
+                )
+                self.assertIn(
+                    "D1A_PROCESS_DELTA",
+                    self.collector.workload_admission_failures(observations),
+                )
 
     def test_runner_reestablishes_trusted_quadlet_activation_before_live_observation(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
@@ -3399,6 +3997,29 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     self.collector.podman_network_online_activation_is_trusted(),
                     expected,
                 )
+
+    def test_user_work_revalidates_active_podman_network_online_unit(self) -> None:
+        def command_result(arguments, **_kwargs):
+            if "list-units" in arguments:
+                return (
+                    0,
+                    "podman-user-wait-network-online.service loaded active exited\n",
+                    True,
+                )
+            if "list-jobs" in arguments:
+                return 0, "", True
+            raise AssertionError(f"unexpected command: {arguments}")
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "podman_network_online_activation_is_trusted",
+            return_value=False,
+        ) as provenance:
+            _, complete = self.collector.user_work_facts()
+        provenance.assert_called_once_with()
+        self.assertFalse(complete)
 
     def test_quadlet_normalization_uses_only_the_fixed_user_manager_contract(self) -> None:
         calls = []
@@ -4389,6 +5010,848 @@ class WorkloadEvidenceTests(unittest.TestCase):
             facts,
         )
 
+    def test_podman_helpers_are_bound_to_runtime_pid_files_and_netns(self) -> None:
+        rootless_group = (
+            "/user.slice/user-20000.slice/user@20000.service/user.slice/"
+            "rootless-netns-deadbeef.scope"
+        )
+        dns_group = (
+            "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+            "run-p123-i456.scope"
+        )
+        rootless_netns = str(self.collector.PODMAN_ROOTLESS_NETWORK_NAMESPACE)
+        aardvark_config = str(self.collector.PODMAN_AARDVARK_CONFIG_ROOT)
+        rootless_pid = str(self.collector.PODMAN_ROOTLESS_NETWORK_PID)
+
+        pasta_arguments = [
+            "/usr/bin/pasta",
+            "--config-net",
+            "--pid", rootless_pid,
+            "--dns-forward", "169.254.1.1",
+            "-t", "none",
+            "-u", "none",
+            "-T", "none",
+            "-U", "none",
+            "--no-map-gw",
+            "--quiet",
+            "--netns", rootless_netns,
+            "--map-guest-addr", "169.254.1.2",
+        ]
+
+        def arguments(pid):
+            if pid == 123:
+                return pasta_arguments, True
+            if pid == 456:
+                return [
+                    "/usr/lib/podman/aardvark-dns", "--config",
+                    aardvark_config, "-p", "53", "run",
+                ], True
+            return [], False
+
+        with mock.patch.object(
+            self.collector, "bounded_process_arguments", side_effect=arguments
+        ), mock.patch.object(
+            self.collector, "runtime_pid_file_matches", return_value=True
+        ), mock.patch.object(
+            self.collector, "process_uses_network_namespace", return_value=True
+        ):
+            self.assertTrue(
+                self.collector.podman_helper_process_is_bound(
+                    123, "/usr/bin/pasta.avx2", rootless_group
+                )
+            )
+            self.assertTrue(
+                self.collector.podman_helper_process_is_bound(
+                    456, "/usr/lib/podman/aardvark-dns", dns_group
+                )
+            )
+
+        invalid_pasta_arguments = {
+            "extra-option": pasta_arguments + ["--no-tcp"],
+            "missing-option": [
+                item for item in pasta_arguments if item != "--no-map-gw"
+            ],
+            "wrong-pid-file": [
+                "/tmp/attacker" if item == rootless_pid else item
+                for item in pasta_arguments
+            ],
+            "wrong-dns-forward": [
+                "192.0.2.53" if item == "169.254.1.1" else item
+                for item in pasta_arguments
+            ],
+            "wrong-map-guest": [
+                "192.0.2.54" if item == "169.254.1.2" else item
+                for item in pasta_arguments
+            ],
+        }
+        for name, candidate in invalid_pasta_arguments.items():
+            with self.subTest(name=name), mock.patch.object(
+                self.collector,
+                "bounded_process_arguments",
+                return_value=(candidate, True),
+            ), mock.patch.object(
+                self.collector, "runtime_pid_file_matches", return_value=True
+            ):
+                self.assertFalse(
+                    self.collector.podman_helper_process_is_bound(
+                        123, "/usr/bin/pasta.avx2", rootless_group
+                    )
+                )
+
+        for mutation in ("pid", "arguments", "namespace"):
+            with self.subTest(mutation=mutation), mock.patch.object(
+                self.collector,
+                "bounded_process_arguments",
+                return_value=(
+                    [
+                        "/usr/lib/podman/aardvark-dns", "--config",
+                        "/tmp/attacker", "-p", "53", "run",
+                    ],
+                    True,
+                ) if mutation == "arguments" else arguments(456),
+            ), mock.patch.object(
+                self.collector,
+                "runtime_pid_file_matches",
+                return_value=mutation != "pid",
+            ), mock.patch.object(
+                self.collector,
+                "process_uses_network_namespace",
+                return_value=mutation != "namespace",
+            ):
+                self.assertFalse(
+                    self.collector.podman_helper_process_is_bound(
+                        456, "/usr/lib/podman/aardvark-dns", dns_group
+                    )
+                )
+
+    def test_aardvark_configuration_is_bound_to_inspected_networks(self) -> None:
+        instance = "a" * 12
+        application = f"secpal-int-{instance}-application"
+        edge_network = f"secpal-int-{instance}-edge"
+        containers = [
+            {
+                "id": "b" * 64,
+                "name": f"secpal-int-{instance}-api",
+                "state": "running",
+                "networks": [application, edge_network],
+            },
+            {
+                "id": "c" * 64,
+                "name": f"secpal-int-{instance}-frontend",
+                "state": "running",
+                "networks": [edge_network],
+            },
+        ]
+        endpoints = {
+            "b" * 64: {
+                application: self.collector.NetworkEndpoint(
+                    addresses=(
+                        self.collector.NetworkAddress("10.89.0.2", 24),
+                    ),
+                    aliases=("api", "b" * 12),
+                    network_id="d" * 64,
+                    gateways=("10.89.0.1",),
+                ),
+                edge_network: self.collector.NetworkEndpoint(
+                    addresses=(
+                        self.collector.NetworkAddress("10.90.0.2", 24),
+                    ),
+                    aliases=("api", "b" * 12),
+                    network_id="e" * 64,
+                    gateways=("10.90.0.1",),
+                ),
+            },
+            "c" * 64: {
+                edge_network: self.collector.NetworkEndpoint(
+                    addresses=(
+                        self.collector.NetworkAddress("10.90.0.3", 24),
+                    ),
+                    aliases=("frontend", "c" * 12),
+                    network_id="e" * 64,
+                    gateways=("10.90.0.1",),
+                ),
+            },
+        }
+        network_metadata = {
+            application: self.collector.NetworkMetadata(
+                network_id="d" * 64,
+                internal=True,
+                subnets=(
+                    self.collector.NetworkSubnet(
+                        "10.89.0.0/24", "10.89.0.1"
+                    ),
+                ),
+            ),
+            edge_network: self.collector.NetworkMetadata(
+                network_id="e" * 64,
+                internal=True,
+                subnets=(
+                    self.collector.NetworkSubnet(
+                        "10.90.0.0/24", "10.90.0.1"
+                    ),
+                ),
+            ),
+        }
+        for mutation in (
+            lambda value: value[0].__setitem__("id", []),
+            lambda value: value[0].__setitem__("networks", [{}]),
+            lambda value: value[0].__setitem__(
+                "name", f"secpal-int-{instance}-unknown"
+            ),
+        ):
+            malformed = copy.deepcopy(containers)
+            mutation(malformed)
+            with self.subTest(malformed=malformed):
+                self.assertFalse(
+                    self.collector.aardvark_configuration_matches_workload(
+                        instance, malformed, endpoints, network_metadata
+                    )
+                )
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory)
+            (config / "aardvark.pid").write_text("456", encoding="ascii")
+            application_path = config / (
+                f"secpal-int-{instance}-application%int"
+            )
+            application_path.write_text(
+                "10.89.0.1\n"
+                f"{'b' * 64} 10.89.0.2  "
+                f"secpal-int-{instance}-api,api,{'b' * 12}\n",
+                encoding="ascii",
+            )
+            edge = config / f"secpal-int-{instance}-edge%int"
+            edge.write_text(
+                "10.90.0.1\n"
+                f"{'b' * 64} 10.90.0.2  "
+                f"secpal-int-{instance}-api,api,{'b' * 12}\n"
+                f"{'c' * 64} 10.90.0.3  "
+                f"secpal-int-{instance}-frontend,frontend,{'c' * 12}\n",
+                encoding="ascii",
+            )
+            with mock.patch.object(
+                self.collector, "PODMAN_AARDVARK_CONFIG_ROOT", config
+            ), mock.patch.object(
+                self.collector, "CI_UID", os.getuid()
+            ), mock.patch.object(
+                self.collector, "CI_GID", os.getgid()
+            ):
+                self.assertTrue(
+                    self.collector.aardvark_configuration_matches_workload(
+                        instance, containers, endpoints, network_metadata
+                    )
+                )
+                valid_edge_entries = (
+                    f"{'b' * 64} 10.90.0.2  "
+                    f"secpal-int-{instance}-api,api,{'b' * 12}\n"
+                    f"{'c' * 64} 10.90.0.3  "
+                    f"secpal-int-{instance}-frontend,frontend,{'c' * 12}\n"
+                )
+                for network_header in (
+                    "10.90.0.254",
+                    "10.90.0.1,10.90.0.2",
+                    "10.90.0.1 192.0.2.53",
+                ):
+                    with self.subTest(network_header=network_header):
+                        edge.write_text(
+                            f"{network_header}\n{valid_edge_entries}",
+                            encoding="ascii",
+                        )
+                        self.assertFalse(
+                            self.collector.aardvark_configuration_matches_workload(
+                                instance,
+                                containers,
+                                endpoints,
+                                network_metadata,
+                            )
+                        )
+                edge.write_text(
+                    "10.90.0.1\n"
+                    f"{valid_edge_entries}",
+                    encoding="ascii",
+                )
+                for api_addresses in (
+                    "203.0.113.1 ",
+                    "10.90.0.1 ",
+                    "10.90.0.2 fd00::2",
+                    "10.90.0.2,10.90.0.4 ",
+                    "bad ",
+                ):
+                    with self.subTest(api_addresses=api_addresses):
+                        edge.write_text(
+                            "10.90.0.1\n"
+                            f"{'b' * 64} {api_addresses} "
+                            f"secpal-int-{instance}-api,api,{'b' * 12}\n"
+                            f"{'c' * 64} 10.90.0.3  "
+                            f"secpal-int-{instance}-frontend,frontend,"
+                            f"{'c' * 12}\n",
+                            encoding="ascii",
+                        )
+                        self.assertFalse(
+                            self.collector.aardvark_configuration_matches_workload(
+                                instance,
+                                containers,
+                                endpoints,
+                                network_metadata,
+                            )
+                        )
+                edge.write_text(
+                    "10.90.0.1\n"
+                    f"{'b' * 64} 10.90.0.2  "
+                    f"secpal-int-{instance}-api,api,{'b' * 12}\n",
+                    encoding="ascii",
+                )
+                self.assertFalse(
+                    self.collector.aardvark_configuration_matches_workload(
+                        instance, containers, endpoints, network_metadata
+                    )
+                )
+
+                edge.write_text(
+                    "10.90.0.1\n"
+                    f"{valid_edge_entries}",
+                    encoding="ascii",
+                )
+                for member_line in (
+                    f"{'b' * 64} 10.90.0.2  "
+                    f"secpal-int-{instance}-api,{'b' * 12}",
+                    f"{'b' * 64} 10.90.0.2  "
+                    f"secpal-int-{instance}-api,api,{'b' * 12} 192.0.2.53",
+                ):
+                    with self.subTest(member_line=member_line):
+                        edge.write_text(
+                            "10.90.0.1\n"
+                            f"{member_line}\n"
+                            f"{'c' * 64} 10.90.0.3  "
+                            f"secpal-int-{instance}-frontend,frontend,"
+                            f"{'c' * 12}\n",
+                            encoding="ascii",
+                        )
+                        self.assertFalse(
+                            self.collector.aardvark_configuration_matches_workload(
+                                instance,
+                                containers,
+                                endpoints,
+                                network_metadata,
+                            )
+                        )
+                semantic_mutations = {
+                    "outside-subnet": (("b" * 64, "203.0.113.2"), None),
+                    "duplicate-member-address": (
+                        ("c" * 64, "10.90.0.2"), None,
+                    ),
+                    "missing-role-alias": (None, ("b" * 64, ("b" * 12,))),
+                }
+                for name, (address_change, alias_change) in (
+                    semantic_mutations.items()
+                ):
+                    candidate = copy.deepcopy(endpoints)
+                    if address_change is not None:
+                        container_id, address = address_change
+                        candidate[container_id][edge_network] = candidate[
+                            container_id
+                        ][edge_network]._replace(
+                            addresses=(
+                                self.collector.NetworkAddress(address, 24),
+                            )
+                        )
+                    if alias_change is not None:
+                        container_id, aliases = alias_change
+                        candidate[container_id][edge_network] = candidate[
+                            container_id
+                        ][edge_network]._replace(aliases=aliases)
+                    api_endpoint = candidate["b" * 64][edge_network]
+                    frontend_endpoint = candidate["c" * 64][edge_network]
+                    api_addresses = api_endpoint.addresses[0].address
+                    frontend_addresses = frontend_endpoint.addresses[0].address
+                    api_names = ",".join(
+                        (containers[0]["name"], *api_endpoint.aliases)
+                    )
+                    frontend_names = ",".join(
+                        (containers[1]["name"], *frontend_endpoint.aliases)
+                    )
+                    with self.subTest(name=name):
+                        edge.write_text(
+                            "10.90.0.1\n"
+                            f"{'b' * 64} {api_addresses}  {api_names}\n"
+                            f"{'c' * 64} {frontend_addresses}  "
+                            f"{frontend_names}\n",
+                            encoding="ascii",
+                        )
+                        self.assertFalse(
+                            self.collector.aardvark_configuration_matches_workload(
+                                instance,
+                                containers,
+                                candidate,
+                                network_metadata,
+                            )
+                        )
+                edge.write_text(
+                    "10.90.0.1\n"
+                    f"{valid_edge_entries}",
+                    encoding="ascii",
+                )
+                application_path.rename(
+                    config / f"secpal-int-{instance}-application"
+                )
+                self.assertFalse(
+                    self.collector.aardvark_configuration_matches_workload(
+                        instance, containers, endpoints, network_metadata
+                    )
+                )
+
+    def test_workload_network_metadata_is_complete_and_canonical(self) -> None:
+        instance = "a" * 12
+        application = f"secpal-int-{instance}-application"
+        edge = f"secpal-int-{instance}-edge"
+        inspections = [
+            {
+                "name": application,
+                "id": "b" * 64,
+                "driver": "bridge",
+                "subnets": [
+                    {"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"},
+                ],
+                "ipv6_enabled": False,
+                "internal": True,
+                "dns_enabled": True,
+            },
+            {
+                "name": edge,
+                "id": "c" * 64,
+                "driver": "bridge",
+                "subnets": [
+                    {"subnet": "10.90.0.0/24", "gateway": "10.90.0.1"},
+                ],
+                "ipv6_enabled": False,
+                "internal": True,
+                "dns_enabled": True,
+            },
+        ]
+        with mock.patch.object(
+            self.collector, "json_array", return_value=(inspections, True)
+        ) as inspect:
+            metadata, complete = self.collector.workload_network_metadata(instance)
+        self.assertTrue(complete)
+        self.assertEqual(
+            {
+                application: self.collector.NetworkMetadata(
+                    network_id="b" * 64,
+                    internal=True,
+                    subnets=(
+                        self.collector.NetworkSubnet(
+                            "10.89.0.0/24", "10.89.0.1"
+                        ),
+                    ),
+                ),
+                edge: self.collector.NetworkMetadata(
+                    network_id="c" * 64,
+                    internal=True,
+                    subnets=(
+                        self.collector.NetworkSubnet(
+                            "10.90.0.0/24", "10.90.0.1"
+                        ),
+                    ),
+                ),
+            },
+            metadata,
+        )
+        inspect.assert_called_once_with(
+            ["podman", "network", "inspect", application, edge], timeout=60
+        )
+
+        mutations = {
+            "missing-key": lambda value: value[0].pop("dns_enabled"),
+            "wrong-driver": lambda value: value[0].__setitem__("driver", "macvlan"),
+            "external": lambda value: value[0].__setitem__("internal", False),
+            "dns-disabled": lambda value: value[0].__setitem__("dns_enabled", False),
+            "missing-gateway": lambda value: value[0]["subnets"][0].pop("gateway"),
+            "bad-subnet": lambda value: value[0]["subnets"][0].__setitem__(
+                "subnet", "10.89.0.1/24"
+            ),
+            "bad-gateway": lambda value: value[0]["subnets"][0].__setitem__(
+                "gateway", "203.0.113.1"
+            ),
+            "ipv6-enabled": lambda value: value[1].__setitem__(
+                "ipv6_enabled", True
+            ),
+            "second-subnet": lambda value: value[1]["subnets"].append(
+                {"subnet": "10.91.0.0/24", "gateway": "10.91.0.1"}
+            ),
+            "network-dns": lambda value: value[1].__setitem__(
+                "network_dns_servers", ["192.0.2.53"]
+            ),
+        }
+        for name, mutate in mutations.items():
+            candidate = copy.deepcopy(inspections)
+            mutate(candidate)
+            with self.subTest(name=name), mock.patch.object(
+                self.collector, "json_array", return_value=(candidate, True)
+            ):
+                self.assertEqual(
+                    ({}, False),
+                    self.collector.workload_network_metadata(instance),
+                )
+
+    def test_inspected_network_endpoints_are_complete_and_canonical(self) -> None:
+        network = "secpal-int-aaaaaaaaaaaa-application"
+        expected = {
+            network: self.collector.NetworkEndpoint(
+                addresses=(self.collector.NetworkAddress("10.89.0.2", 24),),
+                aliases=("api", "b" * 12),
+                network_id="d" * 64,
+                gateways=("10.89.0.1",),
+            )
+        }
+        names, endpoints, complete = self.collector.normalized_network_endpoints(
+            {
+                network: {
+                    "IPAddress": "10.89.0.2",
+                    "IPPrefixLen": 24,
+                    "Gateway": "10.89.0.1",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "IPv6Gateway": "",
+                    "NetworkID": "d" * 64,
+                    "Aliases": ["api", "b" * 12],
+                }
+            },
+            "private",
+        )
+        self.assertTrue(complete)
+        self.assertEqual([network], names)
+        self.assertEqual(expected, endpoints)
+
+        mutations = {
+            "wrong-family": lambda value: value[network].__setitem__(
+                "IPAddress", "fd00::2"
+            ),
+            "secondary-ip": lambda value: value[network].__setitem__(
+                "SecondaryIPAddresses",
+                [{"Addr": "10.89.0.3", "PrefixLength": 24}],
+            ),
+            "ipv6": lambda value: value[network].update(
+                {"GlobalIPv6Address": "fd00::2", "GlobalIPv6PrefixLen": 64}
+            ),
+            "bad-prefix": lambda value: value[network].__setitem__(
+                "IPPrefixLen", 33
+            ),
+            "bad-gateway": lambda value: value[network].__setitem__(
+                "Gateway", "bad"
+            ),
+            "bad-network-id": lambda value: value[network].__setitem__(
+                "NetworkID", "short"
+            ),
+            "missing-alias": lambda value: value[network].__setitem__(
+                "Aliases", ["api"]
+            ),
+        }
+        for name, mutation in mutations.items():
+            candidate = {
+                network: {
+                    "IPAddress": "10.89.0.2",
+                    "IPPrefixLen": 24,
+                    "SecondaryIPAddresses": [],
+                    "Gateway": "10.89.0.1",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "SecondaryIPv6Addresses": [],
+                    "IPv6Gateway": "",
+                    "NetworkID": "d" * 64,
+                    "Aliases": ["api", "b" * 12],
+                }
+            }
+            mutation(candidate)
+            with self.subTest(name=name):
+                self.assertFalse(
+                    self.collector.normalized_network_endpoints(
+                        candidate, "private"
+                    )[2]
+                )
+
+    def test_user_work_accepts_only_canonical_systemd_hex_escapes(self) -> None:
+        def command_result(arguments, **_kwargs):
+            if "list-units" in arguments:
+                return (
+                    0,
+                    "dev-disk-by\\x2ddiskseq-1.device loaded active plugged\n",
+                    True,
+                )
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ):
+            facts, complete = self.collector.user_work_facts()
+        self.assertTrue(complete)
+        self.assertEqual(
+            ["dev-disk-by\\x2ddiskseq-1.device"], facts["active_units"]
+        )
+
+        def malformed_result(arguments, **_kwargs):
+            if "list-units" in arguments:
+                return 0, "dev-disk-by\\xZZescape.device loaded active plugged\n", True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=malformed_result
+        ):
+            _, complete = self.collector.user_work_facts()
+        self.assertFalse(complete)
+
+    def test_health_timer_facts_require_exact_podman_transient_units(self) -> None:
+        container_id = "a" * 64
+        timer = f"{container_id}-1.timer"
+        service = f"{container_id}-1.service"
+        trusted_path = next(
+            item
+            for item in self.collector.TRUSTED_MANAGER_ENVIRONMENT
+            if item.startswith("PATH=")
+        )
+
+        def collect(
+            timer_changes=None,
+            service_changes=None,
+            active_services=(),
+        ):
+            timer_properties = {
+                "FragmentPath": (
+                    f"/run/user/20000/systemd/transient/{timer}"
+                ),
+                "DropInPaths": "",
+                "Transient": "yes",
+                "Triggers": service,
+                "AccuracyUSec": "1s",
+                "TimersMonotonic": (
+                    "{ OnUnitInactiveUSec=10s ; next_elapse=10s }"
+                ),
+            }
+            timer_properties.update(timer_changes or {})
+            service_properties = {
+                "FragmentPath": (
+                    f"/run/user/20000/systemd/transient/{service}"
+                ),
+                "DropInPaths": "",
+                "Transient": "yes",
+                "Environment": trusted_path,
+                "ExecCondition": "",
+                "ExecStartPre": "",
+                "ExecStart": (
+                    "{ path=/usr/bin/podman ; "
+                    "argv[]=/usr/bin/podman healthcheck run "
+                    f"{container_id} ; ignore_errors=no ; "
+                    "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
+                    "code=(null) ; status=0/0 }"
+                ),
+                "ExecStartPost": "",
+                "ExecReload": "",
+                "ExecStop": "",
+                "ExecStopPost": "",
+            }
+            service_properties.update(service_changes or {})
+
+            def command_result(arguments, **_kwargs):
+                if "list-units" in arguments:
+                    active = "".join(
+                        f"{unit} loaded active running\n"
+                        for unit in active_services
+                    )
+                    return (
+                        0,
+                        f"{timer} loaded active waiting\n{active}",
+                        True,
+                    )
+                if "list-jobs" in arguments:
+                    return 0, "", True
+                if arguments[:4] == [
+                    "systemctl", "--user", "show", timer,
+                ]:
+                    return (
+                        0,
+                        "\n".join(
+                            f"{name}={value}"
+                            for name, value in timer_properties.items()
+                        ),
+                        True,
+                    )
+                if arguments[:4] == [
+                    "systemctl", "--user", "show", service,
+                ]:
+                    return (
+                        0,
+                        "\n".join(
+                            f"{name}={value}"
+                            for name, value in service_properties.items()
+                        ),
+                        True,
+                    )
+                if arguments == [
+                    "/usr/bin/podman", "healthcheck", "run", container_id,
+                ]:
+                    return 0, "", True
+                raise AssertionError(f"unexpected command: {arguments}")
+
+            with mock.patch.object(
+                self.collector, "command_result", side_effect=command_result
+            ):
+                return self.collector.user_work_facts()
+
+        facts, complete = collect()
+        self.assertTrue(complete)
+        self.assertEqual(
+            [{
+                "container_id": container_id,
+                "timer": timer,
+                "service": service,
+                "interval_usec": 10_000_000,
+            }],
+            facts["podman_health_timers"],
+        )
+        active_facts, active_complete = collect(active_services=(service,))
+        self.assertTrue(active_complete)
+        self.assertEqual(facts, active_facts)
+
+        unpaired_service = f"{'b' * 64}-1.service"
+        _, unpaired_complete = collect(active_services=(unpaired_service,))
+        self.assertFalse(unpaired_complete)
+
+        for timer_changes, service_changes in (
+            ({"Triggers": "attacker.service"}, None),
+            ({"Transient": "no"}, None),
+            ({"DropInPaths": "/home/secpal-ci/override.conf"}, None),
+            (None, {"Environment": "PATH=/target/bin"}),
+            (None, {"ExecStartPre": "{ path=/usr/bin/attacker ; }"}),
+            (None, {"ExecStart": "{ path=/usr/bin/attacker ; }"}),
+            ({"TimersMonotonic": (
+                "{ OnUnitInactiveUSec=1h ; next_elapse=1h }"
+            )}, None),
+        ):
+            with self.subTest(
+                timer_changes=timer_changes,
+                service_changes=service_changes,
+            ):
+                _, complete = collect(timer_changes, service_changes)
+                self.assertFalse(complete)
+
+        def unhealthy_result(arguments, **_kwargs):
+            if arguments == [
+                "/usr/bin/podman", "healthcheck", "run", container_id,
+            ]:
+                return 1, "unhealthy\n", True
+            raise AssertionError(f"unexpected command: {arguments}")
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=unhealthy_result
+        ):
+            self.assertFalse(
+                self.collector.podman_healthcheck_is_current(container_id)
+            )
+
+    def test_opaque_processes_are_limited_to_trusted_user_manager_units(self) -> None:
+        process = Path("/proc/1234")
+        own_group = (
+            "/user.slice/user-20000.slice/user@20000.service/"
+            "session-collector.scope"
+        )
+
+        def collect(control_group):
+            def observed_group(pid):
+                return (own_group if pid == os.getpid() else control_group, True)
+
+            with mock.patch.object(
+                self.collector.Path, "iterdir", return_value=(process,)
+            ), mock.patch.object(
+                self.collector,
+                "process_control_group",
+                side_effect=observed_group,
+            ), mock.patch.object(
+                self.collector,
+                "process_host_identity",
+                return_value=(20000, 20000, True),
+            ), mock.patch.object(
+                self.collector.os,
+                "readlink",
+                side_effect=PermissionError,
+            ), mock.patch.object(
+                self.collector.Path,
+                "exists",
+                return_value=True,
+            ):
+                return self.collector.user_process_facts()
+
+        facts, complete = collect(
+            "/user.slice/user-20000.slice/user@20000.service/init.scope"
+        )
+        self.assertEqual(
+            [{
+                "executable": "[permission-denied]",
+                "control_group": (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    "init.scope"
+                ),
+                "uid": 20000,
+                "gid": 20000,
+                "count": 1,
+            }],
+            facts,
+        )
+        self.assertTrue(complete)
+
+        facts, complete = collect(
+            "/user.slice/user-20000.slice/user@20000.service/"
+            "app.slice/ssh-agent.service"
+        )
+        self.assertEqual(
+            [{
+                "executable": "[permission-denied]",
+                "control_group": (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    "app.slice/ssh-agent.service"
+                ),
+                "uid": 20000,
+                "gid": 20000,
+                "count": 1,
+            }],
+            facts,
+        )
+        self.assertTrue(complete)
+
+        _, complete = collect(
+            "/user.slice/user-20000.slice/user@20000.service/"
+            "app.slice/attacker.service"
+        )
+        self.assertFalse(complete)
+
+        def generic_os_error(_path):
+            raise OSError("not a reviewed permission denial")
+
+        with mock.patch.object(
+            self.collector.Path, "iterdir", return_value=(process,)
+        ), mock.patch.object(
+            self.collector,
+            "process_control_group",
+            side_effect=lambda pid: (
+                own_group if pid == os.getpid() else (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    "init.scope"
+                ),
+                True,
+            ),
+        ), mock.patch.object(
+            self.collector,
+            "process_host_identity",
+            return_value=(20000, 20000, True),
+        ), mock.patch.object(
+            self.collector.os,
+            "readlink",
+            side_effect=generic_os_error,
+        ), mock.patch.object(
+            self.collector.Path,
+            "exists",
+            return_value=True,
+        ):
+            _, complete = self.collector.user_process_facts()
+        self.assertFalse(complete)
+
     def test_live_collection_fails_closed_when_user_processes_change_mid_observation(self) -> None:
         hidden = [{
             "executable": "/usr/bin/php",
@@ -4403,7 +5866,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
         empty_inventory = {"containers": [], "networks": [], "volumes": []}
         with mock.patch.object(
             self.collector, "user_work_facts",
-            side_effect=(({"active_units": [], "jobs": []}, True),) * 2,
+            side_effect=(({
+                "active_units": [], "jobs": [], "podman_health_timers": [],
+            }, True),) * 2,
         ), mock.patch.object(
             self.collector, "user_process_facts",
             side_effect=(([], True), (hidden, True)),
@@ -4424,9 +5889,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 True,
             ),
         ), mock.patch.object(
-            self.collector, "container_facts", return_value=([], True)
+            self.collector, "container_facts", return_value=([], {}, True)
         ), mock.patch.object(
             self.collector, "bind_container_services", return_value=([], True)
+        ), mock.patch.object(
+            self.collector,
+            "workload_network_metadata",
+            return_value=({}, False),
         ), mock.patch.object(
             self.collector,
             "resource_inventory",
@@ -4554,6 +6023,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations["baseline"]["user_work"] = {
             "active_units": ["dbus.service", "dbus.socket"],
             "jobs": [],
+            "podman_health_timers": [],
         }
         observations["post_cleanup"]["user_work"] = {
             "active_units": [
@@ -4562,10 +6032,22 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "delayed-migration.timer",
             ],
             "jobs": [],
+            "podman_health_timers": [],
         }
         self.assertIn(
             "D1A_PENDING_USER_WORK",
             self.collector.workload_admission_failures(observations),
+        )
+
+        missing_reviewed_service = valid_observations()
+        missing_reviewed_service["post_cleanup"]["user_work"][
+            "active_units"
+        ].remove("podman-user-wait-network-online.service")
+        self.assertIn(
+            "D1A_PENDING_USER_WORK",
+            self.collector.workload_admission_failures(
+                missing_reviewed_service
+            ),
         )
 
     def test_cleanup_collector_uses_the_shared_lifecycle_guard(self) -> None:

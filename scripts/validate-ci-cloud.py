@@ -2195,8 +2195,13 @@ def validate(root: Path) -> None:
         'phase not in {"baseline", "normalize", "live", "post-cleanup"}'
         in workload_collector
         and '("Names", "Name", "name")' in workload_collector
-        and 'state.get("Health", {})' in workload_collector
-        and 'configured_healthcheck = config.get("Healthcheck")'
+        and 'if "Health" not in state:' in workload_collector
+        and 'health_value = state["Health"]' in workload_collector
+        and 'if "Healthcheck" not in config:' in workload_collector
+        and 'configured_healthcheck = config["Healthcheck"]'
+        in workload_collector
+        and 'if "IDMappings" not in host_config:' in workload_collector
+        and 'configured_id_maps(host_config["IDMappings"])'
         in workload_collector
         and '[] if item["EffectiveCaps"] is None else item["EffectiveCaps"]'
         in workload_collector
@@ -2216,7 +2221,19 @@ def validate(root: Path) -> None:
         and "D1A_TMPFS_TOPOLOGY" in workload_collector
         and "D1A_CONTAINER_LIFECYCLE" in workload_collector
         and "container_lifecycle_events" in workload_collector
-        and 'item.get("effective_caps") != expected_caps' in workload_collector,
+        and 'item.get("effective_caps") != expected_caps' in workload_collector
+        and "PODMAN_HEALTH_TIMER_PROPERTIES" in workload_collector
+        and "PODMAN_HEALTH_SERVICE_PROPERTIES" in workload_collector
+        and "podman_health_exec_is_trusted" in workload_collector
+        and 'service_properties["Environment"] == trusted_path'
+        in workload_collector
+        and '"podman_health_timers"' in workload_collector
+        and 'OPAQUE_PROCESS_EXECUTABLE = "[permission-denied]"'
+        in workload_collector
+        and "elif reviewed_opaque:" in workload_collector
+        and "if role not in READY_ROLES:" in workload_collector
+        and 'item.get("cap_add") not in ([], expected_caps)'
+        in workload_collector,
         "Podman evidence must use admitted v5 fields and exact inventory/security facts",
     )
     require(

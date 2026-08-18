@@ -367,17 +367,25 @@ def validate_document(document: object) -> dict[str, object]:
         },
         "$.workload.post_cleanup",
     )
-    exact_keys(
-        baseline["user_work"],
-        {"active_units", "jobs"},
-        "$.workload.baseline.user_work",
-    )
-    exact_keys(live["user_work"], {"active_units", "jobs"}, "$.workload.live.user_work")
-    exact_keys(
-        post_cleanup["user_work"],
-        {"active_units", "jobs"},
-        "$.workload.post_cleanup.user_work",
-    )
+    for work_path, user_work in (
+        ("$.workload.baseline.user_work", baseline["user_work"]),
+        ("$.workload.live.user_work", live["user_work"]),
+        ("$.workload.post_cleanup.user_work", post_cleanup["user_work"]),
+    ):
+        work = exact_keys(
+            user_work,
+            {"active_units", "jobs", "podman_health_timers"},
+            work_path,
+        )
+        timers = work["podman_health_timers"]
+        if not isinstance(timers, list):
+            fail(f"{work_path}.podman_health_timers must be a list")
+        for timer_index, timer in enumerate(timers):
+            exact_keys(
+                timer,
+                {"container_id", "timer", "service", "interval_usec"},
+                f"{work_path}.podman_health_timers[{timer_index}]",
+            )
     for path, controls in (
         ("$.workload.baseline.control_resources", baseline["control_resources"]),
         ("$.workload.live.control_resources", live["control_resources"]),
