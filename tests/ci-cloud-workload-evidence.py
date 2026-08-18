@@ -673,6 +673,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
         cls.collector = load_collector()
         cls.assembler = load_assembler()
 
+    def setUp(self) -> None:
+        self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.clear()
+        self.collector.COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE = True
+
     def test_synthetic_complete_trusted_orchestration_sequence(self) -> None:
         observations = valid_observations()
         host = {
@@ -1224,17 +1228,31 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 }
             ))
         matching_records = "\n".join(records)
+        bare_id_record = json.loads(records[0])
+        bare_id_record["MESSAGE"] = "b" * 64
         with mock.patch.object(
             self.collector,
             "command_result",
             return_value=(0, matching_records, True),
-        ):
+        ) as journal:
             self.assertEqual(
                 (True, True),
                 self.collector.exited_container_execution_matches(
                     service, container
                 ),
             )
+        journal.assert_called_once_with(
+            [
+                "journalctl",
+                "--user-unit=secpal-int-aaaaaaaaaaaa-migrate.service",
+                "_SYSTEMD_INVOCATION_ID=" + "a" * 32,
+                "_EXE=/usr/bin/podman",
+                "--output=json",
+                "--output-fields=_SYSTEMD_INVOCATION_ID,_EXE,_CMDLINE,MESSAGE",
+                "--no-pager",
+            ],
+            timeout=30,
+        )
         for output in (
             "",
             "\n".join(records[:-1]),
@@ -1244,6 +1262,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "PODMAN_SYSTEMD_UNIT=secpal-int-aaaaaaaaaaaa-migrate.service",
                 "PODMAN_SYSTEMD_UNIT=attacker.service",
             ),
+            json.dumps(bare_id_record),
         ):
             with self.subTest(output=output), mock.patch.object(
                 self.collector,
@@ -1308,6 +1327,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertEqual("", output)
         self.assertFalse(complete)
         self.assertLess(elapsed, 1.5)
+
+    def test_command_result_records_the_exact_spawned_child_pid(self) -> None:
+        arguments = ["/usr/bin/true"]
+        with mock.patch.object(
+            self.collector, "record_collector_podman_scope"
+        ) as record:
+            status, output, complete = self.collector.command_result(arguments)
+        self.assertEqual((0, "", True), (status, output, complete))
+        record.assert_called_once()
+        recorded_arguments, recorded_pid = record.call_args.args
+        self.assertEqual(arguments, recorded_arguments)
+        self.assertIs(type(recorded_pid), int)
+        self.assertGreater(recorded_pid, 0)
 
     def test_cleanup_scans_generated_drop_in_directories_and_files(self) -> None:
         prefix = "secpal-int-aaaaaaaaaaaa-api.service"
@@ -2067,6 +2099,48 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ),
             "D1A_CONTAINER_NETWORKS",
         )
+
+    def test_exited_migration_admits_reviewed_empty_podman_networks(self) -> None:
+        observations = valid_observations()
+        migrate = next(
+            item
+            for item in observations["live"]["containers"]
+            if item["role"] == "migrate"
+        )
+        migrate["networks"] = []
+        migrate["network_mode"] = "bridge"
+        self.assertNotIn(
+            "D1A_CONTAINER_NETWORKS",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        for field, value in (
+            ("state", "running"),
+            ("network_mode", "none"),
+            ("lifecycle_service_invocation", ""),
+            ("container_cgroup", "/user.slice/attacker.scope"),
+            (
+                "lifecycle_events",
+                [
+                    {"status": "create", "time_nano": 41},
+                    {"status": "start", "time_nano": 42},
+                    {"status": "remove", "time_nano": 43},
+                ],
+            ),
+            ("networks", ["secpal-int-aaaaaaaaaaaa-edge"]),
+        ):
+            candidate = copy.deepcopy(observations)
+            mutated = next(
+                item
+                for item in candidate["live"]["containers"]
+                if item["role"] == "migrate"
+            )
+            mutated[field] = value
+            with self.subTest(field=field):
+                self.assertIn(
+                    "D1A_CONTAINER_NETWORKS",
+                    self.collector.workload_admission_failures(candidate),
+                )
 
     def test_only_gateway_may_publish_its_exact_loopback_port(self) -> None:
         self.assert_failure(
@@ -5053,7 +5127,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ), mock.patch.object(
             self.collector, "runtime_pid_file_matches", return_value=True
         ), mock.patch.object(
-            self.collector, "process_uses_network_namespace", return_value=True
+            self.collector, "runtime_pid_file_pid", return_value=123
+        ), mock.patch.object(
+            self.collector, "processes_share_network_namespace", return_value=True
         ):
             self.assertTrue(
                 self.collector.podman_helper_process_is_bound(
@@ -5115,7 +5191,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 return_value=mutation != "pid",
             ), mock.patch.object(
                 self.collector,
-                "process_uses_network_namespace",
+                "runtime_pid_file_pid",
+                return_value=None if mutation == "pid" else 123,
+            ), mock.patch.object(
+                self.collector,
+                "processes_share_network_namespace",
                 return_value=mutation != "namespace",
             ):
                 self.assertFalse(
@@ -5123,6 +5203,228 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         456, "/usr/lib/podman/aardvark-dns", dns_group
                     )
                 )
+
+    def test_runtime_pid_files_admit_only_the_reviewed_pasta_newline(self) -> None:
+        metadata = types.SimpleNamespace(
+            st_uid=self.collector.CI_UID,
+            st_gid=self.collector.CI_GID,
+        )
+        with mock.patch.object(
+            self.collector,
+            "bounded_regular_file",
+            return_value=(b"123\n", metadata),
+        ):
+            self.assertTrue(
+                self.collector.runtime_pid_file_matches(
+                    Path("/runtime/pasta.pid"),
+                    123,
+                    reviewed_trailing_newline=True,
+                )
+            )
+            self.assertFalse(
+                self.collector.runtime_pid_file_matches(
+                    Path("/runtime/aardvark.pid"), 123
+                )
+            )
+
+        for content in (b"123\n\n", b"123 ", b" 123\n", b"+123\n"):
+            with self.subTest(content=content), mock.patch.object(
+                self.collector,
+                "bounded_regular_file",
+                return_value=(content, metadata),
+            ):
+                self.assertFalse(
+                    self.collector.runtime_pid_file_matches(
+                        Path("/runtime/pasta.pid"),
+                        123,
+                        reviewed_trailing_newline=True,
+                    )
+                )
+
+        untrusted_metadata = types.SimpleNamespace(
+            st_uid=self.collector.CI_UID + 1,
+            st_gid=self.collector.CI_GID,
+        )
+        with mock.patch.object(
+            self.collector,
+            "bounded_regular_file",
+            return_value=(b"123\n", untrusted_metadata),
+        ):
+            self.assertFalse(
+                self.collector.runtime_pid_file_matches(
+                    Path("/runtime/pasta.pid"),
+                    123,
+                    reviewed_trailing_newline=True,
+                )
+            )
+
+    def test_network_namespace_identity_is_exact_and_bounded(self) -> None:
+        with mock.patch.object(
+            self.collector.os,
+            "readlink",
+            side_effect=("net:[4026533000]", "net:[4026533000]"),
+        ):
+            self.assertTrue(
+                self.collector.processes_share_network_namespace(123, 456)
+            )
+        for values in (
+            ("net:[4026533000]", "net:[4026533001]"),
+            ("mnt:[4026533000]", "mnt:[4026533000]"),
+            ("net:[0]", "net:[0]"),
+        ):
+            with self.subTest(values=values), mock.patch.object(
+                self.collector.os, "readlink", side_effect=values
+            ):
+                self.assertFalse(
+                    self.collector.processes_share_network_namespace(123, 456)
+                )
+        for first_pid, second_pid in ((0, 456), (123, True), (123, 4_194_305)):
+            with self.subTest(first_pid=first_pid, second_pid=second_pid):
+                self.assertFalse(
+                    self.collector.processes_share_network_namespace(
+                        first_pid, second_pid
+                    )
+                )
+
+    def test_aardvark_netns_is_bound_to_the_reviewed_pasta_pid(self) -> None:
+        dns_group = (
+            "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+            "run-p123-i456.scope"
+        )
+        arguments = [
+            "/usr/lib/podman/aardvark-dns", "--config",
+            str(self.collector.PODMAN_AARDVARK_CONFIG_ROOT),
+            "-p", "53", "run",
+        ]
+        with mock.patch.object(
+            self.collector,
+            "bounded_process_arguments",
+            return_value=(arguments, True),
+        ), mock.patch.object(
+            self.collector,
+            "runtime_pid_file_matches",
+            return_value=True,
+        ), mock.patch.object(
+            self.collector,
+            "runtime_pid_file_pid",
+            return_value=123,
+        ) as rootless_pid, mock.patch.object(
+            self.collector,
+            "processes_share_network_namespace",
+            return_value=True,
+        ) as namespace:
+            self.assertTrue(
+                self.collector.podman_helper_process_is_bound(
+                    456, "/usr/lib/podman/aardvark-dns", dns_group
+                )
+            )
+        rootless_pid.assert_called_once_with(
+            self.collector.PODMAN_ROOTLESS_NETWORK_PID,
+            reviewed_trailing_newline=True,
+        )
+        namespace.assert_called_once_with(456, 123)
+
+    def test_collector_podman_scope_tracking_is_exact_and_bounded(self) -> None:
+        self.assertEqual(
+            "podman-4632.scope",
+            self.collector.collector_podman_scope_unit(["podman", "ps"], 4632),
+        )
+        self.assertEqual(
+            "podman-4632.scope",
+            self.collector.collector_podman_scope_unit(
+                ["/usr/bin/podman", "info"], 4632
+            ),
+        )
+        for arguments, pid in (
+            (["/usr/bin/false"], 4632),
+            (["podman", "ps"], 0),
+            (["podman", "ps"], 4_194_305),
+        ):
+            with self.subTest(arguments=arguments, pid=pid):
+                self.assertIsNone(
+                    self.collector.collector_podman_scope_unit(arguments, pid)
+                )
+
+        self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.update(
+            f"podman-{pid}.scope" for pid in range(1, 129)
+        )
+        self.collector.record_collector_podman_scope(["podman", "ps"], 129)
+        self.assertFalse(
+            self.collector.COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE
+        )
+        self.assertNotIn(
+            "podman-129.scope", self.collector.COLLECTOR_PODMAN_SCOPE_UNITS
+        )
+
+    def test_collector_waits_for_its_podman_scopes_to_become_inactive(self) -> None:
+        original = set(self.collector.COLLECTOR_PODMAN_SCOPE_UNITS)
+        original_complete = self.collector.COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE
+        self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.clear()
+        self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.add("podman-4632.scope")
+
+        with mock.patch.object(
+            self.collector,
+            "command_result",
+            side_effect=((0, "active", True), (3, "inactive", True)),
+        ) as status, mock.patch.object(self.collector.time, "sleep") as sleep:
+            try:
+                self.assertTrue(
+                    self.collector.collector_podman_scopes_are_quiescent(
+                        attempts=2, delay=0.01
+                    )
+                )
+            finally:
+                self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.clear()
+                self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.update(original)
+                self.collector.COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE = (
+                    original_complete
+                )
+        self.assertEqual(2, status.call_count)
+        sleep.assert_called_once_with(0.01)
+
+        self.collector.COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE = False
+        with mock.patch.object(self.collector, "command_result") as status:
+            self.assertFalse(
+                self.collector.collector_podman_scopes_are_quiescent()
+            )
+        status.assert_not_called()
+
+    def test_active_or_untracked_podman_scopes_remain_fail_closed(self) -> None:
+        original = set(self.collector.COLLECTOR_PODMAN_SCOPE_UNITS)
+        original_complete = self.collector.COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE
+        self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.clear()
+        self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.add("podman-4632.scope")
+
+        def command_result(arguments, **_kwargs):
+            if "list-units" in arguments:
+                return (
+                    0,
+                    "podman-4632.scope loaded active running\n"
+                    "podman-9999.scope loaded active running\n",
+                    True,
+                )
+            if "list-jobs" in arguments:
+                return 0, "", True
+            raise AssertionError(f"unexpected command: {arguments}")
+
+        try:
+            with mock.patch.object(
+                self.collector, "command_result", side_effect=command_result
+            ), mock.patch.object(
+                self.collector,
+                "collector_podman_scopes_are_quiescent",
+                return_value=False,
+            ):
+                facts, complete = self.collector.user_work_facts()
+        finally:
+            self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.clear()
+            self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.update(original)
+            self.collector.COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE = (
+                original_complete
+            )
+        self.assertFalse(complete)
+        self.assertIn("podman-4632.scope", facts["active_units"])
+        self.assertIn("podman-9999.scope", facts["active_units"])
 
     def test_aardvark_configuration_is_bound_to_inspected_networks(self) -> None:
         instance = "a" * 12
