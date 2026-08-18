@@ -993,7 +993,14 @@ Evidence includes:
   maps must be non-overlapping, remain inside the service-account namespace,
   and cover the role's configured and effective UID/GID plus every admitted
   supplementary GID,
-  the closed role-to-network topology, the complete semantic role-to-mount
+  the closed role-to-network topology; every running container's canonical
+  primary and secondary IPv4/IPv6
+  endpoints remain private collector context from the same bounded Podman
+  inspect snapshot and must exactly match its Aardvark network entry together
+  with the full container ID and expected container name. Missing, extra,
+  duplicated, malformed, or different Aardvark addresses make collection
+  incomplete rather than adding a new target-reported evidence field; the
+  complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
   `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
   and read/write state), and the
@@ -1019,10 +1026,13 @@ Evidence includes:
   establish this binding; an exited container may use either explicit immutable
   configured ID mappings or Podman 5.4's omitted `HostConfig.IDMappings`
   representation for the reviewed default-rootless case only. The latter
-  requires no user-namespace creation option, independently collected bounded
-  Podman outer UID/GID maps, exact lifecycle correlation, and coverage of the
-  configured identity. Present null or malformed mappings, non-default creation
-  modes, and containers.conf modules still fail closed; exited evidence
+  requires no user-namespace or explicit mapping creation control,
+  independently collected bounded Podman outer UID/GID maps, exact lifecycle
+  correlation, and coverage of the configured identity. Explicit mapping
+  controls are admissible only when a present, populated `IDMappings` object
+  supplies valid immutable UID and GID maps. Present null or malformed mappings,
+  non-default creation modes, and containers.conf modules still fail closed;
+  exited evidence
   deliberately records no process
   namespace identity or `/proc` UID/GID map; any Podman `exec`/`exec_died` event for an
   integration container makes lifecycle collection incomplete; one exited

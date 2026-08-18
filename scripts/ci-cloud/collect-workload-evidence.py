@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -230,6 +231,15 @@ class RoleContract(NamedTuple):
     entrypoint: tuple[str, ...] | None = None
     command: tuple[str, ...] | None = None
     healthcheck: tuple[str, ...] | None = None
+
+
+NetworkEndpoint = tuple[tuple[str, ...], tuple[str, ...]]
+
+
+class ContainerCollection(NamedTuple):
+    facts: list[dict[str, object]]
+    network_endpoints: dict[str, dict[str, NetworkEndpoint]]
+    complete: bool
 
 
 API_VOLUMES = (
@@ -1926,7 +1936,9 @@ def configured_id_maps(value: object) -> tuple[
     return uid_map, gid_map, True
 
 
-def configured_userns_options(value: object) -> tuple[list[str], bool]:
+def configured_userns_options(
+    value: object,
+) -> tuple[list[str], bool, bool]:
     if (
         not isinstance(value, list)
         or not 2 <= len(value) <= 256
@@ -1939,39 +1951,135 @@ def configured_userns_options(value: object) -> tuple[list[str], bool]:
         )
         or sum(len(item) for item in value) > 65_536
     ):
-        return [], False
+        return [], False, False
     options: list[str] = []
+    explicit_mapping_controls = False
+    mapping_options = {
+        "--uidmap", "--gidmap", "--subuidname", "--subgidname",
+    }
     index = 0
     while index < len(value):
         argument = value[index]
         if argument == "--module" or argument.startswith("--module="):
-            return [], False
-        if argument in {
-            "--uidmap", "--gidmap", "--subuidname", "--subgidname",
-        } or any(
-            argument.startswith(f"{option}=")
-            for option in (
-                "--uidmap", "--gidmap", "--subuidname", "--subgidname",
-            )
+            return [], explicit_mapping_controls, False
+        if argument in mapping_options:
+            explicit_mapping_controls = True
+            if (
+                index + 1 >= len(value)
+                or value[index + 1].startswith("-")
+                or len(value[index + 1]) > 256
+            ):
+                return [], explicit_mapping_controls, False
+            index += 2
+            continue
+        if any(
+            argument.startswith(f"{option}=") for option in mapping_options
         ):
-            return [], False
+            explicit_mapping_controls = True
+            mapping_value = argument.split("=", 1)[1]
+            if not mapping_value or len(mapping_value) > 256:
+                return [], explicit_mapping_controls, False
+            index += 1
+            continue
         if argument == "--userns":
             if (
                 index + 1 >= len(value)
                 or value[index + 1].startswith("-")
                 or len(value[index + 1]) > 256
             ):
-                return [], False
+                return [], explicit_mapping_controls, False
             options.append(value[index + 1])
             index += 2
             continue
         if argument.startswith("--userns="):
             option = argument.split("=", 1)[1]
             if not option or len(option) > 256:
-                return [], False
+                return [], explicit_mapping_controls, False
             options.append(option)
         index += 1
-    return options, len(options) <= 1
+    return options, explicit_mapping_controls, len(options) <= 1
+
+
+def normalized_network_address(
+    value: object, version: int
+) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return None
+    if address.version != version or str(address) != value:
+        return None
+    return value
+
+
+def normalized_network_address_list(
+    primary: object, secondary: object, version: int
+) -> tuple[tuple[str, ...], bool]:
+    if not isinstance(primary, str) or not isinstance(secondary, list):
+        return (), False
+    values: list[str] = []
+    if primary:
+        address = normalized_network_address(primary, version)
+        if address is None:
+            return (), False
+        values.append(address)
+    if len(secondary) > 15:
+        return (), False
+    maximum_prefix = 32 if version == 4 else 128
+    for item in secondary:
+        if not isinstance(item, dict) or set(item) != {"Addr", "PrefixLength"}:
+            return (), False
+        prefix_length = item["PrefixLength"]
+        address = normalized_network_address(item["Addr"], version)
+        if (
+            address is None
+            or type(prefix_length) is not int
+            or not 0 <= prefix_length <= maximum_prefix
+        ):
+            return (), False
+        values.append(address)
+    if (not primary and values) or len(values) != len(set(values)):
+        return (), False
+    return tuple(values), True
+
+
+def normalized_network_endpoints(
+    value: object, network_mode: object
+) -> tuple[list[str], dict[str, NetworkEndpoint], bool]:
+    if not isinstance(value, dict) or not isinstance(network_mode, str):
+        return [], {}, False
+    if network_mode == "none":
+        return (
+            [], {},
+            set(value) == {"none"} and isinstance(value.get("none"), dict),
+        )
+    if len(value) > 16:
+        return [], {}, False
+    endpoints: dict[str, NetworkEndpoint] = {}
+    for network, endpoint in value.items():
+        if (
+            not isinstance(network, str)
+            or not network
+            or len(network) > 256
+            or "\x00" in network
+            or not isinstance(endpoint, dict)
+            or not {"IPAddress", "GlobalIPv6Address"}.issubset(endpoint)
+        ):
+            return [], {}, False
+        ipv4, ipv4_complete = normalized_network_address_list(
+            endpoint["IPAddress"], endpoint.get("SecondaryIPAddresses", []), 4
+        )
+        ipv6, ipv6_complete = normalized_network_address_list(
+            endpoint["GlobalIPv6Address"],
+            endpoint.get("SecondaryIPv6Addresses", []),
+            6,
+        )
+        if not ipv4_complete or not ipv6_complete or (not ipv4 and not ipv6):
+            return [], {}, False
+        endpoints[network] = (ipv4, ipv6)
+    return sorted(endpoints), endpoints, True
 
 
 def service_environment_assignments(
@@ -2328,7 +2436,7 @@ def container_facts(
     rootless: bool,
     podman_uid_map: list[dict[str, int]],
     podman_gid_map: list[dict[str, int]],
-) -> tuple[list[dict[str, object]], bool]:
+) -> ContainerCollection:
     prefix = f"secpal-int-{instance}-"
     all_names, complete = names_from_listing(
         ["podman", "ps", "--all", "--format", "json"]
@@ -2338,12 +2446,13 @@ def container_facts(
         names = names[:len(ROLES)]
         complete = False
     if not names:
-        return [], complete
+        return ContainerCollection([], {}, complete)
     inspections, inspection_complete = json_array(
         ["podman", "container", "inspect", *names], timeout=60
     )
     complete = complete and inspection_complete and len(inspections) == len(names)
     facts: list[dict[str, object]] = []
+    all_network_endpoints: dict[str, dict[str, NetworkEndpoint]] = {}
     for item in inspections:
         if not isinstance(item, dict):
             complete = False
@@ -2433,19 +2542,11 @@ def container_facts(
         labels = config["Labels"]
         network_map = network_settings["Networks"]
         network_mode = host_config["NetworkMode"] or "private"
-        network_names_complete = all(
-            isinstance(value, str) and value
-            for value in network_map
+        networks, network_endpoints, network_endpoints_complete = (
+            normalized_network_endpoints(network_map, network_mode)
         )
-        if network_mode == "none":
-            networks = []
-            network_names_complete = (
-                network_names_complete
-                and set(network_map) == {"none"}
-                and isinstance(network_map["none"], dict)
-            )
-        else:
-            networks = sorted(str(value) for value in network_map)
+        if network_endpoints_complete:
+            all_network_endpoints[item["Id"]] = network_endpoints
         port_map = network_settings["Ports"]
         published: list[str] = []
         port_fact_complete = True
@@ -2493,16 +2594,20 @@ def container_facts(
                 )
             else:
                 healthcheck_command, healthcheck_complete = [], False
-        create_options, create_options_complete = configured_userns_options(
-            config["CreateCommand"]
-        )
+        (
+            create_options,
+            explicit_mapping_controls,
+            create_options_complete,
+        ) = configured_userns_options(config["CreateCommand"])
         if "IDMappings" not in host_config:
             configured_uid_map, configured_gid_map = [], []
-            configured_maps_complete = True
+            configured_maps_complete = not explicit_mapping_controls
         else:
             configured_uid_map, configured_gid_map, configured_maps_complete = (
                 configured_id_maps(host_config["IDMappings"])
             )
+            if explicit_mapping_controls and not configured_uid_map:
+                configured_maps_complete = False
         if str(state.get("Status", "")) == "running":
             (
                 user_namespace,
@@ -2539,7 +2644,7 @@ def container_facts(
                 entrypoint_complete, command_complete, health_complete,
                 healthcheck_complete,
                 identity_complete, create_options_complete,
-                configured_maps_complete, network_names_complete,
+                configured_maps_complete, network_endpoints_complete,
             )
         )
         remote_api_environment = any(
@@ -2598,7 +2703,11 @@ def container_facts(
                 "image": str(item.get("ImageName", config.get("Image", ""))),
             }
         )
-    return sorted(facts, key=lambda fact: str(fact["role"])), complete
+    return ContainerCollection(
+        sorted(facts, key=lambda fact: str(fact["role"])),
+        all_network_endpoints,
+        complete,
+    )
 
 
 def quadlet_search_paths() -> list[str]:
@@ -3259,15 +3368,51 @@ def podman_helper_process_is_bound(
     return False
 
 
+def normalized_aardvark_addresses(
+    value: str, version: int
+) -> tuple[tuple[str, ...], bool]:
+    if not value:
+        return (), True
+    items = value.split(",")
+    if not 1 <= len(items) <= 16:
+        return (), False
+    addresses: list[str] = []
+    for item in items:
+        address = normalized_network_address(item, version)
+        if address is None:
+            return (), False
+        addresses.append(address)
+    if len(addresses) != len(set(addresses)):
+        return (), False
+    return tuple(addresses), True
+
+
+def normalized_aardvark_dns(value: str) -> bool:
+    if not value:
+        return False
+    items = value.split(",")
+    if not 1 <= len(items) <= 16 or len(items) != len(set(items)):
+        return False
+    for item in items:
+        try:
+            address = ipaddress.ip_address(item)
+        except ValueError:
+            return False
+        if str(address) != item:
+            return False
+    return True
+
+
 def aardvark_configuration_matches_workload(
-    instance: str, containers: object
+    instance: str, containers: object, network_endpoints: object
 ) -> bool:
     if (
         re.fullmatch(r"[0-9a-f]{12}", instance) is None
         or not isinstance(containers, list)
+        or not isinstance(network_endpoints, dict)
     ):
         return False
-    expected: dict[str, dict[str, str]] = {}
+    expected: dict[str, dict[str, tuple[str, NetworkEndpoint]]] = {}
     prefix = f"secpal-int-{instance}-"
     for container in containers:
         if not isinstance(container, dict) or container.get("state") != "running":
@@ -3281,22 +3426,35 @@ def aardvark_configuration_matches_workload(
             or not isinstance(name, str)
             or not name.startswith(prefix)
             or not isinstance(networks, list)
+            or any(not isinstance(network, str) for network in networks)
+        ):
+            return False
+        endpoints = network_endpoints.get(container_id)
+        if (
+            not isinstance(endpoints, dict)
+            or set(endpoints)
+            != {network for network in networks if network != "none"}
         ):
             return False
         for network in networks:
             if network == "none":
                 continue
             if (
-                not isinstance(network, str)
-                or network not in {
+                network not in {
                     f"{prefix}application", f"{prefix}edge",
                 }
             ):
                 return False
             members = expected.setdefault(network, {})
-            if container_id in members:
+            endpoint = endpoints.get(network)
+            if (
+                container_id in members
+                or not isinstance(endpoint, tuple)
+                or len(endpoint) != 2
+                or any(not isinstance(addresses, tuple) for addresses in endpoint)
+            ):
                 return False
-            members[container_id] = name
+            members[container_id] = (name, endpoint)
     if set(expected) != {f"{prefix}application", f"{prefix}edge"}:
         return False
     try:
@@ -3327,18 +3485,34 @@ def aardvark_configuration_matches_workload(
             return False
         observed: set[str] = set()
         for line in lines[1:]:
-            container_id, separator, remainder = line.partition(" ")
-            name = members.get(container_id)
+            fields = line.split(" ")
+            if len(fields) not in {4, 5}:
+                return False
+            container_id, ipv4_value, ipv6_value, names_value = fields[:4]
+            member = members.get(container_id)
+            if member is None:
+                return False
+            name, endpoint = member
+            ipv4, ipv4_complete = normalized_aardvark_addresses(ipv4_value, 4)
+            ipv6, ipv6_complete = normalized_aardvark_addresses(ipv6_value, 6)
+            names = names_value.split(",")
             if (
-                not separator
-                or name is None
-                or container_id in observed
+                container_id in observed
                 or len(line) > 4096
-                or re.search(
-                    rf"(?:^|[ ,]){re.escape(name)}(?:$|[ ,])", remainder
+                or not ipv4_complete
+                or not ipv6_complete
+                or (ipv4, ipv6) != endpoint
+                or not 1 <= len(names) <= 64
+                or len(names) != len(set(names))
+                or name not in names
+                or any(
+                    re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", item)
+                    is None
+                    for item in names
                 )
-                is None
             ):
+                return False
+            if len(fields) == 5 and not normalized_aardvark_dns(fields[4]):
                 return False
             observed.add(container_id)
         if observed != set(members):
@@ -3757,7 +3931,7 @@ def collect_live(instance: str) -> dict[str, object]:
     services, services_complete = generated_service_facts(instance)
     podman_rootless, oci_runtime, runtime_complete = podman_runtime_facts()
     podman_uid_map, podman_gid_map, podman_maps_complete = podman_outer_id_maps()
-    containers, containers_complete = container_facts(
+    containers, network_endpoints, containers_complete = container_facts(
         instance,
         rootless=podman_rootless,
         podman_uid_map=podman_uid_map,
@@ -3765,7 +3939,7 @@ def collect_live(instance: str) -> dict[str, object]:
     )
     containers, bindings_complete = bind_container_services(services, containers)
     network_helpers_complete = aardvark_configuration_matches_workload(
-        instance, containers
+        instance, containers, network_endpoints
     )
     inventory, inventory_complete = resource_inventory()
     prefix = f"secpal-int-{instance}-"
