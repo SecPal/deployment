@@ -1524,6 +1524,47 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     self.collector.direct_podman_exec_start(value, "api")
                 )
 
+    def test_systemd_omitted_empty_property_normalization_is_fail_closed(
+        self,
+    ) -> None:
+        expected = frozenset(
+            {"FragmentPath", "EnvironmentFiles", "ExecStartPre"}
+        )
+        self.assertEqual(
+            {
+                "FragmentPath": "/trusted/service",
+                "EnvironmentFiles": "",
+                "ExecStartPre": "",
+            },
+            self.collector.exact_systemd_service_properties(
+                "FragmentPath=/trusted/service\n", expected
+            ),
+        )
+        self.assertEqual(
+            {
+                "FragmentPath": "/trusted/service",
+                "EnvironmentFiles": "/unreviewed.env",
+                "ExecStartPre": "",
+            },
+            self.collector.exact_systemd_service_properties(
+                "FragmentPath=/trusted/service\n"
+                "EnvironmentFiles=/unreviewed.env\n",
+                expected,
+            ),
+        )
+        for output in (
+            "EnvironmentFiles=\nExecStartPre=\n",
+            "FragmentPath=/trusted/service\nUnknown=\n",
+            "FragmentPath=/trusted/service\nFragmentPath=/duplicate\n",
+            "FragmentPath\n",
+        ):
+            with self.subTest(output=output):
+                self.assertIsNone(
+                    self.collector.exact_systemd_service_properties(
+                        output, expected
+                    )
+                )
+
     def test_generated_service_rejects_non_quadlet_auxiliary_commands(self) -> None:
         properties = {
             name: "" for name in (
@@ -3002,6 +3043,74 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     )
                 )
 
+    def test_generated_service_facts_admit_systemd_omitted_empty_properties(
+        self,
+    ) -> None:
+        instance = "aaaaaaaaaaaa"
+
+        def command_result(arguments, **_kwargs):
+            unit = arguments[3]
+            logical_name = unit.removeprefix(
+                f"secpal-int-{instance}-"
+            ).removesuffix(".service")
+            if logical_name in ROLES:
+                operation = "run"
+                stop = "rm"
+            elif logical_name.endswith("-network"):
+                operation = "network create"
+                stop = None
+            else:
+                operation = "volume create"
+                stop = None
+            properties = {
+                "FragmentPath": (
+                    "/run/user/20000/systemd/generator/" + unit
+                ),
+                "DropInPaths": "",
+                "ActiveState": "active",
+                "SubState": "running",
+                "Result": "success",
+                "ExecMainStatus": "0",
+                "MainPID": "1234",
+                "ControlGroup": f"/trusted/{unit}",
+                "InvocationID": "a" * 32,
+                "SourcePath": f"/trusted/{logical_name}",
+                "Environment": trusted_service_environment(logical_name),
+                "PassEnvironment": "",
+                "UnsetEnvironment": "",
+                "ExecStart": (
+                    "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman "
+                    f"{operation} ; }}"
+                ),
+            }
+            if stop is not None:
+                lifecycle = (
+                    "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman "
+                    f"{stop} ; }}"
+                )
+                properties["ExecStop"] = lifecycle
+                properties["ExecStopPost"] = lifecycle
+            output = "\n".join(
+                f"{name}={value}" for name, value in properties.items()
+            )
+            return 0, output + "\n", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "generated_file_fact",
+            return_value=(20000, 20000, "0644", "b" * 64),
+        ), mock.patch.object(
+            self.collector,
+            "quadlet_source_execution_controls_are_trusted",
+            return_value=True,
+        ):
+            facts, complete = self.collector.generated_service_facts(instance)
+
+        self.assertTrue(complete)
+        self.assertEqual(len(self.collector.GENERATED_LOGICAL_NAMES), len(facts))
+
     def test_closed_user_environment_generator_admission(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3248,10 +3357,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "FragmentPath=/run/user/20000/systemd/generator/"
             "secpal-int-aaaaaaaaaaaa-api.service\nDropInPaths=\n"
             f"Environment={trusted_service_environment('api')}\n"
-            "EnvironmentFiles=\nPassEnvironment=\nUnsetEnvironment=\n"
-            "ExecCondition=\nExecStartPre=\n"
+            "PassEnvironment=\nUnsetEnvironment=\n"
             "ExecStart={ path=/usr/bin/podman ; argv[]=/usr/bin/podman run ; }\n"
-            "ExecStartPost=\nExecReload=\n"
             "ExecStop={ path=/usr/bin/podman ; "
             "argv[]=/usr/bin/podman rm -v -f -i ; }\n"
             "ExecStopPost={ path=/usr/bin/podman ; "
@@ -3340,7 +3447,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     )
                     properties = re.sub(
                         r"ExecStop=.*\nExecStopPost=.*\n",
-                        "ExecStop=\nExecStopPost=\n",
+                        "",
                         properties,
                     )
                 return 0, properties, True

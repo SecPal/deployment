@@ -161,6 +161,9 @@ AUXILIARY_EXEC_PROPERTIES = frozenset(
         "ExecStopPost",
     }
 )
+SYSTEMD_OMITTED_EMPTY_SERVICE_PROPERTIES = frozenset(
+    {"EnvironmentFiles", *AUXILIARY_EXEC_PROPERTIES}
+)
 SERVICE_ACTIVATION_PROPERTIES = (
     "FragmentPath",
     "DropInPaths",
@@ -1133,6 +1136,33 @@ def service_environment_controls_are_trusted(
     )
 
 
+def exact_systemd_service_properties(
+    output: object,
+    expected_properties: set[str] | frozenset[str],
+) -> dict[str, str] | None:
+    if (
+        not isinstance(output, str)
+        or len(output) > MAX_OUTPUT
+        or "\x00" in output
+        or not expected_properties
+    ):
+        return None
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        if "=" not in line:
+            return None
+        name, value = line.split("=", 1)
+        if name not in expected_properties or name in properties:
+            return None
+        properties[name] = value
+    missing = expected_properties - properties.keys()
+    if not missing <= SYSTEMD_OMITTED_EMPTY_SERVICE_PROPERTIES:
+        return None
+    for name in missing:
+        properties[name] = ""
+    return properties
+
+
 def service_execution_controls_are_trusted(
     properties: object, logical_name: str
 ) -> bool:
@@ -1375,17 +1405,13 @@ def generated_service_unit_activation_is_trusted(
             *(f"--property={name}" for name in SERVICE_ACTIVATION_PROPERTIES),
         ]
     )
-    properties: dict[str, str] = {}
-    for line in output.splitlines():
-        if "=" not in line:
-            return False
-        name, value = line.split("=", 1)
-        if name in properties:
-            return False
-        properties[name] = value
+    properties = exact_systemd_service_properties(
+        output, frozenset(SERVICE_ACTIVATION_PROPERTIES)
+    )
     return bool(
         status_code == 0
         and bounded
+        and properties is not None
         and service_runtime_controls_are_trusted(
             properties, logical_name, instance
         )
@@ -1471,16 +1497,12 @@ def generated_service_facts(instance: str) -> tuple[list[dict[str, object]], boo
                 "--property=ExecStopPost",
             ]
         )
-        properties: dict[str, str] = {}
-        for line in value.splitlines():
-            if "=" not in line:
-                properties = {}
-                break
-            key, item = line.split("=", 1)
-            if key not in expected_properties or key in properties:
-                properties = {}
-                break
-            properties[key] = item
+        properties = exact_systemd_service_properties(
+            value, expected_properties
+        )
+        if properties is None:
+            complete = False
+            continue
         fragment = Path(properties.get("FragmentPath", ""))
         drop_ins = [Path(item) for item in properties.get("DropInPaths", "").split()]
         fragment_metadata = (
