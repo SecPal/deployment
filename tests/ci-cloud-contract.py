@@ -988,6 +988,43 @@ class CloudCIContractTests(unittest.TestCase):
                 "    prefix = f\"secpal-int-{instance}{CHECKOUT}\"\n"
                 "    names = [f\"{prefix}-{role}.container\" for role in ROLES]",
             ),
+            # Path.replace also takes its target by keyword, so arity has to
+            # count keywords rather than positional arguments alone.
+            (
+                admission,
+                "    failures: list[str] = []\n",
+                "    failures: list[str] = []\n"
+                '    Path("/tmp/from").replace(target=Path("/tmp/to"))\n',
+            ),
+            # A name looked up at runtime reaches the filesystem without an
+            # attribute node any of the rules above could see.
+            (
+                admission,
+                "    failures: list[str] = []\n",
+                "    failures: list[str] = []\n"
+                '    getattr(Path("/etc/hostname"), "read_text")()\n',
+            ),
+            # An allowed module re-exports its own imports, so naming the
+            # module is not enough to keep the layer pure.
+            (
+                admission,
+                "from pathlib import Path",
+                "from pathlib import Path, os",
+            ),
+            # Rebinding a declared export hands over a different callable than
+            # the one the source checks inspected.
+            (
+                collector,
+                "CI_UID = 20000",
+                "CI_UID = 20000\nexpected_unit_names = container_pid_matches_state",
+            ),
+            # Importing the collector to read its contract runs its module
+            # level on the controller.
+            (
+                collector,
+                "CI_UID = 20000",
+                'CI_UID = 20000\n_BOOT = open("/etc/hostname")',
+            ),
         )
         for relative, old, new in cases:
             with self.subTest(relative=relative, mutation=old):
