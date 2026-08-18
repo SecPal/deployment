@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import builtins
 import gzip
 import json
 import re
@@ -31,9 +32,6 @@ IMPURE_BUILTINS = frozenset(
 # allowlist cannot catch these: pathlib is allowed so a pure layer can name a
 # path, and Path("/etc/hostname").read_text() would otherwise pass every other
 # check. Path construction and naming stay allowed; only access does not.
-# Path.replace is deliberately absent because str.replace shares the name, and
-# a rule that rejects ordinary string handling would be turned off rather than
-# obeyed; the other write and delete methods still close that route.
 IMPURE_PATH_METHODS = frozenset(
     {
         "chmod", "exists", "glob", "hardlink_to", "is_block_device",
@@ -44,9 +42,26 @@ IMPURE_PATH_METHODS = frozenset(
         "touch", "unlink", "walk", "write_bytes", "write_text",
     }
 )
-IMPURE_ATTRIBUTES = (
-    frozenset({"import_module", "system", "popen"}) | IMPURE_PATH_METHODS
+# Path methods whose name another type also carries, so the name alone cannot
+# decide. Arity separates them without type inference: str.replace(old, new)
+# needs two arguments, and Path.replace(target), which renames a file, takes
+# exactly one. Rejecting only the one-argument call keeps ordinary string
+# handling legal, so the rule is obeyed rather than switched off.
+AMBIGUOUS_PATH_METHODS = frozenset({"replace"})
+# Attributes that reach a function's defining module. A contract that shares
+# values cannot stop a caller from walking back to everything the definition
+# could see, so the route is closed instead.
+IMPURE_REFLECTION_ATTRIBUTES = frozenset(
+    {"__globals__", "__code__", "__builtins__"}
 )
+IMPURE_ATTRIBUTES = (
+    frozenset({"import_module", "system", "popen"})
+    | IMPURE_PATH_METHODS
+    | IMPURE_REFLECTION_ATTRIBUTES
+)
+# What an exported contract predicate may reference besides the declared
+# contract: pure standard-library handles that carry no state of their own.
+PURE_CONTRACT_GLOBALS = frozenset({"re", "Path"})
 # The only modules the controller-side admission layer may import. It loads the
 # streamed collector as its contract, so it needs importlib.util, and nothing
 # in this set can reach a process, a file, or the network on its own.
@@ -165,9 +180,10 @@ def pure_module_violations(text: str, allowed_imports: set[str]) -> list[str]:
     """Return every way a module that must stay pure could reach the system.
 
     A module reaches a process, a file, or the network by importing a module
-    that offers one, by calling a builtin that needs no import at all, or by
-    reaching an attribute that resolves an import at runtime. All three routes
-    are refused here, so the rule cannot be evaded by a source change that
+    that offers one, by calling a builtin that needs no import at all, by
+    reaching an attribute that resolves an import or a defining module at
+    runtime, or by calling a path method whose name another type shares. Every
+    route is refused here, so the rule cannot be evaded by a source change that
     merely avoids a forbidden word.
     """
     try:
@@ -192,8 +208,72 @@ def pure_module_violations(text: str, allowed_imports: set[str]) -> list[str]:
             and node.func.id in IMPURE_BUILTINS
         ):
             violations.append(f"calls {node.func.id}")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in AMBIGUOUS_PATH_METHODS
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            violations.append(f"reaches {node.func.attr}")
         elif isinstance(node, ast.Attribute) and node.attr in IMPURE_ATTRIBUTES:
             violations.append(f"reaches {node.attr}")
+    return violations
+
+
+def free_global_names(node: ast.AST) -> set[str]:
+    """Return the names a function body reads from outside its own scope."""
+    bound: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            arguments = child.args
+            bound |= {
+                argument.arg
+                for argument in (
+                    *arguments.posonlyargs,
+                    *arguments.args,
+                    *arguments.kwonlyargs,
+                )
+            }
+            if arguments.vararg:
+                bound.add(arguments.vararg.arg)
+            if arguments.kwarg:
+                bound.add(arguments.kwarg.arg)
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+            bound.add(child.id)
+        if isinstance(child, ast.ExceptHandler) and child.name:
+            bound.add(child.name)
+    return {
+        child.id
+        for child in ast.walk(node)
+        if isinstance(child, ast.Name)
+        and isinstance(child.ctx, ast.Load)
+        and child.id not in bound
+        and child.id not in dir(builtins)
+    }
+
+
+def contract_global_violations(text: str, declared: set[str]) -> list[str]:
+    """Return every undeclared name an exported contract predicate reads.
+
+    Handing a function across a contract boundary hands over everything its
+    definition can see, because the callable keeps its defining module's
+    globals. Sharing values alone therefore proves nothing unless the exported
+    predicates themselves read only declared names, which is what this checks.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ["trusted contract source is invalid"]
+    allowed = declared | PURE_CONTRACT_GLOBALS
+    violations: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name not in declared:
+            continue
+        violations.extend(
+            f"{node.name} reads undeclared {name}"
+            for name in sorted(free_global_names(node) - allowed)
+        )
     return violations
 
 
@@ -2279,6 +2359,14 @@ def validate(root: Path) -> None:
         # same property by running an admission decision under a rejecting
         # audit hook.
         and not pure_module_violations(workload_admission, PURE_ADMISSION_IMPORTS)
+        # An exported predicate keeps the collector's globals, so the contract
+        # only holds if the predicates themselves read declared names alone.
+        and not contract_global_violations(
+            workload_collector,
+            string_collection_constant(
+                workload_collector, "WORKLOAD_CONTRACT_EXPORTS"
+            ),
+        )
         # The contract is bound by subscript from a mapping of exactly the
         # declared members, so attribute access on the loaded collector module
         # would reopen the route past the declared surface.

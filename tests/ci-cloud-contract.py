@@ -963,6 +963,31 @@ class CloudCIContractTests(unittest.TestCase):
                 'CI_UID = WORKLOAD_CONTRACT["CI_UID"]',
                 "CI_UID = WORKLOAD_CONTRACT.CI_UID",
             ),
+            # Path.replace renames a file. str.replace shares the name, so the
+            # rule separates them by arity rather than by word.
+            (
+                admission,
+                "    failures: list[str] = []\n",
+                "    failures: list[str] = []\n"
+                '    Path("/tmp/from").replace(Path("/tmp/to"))\n',
+            ),
+            # A callable keeps its defining module's globals, so reaching them
+            # walks straight past a contract that only shares values.
+            (
+                admission,
+                "    failures: list[str] = []\n",
+                "    failures: list[str] = []\n"
+                "    expected_unit_names.__globals__[\"subprocess\"]\n",
+            ),
+            # An exported predicate reading an undeclared collector global
+            # carries that dependency across the contract boundary.
+            (
+                collector,
+                "    prefix = f\"secpal-int-{instance}\"\n"
+                "    names = [f\"{prefix}-{role}.container\" for role in ROLES]",
+                "    prefix = f\"secpal-int-{instance}{CHECKOUT}\"\n"
+                "    names = [f\"{prefix}-{role}.container\" for role in ROLES]",
+            ),
         )
         for relative, old, new in cases:
             with self.subTest(relative=relative, mutation=old):
