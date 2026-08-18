@@ -1039,7 +1039,11 @@ Evidence includes:
   target-added container, network, and volume regardless of its name; exact
   restoration of the baseline active systemd user-unit and pending-job sets,
   measured both before and after the final inventory so a cleanup- or host-phase
-  transient service, timer, or queued job fails closed; a bounded census of
+  transient service, timer, or queued job fails closed. Unit and job names use
+  systemd's bounded canonical representation: ordinary unit-name characters or
+  lowercase `\xNN` hex escapes only, with the complete encoded name limited to
+  128 characters; malformed escapes fail closed. Evidence schema validation
+  enforces the same representation. A bounded census of
   executable, cgroup, effective host UID/GID, and count for every process in the
   service account's complete UID-20000 user slice, including SSH session scopes.
   A permission-denied executable in the exact user-manager or SSH-agent cgroup

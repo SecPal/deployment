@@ -1152,6 +1152,13 @@
         }
       }
     },
+    "canonicalSystemdUnitName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?:[A-Za-z0-9_.@:-]|\\\\x[0-9a-f]{2})+$",
+      "not": { "pattern": "[\\u0000-\\u001f\\u007f\\u2028\\u2029]" }
+    },
     "userWork": {
       "type": "object",
       "additionalProperties": false,
@@ -1161,19 +1168,13 @@
           "type": "array",
           "uniqueItems": true,
           "maxItems": 128,
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
-          }
+          "items": { "$ref": "#/$defs/canonicalSystemdUnitName" }
         },
         "jobs": {
           "type": "array",
           "uniqueItems": true,
           "maxItems": 128,
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
-          }
+          "items": { "$ref": "#/$defs/canonicalSystemdUnitName" }
         },
         "podman_health_timers": {
           "type": "array",

@@ -308,6 +308,41 @@ class EvidenceContractTests(unittest.TestCase):
         jsonschema.Draft202012Validator(schema).validate(document)
         self.assertEqual(document, self.validator.validate_document(document))
 
+    def test_canonical_systemd_escapes_cross_the_evidence_boundary(self) -> None:
+        document = valid_document()
+        escaped_unit = "dev-disk-by\\x2ddiskseq-1.device"
+        escaped_job = "secpal\\x2dmaintenance.service"
+        for phase in ("baseline", "live", "post_cleanup"):
+            user_work = document["workload"][phase]["user_work"]
+            user_work["active_units"].append(escaped_unit)
+            user_work["jobs"].append(escaped_job)
+
+        schema = json.loads(
+            (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        jsonschema.Draft202012Validator(schema).validate(document)
+        self.assertEqual(document, self.validator.validate_document(document))
+
+        for malformed in (
+            "dev-disk-by\\xZZescape.device",
+            "dev-disk-by\\x2Descape.device",
+            "dev-disk-by\\escape.device",
+            "a" * 125 + "\\x2d",
+            "dev-disk-by-diskseq-1.device\n",
+        ):
+            with self.subTest(malformed=malformed):
+                invalid = valid_document()
+                for phase in ("baseline", "live", "post_cleanup"):
+                    invalid["workload"][phase]["user_work"][
+                        "active_units"
+                    ].append(malformed)
+                with self.assertRaises(jsonschema.ValidationError):
+                    jsonschema.Draft202012Validator(schema).validate(invalid)
+                with self.assertRaisesRegex(ValueError, "declared schema"):
+                    self.validator.validate_document(invalid)
+
     def test_d1_and_d1a_results_are_distinct_and_both_required(self) -> None:
         document = valid_document()
         document["host_admission"]["result"] = "failed"
