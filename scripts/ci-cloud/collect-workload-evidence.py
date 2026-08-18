@@ -3556,7 +3556,7 @@ def reviewed_podman_auxiliary_units(
 ) -> tuple[set[str], str, str] | None:
     if not isinstance(containers, list):
         return None
-    healthy_ids: list[str] = []
+    healthy_ids: set[str] = set()
     for container in containers:
         if not isinstance(container, dict):
             return None
@@ -3567,7 +3567,9 @@ def reviewed_podman_auxiliary_units(
             r"[0-9a-f]{64}", container_id
         ) is None:
             return None
-        healthy_ids.append(container_id)
+        if container_id in healthy_ids:
+            return None
+        healthy_ids.add(container_id)
     health_timer_candidates = {
         unit
         for unit in active_units

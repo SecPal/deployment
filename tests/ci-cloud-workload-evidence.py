@@ -3179,6 +3179,28 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector.workload_admission_failures(observations),
         )
 
+    def test_podman_health_timers_reject_duplicate_container_ids(self) -> None:
+        observations = valid_observations()
+        live = observations["live"]
+        healthy = [
+            container
+            for container in live["containers"]
+            if container["role"] in HEALTHY_ROLES
+        ]
+        duplicate_id = healthy[0]["id"]
+        replaced_id = healthy[1]["id"]
+        healthy[1]["id"] = duplicate_id
+        live["user_work"]["active_units"] = [
+            unit
+            for unit in live["user_work"]["active_units"]
+            if not unit.startswith(f"{replaced_id}-")
+        ]
+
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
     def test_live_process_delta_is_confined_to_generated_service_cgroups(self) -> None:
         observations = valid_observations()
         baseline_process = {
