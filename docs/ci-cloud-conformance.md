@@ -994,19 +994,22 @@ Evidence includes:
   and cover the role's configured and effective UID/GID plus every admitted
   supplementary GID,
   the closed role-to-network topology; every running container's canonical
-  primary and secondary IPv4/IPv6
-  endpoints remain private collector context from the same bounded Podman
-  inspect snapshot and must exactly match its Aardvark network entry together
-  with the full container ID and expected container name. Missing, extra,
-  duplicated, malformed, or different Aardvark addresses make collection
+  single IPv4 endpoint, prefix, gateway, network ID, and exact role/short-ID
+  aliases remain private collector context from the same bounded Podman
+  inspect snapshot. Each endpoint must be a unique usable member of the sole
+  independently inspected IPv4 subnet, must not equal its network, broadcast,
+  or gateway address, and must exactly match its Aardvark network entry together
+  with the full container ID, expected container name, and aliases. Missing,
+  extra, duplicated, malformed, or different Aardvark facts make collection
   incomplete rather than adding a new target-reported evidence field. The
   collector also independently inspects both workload bridge networks and
-  requires their exact internal, DNS-enabled contract. Their Aardvark files
+  requires their exact single-subnet, IPv4-only, internal, DNS-enabled contract
+  with no configured network-level DNS servers. Their Aardvark files
   must use Netavark's reviewed `%int` suffix for internal networks, and each
-  first line must exactly reproduce the inspected subnet gateways followed by
-  the optional network-level DNS servers in runtime order. A missing, extra,
-  reordered, non-canonical, or different header address makes collection
-  incomplete; the
+  first line must be exactly the inspected subnet gateway. The workload
+  configures no per-container DNS servers, so `HostConfig.Dns` must be empty
+  and the optional fifth Aardvark member field must be absent. Any broader DNS,
+  alias, address, or header representation makes collection incomplete; the
   complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
   `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
@@ -1114,6 +1117,10 @@ drop-in-free units under the exact user-manager transient path, the timer must
 trigger only its paired service, and that service must have the trusted PATH,
 no auxiliary execution phase, and exactly one direct
 `/usr/bin/podman healthcheck run <full-container-ID>` command.
+An authenticated paired healthcheck service that is active while the user-work
+snapshot is read is normalized out of the stable active-unit set only after all
+of those timer/service checks pass. An unpaired or unauthenticated active
+healthcheck-shaped service makes collection incomplete.
 Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
 still fail closed. For an exited one-shot, admission instead requires the exact
 existing systemd/Podman lifecycle correlation. An explicit immutable configured

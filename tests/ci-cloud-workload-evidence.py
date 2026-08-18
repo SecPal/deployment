@@ -2131,12 +2131,21 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Devices": [],
                 "Tmpfs": {},
                 "ReadonlyRootfs": True,
+                "Dns": [],
             },
             "NetworkSettings": {
                 "Networks": {
                     "secpal-int-aaaaaaaaaaaa-application": {
                         "IPAddress": "10.89.0.2",
+                        "IPPrefixLen": 24,
+                        "SecondaryIPAddresses": [],
+                        "Gateway": "10.89.0.1",
                         "GlobalIPv6Address": "",
+                        "GlobalIPv6PrefixLen": 0,
+                        "SecondaryIPv6Addresses": [],
+                        "IPv6Gateway": "",
+                        "NetworkID": "d" * 64,
+                        "Aliases": ["api", "c" * 12],
                     }
                 },
                 "Ports": {},
@@ -2194,6 +2203,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             (inspection["HostConfig"], "Devices"),
             (inspection["HostConfig"], "Tmpfs"),
             (inspection["HostConfig"], "ReadonlyRootfs"),
+            (inspection["HostConfig"], "Dns"),
             (inspection["NetworkSettings"], "Ports"),
         )
         for owner, field in required_fields:
@@ -2256,12 +2266,21 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Devices": [],
                 "Tmpfs": {},
                 "ReadonlyRootfs": True,
+                "Dns": [],
             },
             "NetworkSettings": {
                 "Networks": {
                     "secpal-int-aaaaaaaaaaaa-application": {
                         "IPAddress": "10.89.0.2",
+                        "IPPrefixLen": 24,
+                        "SecondaryIPAddresses": [],
+                        "Gateway": "10.89.0.1",
                         "GlobalIPv6Address": "",
+                        "GlobalIPv6PrefixLen": 0,
+                        "SecondaryIPv6Addresses": [],
+                        "IPv6Gateway": "",
+                        "NetworkID": "d" * 64,
+                        "Aliases": ["api", "c" * 12],
                     }
                 },
                 "Ports": {},
@@ -2319,12 +2338,38 @@ class WorkloadEvidenceTests(unittest.TestCase):
             {
                 "c" * 64: {
                     "secpal-int-aaaaaaaaaaaa-application": (
-                        ("10.89.0.2",), ()
+                        self.collector.NetworkEndpoint(
+                            addresses=(
+                                self.collector.NetworkAddress(
+                                    "10.89.0.2", 24
+                                ),
+                            ),
+                            aliases=("api", "c" * 12),
+                            network_id="d" * 64,
+                            gateways=("10.89.0.1",),
+                        )
                     )
                 }
             },
             network_endpoints,
         )
+
+        configured_dns = copy.deepcopy(inspection)
+        configured_dns["HostConfig"]["Dns"] = ["192.0.2.53"]
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([configured_dns], True)
+        ):
+            _, _, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa",
+                rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertFalse(complete)
 
         collector_namespace = {
             **namespace_facts,
@@ -5053,31 +5098,60 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ]
         endpoints = {
             "b" * 64: {
-                application: (("10.89.0.2",), ()),
-                edge_network: (
-                    ("10.90.0.2", "10.90.0.4"),
-                    ("fd00::2", "fd00::4"),
+                application: self.collector.NetworkEndpoint(
+                    addresses=(
+                        self.collector.NetworkAddress("10.89.0.2", 24),
+                    ),
+                    aliases=("api", "b" * 12),
+                    network_id="d" * 64,
+                    gateways=("10.89.0.1",),
+                ),
+                edge_network: self.collector.NetworkEndpoint(
+                    addresses=(
+                        self.collector.NetworkAddress("10.90.0.2", 24),
+                    ),
+                    aliases=("api", "b" * 12),
+                    network_id="e" * 64,
+                    gateways=("10.90.0.1",),
                 ),
             },
             "c" * 64: {
-                edge_network: (("10.90.0.3",), ()),
+                edge_network: self.collector.NetworkEndpoint(
+                    addresses=(
+                        self.collector.NetworkAddress("10.90.0.3", 24),
+                    ),
+                    aliases=("frontend", "c" * 12),
+                    network_id="e" * 64,
+                    gateways=("10.90.0.1",),
+                ),
             },
         }
         network_metadata = {
             application: self.collector.NetworkMetadata(
+                network_id="d" * 64,
                 internal=True,
-                gateways=("10.89.0.1",),
-                dns_servers=(),
+                subnets=(
+                    self.collector.NetworkSubnet(
+                        "10.89.0.0/24", "10.89.0.1"
+                    ),
+                ),
             ),
             edge_network: self.collector.NetworkMetadata(
+                network_id="e" * 64,
                 internal=True,
-                gateways=("10.90.0.1", "fd00::1"),
-                dns_servers=("192.0.2.53", "2001:db8::53"),
+                subnets=(
+                    self.collector.NetworkSubnet(
+                        "10.90.0.0/24", "10.90.0.1"
+                    ),
+                ),
             ),
         }
         for mutation in (
             lambda value: value[0].__setitem__("id", []),
             lambda value: value[0].__setitem__("networks", [{}]),
+            lambda value: value[0].__setitem__(
+                "name", f"secpal-int-{instance}-unknown"
+            ),
         ):
             malformed = copy.deepcopy(containers)
             mutation(malformed)
@@ -5095,15 +5169,17 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
             application_path.write_text(
                 "10.89.0.1\n"
-                f"{'b' * 64} 10.89.0.2  secpal-int-{instance}-api\n",
+                f"{'b' * 64} 10.89.0.2  "
+                f"secpal-int-{instance}-api,api,{'b' * 12}\n",
                 encoding="ascii",
             )
             edge = config / f"secpal-int-{instance}-edge%int"
             edge.write_text(
-                "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53\n"
-                f"{'b' * 64} 10.90.0.2,10.90.0.4 "
-                f"fd00::2,fd00::4 secpal-int-{instance}-api\n"
-                f"{'c' * 64} 10.90.0.3  secpal-int-{instance}-frontend\n",
+                "10.90.0.1\n"
+                f"{'b' * 64} 10.90.0.2  "
+                f"secpal-int-{instance}-api,api,{'b' * 12}\n"
+                f"{'c' * 64} 10.90.0.3  "
+                f"secpal-int-{instance}-frontend,frontend,{'c' * 12}\n",
                 encoding="ascii",
             )
             with mock.patch.object(
@@ -5119,20 +5195,15 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     )
                 )
                 valid_edge_entries = (
-                    f"{'b' * 64} 10.90.0.2,10.90.0.4 "
-                    f"fd00::2,fd00::4 secpal-int-{instance}-api\n"
+                    f"{'b' * 64} 10.90.0.2  "
+                    f"secpal-int-{instance}-api,api,{'b' * 12}\n"
                     f"{'c' * 64} 10.90.0.3  "
-                    f"secpal-int-{instance}-frontend\n"
+                    f"secpal-int-{instance}-frontend,frontend,{'c' * 12}\n"
                 )
                 for network_header in (
-                    "10.90.0.254,fd00::1 192.0.2.53,2001:db8::53",
-                    "10.90.0.1 192.0.2.53,2001:db8::53",
-                    "10.90.0.1,fd00::1,fd00::2 192.0.2.53,2001:db8::53",
-                    "10.90.0.1,fd00::1",
-                    "10.90.0.1,fd00::1 192.0.2.54,2001:db8::53",
-                    "10.90.0.1,fd00::1 192.0.2.53",
-                    "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53,203.0.113.53",
-                    "fd00::1,10.90.0.1 192.0.2.53,2001:db8::53",
+                    "10.90.0.254",
+                    "10.90.0.1,10.90.0.2",
+                    "10.90.0.1 192.0.2.53",
                 ):
                     with self.subTest(network_header=network_header):
                         edge.write_text(
@@ -5148,26 +5219,25 @@ class WorkloadEvidenceTests(unittest.TestCase):
                             )
                         )
                 edge.write_text(
-                    "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53\n"
+                    "10.90.0.1\n"
                     f"{valid_edge_entries}",
                     encoding="ascii",
                 )
                 for api_addresses in (
-                    "203.0.113.1,10.90.0.4 fd00::2,fd00::4",
-                    "10.90.0.2,10.90.0.4 fd00::2,fd00::5",
-                    "10.90.0.2 fd00::2,fd00::4",
-                    "10.90.0.2,10.90.0.4,10.90.0.5 fd00::2,fd00::4",
-                    "10.90.0.2,10.90.0.2 fd00::2,fd00::4",
-                    "bad,10.90.0.4 fd00::2,fd00::4",
+                    "203.0.113.1 ",
+                    "10.90.0.1 ",
+                    "10.90.0.2 fd00::2",
+                    "10.90.0.2,10.90.0.4 ",
+                    "bad ",
                 ):
                     with self.subTest(api_addresses=api_addresses):
                         edge.write_text(
-                            "10.90.0.1,fd00::1 "
-                            "192.0.2.53,2001:db8::53\n"
+                            "10.90.0.1\n"
                             f"{'b' * 64} {api_addresses} "
-                            f"secpal-int-{instance}-api\n"
+                            f"secpal-int-{instance}-api,api,{'b' * 12}\n"
                             f"{'c' * 64} 10.90.0.3  "
-                            f"secpal-int-{instance}-frontend\n",
+                            f"secpal-int-{instance}-frontend,frontend,"
+                            f"{'c' * 12}\n",
                             encoding="ascii",
                         )
                         self.assertFalse(
@@ -5179,8 +5249,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
                             )
                         )
                 edge.write_text(
-                    "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53\n"
-                    f"{'b' * 64} 10.90.0.2  secpal-int-{instance}-api\n",
+                    "10.90.0.1\n"
+                    f"{'b' * 64} 10.90.0.2  "
+                    f"secpal-int-{instance}-api,api,{'b' * 12}\n",
                     encoding="ascii",
                 )
                 self.assertFalse(
@@ -5190,7 +5261,86 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 )
 
                 edge.write_text(
-                    "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53\n"
+                    "10.90.0.1\n"
+                    f"{valid_edge_entries}",
+                    encoding="ascii",
+                )
+                for member_line in (
+                    f"{'b' * 64} 10.90.0.2  "
+                    f"secpal-int-{instance}-api,{'b' * 12}",
+                    f"{'b' * 64} 10.90.0.2  "
+                    f"secpal-int-{instance}-api,api,{'b' * 12} 192.0.2.53",
+                ):
+                    with self.subTest(member_line=member_line):
+                        edge.write_text(
+                            "10.90.0.1\n"
+                            f"{member_line}\n"
+                            f"{'c' * 64} 10.90.0.3  "
+                            f"secpal-int-{instance}-frontend,frontend,"
+                            f"{'c' * 12}\n",
+                            encoding="ascii",
+                        )
+                        self.assertFalse(
+                            self.collector.aardvark_configuration_matches_workload(
+                                instance,
+                                containers,
+                                endpoints,
+                                network_metadata,
+                            )
+                        )
+                semantic_mutations = {
+                    "outside-subnet": (("b" * 64, "203.0.113.2"), None),
+                    "duplicate-member-address": (
+                        ("c" * 64, "10.90.0.2"), None,
+                    ),
+                    "missing-role-alias": (None, ("b" * 64, ("b" * 12,))),
+                }
+                for name, (address_change, alias_change) in (
+                    semantic_mutations.items()
+                ):
+                    candidate = copy.deepcopy(endpoints)
+                    if address_change is not None:
+                        container_id, address = address_change
+                        candidate[container_id][edge_network] = candidate[
+                            container_id
+                        ][edge_network]._replace(
+                            addresses=(
+                                self.collector.NetworkAddress(address, 24),
+                            )
+                        )
+                    if alias_change is not None:
+                        container_id, aliases = alias_change
+                        candidate[container_id][edge_network] = candidate[
+                            container_id
+                        ][edge_network]._replace(aliases=aliases)
+                    api_endpoint = candidate["b" * 64][edge_network]
+                    frontend_endpoint = candidate["c" * 64][edge_network]
+                    api_addresses = api_endpoint.addresses[0].address
+                    frontend_addresses = frontend_endpoint.addresses[0].address
+                    api_names = ",".join(
+                        (containers[0]["name"], *api_endpoint.aliases)
+                    )
+                    frontend_names = ",".join(
+                        (containers[1]["name"], *frontend_endpoint.aliases)
+                    )
+                    with self.subTest(name=name):
+                        edge.write_text(
+                            "10.90.0.1\n"
+                            f"{'b' * 64} {api_addresses}  {api_names}\n"
+                            f"{'c' * 64} {frontend_addresses}  "
+                            f"{frontend_names}\n",
+                            encoding="ascii",
+                        )
+                        self.assertFalse(
+                            self.collector.aardvark_configuration_matches_workload(
+                                instance,
+                                containers,
+                                candidate,
+                                network_metadata,
+                            )
+                        )
+                edge.write_text(
+                    "10.90.0.1\n"
                     f"{valid_edge_entries}",
                     encoding="ascii",
                 )
@@ -5225,12 +5375,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "driver": "bridge",
                 "subnets": [
                     {"subnet": "10.90.0.0/24", "gateway": "10.90.0.1"},
-                    {"subnet": "fd00::/64", "gateway": "fd00::1"},
                 ],
-                "ipv6_enabled": True,
+                "ipv6_enabled": False,
                 "internal": True,
                 "dns_enabled": True,
-                "network_dns_servers": ["192.0.2.53", "2001:db8::53"],
             },
         ]
         with mock.patch.object(
@@ -5241,12 +5389,22 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertEqual(
             {
                 application: self.collector.NetworkMetadata(
-                    True, ("10.89.0.1",), ()
+                    network_id="b" * 64,
+                    internal=True,
+                    subnets=(
+                        self.collector.NetworkSubnet(
+                            "10.89.0.0/24", "10.89.0.1"
+                        ),
+                    ),
                 ),
                 edge: self.collector.NetworkMetadata(
-                    True,
-                    ("10.90.0.1", "fd00::1"),
-                    ("192.0.2.53", "2001:db8::53"),
+                    network_id="c" * 64,
+                    internal=True,
+                    subnets=(
+                        self.collector.NetworkSubnet(
+                            "10.90.0.0/24", "10.90.0.1"
+                        ),
+                    ),
                 ),
             },
             metadata,
@@ -5267,15 +5425,15 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "bad-gateway": lambda value: value[0]["subnets"][0].__setitem__(
                 "gateway", "203.0.113.1"
             ),
-            "wrong-ipv6-flag": lambda value: value[1].__setitem__(
-                "ipv6_enabled", False
+            "ipv6-enabled": lambda value: value[1].__setitem__(
+                "ipv6_enabled", True
             ),
-            "duplicate-dns": lambda value: value[1][
-                "network_dns_servers"
-            ].append("192.0.2.53"),
-            "noncanonical-dns": lambda value: value[1][
-                "network_dns_servers"
-            ].__setitem__(0, "2001:0db8::53"),
+            "second-subnet": lambda value: value[1]["subnets"].append(
+                {"subnet": "10.91.0.0/24", "gateway": "10.91.0.1"}
+            ),
+            "network-dns": lambda value: value[1].__setitem__(
+                "network_dns_servers", ["192.0.2.53"]
+            ),
         }
         for name, mutate in mutations.items():
             candidate = copy.deepcopy(inspections)
@@ -5291,19 +5449,24 @@ class WorkloadEvidenceTests(unittest.TestCase):
     def test_inspected_network_endpoints_are_complete_and_canonical(self) -> None:
         network = "secpal-int-aaaaaaaaaaaa-application"
         expected = {
-            network: (("10.89.0.2", "10.89.0.3"), ("fd00::2", "fd00::3"))
+            network: self.collector.NetworkEndpoint(
+                addresses=(self.collector.NetworkAddress("10.89.0.2", 24),),
+                aliases=("api", "b" * 12),
+                network_id="d" * 64,
+                gateways=("10.89.0.1",),
+            )
         }
         names, endpoints, complete = self.collector.normalized_network_endpoints(
             {
                 network: {
                     "IPAddress": "10.89.0.2",
-                    "SecondaryIPAddresses": [
-                        {"Addr": "10.89.0.3", "PrefixLength": 24}
-                    ],
-                    "GlobalIPv6Address": "fd00::2",
-                    "SecondaryIPv6Addresses": [
-                        {"Addr": "fd00::3", "PrefixLength": 64}
-                    ],
+                    "IPPrefixLen": 24,
+                    "Gateway": "10.89.0.1",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "IPv6Gateway": "",
+                    "NetworkID": "d" * 64,
+                    "Aliases": ["api", "b" * 12],
                 }
             },
             "private",
@@ -5312,30 +5475,47 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertEqual([network], names)
         self.assertEqual(expected, endpoints)
 
-        for mutation in (
-            lambda value: value[network].__setitem__("IPAddress", "fd00::2"),
-            lambda value: value[network].__setitem__(
-                "SecondaryIPAddresses", [{"Addr": "bad", "PrefixLength": 24}]
+        mutations = {
+            "wrong-family": lambda value: value[network].__setitem__(
+                "IPAddress", "fd00::2"
             ),
-            lambda value: value[network].__setitem__(
-                "SecondaryIPv6Addresses",
-                [{"Addr": "fd00::2", "PrefixLength": 64}],
+            "secondary-ip": lambda value: value[network].__setitem__(
+                "SecondaryIPAddresses",
+                [{"Addr": "10.89.0.3", "PrefixLength": 24}],
             ),
-        ):
+            "ipv6": lambda value: value[network].update(
+                {"GlobalIPv6Address": "fd00::2", "GlobalIPv6PrefixLen": 64}
+            ),
+            "bad-prefix": lambda value: value[network].__setitem__(
+                "IPPrefixLen", 33
+            ),
+            "bad-gateway": lambda value: value[network].__setitem__(
+                "Gateway", "bad"
+            ),
+            "bad-network-id": lambda value: value[network].__setitem__(
+                "NetworkID", "short"
+            ),
+            "missing-alias": lambda value: value[network].__setitem__(
+                "Aliases", ["api"]
+            ),
+        }
+        for name, mutation in mutations.items():
             candidate = {
                 network: {
                     "IPAddress": "10.89.0.2",
-                    "SecondaryIPAddresses": [
-                        {"Addr": "10.89.0.3", "PrefixLength": 24}
-                    ],
-                    "GlobalIPv6Address": "fd00::2",
-                    "SecondaryIPv6Addresses": [
-                        {"Addr": "fd00::3", "PrefixLength": 64}
-                    ],
+                    "IPPrefixLen": 24,
+                    "SecondaryIPAddresses": [],
+                    "Gateway": "10.89.0.1",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "SecondaryIPv6Addresses": [],
+                    "IPv6Gateway": "",
+                    "NetworkID": "d" * 64,
+                    "Aliases": ["api", "b" * 12],
                 }
             }
             mutation(candidate)
-            with self.subTest(candidate=candidate):
+            with self.subTest(name=name):
                 self.assertFalse(
                     self.collector.normalized_network_endpoints(
                         candidate, "private"
@@ -5382,7 +5562,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
             if item.startswith("PATH=")
         )
 
-        def collect(timer_changes=None, service_changes=None):
+        def collect(
+            timer_changes=None,
+            service_changes=None,
+            active_services=(),
+        ):
             timer_properties = {
                 "FragmentPath": (
                     f"/run/user/20000/systemd/transient/{timer}"
@@ -5421,7 +5605,15 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
             def command_result(arguments, **_kwargs):
                 if "list-units" in arguments:
-                    return 0, f"{timer} loaded active waiting\n", True
+                    active = "".join(
+                        f"{unit} loaded active running\n"
+                        for unit in active_services
+                    )
+                    return (
+                        0,
+                        f"{timer} loaded active waiting\n{active}",
+                        True,
+                    )
                 if "list-jobs" in arguments:
                     return 0, "", True
                 if arguments[:4] == [
@@ -5468,6 +5660,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             }],
             facts["podman_health_timers"],
         )
+        active_facts, active_complete = collect(active_services=(service,))
+        self.assertTrue(active_complete)
+        self.assertEqual(facts, active_facts)
+
+        unpaired_service = f"{'b' * 64}-1.service"
+        _, unpaired_complete = collect(active_services=(unpaired_service,))
+        self.assertFalse(unpaired_complete)
 
         for timer_changes, service_changes in (
             ({"Triggers": "attacker.service"}, None),

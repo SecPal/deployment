@@ -233,13 +233,27 @@ class RoleContract(NamedTuple):
     healthcheck: tuple[str, ...] | None = None
 
 
-NetworkEndpoint = tuple[tuple[str, ...], tuple[str, ...]]
+class NetworkAddress(NamedTuple):
+    address: str
+    prefix_length: int
+
+
+class NetworkEndpoint(NamedTuple):
+    addresses: tuple[NetworkAddress, ...]
+    aliases: tuple[str, ...]
+    network_id: str
+    gateways: tuple[str, ...]
+
+
+class NetworkSubnet(NamedTuple):
+    network: str
+    gateway: str
 
 
 class NetworkMetadata(NamedTuple):
+    network_id: str
     internal: bool
-    gateways: tuple[str, ...]
-    dns_servers: tuple[str, ...]
+    subnets: tuple[NetworkSubnet, ...]
 
 
 class ContainerCollection(NamedTuple):
@@ -2020,37 +2034,6 @@ def normalized_network_address(
     return value
 
 
-def normalized_network_address_list(
-    primary: object, secondary: object, version: int
-) -> tuple[tuple[str, ...], bool]:
-    if not isinstance(primary, str) or not isinstance(secondary, list):
-        return (), False
-    values: list[str] = []
-    if primary:
-        address = normalized_network_address(primary, version)
-        if address is None:
-            return (), False
-        values.append(address)
-    if len(secondary) > 15:
-        return (), False
-    maximum_prefix = 32 if version == 4 else 128
-    for item in secondary:
-        if not isinstance(item, dict) or set(item) != {"Addr", "PrefixLength"}:
-            return (), False
-        prefix_length = item["PrefixLength"]
-        address = normalized_network_address(item["Addr"], version)
-        if (
-            address is None
-            or type(prefix_length) is not int
-            or not 0 <= prefix_length <= maximum_prefix
-        ):
-            return (), False
-        values.append(address)
-    if (not primary and values) or len(values) != len(set(values)):
-        return (), False
-    return tuple(values), True
-
-
 def normalized_network_endpoints(
     value: object, network_mode: object
 ) -> tuple[list[str], dict[str, NetworkEndpoint], bool]:
@@ -2064,6 +2047,10 @@ def normalized_network_endpoints(
     if len(value) > 16:
         return [], {}, False
     endpoints: dict[str, NetworkEndpoint] = {}
+    required_endpoint = {
+        "IPAddress", "IPPrefixLen", "Gateway", "GlobalIPv6Address",
+        "GlobalIPv6PrefixLen", "IPv6Gateway", "NetworkID", "Aliases",
+    }
     for network, endpoint in value.items():
         if (
             not isinstance(network, str)
@@ -2071,20 +2058,41 @@ def normalized_network_endpoints(
             or len(network) > 256
             or "\x00" in network
             or not isinstance(endpoint, dict)
-            or not {"IPAddress", "GlobalIPv6Address"}.issubset(endpoint)
+            or not required_endpoint.issubset(endpoint)
+            or endpoint.get("SecondaryIPAddresses", []) != []
+            or endpoint["GlobalIPv6Address"] != ""
+            or endpoint["GlobalIPv6PrefixLen"] != 0
+            or endpoint.get("SecondaryIPv6Addresses", []) != []
+            or endpoint["IPv6Gateway"] != ""
+            or not isinstance(endpoint["NetworkID"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", endpoint["NetworkID"]) is None
+            or not isinstance(endpoint["Aliases"], list)
+            or len(endpoint["Aliases"]) != 2
+            or any(
+                not isinstance(alias, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", alias)
+                is None
+                for alias in endpoint["Aliases"]
+            )
+            or len(endpoint["Aliases"]) != len(set(endpoint["Aliases"]))
         ):
             return [], {}, False
-        ipv4, ipv4_complete = normalized_network_address_list(
-            endpoint["IPAddress"], endpoint.get("SecondaryIPAddresses", []), 4
-        )
-        ipv6, ipv6_complete = normalized_network_address_list(
-            endpoint["GlobalIPv6Address"],
-            endpoint.get("SecondaryIPv6Addresses", []),
-            6,
-        )
-        if not ipv4_complete or not ipv6_complete or (not ipv4 and not ipv6):
+        address = normalized_network_address(endpoint["IPAddress"], 4)
+        gateway = normalized_network_address(endpoint["Gateway"], 4)
+        prefix_length = endpoint["IPPrefixLen"]
+        if (
+            address is None
+            or gateway is None
+            or type(prefix_length) is not int
+            or not 1 <= prefix_length <= 30
+        ):
             return [], {}, False
-        endpoints[network] = (ipv4, ipv6)
+        endpoints[network] = NetworkEndpoint(
+            addresses=(NetworkAddress(address, prefix_length),),
+            aliases=tuple(endpoint["Aliases"]),
+            network_id=endpoint["NetworkID"],
+            gateways=(gateway,),
+        )
     return sorted(endpoints), endpoints, True
 
 
@@ -2117,63 +2125,38 @@ def workload_network_metadata(
             or item["driver"] != "bridge"
             or item["internal"] is not True
             or item["dns_enabled"] is not True
-            or type(item["ipv6_enabled"]) is not bool
+            or item["ipv6_enabled"] is not False
             or not isinstance(item["subnets"], list)
-            or not 1 <= len(item["subnets"]) <= 16
+            or len(item["subnets"]) != 1
+            or item.get("network_dns_servers", []) != []
         ):
             return {}, False
-        gateways: list[str] = []
-        versions: set[int] = set()
-        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-        for subnet in item["subnets"]:
-            if (
-                not isinstance(subnet, dict)
-                or not {"subnet", "gateway"}.issubset(subnet)
-                or not isinstance(subnet["subnet"], str)
-            ):
-                return {}, False
-            try:
-                network = ipaddress.ip_network(subnet["subnet"], strict=True)
-            except ValueError:
-                return {}, False
-            gateway = normalized_network_address(
-                subnet["gateway"], network.version
-            )
-            if (
-                str(network) != subnet["subnet"]
-                or gateway is None
-                or ipaddress.ip_address(gateway) not in network
-                or ipaddress.ip_address(gateway)
-                in {network.network_address, network.broadcast_address}
-                or any(network.overlaps(existing) for existing in networks)
-            ):
-                return {}, False
-            networks.append(network)
-            versions.add(network.version)
-            gateways.append(gateway)
+        subnet = item["subnets"][0]
         if (
-            len(gateways) != len(set(gateways))
-            or item["ipv6_enabled"] != (6 in versions)
+            not isinstance(subnet, dict)
+            or not {"subnet", "gateway"}.issubset(subnet)
+            or not isinstance(subnet["subnet"], str)
         ):
             return {}, False
-        dns_value = item.get("network_dns_servers", [])
-        if not isinstance(dns_value, list) or len(dns_value) > 16:
+        try:
+            network = ipaddress.ip_network(subnet["subnet"], strict=True)
+        except ValueError:
             return {}, False
-        dns_servers: list[str] = []
-        for value in dns_value:
-            try:
-                address = ipaddress.ip_address(value)
-            except (TypeError, ValueError):
-                return {}, False
-            if not isinstance(value, str) or str(address) != value:
-                return {}, False
-            dns_servers.append(value)
-        if len(dns_servers) != len(set(dns_servers)):
+        gateway = normalized_network_address(subnet["gateway"], 4)
+        if (
+            network.version != 4
+            or not 1 <= network.prefixlen <= 30
+            or str(network) != subnet["subnet"]
+            or gateway is None
+            or ipaddress.ip_address(gateway) not in network
+            or ipaddress.ip_address(gateway)
+            in {network.network_address, network.broadcast_address}
+        ):
             return {}, False
         metadata[item["name"]] = NetworkMetadata(
+            network_id=item["id"],
             internal=True,
-            gateways=tuple(gateways),
-            dns_servers=tuple(dns_servers),
+            subnets=(NetworkSubnet(str(network), gateway),),
         )
     return metadata, set(metadata) == set(expected)
 
@@ -2575,7 +2558,7 @@ def container_facts(
             "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
             "NetworkMode",
             "SecurityOpt", "CapAdd", "GroupAdd", "Devices", "Tmpfs",
-            "ReadonlyRootfs",
+            "ReadonlyRootfs", "Dns",
         }
         required_network_settings = {"Networks", "Ports"}
         if (
@@ -2611,6 +2594,7 @@ def container_facts(
             or not isinstance(host_config["Devices"], list)
             or not isinstance(host_config["Tmpfs"], dict)
             or not isinstance(host_config["ReadonlyRootfs"], bool)
+            or host_config["Dns"] != []
             or any(
                 not isinstance(host_config[field], str)
                 for field in (
@@ -3236,6 +3220,15 @@ def user_work_facts() -> tuple[dict[str, object], bool]:
     ):
         complete = False
     health_timers: list[dict[str, object]] = []
+    health_service_candidates = {
+        unit
+        for unit in active_units
+        if re.fullmatch(
+            rf"[0-9a-f]{{64}}-{PODMAN_54_HEALTH_TIMER_SUFFIX}\.service",
+            unit,
+        )
+    }
+    authenticated_active_health_services: set[str] = set()
     trusted_path = next(
         item for item in TRUSTED_MANAGER_ENVIRONMENT if item.startswith("PATH=")
     )
@@ -3321,9 +3314,16 @@ def user_work_facts() -> tuple[dict[str, object], bool]:
                 "interval_usec": interval_usec,
             }
         )
+        if service in health_service_candidates:
+            authenticated_active_health_services.add(service)
+    if health_service_candidates != authenticated_active_health_services:
+        complete = False
+    normalized_active_units = (
+        set(active_units) - authenticated_active_health_services
+    )
     return (
         {
-            "active_units": sorted(set(active_units))[:128],
+            "active_units": sorted(normalized_active_units)[:128],
             "jobs": sorted(set(jobs))[:128],
             "podman_health_timers": sorted(
                 health_timers, key=lambda item: item["timer"]
@@ -3483,22 +3483,6 @@ def normalized_aardvark_addresses(
     return tuple(addresses), True
 
 
-def normalized_aardvark_dns(value: str) -> bool:
-    if not value:
-        return False
-    items = value.split(",")
-    if not 1 <= len(items) <= 16 or len(items) != len(set(items)):
-        return False
-    for item in items:
-        try:
-            address = ipaddress.ip_address(item)
-        except ValueError:
-            return False
-        if str(address) != item:
-            return False
-    return True
-
-
 def aardvark_configuration_matches_workload(
     instance: str,
     containers: object,
@@ -3549,9 +3533,7 @@ def aardvark_configuration_matches_workload(
             endpoint = endpoints.get(network)
             if (
                 container_id in members
-                or not isinstance(endpoint, tuple)
-                or len(endpoint) != 2
-                or any(not isinstance(addresses, tuple) for addresses in endpoint)
+                or not isinstance(endpoint, NetworkEndpoint)
             ):
                 return False
             members[container_id] = (name, endpoint)
@@ -3565,25 +3547,63 @@ def aardvark_configuration_matches_workload(
         metadata = network_metadata.get(network)
         if (
             not isinstance(metadata, NetworkMetadata)
+            or re.fullmatch(r"[0-9a-f]{64}", metadata.network_id) is None
             or metadata.internal is not True
-            or not 1 <= len(metadata.gateways) <= 16
-            or len(metadata.gateways) != len(set(metadata.gateways))
-            or len(metadata.dns_servers) > 16
-            or len(metadata.dns_servers) != len(set(metadata.dns_servers))
+            or len(metadata.subnets) != 1
         ):
             return False
-        for value in (*metadata.gateways, *metadata.dns_servers):
-            try:
-                address = ipaddress.ip_address(value)
-            except (TypeError, ValueError):
+        subnet = metadata.subnets[0]
+        if not isinstance(subnet, NetworkSubnet):
+            return False
+        try:
+            subnet_network = ipaddress.ip_network(subnet.network, strict=True)
+        except ValueError:
+            return False
+        gateway = normalized_network_address(subnet.gateway, 4)
+        if (
+            subnet_network.version != 4
+            or not 1 <= subnet_network.prefixlen <= 30
+            or str(subnet_network) != subnet.network
+            or gateway is None
+            or ipaddress.ip_address(gateway) not in subnet_network
+            or ipaddress.ip_address(gateway)
+            in {subnet_network.network_address, subnet_network.broadcast_address}
+        ):
+            return False
+        observed_addresses: set[str] = set()
+        for container_id, (name, endpoint) in expected[network].items():
+            role = name.removeprefix(prefix)
+            if (
+                role not in ROLE_CONTRACTS
+                or endpoint.network_id != metadata.network_id
+                or endpoint.aliases != (role, container_id[:12])
+                or endpoint.gateways != (gateway,)
+                or len(endpoint.addresses) != 1
+                or not isinstance(endpoint.addresses[0], NetworkAddress)
+            ):
                 return False
-            if not isinstance(value, str) or str(address) != value:
+            address = endpoint.addresses[0]
+            normalized = normalized_network_address(address.address, 4)
+            parsed = (
+                ipaddress.ip_address(normalized)
+                if normalized is not None else None
+            )
+            if (
+                normalized is None
+                or address.prefix_length != subnet_network.prefixlen
+                or parsed not in subnet_network
+                or parsed
+                in {
+                    subnet_network.network_address,
+                    subnet_network.broadcast_address,
+                    ipaddress.ip_address(gateway),
+                }
+                or normalized in observed_addresses
+            ):
                 return False
+            observed_addresses.add(normalized)
         aardvark_files[network] = f"{network}%int"
-        network_headers[network] = ",".join(metadata.gateways) + (
-            f" {','.join(metadata.dns_servers)}"
-            if metadata.dns_servers else ""
-        )
+        network_headers[network] = gateway
     try:
         directory_before = PODMAN_AARDVARK_CONFIG_ROOT.stat()
         entries = tuple(PODMAN_AARDVARK_CONFIG_ROOT.iterdir())
@@ -3616,7 +3636,7 @@ def aardvark_configuration_matches_workload(
         observed: set[str] = set()
         for line in lines[1:]:
             fields = line.split(" ")
-            if len(fields) not in {4, 5}:
+            if len(fields) != 4:
                 return False
             container_id, ipv4_value, ipv6_value, names_value = fields[:4]
             member = members.get(container_id)
@@ -3625,24 +3645,25 @@ def aardvark_configuration_matches_workload(
             name, endpoint = member
             ipv4, ipv4_complete = normalized_aardvark_addresses(ipv4_value, 4)
             ipv6, ipv6_complete = normalized_aardvark_addresses(ipv6_value, 6)
-            names = names_value.split(",")
+            names = tuple(names_value.split(","))
+            expected_ipv4 = tuple(
+                address.address
+                for address in endpoint.addresses
+                if ipaddress.ip_address(address.address).version == 4
+            )
+            expected_ipv6 = tuple(
+                address.address
+                for address in endpoint.addresses
+                if ipaddress.ip_address(address.address).version == 6
+            )
             if (
                 container_id in observed
                 or len(line) > 4096
                 or not ipv4_complete
                 or not ipv6_complete
-                or (ipv4, ipv6) != endpoint
-                or not 1 <= len(names) <= 64
-                or len(names) != len(set(names))
-                or name not in names
-                or any(
-                    re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", item)
-                    is None
-                    for item in names
-                )
+                or (ipv4, ipv6) != (expected_ipv4, expected_ipv6)
+                or names != (name, *endpoint.aliases)
             ):
-                return False
-            if len(fields) == 5 and not normalized_aardvark_dns(fields[4]):
                 return False
             observed.add(container_id)
         if observed != set(members):
