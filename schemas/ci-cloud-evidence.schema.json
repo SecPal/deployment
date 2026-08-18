@@ -1139,7 +1139,7 @@
     "podmanHealthTimerFact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["container_id", "timer", "service"],
+      "required": ["container_id", "timer", "service", "interval_usec"],
       "properties": {
         "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "timer": {
@@ -1149,7 +1149,8 @@
         "service": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}-(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})\\.service$"
-        }
+        },
+        "interval_usec": { "enum": [5000000, 10000000] }
       }
     },
     "canonicalSystemdUnitName": {

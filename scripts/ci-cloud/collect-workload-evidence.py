@@ -73,6 +73,16 @@ PODMAN_NETWORK_ONLINE_UNIT = "podman-user-wait-network-online.service"
 PODMAN_NETWORK_ONLINE_FRAGMENT = (
     Path("/usr/lib/systemd/user") / PODMAN_NETWORK_ONLINE_UNIT
 )
+PODMAN_NETWORK_RUN_ROOT = Path("/run/user/20000/containers/networks")
+PODMAN_ROOTLESS_NETWORK_ROOT = PODMAN_NETWORK_RUN_ROOT / "rootless-netns"
+PODMAN_ROOTLESS_NETWORK_NAMESPACE = (
+    PODMAN_ROOTLESS_NETWORK_ROOT / "rootless-netns"
+)
+PODMAN_ROOTLESS_NETWORK_PID = (
+    PODMAN_ROOTLESS_NETWORK_ROOT / "rootless-netns-conn.pid"
+)
+PODMAN_AARDVARK_CONFIG_ROOT = PODMAN_NETWORK_RUN_ROOT / "aardvark-dns"
+PODMAN_AARDVARK_PID = PODMAN_AARDVARK_CONFIG_ROOT / "aardvark.pid"
 TRUSTED_USER_SOCKET_UNITS = {
     name: (
         frozenset(
@@ -183,13 +193,23 @@ SERVICE_ACTIVATION_PROPERTIES = (
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
+HEALTH_INTERVAL_USEC = {
+    "postgres": 5_000_000,
+    "valkey": 5_000_000,
+    "api": 10_000_000,
+    "frontend": 10_000_000,
+    "gateway": 10_000_000,
+}
 # Podman 5.4 formats a non-negative 64-bit rand.Int() with "%x" for this
 # suffix: no leading zeroes, at most 16 hex digits, and a 16th digit <= 7.
 PODMAN_54_HEALTH_TIMER_SUFFIX = (
     r"(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})"
 )
 PODMAN_HEALTH_TIMER_PROPERTIES = frozenset(
-    {"FragmentPath", "DropInPaths", "Transient", "Triggers"}
+    {
+        "FragmentPath", "DropInPaths", "Transient", "Triggers",
+        "AccuracyUSec", "TimersMonotonic",
+    }
 )
 PODMAN_HEALTH_SERVICE_PROPERTIES = frozenset(
     {
@@ -1926,6 +1946,15 @@ def configured_userns_options(value: object) -> tuple[list[str], bool]:
         argument = value[index]
         if argument == "--module" or argument.startswith("--module="):
             return [], False
+        if argument in {
+            "--uidmap", "--gidmap", "--subuidname", "--subgidname",
+        } or any(
+            argument.startswith(f"{option}=")
+            for option in (
+                "--uidmap", "--gidmap", "--subuidname", "--subgidname",
+            )
+        ):
+            return [], False
         if argument == "--userns":
             if (
                 index + 1 >= len(value)
@@ -2926,6 +2955,29 @@ def podman_health_exec_is_trusted(value: object, container_id: str) -> bool:
     )
 
 
+def podman_health_timer_interval_usec(value: object) -> int | None:
+    if not isinstance(value, str) or len(value) > 256 or "\n" in value:
+        return None
+    match = re.fullmatch(
+        r"\{ OnUnitInactiveUSec=(5s|10s) ; "
+        r"next_elapse=[^{}\x00-\x1f]{1,128} \}",
+        value,
+    )
+    if match is None:
+        return None
+    return int(match.group(1).removesuffix("s")) * 1_000_000
+
+
+def podman_healthcheck_is_current(container_id: str) -> bool:
+    if re.fullmatch(r"[0-9a-f]{64}", container_id) is None:
+        return False
+    status_code, output, bounded = command_result(
+        [str(PODMAN_EXECUTABLE), "healthcheck", "run", container_id],
+        timeout=30,
+    )
+    return status_code == 0 and bounded and output == ""
+
+
 def user_work_facts() -> tuple[dict[str, object], bool]:
     units_status, units_output, units_complete = command_result(
         [
@@ -2973,7 +3025,12 @@ def user_work_facts() -> tuple[dict[str, object], bool]:
             complete = False
             continue
         jobs.append(fields[1])
-    health_timers: list[dict[str, str]] = []
+    if (
+        PODMAN_NETWORK_ONLINE_UNIT in active_units
+        and not podman_network_online_activation_is_trusted()
+    ):
+        complete = False
+    health_timers: list[dict[str, object]] = []
     trusted_path = next(
         item for item in TRUSTED_MANAGER_ENVIRONMENT if item.startswith("PATH=")
     )
@@ -3008,12 +3065,23 @@ def user_work_facts() -> tuple[dict[str, object], bool]:
         service_properties = exact_systemd_service_properties(
             service_output, PODMAN_HEALTH_SERVICE_PROPERTIES
         )
-        timer_trusted = timer_properties == {
-            "FragmentPath": f"/run/user/20000/systemd/transient/{timer}",
-            "DropInPaths": "",
-            "Transient": "yes",
-            "Triggers": service,
-        }
+        interval_usec = (
+            podman_health_timer_interval_usec(
+                timer_properties.get("TimersMonotonic")
+            )
+            if timer_properties is not None
+            else None
+        )
+        timer_trusted = bool(
+            timer_properties is not None
+            and timer_properties["FragmentPath"]
+            == f"/run/user/20000/systemd/transient/{timer}"
+            and timer_properties["DropInPaths"] == ""
+            and timer_properties["Transient"] == "yes"
+            and timer_properties["Triggers"] == service
+            and timer_properties["AccuracyUSec"] == "1s"
+            and interval_usec is not None
+        )
         service_trusted = bool(
             service_properties is not None
             and service_properties["FragmentPath"]
@@ -3036,6 +3104,7 @@ def user_work_facts() -> tuple[dict[str, object], bool]:
             or not service_complete
             or not timer_trusted
             or not service_trusted
+            or not podman_healthcheck_is_current(container_id)
         ):
             complete = False
             continue
@@ -3044,6 +3113,7 @@ def user_work_facts() -> tuple[dict[str, object], bool]:
                 "container_id": container_id,
                 "timer": timer,
                 "service": service,
+                "interval_usec": interval_usec,
             }
         )
     return (
@@ -3087,6 +3157,208 @@ def process_control_group(pid: int) -> tuple[str, bool]:
 
 def process_host_identity(pid: int) -> tuple[int, int, bool]:
     return process_status_identity(pid, require_all_ids_equal=False)
+
+
+def bounded_process_arguments(pid: int) -> tuple[list[str], bool]:
+    if pid <= 0 or pid > 4_194_304:
+        return [], False
+    try:
+        with Path(f"/proc/{pid}/cmdline").open("rb") as stream:
+            content = stream.read(8193)
+    except OSError:
+        return [], False
+    if not content or len(content) > 8192 or not content.endswith(b"\0"):
+        return [], False
+    raw_arguments = content[:-1].split(b"\0")
+    if not raw_arguments or len(raw_arguments) > 128 or any(
+        not argument for argument in raw_arguments
+    ):
+        return [], False
+    try:
+        arguments = [argument.decode("utf-8") for argument in raw_arguments]
+    except UnicodeDecodeError:
+        return [], False
+    if any("\x00" in argument or len(argument) > 4096 for argument in arguments):
+        return [], False
+    return arguments, True
+
+
+def runtime_pid_file_matches(path: Path, pid: int) -> bool:
+    observation = bounded_regular_file(path)
+    if observation is None:
+        return False
+    content, metadata = observation
+    return bool(
+        len(content) <= 32
+        and metadata.st_uid == CI_UID
+        and metadata.st_gid == CI_GID
+        and re.fullmatch(rb"[1-9][0-9]{0,9}", content)
+        and content == str(pid).encode("ascii")
+    )
+
+
+def process_uses_network_namespace(pid: int, namespace_path: Path) -> bool:
+    if pid <= 0 or pid > 4_194_304:
+        return False
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(namespace_path, flags)
+        namespace = os.fstat(descriptor)
+        process_namespace = os.readlink(f"/proc/{pid}/ns/net")
+    except OSError:
+        return False
+    finally:
+        if "descriptor" in locals():
+            os.close(descriptor)
+    return process_namespace == f"net:[{namespace.st_ino}]"
+
+
+def podman_helper_process_is_bound(
+    pid: int, executable: str, control_group: str
+) -> bool:
+    arguments, arguments_complete = bounded_process_arguments(pid)
+    if not arguments_complete:
+        return False
+    if executable in {"/usr/bin/pasta", "/usr/bin/pasta.avx2"}:
+        expected_group = re.fullmatch(
+            r"/user\.slice/user-20000\.slice/user@20000\.service/"
+            r"user\.slice/rootless-netns-[0-9a-f]{8}\.scope",
+            control_group,
+        )
+        netns_indexes = [
+            index for index, argument in enumerate(arguments)
+            if argument == "--netns"
+        ]
+        return bool(
+            expected_group is not None
+            and runtime_pid_file_matches(PODMAN_ROOTLESS_NETWORK_PID, pid)
+            and len(netns_indexes) == 1
+            and netns_indexes[0] + 1 < len(arguments)
+            and arguments[netns_indexes[0] + 1]
+            == str(PODMAN_ROOTLESS_NETWORK_NAMESPACE)
+        )
+    if executable == "/usr/lib/podman/aardvark-dns":
+        return bool(
+            re.fullmatch(
+                r"/user\.slice/user-20000\.slice/user@20000\.service/"
+                r"app\.slice/run-p[1-9][0-9]{0,9}-i[1-9][0-9]{0,9}\.scope",
+                control_group,
+            )
+            and runtime_pid_file_matches(PODMAN_AARDVARK_PID, pid)
+            and arguments == [
+                "/usr/lib/podman/aardvark-dns",
+                "--config", str(PODMAN_AARDVARK_CONFIG_ROOT),
+                "-p", "53", "run",
+            ]
+            and process_uses_network_namespace(
+                pid, PODMAN_ROOTLESS_NETWORK_NAMESPACE
+            )
+        )
+    return False
+
+
+def aardvark_configuration_matches_workload(
+    instance: str, containers: object
+) -> bool:
+    if (
+        re.fullmatch(r"[0-9a-f]{12}", instance) is None
+        or not isinstance(containers, list)
+    ):
+        return False
+    expected: dict[str, dict[str, str]] = {}
+    prefix = f"secpal-int-{instance}-"
+    for container in containers:
+        if not isinstance(container, dict) or container.get("state") != "running":
+            continue
+        container_id = container.get("id")
+        name = container.get("name")
+        networks = container.get("networks")
+        if (
+            not isinstance(container_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
+            or not isinstance(name, str)
+            or not name.startswith(prefix)
+            or not isinstance(networks, list)
+        ):
+            return False
+        for network in networks:
+            if network == "none":
+                continue
+            if (
+                not isinstance(network, str)
+                or network not in {
+                    f"{prefix}application", f"{prefix}edge",
+                }
+            ):
+                return False
+            members = expected.setdefault(network, {})
+            if container_id in members:
+                return False
+            members[container_id] = name
+    if set(expected) != {f"{prefix}application", f"{prefix}edge"}:
+        return False
+    try:
+        directory_before = PODMAN_AARDVARK_CONFIG_ROOT.stat()
+        entries = tuple(PODMAN_AARDVARK_CONFIG_ROOT.iterdir())
+    except OSError:
+        return False
+    entry_names = {entry.name for entry in entries}
+    if len(entries) > 3 or entry_names != {
+        "aardvark.pid", *expected,
+    }:
+        return False
+    for network, members in expected.items():
+        path = PODMAN_AARDVARK_CONFIG_ROOT / network
+        observation = bounded_regular_file(path)
+        if observation is None:
+            return False
+        content, metadata = observation
+        if not content or len(content) > 65_536 or not content.endswith(b"\n"):
+            return False
+        if metadata.st_uid != CI_UID or metadata.st_gid != CI_GID:
+            return False
+        try:
+            lines = content.decode("ascii").splitlines()
+        except UnicodeDecodeError:
+            return False
+        if len(lines) != len(members) + 1 or not lines[0]:
+            return False
+        observed: set[str] = set()
+        for line in lines[1:]:
+            container_id, separator, remainder = line.partition(" ")
+            name = members.get(container_id)
+            if (
+                not separator
+                or name is None
+                or container_id in observed
+                or len(line) > 4096
+                or re.search(
+                    rf"(?:^|[ ,]){re.escape(name)}(?:$|[ ,])", remainder
+                )
+                is None
+            ):
+                return False
+            observed.add(container_id)
+        if observed != set(members):
+            return False
+    try:
+        directory_after = PODMAN_AARDVARK_CONFIG_ROOT.stat()
+        names_after = {
+            entry.name for entry in PODMAN_AARDVARK_CONFIG_ROOT.iterdir()
+        }
+    except OSError:
+        return False
+    directory_identity = lambda value: (
+        value.st_dev, value.st_ino, value.st_uid, value.st_gid,
+        value.st_mode, value.st_mtime_ns, value.st_ctime_ns,
+    )
+    if directory_identity(directory_before) != directory_identity(
+        directory_after
+    ) or names_after != entry_names:
+        return False
+    return True
 
 
 def user_process_facts() -> tuple[list[dict[str, object]], bool]:
@@ -3147,6 +3419,12 @@ def user_process_facts() -> tuple[list[dict[str, object]], bool]:
             or "\x00" in executable
             or executable.endswith(" (deleted)")
         ):
+            complete = False
+            continue
+        if executable in {
+            "/usr/bin/pasta", "/usr/bin/pasta.avx2",
+            "/usr/lib/podman/aardvark-dns",
+        } and not podman_helper_process_is_bound(pid, executable, control_group):
             complete = False
             continue
         key = (executable, control_group, uid, gid)
@@ -3486,6 +3764,9 @@ def collect_live(instance: str) -> dict[str, object]:
         podman_gid_map=podman_gid_map,
     )
     containers, bindings_complete = bind_container_services(services, containers)
+    network_helpers_complete = aardvark_configuration_matches_workload(
+        instance, containers
+    )
     inventory, inventory_complete = resource_inventory()
     prefix = f"secpal-int-{instance}-"
     networks = [name for name in inventory["networks"] if name.startswith(prefix)]
@@ -3502,7 +3783,8 @@ def collect_live(instance: str) -> dict[str, object]:
         "complete": all(
             (
                 units_complete, services_complete, containers_complete,
-                bindings_complete, inventory_complete, runtime_complete,
+                bindings_complete, network_helpers_complete,
+                inventory_complete, runtime_complete,
                 podman_maps_complete,
                 lifecycle_complete, controls_complete,
                 user_work_before_complete, user_work_after_complete,
@@ -3720,12 +4002,22 @@ def reviewed_podman_auxiliary_units(
     previous_timer = ""
     for fact in health_timer_facts:
         if not isinstance(fact, dict) or set(fact) != {
-            "container_id", "timer", "service"
+            "container_id", "timer", "service", "interval_usec"
         }:
             return None
         container_id = fact.get("container_id")
         timer = fact.get("timer")
         service = fact.get("service")
+        interval_usec = fact.get("interval_usec")
+        role = next(
+            (
+                container.get("role")
+                for container in containers
+                if isinstance(container, dict)
+                and container.get("id") == container_id
+            ),
+            None,
+        )
         if (
             not isinstance(container_id, str)
             or not isinstance(timer, str)
@@ -3740,6 +4032,7 @@ def reviewed_podman_auxiliary_units(
             )
             is None
             or service != timer.removesuffix(".timer") + ".service"
+            or interval_usec != HEALTH_INTERVAL_USEC.get(str(role))
         ):
             return None
         observed_health_ids.add(container_id)

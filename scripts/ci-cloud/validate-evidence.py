@@ -383,7 +383,7 @@ def validate_document(document: object) -> dict[str, object]:
         for timer_index, timer in enumerate(timers):
             exact_keys(
                 timer,
-                {"container_id", "timer", "service"},
+                {"container_id", "timer", "service", "interval_usec"},
                 f"{work_path}.podman_health_timers[{timer_index}]",
             )
     for path, controls in (

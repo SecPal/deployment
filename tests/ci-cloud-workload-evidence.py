@@ -206,6 +206,13 @@ ROLE_IDENTITIES = {
     "gateway": (10003, 10003),
 }
 HEALTHY_ROLES = {"postgres", "valkey", "api", "frontend", "gateway"}
+HEALTH_INTERVAL_USEC = {
+    "postgres": 5_000_000,
+    "valkey": 5_000_000,
+    "api": 10_000_000,
+    "frontend": 10_000_000,
+    "gateway": 10_000_000,
+}
 API_ENTRYPOINT = ("/bin/bash", "/run/secpal/container-entrypoint.sh")
 ROLE_EXECUTION = {
     "secrets-init": (
@@ -575,6 +582,7 @@ def valid_observations() -> dict[str, object]:
                             "container_id": container["id"],
                             "timer": f"{container['id']}-abcdef123456.timer",
                             "service": f"{container['id']}-abcdef123456.service",
+                            "interval_usec": HEALTH_INTERVAL_USEC[container["role"]],
                         }
                         for container in containers
                         if container["role"] in HEALTHY_ROLES
@@ -1947,6 +1955,17 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     ([], False),
                     self.collector.configured_userns_options(command),
                 )
+
+        for flag in ("uidmap", "gidmap", "subuidname", "subgidname"):
+            for command in (
+                ["/usr/bin/podman", "run", f"--{flag}=explicit", "fixture"],
+                ["/usr/bin/podman", "run", f"--{flag}", "explicit", "fixture"],
+            ):
+                with self.subTest(flag=flag, command=command):
+                    self.assertEqual(
+                        ([], False),
+                        self.collector.configured_userns_options(command),
+                    )
 
     def test_user_namespace_creation_options_match_the_evidence_schema_bound(self) -> None:
         bounded = "a" * 256
@@ -3836,6 +3855,29 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_user_work_revalidates_active_podman_network_online_unit(self) -> None:
+        def command_result(arguments, **_kwargs):
+            if "list-units" in arguments:
+                return (
+                    0,
+                    "podman-user-wait-network-online.service loaded active exited\n",
+                    True,
+                )
+            if "list-jobs" in arguments:
+                return 0, "", True
+            raise AssertionError(f"unexpected command: {arguments}")
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ), mock.patch.object(
+            self.collector,
+            "podman_network_online_activation_is_trusted",
+            return_value=False,
+        ) as provenance:
+            _, complete = self.collector.user_work_facts()
+        provenance.assert_called_once_with()
+        self.assertFalse(complete)
+
     def test_quadlet_normalization_uses_only_the_fixed_user_manager_contract(self) -> None:
         calls = []
         original_environment = "PATH=/target/bin\nATTACKER_VALUE=present\n"
@@ -4825,6 +4867,131 @@ class WorkloadEvidenceTests(unittest.TestCase):
             facts,
         )
 
+    def test_podman_helpers_are_bound_to_runtime_pid_files_and_netns(self) -> None:
+        rootless_group = (
+            "/user.slice/user-20000.slice/user@20000.service/user.slice/"
+            "rootless-netns-deadbeef.scope"
+        )
+        dns_group = (
+            "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+            "run-p123-i456.scope"
+        )
+        rootless_netns = str(self.collector.PODMAN_ROOTLESS_NETWORK_NAMESPACE)
+        aardvark_config = str(self.collector.PODMAN_AARDVARK_CONFIG_ROOT)
+
+        def arguments(pid):
+            if pid == 123:
+                return [
+                    "/usr/bin/pasta", "--quiet", "--netns", rootless_netns,
+                ], True
+            if pid == 456:
+                return [
+                    "/usr/lib/podman/aardvark-dns", "--config",
+                    aardvark_config, "-p", "53", "run",
+                ], True
+            return [], False
+
+        with mock.patch.object(
+            self.collector, "bounded_process_arguments", side_effect=arguments
+        ), mock.patch.object(
+            self.collector, "runtime_pid_file_matches", return_value=True
+        ), mock.patch.object(
+            self.collector, "process_uses_network_namespace", return_value=True
+        ):
+            self.assertTrue(
+                self.collector.podman_helper_process_is_bound(
+                    123, "/usr/bin/pasta.avx2", rootless_group
+                )
+            )
+            self.assertTrue(
+                self.collector.podman_helper_process_is_bound(
+                    456, "/usr/lib/podman/aardvark-dns", dns_group
+                )
+            )
+
+        for mutation in ("pid", "arguments", "namespace"):
+            with self.subTest(mutation=mutation), mock.patch.object(
+                self.collector,
+                "bounded_process_arguments",
+                return_value=(
+                    [
+                        "/usr/lib/podman/aardvark-dns", "--config",
+                        "/tmp/attacker", "-p", "53", "run",
+                    ],
+                    True,
+                ) if mutation == "arguments" else arguments(456),
+            ), mock.patch.object(
+                self.collector,
+                "runtime_pid_file_matches",
+                return_value=mutation != "pid",
+            ), mock.patch.object(
+                self.collector,
+                "process_uses_network_namespace",
+                return_value=mutation != "namespace",
+            ):
+                self.assertFalse(
+                    self.collector.podman_helper_process_is_bound(
+                        456, "/usr/lib/podman/aardvark-dns", dns_group
+                    )
+                )
+
+    def test_aardvark_configuration_is_bound_to_inspected_networks(self) -> None:
+        instance = "a" * 12
+        containers = [
+            {
+                "id": "b" * 64,
+                "name": f"secpal-int-{instance}-api",
+                "state": "running",
+                "networks": [
+                    f"secpal-int-{instance}-application",
+                    f"secpal-int-{instance}-edge",
+                ],
+            },
+            {
+                "id": "c" * 64,
+                "name": f"secpal-int-{instance}-frontend",
+                "state": "running",
+                "networks": [f"secpal-int-{instance}-edge"],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory)
+            (config / "aardvark.pid").write_text("456", encoding="ascii")
+            (config / f"secpal-int-{instance}-application").write_text(
+                "10.89.0.1\n"
+                f"{'b' * 64} 10.89.0.2  secpal-int-{instance}-api\n",
+                encoding="ascii",
+            )
+            edge = config / f"secpal-int-{instance}-edge"
+            edge.write_text(
+                "10.90.0.1\n"
+                f"{'b' * 64} 10.90.0.2  secpal-int-{instance}-api\n"
+                f"{'c' * 64} 10.90.0.3  secpal-int-{instance}-frontend\n",
+                encoding="ascii",
+            )
+            with mock.patch.object(
+                self.collector, "PODMAN_AARDVARK_CONFIG_ROOT", config
+            ), mock.patch.object(
+                self.collector, "CI_UID", os.getuid()
+            ), mock.patch.object(
+                self.collector, "CI_GID", os.getgid()
+            ):
+                self.assertTrue(
+                    self.collector.aardvark_configuration_matches_workload(
+                        instance, containers
+                    )
+                )
+                edge.write_text(
+                    "10.90.0.1\n"
+                    f"{'b' * 64} 10.90.0.2  secpal-int-{instance}-api\n",
+                    encoding="ascii",
+                )
+                self.assertFalse(
+                    self.collector.aardvark_configuration_matches_workload(
+                        instance, containers
+                    )
+                )
+
     def test_user_work_accepts_only_canonical_systemd_hex_escapes(self) -> None:
         def command_result(arguments, **_kwargs):
             if "list-units" in arguments:
@@ -4873,6 +5040,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "DropInPaths": "",
                 "Transient": "yes",
                 "Triggers": service,
+                "AccuracyUSec": "1s",
+                "TimersMonotonic": (
+                    "{ OnUnitInactiveUSec=10s ; next_elapse=10s }"
+                ),
             }
             timer_properties.update(timer_changes or {})
             service_properties = {
@@ -4925,6 +5096,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         ),
                         True,
                     )
+                if arguments == [
+                    "/usr/bin/podman", "healthcheck", "run", container_id,
+                ]:
+                    return 0, "", True
                 raise AssertionError(f"unexpected command: {arguments}")
 
             with mock.patch.object(
@@ -4939,6 +5114,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "container_id": container_id,
                 "timer": timer,
                 "service": service,
+                "interval_usec": 10_000_000,
             }],
             facts["podman_health_timers"],
         )
@@ -4950,6 +5126,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
             (None, {"Environment": "PATH=/target/bin"}),
             (None, {"ExecStartPre": "{ path=/usr/bin/attacker ; }"}),
             (None, {"ExecStart": "{ path=/usr/bin/attacker ; }"}),
+            ({"TimersMonotonic": (
+                "{ OnUnitInactiveUSec=1h ; next_elapse=1h }"
+            )}, None),
         ):
             with self.subTest(
                 timer_changes=timer_changes,
@@ -4957,6 +5136,20 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ):
                 _, complete = collect(timer_changes, service_changes)
                 self.assertFalse(complete)
+
+        def unhealthy_result(arguments, **_kwargs):
+            if arguments == [
+                "/usr/bin/podman", "healthcheck", "run", container_id,
+            ]:
+                return 1, "unhealthy\n", True
+            raise AssertionError(f"unexpected command: {arguments}")
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=unhealthy_result
+        ):
+            self.assertFalse(
+                self.collector.podman_healthcheck_is_current(container_id)
+            )
 
     def test_opaque_processes_are_limited_to_trusted_user_manager_units(self) -> None:
         process = Path("/proc/1234")
