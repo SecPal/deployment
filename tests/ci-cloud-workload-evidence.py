@@ -1914,7 +1914,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "D1A_CONTAINER_NETWORKS",
         )
 
-    def test_container_inspection_missing_security_facts_is_incomplete(self) -> None:
+    def test_container_inspection_malformed_security_facts_are_incomplete(
+        self,
+    ) -> None:
         inspection = {
             "Id": "c" * 64,
             "Name": "secpal-int-aaaaaaaaaaaa-api",
@@ -1922,7 +1924,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Status": "running",
                 "Pid": 2345,
                 "ExitCode": 0,
-                "Healthcheck": {"Status": "healthy"},
+                "Health": {"Status": "healthy"},
             },
             "Config": {
                 "Labels": {
@@ -1960,6 +1962,36 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "BoundingCaps": [],
             "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
         }
+
+        def collect(candidate):
+            with mock.patch.object(
+                self.collector,
+                "names_from_listing",
+                return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+            ), mock.patch.object(
+                self.collector, "json_array", return_value=([candidate], True)
+            ), mock.patch.object(
+                self.collector,
+                "container_lifecycle_events",
+                return_value=(
+                    [
+                        {"status": "create", "time_nano": 1},
+                        {"status": "start", "time_nano": 2},
+                    ],
+                    True,
+                ),
+            ), mock.patch.object(
+                self.collector,
+                "effective_user_namespace_facts",
+                return_value=({}, 10001, 10001, [10001], True),
+            ):
+                return self.collector.container_facts(
+                    "aaaaaaaaaaaa",
+                    rootless=True,
+                    podman_uid_map=[],
+                    podman_gid_map=[],
+                )
+
         required_fields = (
             (inspection, "Id"),
             (inspection, "OCIRuntime"),
@@ -1971,7 +2003,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
             (inspection["Config"], "User"),
             (inspection["Config"], "Entrypoint"),
             (inspection["Config"], "Cmd"),
-            (inspection["Config"], "Healthcheck"),
             (inspection["Config"], "CreateCommand"),
             (inspection["HostConfig"], "CapAdd"),
             (inspection["HostConfig"], "GroupAdd"),
@@ -1993,28 +2024,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     del candidate["HostConfig"][field]
                 else:
                     del candidate["NetworkSettings"][field]
-                with mock.patch.object(
-                    self.collector,
-                    "names_from_listing",
-                    return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
-                ), mock.patch.object(
-                    self.collector, "json_array", return_value=([candidate], True)
-                ), mock.patch.object(
-                    self.collector,
-                    "container_lifecycle_events",
-                    return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
-                ), mock.patch.object(
-                    self.collector,
-                    "effective_user_namespace_facts",
-                    return_value=({}, 10001, 10001, [10001], True),
-                ):
-                    _, complete = self.collector.container_facts(
-                        "aaaaaaaaaaaa", rootless=True,
-                        podman_uid_map=[], podman_gid_map=[],
-                    )
+                _, complete = collect(candidate)
                 self.assertFalse(complete)
 
-    def test_podman_healthcheck_and_global_rootless_fact_are_used(self) -> None:
+        for field in ("EffectiveCaps", "BoundingCaps"):
+            for invalid in ("CAP_ALL", {}, True, 1):
+                with self.subTest(field=field, invalid=invalid):
+                    candidate = copy.deepcopy(inspection)
+                    candidate[field] = invalid
+                    facts, complete = collect(candidate)
+                    self.assertEqual([], facts)
+                    self.assertFalse(complete)
+
+    def test_podman_54_optional_inspect_fields_are_normalized(self) -> None:
         inspection = {
             "Id": "c" * 64,
             "Name": "secpal-int-aaaaaaaaaaaa-api",
@@ -2022,7 +2044,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "Status": "running",
                 "Pid": 2345,
                 "ExitCode": 0,
-                "Healthcheck": {"Status": "healthy"},
+                "Health": {"Status": "healthy"},
             },
             "Config": {
                 "Labels": {
@@ -2056,8 +2078,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
             },
             "Mounts": [],
             "OCIRuntime": "crun",
-            "EffectiveCaps": [],
-            "BoundingCaps": [],
+            "EffectiveCaps": None,
+            "BoundingCaps": None,
             "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
         }
         namespace_facts = {
@@ -2100,6 +2122,44 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
         self.assertTrue(complete)
         self.assertEqual("healthy", facts[0]["health"])
+        self.assertEqual([], facts[0]["effective_caps"])
+        self.assertEqual([], facts[0]["bounding_caps"])
+
+        no_healthcheck = copy.deepcopy(inspection)
+        no_healthcheck["Name"] = "secpal-int-aaaaaaaaaaaa-scheduler"
+        no_healthcheck["State"].pop("Health")
+        no_healthcheck["Config"]["Labels"]["PODMAN_SYSTEMD_UNIT"] = (
+            "secpal-int-aaaaaaaaaaaa-scheduler.service"
+        )
+        no_healthcheck["Config"]["Cmd"] = list(
+            ROLE_EXECUTION["scheduler"][1]
+        )
+        no_healthcheck["Config"].pop("Healthcheck")
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-scheduler"], True),
+        ), mock.patch.object(
+            self.collector,
+            "json_array",
+            return_value=([no_healthcheck], True),
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ):
+            facts, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertTrue(complete)
+        self.assertEqual("none", facts[0]["health"])
+        self.assertEqual([], facts[0]["healthcheck_command"])
 
         inspection["HostConfig"]["UsernsMode"] = ""
         with mock.patch.object(

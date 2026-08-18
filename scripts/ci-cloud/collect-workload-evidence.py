@@ -2310,7 +2310,7 @@ def container_facts(
         required_state = {"Status", "ExitCode", "Pid"}
         required_config = {
             "Labels", "Env", "Image", "User", "Entrypoint", "Cmd",
-            "Healthcheck", "CreateCommand",
+            "CreateCommand",
         }
         required_host_config = {
             "Privileged", "PidMode", "UsernsMode", "IpcMode", "UTSMode",
@@ -2328,8 +2328,14 @@ def container_facts(
             or not isinstance(item["Id"], str)
             or re.fullmatch(r"[0-9a-f]{64}", item["Id"]) is None
             or not isinstance(item["Mounts"], list)
-            or not isinstance(item["EffectiveCaps"], list)
-            or not isinstance(item["BoundingCaps"], list)
+            or (
+                item["EffectiveCaps"] is not None
+                and not isinstance(item["EffectiveCaps"], list)
+            )
+            or (
+                item["BoundingCaps"] is not None
+                and not isinstance(item["BoundingCaps"], list)
+            )
             or not isinstance(config["Labels"], dict)
             or not isinstance(config["Env"], list)
             or not isinstance(config["CreateCommand"], list)
@@ -2358,7 +2364,7 @@ def container_facts(
         ):
             complete = False
             continue
-        health_value = state.get("Healthcheck", {})
+        health_value = state.get("Health", {})
         health = (
             str(health_value.get("Status", "none"))
             if isinstance(health_value, dict)
@@ -2390,14 +2396,18 @@ def container_facts(
         security_opt = host_config["SecurityOpt"]
         cap_add = host_config["CapAdd"]
         group_add = host_config["GroupAdd"]
-        effective_caps = item["EffectiveCaps"]
-        bounding_caps = item["BoundingCaps"]
+        effective_caps = (
+            [] if item["EffectiveCaps"] is None else item["EffectiveCaps"]
+        )
+        bounding_caps = (
+            [] if item["BoundingCaps"] is None else item["BoundingCaps"]
+        )
         devices = host_config["Devices"]
         mounts = item["Mounts"]
         environment = config["Env"]
         entrypoint, entrypoint_complete = normalized_command(config["Entrypoint"])
         command, command_complete = normalized_command(config["Cmd"])
-        configured_healthcheck = config["Healthcheck"]
+        configured_healthcheck = config.get("Healthcheck")
         if configured_healthcheck is None:
             healthcheck_command, healthcheck_complete = [], True
         elif isinstance(configured_healthcheck, dict) and set(

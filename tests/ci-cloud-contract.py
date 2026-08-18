@@ -2280,6 +2280,16 @@ class CloudCIContractTests(unittest.TestCase):
             'NORMALIZATION_DIAGNOSTIC_PREFIX = ""',
         )
 
+    def test_static_contract_rejects_broadened_capability_types(self) -> None:
+        for field in ("EffectiveCaps", "BoundingCaps"):
+            with self.subTest(field=field):
+                self.assert_mutation_rejected(
+                    "scripts/ci-cloud/collect-workload-evidence.py",
+                    f'item["{field}"] is not None\n'
+                    f'                and not isinstance(item["{field}"], list)',
+                    "False",
+                )
+
     def test_static_contract_rejects_broken_normalization_evidence_wiring(
         self,
     ) -> None:
