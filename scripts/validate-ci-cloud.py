@@ -2195,7 +2195,19 @@ def validate(root: Path) -> None:
         'phase not in {"baseline", "normalize", "live", "post-cleanup"}'
         in workload_collector
         and '("Names", "Name", "name")' in workload_collector
-        and 'state.get("Healthcheck", {})' in workload_collector
+        and 'state.get("Health", {})' in workload_collector
+        and 'configured_healthcheck = config.get("Healthcheck")'
+        in workload_collector
+        and '[] if item["EffectiveCaps"] is None else item["EffectiveCaps"]'
+        in workload_collector
+        and '[] if item["BoundingCaps"] is None else item["BoundingCaps"]'
+        in workload_collector
+        and 'item["EffectiveCaps"] is not None\n'
+        '                and not isinstance(item["EffectiveCaps"], list)'
+        in workload_collector
+        and 'item["BoundingCaps"] is not None\n'
+        '                and not isinstance(item["BoundingCaps"], list)'
+        in workload_collector
         and '"rootless": rootless' in workload_collector
         and 'item["Rootless"]' not in workload_collector
         and 'security_options != ["no-new-privileges"]' in workload_collector
