@@ -69,8 +69,14 @@ CONTRACT_NAMES = (
 )
 
 
-def load_workload_contract():
-    """Load the trusted workload contract declared by the collector."""
+def load_workload_contract() -> dict[str, object]:
+    """Return exactly the contract members the collector declares.
+
+    The loaded module is discarded rather than kept, so an undeclared
+    collector constant cannot quietly become a dependency of this layer and
+    bypass the declared surface. Everything shared must be named in
+    WORKLOAD_CONTRACT_EXPORTS, where the agreement checks can see it.
+    """
     spec = importlib.util.spec_from_file_location(
         "trusted_workload_contract", WORKLOAD_CONTRACT_PATH
     )
@@ -83,36 +89,36 @@ def load_workload_contract():
         raise ValueError("trusted workload contract surface is out of contract")
     if any(not hasattr(module, name) for name in declared):
         raise ValueError("trusted workload contract is incomplete")
-    return module
+    return {name: getattr(module, name) for name in declared}
 
 
 WORKLOAD_CONTRACT = load_workload_contract()
 
-CI_UID = WORKLOAD_CONTRACT.CI_UID
-CI_GID = WORKLOAD_CONTRACT.CI_GID
-QUADLET_ROOT = WORKLOAD_CONTRACT.QUADLET_ROOT
-SYSTEMD_ROOT = WORKLOAD_CONTRACT.SYSTEMD_ROOT
-GENERATOR_ROOT = WORKLOAD_CONTRACT.GENERATOR_ROOT
-PODMAN_NETWORK_ONLINE_UNIT = WORKLOAD_CONTRACT.PODMAN_NETWORK_ONLINE_UNIT
-CONTROL_NETWORK = WORKLOAD_CONTRACT.CONTROL_NETWORK
-CONTROL_VOLUME = WORKLOAD_CONTRACT.CONTROL_VOLUME
-ROLES = WORKLOAD_CONTRACT.ROLES
-NETWORK_KINDS = WORKLOAD_CONTRACT.NETWORK_KINDS
-VOLUME_KINDS = WORKLOAD_CONTRACT.VOLUME_KINDS
-GENERATED_LOGICAL_NAMES = WORKLOAD_CONTRACT.GENERATED_LOGICAL_NAMES
-READY_ROLES = WORKLOAD_CONTRACT.READY_ROLES
-HEALTHY_ROLES = WORKLOAD_CONTRACT.HEALTHY_ROLES
-PODMAN_54_HEALTH_TIMER_SUFFIX = WORKLOAD_CONTRACT.PODMAN_54_HEALTH_TIMER_SUFFIX
-OPAQUE_PROCESS_EXECUTABLE = WORKLOAD_CONTRACT.OPAQUE_PROCESS_EXECUTABLE
-ROLE_CONTRACTS = WORKLOAD_CONTRACT.ROLE_CONTRACTS
+CI_UID = WORKLOAD_CONTRACT["CI_UID"]
+CI_GID = WORKLOAD_CONTRACT["CI_GID"]
+QUADLET_ROOT = WORKLOAD_CONTRACT["QUADLET_ROOT"]
+SYSTEMD_ROOT = WORKLOAD_CONTRACT["SYSTEMD_ROOT"]
+GENERATOR_ROOT = WORKLOAD_CONTRACT["GENERATOR_ROOT"]
+PODMAN_NETWORK_ONLINE_UNIT = WORKLOAD_CONTRACT["PODMAN_NETWORK_ONLINE_UNIT"]
+CONTROL_NETWORK = WORKLOAD_CONTRACT["CONTROL_NETWORK"]
+CONTROL_VOLUME = WORKLOAD_CONTRACT["CONTROL_VOLUME"]
+ROLES = WORKLOAD_CONTRACT["ROLES"]
+NETWORK_KINDS = WORKLOAD_CONTRACT["NETWORK_KINDS"]
+VOLUME_KINDS = WORKLOAD_CONTRACT["VOLUME_KINDS"]
+GENERATED_LOGICAL_NAMES = WORKLOAD_CONTRACT["GENERATED_LOGICAL_NAMES"]
+READY_ROLES = WORKLOAD_CONTRACT["READY_ROLES"]
+HEALTHY_ROLES = WORKLOAD_CONTRACT["HEALTHY_ROLES"]
+PODMAN_54_HEALTH_TIMER_SUFFIX = WORKLOAD_CONTRACT["PODMAN_54_HEALTH_TIMER_SUFFIX"]
+OPAQUE_PROCESS_EXECUTABLE = WORKLOAD_CONTRACT["OPAQUE_PROCESS_EXECUTABLE"]
+ROLE_CONTRACTS = WORKLOAD_CONTRACT["ROLE_CONTRACTS"]
 TRUSTED_SERVICE_CONFIG_ENVIRONMENT = (
-    WORKLOAD_CONTRACT.TRUSTED_SERVICE_CONFIG_ENVIRONMENT
+    WORKLOAD_CONTRACT["TRUSTED_SERVICE_CONFIG_ENVIRONMENT"]
 )
-expected_unit_names = WORKLOAD_CONTRACT.expected_unit_names
-expected_generated_source = WORKLOAD_CONTRACT.expected_generated_source
-service_state_matches_role = WORKLOAD_CONTRACT.service_state_matches_role
-container_pid_matches_state = WORKLOAD_CONTRACT.container_pid_matches_state
-id_map_is_bounded = WORKLOAD_CONTRACT.id_map_is_bounded
+expected_unit_names = WORKLOAD_CONTRACT["expected_unit_names"]
+expected_generated_source = WORKLOAD_CONTRACT["expected_generated_source"]
+service_state_matches_role = WORKLOAD_CONTRACT["service_state_matches_role"]
+container_pid_matches_state = WORKLOAD_CONTRACT["container_pid_matches_state"]
+id_map_is_bounded = WORKLOAD_CONTRACT["id_map_is_bounded"]
 
 
 # Reviewed D.1a expectations derived from the trusted workload contract.
