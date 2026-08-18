@@ -1121,6 +1121,16 @@ An authenticated paired healthcheck service that is active while the user-work
 snapshot is read is normalized out of the stable active-unit set only after all
 of those timer/service checks pass. An unpaired or unauthenticated active
 healthcheck-shaped service makes collection incomplete.
+The sole rootless-network `pasta` process is likewise admitted only with the
+exact Podman 5.4.2 argument vector produced under the pinned empty
+`containers.conf`: configuration, PID-file, DNS-forward, disabled pasta port
+auto-discovery, gateway-mapping, quiet, network-namespace, and guest-address
+options must appear once in their reviewed order with their exact values.
+Missing, reordered, changed, or additional arguments make collection
+incomplete. Podman's separate rootless port-forwarder remains responsible for
+the gateway container's explicitly published loopback TCP port; the reviewed
+`pasta -t none` setting disables pasta's automatic namespace-port discovery,
+not that explicit Podman mapping.
 Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
 still fail closed. For an exited one-shot, admission instead requires the exact
 existing systemd/Podman lifecycle correlation. An explicit immutable configured

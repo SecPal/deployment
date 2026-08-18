@@ -3432,17 +3432,23 @@ def podman_helper_process_is_bound(
             r"user\.slice/rootless-netns-[0-9a-f]{8}\.scope",
             control_group,
         )
-        netns_indexes = [
-            index for index, argument in enumerate(arguments)
-            if argument == "--netns"
-        ]
         return bool(
             expected_group is not None
             and runtime_pid_file_matches(PODMAN_ROOTLESS_NETWORK_PID, pid)
-            and len(netns_indexes) == 1
-            and netns_indexes[0] + 1 < len(arguments)
-            and arguments[netns_indexes[0] + 1]
-            == str(PODMAN_ROOTLESS_NETWORK_NAMESPACE)
+            and arguments == [
+                "/usr/bin/pasta",
+                "--config-net",
+                "--pid", str(PODMAN_ROOTLESS_NETWORK_PID),
+                "--dns-forward", "169.254.1.1",
+                "-t", "none",
+                "-u", "none",
+                "-T", "none",
+                "-U", "none",
+                "--no-map-gw",
+                "--quiet",
+                "--netns", str(PODMAN_ROOTLESS_NETWORK_NAMESPACE),
+                "--map-guest-addr", "169.254.1.2",
+            ]
         )
     if executable == "/usr/lib/podman/aardvark-dns":
         return bool(

@@ -5021,12 +5021,26 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         rootless_netns = str(self.collector.PODMAN_ROOTLESS_NETWORK_NAMESPACE)
         aardvark_config = str(self.collector.PODMAN_AARDVARK_CONFIG_ROOT)
+        rootless_pid = str(self.collector.PODMAN_ROOTLESS_NETWORK_PID)
+
+        pasta_arguments = [
+            "/usr/bin/pasta",
+            "--config-net",
+            "--pid", rootless_pid,
+            "--dns-forward", "169.254.1.1",
+            "-t", "none",
+            "-u", "none",
+            "-T", "none",
+            "-U", "none",
+            "--no-map-gw",
+            "--quiet",
+            "--netns", rootless_netns,
+            "--map-guest-addr", "169.254.1.2",
+        ]
 
         def arguments(pid):
             if pid == 123:
-                return [
-                    "/usr/bin/pasta", "--quiet", "--netns", rootless_netns,
-                ], True
+                return pasta_arguments, True
             if pid == 456:
                 return [
                     "/usr/lib/podman/aardvark-dns", "--config",
@@ -5051,6 +5065,38 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     456, "/usr/lib/podman/aardvark-dns", dns_group
                 )
             )
+
+        invalid_pasta_arguments = {
+            "extra-option": pasta_arguments + ["--no-tcp"],
+            "missing-option": [
+                item for item in pasta_arguments if item != "--no-map-gw"
+            ],
+            "wrong-pid-file": [
+                "/tmp/attacker" if item == rootless_pid else item
+                for item in pasta_arguments
+            ],
+            "wrong-dns-forward": [
+                "192.0.2.53" if item == "169.254.1.1" else item
+                for item in pasta_arguments
+            ],
+            "wrong-map-guest": [
+                "192.0.2.54" if item == "169.254.1.2" else item
+                for item in pasta_arguments
+            ],
+        }
+        for name, candidate in invalid_pasta_arguments.items():
+            with self.subTest(name=name), mock.patch.object(
+                self.collector,
+                "bounded_process_arguments",
+                return_value=(candidate, True),
+            ), mock.patch.object(
+                self.collector, "runtime_pid_file_matches", return_value=True
+            ):
+                self.assertFalse(
+                    self.collector.podman_helper_process_is_bound(
+                        123, "/usr/bin/pasta.avx2", rootless_group
+                    )
+                )
 
         for mutation in ("pid", "arguments", "namespace"):
             with self.subTest(mutation=mutation), mock.patch.object(
