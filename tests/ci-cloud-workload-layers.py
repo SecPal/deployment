@@ -79,7 +79,8 @@ static_validator = load(STATIC_VALIDATOR_PATH, "ci_cloud_static_validator")
 # admission layer; binding them here keeps the executable proof over the
 # normalization layer from drifting away from the rule the validator enforces.
 IMPURE_BUILTINS = static_validator.IMPURE_BUILTINS
-IMPURE_PATH_METHODS = static_validator.IMPURE_PATH_METHODS
+IMPURE_ATTRIBUTES = static_validator.IMPURE_ATTRIBUTES
+AMBIGUOUS_PATH_METHODS = static_validator.AMBIGUOUS_PATH_METHODS
 
 
 def file_metadata(uid: int, gid: int, mode: int) -> types.SimpleNamespace:
@@ -95,10 +96,13 @@ def collector_system_access(source: str | None = None) -> dict[str, set[str]]:
     reachable through a module attribute, through a method name only a
     filesystem object carries, or through a builtin that needs no import at
     all, which is why IMPURE_BUILTINS is checked as well: a normalization
-    function calling ``open`` directly would otherwise be invisible here.
+    function calling ``open`` directly would otherwise be invisible here. A
+    method another type shares, such as ``replace``, is judged by arity so
+    ``Path.replace(target)`` is caught while ``str.replace(old, new)`` stays
+    legal.
     """
     modules = {"os", "subprocess", "sys", "time", "selectors", "signal"}
-    methods = IMPURE_PATH_METHODS
+    methods = IMPURE_ATTRIBUTES
     tree = ast.parse(
         COLLECTOR_PATH.read_text(encoding="utf-8") if source is None else source
     )
@@ -117,6 +121,14 @@ def collector_system_access(source: str | None = None) -> dict[str, set[str]]:
                 and child.func.id in IMPURE_BUILTINS
             ):
                 found.add(child.func.id)
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr in AMBIGUOUS_PATH_METHODS
+                and len(child.args) == 1
+                and not child.keywords
+            ):
+                found.add(f".{child.func.attr}")
             if not isinstance(child, ast.Attribute):
                 continue
             if isinstance(child.value, ast.Name) and child.value.id in modules:
@@ -453,6 +465,10 @@ class LayerBoundaryTests(unittest.TestCase):
                 "    return open(path).close()",
                 "def builtin_eval(text):",
                 "    return eval(text)",
+                "def path_replace(path, target):",
+                "    return path.replace(target)",
+                "def string_replace(text):",
+                "    return text.replace(':', ' ')",
                 "def through_a_callee(path):",
                 "    return builtin_open(path)",
                 "",
@@ -465,6 +481,8 @@ class LayerBoundaryTests(unittest.TestCase):
         self.assertEqual({".read_bytes"}, reachable["filesystem_method"])
         self.assertEqual({"open"}, reachable["builtin_open"])
         self.assertEqual({"eval"}, reachable["builtin_eval"])
+        self.assertEqual({".replace"}, reachable["path_replace"])
+        self.assertEqual(set(), reachable["string_replace"])
         self.assertEqual({"open"}, reachable["through_a_callee"])
 
     def test_streamed_collector_runs_without_repository_modules(self) -> None:
