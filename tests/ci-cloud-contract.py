@@ -890,6 +890,44 @@ class CloudCIContractTests(unittest.TestCase):
                 self.assertNotIn("Traceback", result.stdout)
                 self.assertIn(expected, result.stdout)
 
+    def test_validator_rejects_a_broken_workload_layer_boundary(self) -> None:
+        collector = "scripts/ci-cloud/collect-workload-evidence.py"
+        admission = "scripts/ci-cloud/workload-admission.py"
+        expected = (
+            "the streamed collector must stay self-contained "
+            "and the admission layer pure"
+        )
+        cases = (
+            (
+                collector,
+                "WORKLOAD_CONTRACT_EXPORTS = (",
+                "UNDECLARED_EXPORTS = (",
+            ),
+            (
+                collector,
+                "CANONICAL_SYSTEMD_NAME_LIMIT = 128",
+                "CANONICAL_SYSTEMD_NAME_LIMIT = 128\nD1A_SMUGGLED = True",
+            ),
+            (
+                collector,
+                "import argparse",
+                "import argparse\nimport importlib.util",
+            ),
+            (admission, "CONTRACT_NAMES = (", "CONTRACT_NAME_LIST = ("),
+            (
+                admission,
+                "import importlib.util",
+                "import importlib.util\nimport subprocess",
+            ),
+        )
+        for relative, old, new in cases:
+            with self.subTest(relative=relative, mutation=old):
+                fixture = self.mutated_root(relative, old, new)
+                result = self.run_validator(fixture)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertNotIn("Traceback", result.stdout)
+                self.assertIn(expected, result.stdout)
+
     def test_diagnostic_identity_has_existing_root_controlled_home(self) -> None:
         installer = (
             ROOT / "scripts/ci-cloud/install-diagnostic-ssh.sh"

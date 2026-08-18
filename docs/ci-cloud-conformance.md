@@ -872,6 +872,48 @@ that channel before extending deletion and must never infer ownership from an
 `spci-` name alone. Billable DigitalOcean Droplets and GCP instances/disks are
 covered now; the remaining limitation is explicit.
 
+## Workload evidence layers and ownership
+
+The D.1a workload subsystem is split into layers so that a security contract
+has exactly one authoritative place, and so that each layer can be tested on
+its own without losing the guarantee that a representation one layer admits is
+also accepted by the next.
+
+| Layer                        | File                                            | Owns                                                                                                                                                                  |
+| ---------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workload contract            | `scripts/ci-cloud/collect-workload-evidence.py` | Reviewed roles, unit names, networks, volumes, identities, and the pure predicates over them, declared in `WORKLOAD_CONTRACT_EXPORTS`                                 |
+| Representation normalization | `scripts/ci-cloud/collect-workload-evidence.py` | Pure functions that turn a Podman, systemd, or procfs representation into the closed evidence shape, or refuse it, declared in `REPRESENTATION_NORMALIZATION_EXPORTS` |
+| Collection                   | `scripts/ci-cloud/collect-workload-evidence.py` | The side-effecting layer that runs commands and reads procfs and the filesystem to assemble one bounded observation per phase                                         |
+| Evidence shape               | `schemas/ci-cloud-evidence.schema.json`         | The closed schema every observation must satisfy, including the single named `canonicalSystemdUnitName` and `quadletUnitFileName` definitions                         |
+| Admission                    | `scripts/ci-cloud/workload-admission.py`        | Every D.1a admission decision, as a pure function of an observation document                                                                                          |
+| Assembly                     | `scripts/ci-cloud/assemble-evidence.py`         | Joining D.1 host and D.1a workload evidence and recording the admission result                                                                                        |
+| Independent revalidation     | `scripts/ci-cloud/validate-evidence.py`         | Recomputing admission from the published evidence and rejecting a document that disagrees                                                                             |
+
+The collector stays one self-contained file because the trusted runner streams
+it to the target over `python3 -I -` on standard input; it may not import
+repository modules at target runtime. The admission layer runs on the
+controller only, so no target ever grades itself: no D.1a invariant name exists
+in the streamed file. Admission binds the collector's contract surface by name
+and refuses to load when the two declarations differ by name, order, or
+presence, which keeps one definition per concept instead of a restatement that
+can drift.
+
+Normalization cannot become a fourth file for the same streaming reason, so its
+boundary is enforced rather than merely documented: every function named in
+`REPRESENTATION_NORMALIZATION_EXPORTS` is proven unable to run a command, read
+the filesystem, or read the clock, directly or through any callee. A helper
+that needs to observe something belongs in the collection layer instead.
+
+`tests/ci-cloud-workload-layers.py` holds the cross-layer proofs: the reviewed
+Podman 5.4 inspect representations are replayed through the collection layer
+and must reproduce the reviewed evidence exactly and then pass the schema, the
+independent validator, and admission; collector-admitted canonical systemd unit
+names must cross the schema boundary; the reviewed installed units, generated
+services, transient Podman health units, process census, and resource inventory
+are each replayed the same way; and malformed, absent, duplicate, over-limit, or
+provenance-free facts must fail closed at the earliest boundary and stay
+rejected by independent revalidation.
+
 ## Evidence and interpretation
 
 Each reachable host produces JSON validated against the committed closed schema

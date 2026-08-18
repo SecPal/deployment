@@ -671,16 +671,17 @@
         }
       }
     },
+    "quadletUnitFileName": {
+      "type": "string",
+      "pattern": "^secpal-int-[0-9a-f]{12}(-[a-z0-9-]+\\.(container|network|volume)|\\.target)$",
+      "maxLength": 96
+    },
     "unitFact": {
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "path", "uid", "gid", "mode", "sha256"],
       "properties": {
-        "name": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}(-[a-z0-9-]+\\.(container|network|volume)|\\.target)$",
-          "maxLength": 96
-        },
+        "name": { "$ref": "#/$defs/quadletUnitFileName" },
         "path": {
           "type": "string",
           "pattern": "^/etc/(containers/systemd/users/20000|systemd/user)/secpal-int-[0-9a-f]{12}",
@@ -1340,7 +1341,12 @@
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
         "complete": { "type": "boolean" },
-        "owned_units": { "$ref": "#/$defs/stringArray" },
+        "owned_units": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/quadletUnitFileName" }
+        },
         "generated_services": { "$ref": "#/$defs/stringArray" },
         "containers": { "$ref": "#/$defs/stringArray" },
         "networks": { "$ref": "#/$defs/stringArray" },

@@ -22,6 +22,7 @@ from jsonschema.exceptions import SchemaError
 MAX_EVIDENCE_BYTES = 262_144
 COLLECTOR_PATH = Path(__file__).with_name("collect-host-evidence.py")
 WORKLOAD_COLLECTOR_PATH = Path(__file__).with_name("collect-workload-evidence.py")
+WORKLOAD_ADMISSION_PATH = Path(__file__).with_name("workload-admission.py")
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "ci-cloud-evidence.schema.json"
 RUNTIME_PACKAGE_NAMES = {
     "podman", "conmon", "crun", "catatonit", "netavark", "aardvark-dns", "passt",
@@ -128,7 +129,7 @@ def recompute_admission(
     except (AttributeError, KeyError, TypeError, ValueError):
         fail("effective facts are malformed")
     workload_module = load_trusted_module(
-        WORKLOAD_COLLECTOR_PATH, "ci_cloud_workload_evidence_collector"
+        WORKLOAD_ADMISSION_PATH, "ci_cloud_workload_admission"
     )
     try:
         workload_failures = workload_module.workload_admission_failures(
