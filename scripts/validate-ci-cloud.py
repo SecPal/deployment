@@ -2195,8 +2195,13 @@ def validate(root: Path) -> None:
         'phase not in {"baseline", "normalize", "live", "post-cleanup"}'
         in workload_collector
         and '("Names", "Name", "name")' in workload_collector
-        and 'state.get("Health", {})' in workload_collector
-        and 'configured_healthcheck = config.get("Healthcheck")'
+        and 'if "Health" not in state:' in workload_collector
+        and 'health_value = state["Health"]' in workload_collector
+        and 'if "Healthcheck" not in config:' in workload_collector
+        and 'configured_healthcheck = config["Healthcheck"]'
+        in workload_collector
+        and 'if "IDMappings" not in host_config:' in workload_collector
+        and 'configured_id_maps(host_config["IDMappings"])'
         in workload_collector
         and '[] if item["EffectiveCaps"] is None else item["EffectiveCaps"]'
         in workload_collector

@@ -183,6 +183,11 @@ SERVICE_ACTIVATION_PROPERTIES = (
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
+# Podman 5.4 formats a non-negative 64-bit rand.Int() with "%x" for this
+# suffix: no leading zeroes, at most 16 hex digits, and a 16th digit <= 7.
+PODMAN_54_HEALTH_TIMER_SUFFIX = (
+    r"(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})"
+)
 class RoleContract(NamedTuple):
     identity: tuple[int, int]
     networks: tuple[str, ...] = ()
@@ -1851,7 +1856,7 @@ def configured_id_maps(value: object) -> tuple[
     list[dict[str, int]], list[dict[str, int]], bool
 ]:
     if value is None:
-        return [], [], True
+        return [], [], False
     if not isinstance(value, dict) or set(value) != {"UidMap", "GidMap"}:
         return [], [], False
     parsed: list[list[dict[str, int]]] = []
@@ -2364,14 +2369,34 @@ def container_facts(
         ):
             complete = False
             continue
-        health_value = state.get("Health", {})
-        health = (
-            str(health_value.get("Status", "none"))
-            if isinstance(health_value, dict)
-            else "none"
-        )
+        if "Health" not in state:
+            health, health_complete = "none", True
+        else:
+            health_value = state["Health"]
+            health_complete = (
+                isinstance(health_value, dict)
+                and isinstance(health_value.get("Status"), str)
+                and bool(health_value["Status"])
+            )
+            health = (
+                health_value["Status"] if health_complete else "none"
+            )
         labels = config["Labels"]
         network_map = network_settings["Networks"]
+        network_mode = host_config["NetworkMode"] or "private"
+        network_names_complete = all(
+            isinstance(value, str) and value
+            for value in network_map
+        )
+        if network_mode == "none":
+            networks = []
+            network_names_complete = (
+                network_names_complete
+                and set(network_map) == {"none"}
+                and isinstance(network_map["none"], dict)
+            )
+        else:
+            networks = sorted(str(value) for value in network_map)
         port_map = network_settings["Ports"]
         published: list[str] = []
         port_fact_complete = True
@@ -2407,23 +2432,28 @@ def container_facts(
         environment = config["Env"]
         entrypoint, entrypoint_complete = normalized_command(config["Entrypoint"])
         command, command_complete = normalized_command(config["Cmd"])
-        configured_healthcheck = config.get("Healthcheck")
-        if configured_healthcheck is None:
+        if "Healthcheck" not in config:
             healthcheck_command, healthcheck_complete = [], True
-        elif isinstance(configured_healthcheck, dict) and set(
-            configured_healthcheck
-        ).issuperset({"Test"}):
-            healthcheck_command, healthcheck_complete = normalized_command(
-                configured_healthcheck["Test"]
-            )
         else:
-            healthcheck_command, healthcheck_complete = [], False
+            configured_healthcheck = config["Healthcheck"]
+            if isinstance(configured_healthcheck, dict) and set(
+                configured_healthcheck
+            ).issuperset({"Test"}):
+                healthcheck_command, healthcheck_complete = normalized_command(
+                    configured_healthcheck["Test"]
+                )
+            else:
+                healthcheck_command, healthcheck_complete = [], False
         create_options, create_options_complete = configured_userns_options(
             config["CreateCommand"]
         )
-        configured_uid_map, configured_gid_map, configured_maps_complete = (
-            configured_id_maps(host_config.get("IDMappings"))
-        )
+        if "IDMappings" not in host_config:
+            configured_uid_map, configured_gid_map = [], []
+            configured_maps_complete = True
+        else:
+            configured_uid_map, configured_gid_map, configured_maps_complete = (
+                configured_id_maps(host_config["IDMappings"])
+            )
         if str(state.get("Status", "")) == "running":
             (
                 user_namespace,
@@ -2457,9 +2487,10 @@ def container_facts(
         complete = complete and all(
             (
                 mounts_complete, tmpfs_complete, events_complete,
-                entrypoint_complete, command_complete, healthcheck_complete,
+                entrypoint_complete, command_complete, health_complete,
+                healthcheck_complete,
                 identity_complete, create_options_complete,
-                configured_maps_complete,
+                configured_maps_complete, network_names_complete,
             )
         )
         remote_api_environment = any(
@@ -2491,7 +2522,7 @@ def container_facts(
                 "user_namespace": user_namespace,
                 "ipc_mode": str(host_config["IpcMode"] or "private"),
                 "uts_mode": str(host_config["UTSMode"] or "private"),
-                "network_mode": str(host_config["NetworkMode"] or "private"),
+                "network_mode": str(network_mode),
                 "cap_add": sorted(
                     f"CAP_{str(value).upper().removeprefix('CAP_')}"
                     for value in cap_add
@@ -2511,7 +2542,7 @@ def container_facts(
                 "remote_api_environment": remote_api_environment,
                 "security_opt": sorted(str(value) for value in security_opt),
                 "lifecycle_events": lifecycle_events,
-                "networks": sorted(str(value) for value in network_map),
+                "networks": networks,
                 "published_ports": sorted(published),
                 "auto_update": "io.containers.autoupdate" in labels,
                 "systemd_unit": str(labels.get("PODMAN_SYSTEMD_UNIT", "")),
@@ -2871,6 +2902,15 @@ def user_work_facts() -> tuple[dict[str, list[str]], bool]:
             "--no-legend", "--no-pager",
         ]
     )
+
+    def canonical_unit_name(value: str) -> bool:
+        return bool(
+            1 <= len(value) <= 128
+            and re.fullmatch(
+                r"(?:[A-Za-z0-9_.@:-]|\\x[0-9a-f]{2})+", value
+            )
+        )
+
     active_units: list[str] = []
     jobs: list[str] = []
     complete = (
@@ -2881,7 +2921,7 @@ def user_work_facts() -> tuple[dict[str, list[str]], bool]:
     )
     for line in units_output.splitlines():
         fields = line.split()
-        if not fields or re.fullmatch(r"[A-Za-z0-9_.@:-]{1,128}", fields[0]) is None:
+        if not fields or not canonical_unit_name(fields[0]):
             complete = False
             continue
         active_units.append(fields[0])
@@ -2890,7 +2930,7 @@ def user_work_facts() -> tuple[dict[str, list[str]], bool]:
         if (
             len(fields) < 2
             or re.fullmatch(r"[1-9][0-9]{0,9}", fields[0]) is None
-            or re.fullmatch(r"[A-Za-z0-9_.@:-]{1,128}", fields[1]) is None
+            or not canonical_unit_name(fields[1])
         ):
             complete = False
             continue
@@ -2963,8 +3003,20 @@ def user_process_facts() -> tuple[list[dict[str, object]], bool]:
         uid, gid, identity_complete = process_host_identity(pid)
         try:
             executable = os.readlink(process / "exe")
-        except OSError:
-            if process.exists():
+        except OSError as error:
+            trusted_opaque_group = control_group in {
+                f"{user_slice_prefix}user@20000.service/init.scope",
+                (
+                    f"{user_slice_prefix}user@20000.service/app.slice/"
+                    "ssh-agent.service"
+                ),
+            }
+            if process.exists() and not (
+                isinstance(error, PermissionError)
+                and trusted_opaque_group
+                and identity_complete
+                and (uid, gid) == (CI_UID, CI_GID)
+            ):
                 complete = False
             continue
         if (
@@ -3016,11 +3068,23 @@ def service_state_matches_role(
             and isinstance(service.get("control_group"), str)
             and service["control_group"].endswith(f"/{unit}")
         )
+    one_shot_control_group = service.get("control_group")
+    workload_one_shot_group_matches = (
+        logical_name in {"secrets-init", "migrate"}
+        and one_shot_control_group
+        == (
+            "/user.slice/user-20000.slice/user@20000.service/"
+            f"app.slice/{unit}"
+        )
+    )
     return (
         common_state
         and service.get("sub_state") == "exited"
         and service["main_pid"] == 0
-        and service.get("control_group") == ""
+        and (
+            one_shot_control_group == ""
+            or workload_one_shot_group_matches
+        )
     )
 
 
@@ -3143,7 +3207,7 @@ def exited_container_execution_matches(
     )
     if status_code != 0 or not complete:
         return False, False
-    matches = 0
+    matched_statuses: list[str] = []
     try:
         for line in output.splitlines():
             if not line:
@@ -3166,19 +3230,45 @@ def exited_container_execution_matches(
                 for index, value in enumerate(command[:-1])
                 if value == "--name"
             )
+            message = record.get("MESSAGE")
+            event = (
+                re.fullmatch(
+                    r"[0-9]{4}-[0-9]{2}-[0-9]{2} "
+                    r"[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{1,9} "
+                    r"[+-][0-9]{4} UTC m=\+[0-9]+\.[0-9]+ "
+                    r"container (create|start|died) ([0-9a-f]{64}) "
+                    r"\(([^()\n]{1,2048})\)",
+                    message,
+                )
+                if isinstance(message, str) and len(message) <= 2304
+                else None
+            )
+            metadata = event.group(3).split(", ") if event is not None else []
             if (
                 record.get("_SYSTEMD_INVOCATION_ID") == invocation_id
                 and record.get("_EXE") == str(PODMAN_EXECUTABLE)
-                and record.get("MESSAGE") == container_id
                 and len(command) >= 2
                 and command[0] == str(PODMAN_EXECUTABLE)
                 and command[1] == "run"
                 and names == [container_name]
+                and event is not None
+                and event.group(2) == container_id
+                and sum(
+                    value == f"name={container_name}" for value in metadata
+                ) == 1
+                and sum(
+                    value == f"PODMAN_SYSTEMD_UNIT={unit}"
+                    for value in metadata
+                ) == 1
+                and sum(
+                    value.startswith("image=") and len(value) > len("image=")
+                    for value in metadata
+                ) == 1
             ):
-                matches += 1
+                matched_statuses.append(event.group(1))
     except json.JSONDecodeError:
         return False, False
-    return matches == 1, True
+    return matched_statuses == ["create", "start", "died"], True
 
 
 def bind_container_services(
@@ -3461,6 +3551,99 @@ def exact_process_map(
     return facts
 
 
+def reviewed_podman_auxiliary_units(
+    active_units: set[str], containers: object
+) -> tuple[set[str], str, str] | None:
+    if not isinstance(containers, list):
+        return None
+    healthy_ids: list[str] = []
+    for container in containers:
+        if not isinstance(container, dict):
+            return None
+        if container.get("role") not in HEALTHY_ROLES:
+            continue
+        container_id = container.get("id")
+        if not isinstance(container_id, str) or re.fullmatch(
+            r"[0-9a-f]{64}", container_id
+        ) is None:
+            return None
+        healthy_ids.append(container_id)
+    health_timer_candidates = {
+        unit
+        for unit in active_units
+        if re.fullmatch(
+            rf"[0-9a-f]{{64}}-{PODMAN_54_HEALTH_TIMER_SUFFIX}\.timer",
+            unit,
+        )
+    }
+    health_timers: set[str] = set()
+    for container_id in healthy_ids:
+        matches = {
+            unit
+            for unit in health_timer_candidates
+            if unit.startswith(f"{container_id}-")
+        }
+        if len(matches) != 1:
+            return None
+        health_timers.update(matches)
+    if health_timers != health_timer_candidates:
+        return None
+    rootless_scopes = {
+        unit
+        for unit in active_units
+        if re.fullmatch(r"rootless-netns-[0-9a-f]{8}\.scope", unit)
+    }
+    dns_scopes = {
+        unit
+        for unit in active_units
+        if re.fullmatch(r"run-p[1-9][0-9]{0,9}-i[1-9][0-9]{0,9}\.scope", unit)
+    }
+    if (
+        len(rootless_scopes) != 1
+        or len(dns_scopes) != 1
+        or PODMAN_NETWORK_ONLINE_UNIT not in active_units
+    ):
+        return None
+    rootless_scope = next(iter(rootless_scopes))
+    dns_scope = next(iter(dns_scopes))
+    return (
+        health_timers
+        | rootless_scopes
+        | dns_scopes
+        | {PODMAN_NETWORK_ONLINE_UNIT},
+        rootless_scope,
+        dns_scope,
+    )
+
+
+def reviewed_podman_helper_process(
+    key: tuple[str, str, int, int], count: int,
+    rootless_scope: str, dns_scope: str,
+) -> str | None:
+    executable, control_group, uid, gid = key
+    if count != 1 or (uid, gid) != (CI_UID, CI_GID):
+        return None
+    if (
+        executable in {"/usr/bin/pasta", "/usr/bin/pasta.avx2"}
+        and control_group
+        == (
+            "/user.slice/user-20000.slice/user@20000.service/"
+            f"user.slice/{rootless_scope}"
+        )
+    ):
+        return "rootless-network"
+    if (
+        executable == "/usr/lib/podman/aardvark-dns"
+        and control_group
+        == (
+            "/user.slice/user-20000.slice/user@20000.service/"
+            f"app.slice/{dns_scope}"
+        )
+    ):
+        return "dns"
+    return None
+
+
 def id_map_is_bounded(value: object, *, allow_empty: bool) -> bool:
     if (
         not isinstance(value, list)
@@ -3669,9 +3852,10 @@ def user_namespace_contract_matches(
         and value["uid_map"] == []
         and value["gid_map"] == []
         and create_options == []
-        and bool(configured_uid_map)
         and expected_uid_map is not None
         and expected_gid_map is not None
+        and id_map_is_within_collector(expected_uid_map, collector_uid_map)
+        and id_map_is_within_collector(expected_gid_map, collector_gid_map)
         and (
             id_map_covers(expected_uid_map, configured_uid)
             and id_map_covers(expected_gid_map, configured_gid)
@@ -3855,7 +4039,7 @@ def workload_admission_failures(observations: object) -> list[str]:
             )
             if (
                 item.get("privileged") is not False
-                or item.get("cap_add") != expected_caps
+                or item.get("cap_add") not in ([], expected_caps)
                 or item.get("group_add") != []
                 or item.get("effective_caps") != expected_caps
                 or item.get("bounding_caps") != expected_caps
@@ -4062,20 +4246,33 @@ def workload_admission_failures(observations: object) -> list[str]:
     cleanup_user_work = exact_keys(
         cleanup.get("user_work"), {"active_units", "jobs"}
     )
+    baseline_units = (
+        exact_string_set(baseline_user_work.get("active_units"))
+        if baseline_user_work is not None
+        else None
+    )
+    cleanup_units = (
+        exact_string_set(cleanup_user_work.get("active_units"))
+        if cleanup_user_work is not None
+        else None
+    )
     if (
         baseline_user_work is None
         or cleanup_user_work is None
-        or exact_string_set(baseline_user_work.get("active_units")) is None
+        or baseline_units is None
         or exact_string_set(baseline_user_work.get("jobs")) is None
-        or exact_string_set(cleanup_user_work.get("active_units")) is None
+        or cleanup_units is None
         or exact_string_set(cleanup_user_work.get("jobs")) is None
-        or cleanup_user_work != baseline_user_work
+        or PODMAN_NETWORK_ONLINE_UNIT in baseline_units
+        or PODMAN_NETWORK_ONLINE_UNIT not in cleanup_units
+        or cleanup_units - {PODMAN_NETWORK_ONLINE_UNIT} != baseline_units
+        or cleanup_user_work.get("jobs") != baseline_user_work.get("jobs")
     ):
         failures.append("D1A_PENDING_USER_WORK")
     live_user_work = exact_keys(live.get("user_work"), {"active_units", "jobs"})
-    expected_live_units = (
-        exact_string_set(baseline_user_work.get("active_units"))
-        if baseline_user_work is not None
+    live_units = (
+        exact_string_set(live_user_work.get("active_units"))
+        if live_user_work is not None
         else None
     )
     generated_units = {
@@ -4088,11 +4285,21 @@ def workload_admission_failures(observations: object) -> list[str]:
         if re.fullmatch(r"[0-9a-f]{12}", str(instance)) is not None
         else set()
     )
+    auxiliary = (
+        reviewed_podman_auxiliary_units(live_units, containers)
+        if live_units is not None
+        else None
+    )
+    auxiliary_units = auxiliary[0] if auxiliary is not None else set()
     if (
         live_user_work is None
-        or expected_live_units is None
-        or exact_string_set(live_user_work.get("active_units"))
-        != expected_live_units | generated_units | fixture_target
+        or live_units is None
+        or baseline_units is None
+        or auxiliary is None
+        or live_units
+        != (
+            baseline_units - {PODMAN_NETWORK_ONLINE_UNIT}
+        ) | generated_units | fixture_target | auxiliary_units
         or live_user_work.get("jobs")
         != (baseline_user_work.get("jobs") if baseline_user_work else None)
     ):
@@ -4101,6 +4308,29 @@ def workload_admission_failures(observations: object) -> list[str]:
     live_processes = exact_process_map(live.get("processes"))
     cleanup_processes = exact_process_map(cleanup.get("processes"))
     allowed_groups = allowed_service_process_groups(services, containers)
+    helper_kinds: list[str] = []
+    process_delta_valid = True
+    if live_processes is not None and baseline_processes is not None:
+        for key, count in live_processes.items():
+            delta = count - baseline_processes.get(key, 0)
+            if delta <= 0:
+                continue
+            service_process = any(
+                (key[1] == group or key[1].startswith(f"{group}/"))
+                and (key[2], key[3]) in identities
+                for group, identities in allowed_groups.items()
+            )
+            helper_kind = (
+                reviewed_podman_helper_process(
+                    key, delta, auxiliary[1], auxiliary[2]
+                )
+                if auxiliary is not None
+                else None
+            )
+            if helper_kind is not None:
+                helper_kinds.append(helper_kind)
+            elif not service_process:
+                process_delta_valid = False
     if (
         baseline_processes is None
         or live_processes is None
@@ -4109,15 +4339,8 @@ def workload_admission_failures(observations: object) -> list[str]:
             live_processes.get(key, 0) < count
             for key, count in baseline_processes.items()
         )
-        or any(
-            not any(
-                (key[1] == group or key[1].startswith(f"{group}/"))
-                and (key[2], key[3]) in identities
-                for group, identities in allowed_groups.items()
-            )
-            for key, count in live_processes.items()
-            if count > baseline_processes.get(key, 0)
-        )
+        or not process_delta_valid
+        or sorted(helper_kinds) != ["dns", "rootless-network"]
     ):
         failures.append("D1A_PROCESS_DELTA")
     migrate = next(

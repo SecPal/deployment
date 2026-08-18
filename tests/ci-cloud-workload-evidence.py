@@ -556,10 +556,41 @@ def valid_observations() -> dict[str, object]:
                     ["dbus.service", "dbus.socket"]
                     + [service["unit"] for service in services]
                     + [f"{prefix}.target"]
+                    + ["podman-user-wait-network-online.service"]
+                    + [
+                        f"{container['id']}-abcdef123456.timer"
+                        for container in containers
+                        if container["role"] in HEALTHY_ROLES
+                    ]
+                    + [
+                        "rootless-netns-deadbeef.scope",
+                        "run-p123-i456.scope",
+                    ]
                 ),
                 "jobs": [],
             },
-            "processes": [],
+            "processes": [
+                {
+                    "executable": "/usr/bin/pasta.avx2",
+                    "control_group": (
+                        "/user.slice/user-20000.slice/user@20000.service/"
+                        "user.slice/rootless-netns-deadbeef.scope"
+                    ),
+                    "uid": 20000,
+                    "gid": 20000,
+                    "count": 1,
+                },
+                {
+                    "executable": "/usr/lib/podman/aardvark-dns",
+                    "control_group": (
+                        "/user.slice/user-20000.slice/user@20000.service/"
+                        "app.slice/run-p123-i456.scope"
+                    ),
+                    "uid": 20000,
+                    "gid": 20000,
+                    "count": 1,
+                },
+            ],
             "control_resources": {
                 "network_present": True,
                 "volume_present": True,
@@ -584,7 +615,10 @@ def valid_observations() -> dict[str, object]:
             "migration_invocation_count": 1,
             "podman_api": False,
             "user_work": {
-                "active_units": ["dbus.service", "dbus.socket"],
+                "active_units": [
+                    "dbus.service", "dbus.socket",
+                    "podman-user-wait-network-online.service",
+                ],
                 "jobs": [],
             },
             "processes": [],
@@ -971,6 +1005,55 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "D1A_SERVICE_STATE",
                 )
 
+    def test_podman_54_delegated_workload_oneshots_are_admitted(self) -> None:
+        observations = valid_observations()
+        services = observations["live"]["generated_services"]
+        containers = observations["live"]["containers"]
+        for role in ("secrets-init", "migrate"):
+            service = next(
+                item for item in services if item["logical_name"] == role
+            )
+            service["control_group"] = (
+                "/user.slice/user-20000.slice/user@20000.service/"
+                f"app.slice/{service['unit']}"
+            )
+            container = next(item for item in containers if item["role"] == role)
+            container["user_namespace"]["configured_uid_map"] = []
+            container["user_namespace"]["configured_gid_map"] = []
+        secrets_init = next(
+            item for item in containers if item["role"] == "secrets-init"
+        )
+        secrets_init["cap_add"] = []
+        failures = self.collector.workload_admission_failures(observations)
+        for invariant in (
+            "D1A_SERVICE_STATE", "D1A_HOST_NAMESPACES",
+            "D1A_PRIVILEGE_BOUNDARY", "D1A_SERVICE_BINDING",
+        ):
+            self.assertNotIn(invariant, failures)
+
+        next(
+            item for item in services if item["logical_name"] == "migrate"
+        )["control_group"] += "/attacker.scope"
+        self.assertIn(
+            "D1A_SERVICE_STATE",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        wrong_prefix = valid_observations()
+        migrate_service = next(
+            item
+            for item in wrong_prefix["live"]["generated_services"]
+            if item["logical_name"] == "migrate"
+        )
+        migrate_service["control_group"] = (
+            "/user.slice/user-20000.slice/attacker.slice/"
+            f"{migrate_service['unit']}"
+        )
+        self.assertIn(
+            "D1A_SERVICE_STATE",
+            self.collector.workload_admission_failures(wrong_prefix),
+        )
+
     def test_each_container_is_bound_to_its_generated_systemd_service(self) -> None:
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][4].__setitem__(
@@ -1050,7 +1133,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "result": "success",
                 "exec_main_status": 0,
                 "main_pid": 0,
-                "control_group": "",
+                "control_group": (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    f"app.slice/{unit}"
+                ),
                 "invocation_id": "a" * 32,
             }
         ]
@@ -1095,21 +1181,31 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 {"status": "died", "time_nano": 3},
             ],
         }
-        matching_record = json.dumps(
-            {
-                "_SYSTEMD_INVOCATION_ID": "a" * 32,
-                "_EXE": "/usr/bin/podman",
-                "_CMDLINE": (
-                    "/usr/bin/podman run --name "
-                    "secpal-int-aaaaaaaaaaaa-migrate fixture-image"
-                ),
-                "MESSAGE": "b" * 64,
-            }
-        )
+        records = []
+        for status in ("create", "start", "died"):
+            records.append(json.dumps(
+                {
+                    "_SYSTEMD_INVOCATION_ID": "a" * 32,
+                    "_EXE": "/usr/bin/podman",
+                    "_CMDLINE": (
+                        "/usr/bin/podman run --name "
+                        "secpal-int-aaaaaaaaaaaa-migrate fixture-image"
+                    ),
+                    "MESSAGE": (
+                        "2026-08-18 07:20:56.854793053 +0000 UTC "
+                        f"m=+0.047590538 container {status} {'b' * 64} "
+                        "(image=fixture-image, "
+                        "name=secpal-int-aaaaaaaaaaaa-migrate, "
+                        "PODMAN_SYSTEMD_UNIT="
+                        "secpal-int-aaaaaaaaaaaa-migrate.service)"
+                    ),
+                }
+            ))
+        matching_records = "\n".join(records)
         with mock.patch.object(
             self.collector,
             "command_result",
-            return_value=(0, matching_record, True),
+            return_value=(0, matching_records, True),
         ):
             self.assertEqual(
                 (True, True),
@@ -1119,8 +1215,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
         for output in (
             "",
-            f"{matching_record}\n{matching_record}",
-            matching_record.replace("/usr/bin/podman", "/usr/bin/false"),
+            "\n".join(records[:-1]),
+            f"{matching_records}\n{records[-1]}",
+            matching_records.replace("/usr/bin/podman", "/usr/bin/false"),
+            matching_records.replace(
+                "PODMAN_SYSTEMD_UNIT=secpal-int-aaaaaaaaaaaa-migrate.service",
+                "PODMAN_SYSTEMD_UNIT=attacker.service",
+            ),
         ):
             with self.subTest(output=output), mock.patch.object(
                 self.collector,
@@ -1660,7 +1761,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         namespace["create_options"] = ["auto"]
         namespace["uid_map"] = copy.deepcopy(auto_map)
         namespace["gid_map"] = copy.deepcopy(auto_map)
-        observations["live"]["processes"] = [
+        observations["live"]["processes"].append(
             {
                 "executable": "/usr/bin/php",
                 "control_group": service["control_group"] + "/container",
@@ -1668,14 +1769,33 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "gid": 210_001,
                 "count": 1,
             }
-        ]
+        )
         self.assertEqual([], self.collector.workload_admission_failures(observations))
 
-    def test_exited_user_namespace_requires_explicit_mapping_and_lifecycle(self) -> None:
+    def test_exited_default_rootless_user_namespace_uses_podman_mapping(self) -> None:
+        observations = valid_observations()
+        container = next(
+            item
+            for item in observations["live"]["containers"]
+            if item["role"] == "migrate"
+        )
+        namespace = container["user_namespace"]
+        namespace["configured_uid_map"] = []
+        namespace["configured_gid_map"] = []
+        self.assertNotIn(
+            "D1A_HOST_NAMESPACES",
+            self.collector.workload_admission_failures(observations),
+        )
+        namespace["podman_uid_map"] = [
+            {"container_id": 0, "host_id": 200_000, "size": 10}
+        ]
+        self.assertIn(
+            "D1A_HOST_NAMESPACES",
+            self.collector.workload_admission_failures(observations),
+        )
+
+    def test_exited_user_namespace_rejects_unreviewed_mapping_and_lifecycle(self) -> None:
         for mutate in (
-            lambda container: container["user_namespace"].update(
-                {"configured_uid_map": [], "configured_gid_map": []}
-            ),
             lambda container: container["user_namespace"].__setitem__(
                 "create_options", ["unknown"]
             ),
@@ -1879,6 +1999,23 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     ].__setitem__(field, ["CAP_CHOWN"]),
                     "D1A_PRIVILEGE_BOUNDARY",
                 )
+
+        observations = valid_observations()
+        secrets_init = next(
+            item
+            for item in observations["live"]["containers"]
+            if item["role"] == "secrets-init"
+        )
+        secrets_init["cap_add"] = []
+        self.assertNotIn(
+            "D1A_PRIVILEGE_BOUNDARY",
+            self.collector.workload_admission_failures(observations),
+        )
+        secrets_init["bounding_caps"] = ["CAP_CHOWN"]
+        self.assertIn(
+            "D1A_PRIVILEGE_BOUNDARY",
+            self.collector.workload_admission_failures(observations),
+        )
 
     def test_each_container_requires_its_exact_fixture_network(self) -> None:
         self.assert_failure(
@@ -2125,6 +2262,100 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertEqual([], facts[0]["effective_caps"])
         self.assertEqual([], facts[0]["bounding_caps"])
 
+        network_none = copy.deepcopy(inspection)
+        network_none["HostConfig"]["NetworkMode"] = "none"
+        network_none["NetworkSettings"]["Networks"] = {"none": {}}
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([network_none], True)
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ):
+            facts, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertTrue(complete)
+        self.assertEqual([], facts[0]["networks"])
+
+        network_none["NetworkSettings"]["Networks"]["hidden"] = {}
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector, "json_array", return_value=([network_none], True)
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ):
+            _, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertFalse(complete)
+
+        malformed_network_none = copy.deepcopy(inspection)
+        malformed_network_none["HostConfig"]["NetworkMode"] = "none"
+        malformed_network_none["NetworkSettings"]["Networks"] = {"none": None}
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector,
+            "json_array",
+            return_value=([malformed_network_none], True),
+        ), mock.patch.object(
+            self.collector,
+            "container_lifecycle_events",
+            return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+        ), mock.patch.object(
+            self.collector,
+            "effective_user_namespace_facts",
+            return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ):
+            _, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertFalse(complete)
+
+        unexpected_null_id_mappings = copy.deepcopy(inspection)
+        unexpected_null_id_mappings["HostConfig"]["IDMappings"] = None
+        with mock.patch.object(
+            self.collector,
+            "names_from_listing",
+            return_value=(["secpal-int-aaaaaaaaaaaa-api"], True),
+        ), mock.patch.object(
+            self.collector,
+            "json_array",
+            return_value=([unexpected_null_id_mappings], True),
+        ):
+            facts, complete = self.collector.container_facts(
+                "aaaaaaaaaaaa", rootless=True,
+                podman_uid_map=namespace_facts["uid_map"],
+                podman_gid_map=namespace_facts["gid_map"],
+            )
+        self.assertFalse(complete)
+
         no_healthcheck = copy.deepcopy(inspection)
         no_healthcheck["Name"] = "secpal-int-aaaaaaaaaaaa-scheduler"
         no_healthcheck["State"].pop("Health")
@@ -2160,6 +2391,44 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertTrue(complete)
         self.assertEqual("none", facts[0]["health"])
         self.assertEqual([], facts[0]["healthcheck_command"])
+
+        malformed_empty_shapes = []
+        for state_health, config_healthcheck in (
+            (None, "missing"),
+            ({}, "missing"),
+            ({"Status": 1}, "missing"),
+            ("missing", None),
+        ):
+            candidate = copy.deepcopy(no_healthcheck)
+            if state_health != "missing":
+                candidate["State"]["Health"] = state_health
+            if config_healthcheck != "missing":
+                candidate["Config"]["Healthcheck"] = config_healthcheck
+            malformed_empty_shapes.append(candidate)
+        for candidate in malformed_empty_shapes:
+            with mock.patch.object(
+                self.collector,
+                "names_from_listing",
+                return_value=(["secpal-int-aaaaaaaaaaaa-scheduler"], True),
+            ), mock.patch.object(
+                self.collector,
+                "json_array",
+                return_value=([candidate], True),
+            ), mock.patch.object(
+                self.collector,
+                "container_lifecycle_events",
+                return_value=([{"status": "create", "time_nano": 1}, {"status": "start", "time_nano": 2}], True),
+            ), mock.patch.object(
+                self.collector,
+                "effective_user_namespace_facts",
+                return_value=(namespace_facts, 10001, 10001, [10001], True),
+            ):
+                _, complete = self.collector.container_facts(
+                    "aaaaaaaaaaaa", rootless=True,
+                    podman_uid_map=namespace_facts["uid_map"],
+                    podman_gid_map=namespace_facts["gid_map"],
+                )
+            self.assertFalse(complete)
 
         inspection["HostConfig"]["UsernsMode"] = ""
         with mock.patch.object(
@@ -2822,21 +3091,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_live_user_work_rejects_unrelated_target_services(self) -> None:
         observations = valid_observations()
-        baseline = observations["baseline"]["user_work"]
-        generated = [
-            service["unit"] for service in observations["live"]["generated_services"]
-        ]
-        observations["live"]["user_work"] = {
-            "active_units": sorted([
-                *baseline["active_units"],
-                *generated,
-                f"secpal-int-{observations['instance']}.target",
-            ]),
-            "jobs": [],
-        }
-        observations["live"]["processes"] = []
-        observations["baseline"]["processes"] = []
-        observations["post_cleanup"]["processes"] = []
         self.assertEqual(
             [], self.collector.workload_admission_failures(observations)
         )
@@ -2867,6 +3121,64 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector.workload_admission_failures(observations),
         )
 
+    def test_reviewed_podman_auxiliary_units_and_processes_are_exact(self) -> None:
+        observations = valid_observations()
+        live = observations["live"]
+        failures = self.collector.workload_admission_failures(observations)
+        for invariant in (
+            "D1A_PENDING_USER_WORK", "D1A_LIVE_USER_WORK",
+            "D1A_PROCESS_DELTA",
+        ):
+            self.assertNotIn(invariant, failures)
+
+        for suffix in (
+            "0", "f" * 11, "a" * 13, "f" * 15, "7" + "f" * 15,
+        ):
+            candidate = valid_observations()
+            candidate["live"]["user_work"]["active_units"] = [
+                re.sub(r"-[0-9a-f]+\.timer$", f"-{suffix}.timer", unit)
+                for unit in candidate["live"]["user_work"]["active_units"]
+            ]
+            self.assertNotIn(
+                "D1A_LIVE_USER_WORK",
+                self.collector.workload_admission_failures(candidate),
+            )
+
+        for suffix in ("00", "0a", "8" + "0" * 15, "g" * 12):
+            candidate = valid_observations()
+            candidate["live"]["user_work"]["active_units"] = [
+                re.sub(r"-[0-9a-f]+\.timer$", f"-{suffix}.timer", unit)
+                for unit in candidate["live"]["user_work"]["active_units"]
+            ]
+            self.assertIn(
+                "D1A_LIVE_USER_WORK",
+                self.collector.workload_admission_failures(candidate),
+            )
+
+        live["processes"][0]["executable"] = "/usr/bin/attacker"
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        wrong_scope = valid_observations()
+        wrong_scope["live"]["processes"][0]["control_group"] = (
+            "/user.slice/user-20000.slice/attacker.slice/"
+            "rootless-netns-deadbeef.scope"
+        )
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(wrong_scope),
+        )
+        live["processes"][0]["executable"] = "/usr/bin/pasta.avx2"
+        live["user_work"]["active_units"].append(
+            f"{live['containers'][0]['id']}-1111111111111111.timer"
+        )
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
     def test_live_process_delta_is_confined_to_generated_service_cgroups(self) -> None:
         observations = valid_observations()
         baseline_process = {
@@ -2880,6 +3192,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations["post_cleanup"]["processes"] = [baseline_process]
         observations["live"]["processes"] = [
             baseline_process,
+            *observations["live"]["processes"],
             {
                 "executable": "/usr/bin/php",
                 "control_group": (
@@ -2891,20 +3204,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "count": 1,
             },
         ]
-        baseline = observations["baseline"]["user_work"]
-        observations["live"]["user_work"] = {
-            "active_units": sorted(
-                [
-                    *baseline["active_units"],
-                    *[
-                        service["unit"]
-                        for service in observations["live"]["generated_services"]
-                    ],
-                    f"secpal-int-{observations['instance']}.target",
-                ]
-            ),
-            "jobs": [],
-        }
         self.assertEqual(
             [], self.collector.workload_admission_failures(observations)
         )
@@ -2926,7 +3225,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
 
         wrong_identity = valid_observations()
-        wrong_identity["live"]["processes"] = [{
+        wrong_identity["live"]["processes"].append({
             "executable": "/usr/bin/php",
             "control_group": (
                 "/user.slice/user-20000.slice/user@20000.service/app.slice/"
@@ -2935,7 +3234,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "uid": 200001,
             "gid": 200001,
             "count": 1,
-        }]
+        })
         self.assertIn(
             "D1A_PROCESS_DELTA",
             self.collector.workload_admission_failures(wrong_identity),
@@ -4389,6 +4688,118 @@ class WorkloadEvidenceTests(unittest.TestCase):
             facts,
         )
 
+    def test_user_work_accepts_only_canonical_systemd_hex_escapes(self) -> None:
+        def command_result(arguments, **_kwargs):
+            if "list-units" in arguments:
+                return (
+                    0,
+                    "dev-disk-by\\x2ddiskseq-1.device loaded active plugged\n",
+                    True,
+                )
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=command_result
+        ):
+            facts, complete = self.collector.user_work_facts()
+        self.assertTrue(complete)
+        self.assertEqual(
+            ["dev-disk-by\\x2ddiskseq-1.device"], facts["active_units"]
+        )
+
+        def malformed_result(arguments, **_kwargs):
+            if "list-units" in arguments:
+                return 0, "dev-disk-by\\xZZescape.device loaded active plugged\n", True
+            return 0, "", True
+
+        with mock.patch.object(
+            self.collector, "command_result", side_effect=malformed_result
+        ):
+            _, complete = self.collector.user_work_facts()
+        self.assertFalse(complete)
+
+    def test_opaque_processes_are_limited_to_trusted_user_manager_units(self) -> None:
+        process = Path("/proc/1234")
+        own_group = (
+            "/user.slice/user-20000.slice/user@20000.service/"
+            "session-collector.scope"
+        )
+
+        def collect(control_group):
+            def observed_group(pid):
+                return (own_group if pid == os.getpid() else control_group, True)
+
+            with mock.patch.object(
+                self.collector.Path, "iterdir", return_value=(process,)
+            ), mock.patch.object(
+                self.collector,
+                "process_control_group",
+                side_effect=observed_group,
+            ), mock.patch.object(
+                self.collector,
+                "process_host_identity",
+                return_value=(20000, 20000, True),
+            ), mock.patch.object(
+                self.collector.os,
+                "readlink",
+                side_effect=PermissionError,
+            ), mock.patch.object(
+                self.collector.Path,
+                "exists",
+                return_value=True,
+            ):
+                return self.collector.user_process_facts()
+
+        facts, complete = collect(
+            "/user.slice/user-20000.slice/user@20000.service/init.scope"
+        )
+        self.assertEqual([], facts)
+        self.assertTrue(complete)
+
+        facts, complete = collect(
+            "/user.slice/user-20000.slice/user@20000.service/"
+            "app.slice/ssh-agent.service"
+        )
+        self.assertEqual([], facts)
+        self.assertTrue(complete)
+
+        _, complete = collect(
+            "/user.slice/user-20000.slice/user@20000.service/"
+            "app.slice/attacker.service"
+        )
+        self.assertFalse(complete)
+
+        def generic_os_error(_path):
+            raise OSError("not a reviewed permission denial")
+
+        with mock.patch.object(
+            self.collector.Path, "iterdir", return_value=(process,)
+        ), mock.patch.object(
+            self.collector,
+            "process_control_group",
+            side_effect=lambda pid: (
+                own_group if pid == os.getpid() else (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    "init.scope"
+                ),
+                True,
+            ),
+        ), mock.patch.object(
+            self.collector,
+            "process_host_identity",
+            return_value=(20000, 20000, True),
+        ), mock.patch.object(
+            self.collector.os,
+            "readlink",
+            side_effect=generic_os_error,
+        ), mock.patch.object(
+            self.collector.Path,
+            "exists",
+            return_value=True,
+        ):
+            _, complete = self.collector.user_process_facts()
+        self.assertFalse(complete)
+
     def test_live_collection_fails_closed_when_user_processes_change_mid_observation(self) -> None:
         hidden = [{
             "executable": "/usr/bin/php",
@@ -4566,6 +4977,17 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertIn(
             "D1A_PENDING_USER_WORK",
             self.collector.workload_admission_failures(observations),
+        )
+
+        missing_reviewed_service = valid_observations()
+        missing_reviewed_service["post_cleanup"]["user_work"][
+            "active_units"
+        ].remove("podman-user-wait-network-online.service")
+        self.assertIn(
+            "D1A_PENDING_USER_WORK",
+            self.collector.workload_admission_failures(
+                missing_reviewed_service
+            ),
         )
 
     def test_cleanup_collector_uses_the_shared_lifecycle_guard(self) -> None:
