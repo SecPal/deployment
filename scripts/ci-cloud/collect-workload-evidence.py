@@ -188,6 +188,18 @@ HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
 PODMAN_54_HEALTH_TIMER_SUFFIX = (
     r"(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})"
 )
+PODMAN_HEALTH_TIMER_PROPERTIES = frozenset(
+    {"FragmentPath", "DropInPaths", "Transient", "Triggers"}
+)
+PODMAN_HEALTH_SERVICE_PROPERTIES = frozenset(
+    {
+        "FragmentPath", "DropInPaths", "Transient", "Environment", "ExecStart",
+        *AUXILIARY_EXEC_PROPERTIES,
+    }
+)
+OPAQUE_PROCESS_EXECUTABLE = "[permission-denied]"
+
+
 class RoleContract(NamedTuple):
     identity: tuple[int, int]
     networks: tuple[str, ...] = ()
@@ -450,7 +462,9 @@ def incomplete_observation(phase: str) -> dict[str, object]:
     if phase == "baseline":
         common["migration_invocation_count"] = 0
         common["podman_api"] = True
-        common["user_work"] = {"active_units": [], "jobs": []}
+        common["user_work"] = {
+            "active_units": [], "jobs": [], "podman_health_timers": [],
+        }
         common["processes"] = []
         return common
     common.update(
@@ -465,7 +479,9 @@ def incomplete_observation(phase: str) -> dict[str, object]:
         common["owned_units"] = []
         common["migration_invocation_count"] = 0
         common["podman_api"] = True
-        common["user_work"] = {"active_units": [], "jobs": []}
+        common["user_work"] = {
+            "active_units": [], "jobs": [], "podman_health_timers": [],
+        }
         common["processes"] = []
         return common
     if phase != "live":
@@ -477,7 +493,9 @@ def incomplete_observation(phase: str) -> dict[str, object]:
             "podman_rootless": False,
             "oci_runtime": "",
             "podman_api": True,
-            "user_work": {"active_units": [], "jobs": []},
+            "user_work": {
+                "active_units": [], "jobs": [], "podman_health_timers": [],
+            },
             "processes": [],
         }
     )
@@ -2205,6 +2223,8 @@ def allowed_service_process_groups(
         if not isinstance(service, dict):
             continue
         role = str(service.get("logical_name"))
+        if role not in READY_ROLES:
+            continue
         control_group = service.get("control_group")
         contract = ROLE_CONTRACTS.get(role)
         if not isinstance(control_group, str) or not control_group or contract is None:
@@ -2888,7 +2908,25 @@ def lifecycle_guard_facts(instance: str) -> tuple[dict[str, object], bool]:
     )
 
 
-def user_work_facts() -> tuple[dict[str, list[str]], bool]:
+def podman_health_exec_is_trusted(value: object, container_id: str) -> bool:
+    prefix = (
+        "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman healthcheck run "
+        f"{container_id} ;"
+    )
+    return bool(
+        isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", container_id)
+        and len(value) <= 65_536
+        and "\x00" not in value
+        and "\n" not in value
+        and value.count("{ path=") == 1
+        and value.count("argv[]=") == 1
+        and value.startswith(prefix)
+        and value.endswith(" }")
+    )
+
+
+def user_work_facts() -> tuple[dict[str, object], bool]:
     units_status, units_output, units_complete = command_result(
         [
             "systemctl", "--user", "list-units", "--all",
@@ -2935,16 +2973,93 @@ def user_work_facts() -> tuple[dict[str, list[str]], bool]:
             complete = False
             continue
         jobs.append(fields[1])
+    health_timers: list[dict[str, str]] = []
+    trusted_path = next(
+        item for item in TRUSTED_MANAGER_ENVIRONMENT if item.startswith("PATH=")
+    )
+    for timer in active_units:
+        match = re.fullmatch(
+            rf"([0-9a-f]{{64}})-{PODMAN_54_HEALTH_TIMER_SUFFIX}\.timer",
+            timer,
+        )
+        if match is None:
+            continue
+        container_id = match.group(1)
+        service = timer.removesuffix(".timer") + ".service"
+        timer_status, timer_output, timer_complete = command_result(
+            [
+                "systemctl", "--user", "show", timer,
+                *(f"--property={name}" for name in sorted(
+                    PODMAN_HEALTH_TIMER_PROPERTIES
+                )),
+            ]
+        )
+        service_status, service_output, service_complete = command_result(
+            [
+                "systemctl", "--user", "show", service,
+                *(f"--property={name}" for name in sorted(
+                    PODMAN_HEALTH_SERVICE_PROPERTIES
+                )),
+            ]
+        )
+        timer_properties = exact_systemd_service_properties(
+            timer_output, PODMAN_HEALTH_TIMER_PROPERTIES
+        )
+        service_properties = exact_systemd_service_properties(
+            service_output, PODMAN_HEALTH_SERVICE_PROPERTIES
+        )
+        timer_trusted = timer_properties == {
+            "FragmentPath": f"/run/user/20000/systemd/transient/{timer}",
+            "DropInPaths": "",
+            "Transient": "yes",
+            "Triggers": service,
+        }
+        service_trusted = bool(
+            service_properties is not None
+            and service_properties["FragmentPath"]
+            == f"/run/user/20000/systemd/transient/{service}"
+            and service_properties["DropInPaths"] == ""
+            and service_properties["Transient"] == "yes"
+            and service_properties["Environment"] == trusted_path
+            and all(
+                service_properties[name] == ""
+                for name in AUXILIARY_EXEC_PROPERTIES
+            )
+            and podman_health_exec_is_trusted(
+                service_properties["ExecStart"], container_id
+            )
+        )
+        if (
+            timer_status != 0
+            or not timer_complete
+            or service_status != 0
+            or not service_complete
+            or not timer_trusted
+            or not service_trusted
+        ):
+            complete = False
+            continue
+        health_timers.append(
+            {
+                "container_id": container_id,
+                "timer": timer,
+                "service": service,
+            }
+        )
     return (
         {
             "active_units": sorted(set(active_units))[:128],
             "jobs": sorted(set(jobs))[:128],
+            "podman_health_timers": sorted(
+                health_timers, key=lambda item: item["timer"]
+            )[:len(HEALTHY_ROLES)],
         },
         complete
         and len(active_units) <= 128
         and len(jobs) <= 128
         and len(active_units) == len(set(active_units))
-        and len(jobs) == len(set(jobs)),
+        and len(jobs) == len(set(jobs))
+        and len(health_timers) <= len(HEALTHY_ROLES)
     )
 
 
@@ -3011,13 +3126,19 @@ def user_process_facts() -> tuple[list[dict[str, object]], bool]:
                     "ssh-agent.service"
                 ),
             }
-            if process.exists() and not (
+            reviewed_opaque = (
                 isinstance(error, PermissionError)
                 and trusted_opaque_group
                 and identity_complete
                 and (uid, gid) == (CI_UID, CI_GID)
-            ):
+            )
+            if process.exists() and not reviewed_opaque:
                 complete = False
+            elif reviewed_opaque:
+                key = (OPAQUE_PROCESS_EXECUTABLE, control_group, uid, gid)
+                facts[key] = facts.get(key, 0) + 1
+                if facts[key] > 256 or len(facts) > 256:
+                    return [], False
             continue
         if (
             not identity_complete
@@ -3528,9 +3649,21 @@ def exact_process_map(
         uid = item.get("uid")
         gid = item.get("gid")
         count = item.get("count")
+        reviewed_opaque = (
+            executable == OPAQUE_PROCESS_EXECUTABLE
+            and isinstance(control_group, str)
+            and control_group in {
+                "/user.slice/user-20000.slice/user@20000.service/init.scope",
+                (
+                    "/user.slice/user-20000.slice/user@20000.service/app.slice/"
+                    "ssh-agent.service"
+                ),
+            }
+            and (uid, gid) == (CI_UID, CI_GID)
+        )
         if (
             not isinstance(executable, str)
-            or not executable.startswith("/")
+            or (not executable.startswith("/") and not reviewed_opaque)
             or len(executable) > 512
             or "\x00" in executable
             or not isinstance(control_group, str)
@@ -3552,9 +3685,13 @@ def exact_process_map(
 
 
 def reviewed_podman_auxiliary_units(
-    active_units: set[str], containers: object
+    active_units: set[str], health_timer_facts: object, containers: object
 ) -> tuple[set[str], str, str] | None:
-    if not isinstance(containers, list):
+    if (
+        not isinstance(containers, list)
+        or not isinstance(health_timer_facts, list)
+        or len(health_timer_facts) > len(HEALTHY_ROLES)
+    ):
         return None
     healthy_ids: set[str] = set()
     for container in containers:
@@ -3579,15 +3716,45 @@ def reviewed_podman_auxiliary_units(
         )
     }
     health_timers: set[str] = set()
+    observed_health_ids: set[str] = set()
+    previous_timer = ""
+    for fact in health_timer_facts:
+        if not isinstance(fact, dict) or set(fact) != {
+            "container_id", "timer", "service"
+        }:
+            return None
+        container_id = fact.get("container_id")
+        timer = fact.get("timer")
+        service = fact.get("service")
+        if (
+            not isinstance(container_id, str)
+            or not isinstance(timer, str)
+            or not isinstance(service, str)
+            or container_id in observed_health_ids
+            or timer in health_timers
+            or timer <= previous_timer
+            or re.fullmatch(
+                rf"{re.escape(container_id)}-"
+                rf"{PODMAN_54_HEALTH_TIMER_SUFFIX}\.timer",
+                timer,
+            )
+            is None
+            or service != timer.removesuffix(".timer") + ".service"
+        ):
+            return None
+        observed_health_ids.add(container_id)
+        health_timers.add(timer)
+        previous_timer = timer
+    if observed_health_ids != healthy_ids:
+        return None
     for container_id in healthy_ids:
         matches = {
             unit
-            for unit in health_timer_candidates
+            for unit in health_timers
             if unit.startswith(f"{container_id}-")
         }
         if len(matches) != 1:
             return None
-        health_timers.update(matches)
     if health_timers != health_timer_candidates:
         return None
     rootless_scopes = {
@@ -4243,10 +4410,12 @@ def workload_admission_failures(observations: object) -> list[str]:
     if cleanup.get("podman_api") is not False:
         failures.append("D1A_PODMAN_API_DISABLED")
     baseline_user_work = exact_keys(
-        baseline.get("user_work"), {"active_units", "jobs"}
+        baseline.get("user_work"),
+        {"active_units", "jobs", "podman_health_timers"},
     )
     cleanup_user_work = exact_keys(
-        cleanup.get("user_work"), {"active_units", "jobs"}
+        cleanup.get("user_work"),
+        {"active_units", "jobs", "podman_health_timers"},
     )
     baseline_units = (
         exact_string_set(baseline_user_work.get("active_units"))
@@ -4265,13 +4434,18 @@ def workload_admission_failures(observations: object) -> list[str]:
         or exact_string_set(baseline_user_work.get("jobs")) is None
         or cleanup_units is None
         or exact_string_set(cleanup_user_work.get("jobs")) is None
+        or baseline_user_work.get("podman_health_timers") != []
+        or cleanup_user_work.get("podman_health_timers") != []
         or PODMAN_NETWORK_ONLINE_UNIT in baseline_units
         or PODMAN_NETWORK_ONLINE_UNIT not in cleanup_units
         or cleanup_units - {PODMAN_NETWORK_ONLINE_UNIT} != baseline_units
         or cleanup_user_work.get("jobs") != baseline_user_work.get("jobs")
     ):
         failures.append("D1A_PENDING_USER_WORK")
-    live_user_work = exact_keys(live.get("user_work"), {"active_units", "jobs"})
+    live_user_work = exact_keys(
+        live.get("user_work"),
+        {"active_units", "jobs", "podman_health_timers"},
+    )
     live_units = (
         exact_string_set(live_user_work.get("active_units"))
         if live_user_work is not None
@@ -4288,8 +4462,11 @@ def workload_admission_failures(observations: object) -> list[str]:
         else set()
     )
     auxiliary = (
-        reviewed_podman_auxiliary_units(live_units, containers)
+        reviewed_podman_auxiliary_units(
+            live_units, live_user_work.get("podman_health_timers"), containers
+        )
         if live_units is not None
+        and live_user_work is not None
         else None
     )
     auxiliary_units = auxiliary[0] if auxiliary is not None else set()

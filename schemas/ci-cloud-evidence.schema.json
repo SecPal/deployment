@@ -1136,10 +1136,26 @@
         }
       }
     },
+    "podmanHealthTimerFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container_id", "timer", "service"],
+      "properties": {
+        "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "timer": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}-(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})\\.timer$"
+        },
+        "service": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}-(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})\\.service$"
+        }
+      }
+    },
     "userWork": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["active_units", "jobs"],
+      "required": ["active_units", "jobs", "podman_health_timers"],
       "properties": {
         "active_units": {
           "type": "array",
@@ -1158,6 +1174,12 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_.@:-]{1,128}$"
           }
+        },
+        "podman_health_timers": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/podmanHealthTimerFact" }
         }
       }
     },
@@ -1167,8 +1189,10 @@
       "required": ["executable", "control_group", "uid", "gid", "count"],
       "properties": {
         "executable": {
-          "type": "string",
-          "pattern": "^/[^\\u0000]{0,511}$"
+          "oneOf": [
+            { "const": "[permission-denied]" },
+            { "type": "string", "pattern": "^/[^\\u0000]{0,511}$" }
+          ]
         },
         "control_group": {
           "type": "string",

@@ -2221,7 +2221,19 @@ def validate(root: Path) -> None:
         and "D1A_TMPFS_TOPOLOGY" in workload_collector
         and "D1A_CONTAINER_LIFECYCLE" in workload_collector
         and "container_lifecycle_events" in workload_collector
-        and 'item.get("effective_caps") != expected_caps' in workload_collector,
+        and 'item.get("effective_caps") != expected_caps' in workload_collector
+        and "PODMAN_HEALTH_TIMER_PROPERTIES" in workload_collector
+        and "PODMAN_HEALTH_SERVICE_PROPERTIES" in workload_collector
+        and "podman_health_exec_is_trusted" in workload_collector
+        and 'service_properties["Environment"] == trusted_path'
+        in workload_collector
+        and '"podman_health_timers"' in workload_collector
+        and 'OPAQUE_PROCESS_EXECUTABLE = "[permission-denied]"'
+        in workload_collector
+        and "elif reviewed_opaque:" in workload_collector
+        and "if role not in READY_ROLES:" in workload_collector
+        and 'item.get("cap_add") not in ([], expected_caps)'
+        in workload_collector,
         "Podman evidence must use admitted v5 fields and exact inventory/security facts",
     )
     require(

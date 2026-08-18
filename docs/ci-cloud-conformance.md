@@ -1016,10 +1016,14 @@ Evidence includes:
   `/usr/bin/podman run` command naming that exact container in the generated
   service's exact systemd invocation; `inspect`, another Podman subcommand, a
   different name, a duplicate lifecycle, or a bare container-ID message cannot
-  establish this binding; the exited container must have explicit immutable
-  configured ID mappings that compose to a bounded map covering the configured
-  identity, with containers.conf modules rejected rather than treated as part
-  of a trusted default; exited evidence deliberately records no process
+  establish this binding; an exited container may use either explicit immutable
+  configured ID mappings or Podman 5.4's omitted `HostConfig.IDMappings`
+  representation for the reviewed default-rootless case only. The latter
+  requires no user-namespace creation option, independently collected bounded
+  Podman outer UID/GID maps, exact lifecycle correlation, and coverage of the
+  configured identity. Present null or malformed mappings, non-default creation
+  modes, and containers.conf modules still fail closed; exited evidence
+  deliberately records no process
   namespace identity or `/proc` UID/GID map; any Podman `exec`/`exec_died` event for an
   integration container makes lifecycle collection incomplete; one exited
   zero-status migration systemd invocation
@@ -1037,14 +1041,21 @@ Evidence includes:
   measured both before and after the final inventory so a cleanup- or host-phase
   transient service, timer, or queued job fails closed; a bounded census of
   executable, cgroup, effective host UID/GID, and count for every process in the
-  service account's complete UID-20000 user slice, including SSH session scopes,
-  requiring exact baseline restoration
+  service account's complete UID-20000 user slice, including SSH session scopes.
+  A permission-denied executable in the exact user-manager or SSH-agent cgroup
+  is retained as a bounded opaque process fact instead of being omitted; every
+  other unreadable executable makes collection incomplete. Admission requires
+  exact baseline restoration
   after cleanup and confining every live process delta to an independently
   observed generated-service cgroup;
   exact singleton `no-new-privileges` admission with every target-selected
-  seccomp or other additional security option rejected; exact added, effective,
-  and bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the
-  secrets initializer, empty for every other role); and Podman 5.4
+  seccomp or other additional security option rejected; exact effective and
+  bounding capability sets (only `CAP_CHOWN` and `CAP_FOWNER` for the secrets
+  initializer, empty for every other role). Podman 5.4 may report its runtime
+  additions as an empty `HostConfig.CapAdd`; that representation is admitted
+  only while the effective and bounding sets still match the exact role
+  contract. Any nonempty configured additions must themselves equal that role
+  set. Podman 5.4
   `Healthcheck`/network-name field interpretation; and
 - exact absence of every integration unit, generated service and nested
   generated drop-in artifact across the user manager's `generator.early`,
@@ -1076,14 +1087,20 @@ environment unsetting/passing controls, missing or contradictory service-local
 configuration pins, every target-authored auxiliary systemd execution phase,
 unknown generated lifecycle executables, and non-direct or role-inconsistent
 Podman `ExecStart=` commands fail before activation and again during collection
-rather than bypassing that pin.
+rather than bypassing that pin. Podman health timers are not authenticated by
+their names alone: each admitted timer and triggered service must be transient,
+drop-in-free units under the exact user-manager transient path, the timer must
+trigger only its paired service, and that service must have the trusted PATH,
+no auxiliary execution phase, and exactly one direct
+`/usr/bin/podman healthcheck run <full-container-ID>` command.
 Explicitly observable `host`, `container:`, and arbitrary `ns:` creation modes
 still fail closed. For an exited one-shot, admission instead requires the exact
-existing systemd/Podman lifecycle correlation and an explicit immutable
-configured mapping. The bounded configured map must compose through the trusted
-outer mapping and cover the configured identity; an implicit default is
-insufficient because an exited process has no independently observable kernel
-map. It never
+existing systemd/Podman lifecycle correlation. An explicit immutable configured
+map must compose through the trusted outer mapping and cover the configured
+identity. When Podman 5.4 omits `HostConfig.IDMappings` for default-rootless
+mode, that absence is accepted only with no user-namespace creation option and
+the exact bounded outer mapping independently collected from Podman; present
+null, malformed, and non-default alternatives are rejected. It never
 presents those configuration facts as live `/proc` evidence.
 
 Workload admission additionally restricts the active user socket-unit set to

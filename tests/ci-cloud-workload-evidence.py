@@ -507,6 +507,7 @@ def valid_observations() -> dict[str, object]:
             "user_work": {
                 "active_units": ["dbus.service", "dbus.socket"],
                 "jobs": [],
+                "podman_health_timers": [],
             },
             "processes": [],
             "containers": [],
@@ -568,6 +569,18 @@ def valid_observations() -> dict[str, object]:
                     ]
                 ),
                 "jobs": [],
+                "podman_health_timers": sorted(
+                    [
+                        {
+                            "container_id": container["id"],
+                            "timer": f"{container['id']}-abcdef123456.timer",
+                            "service": f"{container['id']}-abcdef123456.service",
+                        }
+                        for container in containers
+                        if container["role"] in HEALTHY_ROLES
+                    ],
+                    key=lambda item: item["timer"],
+                ),
             },
             "processes": [
                 {
@@ -620,6 +633,7 @@ def valid_observations() -> dict[str, object]:
                     "podman-user-wait-network-online.service",
                 ],
                 "jobs": [],
+                "podman_health_timers": [],
             },
             "processes": [],
             "control_resources": {
@@ -3122,6 +3136,24 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
 
     def test_reviewed_podman_auxiliary_units_and_processes_are_exact(self) -> None:
+        def replace_health_timer_suffix(
+            candidate: dict[str, object], suffix: str
+        ) -> None:
+            user_work = candidate["live"]["user_work"]
+            user_work["active_units"] = [
+                re.sub(r"-[0-9a-f]+\.timer$", f"-{suffix}.timer", unit)
+                for unit in user_work["active_units"]
+            ]
+            for fact in user_work["podman_health_timers"]:
+                fact["timer"] = re.sub(
+                    r"-[0-9a-f]+\.timer$", f"-{suffix}.timer", fact["timer"]
+                )
+                fact["service"] = re.sub(
+                    r"-[0-9a-f]+\.service$",
+                    f"-{suffix}.service",
+                    fact["service"],
+                )
+
         observations = valid_observations()
         live = observations["live"]
         failures = self.collector.workload_admission_failures(observations)
@@ -3135,10 +3167,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "0", "f" * 11, "a" * 13, "f" * 15, "7" + "f" * 15,
         ):
             candidate = valid_observations()
-            candidate["live"]["user_work"]["active_units"] = [
-                re.sub(r"-[0-9a-f]+\.timer$", f"-{suffix}.timer", unit)
-                for unit in candidate["live"]["user_work"]["active_units"]
-            ]
+            replace_health_timer_suffix(candidate, suffix)
             self.assertNotIn(
                 "D1A_LIVE_USER_WORK",
                 self.collector.workload_admission_failures(candidate),
@@ -3146,10 +3175,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
         for suffix in ("00", "0a", "8" + "0" * 15, "g" * 12):
             candidate = valid_observations()
-            candidate["live"]["user_work"]["active_units"] = [
-                re.sub(r"-[0-9a-f]+\.timer$", f"-{suffix}.timer", unit)
-                for unit in candidate["live"]["user_work"]["active_units"]
-            ]
+            replace_health_timer_suffix(candidate, suffix)
             self.assertIn(
                 "D1A_LIVE_USER_WORK",
                 self.collector.workload_admission_failures(candidate),
@@ -3195,10 +3221,37 @@ class WorkloadEvidenceTests(unittest.TestCase):
             for unit in live["user_work"]["active_units"]
             if not unit.startswith(f"{replaced_id}-")
         ]
+        live["user_work"]["podman_health_timers"] = [
+            fact
+            for fact in live["user_work"]["podman_health_timers"]
+            if fact["container_id"] != replaced_id
+        ]
 
         self.assertIn(
             "D1A_LIVE_USER_WORK",
             self.collector.workload_admission_failures(observations),
+        )
+
+    def test_podman_health_timers_require_collected_provenance(self) -> None:
+        observations = valid_observations()
+        self.assertNotIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        observations["live"]["user_work"]["podman_health_timers"][0][
+            "service"
+        ] = "attacker.service"
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        missing = valid_observations()
+        missing["live"]["user_work"]["podman_health_timers"].pop()
+        self.assertIn(
+            "D1A_LIVE_USER_WORK",
+            self.collector.workload_admission_failures(missing),
         )
 
     def test_live_process_delta_is_confined_to_generated_service_cgroups(self) -> None:
@@ -3274,6 +3327,68 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "D1A_PROCESS_DELTA",
             self.collector.workload_admission_failures(cleanup_leak),
         )
+
+    def test_opaque_process_facts_remain_in_exact_census_comparisons(self) -> None:
+        opaque = {
+            "executable": "[permission-denied]",
+            "control_group": (
+                "/user.slice/user-20000.slice/user@20000.service/init.scope"
+            ),
+            "uid": 20000,
+            "gid": 20000,
+            "count": 1,
+        }
+        observations = valid_observations()
+        observations["baseline"]["processes"] = [opaque]
+        observations["live"]["processes"].append(opaque)
+        observations["post_cleanup"]["processes"] = [opaque]
+        self.assertNotIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        observations["live"]["processes"].remove(opaque)
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(observations),
+        )
+
+        malformed = valid_observations()
+        malformed["live"]["processes"].append(
+            {**opaque, "control_group": "/user.slice/user-20000.slice/hidden.scope"}
+        )
+        self.assertIn(
+            "D1A_PROCESS_DELTA",
+            self.collector.workload_admission_failures(malformed),
+        )
+
+    def test_exited_oneshot_cgroups_cannot_retain_live_processes(self) -> None:
+        for role in ("secrets-init", "migrate"):
+            with self.subTest(role=role):
+                observations = valid_observations()
+                service = next(
+                    item
+                    for item in observations["live"]["generated_services"]
+                    if item["logical_name"] == role
+                )
+                service["control_group"] = (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    f"app.slice/{service['unit']}"
+                )
+                observations["live"]["processes"].append(
+                    {
+                        "executable": "/usr/bin/attacker",
+                        "control_group": service["control_group"]
+                        + "/attacker.scope",
+                        "uid": 20000,
+                        "gid": 20000,
+                        "count": 1,
+                    }
+                )
+                self.assertIn(
+                    "D1A_PROCESS_DELTA",
+                    self.collector.workload_admission_failures(observations),
+                )
 
     def test_runner_reestablishes_trusted_quadlet_activation_before_live_observation(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")
@@ -4740,6 +4855,109 @@ class WorkloadEvidenceTests(unittest.TestCase):
             _, complete = self.collector.user_work_facts()
         self.assertFalse(complete)
 
+    def test_health_timer_facts_require_exact_podman_transient_units(self) -> None:
+        container_id = "a" * 64
+        timer = f"{container_id}-1.timer"
+        service = f"{container_id}-1.service"
+        trusted_path = next(
+            item
+            for item in self.collector.TRUSTED_MANAGER_ENVIRONMENT
+            if item.startswith("PATH=")
+        )
+
+        def collect(timer_changes=None, service_changes=None):
+            timer_properties = {
+                "FragmentPath": (
+                    f"/run/user/20000/systemd/transient/{timer}"
+                ),
+                "DropInPaths": "",
+                "Transient": "yes",
+                "Triggers": service,
+            }
+            timer_properties.update(timer_changes or {})
+            service_properties = {
+                "FragmentPath": (
+                    f"/run/user/20000/systemd/transient/{service}"
+                ),
+                "DropInPaths": "",
+                "Transient": "yes",
+                "Environment": trusted_path,
+                "ExecCondition": "",
+                "ExecStartPre": "",
+                "ExecStart": (
+                    "{ path=/usr/bin/podman ; "
+                    "argv[]=/usr/bin/podman healthcheck run "
+                    f"{container_id} ; ignore_errors=no ; "
+                    "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
+                    "code=(null) ; status=0/0 }"
+                ),
+                "ExecStartPost": "",
+                "ExecReload": "",
+                "ExecStop": "",
+                "ExecStopPost": "",
+            }
+            service_properties.update(service_changes or {})
+
+            def command_result(arguments, **_kwargs):
+                if "list-units" in arguments:
+                    return 0, f"{timer} loaded active waiting\n", True
+                if "list-jobs" in arguments:
+                    return 0, "", True
+                if arguments[:4] == [
+                    "systemctl", "--user", "show", timer,
+                ]:
+                    return (
+                        0,
+                        "\n".join(
+                            f"{name}={value}"
+                            for name, value in timer_properties.items()
+                        ),
+                        True,
+                    )
+                if arguments[:4] == [
+                    "systemctl", "--user", "show", service,
+                ]:
+                    return (
+                        0,
+                        "\n".join(
+                            f"{name}={value}"
+                            for name, value in service_properties.items()
+                        ),
+                        True,
+                    )
+                raise AssertionError(f"unexpected command: {arguments}")
+
+            with mock.patch.object(
+                self.collector, "command_result", side_effect=command_result
+            ):
+                return self.collector.user_work_facts()
+
+        facts, complete = collect()
+        self.assertTrue(complete)
+        self.assertEqual(
+            [{
+                "container_id": container_id,
+                "timer": timer,
+                "service": service,
+            }],
+            facts["podman_health_timers"],
+        )
+
+        for timer_changes, service_changes in (
+            ({"Triggers": "attacker.service"}, None),
+            ({"Transient": "no"}, None),
+            ({"DropInPaths": "/home/secpal-ci/override.conf"}, None),
+            (None, {"Environment": "PATH=/target/bin"}),
+            (None, {"ExecStartPre": "{ path=/usr/bin/attacker ; }"}),
+            (None, {"ExecStart": "{ path=/usr/bin/attacker ; }"}),
+        ):
+            with self.subTest(
+                timer_changes=timer_changes,
+                service_changes=service_changes,
+            ):
+                _, complete = collect(timer_changes, service_changes)
+                self.assertFalse(complete)
+
     def test_opaque_processes_are_limited_to_trusted_user_manager_units(self) -> None:
         process = Path("/proc/1234")
         own_group = (
@@ -4775,14 +4993,38 @@ class WorkloadEvidenceTests(unittest.TestCase):
         facts, complete = collect(
             "/user.slice/user-20000.slice/user@20000.service/init.scope"
         )
-        self.assertEqual([], facts)
+        self.assertEqual(
+            [{
+                "executable": "[permission-denied]",
+                "control_group": (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    "init.scope"
+                ),
+                "uid": 20000,
+                "gid": 20000,
+                "count": 1,
+            }],
+            facts,
+        )
         self.assertTrue(complete)
 
         facts, complete = collect(
             "/user.slice/user-20000.slice/user@20000.service/"
             "app.slice/ssh-agent.service"
         )
-        self.assertEqual([], facts)
+        self.assertEqual(
+            [{
+                "executable": "[permission-denied]",
+                "control_group": (
+                    "/user.slice/user-20000.slice/user@20000.service/"
+                    "app.slice/ssh-agent.service"
+                ),
+                "uid": 20000,
+                "gid": 20000,
+                "count": 1,
+            }],
+            facts,
+        )
         self.assertTrue(complete)
 
         _, complete = collect(
@@ -4836,7 +5078,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
         empty_inventory = {"containers": [], "networks": [], "volumes": []}
         with mock.patch.object(
             self.collector, "user_work_facts",
-            side_effect=(({"active_units": [], "jobs": []}, True),) * 2,
+            side_effect=(({
+                "active_units": [], "jobs": [], "podman_health_timers": [],
+            }, True),) * 2,
         ), mock.patch.object(
             self.collector, "user_process_facts",
             side_effect=(([], True), (hidden, True)),
@@ -4987,6 +5231,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations["baseline"]["user_work"] = {
             "active_units": ["dbus.service", "dbus.socket"],
             "jobs": [],
+            "podman_health_timers": [],
         }
         observations["post_cleanup"]["user_work"] = {
             "active_units": [
@@ -4995,6 +5240,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "delayed-migration.timer",
             ],
             "jobs": [],
+            "podman_health_timers": [],
         }
         self.assertIn(
             "D1A_PENDING_USER_WORK",
