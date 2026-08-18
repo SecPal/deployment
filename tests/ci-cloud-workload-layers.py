@@ -78,7 +78,9 @@ static_validator = load(STATIC_VALIDATOR_PATH, "ci_cloud_static_validator")
 # static trust-boundary validator owns both lists and applies them to the
 # admission layer; binding them here keeps the executable proof over the
 # normalization layer from drifting away from the rule the validator enforces.
-IMPURE_BUILTINS = static_validator.IMPURE_BUILTINS
+IMPURE_BUILTINS = (
+    static_validator.IMPURE_BUILTINS | static_validator.REFLECTIVE_BUILTINS
+)
 IMPURE_ATTRIBUTES = static_validator.IMPURE_ATTRIBUTES
 AMBIGUOUS_PATH_METHODS = static_validator.AMBIGUOUS_PATH_METHODS
 
@@ -125,8 +127,7 @@ def collector_system_access(source: str | None = None) -> dict[str, set[str]]:
                 isinstance(child, ast.Call)
                 and isinstance(child.func, ast.Attribute)
                 and child.func.attr in AMBIGUOUS_PATH_METHODS
-                and len(child.args) == 1
-                and not child.keywords
+                and len(child.args) + len(child.keywords) == 1
             ):
                 found.add(f".{child.func.attr}")
             if not isinstance(child, ast.Attribute):
@@ -467,6 +468,10 @@ class LayerBoundaryTests(unittest.TestCase):
                 "    return eval(text)",
                 "def path_replace(path, target):",
                 "    return path.replace(target)",
+                "def keyword_path_replace(path, destination):",
+                "    return path.replace(target=destination)",
+                "def reflective(path):",
+                "    return getattr(path, 'read_text')()",
                 "def string_replace(text):",
                 "    return text.replace(':', ' ')",
                 "def through_a_callee(path):",
@@ -482,8 +487,75 @@ class LayerBoundaryTests(unittest.TestCase):
         self.assertEqual({"open"}, reachable["builtin_open"])
         self.assertEqual({"eval"}, reachable["builtin_eval"])
         self.assertEqual({".replace"}, reachable["path_replace"])
+        self.assertEqual({".replace"}, reachable["keyword_path_replace"])
+        self.assertEqual({"getattr"}, reachable["reflective"])
         self.assertEqual(set(), reachable["string_replace"])
         self.assertEqual({"open"}, reachable["through_a_callee"])
+
+    def test_importing_the_contract_reaches_nothing(self) -> None:
+        """Loading the contract must not run the collector's collection code.
+
+        The controller imports the streamed collector to read its contract, so
+        whatever that file runs at module level runs here, before any
+        admission decision. Discarding the module afterwards does not undo it,
+        so the audit hook is installed before the load rather than after, and
+        the only file access it permits is reading the two trusted sources.
+        """
+        program = f"""
+import importlib.util, sys
+
+allowed_reads = {{{str(COLLECTOR_PATH)!r}, {str(ADMISSION_PATH)!r}}}
+forbidden = (
+    "subprocess.Popen", "os.system", "os.exec", "os.fork", "os.posix_spawn",
+    "os.spawn", "os.remove", "os.rename", "os.mkdir", "os.rmdir",
+    "socket.socket", "socket.connect", "urllib.Request", "shutil.",
+)
+
+
+def audit(event, arguments):
+    if event.startswith(forbidden):
+        raise AssertionError(f"loading the contract reached {{event}}")
+    if event == "open":
+        target = arguments[0]
+        cached = "__pycache__" in str(target) and str(target).endswith(".pyc")
+        if isinstance(target, str) and target not in allowed_reads and not cached:
+            raise AssertionError(f"loading the contract opened {{target}}")
+
+
+sys.addaudithook(audit)
+
+
+def load(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+admission = load({str(ADMISSION_PATH)!r}, "workload_admission")
+assert admission.WORKLOAD_CONTRACT
+print("loaded", len(admission.WORKLOAD_CONTRACT))
+"""
+        result = subprocess.run(
+            [sys.executable, "-I", "-"],
+            input=program.encode(),
+            capture_output=True,
+            timeout=120,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            f"loaded {len(collector.WORKLOAD_CONTRACT_EXPORTS)}".encode(),
+            result.stdout,
+        )
+
+    def test_contract_mapping_matches_the_declared_surface(self) -> None:
+        contract = collector.workload_contract()
+        self.assertEqual(
+            list(collector.WORKLOAD_CONTRACT_EXPORTS), list(contract)
+        )
+        for name, value in contract.items():
+            with self.subTest(name=name):
+                self.assertIs(getattr(collector, name), value)
 
     def test_streamed_collector_runs_without_repository_modules(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

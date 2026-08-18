@@ -52,7 +52,14 @@ AMBIGUOUS_PATH_METHODS = frozenset({"replace"})
 # values cannot stop a caller from walking back to everything the definition
 # could see, so the route is closed instead.
 IMPURE_REFLECTION_ATTRIBUTES = frozenset(
-    {"__globals__", "__code__", "__builtins__"}
+    {"__globals__", "__code__", "__builtins__", "__dict__"}
+)
+# Builtins that look a name up at runtime. They turn every rule above into a
+# spelling convention, because getattr(path, "read_text")() reaches the
+# filesystem without an attribute node the analysis could see. The contract is
+# handed over as an explicit mapping so no pure layer needs them.
+REFLECTIVE_BUILTINS = frozenset(
+    {"getattr", "setattr", "delattr", "vars", "globals", "locals"}
 )
 IMPURE_ATTRIBUTES = (
     frozenset({"import_module", "system", "popen"})
@@ -62,11 +69,24 @@ IMPURE_ATTRIBUTES = (
 # What an exported contract predicate may reference besides the declared
 # contract: pure standard-library handles that carry no state of their own.
 PURE_CONTRACT_GLOBALS = frozenset({"re", "Path"})
+# Modules whose every attribute reaches the system.
+SYSTEM_MODULES = frozenset(
+    {"os", "subprocess", "sys", "time", "selectors", "signal", "socket"}
+)
 # The only modules the controller-side admission layer may import. It loads the
 # streamed collector as its contract, so it needs importlib.util, and nothing
 # in this set can reach a process, a file, or the network on its own.
 PURE_ADMISSION_IMPORTS = {
     "__future__", "importlib.util", "re", "pathlib", "typing",
+}
+# An allowed module re-exports its own imports: pathlib carries os, so naming
+# the module is not enough. Only these members may be imported from it.
+PURE_ADMISSION_IMPORT_MEMBERS = {
+    "__future__": frozenset({"annotations"}),
+    "pathlib": frozenset({"Path", "PurePath"}),
+    "typing": frozenset({"Any", "NamedTuple"}),
+    "re": frozenset({"Match", "Pattern"}),
+    "importlib.util": frozenset({"module_from_spec", "spec_from_file_location"}),
 }
 REQUIRED_INPUTS = {"target_sha", "provider_profile"}
 PROFILES = {"digitalocean-intel", "digitalocean-amd", "gcp-axion"}
@@ -202,18 +222,24 @@ def pure_module_violations(text: str, allowed_imports: set[str]) -> list[str]:
             module = node.module or ""
             if node.level or module not in allowed_imports:
                 violations.append(f"imports from {'.' * node.level}{module}")
+                continue
+            members = PURE_ADMISSION_IMPORT_MEMBERS.get(module, frozenset())
+            violations.extend(
+                f"imports {alias.name} from {module}"
+                for alias in node.names
+                if alias.name not in members
+            )
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
-            and node.func.id in IMPURE_BUILTINS
+            and node.func.id in IMPURE_BUILTINS | REFLECTIVE_BUILTINS
         ):
             violations.append(f"calls {node.func.id}")
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in AMBIGUOUS_PATH_METHODS
-            and len(node.args) == 1
-            and not node.keywords
+            and len(node.args) + len(node.keywords) == 1
         ):
             violations.append(f"reaches {node.func.attr}")
         elif isinstance(node, ast.Attribute) and node.attr in IMPURE_ATTRIBUTES:
@@ -267,12 +293,128 @@ def contract_global_violations(text: str, declared: set[str]) -> list[str]:
         return ["trusted contract source is invalid"]
     allowed = declared | PURE_CONTRACT_GLOBALS
     violations: list[str] = []
+    bindings: dict[str, int] = {}
     for node in tree.body:
+        for name in top_level_bound_names(node):
+            if name in declared:
+                bindings[name] = bindings.get(name, 0) + 1
         if not isinstance(node, ast.FunctionDef) or node.name not in declared:
             continue
         violations.extend(
             f"{node.name} reads undeclared {name}"
             for name in sorted(free_global_names(node) - allowed)
+        )
+    # A second binding would export whatever the last one names, so the source
+    # check above would inspect a definition the loader never hands over.
+    violations.extend(
+        f"{name} is bound {count} times"
+        for name, count in sorted(bindings.items())
+        if count != 1
+    )
+    violations.extend(
+        f"{name} is never defined" for name in sorted(declared - set(bindings))
+    )
+    return violations
+
+
+def top_level_bound_names(node: ast.stmt) -> set[str]:
+    """Return the module-level names a single top-level statement binds."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {node.name}
+    if isinstance(node, ast.Assign):
+        return {
+            target.id
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        return {node.target.id}
+    return set()
+
+
+def system_reaching_functions(tree: ast.Module) -> set[str]:
+    """Return the file's functions that reach the system, directly or not."""
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    direct = {
+        name: bool(statement_system_access(node, frozenset()))
+        for name, node in functions.items()
+    }
+    calls = {
+        name: {
+            child.func.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id in functions
+        }
+        for name, node in functions.items()
+    }
+    reaching = {name for name, impure in direct.items() if impure}
+    changed = True
+    while changed:
+        changed = False
+        for name, callees in calls.items():
+            if name not in reaching and callees & reaching:
+                reaching.add(name)
+                changed = True
+    return reaching
+
+
+def statement_system_access(node: ast.AST, impure_calls: frozenset) -> list[str]:
+    """Return the system access a statement performs, ignoring nested bodies."""
+    found: list[str] = []
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+            if child.func.id in IMPURE_BUILTINS | REFLECTIVE_BUILTINS:
+                found.append(f"calls {child.func.id}")
+            elif child.func.id in impure_calls:
+                found.append(f"calls {child.func.id}")
+        if (
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr in AMBIGUOUS_PATH_METHODS
+            and len(child.args) + len(child.keywords) == 1
+        ):
+            found.append(f"reaches {child.func.attr}")
+        if isinstance(child, ast.Attribute):
+            if (
+                isinstance(child.value, ast.Name)
+                and child.value.id in SYSTEM_MODULES
+            ):
+                found.append(f"reaches {child.value.id}.{child.attr}")
+            elif child.attr in IMPURE_ATTRIBUTES:
+                found.append(f"reaches {child.attr}")
+    return found
+
+
+def module_initialization_violations(text: str) -> list[str]:
+    """Return the system access performed while merely importing a module.
+
+    The controller imports the streamed collector to read its contract, so
+    everything the collector runs at module level runs on the controller before
+    any admission decision. Discarding the module afterwards does not undo
+    that, which is why initialization has to stay free of system access.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ["trusted contract source is invalid"]
+    impure_calls = frozenset(system_reaching_functions(tree))
+    violations: list[str] = []
+    for node in tree.body:
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.If)
+        ):
+            # Definitions run no body on import, and the __main__ guard runs
+            # only when the file is executed on a target rather than imported.
+            continue
+        violations.extend(
+            f"initialization {access}"
+            for access in statement_system_access(node, impure_calls)
         )
     return violations
 
@@ -2367,6 +2509,10 @@ def validate(root: Path) -> None:
                 workload_collector, "WORKLOAD_CONTRACT_EXPORTS"
             ),
         )
+        # Importing the collector to read that contract runs its module level
+        # on the controller, so initialization must reach nothing.
+        and not module_initialization_violations(workload_collector)
+        and "def workload_contract()" in workload_collector
         # The contract is bound by subscript from a mapping of exactly the
         # declared members, so attribute access on the loaded collector module
         # would reopen the route past the declared surface.

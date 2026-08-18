@@ -84,12 +84,16 @@ def load_workload_contract() -> dict[str, object]:
         raise ValueError("trusted workload contract is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    declared = getattr(module, "WORKLOAD_CONTRACT_EXPORTS", None)
+    try:
+        declared = module.WORKLOAD_CONTRACT_EXPORTS
+        contract = module.workload_contract()
+    except (AttributeError, NameError) as error:
+        raise ValueError("trusted workload contract is incomplete") from error
     if not isinstance(declared, tuple) or declared != CONTRACT_NAMES:
         raise ValueError("trusted workload contract surface is out of contract")
-    if any(not hasattr(module, name) for name in declared):
+    if not isinstance(contract, dict) or tuple(contract) != CONTRACT_NAMES:
         raise ValueError("trusted workload contract is incomplete")
-    return {name: getattr(module, name) for name in declared}
+    return contract
 
 
 WORKLOAD_CONTRACT = load_workload_contract()

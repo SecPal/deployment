@@ -74,6 +74,43 @@ WORKLOAD_CONTRACT_EXPORTS = (
     "id_map_is_bounded",
 )
 
+
+def workload_contract() -> dict[str, object]:
+    """Return the declared contract surface, by name, for the controller.
+
+    Handing the surface over as an explicit mapping means neither side needs
+    reflection to cross the boundary, so the purity rules can refuse reflective
+    lookup outright instead of carving out an exception for the one place that
+    needed it. Every key here is named in WORKLOAD_CONTRACT_EXPORTS, and
+    tests/ci-cloud-workload-layers.py proves the two agree.
+    """
+    return {
+        "CI_UID": CI_UID,
+        "CI_GID": CI_GID,
+        "QUADLET_ROOT": QUADLET_ROOT,
+        "SYSTEMD_ROOT": SYSTEMD_ROOT,
+        "GENERATOR_ROOT": GENERATOR_ROOT,
+        "PODMAN_NETWORK_ONLINE_UNIT": PODMAN_NETWORK_ONLINE_UNIT,
+        "CONTROL_NETWORK": CONTROL_NETWORK,
+        "CONTROL_VOLUME": CONTROL_VOLUME,
+        "ROLES": ROLES,
+        "NETWORK_KINDS": NETWORK_KINDS,
+        "VOLUME_KINDS": VOLUME_KINDS,
+        "GENERATED_LOGICAL_NAMES": GENERATED_LOGICAL_NAMES,
+        "READY_ROLES": READY_ROLES,
+        "HEALTHY_ROLES": HEALTHY_ROLES,
+        "PODMAN_54_HEALTH_TIMER_SUFFIX": PODMAN_54_HEALTH_TIMER_SUFFIX,
+        "OPAQUE_PROCESS_EXECUTABLE": OPAQUE_PROCESS_EXECUTABLE,
+        "ROLE_CONTRACTS": ROLE_CONTRACTS,
+        "TRUSTED_SERVICE_CONFIG_ENVIRONMENT": TRUSTED_SERVICE_CONFIG_ENVIRONMENT,
+        "expected_unit_names": expected_unit_names,
+        "expected_generated_source": expected_generated_source,
+        "service_state_matches_role": service_state_matches_role,
+        "container_pid_matches_state": container_pid_matches_state,
+        "id_map_is_bounded": id_map_is_bounded,
+    }
+
+
 # The representation-normalization layer. Every name here turns a Podman,
 # systemd, or procfs representation into the closed evidence shape, or refuses
 # it, without running a command or reading the filesystem. The layer cannot
