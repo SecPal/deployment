@@ -1145,7 +1145,7 @@ exact Podman 5.4.2 argument vector produced under the pinned empty
 auto-discovery, gateway-mapping, quiet, network-namespace, and guest-address
 options must appear once in their reviewed order with their exact values.
 Missing, reordered, changed, or additional arguments make collection
-incomplete. The reviewed passt PID file is exactly the decimal PID followed by
+incomplete. The reviewed pasta PID file is exactly the decimal PID followed by
 one line feed; other whitespace and ownership fail closed. Aardvark retains its
 own exact PID file and argument contract and must share the kernel network
 namespace with the process identified by that reviewed pasta PID file. Podman's
