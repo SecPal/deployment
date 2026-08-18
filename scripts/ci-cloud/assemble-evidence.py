@@ -16,6 +16,7 @@ from pathlib import Path
 
 MAX_INPUT_BYTES = 256 * 1024
 WORKLOAD_COLLECTOR = Path(__file__).with_name("collect-workload-evidence.py")
+WORKLOAD_ADMISSION = Path(__file__).with_name("workload-admission.py")
 
 
 class DuplicateKey(ValueError):
@@ -44,7 +45,7 @@ def read_document(path: Path) -> object:
 def read_observation(
     path: Path, phase: str, collection_status: int
 ) -> dict[str, object]:
-    module = load_workload_collector()
+    module = load_workload_admission()
     if collection_status != 0:
         return module.incomplete_observation(phase)
     try:
@@ -122,15 +123,23 @@ def read_normalization_diagnostic(
     return document
 
 
-def load_workload_collector():
-    spec = importlib.util.spec_from_file_location(
-        "trusted_workload_collector", WORKLOAD_COLLECTOR
-    )
+def load_trusted_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ValueError("trusted workload admission implementation is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_workload_collector():
+    """Load the target-side collector, which owns the workload contract."""
+    return load_trusted_module(WORKLOAD_COLLECTOR, "trusted_workload_collector")
+
+
+def load_workload_admission():
+    """Load the controller-side layer that owns every D.1a admission decision."""
+    return load_trusted_module(WORKLOAD_ADMISSION, "trusted_workload_admission")
 
 
 def assemble(
@@ -171,7 +180,7 @@ def assemble(
         "live": live,
         "post_cleanup": post_cleanup,
     }
-    module = load_workload_collector()
+    module = load_workload_admission()
     workload_failures = module.workload_admission_failures(workload)
     status_invariants = {
         ("phase", "workload_prepare_start"): "TARGET_WORKLOAD_PREPARE_START",
