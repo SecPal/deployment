@@ -74,10 +74,12 @@ def load(path: Path, name: str):
 
 static_validator = load(STATIC_VALIDATOR_PATH, "ci_cloud_static_validator")
 # The builtins that reach a process, a file, or the interpreter without an
-# import. The static trust-boundary validator owns the list and applies it to
-# the admission layer; binding it here keeps the executable proof over the
+# import, and the methods that reach the filesystem through a path object. The
+# static trust-boundary validator owns both lists and applies them to the
+# admission layer; binding them here keeps the executable proof over the
 # normalization layer from drifting away from the rule the validator enforces.
 IMPURE_BUILTINS = static_validator.IMPURE_BUILTINS
+IMPURE_PATH_METHODS = static_validator.IMPURE_PATH_METHODS
 
 
 def file_metadata(uid: int, gid: int, mode: int) -> types.SimpleNamespace:
@@ -96,11 +98,7 @@ def collector_system_access(source: str | None = None) -> dict[str, set[str]]:
     function calling ``open`` directly would otherwise be invisible here.
     """
     modules = {"os", "subprocess", "sys", "time", "selectors", "signal"}
-    methods = {
-        "iterdir", "read_bytes", "read_text", "write_bytes", "write_text",
-        "open", "stat", "lstat", "exists", "is_file", "is_dir", "readlink",
-        "chmod", "unlink", "mkdir", "resolve", "glob",
-    }
+    methods = IMPURE_PATH_METHODS
     tree = ast.parse(
         COLLECTOR_PATH.read_text(encoding="utf-8") if source is None else source
     )
@@ -331,12 +329,23 @@ class LayerBoundaryTests(unittest.TestCase):
         self.assertEqual(
             collector.WORKLOAD_CONTRACT_EXPORTS, admission.CONTRACT_NAMES
         )
+        # The loader keeps only the declared members, so an undeclared
+        # collector name cannot become a hidden dependency of admission that
+        # bypasses the surface these agreement checks cover.
+        self.assertEqual(
+            set(collector.WORKLOAD_CONTRACT_EXPORTS),
+            set(admission.WORKLOAD_CONTRACT),
+        )
+        for name in ("CHECKOUT", "MAX_OUTPUT", "PODMAN_EXECUTABLE", "main"):
+            with self.subTest(undeclared=name):
+                self.assertTrue(hasattr(collector, name))
+                self.assertNotIn(name, admission.WORKLOAD_CONTRACT)
         for name in collector.WORKLOAD_CONTRACT_EXPORTS:
             with self.subTest(name=name):
                 # Admission binds the collector's definition rather than
                 # restating the concept, so the two can never drift apart.
                 self.assertIs(
-                    getattr(admission.WORKLOAD_CONTRACT, name),
+                    admission.WORKLOAD_CONTRACT[name],
                     getattr(admission, name),
                 )
                 self.assertIn(name, dir(collector))

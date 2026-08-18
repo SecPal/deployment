@@ -928,23 +928,40 @@ class CloudCIContractTests(unittest.TestCase):
             # import, so an import allowlist alone cannot keep this layer pure.
             (
                 admission,
-                "def load_workload_contract():\n",
-                'def load_workload_contract():\n    eval("1")\n',
+                "def load_workload_contract() -> dict[str, object]:\n",
+                'def load_workload_contract() -> dict[str, object]:\n    eval("1")\n',
             ),
             (
                 admission,
-                "def load_workload_contract():\n",
-                'def load_workload_contract():\n    open("/etc/hostname").close()\n',
+                "def load_workload_contract() -> dict[str, object]:\n",
+                "def load_workload_contract() -> dict[str, object]:\n"
+                '    open("/etc/hostname").close()\n',
             ),
             (
                 admission,
-                "def load_workload_contract():\n",
-                'def load_workload_contract():\n    __import__("os").system("true")\n',
+                "def load_workload_contract() -> dict[str, object]:\n",
+                "def load_workload_contract() -> dict[str, object]:\n"
+                '    __import__("os").system("true")\n',
             ),
             (
                 admission,
                 "    failures: list[str] = []\n",
                 '    failures: list[str] = []\n    exec("pass")\n',
+            ),
+            # pathlib is allowed so a pure layer can name a path, so the rule
+            # has to reject reaching the filesystem through one.
+            (
+                admission,
+                "    failures: list[str] = []\n",
+                "    failures: list[str] = []\n"
+                '    Path("/etc/hostname").read_text()\n',
+            ),
+            # Attribute access on the loaded collector module would reach past
+            # the declared contract surface.
+            (
+                admission,
+                'CI_UID = WORKLOAD_CONTRACT["CI_UID"]',
+                "CI_UID = WORKLOAD_CONTRACT.CI_UID",
             ),
         )
         for relative, old, new in cases:

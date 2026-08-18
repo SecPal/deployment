@@ -27,7 +27,26 @@ PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 IMPURE_BUILTINS = frozenset(
     {"eval", "exec", "compile", "open", "__import__", "input", "breakpoint"}
 )
-IMPURE_ATTRIBUTES = frozenset({"import_module", "system", "popen"})
+# The methods that reach the filesystem through a path object. An import
+# allowlist cannot catch these: pathlib is allowed so a pure layer can name a
+# path, and Path("/etc/hostname").read_text() would otherwise pass every other
+# check. Path construction and naming stay allowed; only access does not.
+# Path.replace is deliberately absent because str.replace shares the name, and
+# a rule that rejects ordinary string handling would be turned off rather than
+# obeyed; the other write and delete methods still close that route.
+IMPURE_PATH_METHODS = frozenset(
+    {
+        "chmod", "exists", "glob", "hardlink_to", "is_block_device",
+        "is_char_device", "is_dir", "is_fifo", "is_file", "is_mount",
+        "is_socket", "is_symlink", "iterdir", "lchmod", "lstat", "mkdir",
+        "open", "owner", "read_bytes", "read_text", "readlink", "rename",
+        "resolve", "rglob", "rmdir", "samefile", "stat", "symlink_to",
+        "touch", "unlink", "walk", "write_bytes", "write_text",
+    }
+)
+IMPURE_ATTRIBUTES = (
+    frozenset({"import_module", "system", "popen"}) | IMPURE_PATH_METHODS
+)
 # The only modules the controller-side admission layer may import. It loads the
 # streamed collector as its contract, so it needs importlib.util, and nothing
 # in this set can reach a process, a file, or the network on its own.
@@ -2260,6 +2279,10 @@ def validate(root: Path) -> None:
         # same property by running an admission decision under a rejecting
         # audit hook.
         and not pure_module_violations(workload_admission, PURE_ADMISSION_IMPORTS)
+        # The contract is bound by subscript from a mapping of exactly the
+        # declared members, so attribute access on the loaded collector module
+        # would reopen the route past the declared surface.
+        and "WORKLOAD_CONTRACT." not in workload_admission
         and "subprocess" not in workload_admission,
         "the streamed collector must stay self-contained and the admission layer pure",
     )
