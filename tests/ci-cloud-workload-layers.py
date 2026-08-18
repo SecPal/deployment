@@ -46,6 +46,7 @@ VALIDATOR_PATH = ROOT / "scripts" / "ci-cloud" / "validate-evidence.py"
 SCHEMA_PATH = ROOT / "schemas" / "ci-cloud-evidence.schema.json"
 WORKLOAD_TEST_PATH = ROOT / "tests" / "ci-cloud-workload-evidence.py"
 EVIDENCE_TEST_PATH = ROOT / "tests" / "ci-cloud-evidence.py"
+STATIC_VALIDATOR_PATH = ROOT / "scripts" / "validate-ci-cloud.py"
 
 INSTANCE = "aaaaaaaaaaaa"
 TARGET_SHA = "a" * 40
@@ -62,16 +63,37 @@ CLEAN_COLLECTION_STATUSES = {"baseline": 0, "live": 0, "post_cleanup": 0}
 SERVICE_BOUND_FIELDS = ("container_cgroup", "lifecycle_service_invocation")
 
 
+def load(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load {path.name}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+static_validator = load(STATIC_VALIDATOR_PATH, "ci_cloud_static_validator")
+# The builtins that reach a process, a file, or the interpreter without an
+# import. The static trust-boundary validator owns the list and applies it to
+# the admission layer; binding it here keeps the executable proof over the
+# normalization layer from drifting away from the rule the validator enforces.
+IMPURE_BUILTINS = static_validator.IMPURE_BUILTINS
+
+
 def file_metadata(uid: int, gid: int, mode: int) -> types.SimpleNamespace:
     """Return the os.stat_result fields the collection layer reads."""
     return types.SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=mode)
 
 
-def collector_system_access() -> dict[str, set[str]]:
+def collector_system_access(source: str | None = None) -> dict[str, set[str]]:
     """Map each collector function to the system access it can reach.
 
     The value is every command, filesystem, or clock primitive the function
-    uses itself or through a callee defined in the same file.
+    uses itself or through a callee defined in the same file. A primitive is
+    reachable through a module attribute, through a method name only a
+    filesystem object carries, or through a builtin that needs no import at
+    all, which is why IMPURE_BUILTINS is checked as well: a normalization
+    function calling ``open`` directly would otherwise be invisible here.
     """
     modules = {"os", "subprocess", "sys", "time", "selectors", "signal"}
     methods = {
@@ -79,7 +101,9 @@ def collector_system_access() -> dict[str, set[str]]:
         "open", "stat", "lstat", "exists", "is_file", "is_dir", "readlink",
         "chmod", "unlink", "mkdir", "resolve", "glob",
     }
-    tree = ast.parse(COLLECTOR_PATH.read_text(encoding="utf-8"))
+    tree = ast.parse(
+        COLLECTOR_PATH.read_text(encoding="utf-8") if source is None else source
+    )
     functions = {
         node.name: node
         for node in tree.body
@@ -89,6 +113,12 @@ def collector_system_access() -> dict[str, set[str]]:
     def direct(node: ast.AST) -> set[str]:
         found: set[str] = set()
         for child in ast.walk(node):
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id in IMPURE_BUILTINS
+            ):
+                found.add(child.func.id)
             if not isinstance(child, ast.Attribute):
                 continue
             if isinstance(child.value, ast.Name) and child.value.id in modules:
@@ -119,15 +149,6 @@ def collector_system_access() -> dict[str, set[str]]:
         return found
 
     return {name: reachable(name, set()) for name in functions}
-
-
-def load(path: Path, name: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load {path.name}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def host_input() -> dict[str, object]:
@@ -398,6 +419,44 @@ class LayerBoundaryTests(unittest.TestCase):
         for name in ("container_facts", "user_work_facts", "installed_unit_facts"):
             with self.subTest(collection=name):
                 self.assertTrue(reachable[name])
+
+    def test_normalization_analysis_sees_every_route_to_the_system(self) -> None:
+        """Prove the analysis behind the boundary above cannot be evaded.
+
+        A route it cannot see is a boundary that is documented rather than
+        enforced, so each way a function can reach the system is replayed
+        against the analysis itself: a module attribute, a filesystem method,
+        a builtin that needs no import, and any of them through a callee.
+        """
+        source = "\n".join(
+            (
+                "import os",
+                "import time",
+                "def pure(value):",
+                "    return value.strip()",
+                "def module_attribute():",
+                "    return os.getuid()",
+                "def clock():",
+                "    return time.monotonic()",
+                "def filesystem_method(path):",
+                "    return path.read_bytes()",
+                "def builtin_open(path):",
+                "    return open(path).close()",
+                "def builtin_eval(text):",
+                "    return eval(text)",
+                "def through_a_callee(path):",
+                "    return builtin_open(path)",
+                "",
+            )
+        )
+        reachable = collector_system_access(source)
+        self.assertEqual(set(), reachable["pure"])
+        self.assertEqual({"os.getuid"}, reachable["module_attribute"])
+        self.assertEqual({"time.monotonic"}, reachable["clock"])
+        self.assertEqual({".read_bytes"}, reachable["filesystem_method"])
+        self.assertEqual({"open"}, reachable["builtin_open"])
+        self.assertEqual({"eval"}, reachable["builtin_eval"])
+        self.assertEqual({"open"}, reachable["through_a_callee"])
 
     def test_streamed_collector_runs_without_repository_modules(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -768,6 +827,48 @@ class CrossLayerEvidenceTests(unittest.TestCase):
                 )
                 self.assertEqual(refused_by_schema, bool(errors))
                 self.assert_refused(observations)
+
+    def test_generated_service_names_have_one_agreed_definition(self) -> None:
+        """The generated service name is one concept with one schema home.
+
+        A Quadlet generator turns each reviewed unit into a systemd service,
+        and both the generated service fact and the container fact that names
+        its own service describe the same string. Stating the rule once keeps
+        the two from drifting the way the canonical unit name once did.
+        """
+        definition = jsonschema.Draft202012Validator(
+            SCHEMA["$defs"]["generatedServiceName"]
+        )
+        reference = {"$ref": "#/$defs/generatedServiceName"}
+        self.assertEqual(
+            reference,
+            SCHEMA["$defs"]["generatedServiceFact"]["properties"]["unit"],
+        )
+        self.assertEqual(
+            reference,
+            SCHEMA["$defs"]["containerFact"]["properties"]["systemd_unit"],
+        )
+        observations = workload_tests.valid_observations()
+        produced = [
+            str(service["unit"])
+            for service in observations["live"]["generated_services"]
+        ] + [
+            str(container["systemd_unit"])
+            for container in observations["live"]["containers"]
+        ]
+        self.assertTrue(produced)
+        for name in produced:
+            with self.subTest(name=name):
+                self.assertTrue(definition.is_valid(name))
+        for name in (
+            f"secpal-int-{INSTANCE}-api.container",
+            f"secpal-int-{INSTANCE}.service",
+            f"secpal-int-{INSTANCE}-API.service",
+            "unrelated.service",
+            "",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(definition.is_valid(name))
 
     def test_reviewed_installed_unit_representation_crosses_every_layer(
         self,

@@ -676,6 +676,11 @@
       "pattern": "^secpal-int-[0-9a-f]{12}(-[a-z0-9-]+\\.(container|network|volume)|\\.target)$",
       "maxLength": 96
     },
+    "generatedServiceName": {
+      "type": "string",
+      "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
+      "maxLength": 96
+    },
     "unitFact": {
       "type": "object",
       "additionalProperties": false,
@@ -747,11 +752,7 @@
             "postgres-volume"
           ]
         },
-        "unit": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
-          "maxLength": 96
-        },
+        "unit": { "$ref": "#/$defs/generatedServiceName" },
         "fragment_path": {
           "type": "string",
           "pattern": "^/run/user/20000/systemd/generator/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
@@ -1030,11 +1031,7 @@
         "networks": { "$ref": "#/$defs/stringArray" },
         "published_ports": { "$ref": "#/$defs/stringArray" },
         "auto_update": { "type": "boolean" },
-        "systemd_unit": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
-          "maxLength": 96
-        },
+        "systemd_unit": { "$ref": "#/$defs/generatedServiceName" },
         "container_cgroup": { "type": "string", "maxLength": 256 },
         "lifecycle_service_invocation": {
           "type": "string",

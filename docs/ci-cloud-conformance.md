@@ -879,15 +879,15 @@ has exactly one authoritative place, and so that each layer can be tested on
 its own without losing the guarantee that a representation one layer admits is
 also accepted by the next.
 
-| Layer                        | File                                            | Owns                                                                                                                                                                  |
-| ---------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Workload contract            | `scripts/ci-cloud/collect-workload-evidence.py` | Reviewed roles, unit names, networks, volumes, identities, and the pure predicates over them, declared in `WORKLOAD_CONTRACT_EXPORTS`                                 |
-| Representation normalization | `scripts/ci-cloud/collect-workload-evidence.py` | Pure functions that turn a Podman, systemd, or procfs representation into the closed evidence shape, or refuse it, declared in `REPRESENTATION_NORMALIZATION_EXPORTS` |
-| Collection                   | `scripts/ci-cloud/collect-workload-evidence.py` | The side-effecting layer that runs commands and reads procfs and the filesystem to assemble one bounded observation per phase                                         |
-| Evidence shape               | `schemas/ci-cloud-evidence.schema.json`         | The closed schema every observation must satisfy, including the single named `canonicalSystemdUnitName` and `quadletUnitFileName` definitions                         |
-| Admission                    | `scripts/ci-cloud/workload-admission.py`        | Every D.1a admission decision, as a pure function of an observation document                                                                                          |
-| Assembly                     | `scripts/ci-cloud/assemble-evidence.py`         | Joining D.1 host and D.1a workload evidence and recording the admission result                                                                                        |
-| Independent revalidation     | `scripts/ci-cloud/validate-evidence.py`         | Recomputing admission from the published evidence and rejecting a document that disagrees                                                                             |
+| Layer                        | File                                            | Owns                                                                                                                                                                   |
+| ---------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workload contract            | `scripts/ci-cloud/collect-workload-evidence.py` | Reviewed roles, unit names, networks, volumes, identities, and the pure predicates over them, declared in `WORKLOAD_CONTRACT_EXPORTS`                                  |
+| Representation normalization | `scripts/ci-cloud/collect-workload-evidence.py` | Pure functions that turn a Podman, systemd, or procfs representation into the closed evidence shape, or refuse it, declared in `REPRESENTATION_NORMALIZATION_EXPORTS`  |
+| Collection                   | `scripts/ci-cloud/collect-workload-evidence.py` | The side-effecting layer that runs commands and reads procfs and the filesystem to assemble one bounded observation per phase                                          |
+| Evidence shape               | `schemas/ci-cloud-evidence.schema.json`         | The closed schema every observation must satisfy, including the single named `canonicalSystemdUnitName`, `quadletUnitFileName`, and `generatedServiceName` definitions |
+| Admission                    | `scripts/ci-cloud/workload-admission.py`        | Every D.1a admission decision, as a pure function of an observation document                                                                                           |
+| Assembly                     | `scripts/ci-cloud/assemble-evidence.py`         | Joining D.1 host and D.1a workload evidence and recording the admission result                                                                                         |
+| Independent revalidation     | `scripts/ci-cloud/validate-evidence.py`         | Recomputing admission from the published evidence and rejecting a document that disagrees                                                                              |
 
 The collector stays one self-contained file because the trusted runner streams
 it to the target over `python3 -I -` on standard input; it may not import
@@ -902,7 +902,22 @@ Normalization cannot become a fourth file for the same streaming reason, so its
 boundary is enforced rather than merely documented: every function named in
 `REPRESENTATION_NORMALIZATION_EXPORTS` is proven unable to run a command, read
 the filesystem, or read the clock, directly or through any callee. A helper
-that needs to observe something belongs in the collection layer instead.
+that needs to observe something belongs in the collection layer instead. A
+function reaches the system through a module attribute, through a method only a
+filesystem object carries, or through a builtin that needs no import at all, so
+the analysis behind that proof covers all three and is itself replayed against
+a source in which each route appears. `scripts/validate-ci-cloud.py` owns the
+list of impure builtins as `IMPURE_BUILTINS` and applies the same rule to the
+admission layer, which may additionally import only `PURE_ADMISSION_IMPORTS`.
+
+One deliberate boundary moved with this ownership split. The post-cleanup
+`owned_units` list previously used the generic `stringArray`, so any leftover
+name was expressible in evidence and refused by the `D1A_CLEANUP_ABSENCE`
+invariant. It now uses `quadletUnitFileName`, so a leftover the trusted
+installer could never have written is refused one layer earlier, at the schema,
+and never reaches admission. Passing runs are unaffected because a clean
+post-cleanup phase reports no owned units at all, and both paths fail closed;
+only the reported boundary differs.
 
 `tests/ci-cloud-workload-layers.py` holds the cross-layer proofs: the reviewed
 Podman 5.4 inspect representations are replayed through the collection layer
@@ -913,6 +928,13 @@ services, transient Podman health units, process census, and resource inventory
 are each replayed the same way; and malformed, absent, duplicate, over-limit, or
 provenance-free facts must fail closed at the earliest boundary and stay
 rejected by independent revalidation.
+
+`tests/ci-cloud-contract.py` mutates the trusted sources and requires
+`scripts/validate-ci-cloud.py` to reject each mutation, so a static rule cannot
+silently stop firing. The layer-boundary rule is covered by an undeclared
+contract surface, a smuggled D.1a name, an import that would let the streamed
+collector reach the repository, a renamed admission contract list, a forbidden
+import, and each impure builtin route into the admission layer.
 
 ## Evidence and interpretation
 
