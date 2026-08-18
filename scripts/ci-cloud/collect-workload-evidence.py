@@ -236,6 +236,12 @@ class RoleContract(NamedTuple):
 NetworkEndpoint = tuple[tuple[str, ...], tuple[str, ...]]
 
 
+class NetworkMetadata(NamedTuple):
+    internal: bool
+    gateways: tuple[str, ...]
+    dns_servers: tuple[str, ...]
+
+
 class ContainerCollection(NamedTuple):
     facts: list[dict[str, object]]
     network_endpoints: dict[str, dict[str, NetworkEndpoint]]
@@ -2082,6 +2088,96 @@ def normalized_network_endpoints(
     return sorted(endpoints), endpoints, True
 
 
+def workload_network_metadata(
+    instance: str,
+) -> tuple[dict[str, NetworkMetadata], bool]:
+    if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
+        return {}, False
+    prefix = f"secpal-int-{instance}-"
+    expected = [f"{prefix}application", f"{prefix}edge"]
+    inspections, inspections_complete = json_array(
+        ["podman", "network", "inspect", *expected], timeout=60
+    )
+    if not inspections_complete or len(inspections) != len(expected):
+        return {}, False
+    metadata: dict[str, NetworkMetadata] = {}
+    required = {
+        "name", "id", "driver", "subnets", "ipv6_enabled", "internal",
+        "dns_enabled",
+    }
+    for item in inspections:
+        if (
+            not isinstance(item, dict)
+            or not required.issubset(item)
+            or not isinstance(item["name"], str)
+            or item["name"] not in expected
+            or item["name"] in metadata
+            or not isinstance(item["id"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", item["id"]) is None
+            or item["driver"] != "bridge"
+            or item["internal"] is not True
+            or item["dns_enabled"] is not True
+            or type(item["ipv6_enabled"]) is not bool
+            or not isinstance(item["subnets"], list)
+            or not 1 <= len(item["subnets"]) <= 16
+        ):
+            return {}, False
+        gateways: list[str] = []
+        versions: set[int] = set()
+        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+        for subnet in item["subnets"]:
+            if (
+                not isinstance(subnet, dict)
+                or not {"subnet", "gateway"}.issubset(subnet)
+                or not isinstance(subnet["subnet"], str)
+            ):
+                return {}, False
+            try:
+                network = ipaddress.ip_network(subnet["subnet"], strict=True)
+            except ValueError:
+                return {}, False
+            gateway = normalized_network_address(
+                subnet["gateway"], network.version
+            )
+            if (
+                str(network) != subnet["subnet"]
+                or gateway is None
+                or ipaddress.ip_address(gateway) not in network
+                or ipaddress.ip_address(gateway)
+                in {network.network_address, network.broadcast_address}
+                or any(network.overlaps(existing) for existing in networks)
+            ):
+                return {}, False
+            networks.append(network)
+            versions.add(network.version)
+            gateways.append(gateway)
+        if (
+            len(gateways) != len(set(gateways))
+            or item["ipv6_enabled"] != (6 in versions)
+        ):
+            return {}, False
+        dns_value = item.get("network_dns_servers", [])
+        if not isinstance(dns_value, list) or len(dns_value) > 16:
+            return {}, False
+        dns_servers: list[str] = []
+        for value in dns_value:
+            try:
+                address = ipaddress.ip_address(value)
+            except (TypeError, ValueError):
+                return {}, False
+            if not isinstance(value, str) or str(address) != value:
+                return {}, False
+            dns_servers.append(value)
+        if len(dns_servers) != len(set(dns_servers)):
+            return {}, False
+        metadata[item["name"]] = NetworkMetadata(
+            internal=True,
+            gateways=tuple(gateways),
+            dns_servers=tuple(dns_servers),
+        )
+    return metadata, set(metadata) == set(expected)
+
+
 def service_environment_assignments(
     value: object,
 ) -> tuple[dict[str, str], bool]:
@@ -3404,12 +3500,16 @@ def normalized_aardvark_dns(value: str) -> bool:
 
 
 def aardvark_configuration_matches_workload(
-    instance: str, containers: object, network_endpoints: object
+    instance: str,
+    containers: object,
+    network_endpoints: object,
+    network_metadata: object,
 ) -> bool:
     if (
         re.fullmatch(r"[0-9a-f]{12}", instance) is None
         or not isinstance(containers, list)
         or not isinstance(network_endpoints, dict)
+        or not isinstance(network_metadata, dict)
     ):
         return False
     expected: dict[str, dict[str, tuple[str, NetworkEndpoint]]] = {}
@@ -3457,6 +3557,33 @@ def aardvark_configuration_matches_workload(
             members[container_id] = (name, endpoint)
     if set(expected) != {f"{prefix}application", f"{prefix}edge"}:
         return False
+    if set(network_metadata) != set(expected):
+        return False
+    aardvark_files: dict[str, str] = {}
+    network_headers: dict[str, str] = {}
+    for network in expected:
+        metadata = network_metadata.get(network)
+        if (
+            not isinstance(metadata, NetworkMetadata)
+            or metadata.internal is not True
+            or not 1 <= len(metadata.gateways) <= 16
+            or len(metadata.gateways) != len(set(metadata.gateways))
+            or len(metadata.dns_servers) > 16
+            or len(metadata.dns_servers) != len(set(metadata.dns_servers))
+        ):
+            return False
+        for value in (*metadata.gateways, *metadata.dns_servers):
+            try:
+                address = ipaddress.ip_address(value)
+            except (TypeError, ValueError):
+                return False
+            if not isinstance(value, str) or str(address) != value:
+                return False
+        aardvark_files[network] = f"{network}%int"
+        network_headers[network] = ",".join(metadata.gateways) + (
+            f" {','.join(metadata.dns_servers)}"
+            if metadata.dns_servers else ""
+        )
     try:
         directory_before = PODMAN_AARDVARK_CONFIG_ROOT.stat()
         entries = tuple(PODMAN_AARDVARK_CONFIG_ROOT.iterdir())
@@ -3464,11 +3591,11 @@ def aardvark_configuration_matches_workload(
         return False
     entry_names = {entry.name for entry in entries}
     if len(entries) > 3 or entry_names != {
-        "aardvark.pid", *expected,
+        "aardvark.pid", *aardvark_files.values(),
     }:
         return False
     for network, members in expected.items():
-        path = PODMAN_AARDVARK_CONFIG_ROOT / network
+        path = PODMAN_AARDVARK_CONFIG_ROOT / aardvark_files[network]
         observation = bounded_regular_file(path)
         if observation is None:
             return False
@@ -3481,7 +3608,10 @@ def aardvark_configuration_matches_workload(
             lines = content.decode("ascii").splitlines()
         except UnicodeDecodeError:
             return False
-        if len(lines) != len(members) + 1 or not lines[0]:
+        if (
+            len(lines) != len(members) + 1
+            or lines[0] != network_headers[network]
+        ):
             return False
         observed: set[str] = set()
         for line in lines[1:]:
@@ -3938,8 +4068,11 @@ def collect_live(instance: str) -> dict[str, object]:
         podman_gid_map=podman_gid_map,
     )
     containers, bindings_complete = bind_container_services(services, containers)
+    network_metadata, network_metadata_complete = workload_network_metadata(
+        instance
+    )
     network_helpers_complete = aardvark_configuration_matches_workload(
-        instance, containers, network_endpoints
+        instance, containers, network_endpoints, network_metadata
     )
     inventory, inventory_complete = resource_inventory()
     prefix = f"secpal-int-{instance}-"
@@ -3957,7 +4090,8 @@ def collect_live(instance: str) -> dict[str, object]:
         "complete": all(
             (
                 units_complete, services_complete, containers_complete,
-                bindings_complete, network_helpers_complete,
+                bindings_complete, network_metadata_complete,
+                network_helpers_complete,
                 inventory_complete, runtime_complete,
                 podman_maps_complete,
                 lifecycle_complete, controls_complete,

@@ -5063,6 +5063,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 edge_network: (("10.90.0.3",), ()),
             },
         }
+        network_metadata = {
+            application: self.collector.NetworkMetadata(
+                internal=True,
+                gateways=("10.89.0.1",),
+                dns_servers=(),
+            ),
+            edge_network: self.collector.NetworkMetadata(
+                internal=True,
+                gateways=("10.90.0.1", "fd00::1"),
+                dns_servers=("192.0.2.53", "2001:db8::53"),
+            ),
+        }
         for mutation in (
             lambda value: value[0].__setitem__("id", []),
             lambda value: value[0].__setitem__("networks", [{}]),
@@ -5072,20 +5084,23 @@ class WorkloadEvidenceTests(unittest.TestCase):
             with self.subTest(malformed=malformed):
                 self.assertFalse(
                     self.collector.aardvark_configuration_matches_workload(
-                        instance, malformed, endpoints
+                        instance, malformed, endpoints, network_metadata
                     )
                 )
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory)
             (config / "aardvark.pid").write_text("456", encoding="ascii")
-            (config / f"secpal-int-{instance}-application").write_text(
+            application_path = config / (
+                f"secpal-int-{instance}-application%int"
+            )
+            application_path.write_text(
                 "10.89.0.1\n"
                 f"{'b' * 64} 10.89.0.2  secpal-int-{instance}-api\n",
                 encoding="ascii",
             )
-            edge = config / f"secpal-int-{instance}-edge"
+            edge = config / f"secpal-int-{instance}-edge%int"
             edge.write_text(
-                "10.90.0.1\n"
+                "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53\n"
                 f"{'b' * 64} 10.90.0.2,10.90.0.4 "
                 f"fd00::2,fd00::4 secpal-int-{instance}-api\n"
                 f"{'c' * 64} 10.90.0.3  secpal-int-{instance}-frontend\n",
@@ -5100,8 +5115,42 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ):
                 self.assertTrue(
                     self.collector.aardvark_configuration_matches_workload(
-                        instance, containers, endpoints
+                        instance, containers, endpoints, network_metadata
                     )
+                )
+                valid_edge_entries = (
+                    f"{'b' * 64} 10.90.0.2,10.90.0.4 "
+                    f"fd00::2,fd00::4 secpal-int-{instance}-api\n"
+                    f"{'c' * 64} 10.90.0.3  "
+                    f"secpal-int-{instance}-frontend\n"
+                )
+                for network_header in (
+                    "10.90.0.254,fd00::1 192.0.2.53,2001:db8::53",
+                    "10.90.0.1 192.0.2.53,2001:db8::53",
+                    "10.90.0.1,fd00::1,fd00::2 192.0.2.53,2001:db8::53",
+                    "10.90.0.1,fd00::1",
+                    "10.90.0.1,fd00::1 192.0.2.54,2001:db8::53",
+                    "10.90.0.1,fd00::1 192.0.2.53",
+                    "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53,203.0.113.53",
+                    "fd00::1,10.90.0.1 192.0.2.53,2001:db8::53",
+                ):
+                    with self.subTest(network_header=network_header):
+                        edge.write_text(
+                            f"{network_header}\n{valid_edge_entries}",
+                            encoding="ascii",
+                        )
+                        self.assertFalse(
+                            self.collector.aardvark_configuration_matches_workload(
+                                instance,
+                                containers,
+                                endpoints,
+                                network_metadata,
+                            )
+                        )
+                edge.write_text(
+                    "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53\n"
+                    f"{valid_edge_entries}",
+                    encoding="ascii",
                 )
                 for api_addresses in (
                     "203.0.113.1,10.90.0.4 fd00::2,fd00::4",
@@ -5113,7 +5162,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 ):
                     with self.subTest(api_addresses=api_addresses):
                         edge.write_text(
-                            "10.90.0.1\n"
+                            "10.90.0.1,fd00::1 "
+                            "192.0.2.53,2001:db8::53\n"
                             f"{'b' * 64} {api_addresses} "
                             f"secpal-int-{instance}-api\n"
                             f"{'c' * 64} 10.90.0.3  "
@@ -5122,18 +5172,120 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         )
                         self.assertFalse(
                             self.collector.aardvark_configuration_matches_workload(
-                                instance, containers, endpoints
+                                instance,
+                                containers,
+                                endpoints,
+                                network_metadata,
                             )
                         )
                 edge.write_text(
-                    "10.90.0.1\n"
+                    "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53\n"
                     f"{'b' * 64} 10.90.0.2  secpal-int-{instance}-api\n",
                     encoding="ascii",
                 )
                 self.assertFalse(
                     self.collector.aardvark_configuration_matches_workload(
-                        instance, containers, endpoints
+                        instance, containers, endpoints, network_metadata
                     )
+                )
+
+                edge.write_text(
+                    "10.90.0.1,fd00::1 192.0.2.53,2001:db8::53\n"
+                    f"{valid_edge_entries}",
+                    encoding="ascii",
+                )
+                application_path.rename(
+                    config / f"secpal-int-{instance}-application"
+                )
+                self.assertFalse(
+                    self.collector.aardvark_configuration_matches_workload(
+                        instance, containers, endpoints, network_metadata
+                    )
+                )
+
+    def test_workload_network_metadata_is_complete_and_canonical(self) -> None:
+        instance = "a" * 12
+        application = f"secpal-int-{instance}-application"
+        edge = f"secpal-int-{instance}-edge"
+        inspections = [
+            {
+                "name": application,
+                "id": "b" * 64,
+                "driver": "bridge",
+                "subnets": [
+                    {"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"},
+                ],
+                "ipv6_enabled": False,
+                "internal": True,
+                "dns_enabled": True,
+            },
+            {
+                "name": edge,
+                "id": "c" * 64,
+                "driver": "bridge",
+                "subnets": [
+                    {"subnet": "10.90.0.0/24", "gateway": "10.90.0.1"},
+                    {"subnet": "fd00::/64", "gateway": "fd00::1"},
+                ],
+                "ipv6_enabled": True,
+                "internal": True,
+                "dns_enabled": True,
+                "network_dns_servers": ["192.0.2.53", "2001:db8::53"],
+            },
+        ]
+        with mock.patch.object(
+            self.collector, "json_array", return_value=(inspections, True)
+        ) as inspect:
+            metadata, complete = self.collector.workload_network_metadata(instance)
+        self.assertTrue(complete)
+        self.assertEqual(
+            {
+                application: self.collector.NetworkMetadata(
+                    True, ("10.89.0.1",), ()
+                ),
+                edge: self.collector.NetworkMetadata(
+                    True,
+                    ("10.90.0.1", "fd00::1"),
+                    ("192.0.2.53", "2001:db8::53"),
+                ),
+            },
+            metadata,
+        )
+        inspect.assert_called_once_with(
+            ["podman", "network", "inspect", application, edge], timeout=60
+        )
+
+        mutations = {
+            "missing-key": lambda value: value[0].pop("dns_enabled"),
+            "wrong-driver": lambda value: value[0].__setitem__("driver", "macvlan"),
+            "external": lambda value: value[0].__setitem__("internal", False),
+            "dns-disabled": lambda value: value[0].__setitem__("dns_enabled", False),
+            "missing-gateway": lambda value: value[0]["subnets"][0].pop("gateway"),
+            "bad-subnet": lambda value: value[0]["subnets"][0].__setitem__(
+                "subnet", "10.89.0.1/24"
+            ),
+            "bad-gateway": lambda value: value[0]["subnets"][0].__setitem__(
+                "gateway", "203.0.113.1"
+            ),
+            "wrong-ipv6-flag": lambda value: value[1].__setitem__(
+                "ipv6_enabled", False
+            ),
+            "duplicate-dns": lambda value: value[1][
+                "network_dns_servers"
+            ].append("192.0.2.53"),
+            "noncanonical-dns": lambda value: value[1][
+                "network_dns_servers"
+            ].__setitem__(0, "2001:0db8::53"),
+        }
+        for name, mutate in mutations.items():
+            candidate = copy.deepcopy(inspections)
+            mutate(candidate)
+            with self.subTest(name=name), mock.patch.object(
+                self.collector, "json_array", return_value=(candidate, True)
+            ):
+                self.assertEqual(
+                    ({}, False),
+                    self.collector.workload_network_metadata(instance),
                 )
 
     def test_inspected_network_endpoints_are_complete_and_canonical(self) -> None:
@@ -5495,6 +5647,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector, "container_facts", return_value=([], {}, True)
         ), mock.patch.object(
             self.collector, "bind_container_services", return_value=([], True)
+        ), mock.patch.object(
+            self.collector,
+            "workload_network_metadata",
+            return_value=({}, False),
         ), mock.patch.object(
             self.collector,
             "resource_inventory",

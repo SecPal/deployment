@@ -999,7 +999,14 @@ Evidence includes:
   inspect snapshot and must exactly match its Aardvark network entry together
   with the full container ID and expected container name. Missing, extra,
   duplicated, malformed, or different Aardvark addresses make collection
-  incomplete rather than adding a new target-reported evidence field; the
+  incomplete rather than adding a new target-reported evidence field. The
+  collector also independently inspects both workload bridge networks and
+  requires their exact internal, DNS-enabled contract. Their Aardvark files
+  must use Netavark's reviewed `%int` suffix for internal networks, and each
+  first line must exactly reproduce the inspected subnet gateways followed by
+  the optional network-level DNS servers in runtime order. A missing, extra,
+  reordered, non-canonical, or different header address makes collection
+  incomplete; the
   complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
   `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
