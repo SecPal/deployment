@@ -84,6 +84,8 @@ PODMAN_ROOTLESS_NETWORK_PID = (
 )
 PODMAN_AARDVARK_CONFIG_ROOT = PODMAN_NETWORK_RUN_ROOT / "aardvark-dns"
 PODMAN_AARDVARK_PID = PODMAN_AARDVARK_CONFIG_ROOT / "aardvark.pid"
+COLLECTOR_PODMAN_SCOPE_UNITS: set[str] = set()
+COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE = True
 TRUSTED_USER_SOCKET_UNITS = {
     name: (
         frozenset(
@@ -568,6 +570,31 @@ def command_environment() -> dict[str, str]:
     }
 
 
+def collector_podman_scope_unit(
+    arguments: object, pid: object
+) -> str | None:
+    if (
+        not isinstance(arguments, list)
+        or not arguments
+        or arguments[0] not in {"podman", str(PODMAN_EXECUTABLE)}
+        or type(pid) is not int
+        or not 1 <= pid <= 4_194_304
+    ):
+        return None
+    return f"podman-{pid}.scope"
+
+
+def record_collector_podman_scope(arguments: object, pid: object) -> None:
+    global COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE
+    unit = collector_podman_scope_unit(arguments, pid)
+    if unit is None or unit in COLLECTOR_PODMAN_SCOPE_UNITS:
+        return
+    if len(COLLECTOR_PODMAN_SCOPE_UNITS) >= 128:
+        COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE = False
+        return
+    COLLECTOR_PODMAN_SCOPE_UNITS.add(unit)
+
+
 def command_result(arguments: list[str], timeout: int = 20) -> tuple[int, str, bool]:
     process: subprocess.Popen[bytes] | None = None
     try:
@@ -578,6 +605,7 @@ def command_result(arguments: list[str], timeout: int = 20) -> tuple[int, str, b
             env=command_environment(),
             start_new_session=True,
         )
+        record_collector_podman_scope(arguments, process.pid)
         if process.stdout is None:
             raise OSError("subprocess stdout pipe is unavailable")
         deadline = time.monotonic() + timeout
@@ -3167,7 +3195,51 @@ def podman_healthcheck_is_current(container_id: str) -> bool:
     return status_code == 0 and bounded and output == ""
 
 
+def collector_podman_scopes_are_quiescent(
+    *, attempts: int = 50, delay: float = 0.1
+) -> bool:
+    if (
+        not COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE
+        or type(attempts) is not int
+        or not 1 <= attempts <= 100
+        or not isinstance(delay, (int, float))
+        or isinstance(delay, bool)
+        or not 0 <= delay <= 1
+    ):
+        return False
+    pending = set(COLLECTOR_PODMAN_SCOPE_UNITS)
+    for attempt in range(attempts):
+        next_pending: set[str] = set()
+        for unit in sorted(pending):
+            status_code, output, complete = command_result(
+                ["systemctl", "--user", "is-active", unit]
+            )
+            if not complete:
+                return False
+            if (
+                (status_code == 0 and output in {"active", "reloading"})
+                or (
+                    status_code == 3
+                    and output in {"activating", "deactivating"}
+                )
+            ):
+                next_pending.add(unit)
+            elif not (
+                (status_code == 3 and output in {"inactive", "failed"})
+                or (status_code == 4 and output == "unknown")
+            ):
+                return False
+        COLLECTOR_PODMAN_SCOPE_UNITS.intersection_update(next_pending)
+        if not next_pending:
+            return True
+        pending = next_pending
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    return False
+
+
 def user_work_facts() -> tuple[dict[str, object], bool]:
+    scopes_before_complete = collector_podman_scopes_are_quiescent()
     units_status, units_output, units_complete = command_result(
         [
             "systemctl", "--user", "list-units", "--all",
@@ -3318,6 +3390,7 @@ def user_work_facts() -> tuple[dict[str, object], bool]:
             authenticated_active_health_services.add(service)
     if health_service_candidates != authenticated_active_health_services:
         complete = False
+    scopes_after_complete = collector_podman_scopes_are_quiescent()
     normalized_active_units = (
         set(active_units) - authenticated_active_health_services
     )
@@ -3330,6 +3403,8 @@ def user_work_facts() -> tuple[dict[str, object], bool]:
             )[:len(HEALTHY_ROLES)],
         },
         complete
+        and scopes_before_complete
+        and scopes_after_complete
         and len(active_units) <= 128
         and len(jobs) <= 128
         and len(active_units) == len(set(active_units))
@@ -3388,36 +3463,57 @@ def bounded_process_arguments(pid: int) -> tuple[list[str], bool]:
     return arguments, True
 
 
-def runtime_pid_file_matches(path: Path, pid: int) -> bool:
+def runtime_pid_file_pid(
+    path: Path, *, reviewed_trailing_newline: bool = False
+) -> int | None:
     observation = bounded_regular_file(path)
     if observation is None:
-        return False
+        return None
     content, metadata = observation
-    return bool(
-        len(content) <= 32
-        and metadata.st_uid == CI_UID
-        and metadata.st_gid == CI_GID
-        and re.fullmatch(rb"[1-9][0-9]{0,9}", content)
-        and content == str(pid).encode("ascii")
+    expression = (
+        rb"[1-9][0-9]{0,9}\n"
+        if reviewed_trailing_newline
+        else rb"[1-9][0-9]{0,9}"
+    )
+    if (
+        len(content) > 32
+        or metadata.st_uid != CI_UID
+        or metadata.st_gid != CI_GID
+        or re.fullmatch(expression, content) is None
+    ):
+        return None
+    return int(content.removesuffix(b"\n"))
+
+
+def runtime_pid_file_matches(
+    path: Path, pid: int, *, reviewed_trailing_newline: bool = False
+) -> bool:
+    return (
+        type(pid) is int
+        and 1 <= pid <= 4_194_304
+        and runtime_pid_file_pid(
+            path,
+            reviewed_trailing_newline=reviewed_trailing_newline,
+        )
+        == pid
     )
 
 
-def process_uses_network_namespace(pid: int, namespace_path: Path) -> bool:
-    if pid <= 0 or pid > 4_194_304:
+def processes_share_network_namespace(first_pid: int, second_pid: int) -> bool:
+    if any(
+        type(pid) is not int or not 1 <= pid <= 4_194_304
+        for pid in (first_pid, second_pid)
+    ):
         return False
-    flags = os.O_RDONLY | os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(namespace_path, flags)
-        namespace = os.fstat(descriptor)
-        process_namespace = os.readlink(f"/proc/{pid}/ns/net")
+        first = os.readlink(f"/proc/{first_pid}/ns/net")
+        second = os.readlink(f"/proc/{second_pid}/ns/net")
     except OSError:
         return False
-    finally:
-        if "descriptor" in locals():
-            os.close(descriptor)
-    return process_namespace == f"net:[{namespace.st_ino}]"
+    return bool(
+        first == second
+        and re.fullmatch(r"net:\[[1-9][0-9]{0,19}\]", first)
+    )
 
 
 def podman_helper_process_is_bound(
@@ -3434,7 +3530,11 @@ def podman_helper_process_is_bound(
         )
         return bool(
             expected_group is not None
-            and runtime_pid_file_matches(PODMAN_ROOTLESS_NETWORK_PID, pid)
+            and runtime_pid_file_matches(
+                PODMAN_ROOTLESS_NETWORK_PID,
+                pid,
+                reviewed_trailing_newline=True,
+            )
             and arguments == [
                 "/usr/bin/pasta",
                 "--config-net",
@@ -3451,6 +3551,10 @@ def podman_helper_process_is_bound(
             ]
         )
     if executable == "/usr/lib/podman/aardvark-dns":
+        rootless_network_pid = runtime_pid_file_pid(
+            PODMAN_ROOTLESS_NETWORK_PID,
+            reviewed_trailing_newline=True,
+        )
         return bool(
             re.fullmatch(
                 r"/user\.slice/user-20000\.slice/user@20000\.service/"
@@ -3463,8 +3567,9 @@ def podman_helper_process_is_bound(
                 "--config", str(PODMAN_AARDVARK_CONFIG_ROOT),
                 "-p", "53", "run",
             ]
-            and process_uses_network_namespace(
-                pid, PODMAN_ROOTLESS_NETWORK_NAMESPACE
+            and rootless_network_pid is not None
+            and processes_share_network_namespace(
+                pid, rootless_network_pid
             )
         )
     return False
@@ -3929,6 +4034,8 @@ def exited_container_execution_matches(
         [
             "journalctl",
             f"--user-unit={unit}",
+            f"_SYSTEMD_INVOCATION_ID={invocation_id}",
+            f"_EXE={PODMAN_EXECUTABLE}",
             "--output=json",
             "--output-fields=_SYSTEMD_INVOCATION_ID,_EXE,_CMDLINE,MESSAGE",
             "--no-pager",
@@ -4965,7 +5072,24 @@ def workload_admission_failures(observations: object) -> list[str]:
                     ROLE_CONTRACTS[role].networks if role in ROLE_CONTRACTS else ()
                 )
             ]
-            if item.get("networks") != expected_networks:
+            reviewed_exited_network_omission = (
+                role == "migrate"
+                and item.get("state") == "exited"
+                and network_mode == "bridge"
+                and item.get("networks") == []
+                and container_control_group == ""
+                and lifecycle_invocation
+                == expected_service_fact.get("invocation_id")
+                and [
+                    event.get("status")
+                    for event in item.get("lifecycle_events", [])
+                    if isinstance(event, dict)
+                ] == ["create", "start", "died"]
+            )
+            if (
+                item.get("networks") != expected_networks
+                and not reviewed_exited_network_omission
+            ):
                 failures.append("D1A_CONTAINER_NETWORKS")
             if mounts != expected_role_mounts(instance, role):
                 failures.append("D1A_VOLUME_TOPOLOGY")

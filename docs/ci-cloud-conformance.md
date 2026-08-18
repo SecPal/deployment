@@ -1010,6 +1010,14 @@ Evidence includes:
   configures no per-container DNS servers, so `HostConfig.Dns` must be empty
   and the optional fifth Aardvark member field must be absent. Any broader DNS,
   alias, address, or header representation makes collection incomplete; the
+  exited migration role may use Podman 5.4's reviewed empty
+  `NetworkSettings.Networks` representation only while its state is exactly
+  `exited`, its effective network mode remains `bridge`, its container cgroup
+  is empty, and its complete `create` → `start` → `died` lifecycle is bound to
+  the exact successful generated-service invocation. The trusted Quadlet source
+  continues to establish the configured application-network topology. Empty
+  network evidence for a running role, another one-shot, another network mode,
+  or an unbound lifecycle still fails closed; the
   complete semantic role-to-mount
   topology (bind/volume type, exact volume name or fixed
   `/home/secpal-ci/quadlet-fixture/<instance>/assets` bind source, destination,
@@ -1029,9 +1037,13 @@ Evidence includes:
   roles, including the exact migration command and distinct non-migration
   commands for API, workers, and scheduler; for each exited one-shot role,
   one ordered Podman `create` → `start` → `died` lifecycle for the independently
-  inspected full container ID plus exactly one journal record from a
-  `/usr/bin/podman run` command naming that exact container in the generated
-  service's exact systemd invocation; `inspect`, another Podman subcommand, a
+  inspected full container ID plus exactly one matching journal record for each
+  lifecycle status from a `/usr/bin/podman run` command naming that exact
+  container in the generated service's exact systemd invocation. The bounded
+  journal query is itself
+  restricted to that invocation ID and `/usr/bin/podman`, so unrelated
+  application output cannot consume the collector's output bound; `inspect`,
+  another Podman subcommand, a
   different name, a duplicate lifecycle, or a bare container-ID message cannot
   establish this binding; an exited container may use either explicit immutable
   configured ID mappings or Podman 5.4's omitted `HostConfig.IDMappings`
@@ -1121,13 +1133,23 @@ An authenticated paired healthcheck service that is active while the user-work
 snapshot is read is normalized out of the stable active-unit set only after all
 of those timer/service checks pass. An unpaired or unauthenticated active
 healthcheck-shaped service makes collection incomplete.
+The collector's own bounded Podman commands can create transient
+`podman-<child-PID>.scope` units. Their names are recorded only from the exact
+spawned child PID and are used solely for a bounded quiescence wait before and
+after a user-work snapshot; they are never removed from observed user work.
+An active, ambiguous, untracked-overflow, or non-quiescent scope therefore makes
+collection incomplete and remains visible to admission.
 The sole rootless-network `pasta` process is likewise admitted only with the
 exact Podman 5.4.2 argument vector produced under the pinned empty
 `containers.conf`: configuration, PID-file, DNS-forward, disabled pasta port
 auto-discovery, gateway-mapping, quiet, network-namespace, and guest-address
 options must appear once in their reviewed order with their exact values.
 Missing, reordered, changed, or additional arguments make collection
-incomplete. Podman's separate rootless port-forwarder remains responsible for
+incomplete. The reviewed passt PID file is exactly the decimal PID followed by
+one line feed; other whitespace and ownership fail closed. Aardvark retains its
+own exact PID file and argument contract and must share the kernel network
+namespace with the process identified by that reviewed pasta PID file. Podman's
+separate rootless port-forwarder remains responsible for
 the gateway container's explicitly published loopback TCP port; the reviewed
 `pasta -t none` setting disables pasta's automatic namespace-port discovery,
 not that explicit Podman mapping.
