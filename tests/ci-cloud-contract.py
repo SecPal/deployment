@@ -1056,6 +1056,15 @@ class CloudCIContractTests(unittest.TestCase):
                 "    def unused(CHECKOUT):\n        return CHECKOUT\n"
                 "    _leak = CHECKOUT\n",
             ),
+            # A comprehension has a scope of its own, so its target must not
+            # mask the same global read either.
+            (
+                collector,
+                "def expected_unit_names(instance: str) -> tuple[str, ...]:\n",
+                "def expected_unit_names(instance: str) -> tuple[str, ...]:\n"
+                "    _x = [CHECKOUT for CHECKOUT in ()]\n"
+                "    _leak = CHECKOUT\n",
+            ),
         )
         for relative, old, new in cases:
             with self.subTest(relative=relative, mutation=old):

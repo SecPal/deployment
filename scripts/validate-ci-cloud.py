@@ -12,6 +12,7 @@ import builtins
 import gzip
 import json
 import re
+import symtable
 import sys
 from pathlib import Path
 
@@ -88,10 +89,11 @@ IMPURE_ATTRIBUTES = (
 # What an exported contract predicate may reference besides the declared
 # contract: pure standard-library handles that carry no state of their own.
 PURE_CONTRACT_GLOBALS = frozenset({"re", "Path"})
-# Modules whose every attribute reaches the system.
-SYSTEM_MODULES = frozenset(
-    {"os", "subprocess", "sys", "time", "selectors", "signal", "socket"}
-)
+# The modules a declared representation-normalization function may reference.
+# Naming the modules that reach the system instead would have to be completed
+# again every time the collector imports another one -- that is how socket was
+# missed -- so the permitted set is named and everything else is a violation.
+PURE_NORMALIZATION_MODULES = frozenset({"ipaddress", "re", "shlex"})
 # The only modules the controller-side admission layer may import. It loads the
 # streamed collector as its contract, so it needs importlib.util, and nothing
 # in this set can reach a process, a file, or the network on its own.
@@ -322,25 +324,6 @@ def loader_capability_violations(tree: ast.Module) -> list[str]:
     ]
 
 
-SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
-
-
-def scope_children(node: ast.AST):
-    """Yield the nodes belonging to one lexical scope, nested scopes aside.
-
-    Each nested scope is yielded whole rather than descended into, because a
-    name bound inside it says nothing about the scope that contains it.
-    """
-    body = node.body if isinstance(node.body, list) else [node.body]
-    pending = list(body)
-    while pending:
-        current = pending.pop()
-        yield current
-        if isinstance(current, SCOPE_NODES):
-            continue
-        pending.extend(ast.iter_child_nodes(current))
-
-
 def dotted_path(node: ast.AST) -> str | None:
     """Return ``a.b.c`` for a chain of attribute accesses rooted in a name."""
     parts: list[str] = []
@@ -364,50 +347,22 @@ def imported_module_aliases(tree: ast.Module) -> set[str]:
     return aliases
 
 
-def free_global_names(node: ast.AST) -> set[str]:
-    """Return the names a function reads from outside its own lexical scopes.
+def scope_global_names(table: symtable.SymbolTable) -> set[str]:
+    """Return every global name a scope and its nested scopes read.
 
-    Scopes are analysed one at a time. Merging them would let a nested
-    parameter mask a genuine global read in the enclosing function, which is
-    exactly the kind of silence a contract check must not produce.
+    Python's own symbol table decides this. Rebuilding scope rules by walking
+    the syntax tree kept missing cases the language already knows about, such
+    as a comprehension having a scope of its own, so the compiler is asked
+    instead of imitated.
     """
-    bound: set[str] = set()
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-        arguments = node.args
-        bound |= {
-            argument.arg
-            for argument in (
-                *arguments.posonlyargs,
-                *arguments.args,
-                *arguments.kwonlyargs,
-            )
-        }
-        if arguments.vararg:
-            bound.add(arguments.vararg.arg)
-        if arguments.kwarg:
-            bound.add(arguments.kwarg.arg)
-    children = list(scope_children(node))
-    for child in children:
-        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
-            bound.add(child.id)
-        elif isinstance(child, ast.ExceptHandler) and child.name:
-            bound.add(child.name)
-        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            bound.add(child.name)
-        elif isinstance(child, (ast.Import, ast.ImportFrom)):
-            bound |= {
-                (alias.asname or alias.name).split(".")[0]
-                for alias in child.names
-            }
-    free = {
-        child.id
-        for child in children
-        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+    names = {
+        symbol.get_name()
+        for symbol in table.get_symbols()
+        if symbol.is_global() and not symbol.is_assigned()
     }
-    for child in children:
-        if isinstance(child, SCOPE_NODES):
-            free |= free_global_names(child)
-    return {name for name in free - bound if name not in dir(builtins)}
+    for child in table.get_children():
+        names |= scope_global_names(child)
+    return names - set(dir(builtins))
 
 
 def contract_global_violations(text: str, declared: set[str]) -> list[str]:
@@ -422,6 +377,10 @@ def contract_global_violations(text: str, declared: set[str]) -> list[str]:
         tree = ast.parse(text)
     except SyntaxError:
         return ["trusted contract source is invalid"]
+    try:
+        table = symtable.symtable(text, "<trusted contract>", "exec")
+    except SyntaxError:
+        return ["trusted contract source is invalid"]
     allowed = declared | PURE_CONTRACT_GLOBALS
     violations: list[str] = []
     bindings: dict[str, int] = {}
@@ -429,11 +388,12 @@ def contract_global_violations(text: str, declared: set[str]) -> list[str]:
         for name in top_level_bound_names(node):
             if name in declared:
                 bindings[name] = bindings.get(name, 0) + 1
-        if not isinstance(node, ast.FunctionDef) or node.name not in declared:
+    for scope in table.get_children():
+        if scope.get_type() != "function" or scope.get_name() not in declared:
             continue
         violations.extend(
-            f"{node.name} reads undeclared {name}"
-            for name in sorted(free_global_names(node) - allowed)
+            f"{scope.get_name()} reads undeclared {name}"
+            for name in sorted(scope_global_names(scope) - allowed)
         )
     # A second binding would export whatever the last one names, so the source
     # check above would inspect a definition the loader never hands over.
@@ -465,13 +425,14 @@ def top_level_bound_names(node: ast.stmt) -> set[str]:
 
 def system_reaching_functions(tree: ast.Module) -> set[str]:
     """Return the file's functions that reach the system, directly or not."""
+    modules = frozenset(imported_module_aliases(tree))
     functions = {
         node.name: node
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     direct = {
-        name: bool(statement_system_access(node, frozenset()))
+        name: bool(statement_system_access(node, frozenset(), modules))
         for name, node in functions.items()
     }
     calls = {
@@ -495,7 +456,9 @@ def system_reaching_functions(tree: ast.Module) -> set[str]:
     return reaching
 
 
-def statement_system_access(node: ast.AST, impure_calls: frozenset) -> list[str]:
+def statement_system_access(
+    node: ast.AST, impure_calls: frozenset, modules: frozenset = frozenset()
+) -> list[str]:
     """Return the system access a statement performs, ignoring nested bodies."""
     found: list[str] = []
     for child in ast.walk(node):
@@ -514,7 +477,8 @@ def statement_system_access(node: ast.AST, impure_calls: frozenset) -> list[str]
         if isinstance(child, ast.Attribute):
             if (
                 isinstance(child.value, ast.Name)
-                and child.value.id in SYSTEM_MODULES
+                and child.value.id in modules
+                and child.value.id not in PURE_NORMALIZATION_MODULES
             ):
                 found.append(f"reaches {child.value.id}.{child.attr}")
             elif child.attr in IMPURE_ATTRIBUTES:
@@ -535,11 +499,12 @@ def module_initialization_violations(text: str) -> list[str]:
     except SyntaxError:
         return ["trusted contract source is invalid"]
     impure_calls = frozenset(system_reaching_functions(tree))
+    modules = frozenset(imported_module_aliases(tree))
     violations: list[str] = []
     for node in imported_statements(tree.body):
         violations.extend(
             f"initialization {access}"
-            for access in statement_system_access(node, impure_calls)
+            for access in statement_system_access(node, impure_calls, modules)
         )
     return list(dict.fromkeys(violations))
 
