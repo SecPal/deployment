@@ -21,6 +21,25 @@ from jsonschema.exceptions import SchemaError
 
 
 PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+# What the purity rules below are for.
+#
+# They keep the pure workload layers pure as the code changes: an ordinary
+# edit that would let admission or representation normalization run a command,
+# read a file, or reach past the declared contract fails preflight instead of
+# passing review unnoticed. That is drift prevention, and it is what these
+# rules can deliver.
+#
+# They are not a sandbox. Whoever can edit workload-admission.py can edit this
+# file too, so a hostile committer is out of scope here and is handled by
+# review, signed commits, and branch protection instead. Enumerating every
+# reflective route Python offers is not a winnable game, which is why the
+# rules that decide capability are written as allowlists that are closed by
+# construction -- the imports, the members imported from them, and the module
+# attribute paths -- rather than as lists of forbidden words.
+#
+# The behavioural proof lives in tests/ci-cloud-workload-layers.py, where an
+# audit hook watches an actual admission decision and an actual contract load.
+# That observes what the code does; the rules here only read what it says.
 # The builtins and attributes that reach a process, a file, or the interpreter
 # without importing anything. This is the authoritative list for every layer
 # that must stay pure; tests/ci-cloud-workload-layers.py binds it so the
@@ -81,6 +100,27 @@ PURE_ADMISSION_IMPORTS = {
 }
 # An allowed module re-exports its own imports: pathlib carries os, so naming
 # the module is not enough. Only these members may be imported from it.
+# An imported module exposes its own imports as attributes: pathlib.os is the
+# real os module. Naming forbidden attributes can therefore never be complete,
+# so module-rooted attribute paths are allowed by name instead of denied.
+PURE_ADMISSION_MODULE_PATHS = frozenset(
+    {
+        "importlib.util",
+        "importlib.util.module_from_spec",
+        "importlib.util.spec_from_file_location",
+        "re.escape",
+        "re.fullmatch",
+        "re.match",
+        "re.search",
+    }
+)
+# Loading the collector is the one capability this layer intentionally has.
+# It is confined to the single reviewed function, and the audit hook in
+# tests/ci-cloud-workload-layers.py observes what that load actually does.
+CONTRACT_LOADER_FUNCTION = "load_workload_contract"
+CONTRACT_LOADER_NAMES = frozenset(
+    {"spec_from_file_location", "module_from_spec", "exec_module", "loader"}
+)
 PURE_ADMISSION_IMPORT_MEMBERS = {
     "__future__": frozenset({"annotations"}),
     "pathlib": frozenset({"Path", "PurePath"}),
@@ -244,39 +284,130 @@ def pure_module_violations(text: str, allowed_imports: set[str]) -> list[str]:
             violations.append(f"reaches {node.func.attr}")
         elif isinstance(node, ast.Attribute) and node.attr in IMPURE_ATTRIBUTES:
             violations.append(f"reaches {node.attr}")
+    violations.extend(module_path_violations(tree))
+    violations.extend(loader_capability_violations(tree))
+    return list(dict.fromkeys(violations))
+
+
+def module_path_violations(tree: ast.Module) -> list[str]:
+    """Return every module attribute path outside the allowed set."""
+    aliases = imported_module_aliases(tree)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        path = dotted_path(node)
+        if path is None or path.split(".")[0] not in aliases:
+            continue
+        if path not in PURE_ADMISSION_MODULE_PATHS:
+            violations.append(f"reaches {path}")
     return violations
 
 
-def free_global_names(node: ast.AST) -> set[str]:
-    """Return the names a function body reads from outside its own scope."""
-    bound: set[str] = set()
-    for child in ast.walk(node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            arguments = child.args
-            bound |= {
-                argument.arg
-                for argument in (
-                    *arguments.posonlyargs,
-                    *arguments.args,
-                    *arguments.kwonlyargs,
-                )
+def loader_capability_violations(tree: ast.Module) -> list[str]:
+    """Return uses of the module-loading capability outside its one function."""
+    confined = {
+        id(node)
+        for definition in ast.walk(tree)
+        if isinstance(definition, ast.FunctionDef)
+        and definition.name == CONTRACT_LOADER_FUNCTION
+        for node in ast.walk(definition)
+    }
+    return [
+        f"loads a module outside {CONTRACT_LOADER_FUNCTION}: {node.attr}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr in CONTRACT_LOADER_NAMES
+        and id(node) not in confined
+    ]
+
+
+SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def scope_children(node: ast.AST):
+    """Yield the nodes belonging to one lexical scope, nested scopes aside.
+
+    Each nested scope is yielded whole rather than descended into, because a
+    name bound inside it says nothing about the scope that contains it.
+    """
+    body = node.body if isinstance(node.body, list) else [node.body]
+    pending = list(body)
+    while pending:
+        current = pending.pop()
+        yield current
+        if isinstance(current, SCOPE_NODES):
+            continue
+        pending.extend(ast.iter_child_nodes(current))
+
+
+def dotted_path(node: ast.AST) -> str | None:
+    """Return ``a.b.c`` for a chain of attribute accesses rooted in a name."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def imported_module_aliases(tree: ast.Module) -> set[str]:
+    """Return the names that refer to a module inside this source."""
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            aliases |= {
+                alias.asname or alias.name.split(".")[0] for alias in node.names
             }
-            if arguments.vararg:
-                bound.add(arguments.vararg.arg)
-            if arguments.kwarg:
-                bound.add(arguments.kwarg.arg)
+    return aliases
+
+
+def free_global_names(node: ast.AST) -> set[str]:
+    """Return the names a function reads from outside its own lexical scopes.
+
+    Scopes are analysed one at a time. Merging them would let a nested
+    parameter mask a genuine global read in the enclosing function, which is
+    exactly the kind of silence a contract check must not produce.
+    """
+    bound: set[str] = set()
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        arguments = node.args
+        bound |= {
+            argument.arg
+            for argument in (
+                *arguments.posonlyargs,
+                *arguments.args,
+                *arguments.kwonlyargs,
+            )
+        }
+        if arguments.vararg:
+            bound.add(arguments.vararg.arg)
+        if arguments.kwarg:
+            bound.add(arguments.kwarg.arg)
+    children = list(scope_children(node))
+    for child in children:
         if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
             bound.add(child.id)
-        if isinstance(child, ast.ExceptHandler) and child.name:
+        elif isinstance(child, ast.ExceptHandler) and child.name:
             bound.add(child.name)
-    return {
+        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(child.name)
+        elif isinstance(child, (ast.Import, ast.ImportFrom)):
+            bound |= {
+                (alias.asname or alias.name).split(".")[0]
+                for alias in child.names
+            }
+    free = {
         child.id
-        for child in ast.walk(node)
-        if isinstance(child, ast.Name)
-        and isinstance(child.ctx, ast.Load)
-        and child.id not in bound
-        and child.id not in dir(builtins)
+        for child in children
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
     }
+    for child in children:
+        if isinstance(child, SCOPE_NODES):
+            free |= free_global_names(child)
+    return {name for name in free - bound if name not in dir(builtins)}
 
 
 def contract_global_violations(text: str, declared: set[str]) -> list[str]:
@@ -405,18 +536,63 @@ def module_initialization_violations(text: str) -> list[str]:
         return ["trusted contract source is invalid"]
     impure_calls = frozenset(system_reaching_functions(tree))
     violations: list[str] = []
-    for node in tree.body:
-        if isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.If)
-        ):
-            # Definitions run no body on import, and the __main__ guard runs
-            # only when the file is executed on a target rather than imported.
-            continue
+    for node in imported_statements(tree.body):
         violations.extend(
             f"initialization {access}"
             for access in statement_system_access(node, impure_calls)
         )
-    return violations
+    return list(dict.fromkeys(violations))
+
+
+def is_main_guard(node: ast.stmt) -> bool:
+    """Return whether a statement is exactly ``if __name__ == "__main__":``."""
+    if not isinstance(node, ast.If) or node.orelse:
+        return False
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
+
+
+def imported_statements(body: list[ast.stmt]) -> list[ast.stmt]:
+    """Return the statements Python executes when a module is imported.
+
+    A function body does not run, but a class body does, and so does the taken
+    branch of any conditional other than the main guard. Skipping every ``if``
+    and every class body would hide exactly the initialization this is meant
+    to catch, so only the verified guard is exempt.
+    """
+    executed: list[ast.stmt] = []
+    for node in body:
+        if is_main_guard(node):
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # The body waits for a call, but decorators and default values
+            # are evaluated as the definition is executed.
+            executed.extend(node.decorator_list)
+            executed.extend(
+                value
+                for value in (
+                    *node.args.defaults,
+                    *(item for item in node.args.kw_defaults if item),
+                )
+            )
+            continue
+        executed.append(node)
+        for name in ("body", "orelse", "finalbody"):
+            nested = getattr(node, name, None)
+            if isinstance(nested, list) and nested and isinstance(nested[0], ast.stmt):
+                executed.extend(imported_statements(nested))
+        for handler in getattr(node, "handlers", []):
+            executed.extend(imported_statements(handler.body))
+    return executed
 
 
 def string_collection_constant(text: str, name: str) -> set[str]:

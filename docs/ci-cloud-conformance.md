@@ -929,6 +929,20 @@ are each replayed the same way; and malformed, absent, duplicate, over-limit, or
 provenance-free facts must fail closed at the earliest boundary and stay
 rejected by independent revalidation.
 
+These purity rules keep the pure layers pure as the code changes: an ordinary
+edit that would let admission or normalization run a command, read a file, or
+reach past the declared contract fails preflight instead of passing review
+unnoticed. They are not a sandbox, and the distinction decides how far they are
+worth taking. Whoever can edit `scripts/ci-cloud/workload-admission.py` can edit
+`scripts/validate-ci-cloud.py` in the same commit, so a hostile committer is out
+of scope for them and is answered by review, signed commits, and branch
+protection. Enumerating every reflective route Python offers is not a winnable
+game, so the rules that decide capability are written as allowlists closed by
+construction — the permitted imports, the members imported from them, and the
+module attribute paths — rather than as lists of forbidden words. What the code
+actually does is observed instead of read: an audit hook watches a real
+admission decision and a real contract load.
+
 `tests/ci-cloud-contract.py` mutates the trusted sources and requires
 `scripts/validate-ci-cloud.py` to reject each mutation, so a static rule cannot
 silently stop firing. The layer-boundary rule is covered by an undeclared
