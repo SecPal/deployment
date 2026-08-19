@@ -1025,6 +1025,37 @@ class CloudCIContractTests(unittest.TestCase):
                 "CI_UID = 20000",
                 'CI_UID = 20000\n_BOOT = open("/etc/hostname")',
             ),
+            # A class body runs on import too, so exempting every class would
+            # hide exactly the initialization this is meant to catch.
+            (
+                collector,
+                "CI_UID = 20000",
+                "CI_UID = 20000\n"
+                'class _Boot:\n    _X = open("/etc/hostname")',
+            ),
+            # So does the taken branch of any conditional but the main guard.
+            (
+                collector,
+                "CI_UID = 20000",
+                "CI_UID = 20000\n"
+                'if sys.platform == "linux":\n    _X = open("/etc/hostname")',
+            ),
+            # An allowed module exposes its own imports as attributes, so
+            # pathlib.os is the real os module.
+            (
+                admission,
+                "from typing import Any",
+                "from typing import Any\nimport pathlib\n\n_ESCAPED = pathlib.os",
+            ),
+            # A nested parameter must not mask a global read in the function
+            # that contains it.
+            (
+                collector,
+                "def expected_unit_names(instance: str) -> tuple[str, ...]:\n",
+                "def expected_unit_names(instance: str) -> tuple[str, ...]:\n"
+                "    def unused(CHECKOUT):\n        return CHECKOUT\n"
+                "    _leak = CHECKOUT\n",
+            ),
         )
         for relative, old, new in cases:
             with self.subTest(relative=relative, mutation=old):

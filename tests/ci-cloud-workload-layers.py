@@ -138,13 +138,35 @@ def collector_system_access(source: str | None = None) -> dict[str, set[str]]:
                 found.add(f".{child.attr}")
         return found
 
+    # A module-level alias such as ``reader = bounded_regular_file`` is an
+    # ordinary refactoring, and following it matters: an unresolved alias would
+    # leave no edge in the graph and report an impure normalizer as clean.
+    aliases: dict[str, str] = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Name)
+        ):
+            aliases[node.targets[0].id] = node.value.id
+    for alias, target in list(aliases.items()):
+        seen = {alias}
+        while target in aliases and target not in seen:
+            seen.add(target)
+            target = aliases[target]
+        aliases[alias] = target
+
+    def resolved(name: str) -> str:
+        return aliases.get(name, name)
+
     calls = {
         name: {
-            child.func.id
+            resolved(child.func.id)
             for child in ast.walk(node)
             if isinstance(child, ast.Call)
             and isinstance(child.func, ast.Name)
-            and child.func.id in functions
+            and resolved(child.func.id) in functions
         }
         for name, node in functions.items()
     }
@@ -476,6 +498,9 @@ class LayerBoundaryTests(unittest.TestCase):
                 "    return text.replace(':', ' ')",
                 "def through_a_callee(path):",
                 "    return builtin_open(path)",
+                "reader = filesystem_method",
+                "def through_an_alias(path):",
+                "    return reader(path)",
                 "",
             )
         )
@@ -491,6 +516,7 @@ class LayerBoundaryTests(unittest.TestCase):
         self.assertEqual({"getattr"}, reachable["reflective"])
         self.assertEqual(set(), reachable["string_replace"])
         self.assertEqual({"open"}, reachable["through_a_callee"])
+        self.assertEqual({".read_bytes"}, reachable["through_an_alias"])
 
     def test_importing_the_contract_reaches_nothing(self) -> None:
         """Loading the contract must not run the collector's collection code.
