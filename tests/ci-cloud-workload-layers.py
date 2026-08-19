@@ -769,6 +769,48 @@ class CrossLayerEvidenceTests(unittest.TestCase):
                 self.assertEqual(refused_by_schema, bool(errors))
                 self.assert_refused(observations)
 
+    def test_generated_service_names_have_one_agreed_definition(self) -> None:
+        """The generated service name is one concept with one schema home.
+
+        A Quadlet generator turns each reviewed unit into a systemd service,
+        and both the generated service fact and the container fact that names
+        its own service describe the same string. Stating the rule once keeps
+        the two from drifting the way the canonical unit name once did.
+        """
+        definition = jsonschema.Draft202012Validator(
+            SCHEMA["$defs"]["generatedServiceName"]
+        )
+        reference = {"$ref": "#/$defs/generatedServiceName"}
+        self.assertEqual(
+            reference,
+            SCHEMA["$defs"]["generatedServiceFact"]["properties"]["unit"],
+        )
+        self.assertEqual(
+            reference,
+            SCHEMA["$defs"]["containerFact"]["properties"]["systemd_unit"],
+        )
+        observations = workload_tests.valid_observations()
+        produced = [
+            str(service["unit"])
+            for service in observations["live"]["generated_services"]
+        ] + [
+            str(container["systemd_unit"])
+            for container in observations["live"]["containers"]
+        ]
+        self.assertTrue(produced)
+        for name in produced:
+            with self.subTest(name=name):
+                self.assertTrue(definition.is_valid(name))
+        for name in (
+            f"secpal-int-{INSTANCE}-api.container",
+            f"secpal-int-{INSTANCE}.service",
+            f"secpal-int-{INSTANCE}-API.service",
+            "unrelated.service",
+            "",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(definition.is_valid(name))
+
     def test_reviewed_installed_unit_representation_crosses_every_layer(
         self,
     ) -> None:

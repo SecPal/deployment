@@ -879,15 +879,15 @@ has exactly one authoritative place, and so that each layer can be tested on
 its own without losing the guarantee that a representation one layer admits is
 also accepted by the next.
 
-| Layer                        | File                                            | Owns                                                                                                                                                                  |
-| ---------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Workload contract            | `scripts/ci-cloud/collect-workload-evidence.py` | Reviewed roles, unit names, networks, volumes, identities, and the pure predicates over them, declared in `WORKLOAD_CONTRACT_EXPORTS`                                 |
-| Representation normalization | `scripts/ci-cloud/collect-workload-evidence.py` | Pure functions that turn a Podman, systemd, or procfs representation into the closed evidence shape, or refuse it, declared in `REPRESENTATION_NORMALIZATION_EXPORTS` |
-| Collection                   | `scripts/ci-cloud/collect-workload-evidence.py` | The side-effecting layer that runs commands and reads procfs and the filesystem to assemble one bounded observation per phase                                         |
-| Evidence shape               | `schemas/ci-cloud-evidence.schema.json`         | The closed schema every observation must satisfy, including the single named `canonicalSystemdUnitName` and `quadletUnitFileName` definitions                         |
-| Admission                    | `scripts/ci-cloud/workload-admission.py`        | Every D.1a admission decision, as a pure function of an observation document                                                                                          |
-| Assembly                     | `scripts/ci-cloud/assemble-evidence.py`         | Joining D.1 host and D.1a workload evidence and recording the admission result                                                                                        |
-| Independent revalidation     | `scripts/ci-cloud/validate-evidence.py`         | Recomputing admission from the published evidence and rejecting a document that disagrees                                                                             |
+| Layer                        | File                                            | Owns                                                                                                                                                                   |
+| ---------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workload contract            | `scripts/ci-cloud/collect-workload-evidence.py` | Reviewed roles, unit names, networks, volumes, identities, and the pure predicates over them, declared in `WORKLOAD_CONTRACT_EXPORTS`                                  |
+| Representation normalization | `scripts/ci-cloud/collect-workload-evidence.py` | Pure functions that turn a Podman, systemd, or procfs representation into the closed evidence shape, or refuse it, declared in `REPRESENTATION_NORMALIZATION_EXPORTS`  |
+| Collection                   | `scripts/ci-cloud/collect-workload-evidence.py` | The side-effecting layer that runs commands and reads procfs and the filesystem to assemble one bounded observation per phase                                          |
+| Evidence shape               | `schemas/ci-cloud-evidence.schema.json`         | The closed schema every observation must satisfy, including the single named `canonicalSystemdUnitName`, `quadletUnitFileName`, and `generatedServiceName` definitions |
+| Admission                    | `scripts/ci-cloud/workload-admission.py`        | Every D.1a admission decision, as a pure function of an observation document                                                                                           |
+| Assembly                     | `scripts/ci-cloud/assemble-evidence.py`         | Joining D.1 host and D.1a workload evidence and recording the admission result                                                                                         |
+| Independent revalidation     | `scripts/ci-cloud/validate-evidence.py`         | Recomputing admission from the published evidence and rejecting a document that disagrees                                                                              |
 
 The collector stays one self-contained file because the trusted runner streams
 it to the target over `python3 -I -` on standard input; it may not import
