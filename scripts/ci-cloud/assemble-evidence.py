@@ -17,6 +17,7 @@ from pathlib import Path
 MAX_INPUT_BYTES = 256 * 1024
 WORKLOAD_COLLECTOR = Path(__file__).with_name("collect-workload-evidence.py")
 WORKLOAD_ADMISSION = Path(__file__).with_name("workload-admission.py")
+TRUSTED_MODULES: dict[Path, object] = {}
 
 
 class DuplicateKey(ValueError):
@@ -124,11 +125,22 @@ def read_normalization_diagnostic(
 
 
 def load_trusted_module(path: Path, name: str):
+    """Load a trusted controller-side module once per assembly run.
+
+    Assembly reads three observations and two diagnostics, and the admission
+    layer loads the collector in turn, so an uncached loader would execute the
+    same trusted sources several times over. One load per path keeps every
+    caller on the same reviewed definitions.
+    """
+    cached = TRUSTED_MODULES.get(path)
+    if cached is not None:
+        return cached
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ValueError("trusted workload admission implementation is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    TRUSTED_MODULES[path] = module
     return module
 
 
