@@ -1338,12 +1338,7 @@
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
         "complete": { "type": "boolean" },
-        "owned_units": {
-          "type": "array",
-          "uniqueItems": true,
-          "maxItems": 128,
-          "items": { "$ref": "#/$defs/quadletUnitFileName" }
-        },
+        "owned_units": { "$ref": "#/$defs/stringArray" },
         "generated_services": { "$ref": "#/$defs/stringArray" },
         "containers": { "$ref": "#/$defs/stringArray" },
         "networks": { "$ref": "#/$defs/stringArray" },

@@ -800,13 +800,19 @@ class CrossLayerEvidenceTests(unittest.TestCase):
                 self.assert_refused(observations)
 
     def test_quadlet_unit_file_names_have_one_agreed_definition(self) -> None:
-        """Installed units and cleanup leftovers name the same concept.
+        """The installed Quadlet unit file name is one concept with one home.
 
-        Both are file names the trusted installer writes under the root-owned
-        Quadlet and systemd roots, so the schema states the rule once. A
-        leftover the collector can report but the installer could never have
-        written is refused at the schema boundary rather than described as a
-        merely failed cleanup.
+        It is the file name the trusted installer writes under the root-owned
+        Quadlet and systemd roots, so the schema states the rule once instead
+        of inlining the pattern at the installed-unit fact.
+
+        Post-cleanup ``owned_units`` deliberately does not share it. That
+        field exists to report what cleanup left behind, so every leftover
+        must stay expressible and be refused by the named
+        ``D1A_CLEANUP_ABSENCE`` invariant. Narrowing it to names the
+        installer could have written would refuse the malformed ones at the
+        schema instead, which invalidates the whole document and hides the
+        reason cleanup failed.
         """
         definition = jsonschema.Draft202012Validator(
             SCHEMA["$defs"]["quadletUnitFileName"]
@@ -816,10 +822,8 @@ class CrossLayerEvidenceTests(unittest.TestCase):
             reference, SCHEMA["$defs"]["unitFact"]["properties"]["name"]
         )
         self.assertEqual(
-            reference,
-            SCHEMA["$defs"]["cleanupObservation"]["properties"]["owned_units"][
-                "items"
-            ],
+            {"$ref": "#/$defs/stringArray"},
+            SCHEMA["$defs"]["cleanupObservation"]["properties"]["owned_units"],
         )
         collected = collector.expected_unit_names(INSTANCE)
         self.assertEqual(16, len(collected))
@@ -837,20 +841,29 @@ class CrossLayerEvidenceTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(definition.is_valid(name))
 
-        # A leftover the installer could never have written fails closed at
-        # the schema, while a well-formed leftover still fails admission.
-        for leftover, refused_by_schema in (
-            (f"secpal-int-{INSTANCE}-evil.sh", True),
-            (f"secpal-int-{INSTANCE}-api.container", False),
+        # Every leftover stays expressible and is named by the same invariant,
+        # whether or not the trusted installer could have written it.
+        for leftover in (
+            f"secpal-int-{INSTANCE}-evil.sh",
+            f"secpal-int-{INSTANCE}-api.container",
+            f"secpal-int-{INSTANCE}.target",
         ):
             with self.subTest(leftover=leftover):
                 observations = workload_tests.valid_observations()
                 observations["post_cleanup"]["owned_units"].append(leftover)
                 document = assembled_document(copy.deepcopy(observations))
-                errors = list(
-                    jsonschema.Draft202012Validator(SCHEMA).iter_errors(document)
+                self.assertEqual(
+                    [],
+                    list(
+                        jsonschema.Draft202012Validator(SCHEMA).iter_errors(
+                            document
+                        )
+                    ),
                 )
-                self.assertEqual(refused_by_schema, bool(errors))
+                self.assertIn(
+                    "D1A_CLEANUP_ABSENCE",
+                    document["workload"]["failed_admission_invariants"],
+                )
                 self.assert_refused(observations)
 
     def test_generated_service_names_have_one_agreed_definition(self) -> None:
