@@ -83,6 +83,7 @@ IMPURE_BUILTINS = (
 )
 IMPURE_ATTRIBUTES = static_validator.IMPURE_ATTRIBUTES
 AMBIGUOUS_PATH_METHODS = static_validator.AMBIGUOUS_PATH_METHODS
+PURE_NORMALIZATION_MODULES = static_validator.PURE_NORMALIZATION_MODULES
 
 
 def file_metadata(uid: int, gid: int, mode: int) -> types.SimpleNamespace:
@@ -95,18 +96,24 @@ def collector_system_access(source: str | None = None) -> dict[str, set[str]]:
 
     The value is every command, filesystem, or clock primitive the function
     uses itself or through a callee defined in the same file. A primitive is
-    reachable through a module attribute, through a method name only a
-    filesystem object carries, or through a builtin that needs no import at
-    all, which is why IMPURE_BUILTINS is checked as well: a normalization
-    function calling ``open`` directly would otherwise be invisible here. A
+    reachable through any imported module the normalization layer is not
+    allowed to touch, through a method name only a filesystem object carries,
+    or through a builtin that needs no import at all, which is why
+    IMPURE_BUILTINS is checked as well: a normalization function calling
+    ``open`` directly would otherwise be invisible here. A
     method another type shares, such as ``replace``, is judged by arity so
     ``Path.replace(target)`` is caught while ``str.replace(old, new)`` stays
     legal.
     """
-    modules = {"os", "subprocess", "sys", "time", "selectors", "signal"}
     methods = IMPURE_ATTRIBUTES
     tree = ast.parse(
         COLLECTOR_PATH.read_text(encoding="utf-8") if source is None else source
+    )
+    # Every module the file imports counts, minus the few a normalizer may
+    # use. Listing the modules that reach the system instead would have to be
+    # completed again for each new import, which is how socket slipped past.
+    modules = (
+        static_validator.imported_module_aliases(tree) - PURE_NORMALIZATION_MODULES
     )
     functions = {
         node.name: node
@@ -475,6 +482,7 @@ class LayerBoundaryTests(unittest.TestCase):
         source = "\n".join(
             (
                 "import os",
+                "import socket",
                 "import time",
                 "def pure(value):",
                 "    return value.strip()",
@@ -498,6 +506,8 @@ class LayerBoundaryTests(unittest.TestCase):
                 "    return text.replace(':', ' ')",
                 "def through_a_callee(path):",
                 "    return builtin_open(path)",
+                "def network(host):",
+                "    return socket.socket()",
                 "reader = filesystem_method",
                 "def through_an_alias(path):",
                 "    return reader(path)",
@@ -509,6 +519,7 @@ class LayerBoundaryTests(unittest.TestCase):
         self.assertEqual({"os.getuid"}, reachable["module_attribute"])
         self.assertEqual({"time.monotonic"}, reachable["clock"])
         self.assertEqual({".read_bytes"}, reachable["filesystem_method"])
+        self.assertEqual({"socket.socket"}, reachable["network"])
         self.assertEqual({"open"}, reachable["builtin_open"])
         self.assertEqual({"eval"}, reachable["builtin_eval"])
         self.assertEqual({".replace"}, reachable["path_replace"])

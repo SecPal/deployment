@@ -938,10 +938,16 @@ worth taking. Whoever can edit `scripts/ci-cloud/workload-admission.py` can edit
 of scope for them and is answered by review, signed commits, and branch
 protection. Enumerating every reflective route Python offers is not a winnable
 game, so the rules that decide capability are written as allowlists closed by
-construction — the permitted imports, the members imported from them, and the
-module attribute paths — rather than as lists of forbidden words. What the code
-actually does is observed instead of read: an audit hook watches a real
-admission decision and a real contract load.
+construction — the permitted imports, the members imported from them, the module
+attribute paths, and the modules a normalization function may reference — rather
+than as lists of forbidden words. Twice a denied list had to be corrected after
+the fact, once for `pathlib.os` and once for `socket`; a permitted list cannot
+fail that way. For the same reason the rules ask Python rather than imitate it:
+which names a predicate reads from outside its own scopes comes from the
+compiler's own symbol table, because rebuilding scope rules by hand kept missing
+cases the language already knows, such as a comprehension having a scope of its
+own. What the code actually does is observed instead of read: an audit hook
+watches a real admission decision and a real contract load.
 
 `tests/ci-cloud-contract.py` mutates the trusted sources and requires
 `scripts/validate-ci-cloud.py` to reject each mutation, so a static rule cannot
