@@ -902,7 +902,22 @@ Normalization cannot become a fourth file for the same streaming reason, so its
 boundary is enforced rather than merely documented: every function named in
 `REPRESENTATION_NORMALIZATION_EXPORTS` is proven unable to run a command, read
 the filesystem, or read the clock, directly or through any callee. A helper
-that needs to observe something belongs in the collection layer instead.
+that needs to observe something belongs in the collection layer instead. A
+function reaches the system through a module attribute, through a method only a
+filesystem object carries, or through a builtin that needs no import at all, so
+the analysis behind that proof covers all three and is itself replayed against
+a source in which each route appears. `scripts/validate-ci-cloud.py` owns the
+list of impure builtins as `IMPURE_BUILTINS` and applies the same rule to the
+admission layer, which may additionally import only `PURE_ADMISSION_IMPORTS`.
+
+One deliberate boundary moved with this ownership split. The post-cleanup
+`owned_units` list previously used the generic `stringArray`, so any leftover
+name was expressible in evidence and refused by the `D1A_CLEANUP_ABSENCE`
+invariant. It now uses `quadletUnitFileName`, so a leftover the trusted
+installer could never have written is refused one layer earlier, at the schema,
+and never reaches admission. Passing runs are unaffected because a clean
+post-cleanup phase reports no owned units at all, and both paths fail closed;
+only the reported boundary differs.
 
 `tests/ci-cloud-workload-layers.py` holds the cross-layer proofs: the reviewed
 Podman 5.4 inspect representations are replayed through the collection layer
@@ -913,6 +928,13 @@ services, transient Podman health units, process census, and resource inventory
 are each replayed the same way; and malformed, absent, duplicate, over-limit, or
 provenance-free facts must fail closed at the earliest boundary and stay
 rejected by independent revalidation.
+
+`tests/ci-cloud-contract.py` mutates the trusted sources and requires
+`scripts/validate-ci-cloud.py` to reject each mutation, so a static rule cannot
+silently stop firing. The layer-boundary rule is covered by an undeclared
+contract surface, a smuggled D.1a name, an import that would let the streamed
+collector reach the repository, a renamed admission contract list, a forbidden
+import, and each impure builtin route into the admission layer.
 
 ## Evidence and interpretation
 

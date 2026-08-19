@@ -20,6 +20,20 @@ from jsonschema.exceptions import SchemaError
 
 
 PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+# The builtins and attributes that reach a process, a file, or the interpreter
+# without importing anything. This is the authoritative list for every layer
+# that must stay pure; tests/ci-cloud-workload-layers.py binds it so the
+# executable proof over the normalization layer enforces the same rule.
+IMPURE_BUILTINS = frozenset(
+    {"eval", "exec", "compile", "open", "__import__", "input", "breakpoint"}
+)
+IMPURE_ATTRIBUTES = frozenset({"import_module", "system", "popen"})
+# The only modules the controller-side admission layer may import. It loads the
+# streamed collector as its contract, so it needs importlib.util, and nothing
+# in this set can reach a process, a file, or the network on its own.
+PURE_ADMISSION_IMPORTS = {
+    "__future__", "importlib.util", "re", "pathlib", "typing",
+}
 REQUIRED_INPUTS = {"target_sha", "provider_profile"}
 PROFILES = {"digitalocean-intel", "digitalocean-amd", "gcp-axion"}
 BOOTSTRAP_FAILURE_SCHEMA_VERSION = 5
@@ -126,6 +140,42 @@ def read(root: Path, relative: str) -> str:
     path = root / relative
     require(path.is_file(), f"required cloud CI file is missing: {relative}")
     return path.read_text(encoding="utf-8")
+
+
+def pure_module_violations(text: str, allowed_imports: set[str]) -> list[str]:
+    """Return every way a module that must stay pure could reach the system.
+
+    A module reaches a process, a file, or the network by importing a module
+    that offers one, by calling a builtin that needs no import at all, or by
+    reaching an attribute that resolves an import at runtime. All three routes
+    are refused here, so the rule cannot be evaded by a source change that
+    merely avoids a forbidden word.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ["trusted pure Python source is invalid"]
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            violations.extend(
+                f"imports {alias.name}"
+                for alias in node.names
+                if alias.name not in allowed_imports
+            )
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level or module not in allowed_imports:
+                violations.append(f"imports from {'.' * node.level}{module}")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in IMPURE_BUILTINS
+        ):
+            violations.append(f"calls {node.func.id}")
+        elif isinstance(node, ast.Attribute) and node.attr in IMPURE_ATTRIBUTES:
+            violations.append(f"reaches {node.attr}")
+    return violations
 
 
 def string_collection_constant(text: str, name: str) -> set[str]:
@@ -2203,17 +2253,13 @@ def validate(root: Path) -> None:
         and "sys.path" not in workload_collector
         and "D1A_" not in workload_collector
         and "def workload_admission_failures" not in workload_collector
-        # The admission layer may import only these modules, so no source
-        # change can give it a way to reach a process, a file, or the network.
-        # tests/ci-cloud-workload-layers.py proves the same property by
-        # running an admission decision under a rejecting audit hook.
-        and "from __future__ import annotations\n\n"
-        "import importlib.util\n"
-        "import re\n"
-        "from pathlib import Path\n"
-        "from typing import Any\n" in workload_admission
-        and workload_admission.count("\nimport ") == 2
-        and workload_admission.count("\nfrom ") == 3
+        # The admission layer may import only the modules in
+        # PURE_ADMISSION_IMPORTS and may call no builtin that reaches the
+        # system, so no source change can give it a way to reach a process, a
+        # file, or the network. tests/ci-cloud-workload-layers.py proves the
+        # same property by running an admission decision under a rejecting
+        # audit hook.
+        and not pure_module_violations(workload_admission, PURE_ADMISSION_IMPORTS)
         and "subprocess" not in workload_admission,
         "the streamed collector must stay self-contained and the admission layer pure",
     )

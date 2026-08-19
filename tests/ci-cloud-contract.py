@@ -919,6 +919,33 @@ class CloudCIContractTests(unittest.TestCase):
                 "import importlib.util",
                 "import importlib.util\nimport subprocess",
             ),
+            (
+                admission,
+                "import importlib.util",
+                "import importlib.util\nfrom os import system",
+            ),
+            # Builtins reach a process, a file, or the interpreter without an
+            # import, so an import allowlist alone cannot keep this layer pure.
+            (
+                admission,
+                "def load_workload_contract():\n",
+                'def load_workload_contract():\n    eval("1")\n',
+            ),
+            (
+                admission,
+                "def load_workload_contract():\n",
+                'def load_workload_contract():\n    open("/etc/hostname").close()\n',
+            ),
+            (
+                admission,
+                "def load_workload_contract():\n",
+                'def load_workload_contract():\n    __import__("os").system("true")\n',
+            ),
+            (
+                admission,
+                "    failures: list[str] = []\n",
+                '    failures: list[str] = []\n    exec("pass")\n',
+            ),
         )
         for relative, old, new in cases:
             with self.subTest(relative=relative, mutation=old):
