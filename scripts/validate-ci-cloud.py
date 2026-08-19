@@ -147,6 +147,30 @@ def string_collection_constant(text: str, name: str) -> set[str]:
     raise ContractError(f"{name} must be a literal string collection")
 
 
+def imported_modules(text: str, label: str) -> set[str]:
+    """Return every module a trusted source imports, at any nesting depth.
+
+    An import inside a function body reaches the same module as one in the
+    first column, so counting source lines cannot bound what a file may
+    import. The parsed tree is walked instead, and a relative import is
+    reported as ``"."`` so it can never match an allowed module name.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        raise ContractError(f"trusted Python source of {label} is invalid") from None
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.add(
+                "." if node.level or node.module is None
+                else node.module.split(".", 1)[0]
+            )
+    return modules
+
+
 def integer_mapping_literal(text: str, key: str) -> int:
     try:
         tree = ast.parse(text)
@@ -2203,18 +2227,14 @@ def validate(root: Path) -> None:
         and "sys.path" not in workload_collector
         and "D1A_" not in workload_collector
         and "def workload_admission_failures" not in workload_collector
-        # The admission layer may import only these modules, so no source
-        # change can give it a way to reach a process, a file, or the network.
-        # tests/ci-cloud-workload-layers.py proves the same property by
-        # running an admission decision under a rejecting audit hook.
-        and "from __future__ import annotations\n\n"
-        "import importlib.util\n"
-        "import re\n"
-        "from pathlib import Path\n"
-        "from typing import Any\n" in workload_admission
-        and workload_admission.count("\nimport ") == 2
-        and workload_admission.count("\nfrom ") == 3
-        and "subprocess" not in workload_admission,
+        # The admission layer may import only these modules, wherever the
+        # import appears, so no source change can give it a way to reach a
+        # process, a file, or the network on its own. The contract module it
+        # loads does reach the system, which is why admission is additionally
+        # proven pure by execution: tests/ci-cloud-workload-layers.py runs
+        # admitting and refusing decisions under a rejecting audit hook.
+        and imported_modules(workload_admission, "the admission layer")
+        == {"__future__", "importlib", "re", "pathlib", "typing"},
         "the streamed collector must stay self-contained and the admission layer pure",
     )
     require(

@@ -44,6 +44,7 @@ ADMISSION_PATH = ROOT / "scripts" / "ci-cloud" / "workload-admission.py"
 ASSEMBLER_PATH = ROOT / "scripts" / "ci-cloud" / "assemble-evidence.py"
 VALIDATOR_PATH = ROOT / "scripts" / "ci-cloud" / "validate-evidence.py"
 SCHEMA_PATH = ROOT / "schemas" / "ci-cloud-evidence.schema.json"
+STATIC_VALIDATOR_PATH = ROOT / "scripts" / "validate-ci-cloud.py"
 WORKLOAD_TEST_PATH = ROOT / "tests" / "ci-cloud-workload-evidence.py"
 EVIDENCE_TEST_PATH = ROOT / "tests" / "ci-cloud-evidence.py"
 
@@ -298,6 +299,7 @@ collector = load(COLLECTOR_PATH, "ci_cloud_workload_collector")
 admission = load(ADMISSION_PATH, "ci_cloud_workload_admission")
 assembler = load(ASSEMBLER_PATH, "ci_cloud_evidence_assembler")
 validator = load(VALIDATOR_PATH, "ci_cloud_evidence_validator")
+static_validator = load(STATIC_VALIDATOR_PATH, "ci_cloud_static_validator")
 SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
@@ -412,7 +414,39 @@ class LayerBoundaryTests(unittest.TestCase):
         self.assertIn(b"workload collection refused", result.stderr)
         self.assertEqual(b"", result.stdout)
 
+    def test_admission_imports_only_pure_modules(self) -> None:
+        """Bound what admission may import, wherever the import appears.
+
+        The static validator states this rule, so the same helper decides it
+        here rather than a second reading of the source. Counting import
+        lines would miss an indented ``import os`` in a function body, which
+        is why the rule is decided from the parsed tree.
+        """
+        source = ADMISSION_PATH.read_text(encoding="utf-8")
+        self.assertEqual(
+            {"__future__", "importlib", "re", "pathlib", "typing"},
+            static_validator.imported_modules(source, "admission"),
+        )
+        smuggled = source.replace(
+            "def expected_gateway_port(instance: str) -> int:\n",
+            "def expected_gateway_port(instance: str) -> int:\n    import os\n",
+            1,
+        )
+        self.assertNotEqual(smuggled, source)
+        self.assertIn("os", static_validator.imported_modules(smuggled, "smuggled"))
+
     def test_admission_decides_without_touching_the_system(self) -> None:
+        """Run admitting and refusing decisions under a rejecting audit hook.
+
+        Admitting evidence exercises only the accepting path, so a system
+        call reached from a refusal branch would stay invisible. Every
+        single-field refusal is replayed here as well.
+
+        The subject is system access, not the refusal shape: a document that
+        makes admission raise still proves the branches it reached touched
+        nothing, so the child records ``"raised"`` for it. Only an audit
+        violation escapes, because the hook raises out of the child.
+        """
         program = f"""
 import importlib.util, json, sys
 from pathlib import Path
@@ -428,19 +462,57 @@ def load(path, name):
 tests = load({str(WORKLOAD_TEST_PATH)!r}, "workload_tests")
 admission = load({str(ADMISSION_PATH)!r}, "workload_admission")
 observations = tests.valid_observations()
+structural = [
+    {{}},
+    {{"protocol_version": 1}},
+    [],
+    {{
+        "instance": observations["instance"],
+        "baseline": admission.incomplete_observation("baseline"),
+        "live": admission.incomplete_observation("live"),
+        "post_cleanup": admission.incomplete_observation("post-cleanup"),
+    }},
+]
+mutations = []
+for phase in ("baseline", "live", "post_cleanup"):
+    for field in observations[phase]:
+        candidate = tests.valid_observations()
+        candidate[phase][field] = None
+        mutations.append(candidate)
 forbidden = (
     "subprocess.Popen", "os.system", "os.exec", "os.fork", "os.posix_spawn",
     "open", "socket.socket", "socket.connect", "urllib.Request",
 )
 
 
+class AuditViolation(BaseException):
+    pass
+
+
 def audit(event, _arguments):
     if event.startswith(forbidden):
-        raise AssertionError(f"admission reached the system through {{event}}")
+        raise AuditViolation(f"admission reached the system through {{event}}")
+
+
+def decide(document):
+    # A refusal that raises still proves the branches it reached touched
+    # nothing. AuditViolation derives from BaseException, so it escapes here.
+    try:
+        return admission.workload_admission_failures(document)
+    except Exception:
+        return "raised"
 
 
 sys.addaudithook(audit)
-json.dump(admission.workload_admission_failures(observations), sys.stdout)
+admitted = admission.workload_admission_failures(observations)
+json.dump(
+    {{
+        "admitted": admitted,
+        "structural": [decide(item) for item in structural],
+        "mutations": [decide(item) for item in mutations],
+    }},
+    sys.stdout,
+)
 """
         result = subprocess.run(
             [sys.executable, "-I", "-"],
@@ -449,7 +521,19 @@ json.dump(admission.workload_admission_failures(observations), sys.stdout)
             timeout=120,
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual([], json.loads(result.stdout))
+        decisions = json.loads(result.stdout)
+        self.assertEqual([], decisions["admitted"])
+        for outcome in decisions["structural"]:
+            self.assertNotEqual([], outcome)
+        # The field mutations exist to drive refusal branches under the hook,
+        # so they only have to reach a decision. Which of them admission
+        # refuses on its own, and which the closed schema refuses first, is
+        # pinned by the cross-layer tests below.
+        self.assertTrue(decisions["mutations"])
+        self.assertTrue(
+            any(outcome != "raised" for outcome in decisions["mutations"]),
+            "no field mutation reached a decision under the audit hook",
+        )
 
     def test_collection_holds_no_admission_decision(self) -> None:
         self.assertFalse(hasattr(collector, "workload_admission_failures"))
