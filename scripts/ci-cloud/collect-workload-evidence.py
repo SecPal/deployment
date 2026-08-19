@@ -8,7 +8,10 @@ This file is the reviewed target-side entrypoint. The orchestrator streams it
 to a conformance target over ``python3 -I -`` on standard input, so it must
 stay self-contained: it may not import repository modules at target runtime.
 
-It holds three layers, in this order:
+It holds three layers. Membership is declared by the export tuples below, not
+by position: the collection layer reads a representation and then normalizes
+it, so the two are interleaved in the file body and only the declarations say
+which function belongs where.
 
 1. The workload contract: the reviewed roles, unit names, networks, volumes,
    identities, and the pure predicates over them. The names listed in
@@ -16,9 +19,12 @@ It holds three layers, in this order:
    the controller-side admission layer also needs, and it binds exactly those.
 2. Representation normalization: pure functions that turn a Podman, systemd,
    or procfs representation into the closed evidence shape, or refuse it. They
-   never repair a missing or unexpected field.
+   never repair a missing or unexpected field, and they are named in
+   REPRESENTATION_NORMALIZATION_EXPORTS.
 3. Collection: the side-effecting layer that runs commands, reads procfs and
-   the filesystem, and assembles one bounded observation per phase.
+   the filesystem, and assembles one bounded observation per phase. It is
+   every remaining function, so a helper is in this layer unless it is
+   declared above.
 
 Admission lives in ``workload-admission.py``, which runs on the controller
 only. Nothing in this file decides whether collected evidence passes D.1a, so
