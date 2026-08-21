@@ -17,6 +17,10 @@ from pathlib import Path
 MAX_INPUT_BYTES = 256 * 1024
 WORKLOAD_COLLECTOR = Path(__file__).with_name("collect-workload-evidence.py")
 WORKLOAD_ADMISSION = Path(__file__).with_name("workload-admission.py")
+TRUSTED_MODULE_RESPONSIBILITIES = {
+    WORKLOAD_COLLECTOR: "workload collector",
+    WORKLOAD_ADMISSION: "workload admission",
+}
 TRUSTED_MODULES: dict[Path, object] = {}
 
 
@@ -137,7 +141,8 @@ def load_trusted_module(path: Path, name: str):
         return cached
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise ValueError("trusted workload admission implementation is unavailable")
+        responsibility = TRUSTED_MODULE_RESPONSIBILITIES.get(path, "module")
+        raise ValueError(f"trusted {responsibility} implementation is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     TRUSTED_MODULES[path] = module

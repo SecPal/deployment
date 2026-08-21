@@ -22,6 +22,7 @@ stay self-contained, and admission must decide without touching the system.
 from __future__ import annotations
 
 import ast
+import builtins
 import copy
 import hashlib
 import importlib.util
@@ -29,6 +30,7 @@ import json
 import os
 import subprocess
 import sys
+import symtable
 import tempfile
 import types
 import unittest
@@ -61,6 +63,30 @@ CLEAN_PHASE_STATUSES = {
 CLEAN_COLLECTION_STATUSES = {"baseline": 0, "live": 0, "post_cleanup": 0}
 # Fields the service binding layer adds to a container fact after inspection.
 SERVICE_BOUND_FIELDS = ("container_cgroup", "lifecycle_service_invocation")
+PURE_BUILTIN_CALLS = frozenset(
+    {
+        "ValueError",
+        "all",
+        "any",
+        "bool",
+        "enumerate",
+        "int",
+        "isinstance",
+        "len",
+        "list",
+        "ord",
+        "range",
+        "set",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "type",
+    }
+)
+IMPURE_BUILTIN_CALLS = frozenset(
+    {"__import__", "breakpoint", "compile", "eval", "exec", "input", "open"}
+)
 
 
 def file_metadata(uid: int, gid: int, mode: int) -> types.SimpleNamespace:
@@ -68,7 +94,7 @@ def file_metadata(uid: int, gid: int, mode: int) -> types.SimpleNamespace:
     return types.SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=mode)
 
 
-def collector_system_access() -> dict[str, set[str]]:
+def collector_system_access(source: str | None = None) -> dict[str, set[str]]:
     """Map each collector function to the system access it can reach.
 
     The value is every command, filesystem, or clock primitive the function
@@ -80,22 +106,69 @@ def collector_system_access() -> dict[str, set[str]]:
         "open", "stat", "lstat", "exists", "is_file", "is_dir", "readlink",
         "chmod", "unlink", "mkdir", "resolve", "glob",
     }
-    tree = ast.parse(COLLECTOR_PATH.read_text(encoding="utf-8"))
+    collector_source = (
+        COLLECTOR_PATH.read_text(encoding="utf-8") if source is None else source
+    )
+    tree = ast.parse(collector_source)
+    symbol_table = symtable.symtable(
+        collector_source, str(COLLECTOR_PATH), "exec"
+    )
     functions = {
         node.name: node
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
     }
+    function_scopes = {
+        scope.get_name(): scope
+        for scope in symbol_table.get_children()
+        if scope.get_type() == "function" and scope.get_name() in functions
+    }
 
-    def direct(node: ast.AST) -> set[str]:
+    def is_direct_builtin(scope: symtable.SymbolTable, name: str) -> bool:
+        symbol = scope.lookup(name)
+        if not symbol.is_global() or not hasattr(builtins, name):
+            return False
+        try:
+            module_symbol = symbol_table.lookup(name)
+        except KeyError:
+            return True
+        return not (
+            module_symbol.is_assigned()
+            or module_symbol.is_imported()
+            or module_symbol.is_namespace()
+        )
+
+    def builtin_names(scope: symtable.SymbolTable) -> set[str]:
+        names = {
+            symbol.get_name()
+            for symbol in scope.get_symbols()
+            if symbol.is_global()
+            and is_direct_builtin(scope, symbol.get_name())
+        }
+        for child in scope.get_children():
+            names |= builtin_names(child)
+        return names
+
+    def direct(function: str, node: ast.FunctionDef) -> set[str]:
         found: set[str] = set()
+        direct_builtins = builtin_names(function_scopes[function])
         for child in ast.walk(node):
-            if not isinstance(child, ast.Attribute):
-                continue
-            if isinstance(child.value, ast.Name) and child.value.id in modules:
+            if isinstance(child, ast.Attribute) and (
+                isinstance(child.value, ast.Name) and child.value.id in modules
+            ):
                 found.add(f"{child.value.id}.{child.attr}")
-            elif child.attr in methods:
+            elif isinstance(child, ast.Attribute) and child.attr in methods:
                 found.add(f".{child.attr}")
+            elif (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id in direct_builtins
+            ):
+                builtin_name = child.func.id
+                if builtin_name in IMPURE_BUILTIN_CALLS:
+                    found.add(builtin_name)
+                elif builtin_name not in PURE_BUILTIN_CALLS:
+                    found.add(f"unclassified builtin {builtin_name}")
         return found
 
     calls = {
@@ -108,7 +181,10 @@ def collector_system_access() -> dict[str, set[str]]:
         }
         for name, node in functions.items()
     }
-    immediate = {name: direct(node) for name, node in functions.items()}
+    immediate = {
+        name: direct(name, node)
+        for name, node in functions.items()
+    }
 
     def reachable(name: str, seen: set[str]) -> set[str]:
         if name in seen:
@@ -306,6 +382,27 @@ SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 class LayerBoundaryTests(unittest.TestCase):
     """Pin the module boundary between collection and admission."""
 
+    def test_trusted_module_failure_names_the_unavailable_responsibility(
+        self,
+    ) -> None:
+        failures = {
+            assembler.WORKLOAD_ADMISSION: "workload admission",
+            assembler.WORKLOAD_COLLECTOR: "workload collector",
+        }
+        for path, responsibility in failures.items():
+            with self.subTest(responsibility=responsibility):
+                assembler.TRUSTED_MODULES.pop(path, None)
+                with mock.patch.object(
+                    assembler.importlib.util,
+                    "spec_from_file_location",
+                    return_value=None,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"^trusted {responsibility} implementation is unavailable$",
+                    ):
+                        assembler.load_trusted_module(path, f"missing_{path.name}")
+
     def test_one_contract_surface_is_shared_by_collection_and_admission(
         self,
     ) -> None:
@@ -400,6 +497,42 @@ class LayerBoundaryTests(unittest.TestCase):
         for name in ("container_facts", "user_work_facts", "installed_unit_facts"):
             with self.subTest(collection=name):
                 self.assertTrue(reachable[name])
+
+    def test_declared_normalization_layer_detects_direct_impure_builtins(
+        self,
+    ) -> None:
+        source = COLLECTOR_PATH.read_text(encoding="utf-8")
+        marker = "def canonical_systemd_unit_name(value: object) -> bool:\n"
+        mutations = {
+            "impure": ('    open("ignored")\n', "open"),
+            "unclassified": ('    print("ignored")\n', "unclassified builtin print"),
+        }
+        for name, (statement, expected) in mutations.items():
+            with self.subTest(capability=name):
+                mutated = source.replace(marker, marker + statement, 1)
+                self.assertNotEqual(source, mutated)
+                self.assertIn(
+                    expected,
+                    collector_system_access(mutated)[
+                        "canonical_systemd_unit_name"
+                    ],
+                )
+        pure = source.replace(marker, marker + "    len(())\n", 1)
+        self.assertNotEqual(source, pure)
+        self.assertEqual(
+            set(),
+            collector_system_access(pure)["canonical_systemd_unit_name"],
+        )
+        shadowed = source.replace(
+            marker,
+            marker + "    open = len\n    open(())\n",
+            1,
+        )
+        self.assertNotEqual(source, shadowed)
+        self.assertEqual(
+            set(),
+            collector_system_access(shadowed)["canonical_systemd_unit_name"],
+        )
 
     def test_streamed_collector_runs_without_repository_modules(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
