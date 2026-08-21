@@ -14,6 +14,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - Never use destructive Git commands, force-push, or bypass hooks.
 - Keep one coherent topic per branch and pull request.
 
+## Canonical work graph
+
+- Follow `SecPal/.github/docs/work-graph-contract.md` as the single authority
+  for work-graph, delivery, replanning, and evidence semantics. This repository
+  adds only deployment-specific implementation and security constraints.
+- The native GitHub graph state is authoritative. Human-readable diagrams and
+  prose are explanatory only and must not duplicate native relationship or
+  progress state.
+- A leaf owns one reviewable contract and one primary delivery pull request,
+  linked with `Fixes #<leaf>`. A leaf inside an epic also carries
+  `Part of: #<parent>` as canonical delivery linkage, not graph authority.
+- Promote a leaf to a sub-epic when it needs multiple independently reviewable
+  contracts or delivery pull requests. Preserve parallelism: use dependencies
+  only for genuine prerequisites and native sibling order for preference.
+
 ## Security boundaries
 
 Without current explicit authorization, do not access the Docker daemon,
@@ -35,9 +50,18 @@ Never print secret values to logs.
 
 ## Development contract
 
-- Use test-driven development for executable scripts and validation logic:
-  write the smallest failing test first, implement the minimum behavior, then
+- Observable behavior or validator-contract changes require failing-first
+  contract or behavior evidence, followed by the minimum implementation and a
   refactor with the tests green.
+- Behavior-preserving refactors may rely on unchanged behavior tests,
+  characterization, structural, source-shape, security, or pinned-equivalence
+  evidence. Do not manufacture a failing-first test when behavior is preserved.
+- If a leaf promises a real-system or cloud outcome, repository-authored
+  fixtures cannot replace real-system evidence. Do not require a real-system
+  run when the leaf promises no real-system outcome.
+- One scenario or evidence artifact may satisfy several acceptance criteria.
+  Stop at the smallest non-redundant evidence set; do not create one test per
+  finding or one evidence leaf per seam.
 - Run all relevant validation before committing and report exact commands and
   results.
 - Maintain SPDX headers and REUSE compliance.
@@ -51,6 +75,22 @@ Never print secret values to logs.
   and current Debian packages only when it is isolated from production, records
   the resolved provider image ID and exact installed package versions in closed
   schema-validated evidence, and re-admits their expected Debian provenance.
+
+## Validator and evidence design
+
+- Every semantic invariant has exactly one authoritative definition.
+  Independent enforcement remains legitimate at trust boundaries when each
+  enforcement point names or demonstrably follows that owner.
+- Prefer standard-library, language, runtime, and platform primitives over
+  hand-written equivalents. Python scope analysis uses `symtable` for this
+  reason. Custom deployment-domain validation remains legitimate where no
+  standard owns the rule. Do not add a dependency when the standard library or
+  platform suffices.
+- Use allowlists when the valid set is finite, closed, and known, and reject
+  unknown values. Do not force an allowlist onto an open-ended domain.
+- Cloud evidence remains closed-schema, bounded, target-SHA-bound, and
+  independently revalidated. Repository-authored fixtures prove repository
+  behavior; only provider/system evidence proves a promised real-system result.
 
 ## Licensing, REUSE, and Branding
 

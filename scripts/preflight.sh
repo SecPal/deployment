@@ -75,6 +75,7 @@ bash tests/ci-cloud-workload-orchestration.sh
 bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
+python3 tests/work-graph-governance.py
 bash tests/repository-contract.sh
 bash tests/phase-b-contract.sh
 bash tests/phase-c-api-image-contract.sh

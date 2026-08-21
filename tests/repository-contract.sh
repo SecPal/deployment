@@ -118,6 +118,7 @@ required_files=(
   tests/production-contract-regressions.py
   tests/production-host-contract.sh
   tests/production-inventory-contract.py
+  tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
   tests/local-integration-lifecycle.sh
   tests/preflight-origin-contract.sh
