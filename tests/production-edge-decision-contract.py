@@ -14,6 +14,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 ADR = ROOT / "docs" / "architecture" / "decisions" / "production-edge.md"
+PRODUCTION_HOST = ROOT / "docs" / "architecture" / "production-host.md"
+QUADLET = ROOT / "config" / "production" / "quadlet"
 CONTRACT_START = "<!-- production-edge-contract:start -->"
 CONTRACT_END = "<!-- production-edge-contract:end -->"
 
@@ -40,6 +42,27 @@ REQUIRED_KEYS = {
     "downstream",
 }
 
+NESTED_REQUIRED_KEYS = {
+    "reference_edge": {"technology", "phase_b_gateway"},
+    "distribution": {"package", "architectures", "suites"},
+    "runtime_authority": {"model", "user", "capabilities", "read_only_system", "edge_state"},
+    "orchestration": {"edge", "backends", "podman_api_socket", "docker_socket"},
+    "public_boundary": {"public_roles", "private_roles", "listeners", "product_public_ports"},
+    "origins": {"frontend", "api", "same_origin", "frontend_api_proxy"},
+    "backend_boundary": {"transport", "product_host_network", "data_edge_membership"},
+    "proxy_trust": {"allowlist", "wildcards", "caller_headers_are_identity"},
+    "forwarded_metadata": {"discard", "set"},
+    "client_identity_evidence": {"ipv4", "ipv6", "upstream_proxy"},
+    "tls": {"termination", "product_tls"},
+    "acme": {"client", "authority", "state", "edge_access"},
+    "logging": {"format", "sink", "path_field", "fields", "forbidden"},
+    "crowdsec": {"remediation", "ipv4", "ipv6", "application_readiness_dependency", "l7_plugin"},
+    "supply_chain": {"runtime_downloads", "plugins", "remote_configuration", "moving_blocklists", "reviewed_updates_only"},
+    "failure_semantics": {"invalid_config", "reload_failure", "edge_failure", "acme_failure", "crowdsec_failure"},
+    "phase_b": {"caddy_image", "internal_ca", "playwright_gateway"},
+    "downstream": {"network_and_source_identity", "tls_and_acme_lifecycle", "security_profile_integration"},
+}
+
 
 class DecisionViolation(ValueError):
     """Raised when the normative ADR summary violates the selected contract."""
@@ -62,7 +85,30 @@ def require(condition: bool, message: str) -> None:
         raise DecisionViolation(message)
 
 
+def require_closed_objects(contract: dict[str, object]) -> None:
+    """Reject unknown or missing keys in every finite decision object."""
+
+    for name, expected_keys in NESTED_REQUIRED_KEYS.items():
+        value = contract.get(name)
+        require(isinstance(value, dict), f"{name} must be an object")
+        require(set(value) == expected_keys, f"{name} must use its closed key set")
+
+
+def production_quadlet_roles() -> set[str]:
+    roles: set[str] = set()
+    for unit in QUADLET.glob("*.container"):
+        labels = [
+            line.removeprefix("Label=org.secpal.role=")
+            for line in unit.read_text(encoding="utf-8").splitlines()
+            if line.startswith("Label=org.secpal.role=")
+        ]
+        require(len(labels) == 1, f"{unit.name} must declare exactly one production role")
+        roles.add(labels[0])
+    return roles
+
+
 def validate(contract: dict[str, object]) -> None:
+    require_closed_objects(contract)
     require(contract["schema_version"] == 1, "schema version is closed")
     require(contract["status"] == "accepted", "the ADR must select one edge")
 
@@ -80,10 +126,10 @@ def validate(contract: dict[str, object]) -> None:
     authority = contract["runtime_authority"]
     require(isinstance(authority, dict), "runtime authority must be an object")
     require(authority.get("model") == "host-system-service", "edge is a host service")
-    require(authority.get("user") == "dedicated-secpal-edge", "edge has a dedicated identity")
+    require(authority.get("user") == "secpal-edge", "edge has the canonical dedicated identity")
     require(authority.get("capabilities") == ["CAP_NET_BIND_SERVICE"], "edge capability set is closed")
     require(authority.get("read_only_system") is True, "edge system paths are read-only")
-    require(authority.get("edge_state") == "/srv/secpal/edge-root-owned-edge-read-only", "edge state follows the D.2 namespace")
+    require(authority.get("edge_state") == "/srv/secpal/edge", "edge state follows the D.2 namespace")
 
     orchestration = contract["orchestration"]
     require(orchestration == {
@@ -97,10 +143,10 @@ def validate(contract: dict[str, object]) -> None:
     require(isinstance(public, dict), "public boundary must be an object")
     require(public.get("public_roles") == ["edge"], "only the edge may be public")
     require(public.get("listeners") == ["0.0.0.0:80", "[::]:80", "0.0.0.0:443", "[::]:443"], "dual-stack listeners are exact")
-    require(set(public.get("private_roles", [])) == {
-        "frontend", "api", "migrate", "worker-general", "worker-hash-chain",
-        "scheduler", "postgresql", "valkey",
-    }, "every non-edge role must remain private")
+    private_roles = public.get("private_roles", [])
+    require(isinstance(private_roles, list), "private roles must be a list")
+    require(len(private_roles) == len(set(private_roles)), "private roles must be unique")
+    require(set(private_roles) == production_quadlet_roles(), "every production Quadlet role must remain private")
     require(public.get("product_public_ports") is False, "product ports cannot be public")
 
     origins = contract["origins"]
@@ -185,7 +231,11 @@ def validate(contract: dict[str, object]) -> None:
     }, "Phase B artifacts remain test-only")
 
     downstream = contract["downstream"]
-    require(downstream == {"d4_issue": 12, "d5_issue": 13, "d6_issue": 14}, "downstream ownership is exact")
+    require(downstream == {
+        "network_and_source_identity": "required",
+        "tls_and_acme_lifecycle": "required",
+        "security_profile_integration": "required",
+    }, "semantic downstream obligations are exact")
 
 
 class ProductionEdgeDecisionContractTest(unittest.TestCase):
@@ -225,6 +275,8 @@ class ProductionEdgeDecisionContractTest(unittest.TestCase):
 
     def test_runtime_socket_and_proxy_trust_mutations_fail(self) -> None:
         mutations = {
+            ("runtime_authority", "user"): "dedicated-secpal-edge",
+            ("runtime_authority", "edge_state"): "/srv/secpal/edge-root-owned-edge-read-only",
             ("orchestration", "podman_api_socket"): "mounted",
             ("orchestration", "docker_socket"): "mounted",
             ("proxy_trust", "wildcards"): True,
@@ -236,6 +288,19 @@ class ProductionEdgeDecisionContractTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assert_mutation_rejected(path, value)
 
+    def test_nested_contract_objects_are_closed(self) -> None:
+        self.assert_mutation_rejected(("runtime_authority", "unexpected"), True)
+
+    def test_private_boundary_matches_canonical_quadlet_roles(self) -> None:
+        self.assertEqual(set(self.contract["public_boundary"]["private_roles"]), production_quadlet_roles())
+
+    def test_current_host_topology_separates_edge_and_product_authorities(self) -> None:
+        host = PRODUCTION_HOST.read_text(encoding="utf-8")
+        self.assertNotIn("future public edge through\nrootless Podman", host)
+        self.assertNotIn("only publicly reachable container boundary", host)
+        self.assertIn("public NGINX edge as a host system service", host)
+        self.assertIn("product and data services remain on private rootless\ncontainer networks", host)
+
     def test_unpinned_or_moving_supply_chain_mutations_fail(self) -> None:
         mutations = {
             ("distribution", "package"): "nginx=latest",
@@ -243,6 +308,7 @@ class ProductionEdgeDecisionContractTest(unittest.TestCase):
             ("supply_chain", "plugins"): ["moving-marketplace-plugin"],
             ("supply_chain", "remote_configuration"): True,
             ("supply_chain", "moving_blocklists"): True,
+            ("downstream",): {"d4_issue": 12, "d5_issue": 13, "d6_issue": 14},
         }
         for path, value in mutations.items():
             with self.subTest(path=path):

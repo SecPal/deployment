@@ -263,10 +263,10 @@ must implement rather than redefine them.
   },
   "runtime_authority": {
     "model": "host-system-service",
-    "user": "dedicated-secpal-edge",
+    "user": "secpal-edge",
     "capabilities": ["CAP_NET_BIND_SERVICE"],
     "read_only_system": true,
-    "edge_state": "/srv/secpal/edge-root-owned-edge-read-only"
+    "edge_state": "/srv/secpal/edge"
   },
   "orchestration": {
     "edge": "systemd-system",
@@ -277,14 +277,15 @@ must implement rather than redefine them.
   "public_boundary": {
     "public_roles": ["edge"],
     "private_roles": [
-      "frontend",
       "api",
+      "frontend",
       "migrate",
-      "worker-general",
-      "worker-hash-chain",
+      "postgres",
+      "postgres-init",
       "scheduler",
-      "postgresql",
-      "valkey"
+      "valkey",
+      "worker-general",
+      "worker-hash-chain"
     ],
     "listeners": ["0.0.0.0:80", "[::]:80", "0.0.0.0:443", "[::]:443"],
     "product_public_ports": false
@@ -389,9 +390,9 @@ must implement rather than redefine them.
     "playwright_gateway": "behavioral-evidence-not-production"
   },
   "downstream": {
-    "d4_issue": 12,
-    "d5_issue": 13,
-    "d6_issue": 14
+    "network_and_source_identity": "required",
+    "tls_and_acme_lifecycle": "required",
+    "security_profile_integration": "required"
   }
 }
 ```
@@ -407,6 +408,8 @@ CA, trusts stack-local test metadata, and exists to drive Playwright. None of
 its image, CA, credentials, routing configuration, dynamic port behavior, or
 trust rule is promoted.
 
+The issue links in this paragraph are navigation only; native GitHub
+relationships remain authoritative for hierarchy, dependencies, and readiness.
 D.4 (#12) implements and proves the selected public/loopback topology, exact
 backend peer allowlist, dual-stack source paths, spoofed-header overwrite,
 firewall owner rule, configuration validation, reload, health, and process
