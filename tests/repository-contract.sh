@@ -46,6 +46,7 @@ required_files=(
   docs/architecture/production-host.md
   docs/architecture/production-inventory.md
   docs/architecture/production-state.md
+  docs/architecture/decisions/production-edge.md
   docs/architecture/production-secrets.md
   docs/api-image-consumption.md
   docs/frontend-image-consumption.md
@@ -128,6 +129,7 @@ required_files=(
   tests/production-host-contract.sh
   tests/production-inventory-contract.py
   tests/production-state-contract.py
+  tests/production-edge-decision-contract.py
   tests/production-state-native-lifecycle-gate.sh
   tests/production-state-native-lifecycle.sh
   tests/work-graph-governance.py
