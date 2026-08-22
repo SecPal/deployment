@@ -8,8 +8,9 @@ SPDX-License-Identifier: CC0-1.0
 This document defines ownership and trust boundaries for the SecPal deployment
 reference. Phase B implemented the original test-only local integration
 subset, Phase C supplied its reviewed API and frontend digests, and D.1a moves
-the active disposable runtime to native rootless Podman and Quadlet. D.1 and
-D.1a do not implement a production deployment.
+the active disposable runtime to native rootless Podman and Quadlet. D.3 now
+selects the [production edge](decisions/production-edge.md). These decisions do
+not implement a production deployment.
 
 ## Repository responsibilities
 
@@ -25,9 +26,9 @@ This repository owns:
 - integration-test documentation.
 
 The reviewed immutable API and frontend images are already consumed here.
-Later Phase-D work will add production persistence and secret contracts, the
-selected production edge and CrowdSec, backup/restore, update/rollback, and
-production operator guidance.
+Phase D has added production persistence and secret contracts and selected the
+production edge. Later work will implement that edge and CrowdSec,
+backup/restore, update/rollback, and production operator guidance.
 
 ## Out of scope
 
@@ -54,7 +55,7 @@ The architecture separates the following trust zones:
   edge network. The API uses Laravel's immediate-peer trust token so gateway
   HTTPS and client metadata survive dynamic bridge addressing. All Phase B
   network peers are stack-owned services. The gateway is not the selected
-  production edge.
+  [production NGINX edge](decisions/production-edge.md).
 - **Frontend container:** serves the frontend image and has no direct database
   or secret-store authority.
 - **API HTTP container:** handles authenticated application requests and is

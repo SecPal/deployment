@@ -113,12 +113,16 @@ parallel-run isolation, and exact cleanup. It provisions no host and
 implements no production orchestration. See
 [`production-host.md`](architecture/production-host.md) and
 [`production-inventory.md`](architecture/production-inventory.md) for D.1 and
-[`quadlet-integration.md`](quadlet-integration.md) for D.1a.
+[`quadlet-integration.md`](quadlet-integration.md) for D.1a. D.2 defines the
+production state and secret contract. D.3 selects a pinned Debian NGINX host
+service and its trust boundary in
+[`production-edge.md`](architecture/decisions/production-edge.md); neither
+decision performs a deployment.
 
 **Expected artifacts:** D.1a supplies integration-only native Quadlet
 orchestration, service dependencies, disposable secret mounts, and health
-checks. Production persistence, secret, edge, and operator contracts remain
-later Phase-D work.
+checks. Production edge implementation and operator contracts remain later
+Phase-D work.
 
 **Entry criteria:** Immutable image contracts exist.
 

@@ -19,10 +19,12 @@ created or changed by D.1.
 ## Supported topology
 
 The first supported reference topology is `single-host`: one admitted Linux
-host will run the data services, product roles, and future public edge through
-rootless Podman and systemd/Quadlet. The historical Phase B/C Docker/Compose
-integration proves the service relationships, one scheduler, one
-`activity-hash-chain` worker, and explicit one-shot migration role. D.1 does
+host runs product and data roles through rootless Podman, systemd-user, and
+native Quadlet, plus the public NGINX edge as a host system service. D.1 left
+the future edge placement open; D.3 supersedes only that placeholder topology
+and keeps the D.1 rootless product-runtime boundary intact. The historical
+Phase B/C Docker/Compose integration proves the service relationships, one
+scheduler, one `activity-hash-chain` worker, and explicit one-shot migration role. D.1 does
 not claim Podman integration parity; [D.1a (#20)](https://github.com/SecPal/deployment/issues/20)
 now owns the separate disposable migration and parity proof before D.2 builds
 production state handling on the new runtime. The D.1 host contract itself
@@ -250,7 +252,8 @@ capability and does not add production Quadlet files.
 The rootless network contract is Netavark with Aardvark DNS and `pasta` from
 Debian packages. Host networking is forbidden. D.1 does not change
 `net.ipv4.ip_unprivileged_port_start`, firewall rules, forwarding, or ports
-80/443; D.3/D.4 must choose and prove the edge/public-port path without
+80/443. D.3 selects the NGINX host system service as the edge authority; D.4
+must prove its public-port and protected loopback-backend paths without
 weakening rootless isolation.
 
 Effective Podman registry configuration is supply-chain state. SecPal image
@@ -427,9 +430,9 @@ host addresses and fail admission. Scoped IPv6 literals also fail because an
 interface-zone suffix is not a stable inventory identity. Address facts are
 strings and are never coerced from numeric or binary YAML values.
 Private-address collection order is insignificant, but duplicates and
-mismatches fail closed. The public edge will
-be the only publicly reachable container boundary; product and data services
-remain on private container networks. Firewall mutation, routing, port
+mismatches fail closed. The public NGINX host service is the only publicly
+reachable boundary; product and data services remain on private rootless
+container networks. Firewall mutation, routing, port
 publication, cloud metadata, and public reachability checks are outside D.1.
 
 The host has a stable DNS hostname distinct from both application origins. A
@@ -478,7 +481,7 @@ account owns its rootless Podman graphroot, logs, and backup staging. Its home
 is an absolute local state path but is not a user-writable Podman policy source;
 its shell is `/usr/sbin/nologin`, interactive login is disabled, and it receives
 no `sudo` authorization. It does not own PostgreSQL, Quadlet definitions, or
-undecided edge identities.
+the `secpal-edge` host-service identity selected by D.3.
 
 Named human operators authorize host changes. Their SSH keys, certificates,
 hardware-backed credentials, and privilege policy live outside this
@@ -510,22 +513,22 @@ root-owned. State and runtime-secret namespace roots themselves are not
 selectable. This structural allowlist rejects unrelated `/etc`, `/usr`, and
 `/var/lib` trees without maintaining an incomplete directory blacklist.
 
-| Inventory key                 | Example path                          | Owner and UID:GID                               |   Mode | Class           | Decision owner       |
-| ----------------------------- | ------------------------------------- | ----------------------------------------------- | -----: | --------------- | -------------------- |
-| `configuration`               | `/srv/secpal/config`                  | root:service GID, runtime read-only             | `0750` | persistent      | D.1                  |
-| `deployment_state`            | `/srv/secpal/deployment-state`        | root:service GID, runtime read-only             | `0750` | persistent      | D.1                  |
-| `runtime_secrets`             | `/run/secpal/secrets`                 | root:`20000`                                    | `0710` | reconstructable | D.2                  |
-| `postgresql_data`             | `/srv/secpal/postgresql`              | mapped `100998:200998`; container `999:999`     | `0700` | persistent      | D.2                  |
-| `private_application_storage` | `/srv/secpal/private-storage`         | mapped `110000:210000`; container `10001:10001` | `0750` | persistent      | D.2                  |
-| `public_application_storage`  | `/srv/secpal/public-storage`          | mapped `110000:210000`; container `10001:10001` | `0750` | persistent      | D.2                  |
-| `valkey_data`                 | `/srv/secpal/valkey`                  | mapped `110001:210001`; container `10002:10002` | `0700` | persistent      | D.2                  |
-| `edge_state`                  | `/srv/secpal/edge`                    | edge contract, unset                            | `0750` | persistent      | D.3 (#11)            |
-| `acme_state`                  | `/srv/secpal/acme`                    | TLS contract, unset                             | `0700` | persistent      | D.5 (#13)            |
-| `crowdsec_state`              | `/srv/secpal/crowdsec`                | CrowdSec contract, unset                        | `0750` | persistent      | D.6 (#14)            |
-| `logs`                        | `/srv/secpal/logs`                    | service account, inventory UID:GID              | `0750` | persistent      | D.1; retention later |
-| `backup_staging`              | `/srv/secpal/backup-staging`          | service account, inventory UID:GID              | `0700` | reconstructable | D.7 (#15)            |
-| `podman_graph_root`           | `/srv/secpal/podman-storage`          | service account, inventory UID:GID              | `0700` | reconstructable | D.1                  |
-| `quadlet_definitions`         | `/etc/containers/systemd/users/<UID>` | operator root `0:0`                             | `0755` | reconstructable | D.1                  |
+| Inventory key                 | Example path                          | Owner and UID:GID                                  |   Mode | Class           | Decision owner       |
+| ----------------------------- | ------------------------------------- | -------------------------------------------------- | -----: | --------------- | -------------------- |
+| `configuration`               | `/srv/secpal/config`                  | root:service GID, runtime read-only                | `0750` | persistent      | D.1                  |
+| `deployment_state`            | `/srv/secpal/deployment-state`        | root:service GID, runtime read-only                | `0750` | persistent      | D.1                  |
+| `runtime_secrets`             | `/run/secpal/secrets`                 | root:`20000`                                       | `0710` | reconstructable | D.2                  |
+| `postgresql_data`             | `/srv/secpal/postgresql`              | mapped `100998:200998`; container `999:999`        | `0700` | persistent      | D.2                  |
+| `private_application_storage` | `/srv/secpal/private-storage`         | mapped `110000:210000`; container `10001:10001`    | `0750` | persistent      | D.2                  |
+| `public_application_storage`  | `/srv/secpal/public-storage`          | mapped `110000:210000`; container `10001:10001`    | `0750` | persistent      | D.2                  |
+| `valkey_data`                 | `/srv/secpal/valkey`                  | mapped `110001:210001`; container `10002:10002`    | `0700` | persistent      | D.2                  |
+| `edge_state`                  | `/srv/secpal/edge`                    | root owner; `secpal-edge` group, runtime read-only | `0750` | persistent      | D.3 (#11)            |
+| `acme_state`                  | `/srv/secpal/acme`                    | TLS contract, unset                                | `0700` | persistent      | D.5 (#13)            |
+| `crowdsec_state`              | `/srv/secpal/crowdsec`                | CrowdSec contract, unset                           | `0750` | persistent      | D.6 (#14)            |
+| `logs`                        | `/srv/secpal/logs`                    | service account, inventory UID:GID                 | `0750` | persistent      | D.1; retention later |
+| `backup_staging`              | `/srv/secpal/backup-staging`          | service account, inventory UID:GID                 | `0700` | reconstructable | D.7 (#15)            |
+| `podman_graph_root`           | `/srv/secpal/podman-storage`          | service account, inventory UID:GID                 | `0700` | reconstructable | D.1                  |
+| `quadlet_definitions`         | `/etc/containers/systemd/users/<UID>` | operator root `0:0`                                | `0755` | reconstructable | D.1                  |
 
 `/app/storage/app/private` is business-critical container state and retains the
 verified API container owner `10001:10001`. Under rootless Podman those are host
