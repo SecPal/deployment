@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+[Unit]
+Description=SecPal production Valkey
+PartOf=secpal.target
+Requires=secpal-state-ready.service
+After=secpal-state-ready.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+[Container]
+ContainerName=secpal-valkey
+Image=docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd
+Pull=never
+User=10002
+Group=10002
+ReadOnly=true
+ReadOnlyTmpfs=false
+DropCapability=all
+NoNewPrivileges=true
+RunInit=true
+StopTimeout=30
+LogDriver=k8s-file
+LogOpt=path=/srv/secpal/logs/secpal-valkey.log
+LogOpt=max-size=10mb
+PidsLimit=512
+PodmanArgs=--http-proxy=false
+PodmanArgs=--pid=private
+PodmanArgs=--ipc=private
+PodmanArgs=--uts=private
+Label=org.secpal.production=true
+Label=org.secpal.role=valkey
+Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-valkey-entrypoint.sh"]
+Mount=type=bind,source=/srv/secpal/config/runtime/production-valkey-entrypoint.sh,target=/run/secpal/bootstrap/production-valkey-entrypoint.sh,ro=true
+Mount=type=bind,source=/run/secpal/secrets/valkey/password,target=/run/secpal-secret/password,ro=true
+Mount=type=bind,source=/srv/secpal/valkey,target=/data,rw=true
+Mount=type=tmpfs,destination=/tmp,tmpfs-size=16m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
+Network=secpal-application.network
+NetworkAlias=valkey
+HealthCmd=valkey-cli ping 2>&1 | grep -q 'NOAUTH Authentication required.'
+HealthInterval=5s
+HealthTimeout=3s
+HealthRetries=20
+HealthStartPeriod=5s
+HealthOnFailure=kill
+Notify=healthy
+[Service]
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=180

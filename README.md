@@ -41,9 +41,10 @@ local integration subset; later phases remain targets:
    commit `4fc2796409b7c37a541f515ccf29236f143fc132` passed post-merge
    Repository Quality run `31264563173` and Local Integration run
    `31264562902` on `main`.
-4. Public rootless Podman/Quadlet reference deployment: the D.1 host contract
-   and D.1a integration-runtime parity are implemented; production
-   orchestration and later Phase-D work are not.
+4. Public rootless Podman/Quadlet reference deployment: the D.1 host contract,
+   D.1a integration-runtime parity, and D.2 production state/secret boundary are
+   implemented; installation, public-edge, backup/restore, and later Phase-D
+   work are not.
 5. Public edge, TLS, and CrowdSec: not implemented.
 6. Backup, restore, update, and rollback: not implemented.
 7. Private managed-hosting automation: permanently outside this public

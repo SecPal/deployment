@@ -9,6 +9,15 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- The authoritative production persistence matrix, deterministic rootless host
+  ownership mapping, fail-closed state/secret preparation, and checked native
+  Quadlet bind declarations for PostgreSQL, application storage, and Valkey.
+- Stable file-backed application, PostgreSQL, Valkey, and raw tenant-KEK secret
+  contracts with atomic initial publication, bounded APP key history, exact
+  consumers, negative mutation coverage, and leak-surface validation.
+- A documented coordinated D.7 recovery boundary and durable Valkey AOF policy
+  without adding backup jobs, live secrets, or a production deployment.
+
 - A constrained native Quadlet renderer and rootless Podman/systemd-user
   lifecycle that transfer the disposable Phase B/C integration contract
   without rewriting its historical Docker/Compose evidence.

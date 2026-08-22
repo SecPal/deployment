@@ -48,7 +48,8 @@ safe parent location and violated invariant.
 `backup.credential_reference` is an opaque reference beginning with
 `external-secret://`. It identifies material held by a later approved secret
 system; it is not the material. Secret generation, storage, rotation, and
-recovery belong to D.2 (#10).
+recovery follow the implemented D.2 production-secret contract; inventory
+continues to contain references only.
 
 Actual production inventories must remain outside this public repository. The
 checked-in example uses `example.invalid` origins and RFC documentation
@@ -185,16 +186,15 @@ most 255 encoded bytes per component and 4095 encoded bytes for the complete
 path. ASCII control characters and character-count-only values that the target
 filesystem cannot safely represent fail admission.
 
-Known API private and public storage requires container identity
-`10001:10001`; the inventory deliberately records null host UID/GID for those
-bind paths. Rootless namespace mapping means the container identity is not the
-same host identity. A null owner delegates selection; it does not permit the
-path to alias the service-account UID while claiming that the account cannot
-write. Host facts must keep effective access consistent with UID/GID and mode.
-D.2 owns safe host-side ownership materialization. Runtime
-secret, PostgreSQL, edge, ACME, and CrowdSec identities remain explicitly
-delegated rather than guessed. Podman graphroot is service-account-owned and
-reconstructable; authoritative business data must remain outside it.
+API private/public storage uses container `10001:10001` and mapped host
+`110000:210000`; PostgreSQL uses container `999:999` and host
+`100998:200998`; Valkey uses container `10002:10002` and host
+`110001:210001`. Runtime secret directories are root-owned with service group
+`20000` and mode `0710`. These values derive from the one D.2 rootless mapping
+rather than container/host identity equality. Edge, ACME, and CrowdSec
+identities remain explicitly delegated rather than guessed. Podman graphroot
+is service-account-owned and reconstructable; authoritative business data
+remains outside it.
 
 ### `resources`
 
@@ -272,8 +272,8 @@ Validation consists of:
    enforcing-profile evidence, resources, and storage headroom. Every supplied
    path-access value is the collector-resolved canonical path and must exactly
    equal its contract spelling, proving that no represented path component
-   traverses a symlink. Runtime secrets receive that effective path evidence in
-   D.2 when their materialization contract is defined.
+   traverses a symlink. Runtime secret materialization is additionally enforced
+   by the D.2 host and user-namespace validator.
 
 Missing fields, unknown or duplicate fields, conflicting merges, unsupported
 versions and topology, relative or traversing paths, duplicate or nested state

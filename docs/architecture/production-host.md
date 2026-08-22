@@ -89,7 +89,7 @@ A conforming fact document reports all of the following:
 - writable local `ext4`, or writable local XFS with `ftype=1`, for every
   persistent state path and backup staging;
 - working `d_type` directory-entry support; and
-- the required commands `bash`, `curl`, `df`, `findmnt`, `getent`, `gh`, `id`,
+- the required commands `bash`, `curl`, `df`, `findmnt`, `getfacl`, `getent`, `gh`, `id`,
   `install`, `loginctl`, `mktemp`, `newgidmap`, `newuidmap`, `podman`,
   `python3`, `realpath`, `sha256sum`, `stat`, `systemctl`, and `timedatectl`.
 
@@ -204,10 +204,11 @@ subordinate range.
 collector must prove that each helper can establish the selected mapping for a
 short-lived user-namespace probe owned by the service account; executable
 presence alone is insufficient.
-This normal rootless namespace maps all current known container identities,
-including API `10001:10001` and frontend `101:101`. Exact PostgreSQL and Valkey
-container identities remain D.2 decisions; selecting an identity outside this
-namespace requires a reviewed contract migration.
+This normal rootless namespace maps all reviewed container identities: API
+`10001:10001`, frontend `101:101`, PostgreSQL `999:999`, and Valkey
+`10002:10002`. D.2 maps them to host identities through the one default
+single-range method; selecting an identity outside this namespace requires a
+reviewed contract migration.
 
 Production orchestration is the systemd user manager plus Quadlet. cgroup v2,
 the Quadlet generator, the user manager, its DBus session, and boot startup are
@@ -379,13 +380,13 @@ Filesystem facts remain separate from headroom facts. They cover every path
 classified as persistent plus reconstructable backup staging and must match
 the corresponding inventory path. This includes configuration and deployment
 state even though those two paths have no separate capacity floor. Runtime
-secrets are reconstructable state under `/run`; D.2 (#10) owns their eventual
-filesystem, canonicalization, ownership, mode materialization, and lifecycle
-decision. Each represented path reports its effective
+secrets are reconstructable state under `/run`; D.2 defines their filesystem,
+canonicalization, ownership, mode materialization, and lifecycle in the
+production state contract. Each represented path reports its effective
 numeric UID, GID, and directory mode. D.1 compares fixed owners for
 configuration, deployment state, logs, backup staging, and Podman graphroot;
-owners delegated to later state or edge contracts are observed but not selected
-here. A delegated path cannot report the service-account UID because every
+owners delegated to later edge contracts are observed but not selected here. A
+delegated path cannot report the service-account UID because every
 delegated baseline mode grants its owner write access; such a fact would
 contradict the required effective-access denial. Every baseline mode is fixed
 and enforced, including for delegated-owner paths. Effective access facts must
@@ -509,37 +510,38 @@ root-owned. State and runtime-secret namespace roots themselves are not
 selectable. This structural allowlist rejects unrelated `/etc`, `/usr`, and
 `/var/lib` trees without maintaining an incomplete directory blacklist.
 
-| Inventory key                 | Example path                          | Owner and UID:GID                           |   Mode | Class           | Decision owner       |
-| ----------------------------- | ------------------------------------- | ------------------------------------------- | -----: | --------------- | -------------------- |
-| `configuration`               | `/srv/secpal/config`                  | root:service GID, runtime read-only         | `0750` | persistent      | D.1                  |
-| `deployment_state`            | `/srv/secpal/deployment-state`        | root:service GID, runtime read-only         | `0750` | persistent      | D.1                  |
-| `runtime_secrets`             | `/run/secpal/secrets`                 | state contract, unset                       | `0750` | reconstructable | D.2 (#10)            |
-| `postgresql_data`             | `/srv/secpal/postgresql`              | state contract, unset                       | `0700` | persistent      | D.2 (#10)            |
-| `private_application_storage` | `/srv/secpal/private-storage`         | host mapping unset; container `10001:10001` | `0750` | persistent      | D.2 (#10)            |
-| `public_application_storage`  | `/srv/secpal/public-storage`          | host mapping unset; container `10001:10001` | `0750` | persistent      | D.2 (#10)            |
-| `edge_state`                  | `/srv/secpal/edge`                    | edge contract, unset                        | `0750` | persistent      | D.3 (#11)            |
-| `acme_state`                  | `/srv/secpal/acme`                    | TLS contract, unset                         | `0700` | persistent      | D.5 (#13)            |
-| `crowdsec_state`              | `/srv/secpal/crowdsec`                | CrowdSec contract, unset                    | `0750` | persistent      | D.6 (#14)            |
-| `logs`                        | `/srv/secpal/logs`                    | service account, inventory UID:GID          | `0750` | persistent      | D.1; retention later |
-| `backup_staging`              | `/srv/secpal/backup-staging`          | service account, inventory UID:GID          | `0700` | reconstructable | D.7 (#15)            |
-| `podman_graph_root`           | `/srv/secpal/podman-storage`          | service account, inventory UID:GID          | `0700` | reconstructable | D.1                  |
-| `quadlet_definitions`         | `/etc/containers/systemd/users/<UID>` | operator root `0:0`                         | `0755` | reconstructable | D.1                  |
+| Inventory key                 | Example path                          | Owner and UID:GID                               |   Mode | Class           | Decision owner       |
+| ----------------------------- | ------------------------------------- | ----------------------------------------------- | -----: | --------------- | -------------------- |
+| `configuration`               | `/srv/secpal/config`                  | root:service GID, runtime read-only             | `0750` | persistent      | D.1                  |
+| `deployment_state`            | `/srv/secpal/deployment-state`        | root:service GID, runtime read-only             | `0750` | persistent      | D.1                  |
+| `runtime_secrets`             | `/run/secpal/secrets`                 | root:`20000`                                    | `0710` | reconstructable | D.2                  |
+| `postgresql_data`             | `/srv/secpal/postgresql`              | mapped `100998:200998`; container `999:999`     | `0700` | persistent      | D.2                  |
+| `private_application_storage` | `/srv/secpal/private-storage`         | mapped `110000:210000`; container `10001:10001` | `0750` | persistent      | D.2                  |
+| `public_application_storage`  | `/srv/secpal/public-storage`          | mapped `110000:210000`; container `10001:10001` | `0750` | persistent      | D.2                  |
+| `valkey_data`                 | `/srv/secpal/valkey`                  | mapped `110001:210001`; container `10002:10002` | `0700` | persistent      | D.2                  |
+| `edge_state`                  | `/srv/secpal/edge`                    | edge contract, unset                            | `0750` | persistent      | D.3 (#11)            |
+| `acme_state`                  | `/srv/secpal/acme`                    | TLS contract, unset                             | `0700` | persistent      | D.5 (#13)            |
+| `crowdsec_state`              | `/srv/secpal/crowdsec`                | CrowdSec contract, unset                        | `0750` | persistent      | D.6 (#14)            |
+| `logs`                        | `/srv/secpal/logs`                    | service account, inventory UID:GID              | `0750` | persistent      | D.1; retention later |
+| `backup_staging`              | `/srv/secpal/backup-staging`          | service account, inventory UID:GID              | `0700` | reconstructable | D.7 (#15)            |
+| `podman_graph_root`           | `/srv/secpal/podman-storage`          | service account, inventory UID:GID              | `0700` | reconstructable | D.1                  |
+| `quadlet_definitions`         | `/etc/containers/systemd/users/<UID>` | operator root `0:0`                             | `0755` | reconstructable | D.1                  |
 
 `/app/storage/app/private` is business-critical container state and retains the
-verified API container owner `10001:10001`. Under rootless Podman those are not
-host UID/GID `10001:10001`: the host owner is derived through the reviewed user
-namespace mapping. D.2 owns the bind-mount initialization method and may choose
-only a reviewed mapping mechanism; D.1 does not preselect `:U`, `keep-id`, an
-idmapped mount, or `podman unshare chown`. It is never merged with PostgreSQL data. The
+verified API container owner `10001:10001`. Under rootless Podman those are host
+UID/GID `110000:210000`, derived through the reviewed default single-range
+mapping. The production state initializer materializes that mapping; `:U`,
+`keep-id`, alternate idmapped mounts, and container-side recursive chown are not
+supported. It is never merged with PostgreSQL data. The
 frontend remains `101:101`, serves HTTP on 8080, has a read-only root filesystem
 and writable `/tmp`, and does not own TLS, ACME, or API proxying.
 
-D.1 fixes public application storage as persistent host state on a separate
-path with required container identity `10001:10001` and D.2-owned host mapping.
-It may hold only artifacts deliberately classified for
-public delivery, never private uploads, credentials, or database state. D.2
-must decide its backup and publication lifecycle before it is mounted in
-production; the edge must not expose the host path directly.
+D.2 classifies public application storage as durable, non-reconstructable,
+restore-required state with container identity `10001:10001` and mapped host
+identity `110000:210000`. It may hold only artifacts deliberately classified
+for public delivery, never private uploads, credentials, or database state. It
+is backed up with PostgreSQL and private storage; the edge must not expose the
+host path directly.
 
 Logs are persistent operational and security evidence, not reconstructable
 state. D.10 owns retention, rotation, optional external shipping, and the
@@ -551,9 +553,10 @@ application storage, runtime secrets, or reviewed deployment policy. Loss of
 graphroot must be recoverable by reinstalling the reviewed runtime state and
 re-pulling and re-verifying the approved OCI identities; D.7/D.8 own that proof.
 
-Valkey is queue/cache infrastructure, not a source of truth. D.1 does not
-require a persistent Valkey host path. D.2 decides whether to add one; no
-business-backup guarantee follows from that choice.
+Valkey is queue/cache infrastructure, not a source of truth. D.2 enables AOF
+persistence at `/srv/secpal/valkey` because queued-work loss is not generally
+reconstructable even though cache loss is. PostgreSQL remains authoritative;
+the Valkey AOF joins D.7's coordinated continuity backup and recovery policy.
 
 The backup target is a non-secret external descriptor. Backup creation,
 encryption, retention, credentials, and restore proof belong to D.7. The

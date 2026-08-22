@@ -45,6 +45,8 @@ required_files=(
   docs/architecture/scope.md
   docs/architecture/production-host.md
   docs/architecture/production-inventory.md
+  docs/architecture/production-state.md
+  docs/architecture/production-secrets.md
   docs/api-image-consumption.md
   docs/frontend-image-consumption.md
   docs/quadlet-integration.md
@@ -64,6 +66,7 @@ required_files=(
   schemas/ci-cloud-bootstrap-failure.schema.json
   schemas/ci-cloud-evidence.schema.json
   config/production/inventory.example.yaml
+  config/production/state-contract.yaml
   config/quadlet/Caddyfile
   schemas/production-host-facts.schema.json
   schemas/production-inventory.schema.json
@@ -72,6 +75,10 @@ required_files=(
   scripts/integration_runtime_contract.py
   scripts/quadlet-integration.py
   scripts/quadlet-oneshot-entrypoint.sh
+  scripts/production-secret-bootstrap.php
+  scripts/production-state.py
+  scripts/production-valkey-entrypoint.sh
+  scripts/render-production-quadlets.py
   scripts/render-integration-quadlets.py
   scripts/valkey-entrypoint.sh
   scripts/ci-cloud/bounded-target-diagnostic.py
@@ -118,6 +125,8 @@ required_files=(
   tests/production-contract-regressions.py
   tests/production-host-contract.sh
   tests/production-inventory-contract.py
+  tests/production-state-contract.py
+  tests/production-state-native-lifecycle.sh
   tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
   tests/local-integration-lifecycle.sh

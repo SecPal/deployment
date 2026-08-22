@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+[Unit]
+Description=Validate SecPal production state before product startup
+Before=secpal-postgres.service secpal-valkey.service secpal-migrate.service
+PartOf=secpal.target
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.yaml --validate-namespace --require-secrets
+RemainAfterExit=yes

@@ -1356,7 +1356,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
                 "subuid-start",
                 ("service_account", "subordinate_ids", "uid", "start"),
             ),
-            ("decision-issue", ("paths", "runtime_secrets", "decision_issue")),
+            ("decision-issue", ("paths", "edge_state", "decision_issue")),
             ("resource-floor", ("resources", "logical_cpus")),
             (
                 "storage-floor",
