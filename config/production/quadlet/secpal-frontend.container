@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+[Unit]
+Description=SecPal production frontend
+PartOf=secpal.target
+Requires=secpal-state-ready.service
+After=secpal-state-ready.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+[Container]
+ContainerName=secpal-frontend
+Image=ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077
+Pull=never
+User=101
+Group=101
+ReadOnly=true
+ReadOnlyTmpfs=false
+DropCapability=all
+NoNewPrivileges=true
+RunInit=true
+StopTimeout=30
+LogDriver=k8s-file
+LogOpt=path=/srv/secpal/logs/secpal-frontend.log
+LogOpt=max-size=10mb
+PidsLimit=512
+PodmanArgs=--http-proxy=false
+PodmanArgs=--pid=private
+PodmanArgs=--ipc=private
+PodmanArgs=--uts=private
+Label=org.secpal.production=true
+Label=org.secpal.role=frontend
+Mount=type=tmpfs,destination=/tmp,tmpfs-size=32m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
+Network=secpal-edge.network
+HealthCmd=curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/health/live
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=12
+HealthStartPeriod=5s
+HealthOnFailure=kill
+Notify=healthy
+[Service]
+ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=180

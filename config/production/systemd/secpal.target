@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+[Unit]
+Description=SecPal production role target
+Requires=secpal-api.service secpal-worker-general.service secpal-worker-hash-chain.service secpal-scheduler.service secpal-frontend.service
+After=secpal-migrate.service
+[Install]
+WantedBy=default.target

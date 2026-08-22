@@ -120,7 +120,7 @@ require_text docs/architecture/production-host.md "Direct root SSH is unsupporte
 require_prose docs/architecture/production-host.md "The Podman API is not a production dependency"
 require_text docs/architecture/production-host.md "Pull=never"
 require_prose docs/architecture/production-host.md "Logs are persistent operational and security evidence"
-require_prose docs/architecture/production-host.md "D.1 fixes public application storage as persistent host state"
+require_prose docs/architecture/production-host.md "D.2 classifies public application storage as durable"
 require_text docs/architecture/production-host.md "10001:10001"
 require_text docs/architecture/production-host.md "101:101"
 require_text docs/architecture/production-host.md "No host was provisioned."

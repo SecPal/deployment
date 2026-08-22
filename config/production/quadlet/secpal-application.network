@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+[Unit]
+Description=SecPal private production application network
+PartOf=secpal.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+[Network]
+NetworkName=secpal-application
+Internal=true
+Label=org.secpal.production=true

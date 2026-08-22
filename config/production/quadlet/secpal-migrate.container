@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+[Unit]
+Description=SecPal production migrate
+PartOf=secpal.target
+Requires=secpal-postgres.service secpal-valkey.service
+After=secpal-postgres.service secpal-valkey.service
+[Container]
+ContainerName=secpal-migrate
+Image=ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e
+Pull=never
+User=10001
+Group=10001
+ReadOnly=true
+ReadOnlyTmpfs=false
+DropCapability=all
+NoNewPrivileges=true
+RunInit=true
+StopTimeout=30
+LogDriver=k8s-file
+LogOpt=path=/srv/secpal/logs/secpal-migrate.log
+LogOpt=max-size=10mb
+PidsLimit=512
+PodmanArgs=--http-proxy=false
+PodmanArgs=--pid=private
+PodmanArgs=--ipc=private
+PodmanArgs=--uts=private
+Label=org.secpal.production=true
+Label=org.secpal.role=migrate
+Environment=APP_DEBUG=false
+Environment=APP_ENV=production
+Environment=APP_NAME=SecPal
+Environment=CACHE_STORE=redis
+Environment=DB_CONNECTION=pgsql
+Environment=DB_DATABASE=secpal
+Environment=DB_HOST=postgres
+Environment=DB_PORT=5432
+Environment=DB_USERNAME=secpal
+Environment=FILESYSTEM_DISK=local
+Environment=LOG_CHANNEL=stderr
+Environment=QUEUE_CONNECTION=redis
+Environment=REDIS_CLIENT=phpredis
+Environment=REDIS_CACHE_DB=1
+Environment=REDIS_DB=0
+Environment=REDIS_HOST=valkey
+Environment=REDIS_PORT=6379
+Environment=REDIS_QUEUE=default
+Environment=REDIS_QUEUE_CONNECTION=default
+Environment=SESSION_DRIVER=database
+Exec=php artisan migrate --force
+Mount=type=bind,source=/srv/secpal/config/php/99-secpal-secrets.ini,target=/usr/local/etc/php/conf.d/99-secpal-secrets.ini,ro=true
+Mount=type=bind,source=/srv/secpal/config/runtime/production-secret-bootstrap.php,target=/run/secpal/bootstrap/production-secret-bootstrap.php,ro=true
+Mount=type=bind,source=/run/secpal/secrets/api/app-key,target=/run/secpal/secrets/api/app-key,ro=true
+Mount=type=bind,source=/run/secpal/secrets/api/app-previous-keys,target=/run/secpal/secrets/api/app-previous-keys,ro=true
+Mount=type=bind,source=/run/secpal/secrets/api/tenant-kek,target=/run/secpal/secrets/api/tenant-kek,ro=true
+Mount=type=bind,source=/run/secpal/secrets/api/postgres-password,target=/run/secpal/secrets/api/postgres-password,ro=true
+Mount=type=bind,source=/run/secpal/secrets/api/valkey-password,target=/run/secpal/secrets/api/valkey-password,ro=true
+Mount=type=bind,source=/srv/secpal/private-storage,target=/app/storage/app/private,rw=true
+Mount=type=bind,source=/srv/secpal/public-storage,target=/app/storage/app/public,rw=true
+Mount=type=tmpfs,destination=/tmp,tmpfs-size=32m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
+Mount=type=tmpfs,destination=/config,tmpfs-size=16m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
+Mount=type=tmpfs,destination=/data,tmpfs-size=16m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
+Mount=type=tmpfs,destination=/app/storage/framework/cache/data,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
+Mount=type=tmpfs,destination=/app/storage/framework/sessions,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
+Mount=type=tmpfs,destination=/app/storage/framework/views,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
+Mount=type=tmpfs,destination=/app/storage/logs,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
+Mount=type=tmpfs,destination=/app/bootstrap/cache,tmpfs-size=16m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
+Network=secpal-application.network
+NetworkAlias=migrate
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
+RemainAfterExit=yes
+Restart=no
+TimeoutStartSec=300
