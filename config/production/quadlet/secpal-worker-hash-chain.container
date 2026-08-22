@@ -49,7 +49,6 @@ Environment=REDIS_HOST=valkey
 Environment=REDIS_PORT=6379
 Environment=REDIS_QUEUE=default
 Environment=REDIS_QUEUE_CONNECTION=default
-Environment=SECPAL_SECRET_ROOT=/run/secpal/secrets/api
 Environment=SESSION_DRIVER=database
 Exec=php artisan queue:work --queue=activity-hash-chain --sleep=1 --tries=3 --timeout=90
 Mount=type=bind,source=/srv/secpal/config/php/99-secpal-secrets.ini,target=/usr/local/etc/php/conf.d/99-secpal-secrets.ini,ro=true
@@ -70,9 +69,9 @@ Mount=type=tmpfs,destination=/app/storage/framework/views,tmpfs-size=32m,tmpfs-m
 Mount=type=tmpfs,destination=/app/storage/logs,tmpfs-size=32m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
 Mount=type=tmpfs,destination=/app/bootstrap/cache,tmpfs-size=16m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
 Network=secpal-application.network
-Network=secpal-edge.network
 NetworkAlias=worker-hash-chain
 [Service]
+ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
 Restart=on-failure
 RestartSec=2
 TimeoutStartSec=180

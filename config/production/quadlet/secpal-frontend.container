@@ -40,6 +40,7 @@ HealthStartPeriod=5s
 HealthOnFailure=kill
 Notify=healthy
 [Service]
+ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
 Restart=on-failure
 RestartSec=2
 TimeoutStartSec=180

@@ -38,6 +38,7 @@ Mount=type=tmpfs,destination=/run/postgresql,tmpfs-size=16m,tmpfs-mode=0750,U=tr
 Network=none
 [Service]
 Type=oneshot
+ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
 RemainAfterExit=yes
 Restart=no
 TimeoutStartSec=300

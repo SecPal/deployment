@@ -9,6 +9,9 @@ FRONTEND_IMAGE='ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a77
 GENERATOR=/usr/lib/systemd/user-generators/podman-user-generator
 
 native_unavailable() {
+  if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then
+    native_failure
+  fi
   printf 'SKIP: Production state native lifecycle unavailable: native Quadlet user generator is not installed.\n'
   exit 0
 }
@@ -95,7 +98,7 @@ sys.exit(
 admit_native_generator
 
 FIXTURE_ROOT="$(mktemp -d /tmp/secpal-d2-native.XXXXXX)"
-STATE_PATH="$FIXTURE_ROOT/state"
+STATE_PATH="$FIXTURE_ROOT/srv/secpal/private-storage"
 QUADLET_ROOT="$FIXTURE_ROOT/quadlet"
 GENERATED_ROOT="$FIXTURE_ROOT/generated"
 INSTANCE="d2-native-$$"
@@ -114,42 +117,50 @@ cleanup() {
     env "${SYSTEMD_ENV[@]}" systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
   podman rm --force "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  if [ -d "$FIXTURE_ROOT" ]; then
-    podman unshare chown -R 0:0 "$FIXTURE_ROOT" >/dev/null 2>&1 || true
+  if [ -L "$FIXTURE_ROOT" ]; then
+    printf 'ERROR: native lifecycle fixture root became a symbolic link.\n' >&2
+    return 1
+  elif [ -d "$FIXTURE_ROOT" ]; then
     case "$(realpath "$FIXTURE_ROOT")" in
-      /tmp/secpal-d2-native.*) rm -rf -- "$FIXTURE_ROOT" ;;
+      /tmp/secpal-d2-native.*)
+        podman unshare chown -R 0:0 "$FIXTURE_ROOT" >/dev/null 2>&1 || true
+        rm -rf -- "$FIXTURE_ROOT"
+        ;;
       *) printf 'ERROR: native lifecycle fixture root escaped its boundary.\n' >&2 ;;
     esac
   fi
 }
-trap cleanup EXIT HUP INT TERM
+interrupted() {
+  trap - EXIT HUP INT TERM
+  cleanup
+  exit 143
+}
+trap cleanup EXIT
+trap interrupted HUP INT TERM
 
-install -d -m 0750 "$STATE_PATH"
+install -d -m 0750 "$FIXTURE_ROOT/srv/secpal" "$STATE_PATH"
 install -d -m 0700 "$QUADLET_ROOT" "$GENERATED_ROOT"
-podman unshare chown 101:101 "$STATE_PATH"
+podman unshare chown 10001:10001 "$STATE_PATH"
 
-cat >"$QUADLET_ROOT/$INSTANCE.container" <<EOF
-[Unit]
-Description=SecPal D.2 disposable native persistence proof
+python3 - "$ROOT_DIR" "$FIXTURE_ROOT" "$INSTANCE" "$QUADLET_ROOT/$INSTANCE.container" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
 
-[Container]
-ContainerName=$CONTAINER_NAME
-Image=$FRONTEND_IMAGE
-Pull=never
-User=101
-Group=101
-ReadOnly=true
-DropCapability=all
-NoNewPrivileges=true
-Network=none
-Mount=type=bind,source=$STATE_PATH,target=/state,rw=true
-Entrypoint=["/bin/sh"]
-Exec=-c "if [ ! -f /state/proof ]; then printf persistence > /state/proof; fi; exec sleep 300"
-
-[Service]
-Restart=no
-TimeoutStartSec=60
-EOF
+root, fixture, instance, output = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location(
+    "render_production_quadlets", root / "scripts/render-production-quadlets.py"
+)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+contract = module.load_contract(module.DEFAULT_CONTRACT)
+output.write_text(
+    module.build_native_lifecycle_fixture_unit(contract, fixture, instance.name),
+    encoding="utf-8",
+)
+PY
 
 QUADLET_UNIT_DIRS="$QUADLET_ROOT" "$GENERATOR" \
   "$GENERATED_ROOT" "$GENERATED_ROOT" "$GENERATED_ROOT"
@@ -163,11 +174,19 @@ QUADLET_UNIT_DIRS="$ROOT_DIR/config/production/quadlet" "$GENERATOR" \
 test "$(find "$PRODUCTION_GENERATED" -maxdepth 1 -type f | wc -l)" -eq 11
 
 if ! podman image exists "$FRONTEND_IMAGE"; then
-  printf 'Production state native lifecycle skipped: reviewed image is not locally staged.\n'
+  if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then
+    printf 'ERROR: required production state native lifecycle image is not staged.\n' >&2
+    exit 1
+  fi
+  printf 'SKIP: Production state native lifecycle unavailable: reviewed image is not locally staged.\n'
   exit 0
 fi
 if [ ! -S "/run/user/$(id -u)/bus" ]; then
-  printf 'Production state native lifecycle skipped: systemd user bus is unavailable.\n'
+  if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then
+    printf 'ERROR: required production state native lifecycle systemd user bus is unavailable.\n' >&2
+    exit 1
+  fi
+  printf 'SKIP: Production state native lifecycle unavailable: systemd user bus is unavailable.\n'
   exit 0
 fi
 
@@ -177,6 +196,7 @@ env "${SYSTEMD_ENV[@]}" systemctl --user daemon-reload
 env "${SYSTEMD_ENV[@]}" systemctl --user start "$SERVICE_NAME"
 
 before="$(podman unshare stat -c '%i:%u:%g:%a:%s' "$STATE_PATH/proof")"
+test "$(podman unshare stat -c '%u:%g' "$STATE_PATH/proof")" = 10001:10001
 test "$(podman unshare cat "$STATE_PATH/proof")" = persistence
 env "${SYSTEMD_ENV[@]}" systemctl --user stop "$SERVICE_NAME"
 env "${SYSTEMD_ENV[@]}" systemctl --user start "$SERVICE_NAME"

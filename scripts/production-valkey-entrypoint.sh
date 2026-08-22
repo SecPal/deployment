@@ -13,6 +13,13 @@ if [ -L "$password_file" ] || [ ! -f "$password_file" ] || [ ! -r "$password_fil
   exit 78
 fi
 
+newline_count="$(LC_ALL=C tr -cd '\n' <"$password_file" | wc -c)"
+byte_count="$(wc -c <"$password_file")"
+if [ "$newline_count" -gt 1 ] || [ "$byte_count" -gt 129 ]; then
+  printf 'ERROR: production Valkey secret contract is invalid.\n' >&2
+  exit 78
+fi
+
 password="$(cat "$password_file")"
 case "$password" in
   *"

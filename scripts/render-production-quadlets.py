@@ -66,7 +66,6 @@ APPLICATION_ENVIRONMENT = (
     "Environment=REDIS_PORT=6379",
     "Environment=REDIS_QUEUE=default",
     "Environment=REDIS_QUEUE_CONNECTION=default",
-    "Environment=SECPAL_SECRET_ROOT=/run/secpal/secrets/api",
     "Environment=SESSION_DRIVER=database",
 )
 COMMON_PODMAN_ARGS = (
@@ -79,6 +78,11 @@ SPDX_HEADER = (
     "# SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
     + "# SPDX-License"
     + "-Identifier: CC0-1.0\n\n"
+)
+STATE_READY_COMMAND = (
+    "/usr/bin/podman unshare /usr/local/libexec/secpal/production-state "
+    "--contract /srv/secpal/config/state-contract.json "
+    "--validate-namespace --require-secrets"
 )
 
 
@@ -127,15 +131,52 @@ def common_container(
 
 
 def service(*, oneshot: bool = False) -> str:
+    validation = f"ExecStartPre={STATE_READY_COMMAND}"
     if oneshot:
         return section(
             "Service",
-            ["Type=oneshot", "RemainAfterExit=yes", "Restart=no", "TimeoutStartSec=300"],
+            [
+                "Type=oneshot",
+                validation,
+                "RemainAfterExit=yes",
+                "Restart=no",
+                "TimeoutStartSec=300",
+            ],
         )
     return section(
         "Service",
-        ["Restart=on-failure", "RestartSec=2", "TimeoutStartSec=180"],
+        [validation, "Restart=on-failure", "RestartSec=2", "TimeoutStartSec=180"],
     )
+
+
+def build_native_lifecycle_fixture_unit(
+    contract: dict, fixture_root: Path, instance: str
+) -> str:
+    """Render a fixture-only probe from the production private-storage seam."""
+    private = contract["objects"]["private_application_storage"]
+    identity = role_spec("api")
+    source = fixture_root / private["location"].lstrip("/")
+    lines = common_container(contract, "api", FRONTEND_IMAGE, instance=instance)
+    lines = [line for line in lines if not line.startswith(("LogDriver=", "LogOpt="))]
+    lines.append("LogDriver=journald")
+    lines.extend(
+        (
+            "Network=none",
+            f"Mount=type=bind,source={source},target=/app/storage/app/private,rw=true",
+            'Entrypoint=["/bin/sh"]',
+            'Exec=-c "if [ ! -f /app/storage/app/private/proof ]; then '
+            "printf persistence > /app/storage/app/private/proof; fi; exec sleep 300\"",
+        )
+    )
+    # This fixture deliberately omits state-ready: host-side fixture admission is
+    # separate, while the mounted path, target and API identity come from the
+    # production contract and role registry.
+    content = unit("SecPal D.2 native private-storage persistence proof")
+    content += section("Container", lines)
+    content += section("Service", ["Restart=no", "TimeoutStartSec=60"])
+    if f"User={identity.uid}" not in content or f"Group={identity.gid}" not in content:
+        raise ValueError("native lifecycle fixture identity drifted from API role")
+    return SPDX_HEADER + content
 
 
 def api_secret_mounts(contract: dict) -> list[str]:
@@ -181,7 +222,7 @@ def api_container(contract: dict, role: str) -> str:
             f"Mount=type=bind,source={public},target=/app/storage/app/public,rw=true",
             *role_tmpfs,
             "Network=secpal-application.network",
-            "Network=secpal-edge.network",
+            *(("Network=secpal-edge.network",) if role == "api" else ()),
             f"NetworkAlias={role}",
         )
     )
@@ -319,9 +360,7 @@ def build_units(contract: dict) -> dict[str, str]:
         "Service",
         [
             "Type=oneshot",
-            "ExecStart=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state "
-            "--contract /srv/secpal/config/state-contract.yaml "
-            "--validate-namespace --require-secrets",
+            f"ExecStart={STATE_READY_COMMAND}",
             "RemainAfterExit=yes",
         ],
     )

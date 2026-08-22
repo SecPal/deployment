@@ -7,5 +7,5 @@ Before=secpal-postgres-init.service secpal-postgres.service secpal-valkey.servic
 PartOf=secpal.target
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.yaml --validate-namespace --require-secrets
+ExecStart=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
 RemainAfterExit=yes

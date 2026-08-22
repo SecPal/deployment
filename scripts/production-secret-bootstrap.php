@@ -8,11 +8,19 @@ declare(strict_types=1);
  * Load production application secrets into PHP's in-process configuration.
  *
  * Values are deliberately not published through the OS environment, command
- * arguments, logs, or generated configuration. The root path is a non-secret deployment
- * constant; production sets it to /run/secpal/secrets/api.
+ * arguments, logs, or generated configuration. Production always uses the
+ * canonical /run/secpal/secrets/api root.
  */
 
-$secretRoot = $_SERVER['SECPAL_SECRET_ROOT'] ?? '/run/secpal/secrets/api';
+$secretRoot = '/run/secpal/secrets/api';
+if (defined('SECPAL_TEST_SECRET_ROOT')) {
+    $testRoot = constant('SECPAL_TEST_SECRET_ROOT');
+    if (!is_string($testRoot)) {
+        fwrite(STDERR, "ERROR: production application secret contract is invalid.\n");
+        exit(78);
+    }
+    $secretRoot = $testRoot;
+}
 
 $fail = static function (): never {
     fwrite(STDERR, "ERROR: production application secret contract is invalid.\n");
@@ -50,16 +58,31 @@ $readFile = static function (string $name, int $mode) use (
     return $value;
 };
 
-$appKey = rtrim($readFile('app-key', 0400), "\n");
+$stripOptionalFinalLf = static function (string $value) use ($fail): string {
+    if (str_contains($value, "\r")) {
+        $fail();
+    }
+    if (str_ends_with($value, "\n")) {
+        $value = substr($value, 0, -1);
+    }
+    if (str_contains($value, "\n")) {
+        $fail();
+    }
+    return $value;
+};
+
+$appKey = $stripOptionalFinalLf($readFile('app-key', 0400));
 $previous = $readFile('app-previous-keys', 0400);
-$databasePassword = rtrim($readFile('postgres-password', 0400), "\n");
-$valkeyPassword = rtrim($readFile('valkey-password', 0400), "\n");
+$databasePassword = $stripOptionalFinalLf($readFile('postgres-password', 0400));
+$valkeyPassword = $stripOptionalFinalLf($readFile('valkey-password', 0400));
 $kekPath = $secretRoot.'/tenant-kek';
 $kekMetadata = @lstat($kekPath);
 
 $keyPattern = '/\Abase64:[A-Za-z0-9+\/]{43}=\z/D';
-$previousKeys = $previous === '' ? [] : preg_split('/\n/', rtrim($previous, "\n"));
+$previousBody = str_ends_with($previous, "\n") ? substr($previous, 0, -1) : $previous;
+$previousKeys = $previousBody === '' ? [] : explode("\n", $previousBody);
 if (!preg_match($keyPattern, $appKey)
+    || str_contains($previous, "\r")
     || !is_array($previousKeys)
     || count($previousKeys) > 3
     || count(array_unique($previousKeys)) !== count($previousKeys)

@@ -8,7 +8,7 @@ SPDX-License-Identifier: CC0-1.0
 ## Boundary and delivery model
 
 The canonical rows and delivery sets are in
-[`config/production/state-contract.yaml`](../../config/production/state-contract.yaml).
+[`config/production/state-contract.json`](../../config/production/state-contract.json).
 Secret values are created by a security operator or external secret authority,
 never by a product container, image build, Quadlet renderer, or ordinary state
 initializer. D.2 contains no real value.
@@ -16,6 +16,9 @@ initializer. D.2 contains no real value.
 The external authority publishes a complete staged tree as
 `/run/secpal/secrets` only after validating every file. Initial publication is
 one atomic directory rename from a sibling on the same tmpfs filesystem.
+Independent publication first proves the canonical `/run` ancestry and exact
+`/run/secpal` owner, group, mode, and ACL contract; it cannot stage beneath an
+arbitrary or product-writable parent.
 Rotation stops affected roles, stages and fsyncs a complete replacement tree,
 atomically exchanges it with the active tree, runs host and user-namespace
 validation, restarts all affected roles, verifies recovery, and then destroys
@@ -49,11 +52,13 @@ inventory gates remain disabled.
 PostgreSQL's explicit one-shot initializer is the only PostgreSQL container that
 receives its credential file. It passes that file path to the pinned image's
 `initdb --pwfile` seam, creates the `secpal` database over a private Unix socket,
-and stops. The steady-state PostgreSQL container mounts no credential and execs
+then proves the credential through TCP SCRAM before it admits a new, existing,
+or recovered cluster, and stops. The steady-state PostgreSQL container mounts no credential and execs
 `postgres` only after `pg_controldata` validates the existing version-16 cluster,
 so the official image entrypoint cannot convert the file into an exported
-`POSTGRES_PASSWORD` process environment value. Valkey's fixed launcher reads
-only its individual file and writes a mode-`0600` configuration in container
+`POSTGRES_PASSWORD` process environment value. Valkey's fixed launcher validates
+the raw file's length and LF count before command substitution, reads only its
+individual file, and writes a mode-`0600` configuration in container
 tmpfs before exec. Its health probe tests the expected unauthenticated `NOAUTH`
 response and never reads the password.
 
@@ -61,7 +66,10 @@ The API image currently names application settings through Laravel's PHP
 configuration interface. Production mounts a root-owned `auto_prepend_file`
 bootstrap. That bootstrap validates files, loads values only into PHP's
 in-process `$_ENV`/`$_SERVER` configuration, and never changes the OS process
-environment. Consequently Quadlet source, generated systemd properties, Podman
+environment. Its production root is fixed at `/run/secpal/secrets/api`;
+ordinary runtime environment cannot redirect it. Repository tests use an
+explicit PHP constant that is not production configuration. Consequently
+Quadlet source, generated systemd properties, Podman
 container configuration, `/proc` environment inspection, and process arguments
 contain paths and non-secret settings only. The bootstrap logs one bounded error
 with no path content or value on failure.
@@ -97,8 +105,9 @@ Destruction happens only after verified recovery and the retirement decision.
 
 ## APP_PREVIOUS_KEYS contract
 
-The file is zero to three newline-separated Laravel keys, newest previous key
-first. An empty file means there is no previous key. Duplicate keys, the current
+The file is zero to three LF-separated Laravel keys, newest previous key first,
+with at most one optional final LF. CR, CRLF, other line separators, and blank
+records are invalid. An empty file means there is no previous key. Duplicate keys, the current
 active key, blank interior lines, malformed base64, more than three entries, or
 an unreviewed removal fail validation. PHP converts the validated list to the
 comma-separated value expected by the API only in process memory. The list is

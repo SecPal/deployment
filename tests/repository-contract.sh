@@ -66,11 +66,12 @@ required_files=(
   schemas/ci-cloud-bootstrap-failure.schema.json
   schemas/ci-cloud-evidence.schema.json
   config/production/inventory.example.yaml
-  config/production/state-contract.yaml
+  config/production/state-contract.json
   config/quadlet/Caddyfile
   schemas/production-host-facts.schema.json
   schemas/production-inventory.schema.json
   scripts/preflight.sh
+  config/production/php/99-secpal-secrets.ini
   scripts/fetch-oci-attestation.py
   scripts/integration_runtime_contract.py
   scripts/quadlet-integration.py

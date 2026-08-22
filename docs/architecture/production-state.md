@@ -12,11 +12,16 @@ single-host reference deployment. It uses rootless Podman, the systemd user
 manager, and native Quadlet. It is not a live-host installation or a backup
 implementation.
 
-[`config/production/state-contract.yaml`](../../config/production/state-contract.yaml)
+[`config/production/state-contract.json`](../../config/production/state-contract.json)
 is the one authoritative persistence matrix. The checked Quadlets are generated
 from it, and the production-state tests reject drift between the matrix,
 renderer, inventory, and checked declarations. This document explains the
 contract; it does not create a second metadata authority.
+
+The matrix uses strict JSON so the production host reads it with Python's
+standard library and D.2 adds no undeclared PyYAML runtime dependency. The
+loader rejects duplicate keys, unknown structure, and any supplied matrix whose
+canonical semantic digest differs from the reviewed matrix.
 
 ## Classification summary
 
@@ -78,7 +83,7 @@ selects reviewed container identities. D.2 does not guess those identities or
 activate those services.
 
 Installation later copies the checked matrix to
-`/srv/secpal/config/state-contract.yaml`, the PHP/Valkey bootstrap files below
+`/srv/secpal/config/state-contract.json`, the PHP/Valkey bootstrap files below
 `/srv/secpal/config/runtime/`, and the PHP INI fragment below
 `/srv/secpal/config/php/`. These are non-secret, root-controlled inputs; product
 containers see only the exact read-only files declared in their units.
@@ -97,18 +102,27 @@ containers see only the exact read-only files declared in their units.
   invokes this operation.
 - `--validate-production` checks the host view, including exact mapped owners,
   modes, file types, canonical ancestors, hard-link restrictions for secrets,
-  and ACLs.
+  ACLs, secret bytes and grammar, and equality of credential delivery copies.
 - `--validate-namespace` runs through `podman unshare` in
-  `secpal-state-ready.service`. It checks the same state from the D.1 user
-  namespace and validates the complete secret set before product startup.
+  `secpal-state-ready.service`. It checks state and secret metadata plus each
+  expected consumer-visible path from the D.1 user namespace. It deliberately
+  does not read mode-`0400` files owned by other mapped consumers; host
+  authority validates bytes and each consumer validates its own seam. Every
+  product/data unit also repeats this namespace admission as `ExecStartPre`, so
+  restarting one role cannot reuse a stale successful oneshot result.
 - Fixture operations require an explicit disposable root. They cannot resolve
-  to `/`, and cleanup is owned only by the calling test's temporary directory.
+  to `/`. The supplied root and every existing descendant are inspected with
+  `lstat` before resolution or writes, symlink redirection is rejected, and
+  cleanup refuses a symlinked root before recursive ownership changes.
 
 The validator permits only base user/group/other ACL entries and no default or
 named ACL. Mode bits and effective ACL access must therefore agree. `/srv`,
-`/srv/secpal`, `/run`, and `/run/secpal` are bounded trusted ancestors; a
-symlink, non-directory substitution, writable trusted ancestor, unexpected
-hard link, wrong owner/group/mode, or inaccessible ACL is a hard failure.
+`/srv/secpal`, `/run`, and `/run/secpal` are bounded root-owned trusted
+ancestors with no named ACL and no group/world write authority. Independent
+secret publication proves `/run/secpal` is exactly `0:20000`, mode `0710`, and
+ACL-free before creating a staging directory. A symlink, non-directory
+substitution, writable or non-root trusted ancestor, unexpected hard link,
+wrong owner/group/mode, or inaccessible ACL is a hard failure.
 
 A valid existing directory is preserved byte-for-byte. A missing state leaf
 may be created only during the explicitly acknowledged first installation.
@@ -139,6 +153,14 @@ inode metadata and cross-role visibility across native systemd-user stop/start
 and container recreation. Frontend, PostgreSQL, Valkey, and future edge roles
 receive neither application-storage bind.
 
+PostgreSQL initialization writes a transient HBA policy in container tmpfs.
+Local administration remains socket-local, while every TCP connection requires
+SCRAM. Existing and recovered clusters are admitted only after the delivered
+credential authenticates over TCP at `127.0.0.1`; a trust-only socket success
+is insufficient. The steady server listens on its container interfaces, but it
+belongs only to the internal application network, has no published port or edge
+membership, and accepts API traffic through the `postgres` alias with SCRAM.
+
 ## Valkey decision
 
 Valkey persistence is enabled. The immutable Valkey image writes append-only
@@ -161,13 +183,17 @@ state may not be discarded without an explicit recovery decision.
 an explicit fixture root, records PostgreSQL/private/Valkey inode and ownership
 metadata, models every lifecycle phase, and proves bounded fixture cleanup.
 `tests/production-state-native-lifecycle.sh` additionally runs the checked
-production set through Podman 5.4.2's native user generator, starts a disposable
-generated service through the real systemd user manager, performs controlled
-stop/start, removes and recreates its rootless container, and verifies the same
-bind-source bytes, inode, mapped owner/group, mode, and size. It uses only the
-already staged reviewed frontend image (`Pull=never`) and skips the runtime
-portion when that local image or user bus is absent; it never contacts a
-registry. D.1a remains the complete product-role parity proof.
+production set through Podman 5.4.2's native user generator. Its disposable
+service is rendered from the canonical private-storage row, exact API
+`10001:10001` identity, and production `/app/storage/app/private` bind target.
+Through the real systemd user manager it performs controlled stop/start,
+removes and recreates the rootless container, and verifies the same bind-source
+bytes, inode, mapped owner/group, mode, and size. Generic validation reports an
+explicit unavailable result if the admitted generator, reviewed local image,
+or user bus is absent. The native Local Integration job sets the required-mode
+gate after staging reviewed images, so any missing or invalid native capability
+there fails instead of becoming a skip. The lifecycle proof never contacts a
+registry itself. D.1a remains the complete product-role parity proof.
 
 ## D.7 handoff
 

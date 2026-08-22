@@ -49,7 +49,6 @@ Environment=REDIS_HOST=valkey
 Environment=REDIS_PORT=6379
 Environment=REDIS_QUEUE=default
 Environment=REDIS_QUEUE_CONNECTION=default
-Environment=SECPAL_SECRET_ROOT=/run/secpal/secrets/api
 Environment=SESSION_DRIVER=database
 Exec=frankenphp run --config /etc/frankenphp/Caddyfile
 Mount=type=bind,source=/srv/secpal/config/php/99-secpal-secrets.ini,target=/usr/local/etc/php/conf.d/99-secpal-secrets.ini,ro=true
@@ -80,6 +79,7 @@ HealthStartPeriod=15s
 HealthOnFailure=kill
 Notify=healthy
 [Service]
+ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
 Restart=on-failure
 RestartSec=2
 TimeoutStartSec=180

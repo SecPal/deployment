@@ -13,6 +13,8 @@ created and delivered by their named external authority.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -24,16 +26,14 @@ import sys
 import tempfile
 from typing import Any
 
-import yaml
-from yaml.constructor import ConstructorError
-from yaml.nodes import MappingNode
-
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONTRACT = ROOT / "config" / "production" / "state-contract.yaml"
+DEFAULT_CONTRACT = ROOT / "config" / "production" / "state-contract.json"
 APP_KEY_PATTERN = re.compile(rb"base64:[A-Za-z0-9+/]{43}=\n?\Z")
 PASSWORD_PATTERN = re.compile(rb"[A-Za-z0-9._~!#$%&*+\-/=?^]{24,128}\n?\Z")
+EXPECTED_OBJECTS_DIGEST = "6bb63d262ecee9de0db714aeee810c10b75411c123958780f409246dffb56516"
 EXPECTED_TOP_LEVEL = {
+    "$comment",
     "schema_version",
     "rootless_mapping",
     "state_policy",
@@ -172,32 +172,13 @@ class ContractError(RuntimeError):
     """A bounded contract failure that never includes secret content."""
 
 
-class NoDuplicateSafeLoader(yaml.SafeLoader):
-    """Reject duplicate effective YAML keys in the authority document."""
-
-    def construct_mapping(self, node: MappingNode, deep: bool = False) -> dict[Any, Any]:
-        self.flatten_mapping(node)
-        observed: set[Any] = set()
-        for key_node, _value_node in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            try:
-                duplicate = key in observed
-                observed.add(key)
-            except TypeError as error:
-                raise ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "unhashable mapping key",
-                    key_node.start_mark,
-                ) from error
-            if duplicate:
-                raise ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "duplicate mapping key",
-                    key_node.start_mark,
-                )
-        return super().construct_mapping(node, deep=deep)
+def _closed_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
 
 
 def fail(message: str) -> None:
@@ -208,19 +189,31 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> dict[str, Any]:
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
             fail("production state contract path is unsafe")
-        contract = yaml.load(path.read_text(encoding="utf-8"), Loader=NoDuplicateSafeLoader)
-    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        contract = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_closed_json_object
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         raise ContractError("production state contract cannot be read") from error
     if not isinstance(contract, dict) or set(contract) != EXPECTED_TOP_LEVEL:
         fail("production state contract has an unexpected top-level shape")
     if contract["schema_version"] != 1:
         fail("production state contract schema version is unsupported")
+    if contract["$comment"] != (
+        "SPDX-FileCopyrightText: 2026 SecPal Contributors; "
+        "SPDX-License-Identifier: CC0-1.0"
+    ):
+        fail("production state contract provenance is unsupported")
     objects = contract.get("objects")
     if not isinstance(objects, dict) or set(objects) != EXPECTED_OBJECTS:
         fail("production persistence matrix is incomplete")
     for row in objects.values():
         if not isinstance(row, dict) or set(row) != EXPECTED_ROW_FIELDS:
             fail("production persistence matrix row has an unexpected shape")
+    objects_digest = hashlib.sha256(
+        json.dumps(objects, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if objects_digest != EXPECTED_OBJECTS_DIGEST:
+        fail("production persistence matrix semantics are unsupported")
     mapping = contract.get("rootless_mapping")
     if not isinstance(mapping, dict) or set(mapping) != {
         "method", "service_uid", "service_gid", "uid_start", "gid_start", "count"
@@ -323,6 +316,37 @@ def _fixture_path(root: Path, absolute: str) -> Path:
     return root.joinpath(*pure.parts[1:])
 
 
+def _validate_fixture_root(root: Path) -> Path:
+    if not root.is_absolute() or root == Path("/") or ".." in root.parts:
+        fail("fixture root is unsafe")
+    _assert_safe_component(root, True)
+    metadata = root.lstat()
+    if (
+        metadata.st_uid != os.getuid()
+        or metadata.st_gid != os.getgid()
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        fail("fixture root ownership or mode is unsafe")
+    _assert_no_extended_acl(root)
+    return root
+
+
+def _validate_fixture_chain(root: Path, path: Path, *, create: bool) -> None:
+    try:
+        relative = path.relative_to(root)
+    except ValueError as error:
+        raise ContractError("fixture path escaped its root") from error
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.exists() or current.is_symlink():
+            _assert_safe_component(current, True)
+            continue
+        if not create:
+            fail("required state artifact is missing")
+        current.mkdir(mode=0o700)
+
+
 def _mode(value: str) -> int:
     if re.fullmatch(r"0[0-7]{3}", value) is None:
         fail("state mode is malformed")
@@ -391,11 +415,16 @@ def _production_identity(
     fail("state owner is not materialized by D.2")
 
 
-def _validate_trusted_ancestors(path: Path, stop: Path = Path("/")) -> None:
+def _validate_trusted_ancestors(
+    path: Path, stop: Path = Path("/"), *, expected_uid: int = 0
+) -> None:
     current = path.parent
     while True:
         _assert_safe_component(current, True)
         metadata = current.lstat()
+        if metadata.st_uid != expected_uid:
+            fail("trusted state ancestor is not root-owned")
+        _assert_no_extended_acl(current)
         if stat.S_IMODE(metadata.st_mode) & 0o022:
             fail("trusted state ancestor is group-writable or world-writable")
         if current == stop:
@@ -414,24 +443,22 @@ def _state_directories(contract: dict[str, Any], include_reserved: bool = False)
 
 
 def initialize_fixture(contract: dict[str, Any], root: Path) -> None:
-    root = root.resolve(strict=True)
-    if root == Path("/") or root.is_symlink():
-        fail("fixture root is unsafe")
+    root = _validate_fixture_root(root)
     for _name, absolute, mode in _state_directories(contract):
         path = _fixture_path(root, absolute)
+        _validate_fixture_chain(root, path.parent, create=True)
         if path.exists() or path.is_symlink():
             _assert_safe_component(path, True, mode)
             _assert_no_extended_acl(path)
             continue
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.mkdir(mode=mode)
         path.chmod(mode)
     for delivery in contract["secret_delivery"].values():
         path = _fixture_path(root, delivery["directory"])
+        _validate_fixture_chain(root, path.parent, create=True)
         if path.exists() or path.is_symlink():
             _assert_safe_component(path, True, _mode(delivery["directory_mode"]))
         else:
-            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             path.mkdir(mode=_mode(delivery["directory_mode"]))
             path.chmod(_mode(delivery["directory_mode"]))
         _assert_no_extended_acl(path)
@@ -448,7 +475,8 @@ def _validate_secret(path: Path, secret_type: str, mode: int, max_previous: int)
     if secret_type == "app-key":
         valid = APP_KEY_PATTERN.fullmatch(value) is not None
     elif secret_type == "app-previous-keys":
-        lines = value.splitlines()
+        normalized = value[:-1] if value.endswith(b"\n") else value
+        lines = [] if normalized == b"" else normalized.split(b"\n")
         valid = len(lines) <= max_previous and len(set(lines)) == len(lines) and all(
             APP_KEY_PATTERN.fullmatch(line) is not None for line in lines
         )
@@ -465,14 +493,16 @@ def _validate_secret(path: Path, secret_type: str, mode: int, max_previous: int)
 def validate_fixture(
     contract: dict[str, Any], root: Path, *, require_secrets: bool = False
 ) -> None:
-    root = root.resolve(strict=True)
+    root = _validate_fixture_root(root)
     for _name, absolute, mode in _state_directories(contract):
         path = _fixture_path(root, absolute)
+        _validate_fixture_chain(root, path.parent, create=False)
         _assert_safe_component(path, True, mode)
         _assert_no_extended_acl(path)
     expected_files: set[Path] = set()
     for delivery in contract["secret_delivery"].values():
         directory = _fixture_path(root, delivery["directory"])
+        _validate_fixture_chain(root, directory.parent, create=False)
         _assert_safe_component(directory, True, _mode(delivery["directory_mode"]))
         _assert_no_extended_acl(directory)
         for name, spec in delivery["files"].items():
@@ -517,9 +547,10 @@ def _validate_secret_deliveries(
         _assert_no_extended_acl(directory)
         _assert_owner(directory, expected_root_uid, expected_root_gid)
         expected_paths = {directory / name for name in delivery["files"]}
-        actual_paths = set(directory.iterdir())
-        if require_secrets and actual_paths != expected_paths:
-            fail("secret delivery contains a partial set or unexpected material")
+        if require_secrets and not namespace_view:
+            actual_paths = set(directory.iterdir())
+            if actual_paths != expected_paths:
+                fail("secret delivery contains a partial set or unexpected material")
         owner_uid, owner_gid = _production_secret_expected_owner(
             contract, delivery, namespace_view=namespace_view
         )
@@ -527,13 +558,17 @@ def _validate_secret_deliveries(
             for name, spec in delivery["files"].items():
                 path = directory / name
                 _assert_owner(path, owner_uid, owner_gid)
-                _validate_secret(
-                    path,
-                    spec["type"],
-                    _mode(spec["mode"]),
-                    contract["secret_policy"]["max_previous_keys"],
-                )
-    if require_secrets:
+                if namespace_view:
+                    _assert_safe_component(path, False, _mode(spec["mode"]))
+                    _assert_no_extended_acl(path)
+                else:
+                    _validate_secret(
+                        path,
+                        spec["type"],
+                        _mode(spec["mode"]),
+                        contract["secret_policy"]["max_previous_keys"],
+                    )
+    if require_secrets and not namespace_view:
         api = Path(contract["secret_delivery"]["api"]["directory"])
         postgres = Path(contract["secret_delivery"]["postgres"]["directory"])
         valkey = Path(contract["secret_delivery"]["valkey"]["directory"])
@@ -541,8 +576,11 @@ def _validate_secret_deliveries(
             fail("PostgreSQL consumer credential copies do not match")
         if (api / "valkey-password").read_bytes() != (valkey / "password").read_bytes():
             fail("Valkey consumer credential copies do not match")
-        active_key = (api / "app-key").read_bytes().rstrip(b"\n")
-        previous_keys = (api / "app-previous-keys").read_bytes().splitlines()
+        active_raw = (api / "app-key").read_bytes()
+        active_key = active_raw[:-1] if active_raw.endswith(b"\n") else active_raw
+        previous_raw = (api / "app-previous-keys").read_bytes()
+        previous_normalized = previous_raw[:-1] if previous_raw.endswith(b"\n") else previous_raw
+        previous_keys = [] if previous_normalized == b"" else previous_normalized.split(b"\n")
         if active_key in previous_keys:
             fail("active APP_KEY is duplicated in APP_PREVIOUS_KEYS")
 
@@ -566,13 +604,21 @@ def validate_production(
             contract, row["group"], "gid", namespace_view=namespace_view
         )
         _assert_owner(path, expected_uid, expected_gid)
-        if not namespace_view:
-            _validate_trusted_ancestors(path)
+        _validate_trusted_ancestors(path, expected_uid=65534 if namespace_view else 0)
     _validate_secret_deliveries(
         contract, namespace_view=namespace_view, require_secrets=require_secrets
     )
-    if not namespace_view:
-        _validate_trusted_ancestors(Path(contract["secret_policy"]["delivery_root"]))
+    secret_parent = Path(contract["secret_policy"]["delivery_root"]).parent
+    _assert_safe_component(secret_parent, True, 0o710)
+    parent_uid = 65534 if namespace_view else 0
+    parent_gid = 0 if namespace_view else contract["rootless_mapping"]["service_gid"]
+    _assert_owner(secret_parent, parent_uid, parent_gid)
+    _assert_no_extended_acl(secret_parent)
+    ancestor_uid = 65534 if namespace_view else 0
+    _validate_trusted_ancestors(secret_parent, expected_uid=ancestor_uid)
+    _validate_trusted_ancestors(
+        Path(contract["secret_policy"]["delivery_root"]), expected_uid=ancestor_uid
+    )
     if require_marker:
         marker = Path(contract["state_policy"]["initialization_marker"])
         _assert_safe_component(marker, False, _mode(contract["state_policy"]["marker_mode"]))
@@ -592,6 +638,7 @@ def _create_production_directory(path: Path, mode: int, uid: int, gid: int) -> N
         return
     if not path.parent.is_dir() or path.parent.is_symlink():
         fail("production state parent must be prepared explicitly")
+    _validate_trusted_ancestors(path)
     path.mkdir(mode=mode)
     os.chown(path, uid, gid)
     path.chmod(mode)
@@ -695,6 +742,11 @@ def publish_initial_secret_tree(
         fail("secret publication refuses to overwrite existing material")
     parent = destination_root.parent
     _assert_safe_component(parent, True)
+    if not fixture:
+        _assert_safe_component(parent, True, 0o710)
+        _assert_owner(parent, 0, contract["rootless_mapping"]["service_gid"])
+        _assert_no_extended_acl(parent)
+        _validate_trusted_ancestors(parent)
     staging = Path(tempfile.mkdtemp(prefix=".secpal-secrets.", dir=parent))
     published = False
     copied = 0
@@ -702,6 +754,7 @@ def publish_initial_secret_tree(
         staging.chmod(0o710)
         if not fixture:
             os.chown(staging, 0, contract["rootless_mapping"]["service_gid"])
+        _assert_no_extended_acl(staging)
         expected_source_entries = {source_root / name for name in contract["secret_delivery"]}
         if set(source_root.iterdir()) != expected_source_entries:
             fail("secret publication source has an incomplete consumer set")
@@ -719,6 +772,7 @@ def publish_initial_secret_tree(
                 os.chown(
                     destination_directory, 0, contract["rootless_mapping"]["service_gid"]
                 )
+            _assert_no_extended_acl(destination_directory)
             owner_uid, owner_gid = _production_secret_expected_owner(
                 contract, delivery, namespace_view=fixture
             )
@@ -780,8 +834,12 @@ def publish_initial_secret_tree(
             staging / "valkey/password"
         ).read_bytes():
             fail("Valkey consumer credential copies do not match")
-        active = (staging / "api/app-key").read_bytes().rstrip(b"\n")
-        if active in (staging / "api/app-previous-keys").read_bytes().splitlines():
+        active_raw = (staging / "api/app-key").read_bytes()
+        active = active_raw[:-1] if active_raw.endswith(b"\n") else active_raw
+        previous_raw = (staging / "api/app-previous-keys").read_bytes()
+        previous_normalized = previous_raw[:-1] if previous_raw.endswith(b"\n") else previous_raw
+        previous_keys = [] if previous_normalized == b"" else previous_normalized.split(b"\n")
+        if active in previous_keys:
             fail("active APP_KEY is duplicated in APP_PREVIOUS_KEYS")
         staging_descriptor = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
         try:
