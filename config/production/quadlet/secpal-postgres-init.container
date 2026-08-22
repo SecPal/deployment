@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: CC0-1.0
 
 [Unit]
-Description=SecPal production PostgreSQL
+Description=Initialize SecPal production PostgreSQL
 PartOf=secpal.target
-Requires=secpal-postgres-init.service
-After=secpal-postgres-init.service
-StartLimitIntervalSec=60
-StartLimitBurst=3
+Requires=secpal-state-ready.service
+After=secpal-state-ready.service
 [Container]
-ContainerName=secpal-postgres
+ContainerName=secpal-postgres-init
 Image=docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
 Pull=never
 User=999
@@ -21,7 +19,7 @@ NoNewPrivileges=true
 RunInit=true
 StopTimeout=30
 LogDriver=k8s-file
-LogOpt=path=/srv/secpal/logs/secpal-postgres.log
+LogOpt=path=/srv/secpal/logs/secpal-postgres-init.log
 LogOpt=max-size=10mb
 PidsLimit=512
 PodmanArgs=--http-proxy=false
@@ -29,23 +27,17 @@ PodmanArgs=--pid=private
 PodmanArgs=--ipc=private
 PodmanArgs=--uts=private
 Label=org.secpal.production=true
-Label=org.secpal.role=postgres
+Label=org.secpal.role=postgres-init
 Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-postgres-entrypoint.sh"]
-Exec=run
+Exec=initialize
 Mount=type=bind,source=/srv/secpal/config/runtime/production-postgres-entrypoint.sh,target=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true
+Mount=type=bind,source=/run/secpal/secrets/postgres/password,target=/run/secpal-secret/password,ro=true
 Mount=type=bind,source=/srv/secpal/postgresql,target=/var/lib/postgresql/data,rw=true
 Mount=type=tmpfs,destination=/tmp,tmpfs-size=32m,tmpfs-mode=0700,U=true,nosuid=true,nodev=true,noexec=true
 Mount=type=tmpfs,destination=/run/postgresql,tmpfs-size=16m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
-Network=secpal-application.network
-NetworkAlias=postgres
-HealthCmd=pg_isready -U secpal -d secpal
-HealthInterval=5s
-HealthTimeout=3s
-HealthRetries=20
-HealthStartPeriod=10s
-HealthOnFailure=kill
-Notify=healthy
+Network=none
 [Service]
-Restart=on-failure
-RestartSec=2
-TimeoutStartSec=180
+Type=oneshot
+RemainAfterExit=yes
+Restart=no
+TimeoutStartSec=300

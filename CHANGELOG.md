@@ -14,7 +14,8 @@ SPDX-License-Identifier: CC0-1.0
   Quadlet bind declarations for PostgreSQL, application storage, and Valkey.
 - Stable file-backed application, PostgreSQL, Valkey, and raw tenant-KEK secret
   contracts with atomic initial publication, bounded APP key history, exact
-  consumers, negative mutation coverage, and leak-surface validation.
+  consumers, explicit environment-free PostgreSQL initialization, negative
+  mutation coverage, and leak-surface validation.
 - A documented coordinated D.7 recovery boundary and durable Valkey AOF policy
   without adding backup jobs, live secrets, or a production deployment.
 

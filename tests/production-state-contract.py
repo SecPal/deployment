@@ -26,8 +26,12 @@ INVENTORY_PATH = ROOT / "config" / "production" / "inventory.example.yaml"
 RENDERER_PATH = ROOT / "scripts" / "render-production-quadlets.py"
 STATE_TOOL_PATH = ROOT / "scripts" / "production-state.py"
 BOOTSTRAP_PATH = ROOT / "scripts" / "production-secret-bootstrap.php"
+POSTGRES_LAUNCHER_PATH = ROOT / "scripts" / "production-postgres-entrypoint.sh"
+VALKEY_LAUNCHER_PATH = ROOT / "scripts" / "production-valkey-entrypoint.sh"
 CHECKED_QUADLETS = ROOT / "config" / "production" / "quadlet"
 CHECKED_SYSTEMD = ROOT / "config" / "production" / "systemd"
+POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
+VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 
 EXPECTED_OBJECTS = {
     "postgresql_data",
@@ -261,6 +265,234 @@ class ProductionStateContractTest(unittest.TestCase):
         bootstrap = BOOTSTRAP_PATH.read_text(encoding="utf-8")
         self.assertNotIn("putenv", bootstrap)
         self.assertNotIn("getenv", bootstrap)
+
+    def test_postgres_secret_is_confined_to_the_explicit_initializer(self) -> None:
+        rendered = self.renderer.build_units(self.contract)
+        initializer = rendered["secpal-postgres-init.container"]
+        server = rendered["secpal-postgres.container"]
+        self.assertIn("Exec=initialize", initializer)
+        self.assertIn("/run/secpal/secrets/postgres/password", initializer)
+        self.assertIn("production-postgres-entrypoint.sh", initializer)
+        self.assertIn("Exec=run", server)
+        self.assertIn("production-postgres-entrypoint.sh", server)
+        self.assertNotIn("POSTGRES_PASSWORD", server)
+        self.assertNotIn("/run/secpal/secrets/postgres", server)
+        if subprocess.run(["podman", "image", "exists", POSTGRES_IMAGE], check=False).returncode != 0:
+            self.skipTest("the reviewed PostgreSQL image is not locally staged")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = root / "data"
+            data.mkdir(mode=0o700)
+            password = root / "password"
+            password.write_text("SecPalFakePostgresCredential1234\n", encoding="utf-8")
+            password.chmod(0o400)
+            subprocess.run(
+                [
+                    "podman",
+                    "unshare",
+                    "chown",
+                    "-R",
+                    "999:999",
+                    os.fspath(data),
+                    os.fspath(password),
+                ],
+                check=True,
+            )
+            container_name = f"secpal-postgres-contract-{os.getpid()}"
+            mounts = [
+                "--mount",
+                f"type=bind,source={POSTGRES_LAUNCHER_PATH},destination=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true",
+                "--mount",
+                f"type=bind,source={data},destination=/var/lib/postgresql/data,rw=true",
+                "--mount",
+                "type=tmpfs,destination=/tmp,tmpfs-mode=0700,U=true",
+                "--mount",
+                "type=tmpfs,destination=/run/postgresql,tmpfs-mode=0750,U=true",
+            ]
+            initializer_mounts = [
+                *mounts,
+                "--mount",
+                f"type=bind,source={password},destination=/run/secpal-secret/password,ro=true",
+            ]
+            base = [
+                "podman",
+                "run",
+                "--network",
+                "none",
+                "--user",
+                "999:999",
+                "--read-only",
+                "--entrypoint",
+                "/bin/sh",
+            ]
+            try:
+                for _attempt in range(2):
+                    result = subprocess.run(
+                        [
+                            *base,
+                            "--rm",
+                            *initializer_mounts,
+                            POSTGRES_IMAGE,
+                            "/run/secpal/bootstrap/production-postgres-entrypoint.sh",
+                            "initialize",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                subprocess.run(
+                    [
+                        *base,
+                        "--detach",
+                        "--name",
+                        container_name,
+                        *mounts,
+                        POSTGRES_IMAGE,
+                        "/run/secpal/bootstrap/production-postgres-entrypoint.sh",
+                        "run",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    ready = subprocess.run(
+                        [
+                            "podman",
+                            "exec",
+                            container_name,
+                            "pg_isready",
+                            "-h",
+                            "/run/postgresql",
+                            "-U",
+                            "secpal",
+                            "-d",
+                            "secpal",
+                        ],
+                        capture_output=True,
+                        check=False,
+                    )
+                    if ready.returncode == 0:
+                        break
+                    time.sleep(0.1)
+                else:
+                    self.fail("the pinned PostgreSQL image did not become ready")
+                database = subprocess.run(
+                    [
+                        "podman",
+                        "exec",
+                        container_name,
+                        "psql",
+                        "-h",
+                        "/run/postgresql",
+                        "-U",
+                        "secpal",
+                        "-d",
+                        "secpal",
+                        "-Atqc",
+                        "SELECT current_database()",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertEqual(database.stdout.strip(), "secpal")
+                environment = subprocess.run(
+                    [
+                        "podman",
+                        "exec",
+                        container_name,
+                        "/bin/sh",
+                        "-c",
+                        "tr '\\000' '\\n' </proc/1/environ | "
+                        "grep -Eq '^(POSTGRES_PASSWORD|POSTGRES_PASSWORD_FILE|PGPASSWORD)='",
+                    ],
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(environment.returncode, 1)
+            finally:
+                subprocess.run(
+                    ["podman", "rm", "--force", container_name],
+                    capture_output=True,
+                    check=False,
+                )
+                subprocess.run(
+                    [
+                        "podman",
+                        "unshare",
+                        "chown",
+                        "-R",
+                        "0:0",
+                        os.fspath(data),
+                        os.fspath(password),
+                    ],
+                    check=True,
+                )
+
+    def test_pinned_valkey_launcher_accepts_the_canonical_password_grammar(self) -> None:
+        if subprocess.run(["podman", "image", "exists", VALKEY_IMAGE], check=False).returncode != 0:
+            self.skipTest("the reviewed Valkey image is not locally staged")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            password = root / "password"
+            password.write_text("SecPalFake$And&Star*Credential1234\n", encoding="utf-8")
+            password.chmod(0o400)
+            fake_server = root / "valkey-server"
+            fake_server.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                "test \"$#\" -eq 1\n"
+                "test \"$(stat -c %a \"$1\")\" = 600\n"
+                "test \"$(wc -l <\"$1\")\" -eq 5\n"
+                "grep -Eq '^requirepass .{24,128}$' \"$1\"\n"
+                "grep -Fx 'dir /data' \"$1\" >/dev/null\n"
+                "grep -Fx 'appendonly yes' \"$1\" >/dev/null\n"
+                "grep -Fx 'appendfsync everysec' \"$1\" >/dev/null\n"
+                "grep -Fx 'save \"\"' \"$1\" >/dev/null\n",
+                encoding="utf-8",
+            )
+            fake_server.chmod(0o755)
+            subprocess.run(
+                ["podman", "unshare", "chown", "10002:10002", os.fspath(password)],
+                check=True,
+            )
+            try:
+                result = subprocess.run(
+                    [
+                        "podman",
+                        "run",
+                        "--rm",
+                        "--network",
+                        "none",
+                        "--user",
+                        "10002:10002",
+                        "--read-only",
+                        "--mount",
+                        "type=tmpfs,destination=/tmp,tmpfs-mode=0700,U=true",
+                        "--volume",
+                        f"{VALKEY_LAUNCHER_PATH}:/run/secpal/bootstrap/production-valkey-entrypoint.sh:ro",
+                        "--volume",
+                        f"{password}:/run/secpal-secret/password:ro",
+                        "--volume",
+                        f"{fake_server}:/usr/local/bin/valkey-server:ro",
+                        "--entrypoint",
+                        "/bin/sh",
+                        VALKEY_IMAGE,
+                        "/run/secpal/bootstrap/production-valkey-entrypoint.sh",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            finally:
+                subprocess.run(
+                    ["podman", "unshare", "chown", "0:0", os.fspath(password)],
+                    check=True,
+                )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_state_initializer_is_idempotent_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

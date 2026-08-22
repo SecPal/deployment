@@ -76,6 +76,7 @@ required_files=(
   scripts/quadlet-integration.py
   scripts/quadlet-oneshot-entrypoint.sh
   scripts/production-secret-bootstrap.php
+  scripts/production-postgres-entrypoint.sh
   scripts/production-state.py
   scripts/production-valkey-entrypoint.sh
   scripts/render-production-quadlets.py

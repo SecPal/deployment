@@ -114,11 +114,14 @@ A valid existing directory is preserved byte-for-byte. A missing state leaf
 may be created only during the explicitly acknowledged first installation.
 Once the layout marker exists, initialization becomes validation-only and a
 missing authoritative path fails instead of being recreated. An invalid
-existing leaf is never silently repaired. A missing, partial, malformed, or extra secret set
-prevents `secpal-state-ready.service` from succeeding. Ordinary stop, rollback,
-container removal, or recreation never removes a host state path. Layout changes
-need a separately reviewed migration with explicit rollback and orphan
-detection.
+existing leaf is never silently repaired. After state and secret validation,
+`secpal-postgres-init.service` initializes only an empty PostgreSQL directory;
+an existing valid cluster is preserved, while non-empty incomplete state fails
+instead of being repaired or overwritten. A missing, partial, malformed, or
+extra secret set prevents `secpal-state-ready.service` from succeeding. Ordinary
+stop, rollback, container removal, or recreation never removes a host state
+path. Layout changes need a separately reviewed migration with explicit rollback
+and orphan detection.
 
 ## PostgreSQL and application recovery boundary
 

@@ -46,11 +46,16 @@ inventory gates remain disabled.
 
 ## Application delivery without OS-environment secrets
 
-PostgreSQL consumes `POSTGRES_PASSWORD_FILE`; its value is never a Quadlet
-environment literal. Valkey's fixed launcher reads only its individual file and
-writes a mode-`0600` configuration in container tmpfs before exec. Its health
-probe tests the expected unauthenticated `NOAUTH` response and never reads the
-password.
+PostgreSQL's explicit one-shot initializer is the only PostgreSQL container that
+receives its credential file. It passes that file path to the pinned image's
+`initdb --pwfile` seam, creates the `secpal` database over a private Unix socket,
+and stops. The steady-state PostgreSQL container mounts no credential and execs
+`postgres` only after `pg_controldata` validates the existing version-16 cluster,
+so the official image entrypoint cannot convert the file into an exported
+`POSTGRES_PASSWORD` process environment value. Valkey's fixed launcher reads
+only its individual file and writes a mode-`0600` configuration in container
+tmpfs before exec. Its health probe tests the expected unauthenticated `NOAUTH`
+response and never reads the password.
 
 The API image currently names application settings through Laravel's PHP
 configuration interface. Production mounts a root-owned `auto_prepend_file`

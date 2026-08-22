@@ -15,12 +15,13 @@ fi
 
 password="$(cat "$password_file")"
 case "$password" in
-  *[!A-Za-z0-9._~!#%+/:=?^@-]* | '')
+  *"
+"* | '')
     printf 'ERROR: production Valkey secret contract is invalid.\n' >&2
     exit 78
     ;;
 esac
-if [ "${#password}" -lt 24 ] || [ "${#password}" -gt 128 ]; then
+if ! printf '%s\n' "$password" | LC_ALL=C grep -Eq '^[A-Za-z0-9._~!#$%&*+/=?^-]{24,128}$'; then
   printf 'ERROR: production Valkey secret contract is invalid.\n' >&2
   exit 78
 fi

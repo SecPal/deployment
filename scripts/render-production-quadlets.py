@@ -96,10 +96,13 @@ def unit(description: str, dependencies: tuple[str, ...] = (), *, oneshot: bool 
     return section("Unit", lines)
 
 
-def common_container(contract: dict, role: str, image: str) -> list[str]:
+def common_container(
+    contract: dict, role: str, image: str, *, instance: str | None = None
+) -> list[str]:
     identity = role_spec(role)
     logs = contract["log_policy"]
-    container_name = f"secpal-{role}"
+    effective_role = instance or role
+    container_name = f"secpal-{effective_role}"
     log_file = logs["file_name"].format(container_name=container_name)
     return [
         f"ContainerName={container_name}",
@@ -119,7 +122,7 @@ def common_container(contract: dict, role: str, image: str) -> list[str]:
         "PidsLimit=512",
         *COMMON_PODMAN_ARGS,
         "Label=org.secpal.production=true",
-        f"Label=org.secpal.role={role}",
+        f"Label=org.secpal.role={effective_role}",
     ]
 
 
@@ -220,14 +223,33 @@ def build_units(contract: dict) -> dict[str, str]:
         ],
     )
 
+    postgres_init = common_container(
+        contract, "postgres", POSTGRES_IMAGE, instance="postgres-init"
+    )
+    postgres_init.extend(
+        (
+            'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-postgres-entrypoint.sh"]',
+            "Exec=initialize",
+            "Mount=type=bind,source=/srv/secpal/config/runtime/production-postgres-entrypoint.sh,"
+            "target=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true",
+            f"Mount=type=bind,source={postgres_secret}/password,"
+            "target=/run/secpal-secret/password,ro=true",
+            f"Mount=type=bind,source={postgres_path},target=/var/lib/postgresql/data,rw=true",
+            *tmpfs_mounts("postgres"),
+            "Network=none",
+        )
+    )
+    units["secpal-postgres-init.container"] = unit(
+        "Initialize SecPal production PostgreSQL", ("secpal-state-ready.service",), oneshot=True
+    ) + section("Container", postgres_init) + service(oneshot=True)
+
     postgres = common_container(contract, "postgres", POSTGRES_IMAGE)
     postgres.extend(
         (
-            "Environment=POSTGRES_DB=secpal",
-            "Environment=POSTGRES_USER=secpal",
-            "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secret/password",
-            f"Mount=type=bind,source={postgres_secret}/password,"
-            "target=/run/secpal-secret/password,ro=true",
+            'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-postgres-entrypoint.sh"]',
+            "Exec=run",
+            "Mount=type=bind,source=/srv/secpal/config/runtime/production-postgres-entrypoint.sh,"
+            "target=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true",
             f"Mount=type=bind,source={postgres_path},target=/var/lib/postgresql/data,rw=true",
             *tmpfs_mounts("postgres"),
             "Network=secpal-application.network",
@@ -242,7 +264,7 @@ def build_units(contract: dict) -> dict[str, str]:
         )
     )
     units["secpal-postgres.container"] = unit(
-        "SecPal production PostgreSQL", ("secpal-state-ready.service",)
+        "SecPal production PostgreSQL", ("secpal-postgres-init.service",)
     ) + section("Container", postgres) + service()
 
     valkey = common_container(contract, "valkey", VALKEY_IMAGE)
@@ -289,7 +311,8 @@ def build_units(contract: dict) -> dict[str, str]:
         "Unit",
         [
             "Description=Validate SecPal production state before product startup",
-            "Before=secpal-postgres.service secpal-valkey.service secpal-migrate.service",
+            "Before=secpal-postgres-init.service secpal-postgres.service "
+            "secpal-valkey.service secpal-migrate.service",
             "PartOf=secpal.target",
         ],
     ) + section(

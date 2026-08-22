@@ -73,7 +73,7 @@ PRODUCTION_GENERATED="$FIXTURE_ROOT/production-generated"
 install -d -m 0700 "$PRODUCTION_GENERATED"
 QUADLET_UNIT_DIRS="$ROOT_DIR/config/production/quadlet" "$GENERATOR" \
   "$PRODUCTION_GENERATED" "$PRODUCTION_GENERATED" "$PRODUCTION_GENERATED"
-test "$(find "$PRODUCTION_GENERATED" -maxdepth 1 -type f | wc -l)" -eq 10
+test "$(find "$PRODUCTION_GENERATED" -maxdepth 1 -type f | wc -l)" -eq 11
 
 if ! podman image exists "$FRONTEND_IMAGE"; then
   printf 'Production state native lifecycle skipped: reviewed image is not locally staged.\n'
