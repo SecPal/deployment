@@ -75,6 +75,7 @@ bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
 python3 tests/production-state-contract.py
+bash tests/production-state-native-lifecycle-gate.sh
 bash tests/production-state-native-lifecycle.sh
 python3 tests/work-graph-governance.py
 bash tests/repository-contract.sh

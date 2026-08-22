@@ -127,6 +127,7 @@ required_files=(
   tests/production-host-contract.sh
   tests/production-inventory-contract.py
   tests/production-state-contract.py
+  tests/production-state-native-lifecycle-gate.sh
   tests/production-state-native-lifecycle.sh
   tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
