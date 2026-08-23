@@ -160,8 +160,8 @@ The full service, security, lifecycle, and hosted-evidence contract is in
 
 - **Active integration definitions:** constrained generated Quadlets, a native
   systemd user target, the test Caddyfile, and validation scripts.
-- **Historical template:** `compose.yaml` and its original runner remain Phase
-  B/C evidence, not the active runtime.
+- **Historical evidence:** completed Phase B/C commits, pull requests, and
+  immutable run records remain the evidence; no compatibility runtime is kept.
 - **Local user configuration:** none is required by the canonical test; no
   `.env` file is read.
 - **Secrets:** generated at runtime in the `local-secrets` volume, rolled back

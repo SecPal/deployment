@@ -198,11 +198,6 @@ require_text CHANGELOG.md "provider-neutral production host and inventory contra
 require_text scripts/preflight.sh "python3 tests/production-inventory-contract.py"
 require_text scripts/preflight.sh "bash tests/production-host-contract.sh"
 
-readonly API_IMAGE='ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e'
-readonly FRONTEND_IMAGE='ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077'
-require_text compose.yaml "$API_IMAGE"
-require_text compose.yaml "$FRONTEND_IMAGE"
-
 checks=$((checks + 1))
 if grep -Eiq 'host provisioning|ssh connection|terraform|ansible|cloud provider' \
   scripts/validate-production-contract.py 2>/dev/null; then

@@ -42,7 +42,7 @@ else
   if ! printf '%s\0' \
     README.md \
     docs/architecture/state-machine.md \
-    config/phase-b/Caddyfile \
+    config/quadlet/Caddyfile \
     tests/fixtures/example.invalid | "$CHECKER"; then
     fail "public non-sensitive paths were rejected"
   fi

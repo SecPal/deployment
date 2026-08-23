@@ -80,12 +80,8 @@ bash tests/production-state-native-lifecycle-gate.sh
 bash tests/production-state-native-lifecycle.sh
 python3 tests/work-graph-governance.py
 bash tests/repository-contract.sh
-bash tests/phase-b-contract.sh
-bash tests/phase-c-api-image-contract.sh
-bash tests/phase-c-frontend-image-contract.sh
 bash tests/production-host-contract.sh
 bash tests/runtime-secret-contract.sh
-bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh
 bash tests/sensitive-path-contract.sh
 bash tests/workflow-action-pin-contract.sh
