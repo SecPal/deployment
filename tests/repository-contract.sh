@@ -72,6 +72,7 @@ required_files=(
   schemas/production-host-facts.schema.json
   schemas/production-inventory.schema.json
   scripts/preflight.sh
+  scripts/validate-compose-prohibition.sh
   config/production/php/99-secpal-secrets.ini
   scripts/fetch-oci-attestation.py
   scripts/integration_runtime_contract.py
@@ -109,6 +110,8 @@ required_files=(
   scripts/validate-origin.sh
   scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
+  tests/compose-prohibition-contract.sh
+  tests/image-consumption-evidence-contract.py
   tests/ci-cloud-bootstrap-failure.py
   tests/ci-cloud-config.py
   tests/ci-cloud-contract.py
@@ -245,9 +248,7 @@ for path in \
   fi
 done
 
-if rg -l -i 'docker compose|docker-compose' scripts .github/workflows \
-  --glob '*.sh' --glob '*.yml' --glob '*.yaml' \
-  >/dev/null; then
+if ! scripts/validate-compose-prohibition.sh; then
   fail "current scripts and workflows must not invoke Docker Compose"
 fi
 

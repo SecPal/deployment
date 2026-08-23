@@ -246,8 +246,10 @@ python3 scripts/quadlet-integration.py \
 
 The identifier also scopes Playwright output and last-run state beneath
 `test-results/secpal-int-<instance>`, so concurrent browser proofs never share
-worker artifacts or trace paths. The no-instance Quadlet invocation uses the
-fixed `secpal-int-phasebcompose` output directory.
+worker artifacts or trace paths. The no-instance Quadlet invocation retains the
+historical `secpal-int-phasebcompose` output-directory identifier. The name does
+not invoke or depend on Docker Compose; execution remains rootless Podman and
+native Quadlet only.
 
 ## Hosted evidence and production admission
 

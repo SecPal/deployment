@@ -107,8 +107,14 @@ an allowed Compose value. Only the canonical digest above is consumed.
 
 Changing the digest requires a new successful publisher run, a newly verified
 digest, recorded source and attestation identity, a dedicated deployment pull
-request, static contract checks, the real Compose integration lifecycle,
-review, and merge. There is no automatic move to a newest image.
+request, static contract checks, and the current rootless Podman/Quadlet
+integration lifecycle:
+
+```bash
+python3 scripts/quadlet-integration.py
+```
+
+Review and merge remain required. There is no automatic move to a newest image.
 
 Every digest update requires a new reviewed deployment pull request.
 

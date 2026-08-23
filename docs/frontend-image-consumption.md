@@ -57,15 +57,15 @@ OCI index digest.
 
 ## Pre-execution verification
 
-The runner resolves the static Compose contract first. It requires every API
-role and the frontend to resolve to their reviewed digest references without a
-build block. It then verifies the API, followed by the frontend, before
-`secrets-init` or any long-running container can execute.
+The active runner resolves the closed integration runtime contract first. It
+requires every API role and the frontend to use their reviewed digest references
+in native Quadlet units with `Pull=never`. It then verifies the API, followed by
+the frontend, before `secrets-init` or any long-running container can execute.
 
-Each image has a separate, newly created mode-`0700`, empty `DOCKER_CONFIG`.
-The exact `docker pull` process unsets `DOCKER_AUTH_CONFIG`; no registry login,
-GitHub token, GHCR credential, credential helper, or fallback is introduced.
-The caller's Docker configuration is never read or modified.
+Each image has a separate, newly created empty Podman authentication file. The
+exact `podman pull --authfile` process cannot reuse a registry login, GitHub
+token, GHCR credential, credential helper, or fallback. The caller's Docker and
+Podman authentication configuration is never read or modified.
 
 For the frontend, the anonymous OCI Distribution verifier:
 
