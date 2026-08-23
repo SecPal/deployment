@@ -294,12 +294,13 @@ class ProductionEdgeDecisionContractTest(unittest.TestCase):
     def test_private_boundary_matches_canonical_quadlet_roles(self) -> None:
         self.assertEqual(set(self.contract["public_boundary"]["private_roles"]), production_quadlet_roles())
 
-    def test_current_host_topology_separates_edge_and_product_authorities(self) -> None:
+    def test_current_host_topology_separates_host_and_product_authorities(self) -> None:
         host = PRODUCTION_HOST.read_text(encoding="utf-8")
         self.assertNotIn("future public edge through\nrootless Podman", host)
         self.assertNotIn("only publicly reachable container boundary", host)
-        self.assertIn("public NGINX edge as a host system service", host)
-        self.assertIn("product and data services remain on private rootless\ncontainer networks", host)
+        self.assertNotIn("public NGINX edge as a host system service", host)
+        self.assertIn("host-native edge authority", host)
+        self.assertIn("remain operator-owned", host)
 
     def test_unpinned_or_moving_supply_chain_mutations_fail(self) -> None:
         mutations = {

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -132,6 +133,59 @@ class QuadletContract(unittest.TestCase):
             path.name: path.read_text(encoding="utf-8")
             for path in sorted(self.output.iterdir())
         }
+
+    def assert_effective_podman_entrypoint(
+        self, exec_start: str, expected: list[str]
+    ) -> None:
+        """Require one exact JSON entrypoint, independent of CLI serialization."""
+        arguments = shlex.split(exec_start.removeprefix("ExecStart="))
+        entrypoints = []
+        for index, argument in enumerate(arguments):
+            if argument == "--entrypoint":
+                self.assertLess(index + 1, len(arguments), "entrypoint value is missing")
+                entrypoints.append(arguments[index + 1])
+            elif argument.startswith("--entrypoint="):
+                entrypoints.append(argument.partition("=")[2])
+        self.assertEqual(len(entrypoints), 1, "exactly one entrypoint override is required")
+        try:
+            actual = json.loads(entrypoints[0])
+        except json.JSONDecodeError as error:
+            self.fail(f"entrypoint override is not JSON: {error}")
+        self.assertEqual(actual, expected)
+
+    def test_effective_podman_entrypoint_rejects_invalid_semantics(self) -> None:
+        expected = ["/bin/bash", "/run/secpal/container-entrypoint.sh"]
+        expected_json = json.dumps(expected, separators=(",", ":"))
+        for option in (
+            f"--entrypoint '{expected_json}'",
+            f"--entrypoint='{expected_json}'",
+        ):
+            with self.subTest(accepted=option):
+                self.assert_effective_podman_entrypoint(
+                    f"ExecStart=/usr/bin/podman run {option} image", expected
+                )
+        cases = {
+            "absent": "ExecStart=/usr/bin/podman run image",
+            "wrong executable": (
+                "ExecStart=/usr/bin/podman run "
+                "--entrypoint '[\"/bin/sh\",\"/run/secpal/container-entrypoint.sh\"]' image"
+            ),
+            "wrong path": (
+                "ExecStart=/usr/bin/podman run "
+                "--entrypoint '[\"/bin/bash\",\"/run/secpal/unexpected.sh\"]' image"
+            ),
+            "oneshot wrapper": (
+                "ExecStart=/usr/bin/podman run "
+                "--entrypoint '[\"/bin/sh\",\"/run/secpal/quadlet-oneshot-entrypoint.sh\"]' image"
+            ),
+            "duplicate": (
+                "ExecStart=/usr/bin/podman run "
+                f"--entrypoint '{expected_json}' --entrypoint='{expected_json}' image"
+            ),
+        }
+        for name, command in cases.items():
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_effective_podman_entrypoint(command, expected)
 
     def test_cloud_renderer_uses_only_closed_local_digest_identities(self) -> None:
         units = self.render_cloud()
@@ -771,10 +825,14 @@ class QuadletContract(unittest.TestCase):
         scheduler = generated.split(
             f"---secpal-int-{INSTANCE}-scheduler.service---", 1
         )[1].split("\n---", 1)[0]
-        self.assertIn(
-            '--entrypoint "[\\"/bin/bash\\",'
-            '\\"/run/secpal/container-entrypoint.sh\\"]"',
-            scheduler,
+        scheduler_start = next(
+            line
+            for line in scheduler.splitlines()
+            if line.startswith("ExecStart=/usr/bin/podman run ")
+        )
+        self.assert_effective_podman_entrypoint(
+            scheduler_start,
+            ["/bin/bash", "/run/secpal/container-entrypoint.sh"],
         )
         self.assertIn(
             f"{API_IMAGE} php artisan schedule:work",
@@ -850,20 +908,13 @@ class QuadletContract(unittest.TestCase):
                 self.assertLess(
                     command.index(" --rm "), command.index(" --rm=false ")
                 )
-                self.assertNotIn(
-                    '--entrypoint "[\\"/bin/sh\\",\\"/run/secpal/'
-                    'quadlet-oneshot-entrypoint.sh\\"]"',
-                    command,
-                )
-        self.assertIn(
-            '--entrypoint "[\\"/bin/bash\\",\\"/run/secpal/'
-            'init-local-secrets.sh\\"]"',
+        self.assert_effective_podman_entrypoint(
             starts["secrets-init"],
+            ["/bin/bash", "/run/secpal/init-local-secrets.sh"],
         )
-        self.assertIn(
-            '--entrypoint "[\\"/bin/bash\\",\\"/run/secpal/'
-            'container-entrypoint.sh\\"]"',
+        self.assert_effective_podman_entrypoint(
             starts["migrate"],
+            ["/bin/bash", "/run/secpal/container-entrypoint.sh"],
         )
         self.assertTrue(
             starts["migrate"].endswith(" php artisan migrate --force")

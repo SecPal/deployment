@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Positive, negative-mutation, and synthetic host-fact tests for D.1."""
+"""Positive, negative-mutation, and synthetic production host-fact tests."""
 
 from __future__ import annotations
 
@@ -104,7 +104,9 @@ def assert_schema_objects_are_closed(value: Any, path: tuple[str, ...] = ()) -> 
 def main() -> int:
     for required in (VALIDATOR, SCHEMA, HOST_FACTS_SCHEMA, EXAMPLE):
         if not required.is_file():
-            raise AssertionError(f"required D.1 artifact is missing: {required.relative_to(ROOT)}")
+            raise AssertionError(
+                f"required production contract artifact is missing: {required.relative_to(ROOT)}"
+            )
 
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(schema)
@@ -531,10 +533,9 @@ def main() -> int:
         "malformed-kernel-release.yaml",
         "cgroup-v1.yaml",
         "unsupported-os.yaml",
+        "debian-host.yaml",
         "ubuntu-host.yaml",
-        "future-debian-major.yaml",
-        "floating-stable-suite.yaml",
-        "missing-security-suite.yaml",
+        "unqualified-rocky-minor.yaml",
         "security-updates-disabled.yaml",
         "automatic-reboot-enabled.yaml",
         "local-kernel-source.yaml",

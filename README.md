@@ -113,9 +113,9 @@ This stack proves integration only. It does not provision a tenant, claim
 `/health/ready`, expose a public service, persist production data, use
 production credentials, or select the future production edge.
 
-## Ephemeral Debian 13 cloud conformance
+## Ephemeral Debian 13 cloud conformance (historical)
 
-The repository now contains a manual, protected
+The repository retains the historical manual, protected
 [`Debian 13 cloud conformance`](docs/ci-cloud-conformance.md) foundation. It
 can provision one short-lived official Debian 13 host using a closed
 DigitalOcean Intel/AMD or Google C4A/Axion profile, run an exact 40-character
@@ -145,14 +145,14 @@ claim a production deployment or public infrastructure. Phase D has begun
 only with the provider-neutral, contract-only
 [`production host`](docs/architecture/production-host.md) and
 [`production inventory`](docs/architecture/production-inventory.md)
-definitions. Schema version 1 admits only Debian 13/trixie hosts and defines
-its security-update, controlled-reboot, reviewed major-upgrade, rootless
-Podman, systemd/Quadlet, subordinate-ID, and local runtime-storage boundaries.
-The D.1a integration runtime now re-proves those behaviors on native rootless
-Podman/Quadlet. The Phase B/C immutable records remain historical evidence and
-Docker/Compose is not a supported production runtime. D.1a is
-still disposable integration evidence: no production orchestration or
-infrastructure exists. Digest
+definitions. The active host contract admits only reviewed Rocky Linux 10.2
+facts with SELinux Enforcing, x86-64-v3 or independently qualified aarch64,
+signed Rocky package provenance, rootless Podman, systemd-user/Quadlet,
+subordinate IDs, seccomp, and administrator-owned Quadlet authority. Required
+native Rocky/SELinux evidence is distinct from the historical Debian D.1/D.1a
+cloud and portable runtime evidence. The Phase B/C Docker/Compose artifacts
+remain historical evidence and Docker/Compose is not a supported production
+runtime. No production orchestration or infrastructure exists. Digest
 provenance, reviewed updates, and rollback are detailed in
 [`docs/api-image-consumption.md`](docs/api-image-consumption.md) and
 [`docs/frontend-image-consumption.md`](docs/frontend-image-consumption.md).

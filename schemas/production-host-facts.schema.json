@@ -1,18 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/SecPal/deployment/schemas/production-host-facts.schema.json",
-  "title": "SecPal synthetic production host facts",
-  "description": "Version 1 side-effect-free observations compared with the production inventory.",
+  "title": "SecPal production host facts",
+  "description": "Version 2 closed Rocky/SELinux effective-host observations compared with the production inventory; synthetic fixtures are explicitly marked and cannot be native evidence.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "evidence_class",
     "hostname",
     "architecture",
+    "cpu",
     "os",
     "service_account",
     "ssh",
     "kernel",
+    "selinux",
     "runtime",
     "clock",
     "network",
@@ -24,7 +27,10 @@
   "properties": {
     "schema_version": {
       "type": "integer",
-      "const": 1
+      "const": 2
+    },
+    "evidence_class": {
+      "enum": ["synthetic", "rocky-native"]
     },
     "hostname": {
       "type": "string",
@@ -34,91 +40,92 @@
     "architecture": {
       "enum": ["amd64", "arm64"]
     },
+    "cpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admission_method", "x86_64_level", "qualified"],
+      "properties": {
+        "admission_method": {
+          "enum": ["glibc-loader-hwcaps", "rocky-aarch64-native"]
+        },
+        "x86_64_level": {
+          "type": ["string", "null"],
+          "enum": ["x86-64-v3", null]
+        },
+        "qualified": { "const": true }
+      }
+    },
     "os": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "version_id",
-        "version_codename",
-        "package_provenance",
-        "debian_release_suites",
-        "security_updates"
-      ],
+      "required": ["id", "version_id", "package_provenance", "updates"],
       "properties": {
         "id": {
-          "const": "debian"
+          "const": "rocky"
         },
         "version_id": {
-          "const": "13"
-        },
-        "version_codename": {
-          "const": "trixie"
+          "type": "string",
+          "pattern": "^10\\.(?:[2-9]|10)$"
         },
         "package_provenance": {
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "release_origins",
-            "archive_keyring_package",
-            "release_signatures_verified"
+            "distribution",
+            "gpg_key",
+            "enabled_repository_ids",
+            "rpm_signatures_verified",
+            "external_repositories_enabled"
           ],
           "properties": {
-            "release_origins": {
-              "const": ["Debian"]
+            "distribution": {
+              "const": "rocky"
             },
-            "archive_keyring_package": {
-              "const": "debian-archive-keyring"
+            "gpg_key": {
+              "const": "RPM-GPG-KEY-Rocky-10"
             },
-            "release_signatures_verified": {
+            "enabled_repository_ids": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": { "enum": ["baseos", "appstream", "extras"] },
+              "allOf": [
+                { "contains": { "const": "baseos" } },
+                { "contains": { "const": "appstream" } },
+                { "contains": { "const": "extras" } }
+              ]
+            },
+            "rpm_signatures_verified": {
               "const": true
+            },
+            "external_repositories_enabled": {
+              "const": false
             }
           }
         },
-        "debian_release_suites": {
-          "type": "array",
-          "minItems": 3,
-          "maxItems": 3,
-          "uniqueItems": true,
-          "items": {
-            "enum": ["trixie", "trixie-security", "trixie-updates"]
-          },
-          "allOf": [
-            { "contains": { "const": "trixie" } },
-            { "contains": { "const": "trixie-security" } },
-            { "contains": { "const": "trixie-updates" } }
-          ]
-        },
-        "security_updates": {
+        "updates": {
           "type": "object",
           "additionalProperties": false,
           "required": [
             "mechanism",
+            "reviewed",
             "automatic",
-            "release_codename",
-            "security_suite",
-            "normal_updates_automatic",
-            "major_release_upgrades_automatic",
+            "releasever",
             "automatic_reboot"
           ],
           "properties": {
             "mechanism": {
-              "const": "unattended-upgrades"
+              "const": "dnf4"
             },
-            "automatic": {
+            "reviewed": {
               "const": true
             },
-            "release_codename": {
-              "const": "trixie"
-            },
-            "security_suite": {
-              "const": "trixie-security"
-            },
-            "normal_updates_automatic": {
+            "automatic": {
               "const": false
             },
-            "major_release_upgrades_automatic": {
-              "const": false
+            "releasever": {
+              "const": "10"
             },
             "automatic_reboot": {
               "const": false
@@ -212,11 +219,10 @@
         "release",
         "package_architecture",
         "package_source",
-        "package_suite",
+        "package_repository_id",
         "package_owned",
         "cgroup_version",
         "overlayfs_supported",
-        "apparmor",
         "seccomp_available_to_podman"
       ],
       "properties": {
@@ -229,10 +235,10 @@
           "enum": ["amd64", "arm64"]
         },
         "package_source": {
-          "const": "debian-archive"
+          "const": "rocky-baseos"
         },
-        "package_suite": {
-          "enum": ["trixie", "trixie-security"]
+        "package_repository_id": {
+          "const": "baseos"
         },
         "package_owned": {
           "const": true
@@ -243,29 +249,96 @@
         "overlayfs_supported": {
           "const": true
         },
-        "apparmor": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "enabled",
-            "profiles_loaded",
-            "profiles_in_enforce_mode"
-          ],
-          "properties": {
-            "enabled": { "const": true },
-            "profiles_loaded": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "profiles_in_enforce_mode": {
-              "type": "integer",
-              "minimum": 1
-            }
-          }
-        },
         "seccomp_available_to_podman": {
           "const": true
         }
+      }
+    },
+    "selinux": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "mode",
+        "policy",
+        "container_policy_package",
+        "workload",
+        "persistent_labels",
+        "global_policy_weakened"
+      ],
+      "properties": {
+        "enabled": { "const": true },
+        "mode": { "const": "enforcing" },
+        "policy": { "const": "targeted" },
+        "container_policy_package": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "installed",
+            "source",
+            "repository_id",
+            "signature_verified"
+          ],
+          "properties": {
+            "name": { "const": "container-selinux" },
+            "installed": { "const": true },
+            "source": { "const": "rocky-appstream" },
+            "repository_id": { "const": "appstream" },
+            "signature_verified": { "const": true }
+          }
+        },
+        "workload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "process_type",
+            "process_mcs",
+            "storage_type",
+            "storage_mcs",
+            "label_disabled",
+            "intended_access_succeeded",
+            "cross_boundary_process_type",
+            "cross_boundary_process_mcs",
+            "cross_boundary_access_denied",
+            "denial_cause",
+            "avc_denial_observed",
+            "dac_would_allow_cross_boundary",
+            "target_existed"
+          ],
+          "properties": {
+            "process_type": { "const": "container_t" },
+            "process_mcs": { "$ref": "#/$defs/mcsRange" },
+            "storage_type": { "const": "container_file_t" },
+            "storage_mcs": { "$ref": "#/$defs/mcsRange" },
+            "label_disabled": { "const": false },
+            "intended_access_succeeded": { "const": true },
+            "cross_boundary_process_type": { "const": "container_t" },
+            "cross_boundary_process_mcs": { "$ref": "#/$defs/mcsRange" },
+            "cross_boundary_access_denied": { "const": true },
+            "denial_cause": { "const": "selinux" },
+            "avc_denial_observed": { "const": true },
+            "dac_would_allow_cross_boundary": { "const": true },
+            "target_existed": { "const": true }
+          }
+        },
+        "persistent_labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mechanism",
+            "fcontext_rule_present",
+            "restorecon_verified",
+            "chcon_only"
+          ],
+          "properties": {
+            "mechanism": { "const": "semanage-fcontext-restorecon" },
+            "fcontext_rule_present": { "const": true },
+            "restorecon_verified": { "const": true },
+            "chcon_only": { "const": false }
+          }
+        },
+        "global_policy_weakened": { "const": false }
       }
     },
     "runtime": {
@@ -286,7 +359,8 @@
         "network",
         "api",
         "updates",
-        "registries"
+        "registries",
+        "security"
       ],
       "properties": {
         "engine": {
@@ -313,21 +387,19 @@
           "required": [
             "source",
             "distribution",
-            "release_codename",
             "external_repository",
             "installed_packages",
-            "package_suites",
+            "installed_nevras",
+            "package_repositories",
+            "rpm_signatures_verified",
             "forbidden_packages_present"
           ],
           "properties": {
             "source": {
-              "const": "debian-archive"
+              "const": "rocky-official"
             },
             "distribution": {
-              "const": "debian"
-            },
-            "release_codename": {
-              "const": "trixie"
+              "const": "rocky"
             },
             "external_repository": {
               "const": false
@@ -342,8 +414,13 @@
                 "netavark",
                 "aardvark_dns",
                 "passt",
-                "uidmap",
-                "dbus_user_session"
+                "shadow_utils_subid",
+                "systemd",
+                "container_selinux",
+                "audit",
+                "policycoreutils",
+                "policycoreutils_python_utils",
+                "selinux_policy_targeted"
               ],
               "properties": {
                 "podman": { "const": "podman" },
@@ -352,11 +429,20 @@
                 "netavark": { "const": "netavark" },
                 "aardvark_dns": { "const": "aardvark-dns" },
                 "passt": { "const": "passt" },
-                "uidmap": { "const": "uidmap" },
-                "dbus_user_session": { "const": "dbus-user-session" }
+                "shadow_utils_subid": { "const": "shadow-utils-subid" },
+                "systemd": { "const": "systemd" },
+                "container_selinux": { "const": "container-selinux" },
+                "audit": { "const": "audit" },
+                "policycoreutils": { "const": "policycoreutils" },
+                "policycoreutils_python_utils": {
+                  "const": "policycoreutils-python-utils"
+                },
+                "selinux_policy_targeted": {
+                  "const": "selinux-policy-targeted"
+                }
               }
             },
-            "package_suites": {
+            "installed_nevras": {
               "type": "object",
               "additionalProperties": false,
               "required": [
@@ -366,22 +452,65 @@
                 "netavark",
                 "aardvark_dns",
                 "passt",
-                "uidmap",
-                "dbus_user_session"
+                "shadow_utils_subid",
+                "systemd",
+                "container_selinux",
+                "audit",
+                "policycoreutils",
+                "policycoreutils_python_utils",
+                "selinux_policy_targeted"
               ],
               "properties": {
-                "podman": { "$ref": "#/$defs/runtimePackageSuite" },
-                "conmon": { "$ref": "#/$defs/runtimePackageSuite" },
-                "crun": { "$ref": "#/$defs/runtimePackageSuite" },
-                "netavark": { "$ref": "#/$defs/runtimePackageSuite" },
-                "aardvark_dns": { "$ref": "#/$defs/runtimePackageSuite" },
-                "passt": { "$ref": "#/$defs/runtimePackageSuite" },
-                "uidmap": { "$ref": "#/$defs/runtimePackageSuite" },
-                "dbus_user_session": {
-                  "$ref": "#/$defs/runtimePackageSuite"
-                }
+                "podman": { "$ref": "#/$defs/nevra" },
+                "conmon": { "$ref": "#/$defs/nevra" },
+                "crun": { "$ref": "#/$defs/nevra" },
+                "netavark": { "$ref": "#/$defs/nevra" },
+                "aardvark_dns": { "$ref": "#/$defs/nevra" },
+                "passt": { "$ref": "#/$defs/nevra" },
+                "shadow_utils_subid": { "$ref": "#/$defs/nevra" },
+                "systemd": { "$ref": "#/$defs/nevra" },
+                "container_selinux": { "$ref": "#/$defs/nevra" },
+                "audit": { "$ref": "#/$defs/nevra" },
+                "policycoreutils": { "$ref": "#/$defs/nevra" },
+                "policycoreutils_python_utils": { "$ref": "#/$defs/nevra" },
+                "selinux_policy_targeted": { "$ref": "#/$defs/nevra" }
               }
             },
+            "package_repositories": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "podman",
+                "conmon",
+                "crun",
+                "netavark",
+                "aardvark_dns",
+                "passt",
+                "shadow_utils_subid",
+                "systemd",
+                "container_selinux",
+                "audit",
+                "policycoreutils",
+                "policycoreutils_python_utils",
+                "selinux_policy_targeted"
+              ],
+              "properties": {
+                "podman": { "const": "appstream" },
+                "conmon": { "const": "appstream" },
+                "crun": { "const": "appstream" },
+                "netavark": { "const": "appstream" },
+                "aardvark_dns": { "const": "appstream" },
+                "passt": { "const": "appstream" },
+                "shadow_utils_subid": { "const": "baseos" },
+                "systemd": { "const": "baseos" },
+                "container_selinux": { "const": "appstream" },
+                "audit": { "const": "baseos" },
+                "policycoreutils": { "const": "baseos" },
+                "policycoreutils_python_utils": { "const": "appstream" },
+                "selinux_policy_targeted": { "const": "baseos" }
+              }
+            },
+            "rpm_signatures_verified": { "const": true },
             "forbidden_packages_present": {
               "type": "array",
               "maxItems": 0
@@ -528,7 +657,10 @@
             "service_enabled",
             "socket_enabled",
             "tcp_listener",
-            "application_dependency"
+            "application_dependency",
+            "podman_socket_mounted",
+            "docker_socket_mounted",
+            "docker_api_dependency"
           ],
           "properties": {
             "connection": { "const": "local-cli" },
@@ -536,7 +668,10 @@
             "service_enabled": { "const": false },
             "socket_enabled": { "const": false },
             "tcp_listener": { "const": false },
-            "application_dependency": { "const": false }
+            "application_dependency": { "const": false },
+            "podman_socket_mounted": { "const": false },
+            "docker_socket_mounted": { "const": false },
+            "docker_api_dependency": { "const": false }
           }
         },
         "updates": {
@@ -575,6 +710,26 @@
             "ghcr_insecure": { "const": false },
             "fallback_enabled": { "const": false },
             "short_name_resolution_required": { "const": false }
+          }
+        },
+        "security": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "privileged",
+            "seccomp_enabled",
+            "seccomp_profile",
+            "digest_only_images",
+            "non_root_processes",
+            "added_capabilities"
+          ],
+          "properties": {
+            "privileged": { "const": false },
+            "seccomp_enabled": { "const": true },
+            "seccomp_profile": { "const": "runtime-default" },
+            "digest_only_images": { "const": true },
+            "non_root_processes": { "const": true },
+            "added_capabilities": { "type": "array", "maxItems": 0 }
           }
         }
       }
@@ -789,8 +944,15 @@
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$"
     },
-    "runtimePackageSuite": {
-      "enum": ["trixie", "trixie-security"]
+    "nevra": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9_.+~^:-]+$"
+    },
+    "mcsRange": {
+      "type": "string",
+      "pattern": "^s0:c[0-9]{1,4},c[0-9]{1,4}$"
     },
     "subordinateIdFact": {
       "type": "object",

@@ -650,8 +650,8 @@ class ProductionContractRegressionTests(unittest.TestCase):
         mutations = (
             ("source", "external-repository"),
             ("distribution", "ubuntu"),
-            ("release_codename", "stable"),
             ("external_repository", True),
+            ("rpm_signatures_verified", False),
         )
         for field, value in mutations:
             with self.subTest(field=field):
@@ -672,8 +672,13 @@ class ProductionContractRegressionTests(unittest.TestCase):
             ("netavark", ""),
             ("aardvark_dns", ""),
             ("passt", "slirp4netns"),
-            ("uidmap", ""),
-            ("dbus_user_session", "dbus-x11"),
+            ("shadow_utils_subid", ""),
+            ("systemd", ""),
+            ("container_selinux", ""),
+            ("audit", ""),
+            ("policycoreutils", ""),
+            ("policycoreutils_python_utils", ""),
+            ("selinux_policy_targeted", ""),
         ):
             with self.subTest(package=package):
                 facts = copy.deepcopy(self.host_facts)
@@ -694,15 +699,20 @@ class ProductionContractRegressionTests(unittest.TestCase):
             "netavark",
             "aardvark_dns",
             "passt",
-            "uidmap",
-            "dbus_user_session",
+            "shadow_utils_subid",
+            "systemd",
+            "container_selinux",
+            "audit",
+            "policycoreutils",
+            "policycoreutils_python_utils",
+            "selinux_policy_targeted",
         ):
-            with self.subTest(package=package, provenance="backports"):
+            with self.subTest(package=package, provenance="external"):
                 facts = copy.deepcopy(self.host_facts)
-                suites = nested_mapping(
-                    facts, "runtime", "installation", "package_suites"
+                repositories = nested_mapping(
+                    facts, "runtime", "installation", "package_repositories"
                 )
-                suites[package] = "trixie-backports"
+                repositories[package] = "external"
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
@@ -848,16 +858,16 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     dimension,
                 )
 
-    def test_host_facts_require_exact_debian_13_identity(self) -> None:
+    def test_host_facts_require_exact_qualified_rocky_identity(self) -> None:
         self.validator.validate_host_facts(self.inventory, self.host_facts)
 
         for field, value in (
+            ("id", "debian"),
             ("id", "ubuntu"),
-            ("version_id", "12"),
-            ("version_id", "14"),
-            ("version_codename", "bookworm"),
-            ("version_codename", "testing"),
-            ("version_codename", "unstable"),
+            ("version_id", "9.7"),
+            ("version_id", "10.1"),
+            ("version_id", "10.3"),
+            ("version_id", "10"),
         ):
             with self.subTest(field=field, value=value):
                 facts = copy.deepcopy(self.host_facts)
@@ -869,52 +879,43 @@ class ProductionContractRegressionTests(unittest.TestCase):
 
     def test_ubuntu_host_facts_are_rejected(self) -> None:
         facts = copy.deepcopy(self.host_facts)
-        facts["os"] = {
-            "id": "ubuntu",
-            "version_id": "24.04",
-            "installation_profile": "ubuntu-server",
-        }
-        kernel = nested_mapping(facts, "kernel")
-        kernel["release"] = "6.8.0"
-        kernel["package_source"] = "ubuntu-archive"
-        kernel.pop("package_suite")
-        kernel.pop("package_owned")
+        nested_mapping(facts, "os")["id"] = "ubuntu"
         self.assert_contract_violation(
             lambda: self.validator.validate_host_facts(self.inventory, facts)
         )
 
-    def test_debian_release_suites_are_codename_pinned(self) -> None:
-        for suites in (
-            ["trixie", "trixie-updates"],
-            ["stable", "trixie-security", "trixie-updates"],
-            ["testing", "trixie-security", "trixie-updates"],
-            ["unstable", "trixie-security", "trixie-updates"],
-            ["sid", "trixie-security", "trixie-updates"],
-            ["trixie", "trixie-security", "trixie-backports"],
+    def test_rocky_enabled_repositories_are_closed(self) -> None:
+        for repositories in (
+            ["baseos", "appstream"],
+            ["baseos", "appstream", "crb"],
+            ["baseos", "appstream", "extras", "epel"],
         ):
-            with self.subTest(suites=suites):
+            with self.subTest(repositories=repositories):
                 facts = copy.deepcopy(self.host_facts)
-                nested_mapping(facts, "os")["debian_release_suites"] = suites
+                provenance = nested_mapping(facts, "os", "package_provenance")
+                provenance["enabled_repository_ids"] = repositories
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
                     )
                 )
 
-    def test_debian_release_suite_order_is_not_significant(self) -> None:
+    def test_rocky_repository_order_is_not_significant(self) -> None:
         facts = copy.deepcopy(self.host_facts)
-        nested_mapping(facts, "os")["debian_release_suites"] = [
-            "trixie-updates",
-            "trixie",
-            "trixie-security",
+        provenance = nested_mapping(facts, "os", "package_provenance")
+        provenance["enabled_repository_ids"] = [
+            "extras",
+            "appstream",
+            "baseos",
         ]
         self.validator.validate_host_facts(self.inventory, facts)
 
-    def test_debian_archive_provenance_is_exact(self) -> None:
+    def test_rocky_package_provenance_is_exact(self) -> None:
         for field, value in (
-            ("release_origins", ["Debian", "Debian derivative"]),
-            ("archive_keyring_package", "custom-keyring"),
-            ("release_signatures_verified", False),
+            ("distribution", "almalinux"),
+            ("gpg_key", "RPM-GPG-KEY-custom"),
+            ("rpm_signatures_verified", False),
+            ("external_repositories_enabled", True),
         ):
             with self.subTest(field=field):
                 facts = copy.deepcopy(self.host_facts)
@@ -926,20 +927,18 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_debian_security_update_policy_is_fail_closed(self) -> None:
+    def test_rocky_update_policy_is_fail_closed(self) -> None:
         mutations = (
-            ("mechanism", "manual"),
-            ("automatic", False),
-            ("release_codename", "stable"),
-            ("security_suite", "stable-security"),
-            ("normal_updates_automatic", True),
-            ("major_release_upgrades_automatic", True),
+            ("mechanism", "yum"),
+            ("reviewed", False),
+            ("automatic", True),
+            ("releasever", "10.3"),
             ("automatic_reboot", True),
         )
         for field, value in mutations:
             with self.subTest(field=field):
                 facts = copy.deepcopy(self.host_facts)
-                update_policy = nested_mapping(facts, "os", "security_updates")
+                update_policy = nested_mapping(facts, "os", "updates")
                 update_policy[field] = value
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
@@ -947,12 +946,12 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_host_facts_require_debian_kernel_package_provenance(self) -> None:
+    def test_host_facts_require_rocky_kernel_package_provenance(self) -> None:
         mutations = (
             ("package_source", "local-build"),
             ("package_source", "mainline"),
             ("package_source", "ubuntu-archive"),
-            ("package_suite", "trixie-backports"),
+            ("package_repository_id", "crb"),
             ("package_owned", False),
         )
         for field, value in mutations:
@@ -966,25 +965,29 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
-    def test_apparmor_requires_observed_enforcement(self) -> None:
-        apparmor = nested_mapping(self.host_facts, "kernel").get("apparmor")
-        self.assertIsInstance(apparmor, dict)
-        assert isinstance(apparmor, dict)
-
-        for loaded, enforcing in ((4, 0), (1, 2)):
-            with self.subTest(loaded=loaded, enforcing=enforcing):
+    def test_selinux_requires_effective_enforcement(self) -> None:
+        mutations = (
+            (("mode",), "permissive"),
+            (("container_policy_package", "installed"), False),
+            (("workload", "process_type"), "unconfined_t"),
+            (("workload", "storage_type"), "default_t"),
+            (("workload", "avc_denial_observed"), False),
+        )
+        for path, value in mutations:
+            with self.subTest(path=path):
                 facts = copy.deepcopy(self.host_facts)
-                candidate = nested_mapping(facts, "kernel", "apparmor")
-                candidate["profiles_loaded"] = loaded
-                candidate["profiles_in_enforce_mode"] = enforcing
+                candidate = nested_mapping(facts, "selinux")
+                for segment in path[:-1]:
+                    candidate = nested_mapping(candidate, segment)
+                candidate[path[-1]] = value
                 self.assert_contract_violation(
                     lambda facts=facts: self.validator.validate_host_facts(
                         self.inventory, facts
                     )
                 )
 
-    def test_kernel_series_is_exactly_debian_13_stable(self) -> None:
-        for release in ("6.11.99+deb13-amd64", "6.13.0+deb13-amd64"):
+    def test_kernel_series_is_exactly_rocky_10_stable(self) -> None:
+        for release in ("6.11.99-1.el10.x86_64", "6.13.0-1.el10.x86_64"):
             with self.subTest(release=release):
                 facts = copy.deepcopy(self.host_facts)
                 nested_mapping(facts, "kernel")["release"] = release

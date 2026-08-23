@@ -17,224 +17,123 @@ fail() {
 
 require_file() {
   checks=$((checks + 1))
-  if [ ! -f "$1" ]; then
-    fail "required production contract file is missing: $1"
-  fi
+  [[ -f "$1" ]] || fail "required production host artifact is missing: $1"
 }
 
 require_text() {
   local path="$1"
   local text="$2"
   checks=$((checks + 1))
-  if [ ! -f "$path" ] || ! grep -Fq -- "$text" "$path"; then
-    fail "$path must contain: $text"
-  fi
+  grep -Fq -- "$text" "$path" || fail "$path must contain: $text"
 }
 
-require_prose() {
-  local path="$1"
-  local text="$2"
-  local normalized=""
-  checks=$((checks + 1))
-  if [ -f "$path" ]; then
-    normalized="$(tr '\n' ' ' <"$path")"
-  fi
-  if [ ! -f "$path" ] || ! grep -Fq -- "$text" <<<"$normalized"; then
-    fail "$path must contain prose: $text"
-  fi
-}
-
-for path in \
-  docs/architecture/production-host.md \
-  docs/architecture/production-inventory.md \
-  config/production/inventory.example.yaml \
-  schemas/production-host-facts.schema.json \
-  schemas/production-inventory.schema.json \
-  scripts/validate-production-contract.py \
-  tests/production-inventory-contract.py \
-  tests/fixtures/production-host/valid-amd64.yaml \
-  tests/fixtures/production-host/valid-arm64.yaml \
-  tests/fixtures/production-host/invalid-architecture.yaml \
-  tests/fixtures/production-host/insufficient-disk.yaml \
-  tests/fixtures/production-host/clock-unsynchronized.yaml \
-  tests/fixtures/production-host/ubuntu-host.yaml \
-  tests/fixtures/production-host/future-debian-major.yaml \
-  tests/fixtures/production-host/floating-stable-suite.yaml \
-  tests/fixtures/production-host/missing-security-suite.yaml \
-  tests/fixtures/production-host/security-updates-disabled.yaml \
-  tests/fixtures/production-host/automatic-reboot-enabled.yaml \
-  tests/fixtures/production-host/local-kernel-source.yaml \
-  tests/fixtures/production-host/kernel-backports-suite.yaml \
-  tests/fixtures/production-host/kernel-architecture-mismatch.yaml \
-  tests/fixtures/production-host/docker-runtime.yaml \
-  tests/fixtures/production-host/rootful-podman.yaml \
-  tests/fixtures/production-host/podman-too-old.yaml \
-  tests/fixtures/production-host/podman-future-major.yaml \
-  tests/fixtures/production-host/wrong-podman-source.yaml \
-  tests/fixtures/production-host/podman-docker-installed.yaml \
-  tests/fixtures/production-host/quadlet-unavailable.yaml \
-  tests/fixtures/production-host/linger-disabled.yaml \
-  tests/fixtures/production-host/missing-subuid.yaml \
-  tests/fixtures/production-host/missing-subgid.yaml \
-  tests/fixtures/production-host/remote-podman-connection.yaml \
-  tests/fixtures/production-host/podman-tcp-api.yaml \
-  tests/fixtures/production-host/podman-auto-update.yaml \
-  tests/fixtures/production-host/secpal-registry-mirror.yaml \
-  tests/fixtures/production-host/insecure-ghcr.yaml \
-  tests/fixtures/production-host/remote-podman-graphroot.yaml \
-  tests/fixtures/production-host/contradictory-filesystem.yaml \
-  tests/fixtures/production-host/managed-path-symlink.yaml \
-  tests/fixtures/production-host/malformed-kernel-release.yaml \
-  tests/fixtures/production-host/malformed-architecture.yaml \
-  tests/fixtures/production-inventory/valid-amd64.yaml \
-  tests/fixtures/production-inventory/valid-arm64.yaml; do
+required_paths=(
+  docs/architecture/production-host.md
+  schemas/production-host-facts.schema.json
+  scripts/validate-production-contract.py
+  scripts/qualify-production-host.sh
+  tests/production-host-rocky-contract.py
+  tests/production-host-native-gate.sh
+  tests/fixtures/production-host/valid-amd64.yaml
+  tests/fixtures/production-host/valid-arm64.yaml
+  tests/fixtures/production-host/debian-host.yaml
+  tests/fixtures/production-host/unqualified-rocky-minor.yaml
+)
+for path in "${required_paths[@]}"; do
   require_file "$path"
 done
 
-require_text docs/architecture/production-host.md "single-host"
-require_text docs/architecture/production-host.md "Multi-host and high availability are deferred"
-require_text docs/architecture/production-host.md "Debian 13"
-require_text docs/architecture/production-host.md "trixie"
-require_text docs/architecture/production-host.md "linux/amd64"
-require_text docs/architecture/production-host.md "linux/arm64"
-require_text docs/architecture/production-host.md "Linux 6.12"
-require_text docs/architecture/production-host.md "Operating-system lifecycle"
-require_text docs/architecture/production-host.md "Automatic security updates are required"
-require_text docs/architecture/production-host.md "Automatic reboots are forbidden"
-require_text docs/architecture/production-host.md "Automatic major-release upgrades are forbidden"
-require_prose docs/architecture/production-host.md "Replace/rebuild before in-place major upgrade"
-require_text docs/architecture/production-host.md "cgroup v2"
-require_text docs/architecture/production-host.md "Podman 5.4.2"
-require_text docs/architecture/production-host.md "rootless Podman"
-require_text docs/architecture/production-host.md "Quadlet"
-require_text docs/architecture/production-host.md "systemd user manager"
-require_text docs/architecture/production-host.md "/etc/subuid"
-require_text docs/architecture/production-host.md "/etc/subgid"
-require_text docs/architecture/production-host.md "65536"
-require_text docs/architecture/production-host.md "/etc/containers/systemd/users/"
-require_text docs/architecture/production-host.md "/usr/lib/systemd/user-generators/podman-user-generator"
-require_text docs/architecture/production-host.md "Initial unmeasured planning envelope"
-require_prose docs/architecture/production-host.md "not assigned a universal D.1 floor"
-require_prose docs/architecture/production-host.md "Rootful Podman is unsupported"
-require_text docs/architecture/production-host.md "Direct root SSH is unsupported"
-require_prose docs/architecture/production-host.md "The Podman API is not a production dependency"
-require_text docs/architecture/production-host.md "Pull=never"
-require_prose docs/architecture/production-host.md "Logs are persistent operational and security evidence"
-require_prose docs/architecture/production-host.md "D.2 classifies public application storage as durable"
-require_text docs/architecture/production-host.md "10001:10001"
-require_text docs/architecture/production-host.md "101:101"
-require_text docs/architecture/production-host.md "No host was provisioned."
-require_text docs/architecture/production-host.md "No production deployment was performed."
-
-for dependency in \
-  "GHCR image retrieval" \
-  "GitHub artifact attestation verification" \
-  "Mail delivery" \
-  "OpenTimestamp calendars" \
-  "Bitcoin quorum providers" \
-  "Address-data imports" \
-  "Android push delivery" \
-  "Web Push delivery" \
-  "Optional object storage"; do
-  require_text docs/architecture/production-host.md "$dependency"
+document_terms=(
+  "Rocky Linux 10.2"
+  "SELinux Enforcing"
+  "x86-64-v3"
+  "aarch64"
+  "container-selinux"
+  "container_t"
+  "container_file_t"
+  "semanage fcontext"
+  "restorecon"
+  "rootless Podman"
+  "systemd-user"
+  "native Quadlet"
+  "/etc/containers/systemd/users/<UID>/"
+  "administrator-owned"
+  "Netavark"
+  "Aardvark DNS"
+  "pasta"
+  "cgroup v2"
+  "crun"
+  "seccomp"
+  "digest-only"
+  "Pull=never"
+  "NOT RUN"
+)
+for text in "${document_terms[@]}"; do
+  require_text docs/architecture/production-host.md "$text"
 done
 
-for path_name in \
-  configuration \
-  deployment_state \
-  runtime_secrets \
-  postgresql_data \
-  private_application_storage \
-  public_application_storage \
-  edge_state \
-  acme_state \
-  crowdsec_state \
-  logs \
-  backup_staging \
-  podman_graph_root \
-  quadlet_definitions; do
-  require_text config/production/inventory.example.yaml "$path_name:"
+schema_terms=(
+  '"evidence_class"'
+  '"rocky-native"'
+  '"const": "rocky"'
+  '"container_policy_package"'
+  '"process_mcs"'
+  '"cross_boundary_access_denied"'
+  '"avc_denial_observed"'
+  '"dac_would_allow_cross_boundary"'
+  '"persistent_labels"'
+  '"privileged"'
+  '"seccomp_enabled"'
+  '"digest_only_images"'
+  '"podman_socket_mounted"'
+  '"docker_socket_mounted"'
+  '"package_repositories"'
+  '"installed_nevras"'
+)
+for text in "${schema_terms[@]}"; do
+  require_text schemas/production-host-facts.schema.json "$text"
 done
 
-require_text docs/architecture/production-inventory.md "schema_version"
-require_prose docs/architecture/production-inventory.md "Unknown schema versions fail closed"
-require_text docs/architecture/production-inventory.md "must not contain secrets"
-require_text docs/architecture/production-inventory.md "must not select image identities"
-require_prose docs/architecture/production-inventory.md "frontend and API origins must differ"
-require_text docs/architecture/production-inventory.md "reviewed migration notes"
+packages=(
+  podman conmon crun netavark aardvark-dns passt shadow-utils-subid systemd
+  container-selinux audit policycoreutils policycoreutils-python-utils
+  selinux-policy-targeted
+)
+for package in "${packages[@]}"; do
+  require_text schemas/production-host-facts.schema.json "$package"
+done
 
-require_text schemas/production-inventory.schema.json '"additionalProperties": false'
-require_text schemas/production-inventory.schema.json '"schema_version"'
-require_text schemas/production-inventory.schema.json '"single-host"'
-require_text schemas/production-inventory.schema.json '"amd64"'
-require_text schemas/production-inventory.schema.json '"arm64"'
-require_text schemas/production-host-facts.schema.json '"additionalProperties": false'
-require_text schemas/production-host-facts.schema.json '"engine"'
-require_text schemas/production-host-facts.schema.json '"podman"'
-require_text schemas/production-host-facts.schema.json '"rootless"'
-require_text schemas/production-host-facts.schema.json '"quadlet"'
-require_text schemas/production-host-facts.schema.json '"subuid"'
-require_text schemas/production-host-facts.schema.json '"subgid"'
-require_text schemas/production-host-facts.schema.json '"newuidmap_effective"'
-require_text schemas/production-host-facts.schema.json '"newgidmap_effective"'
-require_text schemas/production-host-facts.schema.json '"podman_graph_root"'
-require_text schemas/production-host-facts.schema.json '"package_suites"'
-require_text schemas/production-host-facts.schema.json '"effective_search_paths"'
-require_text schemas/production-host-facts.schema.json '"tree_symlinks_present"'
-require_text schemas/production-host-facts.schema.json '"path_access"'
-require_text schemas/production-host-facts.schema.json '"package_architecture"'
-require_text schemas/production-host-facts.schema.json '"effective_oci_runtime"'
-require_text schemas/production-host-facts.schema.json '"containers_configuration_account_writable"'
-require_text schemas/production-host-facts.schema.json '"debian_release_suites"'
-require_text schemas/production-host-facts.schema.json '"trixie-security"'
-require_text schemas/production-host-facts.schema.json '"major_release_upgrades_automatic"'
-require_text schemas/production-host-facts.schema.json '"automatic_reboot"'
-require_text schemas/production-host-facts.schema.json '"debian-archive"'
-require_text schemas/production-host-facts.schema.json '"netavark"'
-require_text schemas/production-host-facts.schema.json '"pasta"'
-require_text schemas/production-host-facts.schema.json '"image_auto_update"'
-
-require_text CHANGELOG.md "provider-neutral production host and inventory contract"
-require_text scripts/preflight.sh "python3 tests/production-inventory-contract.py"
-require_text scripts/preflight.sh "bash tests/production-host-contract.sh"
+validator_terms=(
+  'QUALIFIED_ROCKY_MINORS = frozenset({"10.2"})'
+  "glibc-loader-hwcaps"
+  "rocky-aarch64-native"
+  "validate_selinux_facts"
+)
+for text in "${validator_terms[@]}"; do
+  require_text scripts/validate-production-contract.py "$text"
+done
 
 checks=$((checks + 1))
-if grep -Eiq 'host provisioning|ssh connection|terraform|ansible|cloud provider' \
-  scripts/validate-production-contract.py 2>/dev/null; then
-  fail "the pure production contract validator must not implement provisioning, SSH, or providers"
+if rg -n 'const.*debian|debian_release_suites|trixie|debian-archive|apparmor.*required|AppArmor enabled|unattended-upgrades' schemas/production-host-facts.schema.json scripts/validate-production-contract.py; then
+  fail "active machine admission retains a Debian/AppArmor production requirement"
 fi
 
 checks=$((checks + 1))
-if grep -ERin \
-  'Ubuntu|ubuntu|noble|ubuntu-server|ubuntu-archive|Linux 6\.8' \
-  docs/architecture/production-host.md \
-  docs/architecture/production-inventory.md \
-  schemas/production-host-facts.schema.json \
-  schemas/production-inventory.schema.json \
-  scripts/validate-production-contract.py \
-  tests/fixtures/production-host/valid-amd64.yaml \
-  tests/fixtures/production-host/valid-arm64.yaml \
-  tests/fixtures/production-inventory \
-  config/production/inventory.example.yaml; then
-  fail "active D.1 contract artifacts must not retain an Ubuntu host assumption"
+if rg -n 'label=disable|Network=host|Privileged=true|AutoUpdate=registry' config/production/quadlet scripts/render-production-quadlets.py; then
+  fail "production Quadlet inputs contain a forbidden runtime fallback"
 fi
 
 checks=$((checks + 1))
-if grep -ERin \
-  'docker_engine_version|docker_compose_version|docker_data_root|docker-apt-repository|docker-compose-plugin|/var/run/docker\.sock' \
-  schemas/production-host-facts.schema.json \
-  schemas/production-inventory.schema.json \
-  scripts/validate-production-contract.py \
-  tests/fixtures/production-host/valid-amd64.yaml \
-  tests/fixtures/production-host/valid-arm64.yaml \
-  tests/fixtures/production-inventory \
-  config/production/inventory.example.yaml; then
-  fail "active D.1 machine contracts must not retain Docker runtime fields"
+if rg -n 'docker_engine_version|docker_compose_version|docker_data_root|/var/run/docker\.sock' schemas/production-host-facts.schema.json scripts/validate-production-contract.py; then
+  fail "active host machine contract retains Docker runtime fields"
 fi
 
-if [ "$failures" -ne 0 ]; then
-  printf 'Production host contract failed with %d issue(s).\n' "$failures" >&2
+python3 tests/production-host-rocky-contract.py
+bash tests/production-host-native-gate.sh
+
+if ((failures)); then
+  printf 'Production host contract failed: %d of %d checks failed.\n' "$failures" "$checks" >&2
   exit 1
 fi
 
-printf 'Production host contract passed (%d assertions).\n' "$checks"
+printf 'Production host contract passed (%d static checks plus focused fixture/native gates).\n' "$checks"
