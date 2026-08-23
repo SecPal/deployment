@@ -72,6 +72,7 @@ required_files=(
   schemas/production-host-facts.schema.json
   schemas/production-inventory.schema.json
   scripts/preflight.sh
+  scripts/validate-compose-prohibition.sh
   config/production/php/99-secpal-secrets.ini
   scripts/fetch-oci-attestation.py
   scripts/integration_runtime_contract.py
@@ -109,6 +110,8 @@ required_files=(
   scripts/validate-origin.sh
   scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
+  tests/compose-prohibition-contract.sh
+  tests/image-consumption-evidence-contract.py
   tests/ci-cloud-bootstrap-failure.py
   tests/ci-cloud-config.py
   tests/ci-cloud-contract.py
@@ -123,8 +126,6 @@ required_files=(
   tests/ci-cloud-remote-bootstrap.sh
   tests/ci-cloud-systemd-reboot.py
   tests/ci-cloud-target-diagnostic.py
-  tests/phase-b-contract.sh
-  tests/phase-c-api-image-contract.sh
   tests/production-contract-regressions.py
   tests/production-host-contract.sh
   tests/production-inventory-contract.py
@@ -134,11 +135,9 @@ required_files=(
   tests/production-state-native-lifecycle.sh
   tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
-  tests/local-integration-lifecycle.sh
   tests/preflight-origin-contract.sh
   tests/sensitive-path-contract.sh
   tests/workflow-action-pin-contract.sh
-  tests/fixtures/fake-docker.sh
   tests/fixtures/fake-gh.sh
   tests/fixtures/fake-python3.sh
   tests/fixtures/fake-curl.sh
@@ -239,17 +238,19 @@ if [ -n "$unexpected_symlink" ]; then
   fail "unexpected symlink found: $unexpected_symlink"
 fi
 
-# These absences remain permanent or belong to later roadmap phases. Phase B
-# deliberately permits only the repository-root Compose contract.
+# These absences remain permanent or belong to later roadmap phases.
 for path in \
-  compose.yml docker-compose.yaml docker-compose.yml \
+  compose.yaml compose.yml docker-compose.yaml docker-compose.yml \
+  config/phase-b scripts/local-integration.sh \
   Dockerfile Containerfile Chart.yaml values.yaml .env; do
   if [ -e "$path" ] || [ -L "$path" ]; then
     fail "forbidden or later-phase path exists: $path"
   fi
 done
 
-require_file compose.yaml
+if ! scripts/validate-compose-prohibition.sh; then
+  fail "current scripts and workflows must not invoke Docker Compose"
+fi
 
 if grep -Eiq 'Phase B (remains|stays|is) in progress|Phase B.*pending|Local API/frontend integration: in progress' \
   README.md docs/roadmap.md; then

@@ -11,10 +11,10 @@ services, `crun`, Netavark/Aardvark, and `pasta`. It is not a production
 deployment and does not implement persistence, production secrets, public
 edge, TLS lifecycle, CrowdSec, backup, update, or rollback operations.
 
-The old [`compose.yaml`](../compose.yaml) and
-[`local-integration.sh`](../scripts/local-integration.sh) remain immutable
-historical evidence of how Phase B/C was originally completed. They are no
-longer the active required runtime.
+Phase B/C completion remains evidenced by its immutable Git and GitHub
+history. The current repository intentionally has no runnable Docker/Compose
+compatibility stack; this Quadlet runtime is the only current integration
+runtime.
 
 ## Closed runtime contract
 
@@ -246,9 +246,10 @@ python3 scripts/quadlet-integration.py \
 
 The identifier also scopes Playwright output and last-run state beneath
 `test-results/secpal-int-<instance>`, so concurrent browser proofs never share
-worker artifacts or trace paths. The retained historical Compose harness uses
-the fixed `secpal-int-phasebcompose` output directory when no Quadlet instance
-identifier is present.
+worker artifacts or trace paths. The no-instance Quadlet invocation retains the
+historical `secpal-int-phasebcompose` output-directory identifier. The name does
+not invoke or depend on Docker Compose; execution remains rootless Podman and
+native Quadlet only.
 
 ## Hosted evidence and production admission
 

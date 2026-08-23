@@ -83,104 +83,23 @@ See [the complete integration contract](docs/quadlet-integration.md) for the
 service map, supply-chain order, security invariants, lifecycle behavior,
 hosted-runner limits, and parallel-run inputs.
 
-## Historical Phase B/C Docker and Compose evidence
+## Historical Phase B/C evidence
 
-The retained [`compose.yaml`](compose.yaml) consumed the verified API OCI index
-by this canonical digest reference:
+Phase B/C completion is preserved in immutable Git and GitHub evidence, not in
+a maintained compatibility runtime. Deployment merge commit
+`4fc2796409b7c37a541f515ccf29236f143fc132` and its push-triggered Local
+Integration run `31264562902` recorded the completed lifecycle and cleanup.
+The reviewed API OCI index was
+`ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`;
+the reviewed frontend OCI index was
+`ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`,
+published from `b755ca0d0ee5a85eca5ad5688d457241f070b1b4` by run
+`31247196734` (attempt `1`).
 
-- `ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
-
-The frontend is consumed only through its verified canonical OCI index:
-
-- `ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
-
-Its source commit is `b755ca0d0ee5a85eca5ad5688d457241f070b1b4`,
-published by run `31247196734` (attempt `1`). The frontend source build and
-image override have been removed. PostgreSQL, Valkey, and the test-only Caddy
-base remain pinned by version and digest.
-
-Phase C completion is bound to deployment merge commit
-`4fc2796409b7c37a541f515ccf29236f143fc132`. Its push-triggered Local
-Integration run `31264562902` verified the frontend OCI index digest
-`sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
-and API OCI index digest
-`sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
-before runtime, then passed the real Compose lifecycle, Playwright, and full
-project cleanup.
-
-The stack exposes one dynamic port on `127.0.0.1` and uses two reserved HTTPS
-origins on that port:
-
-- `https://app.secpal.example.invalid:<port>` for the frontend;
-- `https://api.secpal.example.invalid:<port>` for the API.
-
-API, frontend, workers, scheduler, and data services have no published ports.
-
-The historical explicit integration test requires Docker Engine, Docker Compose
-v2, GitHub CLI 2.97.0 with `gh attestation verify`, Python 3, `curl`, util-linux
-`setsid`, Node.js 22.22.2, npm dependencies installed with `npm ci`, Playwright
-Chromium installed, and anonymous registry access for the pinned inputs:
-
-```bash
-./scripts/local-integration.sh
-```
-
-GitHub CLI currently applies its GitHub authentication gate to the direct
-`--bundle-from-oci` mode. The runner does not provide a GitHub token to bypass
-that gate. Instead, it retrieves both the public Sigstore bundle and the exact
-raw OCI index through GHCR's anonymous OCI Distribution flow. The runner
-validates the referrer, manifests, subject, layer digests, sizes, and media
-types, then gives the private, digest-matching local index and bundle to
-`gh attestation verify --bundle`. GitHub CLI therefore hashes the reviewed
-local index instead of reopening the registry. Verification uses the exact
-reviewed GitHub CLI 2.97.0, runs against an empty GitHub configuration, fixes
-the host to `github.com`, disables prompting, updates, and telemetry, and
-removes all GitHub, Docker, and registry configuration variables. The temporary
-index and bundle are removed on success, failure, and signals.
-
-The sequence validates every API role and the frontend against their canonical
-digests. It pulls each image with its own new empty Docker configuration while
-removing inherited `DOCKER_AUTH_CONFIG` from each exact pull process. For each
-image it verifies the raw index byte digest and `Docker-Content-Digest` header,
-retrieves and validates the public OCI attestation bundle, and requires
-successful GitHub Artifact Attestation verification. Only after both gates
-succeed does the script build the project-scoped gateway image, generate
-random test-only secrets inside a private runtime volume without printing them,
-start private PostgreSQL and Valkey services, run migrations exactly once, and
-start the explicit service roles. Neither published SecPal image is a local
-cleanup artifact. The runner then proves Valkey cache and queue round trips,
-worker-to-queue ownership, shared visibility of the disposable private-storage
-volume, exact credentialed CORS, and the separate app/API origins. Playwright
-Chromium exercises the actual Compose frontend and API, including the Sanctum
-CSRF handshake, an intentionally unsuccessful login, secure cookie attributes,
-CSP, service-worker registration, and runtime API routing. Successful
-completion means its containers, networks, volumes, project-built images,
-database data, private files, certificates, and secrets were removed. Failure
-paths trigger best-effort cleanup; handled signals are forwarded to the active
-integration process group and stop the run with a non-success status after
-cleanup. Interrupted secret publication rolls back partial files, and a later
-run replaces any legacy partial set.
-
-For a deterministic caller-assigned port, including parallel test scheduling,
-set a distinct loopback port for each run:
-
-```bash
-SECPAL_PHASE_B_PORT=18443 ./scripts/local-integration.sh
-```
-
-The public Compose template retains `8443` and reserved singleton container
-names as its single-project direct-use defaults. One validated port setting
-drives gateway publication and both HTTPS origins. The integration script
-derives unique values for parallel runs. The runner requires the
-`docker compose` v2 plugin and does not fall back to the legacy standalone
-Compose v1 command.
-
-Valkey is the queue and cache backend. `worker-hash-chain` is the guarded
-singleton consumer of only `activity-hash-chain`; `worker-general` consumes
-`merkle`, `opentimestamp`, and `default` without a fixed container name. The
-scheduler remains a guarded singleton. All API-based roles mount the same
-`private-storage` volume at `/app/storage/app/private`; this volume is
-disposable test state, not a production persistence contract.
+The current integration runtime is exclusively rootless Podman, systemd-user,
+and native Quadlet. It preserves the relevant disposable PostgreSQL, Valkey,
+browser, worker, migration, and cleanup coverage without retaining a runnable
+Docker/Compose stack.
 
 Phase B completed in the required check context
 `Local Integration / Compose Contract`: the technical implementation head
@@ -230,8 +149,8 @@ definitions. Schema version 1 admits only Debian 13/trixie hosts and defines
 its security-update, controlled-reboot, reviewed major-upgrade, rootless
 Podman, systemd/Quadlet, subordinate-ID, and local runtime-storage boundaries.
 The D.1a integration runtime now re-proves those behaviors on native rootless
-Podman/Quadlet. The Phase B/C Docker/Compose artifacts remain historical
-evidence and Docker/Compose is not a supported production runtime. D.1a is
+Podman/Quadlet. The Phase B/C immutable records remain historical evidence and
+Docker/Compose is not a supported production runtime. D.1a is
 still disposable integration evidence: no production orchestration or
 infrastructure exists. Digest
 provenance, reviewed updates, and rollback are detailed in

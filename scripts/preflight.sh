@@ -52,6 +52,7 @@ fi
 bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
 php -l scripts/phase-b-runtime-probe.php
+python3 tests/image-consumption-evidence-contract.py
 python3 tests/oci-attestation-bundle-contract.py
 python3 tests/quadlet-integration-contract.py
 python3 tests/quadlet-integration-lifecycle.py
@@ -79,13 +80,10 @@ python3 tests/production-edge-decision-contract.py
 bash tests/production-state-native-lifecycle-gate.sh
 bash tests/production-state-native-lifecycle.sh
 python3 tests/work-graph-governance.py
+bash tests/compose-prohibition-contract.sh
 bash tests/repository-contract.sh
-bash tests/phase-b-contract.sh
-bash tests/phase-c-api-image-contract.sh
-bash tests/phase-c-frontend-image-contract.sh
 bash tests/production-host-contract.sh
 bash tests/runtime-secret-contract.sh
-bash tests/local-integration-lifecycle.sh
 bash tests/preflight-origin-contract.sh
 bash tests/sensitive-path-contract.sh
 bash tests/workflow-action-pin-contract.sh
