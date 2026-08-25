@@ -59,9 +59,11 @@ python3 tests/quadlet-integration-lifecycle.py
 python3 tests/ci-cloud-bootstrap-failure.py
 python3 tests/ci-cloud-config.py
 python3 tests/ci-cloud-contract.py
+python3 tests/ci-cloud-rocky-control.py
 python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py
 python3 tests/ci-cloud-gcp-janitor.py
+python3 tests/ci-cloud-gcp-rocky-janitor.py
 bash tests/ci-cloud-gcp-identity.sh
 python3 tests/ci-cloud-host-setup-failure.py
 python3 tests/ci-cloud-janitor.py

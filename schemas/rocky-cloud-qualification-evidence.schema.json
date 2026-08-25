@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/rocky-cloud-qualification-evidence.schema.json",
+  "title": "Target-owned Rocky native qualification evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "target_sha",
+    "exit_status",
+    "stdout_sha256",
+    "stdout_bytes",
+    "process_contexts",
+    "storage_context",
+    "mcs_distinct",
+    "positive_access",
+    "cross_mcs_denied",
+    "avc_observed",
+    "seccomp_enforced",
+    "cleanup_complete",
+    "classification"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "exit_status": { "const": 0 },
+    "stdout_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "stdout_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
+    "process_contexts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "string",
+        "pattern": "^[^:]+:[^:]+:container_t:s0:c[0-9]+(?:,c[0-9]+)?$",
+        "maxLength": 256
+      }
+    },
+    "storage_context": {
+      "type": "string",
+      "pattern": "^[^:]+:[^:]+:container_file_t:s0:c[0-9]+(?:,c[0-9]+)?$",
+      "maxLength": 256
+    },
+    "mcs_distinct": { "const": true },
+    "positive_access": { "const": true },
+    "cross_mcs_denied": { "const": true },
+    "avc_observed": { "const": true },
+    "seccomp_enforced": { "const": true },
+    "cleanup_complete": { "const": true },
+    "classification": { "const": "PASS" }
+  }
+}

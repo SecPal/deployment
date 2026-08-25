@@ -1,0 +1,713 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+name: Rocky 10.2 Ephemeral Cloud Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: One closed trusted lifecycle operation
+        required: true
+        type: choice
+        options:
+          - discover
+          - provision-and-prepare
+          - qualify
+          - destroy
+      target_sha:
+        description: Full 40-character SecPal/deployment commit SHA
+        required: true
+        type: string
+      provider_profile:
+        description: Reviewed current Rocky provider profile
+        required: true
+        type: choice
+        options:
+          - gcp-rocky-10-2-arm64
+      continuation_run_id:
+        description: Exact preparation run ID for qualify or destroy
+        required: false
+        type: string
+      continuation_run_attempt:
+        description: Exact preparation run attempt for qualify or destroy
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+concurrency:
+  group: rocky-cloud-${{ inputs.continuation_run_id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate closed lifecycle selection
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      operation: ${{ steps.closed.outputs.operation }}
+      target_sha: ${{ steps.closed.outputs.target_sha }}
+      source_run_id: ${{ steps.closed.outputs.source_run_id }}
+      source_run_attempt: ${{ steps.closed.outputs.source_run_attempt }}
+      source_continuation_artifact: ${{ steps.closed.outputs.source_continuation_artifact }}
+      source_state_artifact: ${{ steps.closed.outputs.source_state_artifact }}
+    steps:
+      - name: Validate immutable inputs
+        id: closed
+        env:
+          RAW_OPERATION: ${{ inputs.operation }}
+          RAW_TARGET_SHA: ${{ inputs.target_sha }}
+          RAW_PROFILE: ${{ inputs.provider_profile }}
+          RAW_SOURCE_RUN_ID: ${{ inputs.continuation_run_id }}
+          RAW_SOURCE_RUN_ATTEMPT: ${{ inputs.continuation_run_attempt }}
+          IS_DEFAULT_BRANCH: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          [[ "$IS_DEFAULT_BRANCH" == true ]]
+          [[ "$RAW_TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$RAW_PROFILE" == gcp-rocky-10-2-arm64 ]]
+          case "$RAW_OPERATION" in
+            discover | provision-and-prepare)
+              [[ -z "$RAW_SOURCE_RUN_ID" && -z "$RAW_SOURCE_RUN_ATTEMPT" ]]
+              ;;
+            qualify | destroy)
+              [[ "$RAW_SOURCE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+              [[ "$RAW_SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,2}$ ]]
+              ;;
+            *) exit 1 ;;
+          esac
+          {
+            printf 'operation=%s\n' "$RAW_OPERATION"
+            printf 'target_sha=%s\n' "${RAW_TARGET_SHA,,}"
+            printf 'source_run_id=%s\n' "$RAW_SOURCE_RUN_ID"
+            printf 'source_run_attempt=%s\n' "$RAW_SOURCE_RUN_ATTEMPT"
+            printf 'source_continuation_artifact=rocky-cloud-continuation-%s-%s\n' \
+              "$RAW_SOURCE_RUN_ID" "$RAW_SOURCE_RUN_ATTEMPT"
+            printf 'source_state_artifact=rocky-cloud-state-%s-%s\n' \
+              "$RAW_SOURCE_RUN_ID" "$RAW_SOURCE_RUN_ATTEMPT"
+          } >>"$GITHUB_OUTPUT"
+
+  discover:
+    name: Resolve exact official Rocky ARM64 image
+    needs: validate
+    if: >-
+      ${{ needs.validate.outputs.operation == 'discover' ||
+      needs.validate.outputs.operation == 'provision-and-prepare' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ci-cloud-gcp
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted discovery from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Validate reviewed profile and WIF identity
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        run: |
+          scripts/ci-cloud/rocky-control.py validate-profile \
+            config/ci-cloud/gcp-rocky-10-2-arm64.json
+          [[ "$GCP_PROJECT_ID" == secpal-dev ]]
+          [[ "$GCP_WORKLOAD_IDENTITY_PROVIDER" == \
+            projects/94792370946/locations/global/workloadIdentityPools/secpal/providers/github ]]
+          [[ "$GCP_SERVICE_ACCOUNT" == \
+            gcp-service-account@secpal-dev.iam.gserviceaccount.com ]]
+
+      - name: Authenticate bounded read-only discovery through OIDC
+        id: discovery_auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 600s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Resolve family once to an immutable image
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.discovery_auth.outputs.access_token }}
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/rocky-cloud"
+          scripts/ci-cloud/rocky-control.py discover-image \
+            --control-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/rocky-cloud/discovery.json"
+
+      - name: Publish bounded discovery evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-discovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-cloud/discovery.json
+          if-no-files-found: error
+          retention-days: 14
+
+  provision:
+    name: Provision and prepare one retained Rocky guest
+    needs: [validate, discover]
+    if: ${{ needs.validate.outputs.operation == 'provision-and-prepare' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    environment: ci-cloud-gcp
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted provisioning from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Retrieve exact discovery evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rocky-cloud-discovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-cloud
+
+      - name: Generate private per-run SSH authority and exact variables
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          GCP_BOOTSTRAP_SERVICE_ACCOUNT: ${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}
+        run: |
+          [[ "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" == \
+            secpal-ci-bootstrap@secpal-dev.iam.gserviceaccount.com ]]
+          scripts/ci-cloud/rocky-control.py validate-evidence discovery \
+            "$RUNNER_TEMP/rocky-cloud/discovery.json"
+          [[ "$(jq -er .trusted_control_sha "$RUNNER_TEMP/rocky-cloud/discovery.json")" == \
+            "$GITHUB_SHA" ]]
+          install -d -m 0700 "$RUNNER_TEMP/rocky-cloud"
+          ssh-keygen -q -t ed25519 -N '' \
+            -C "secpal-rocky-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -f "$RUNNER_TEMP/rocky-cloud/id_ed25519"
+          chmod 0600 "$RUNNER_TEMP/rocky-cloud/id_ed25519"
+          runner_ipv4="$(curl --proto '=https' --tlsv1.2 --fail --silent \
+            --show-error --max-time 15 https://api.ipify.org)"
+          python3 - "$runner_ipv4" <<'PY'
+          import ipaddress
+          import sys
+          address = ipaddress.ip_address(sys.argv[1])
+          if address.version != 4 or not address.is_global:
+              raise SystemExit("runner address is not a public IPv4 address")
+          PY
+          created_at="$(date -u +%s)"
+          expires_at="$((created_at + 10800))"
+          jq -n \
+            --arg project_id secpal-dev \
+            --arg bootstrap_service_account "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \
+            --arg trusted_control_sha "$GITHUB_SHA" \
+            --arg target_sha "$TARGET_SHA" \
+            --arg profile gcp-rocky-10-2-arm64 \
+            --arg zone europe-west3-a \
+            --arg machine_type c4a-standard-4 \
+            --arg disk_type hyperdisk-balanced \
+            --arg exact_image_self_link "$(jq -er .exact_image_self_link "$RUNNER_TEMP/rocky-cloud/discovery.json")" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg runner_ipv4 "$runner_ipv4" \
+            --arg ssh_public_key "$(cat "$RUNNER_TEMP/rocky-cloud/id_ed25519.pub")" \
+            --arg created_at "$created_at" \
+            --arg expires_at "$expires_at" \
+            '{project_id: $project_id,
+              bootstrap_service_account: $bootstrap_service_account,
+              trusted_control_sha: $trusted_control_sha,
+              target_sha: $target_sha, profile: $profile, zone: $zone,
+              machine_type: $machine_type, disk_type: $disk_type,
+              disk_size_gib: 120,
+              exact_image_self_link: $exact_image_self_link,
+              run_id: $run_id, run_attempt: $run_attempt,
+              runner_ipv4: $runner_ipv4, ssh_public_key: $ssh_public_key,
+              created_at: $created_at, expires_at: $expires_at}' \
+            >infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
+
+      - name: Set up pinned OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
+      - name: Validate exact-image OpenTofu root without credentials
+        working-directory: infra/ci-cloud/gcp-rocky
+        run: |
+          tofu fmt -check -diff
+          tofu init -input=false -lockfile=readonly
+          tofu validate
+
+      - name: Authenticate trusted provisioning through OIDC
+        id: provision_auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 1200s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Apply one exact run-owned guest
+        id: apply
+        continue-on-error: true
+        working-directory: infra/ci-cloud/gcp-rocky
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
+        run: |
+          tofu apply --auto-approve --input=false
+          tofu output -raw instance_id >"$RUNNER_TEMP/rocky-cloud/instance_id"
+          tofu output -raw instance_name >"$RUNNER_TEMP/rocky-cloud/instance_name"
+
+      - name: Preserve exact state before identity transition
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-state-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            infra/ci-cloud/gcp-rocky/terraform.tfstate
+            infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Remove cloud identity and restart trusted preparation
+        id: identity_transition
+        if: ${{ steps.apply.outcome == 'success' }}
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          scripts/ci-cloud/rocky-gcp-transition.py \
+            --instance "$(cat "$RUNNER_TEMP/rocky-cloud/instance_name")" \
+            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --created-at "$(jq -er .created_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
+            --expires-at "$(jq -er .expires_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
+            --ssh-public-key "$(cat "$RUNNER_TEMP/rocky-cloud/id_ed25519.pub")" \
+            --runner-ipv4 "$(jq -er .runner_ipv4 infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
+            --ipv4-output "$RUNNER_TEMP/rocky-cloud/ipv4_address"
+
+      - name: Collect trusted preparation evidence without cloud credentials
+        id: preparation
+        if: ${{ steps.identity_transition.outcome == 'success' }}
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          unset GOOGLE_OAUTH_ACCESS_TOKEN GOOGLE_APPLICATION_CREDENTIALS
+          ip="$(cat "$RUNNER_TEMP/rocky-cloud/ipv4_address")"
+          for attempt in {1..90}; do
+            if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              -o ConnectTimeout=5 -i "$RUNNER_TEMP/rocky-cloud/id_ed25519" \
+              "secpal-cloud@$ip" test -r /var/lib/secpal-rocky/evidence/preparation.json; then
+              break
+            fi
+            [[ "$attempt" -lt 90 ]]
+            sleep 10
+          done
+          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i "$RUNNER_TEMP/rocky-cloud/id_ed25519" \
+            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/preparation.json" \
+            "$RUNNER_TEMP/rocky-cloud/preparation.json"
+          scripts/ci-cloud/rocky-control.py validate-evidence preparation \
+            "$RUNNER_TEMP/rocky-cloud/preparation.json"
+          jq -e --arg target_sha "$TARGET_SHA" --arg control_sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '.target_sha == $target_sha and
+             .run.trusted_control_sha == $control_sha and
+             .run.run_id == $run_id and .run.run_attempt == $run_attempt' \
+            "$RUNNER_TEMP/rocky-cloud/preparation.json"
+          scripts/ci-cloud/rocky-control.py create-continuation \
+            --control-sha "$GITHUB_SHA" --target-sha "$TARGET_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --image "$(jq -er .exact_image_self_link "$RUNNER_TEMP/rocky-cloud/discovery.json")" \
+            --instance-id "$(cat "$RUNNER_TEMP/rocky-cloud/instance_id")" \
+            --instance-name "$(cat "$RUNNER_TEMP/rocky-cloud/instance_name")" \
+            --created-at "$(jq -er .created_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
+            --expires-at "$(jq -er .expires_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
+            --output "$RUNNER_TEMP/rocky-cloud/continuation.json"
+
+      - name: Publish preparation and non-secret continuation evidence
+        if: ${{ steps.preparation.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-continuation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/rocky-cloud/continuation.json
+            ${{ runner.temp }}/rocky-cloud/preparation.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove ephemeral SSH private material
+        if: ${{ always() }}
+        run: rm -f -- "$RUNNER_TEMP/rocky-cloud/id_ed25519" "$RUNNER_TEMP/rocky-cloud/id_ed25519.pub"
+
+      - name: Enforce provisioning and preparation result
+        if: ${{ always() }}
+        env:
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          IDENTITY_OUTCOME: ${{ steps.identity_transition.outcome }}
+          PREPARATION_OUTCOME: ${{ steps.preparation.outcome }}
+        run: |
+          [[ "$APPLY_OUTCOME" == success ]]
+          [[ "$IDENTITY_OUTCOME" == success ]]
+          [[ "$PREPARATION_OUTCOME" == success ]]
+
+  resume_control:
+    name: Resume exact retained guest and request qualification
+    needs: validate
+    if: ${{ needs.validate.outputs.operation == 'qualify' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    environment: ci-cloud-gcp
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted resume control from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Retrieve exact continuation
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.validate.outputs.source_continuation_artifact }}
+          run-id: ${{ needs.validate.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rocky-resume
+
+      - name: Retrieve exact retained state
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.validate.outputs.source_state_artifact }}
+          run-id: ${{ needs.validate.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rocky-resume
+
+      - name: Admit exact unexpired continuation
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          SOURCE_RUN_ID: ${{ needs.validate.outputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ needs.validate.outputs.source_run_attempt }}
+        run: |
+          scripts/ci-cloud/rocky-control.py validate-continuation \
+            "$RUNNER_TEMP/rocky-resume/continuation.json" \
+            --control-sha "$GITHUB_SHA" --target-sha "$TARGET_SHA" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --source-run-attempt "$SOURCE_RUN_ATTEMPT" \
+            --now "$(date -u +%s)"
+
+      - name: Wait for the uncredentialed target runner access request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          scripts/ci-cloud/wait-github-artifact.sh \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+            "rocky-cloud-access-request-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "$RUNNER_TEMP/rocky-exchange"
+          jq -e \
+            --arg target_sha "$TARGET_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg key_pattern "^ssh-ed25519 [A-Za-z0-9+/]+={0,2} secpal-rocky-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}$" \
+            'keys == ["runner_ipv4", "run_attempt", "run_id", "ssh_public_key", "target_sha"] and
+             .target_sha == $target_sha and .run_id == $run_id and
+             .run_attempt == $run_attempt and
+             (.runner_ipv4 | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$")) and
+             (.ssh_public_key | test($key_pattern))' \
+            "$RUNNER_TEMP/rocky-exchange/access-request.json"
+
+      - name: Authenticate only trusted resume control through OIDC
+        id: resume_auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 1200s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Rotate SSH authority and reverify identity-free restart
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.resume_auth.outputs.access_token }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          variables="$RUNNER_TEMP/rocky-resume/run.auto.tfvars.json"
+          request="$RUNNER_TEMP/rocky-exchange/access-request.json"
+          scripts/ci-cloud/rocky-gcp-transition.py \
+            --instance "$(jq -er .instance_name "$RUNNER_TEMP/rocky-resume/continuation.json")" \
+            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --created-at "$(jq -er .created_at "$variables")" \
+            --expires-at "$(jq -er .expires_at "$variables")" \
+            --ssh-public-key "$(jq -er .ssh_public_key "$request")" \
+            --runner-ipv4 "$(jq -er .runner_ipv4 "$request")" \
+            --ipv4-output "$RUNNER_TEMP/rocky-exchange/ipv4_address"
+
+      - name: Publish the identity-free guest handoff
+        run: |
+          jq -n --arg ipv4 "$(cat "$RUNNER_TEMP/rocky-exchange/ipv4_address")" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{ipv4: $ipv4, run_id: $run_id, run_attempt: $run_attempt,
+              cloud_identity_removed: true}' \
+            >"$RUNNER_TEMP/rocky-exchange/access-ready.json"
+
+      - name: Upload the bounded public access handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-access-ready-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-exchange/access-ready.json
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify_target:
+    name: Execute target-owned qualification without cloud authority
+    needs: validate
+    if: ${{ needs.validate.outputs.operation == 'qualify' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted evidence transport from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Generate runner-local SSH key and public access request
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/rocky-target" "$RUNNER_TEMP/rocky-exchange"
+          ssh-keygen -q -t ed25519 -N '' \
+            -C "secpal-rocky-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -f "$RUNNER_TEMP/rocky-target/id_ed25519"
+          chmod 0600 "$RUNNER_TEMP/rocky-target/id_ed25519"
+          runner_ipv4="$(curl --proto '=https' --tlsv1.2 --fail --silent \
+            --show-error --max-time 15 https://api.ipify.org)"
+          python3 - "$runner_ipv4" <<'PY'
+          import ipaddress
+          import sys
+          address = ipaddress.ip_address(sys.argv[1])
+          if address.version != 4 or not address.is_global:
+              raise SystemExit("runner address is not a public IPv4 address")
+          PY
+          jq -n --arg runner_ipv4 "$runner_ipv4" \
+            --arg ssh_public_key "$(cat "$RUNNER_TEMP/rocky-target/id_ed25519.pub")" \
+            --arg target_sha "$TARGET_SHA" --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{runner_ipv4: $runner_ipv4, ssh_public_key: $ssh_public_key,
+              target_sha: $target_sha, run_id: $run_id, run_attempt: $run_attempt}' \
+            >"$RUNNER_TEMP/rocky-exchange/access-request.json"
+
+      - name: Upload only the public access request
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-access-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-exchange/access-request.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Wait for trusted identity-free handoff
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          scripts/ci-cloud/wait-github-artifact.sh \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+            "rocky-cloud-access-ready-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "$RUNNER_TEMP/rocky-exchange"
+          jq -e --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            'keys == ["cloud_identity_removed", "ipv4", "run_attempt", "run_id"] and
+             .run_id == $run_id and .run_attempt == $run_attempt and
+             .cloud_identity_removed == true' \
+            "$RUNNER_TEMP/rocky-exchange/access-ready.json"
+
+      - name: Execute exact target SHA only on the identity-free guest
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip" \
+            sudo /usr/local/sbin/secpal-run-rocky-target-qualification "$TARGET_SHA"
+          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/qualification.json" \
+            "$RUNNER_TEMP/rocky-target/qualification.json"
+          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/qualification.stdout" \
+            "$RUNNER_TEMP/rocky-target/qualification.stdout"
+          scripts/ci-cloud/rocky-control.py validate-evidence qualification \
+            "$RUNNER_TEMP/rocky-target/qualification.json"
+          python3 - "$TARGET_SHA" \
+            "$RUNNER_TEMP/rocky-target/qualification.json" \
+            "$RUNNER_TEMP/rocky-target/qualification.stdout" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          target_sha, evidence_path, stdout_path = sys.argv[1:]
+          evidence = json.loads(Path(evidence_path).read_text(encoding="utf-8"))
+          stdout = Path(stdout_path).read_bytes()
+          if (
+              evidence["target_sha"] != target_sha
+              or evidence["stdout_bytes"] != len(stdout)
+              or evidence["stdout_sha256"] != hashlib.sha256(stdout).hexdigest()
+          ):
+              raise SystemExit("qualification evidence is not bound to target stdout")
+          PY
+
+      - name: Publish bounded target-owned qualification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/rocky-target/qualification.json
+            ${{ runner.temp }}/rocky-target/qualification.stdout
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove target runner SSH private material
+        if: ${{ always() }}
+        run: rm -f -- "$RUNNER_TEMP/rocky-target/id_ed25519" "$RUNNER_TEMP/rocky-target/id_ed25519.pub"
+
+  cleanup:
+    name: Destroy only exact retained OpenTofu state
+    needs: [validate, provision, resume_control, qualify_target]
+    if: >-
+      ${{ always() && (
+      needs.validate.outputs.operation == 'destroy' ||
+      needs.validate.outputs.operation == 'qualify' ||
+      (needs.validate.outputs.operation == 'provision-and-prepare' && needs.provision.result == 'failure')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: ci-cloud-gcp-cleanup
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted exact cleanup from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Retrieve exact retained continuation
+        if: >-
+          ${{ needs.validate.outputs.operation == 'qualify' ||
+          needs.validate.outputs.operation == 'destroy' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.validate.outputs.source_continuation_artifact }}
+          run-id: ${{ needs.validate.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rocky-cleanup
+
+      - name: Retrieve exact retained state
+        if: >-
+          ${{ needs.validate.outputs.operation == 'qualify' ||
+          needs.validate.outputs.operation == 'destroy' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.validate.outputs.source_state_artifact }}
+          run-id: ${{ needs.validate.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/rocky-cleanup
+
+      - name: Retrieve failed current-run state
+        if: ${{ needs.validate.outputs.operation == 'provision-and-prepare' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rocky-cloud-state-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-cleanup
+
+      - name: Admit continuation before cross-run cleanup
+        if: ${{ needs.validate.outputs.operation == 'qualify' || needs.validate.outputs.operation == 'destroy' }}
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          SOURCE_RUN_ID: ${{ needs.validate.outputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ needs.validate.outputs.source_run_attempt }}
+        run: |
+          extra=()
+          if [[ "${{ needs.validate.outputs.operation }}" == destroy ]]; then
+            extra+=(--allow-expired-for-destroy --allow-control-sha-mismatch-for-destroy)
+          fi
+          scripts/ci-cloud/rocky-control.py validate-continuation \
+            "$RUNNER_TEMP/rocky-cleanup/continuation.json" \
+            --control-sha "$GITHUB_SHA" --target-sha "$TARGET_SHA" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --source-run-attempt "$SOURCE_RUN_ATTEMPT" \
+            --now "$(date -u +%s)" "${extra[@]}"
+          continuation="$RUNNER_TEMP/rocky-cleanup/continuation.json"
+          variables="$RUNNER_TEMP/rocky-cleanup/run.auto.tfvars.json"
+          [[ "$(jq -er .trusted_control_sha "$continuation")" == \
+            "$(jq -er .trusted_control_sha "$variables")" ]]
+          [[ "$(jq -er .target_sha "$continuation")" == \
+            "$(jq -er .target_sha "$variables")" ]]
+          [[ "$(jq -er .run_id "$continuation")" == \
+            "$(jq -er .run_id "$variables")" ]]
+          [[ "$(jq -er .run_attempt "$continuation")" == \
+            "$(jq -er .run_attempt "$variables")" ]]
+          [[ "$(jq -er .exact_image_self_link "$continuation")" == \
+            "$(jq -er .exact_image_self_link "$variables")" ]]
+          [[ "$(jq -er .profile "$continuation")" == \
+            "$(jq -er .profile "$variables")" ]]
+
+      - name: Restore exact state into the locked root
+        run: |
+          install -m 0600 "$RUNNER_TEMP/rocky-cleanup/terraform.tfstate" \
+            infra/ci-cloud/gcp-rocky/terraform.tfstate
+          install -m 0600 "$RUNNER_TEMP/rocky-cleanup/run.auto.tfvars.json" \
+            infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
+
+      - name: Set up pinned OpenTofu for cleanup
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
+      - name: Initialize locked exact cleanup root
+        working-directory: infra/ci-cloud/gcp-rocky
+        run: |
+          "$GITHUB_WORKSPACE/scripts/ci-cloud/init-cleanup-root.sh"
+
+      - name: Authenticate separate exact cleanup authority through OIDC
+        id: cleanup_auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 1200s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Destroy exact state and prove it empty
+        working-directory: infra/ci-cloud/gcp-rocky
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.cleanup_auth.outputs.access_token }}
+        run: |
+          tofu destroy --auto-approve --input=false
+          test -z "$(tofu state list)"
