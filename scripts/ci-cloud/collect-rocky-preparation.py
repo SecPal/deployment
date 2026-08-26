@@ -41,6 +41,7 @@ PACKAGES = (
     "openssh-server",
     "sudo",
     "python3-jsonschema",
+    "dnf-plugins-core",
 )
 REPOSITORIES = {"baseos", "appstream", "extras"}
 FIXTURE = "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"

@@ -117,8 +117,8 @@
     },
     "packages": {
       "type": "array",
-      "minItems": 21,
-      "maxItems": 21,
+      "minItems": 22,
+      "maxItems": 22,
       "allOf": [
         { "contains": { "properties": { "name": { "const": "podman" } } } },
         { "contains": { "properties": { "name": { "const": "conmon" } } } },
@@ -171,6 +171,11 @@
         {
           "contains": {
             "properties": { "name": { "const": "python3-jsonschema" } }
+          }
+        },
+        {
+          "contains": {
+            "properties": { "name": { "const": "dnf-plugins-core" } }
           }
         }
       ],

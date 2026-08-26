@@ -49,8 +49,34 @@
         "version_id": { "$ref": "#/$defs/guest_fact" },
         "uname_machine": { "$ref": "#/$defs/guest_fact" }
       }
+    },
+    "repositories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stage",
+        "enabled",
+        "unexpected_enabled",
+        "missing_required"
+      ],
+      "properties": {
+        "stage": { "enum": ["pre-admission", "final-admission"] },
+        "enabled": { "$ref": "#/$defs/repository_ids" },
+        "unexpected_enabled": { "$ref": "#/$defs/repository_ids" },
+        "missing_required": { "$ref": "#/$defs/required_repository_ids" }
+      }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "phase": { "const": "repositories" } },
+        "required": ["phase"]
+      },
+      "then": {},
+      "else": { "not": { "required": ["repositories"] } }
+    }
+  ],
   "$defs": {
     "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "guest_fact": {
@@ -58,6 +84,24 @@
         { "const": "unavailable" },
         { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" }
       ]
+    },
+    "repository_ids": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+      }
+    },
+    "required_repository_ids": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+      }
     }
   }
 }
