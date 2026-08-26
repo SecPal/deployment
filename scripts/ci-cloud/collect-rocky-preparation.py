@@ -46,6 +46,12 @@ PACKAGES = (
 REPOSITORIES = {"baseos", "appstream", "extras"}
 FIXTURE = "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
 ARM_CHILD = "sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192"
+FIXTURE_REPOSITORY = FIXTURE.partition("@")[0]
+FIXTURE_DIGEST_IDENTITY_MAX = 8
+FIXTURE_DIGEST_METADATA_MAX_BYTES = 1024
+FIXTURE_REPO_DIGEST = re.compile(
+    rf"^{re.escape(FIXTURE_REPOSITORY)}@sha256:[0-9a-f]{{64}}$"
+)
 ROCKY_KEY_ID = "6fedfc85"
 ROCKY_FINGERPRINT = "fc226859c0860bf0ddb95b085b106c736fedfc85"
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -53,6 +59,29 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 
 class CollectionError(RuntimeError):
     pass
+
+
+def admitted_fixture_arm64_child(repo_digests_metadata: str) -> str:
+    """Require the reviewed ARM64 child among bounded local digest identities."""
+
+    if len(repo_digests_metadata.encode("utf-8")) > FIXTURE_DIGEST_METADATA_MAX_BYTES:
+        raise CollectionError("fixture digest metadata exceeds the closed bound")
+    try:
+        identities = json.loads(repo_digests_metadata)
+    except json.JSONDecodeError as error:
+        raise CollectionError("fixture digest metadata is not structured JSON") from error
+    if not isinstance(identities, list) or not 1 <= len(identities) <= FIXTURE_DIGEST_IDENTITY_MAX:
+        raise CollectionError("fixture digest identity collection is outside the closed bound")
+    if not all(isinstance(identity, str) for identity in identities):
+        raise CollectionError("fixture digest identity collection contains a non-string")
+    if len(set(identities)) != len(identities):
+        raise CollectionError("fixture digest identity collection contains duplicates")
+    if not all(FIXTURE_REPO_DIGEST.fullmatch(identity) for identity in identities):
+        raise CollectionError("fixture digest identity is not canonical")
+    expected = f"{FIXTURE_REPOSITORY}@{ARM_CHILD}"
+    if expected not in identities:
+        raise CollectionError("fixture did not admit the reviewed ARM64 child")
+    return ARM_CHILD
 
 
 def run(arguments: list[str], *, user: str | None = None) -> str:
@@ -278,12 +307,14 @@ def main() -> int:
         account_home = Path(account.pw_dir).resolve(strict=True)
         if not graphroot.is_relative_to(account_home):
             raise CollectionError("rootless graphroot must remain inside the account home")
-        resolved_fixture = run(
-            ["podman", "image", "inspect", "--format", "{{.Digest}}", FIXTURE],
+        # libimage's singular Digest can be either an image or manifest-list
+        # digest. RepoDigests exposes the complete local identities needed for
+        # an exact reviewed-child membership assertion.
+        fixture_digest_metadata = run(
+            ["podman", "image", "inspect", "--format", "{{json .RepoDigests}}", FIXTURE],
             user=account.pw_name,
         )
-        if resolved_fixture != ARM_CHILD:
-            raise CollectionError("fixture did not resolve to the reviewed ARM64 child")
+        resolved_fixture = admitted_fixture_arm64_child(fixture_digest_metadata)
         automatic_units = (
             "dnf-automatic.timer",
             "dnf-automatic-install.timer",
