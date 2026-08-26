@@ -42,6 +42,50 @@ DISCOVERY_URL = (
     "https://compute.googleapis.com/compute/v1/projects/rocky-linux-cloud/"
     "global/images/family/rocky-linux-10-arm64"
 )
+REPOSITORY_DIAGNOSTIC_REASONS = {
+    "validate-dnf4": {"command-failed", "postcondition-failed"},
+    "load-reviewed-provider-repositories": {"profile-invalid"},
+    "observe-initial-enabled-repositories": {
+        "command-failed",
+        "parse-failed",
+        "observation-limit-exceeded",
+        "invalid-repository-id",
+    },
+    "validate-initial-pre-admission": {"postcondition-failed"},
+    "observe-available-repository-definitions": {
+        "command-failed",
+        "parse-failed",
+        "observation-limit-exceeded",
+        "invalid-repository-id",
+    },
+    "validate-required-repository-definitions": {
+        "required-repository-definition-unavailable"
+    },
+    "install-repository-management-prerequisite": {"package-transaction-failed"},
+    "enable-required-rocky-repository": {"repository-mutation-failed"},
+    "observe-normalized-pre-removal-state": {
+        "command-failed",
+        "parse-failed",
+        "observation-limit-exceeded",
+        "invalid-repository-id",
+    },
+    "validate-normalized-pre-removal-state": {"postcondition-failed"},
+    "disable-reviewed-provider-repository": {"repository-mutation-failed"},
+    "observe-final-repository-state": {
+        "command-failed",
+        "parse-failed",
+        "observation-limit-exceeded",
+        "invalid-repository-id",
+    },
+    "validate-final-repository-state": {"postcondition-failed"},
+}
+# Repository IDs are only meaningful for operations on a single reviewed
+# repository.  Their allowed domain is bound to the canonical profile.
+REPOSITORY_ID_OPERATION_DOMAINS = {
+    "validate-required-repository-definitions": "final",
+    "enable-required-rocky-repository": "final",
+    "disable-reviewed-provider-repository": "provider",
+}
 
 
 class ControlError(RuntimeError):
@@ -98,7 +142,32 @@ def validate_evidence(kind: str, path: Path) -> dict[str, Any]:
 
 
 def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
-    if document.get("phase") != "repositories" or "repositories" not in document:
+    if document.get("phase") != "repositories":
+        return
+    profile_repositories = canonical_profile().get("repositories")
+    if not isinstance(profile_repositories, dict):
+        raise ControlError("reviewed repository profile is malformed")
+    final = profile_repositories.get("final_enabled_repositories")
+    provider = profile_repositories.get("pre_admission_provider_repositories")
+    if not isinstance(final, list) or not isinstance(provider, list):
+        raise ControlError("reviewed repository profile is malformed")
+    diagnostic = document.get("repository_diagnostic")
+    if diagnostic is not None:
+        if not isinstance(diagnostic, dict):
+            raise ControlError("repository failure diagnostic must be an object")
+        operation = diagnostic.get("operation")
+        reason = diagnostic.get("reason")
+        if operation not in REPOSITORY_DIAGNOSTIC_REASONS or reason not in REPOSITORY_DIAGNOSTIC_REASONS[operation]:
+            raise ControlError("repository failure diagnostic contradicts the closed operation contract")
+        repository_id = diagnostic.get("repository_id")
+        repository_id_domain = REPOSITORY_ID_OPERATION_DOMAINS.get(operation)
+        if repository_id_domain is not None:
+            expected_ids = final if repository_id_domain == "final" else provider
+            if repository_id not in expected_ids:
+                raise ControlError("repository failure diagnostic names an unreviewed repository")
+        elif repository_id is not None:
+            raise ControlError("repository failure diagnostic includes an inappropriate repository ID")
+    if "repositories" not in document:
         return
     observation = document["repositories"]
     if not isinstance(observation, dict):
@@ -112,13 +181,6 @@ def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
         for value in (enabled, supplied_unexpected, supplied_missing)
     ):
         raise ControlError("repository failure observation is malformed")
-    profile_repositories = canonical_profile().get("repositories")
-    if not isinstance(profile_repositories, dict):
-        raise ControlError("reviewed repository profile is malformed")
-    final = profile_repositories.get("final_enabled_repositories")
-    provider = profile_repositories.get("pre_admission_provider_repositories")
-    if not isinstance(final, list) or not isinstance(provider, list):
-        raise ControlError("reviewed repository profile is malformed")
     allowed = set(final)
     if stage == "pre-admission":
         allowed.update(provider)
