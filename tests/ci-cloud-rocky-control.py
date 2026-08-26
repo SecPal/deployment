@@ -36,6 +36,18 @@ SCHEMA_NAMES = (
 )
 
 
+def load_rocky_preparation_collector():
+    path = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
+    specification = importlib.util.spec_from_file_location(
+        "rocky_preparation_collector", path
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError("unable to load Rocky preparation collector")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
 class RockyCloudControlTests(unittest.TestCase):
     def test_rendered_rocky_startup_script_is_bounded_valid_bash(self) -> None:
         template = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
@@ -765,6 +777,81 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotIn("{{.Digest}}", fixture_block)
         self.assertIn("readonly fixture_digest_identity_max=8", preparation)
         self.assertIn("readonly fixture_digest_metadata_max_bytes=1024", preparation)
+
+    def test_preparation_collector_uses_the_same_complete_fixture_digest_membership(self) -> None:
+        collector = load_rocky_preparation_collector()
+        collector_source = (
+            ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
+        ).read_text(encoding="utf-8")
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        schema = json.loads(
+            (ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        self.assertIn("{{json .RepoDigests}}", collector_source)
+        self.assertNotIn("{{.Digest}}", collector_source)
+        self.assertEqual(8, collector.FIXTURE_DIGEST_IDENTITY_MAX)
+        self.assertEqual(1024, collector.FIXTURE_DIGEST_METADATA_MAX_BYTES)
+        self.assertIn("readonly fixture_digest_identity_max=8", preparation)
+        self.assertIn("readonly fixture_digest_metadata_max_bytes=1024", preparation)
+        self.assertEqual(
+            collector.FIXTURE,
+            schema["properties"]["fixture"]["properties"]["input"]["const"],
+        )
+        self.assertEqual(
+            collector.ARM_CHILD,
+            schema["properties"]["fixture"]["properties"]["resolved_arm64_child"][
+                "const"
+            ],
+        )
+
+        repository = collector.FIXTURE_REPOSITORY
+        parent = f"{repository}@sha256:" + "1" * 64
+        expected = f"{repository}@{collector.ARM_CHILD}"
+        wrong_child = f"{repository}@sha256:" + "3" * 64
+
+        # Run 33018858593: a singular Digest may be the parent/list identity,
+        # while the complete local identities contain the reviewed ARM64 child.
+        singular_digest = parent.removeprefix(f"{repository}@")
+        self.assertNotEqual(collector.ARM_CHILD, singular_digest)
+        accepted = (
+            [parent, expected],
+            [expected],
+            [expected, parent],
+        )
+        for identities in accepted:
+            with self.subTest(accepted=identities):
+                self.assertEqual(
+                    collector.ARM_CHILD,
+                    collector.admitted_fixture_arm64_child(
+                        json.dumps(identities, separators=(",", ":"))
+                    ),
+                )
+
+        metadata_over_bound = json.dumps([expected], separators=(",", ":")) + " " * 1024
+        rejected = (
+            [parent],
+            [parent, wrong_child],
+            [expected + "0"],
+            [f"docker.io/library/other@{collector.ARM_CHILD}"],
+            ["untrusted podman output"],
+            [],
+            [expected, expected],
+            [f"{repository}@sha256:{value:064x}" for value in range(1, 10)],
+        )
+        for identities in rejected:
+            with self.subTest(rejected=identities):
+                with self.assertRaises(collector.CollectionError) as error:
+                    collector.admitted_fixture_arm64_child(
+                        json.dumps(identities, separators=(",", ":"))
+                    )
+                self.assertNotIn("untrusted podman output", str(error.exception))
+        with self.assertRaises(collector.CollectionError):
+            collector.admitted_fixture_arm64_child(metadata_over_bound)
 
     def _run_repository_admission(
         self,
