@@ -35,6 +35,7 @@ readonly failure_output="$state_root/evidence/preparation-failure.json"
 current_phase="guest-identity"
 reboot_requested=false
 repository_failure_evidence=''
+repository_diagnostic_evidence=''
 repository_enabled=()
 repository_unexpected=()
 repository_missing=()
@@ -77,7 +78,7 @@ write_failure_evidence() {
   base_record="$(printf '{"schema_version":1,"target_sha":"%s","trusted_control_sha":"%s","run_id":"%s","run_attempt":"%s","phase":"%s","exit_status":%s,"guest":{"id":"%s","version_id":"%s","uname_machine":"%s"}}' \
     "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$current_phase" "$status" \
     "$guest_id" "$guest_version" "$guest_architecture")"
-  if ! write_failure_document "$base_record" "$repository_failure_evidence" "$temporary"; then
+  if ! write_failure_document "$base_record" "$repository_failure_evidence" "$repository_diagnostic_evidence" "$temporary"; then
     rm -f -- "$temporary"
     return 0
   fi
@@ -143,11 +144,13 @@ configure_subids() {
 }
 
 read_repository_ids() {
-  local mode="$1" output ids
+  local operation="$1" mode="$2" output ids
+  set_repository_diagnostic "$operation" command-failed
   if ! output="$(dnf4 --quiet repolist "$mode")"; then
     printf 'ERROR: dnf4 repository observation failed.\n' >&2
     return 1
   fi
+  set_repository_diagnostic "$operation" parse-failed
   if ! ids="$(printf '%s\n' "$output" | awk '
     NF && tolower($1) != "repo" {print $1}
   ' | LC_ALL=C sort -u)"; then
@@ -157,12 +160,14 @@ read_repository_ids() {
   REPLY=()
   while IFS= read -r repository; do
     [[ -z "$repository" ]] && continue
+    set_repository_diagnostic "$operation" invalid-repository-id
     [[ "$repository" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || {
       printf 'ERROR: repository ID is outside the closed syntax.\n' >&2
       return 1
     }
     REPLY+=("$repository")
   done <<<"$ids"
+  set_repository_diagnostic "$operation" observation-limit-exceeded
   [[ "${#REPLY[@]}" -le 16 ]] || {
     printf 'ERROR: repository observation exceeds the bounded limit.\n' >&2
     return 1
@@ -207,13 +212,23 @@ repository_json_array() {
 }
 
 write_failure_document() {
-  local base_record="$1" repository_record="$2" output="$3"
+  local base_record="$1" repository_record="$2" diagnostic_record="$3" output="$4"
   local document="$base_record"
   if [[ -n "$repository_record" ]]; then
     document="${base_record%?},\"repositories\":$repository_record}"
   fi
+  if [[ -n "$diagnostic_record" ]]; then
+    document="${document%?},\"repository_diagnostic\":$diagnostic_record}"
+  fi
   printf '%s\n' "$document" >"$output" || return 1
   if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && -n "$repository_record" ]]; then
+    document="$base_record"
+    if [[ -n "$diagnostic_record" ]]; then
+      document="${base_record%?},\"repository_diagnostic\":$diagnostic_record}"
+    fi
+    printf '%s\n' "$document" >"$output" || return 1
+  fi
+  if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && -n "$diagnostic_record" ]]; then
     printf '%s\n' "$base_record" >"$output" || return 1
   fi
   [[ "$(wc -c <"$output")" -le "$failure_evidence_max_bytes" ]]
@@ -221,9 +236,22 @@ write_failure_document() {
 
 clear_repository_failure() {
   repository_failure_evidence=''
+  repository_diagnostic_evidence=''
   repository_enabled=()
   repository_unexpected=()
   repository_missing=()
+}
+
+set_repository_diagnostic() {
+  local operation="$1" reason="$2" repository_id="${3:-}"
+  [[ "$operation" =~ ^(validate-dnf4|load-reviewed-provider-repositories|observe-initial-enabled-repositories|validate-initial-pre-admission|observe-available-repository-definitions|validate-required-repository-definitions|install-repository-management-prerequisite|enable-required-rocky-repository|observe-normalized-pre-removal-state|validate-normalized-pre-removal-state|disable-reviewed-provider-repository|observe-final-repository-state|validate-final-repository-state)$ ]]
+  [[ "$reason" =~ ^(command-failed|parse-failed|observation-limit-exceeded|invalid-repository-id|required-repository-definition-unavailable|package-transaction-failed|repository-mutation-failed|postcondition-failed|profile-invalid)$ ]]
+  if [[ -n "$repository_id" ]]; then
+    [[ "$repository_id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]
+    repository_diagnostic_evidence="$(printf '{\"operation\":\"%s\",\"reason\":\"%s\",\"repository_id\":\"%s\"}' "$operation" "$reason" "$repository_id")"
+  else
+    repository_diagnostic_evidence="$(printf '{\"operation\":\"%s\",\"reason\":\"%s\"}' "$operation" "$reason")"
+  fi
 }
 
 record_repository_failure() {
@@ -248,9 +276,9 @@ contains_repository() {
 }
 
 observe_enabled_repositories() {
-  local stage="$1" repository
+  local operation="$1" stage="$2" repository
   clear_repository_failure
-  if ! read_repository_ids --enabled; then
+  if ! read_repository_ids "$operation" --enabled; then
     return 1
   fi
   repository_enabled=("${REPLY[@]}")
@@ -274,19 +302,23 @@ observe_enabled_repositories() {
 admit_repositories() {
   local dnf_version repository provider_output
   local -a available_repos missing_before_enable enabled_before_disable
+  set_repository_diagnostic validate-dnf4 command-failed
   dnf_version="$(dnf4 --version)"
+  set_repository_diagnostic validate-dnf4 postcondition-failed
   [[ "${dnf_version%%$'\n'*}" =~ ^4(\.|$) ]] || {
     printf 'ERROR: repository admission requires DNF4.\n' >&2
     return 1
   }
+  set_repository_diagnostic load-reviewed-provider-repositories profile-invalid
   if ! provider_output="$(provider_bootstrap_repositories)"; then
     printf 'ERROR: provider repository profile is invalid.\n' >&2
     return 1
   fi
   mapfile -t provider_repositories <<<"$provider_output"
-  if ! observe_enabled_repositories pre-admission; then
+  if ! observe_enabled_repositories observe-initial-enabled-repositories pre-admission; then
     return 1
   fi
+  set_repository_diagnostic validate-initial-pre-admission postcondition-failed
   [[ "${#repository_unexpected[@]}" -eq 0 ]] || {
     printf 'ERROR: enabled repositories include an unreviewed provider or external repository.\n' >&2
     return 1
@@ -301,30 +333,35 @@ admit_repositories() {
       provider_present=true
     fi
   done
+  set_repository_diagnostic validate-initial-pre-admission postcondition-failed
   [[ "$provider_present" == true ]] || {
     printf 'ERROR: required final repositories are missing without a reviewed provider bootstrap repository.\n' >&2
     return 1
   }
-  if ! read_repository_ids --all; then
+  if ! read_repository_ids observe-available-repository-definitions --all; then
     return 1
   fi
   available_repos=("${REPLY[@]}")
   for repository in "${final_repositories[@]}"; do
+    set_repository_diagnostic validate-required-repository-definitions required-repository-definition-unavailable "$repository"
     contains_repository "$repository" "${available_repos[@]}" || {
       printf 'ERROR: a required Rocky repository definition is unavailable.\n' >&2
       return 1
     }
   done
+  set_repository_diagnostic install-repository-management-prerequisite package-transaction-failed
   dnf4 --assumeyes --releasever=10 --disablerepo='*' \
     --enablerepo=baseos,appstream,extras install dnf-plugins-core
   missing_before_enable=("${repository_missing[@]}")
   clear_repository_failure
   for repository in "${missing_before_enable[@]}"; do
+    set_repository_diagnostic enable-required-rocky-repository repository-mutation-failed "$repository"
     dnf4 config-manager --set-enabled "$repository"
   done
-  if ! observe_enabled_repositories pre-admission; then
+  if ! observe_enabled_repositories observe-normalized-pre-removal-state pre-admission; then
     return 1
   fi
+  set_repository_diagnostic validate-normalized-pre-removal-state postcondition-failed
   [[ "${#repository_unexpected[@]}" -eq 0 && "${#repository_missing[@]}" -eq 0 ]] || {
     printf 'ERROR: required final repositories are not all enabled before provider repository removal.\n' >&2
     return 1
@@ -333,12 +370,14 @@ admit_repositories() {
   clear_repository_failure
   for repository in "${provider_repositories[@]}"; do
     if contains_repository "$repository" "${enabled_before_disable[@]}"; then
+      set_repository_diagnostic disable-reviewed-provider-repository repository-mutation-failed "$repository"
       dnf4 config-manager --set-disabled "$repository"
     fi
   done
-  if ! observe_enabled_repositories final-admission; then
+  if ! observe_enabled_repositories observe-final-repository-state final-admission; then
     return 1
   fi
+  set_repository_diagnostic validate-final-repository-state postcondition-failed
   [[ "${#repository_unexpected[@]}" -eq 0 && "${#repository_missing[@]}" -eq 0 && "${#repository_enabled[@]}" -eq "${#final_repositories[@]}" ]] || {
     printf 'ERROR: final enabled repositories must be exactly appstream,baseos,extras.\n' >&2
     return 1

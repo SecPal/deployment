@@ -368,6 +368,9 @@ jobs:
                .run_id == $run_id and .run_attempt == $run_attempt' \
               "$RUNNER_TEMP/rocky-cloud/preparation-failure.json"
             jq -er '"ROCKY_PREPARATION_GUEST_FAILURE phase=" + .phase +
+              " repository_operation=" + (.repository_diagnostic.operation // "unavailable") +
+              " repository_reason=" + (.repository_diagnostic.reason // "unavailable") +
+              " repository_id=" + (.repository_diagnostic.repository_id // "unavailable") +
               " guest_id=" + .guest.id + " version_id=" + .guest.version_id +
               " uname_machine=" + .guest.uname_machine' \
               "$RUNNER_TEMP/rocky-cloud/preparation-failure.json" >&2

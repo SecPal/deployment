@@ -361,6 +361,10 @@ class RockyCloudControlTests(unittest.TestCase):
                 "unexpected_enabled": ["epel"],
                 "missing_required": [],
             },
+            "repository_diagnostic": {
+                "operation": "validate-initial-pre-admission",
+                "reason": "postcondition-failed",
+            },
         }
         self.assertFalse(list(validator.iter_errors(base)))
         mutations = (
@@ -368,6 +372,8 @@ class RockyCloudControlTests(unittest.TestCase):
             (("repositories", "enabled"), ["a" for _ in range(17)]),
             (("repositories", "enabled"), ["bad repo id"]),
             (("repositories", "diagnostic"), "arbitrary command output"),
+            (("repository_diagnostic", "operation"), "arbitrary-command"),
+            (("repository_diagnostic", "reason"), "arbitrary stderr"),
             (("phase",), "packages"),
         )
         for path, value in mutations:
@@ -379,12 +385,76 @@ class RockyCloudControlTests(unittest.TestCase):
                 owner[path[-1]] = value
                 self.assertTrue(list(validator.iter_errors(candidate)))
 
+    def test_repository_failure_diagnostic_is_closed_and_independently_validated(self) -> None:
+        control = ROOT / "scripts/ci-cloud/rocky-control.py"
+
+        def validate(diagnostic: dict[str, object]) -> int:
+            document = {
+                "schema_version": 1,
+                "target_sha": "b" * 40,
+                "trusted_control_sha": "a" * 40,
+                "run_id": "12345",
+                "run_attempt": "1",
+                "phase": "repositories",
+                "exit_status": 1,
+                "guest": {"id": "rocky", "version_id": "10.2", "uname_machine": "aarch64"},
+                "repository_diagnostic": diagnostic,
+            }
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+                json.dump(document, path)
+                path.flush()
+                return subprocess.run(
+                    [control, "validate-evidence", "preparation-failure", path.name],
+                    check=False,
+                    capture_output=True,
+                ).returncode
+
+        self.assertEqual(
+            0,
+            validate(
+                {
+                    "operation": "install-repository-management-prerequisite",
+                    "reason": "package-transaction-failed",
+                }
+            ),
+        )
+        self.assertEqual(
+            0,
+            validate(
+                {
+                    "operation": "disable-reviewed-provider-repository",
+                    "reason": "repository-mutation-failed",
+                    "repository_id": "google-cloud-sdk",
+                }
+            ),
+        )
+        rejected = (
+            {"operation": "arbitrary-command", "reason": "command-failed"},
+            {"operation": "install-repository-management-prerequisite", "reason": "command-failed"},
+            {
+                "operation": "disable-reviewed-provider-repository",
+                "reason": "repository-mutation-failed",
+                "repository_id": "evil-external",
+            },
+            {
+                "operation": "observe-final-repository-state",
+                "reason": "command-failed",
+                "repository_id": "google-cloud-sdk",
+            },
+        )
+        for diagnostic in rejected:
+            with self.subTest(diagnostic=diagnostic):
+                self.assertNotEqual(0, validate(diagnostic))
+
     def _run_repository_admission(
         self,
         enabled_states: list[list[str]],
         *,
         all_repositories: list[str] | None = None,
         fail_enabled_attempts: set[int] | None = None,
+        fail_all_observation: bool = False,
+        fail_install: bool = False,
+        failure_noise: str = "",
         fail_config_command: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
@@ -423,15 +493,17 @@ class RockyCloudControlTests(unittest.TestCase):
                 "if [[ \"$*\" == *\"repolist --enabled\"* ]]; then\n"
                 "  count=0; [[ -f \"$DNF_COUNT\" ]] && count=$(cat \"$DNF_COUNT\")\n"
                 "  count=$((count + 1)); printf '%s' \"$count\" >\"$DNF_COUNT\"\n"
-                "  [[ \",${DNF_FAIL_ENABLED_ATTEMPTS},\" == *\",${count},\"* ]] && exit 1\n"
+                "  if [[ \",${DNF_FAIL_ENABLED_ATTEMPTS},\" == *\",${count},\"* ]]; then printf '%s\\n' \"$DNF_FAILURE_NOISE\" >&2; exit 1; fi\n"
                 "  state=$(sed -n \"${count}p\" \"$DNF_STATES\")\n"
                 "  printf 'repo id repo name\\n'; tr ',' '\\n' <<<\"$state\" | awk 'NF {print $1 \" test\"}'\n"
                 "  exit 0\n"
                 "fi\n"
                 "if [[ \"$*\" == *\"repolist --all\"* ]]; then\n"
+                "  [[ \"${DNF_FAIL_ALL_OBSERVATION}\" == true ]] && exit 1\n"
                 "  printf 'repo id repo name\\n'; tr ',' '\\n' <<<\"$DNF_ALL\" | awk 'NF {print $1 \" test\"}'; exit 0\n"
                 "fi\n"
-                "[[ -n \"${DNF_FAIL_CONFIG_COMMAND:-}\" && \"$*\" == *\"${DNF_FAIL_CONFIG_COMMAND}\"* ]] && exit 1\n"
+                "if [[ \"$*\" == *\" install dnf-plugins-core\"* ]] && [[ \"${DNF_FAIL_INSTALL}\" == true ]]; then printf '%s\\n' \"$DNF_FAILURE_NOISE\" >&2; exit 1; fi\n"
+                "if [[ -n \"${DNF_FAIL_CONFIG_COMMAND:-}\" && \"$*\" == *\"${DNF_FAIL_CONFIG_COMMAND}\"* ]]; then printf '%s\\n' \"$DNF_FAILURE_NOISE\" >&2; exit 1; fi\n"
                 "exit 0\n",
                 encoding="utf-8",
             )
@@ -441,9 +513,14 @@ class RockyCloudControlTests(unittest.TestCase):
                 "readonly profile_path='" + str(profile) + "'\n"
                 "readonly final_repositories=(appstream baseos extras)\n"
                 "repository_failure_evidence=''\n"
+                "repository_diagnostic_evidence=''\n"
                 + functions
-                + "\nif admit_repositories; then status=0; else status=$?; fi\n"
-                + "printf 'STATUS=%s\\nFAILURE=%s\\n' \"$status\" \"$repository_failure_evidence\"\n"
+                + "\nset +e\n(\n"
+                + "  set -euo pipefail\n"
+                + "  trap 'status=$?; printf \"FAILURE=%s\\nDIAGNOSTIC=%s\\n\" \"$repository_failure_evidence\" \"$repository_diagnostic_evidence\" >\"$DNF_RESULT\"; exit \"$status\"' EXIT\n"
+                + "  admit_repositories\n"
+                + ")\nstatus=$?\nset -e\n"
+                + "printf 'STATUS=%s\\n' \"$status\"\ncat \"$DNF_RESULT\"\n"
                 + "exit \"$status\"\n"
             )
             environment = dict(os.environ)
@@ -451,12 +528,16 @@ class RockyCloudControlTests(unittest.TestCase):
                 {
                     "PATH": f"{fake_bin}:{environment['PATH']}",
                     "DNF_LOG": str(root / "dnf.log"),
+                    "DNF_RESULT": str(root / "result"),
                     "DNF_COUNT": str(root / "dnf.count"),
                     "DNF_STATES": str(state_file),
                     "DNF_ALL": ",".join(available),
                     "DNF_FAIL_ENABLED_ATTEMPTS": ",".join(
                         str(item) for item in sorted(fail_enabled_attempts or set())
                     ),
+                    "DNF_FAIL_ALL_OBSERVATION": "true" if fail_all_observation else "false",
+                    "DNF_FAIL_INSTALL": "true" if fail_install else "false",
+                    "DNF_FAILURE_NOISE": failure_noise,
                     "DNF_FAIL_CONFIG_COMMAND": fail_config_command or "",
                 }
             )
@@ -550,6 +631,99 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotEqual(0, dnf_failure.returncode)
         self.assertIn("dnf4 repository observation failed", dnf_failure.stderr)
         self.assertNotIn(" install ", dnf_failure.dnf_log)  # type: ignore[attr-defined]
+
+    def test_repository_failure_diagnostics_identify_the_semantic_operation(self) -> None:
+        def diagnostic(completed: subprocess.CompletedProcess[str]) -> dict[str, object]:
+            line = next(line for line in completed.stdout.splitlines() if line.startswith("DIAGNOSTIC="))
+            return json.loads(line.removeprefix("DIAGNOSTIC="))
+
+        initial = ["appstream", "baseos", "extras", "google-cloud-sdk", "google-compute-engine"]
+        cases = (
+            (
+                "all-observation",
+                self._run_repository_admission([initial], fail_all_observation=True),
+                {
+                    "operation": "observe-available-repository-definitions",
+                    "reason": "command-failed",
+                },
+            ),
+            (
+                "required-definition",
+                self._run_repository_admission([initial], all_repositories=["appstream", "baseos"]),
+                {
+                    "operation": "validate-required-repository-definitions",
+                    "reason": "required-repository-definition-unavailable",
+                    "repository_id": "extras",
+                },
+            ),
+            (
+                "plugin-transaction",
+                self._run_repository_admission([initial], fail_install=True),
+                {
+                    "operation": "install-repository-management-prerequisite",
+                    "reason": "package-transaction-failed",
+                },
+            ),
+            (
+                "enable-mutation",
+                self._run_repository_admission(
+                    [["appstream", "baseos", "google-compute-engine"]],
+                    fail_config_command="config-manager --set-enabled extras",
+                ),
+                {
+                    "operation": "enable-required-rocky-repository",
+                    "reason": "repository-mutation-failed",
+                    "repository_id": "extras",
+                },
+            ),
+            (
+                "disable-mutation",
+                self._run_repository_admission(
+                    [initial, initial],
+                    fail_config_command="config-manager --set-disabled google-cloud-sdk",
+                ),
+                {
+                    "operation": "disable-reviewed-provider-repository",
+                    "reason": "repository-mutation-failed",
+                    "repository_id": "google-cloud-sdk",
+                },
+            ),
+            (
+                "final-postcondition",
+                self._run_repository_admission([initial, initial, initial]),
+                {
+                    "operation": "validate-final-repository-state",
+                    "reason": "postcondition-failed",
+                },
+            ),
+        )
+        for name, completed, expected in cases:
+            with self.subTest(name=name):
+                self.assertNotEqual(0, completed.returncode)
+                self.assertEqual(expected, diagnostic(completed))
+
+    def test_repository_failure_diagnostic_does_not_retain_stale_operation_context(self) -> None:
+        failed = self._run_repository_admission(
+            [
+                ["appstream", "baseos", "extras", "google-compute-engine"],
+                ["appstream", "baseos", "extras", "google-compute-engine"],
+            ],
+            fail_enabled_attempts={3},
+            failure_noise="untrusted dnf stderr is not evidence",
+        )
+        self.assertNotEqual(0, failed.returncode)
+        diagnostic_line = next(
+            line for line in failed.stdout.splitlines() if line.startswith("DIAGNOSTIC=")
+        )
+        self.assertEqual(
+            {
+                "operation": "observe-final-repository-state",
+                "reason": "command-failed",
+            },
+            json.loads(diagnostic_line.removeprefix("DIAGNOSTIC=")),
+        )
+        self.assertIn("untrusted dnf stderr is not evidence", failed.stderr)
+        self.assertNotIn("untrusted dnf stderr is not evidence", failed.stdout)
 
     def test_repository_admission_requires_final_state_after_provider_normalization(self) -> None:
         missing_extras = self._run_repository_admission(
@@ -704,7 +878,8 @@ class RockyCloudControlTests(unittest.TestCase):
             + json.dumps(maximum_ids, separators=(",", ":"))
             + ',"missing_required":'
             + json.dumps(["appstream", "baseos", "extras"], separators=(",", ":"))
-            + "}}\n"
+            + '},"repository_diagnostic":{"operation":"validate-initial-pre-admission",'
+            + '"reason":"postcondition-failed"}}\n'
         ).encode("utf-8")
         schema = json.loads(
             (ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json").read_text(
@@ -713,6 +888,22 @@ class RockyCloudControlTests(unittest.TestCase):
         )
         self.assertFalse(list(Draft202012Validator(schema).iter_errors(json.loads(document))))
         self.assertLessEqual(len(document), 4096)
+        with tempfile.NamedTemporaryFile(mode="wb") as path:
+            path.write(document)
+            path.flush()
+            self.assertEqual(
+                0,
+                subprocess.run(
+                    [
+                        ROOT / "scripts/ci-cloud/rocky-control.py",
+                        "validate-evidence",
+                        "preparation-failure",
+                        path.name,
+                    ],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+            )
         preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(encoding="utf-8")
         start = preparation.index("write_failure_document()")
         end = preparation.index("\nclear_repository_failure()", start)
@@ -725,7 +916,7 @@ class RockyCloudControlTests(unittest.TestCase):
                     "-c",
                     "failure_evidence_max_bytes=20\n"
                     + function
-                    + "\nwrite_failure_document '{\"base\":1}' '{\"repositories\":\"oversized\"}' \"$1\"\ncat \"$1\"",
+                    + "\nwrite_failure_document '{\"base\":1}' '{\"repositories\":\"oversized\"}' '{\"operation\":\"install-repository-management-prerequisite\",\"reason\":\"package-transaction-failed\"}' \"$1\"\ncat \"$1\"",
                     "bash",
                     str(output),
                 ],
@@ -749,6 +940,8 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn("ROCKY_PREPARATION_EVIDENCE_TIMEOUT", workflow)
         self.assertIn("rocky-cloud-preparation-failure-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
         self.assertIn("validate-evidence preparation-failure", workflow)
+        self.assertIn("repository_operation=", workflow)
+        self.assertIn("repository_reason=", workflow)
         self.assertIn("steps.preparation.outputs.failure == 'true'", workflow)
         self.assertIn('install -d -o root -g secpal-cloud -m 0710 "$state_root"', preparation)
         self.assertIn('install -d -o root -g secpal-cloud -m 0750 "$state_root/evidence"', preparation)

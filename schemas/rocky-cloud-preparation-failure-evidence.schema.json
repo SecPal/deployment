@@ -65,6 +65,64 @@
         "unexpected_enabled": { "$ref": "#/$defs/repository_ids" },
         "missing_required": { "$ref": "#/$defs/required_repository_ids" }
       }
+    },
+    "repository_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "reason"],
+      "properties": {
+        "operation": {
+          "enum": [
+            "validate-dnf4",
+            "load-reviewed-provider-repositories",
+            "observe-initial-enabled-repositories",
+            "validate-initial-pre-admission",
+            "observe-available-repository-definitions",
+            "validate-required-repository-definitions",
+            "install-repository-management-prerequisite",
+            "enable-required-rocky-repository",
+            "observe-normalized-pre-removal-state",
+            "validate-normalized-pre-removal-state",
+            "disable-reviewed-provider-repository",
+            "observe-final-repository-state",
+            "validate-final-repository-state"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "command-failed",
+            "parse-failed",
+            "observation-limit-exceeded",
+            "invalid-repository-id",
+            "required-repository-definition-unavailable",
+            "package-transaction-failed",
+            "repository-mutation-failed",
+            "postcondition-failed",
+            "profile-invalid"
+          ]
+        },
+        "repository_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "enable-required-rocky-repository",
+                  "disable-reviewed-provider-repository"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "required": ["repository_id"] },
+          "else": { "not": { "required": ["repository_id"] } }
+        }
+      ]
     }
   },
   "allOf": [
@@ -74,7 +132,14 @@
         "required": ["phase"]
       },
       "then": {},
-      "else": { "not": { "required": ["repositories"] } }
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["repositories"] },
+            { "required": ["repository_diagnostic"] }
+          ]
+        }
+      }
     }
   ],
   "$defs": {
