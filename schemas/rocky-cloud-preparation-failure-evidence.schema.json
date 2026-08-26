@@ -53,11 +53,17 @@
     "repositories": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "unexpected_enabled", "missing_required"],
+      "required": [
+        "stage",
+        "enabled",
+        "unexpected_enabled",
+        "missing_required"
+      ],
       "properties": {
+        "stage": { "enum": ["pre-admission", "final-admission"] },
         "enabled": { "$ref": "#/$defs/repository_ids" },
         "unexpected_enabled": { "$ref": "#/$defs/repository_ids" },
-        "missing_required": { "$ref": "#/$defs/repository_ids" }
+        "missing_required": { "$ref": "#/$defs/required_repository_ids" }
       }
     }
   },
@@ -82,6 +88,15 @@
     "repository_ids": {
       "type": "array",
       "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+      }
+    },
+    "required_repository_ids": {
+      "type": "array",
+      "maxItems": 3,
       "uniqueItems": true,
       "items": {
         "type": "string",

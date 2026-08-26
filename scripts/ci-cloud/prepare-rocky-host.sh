@@ -13,6 +13,7 @@ readonly arm_child='sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b1897
 readonly state_root=/var/lib/secpal-rocky
 readonly profile_path=/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
 readonly final_repositories=(appstream baseos extras)
+readonly failure_evidence_max_bytes=4096
 
 if [[ "$#" -ne 7 ]]; then
   printf 'usage: prepare-rocky-host.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT EXPIRES_AT IMAGE_SELF_LINK EVIDENCE_OUTPUT\n' >&2
@@ -34,6 +35,10 @@ readonly failure_output="$state_root/evidence/preparation-failure.json"
 current_phase="guest-identity"
 reboot_requested=false
 repository_failure_evidence=''
+repository_enabled=()
+repository_unexpected=()
+repository_missing=()
+provider_repositories=()
 
 read_release_value() {
   local key="$1"
@@ -50,7 +55,7 @@ safe_guest_fact() {
 }
 
 write_failure_evidence() {
-  local status="$1" temporary guest_id guest_version guest_architecture repository_fragment=''
+  local status="$1" temporary guest_id guest_version guest_architecture base_record
   set +e
   trap - EXIT
   [[ "$status" =~ ^[1-9][0-9]{0,2}$ ]] || status=1
@@ -69,13 +74,13 @@ write_failure_evidence() {
   temporary="$(mktemp "$state_root/evidence/.preparation-failure.XXXXXX")" || return 0
   chown root:root "$temporary" || { rm -f -- "$temporary"; return 0; }
   chmod 0600 "$temporary" || { rm -f -- "$temporary"; return 0; }
-  if [[ "$current_phase" == repositories && -n "$repository_failure_evidence" ]]; then
-    repository_fragment=",\"repositories\":$repository_failure_evidence"
-  fi
-  printf '{"schema_version":1,"target_sha":"%s","trusted_control_sha":"%s","run_id":"%s","run_attempt":"%s","phase":"%s","exit_status":%s,"guest":{"id":"%s","version_id":"%s","uname_machine":"%s"}%s}\n' \
+  base_record="$(printf '{"schema_version":1,"target_sha":"%s","trusted_control_sha":"%s","run_id":"%s","run_attempt":"%s","phase":"%s","exit_status":%s,"guest":{"id":"%s","version_id":"%s","uname_machine":"%s"}}' \
     "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$current_phase" "$status" \
-    "$guest_id" "$guest_version" "$guest_architecture" "$repository_fragment" >"$temporary" || { rm -f -- "$temporary"; return 0; }
-  [[ "$(wc -c <"$temporary")" -le 2048 ]] || { rm -f -- "$temporary"; return 0; }
+    "$guest_id" "$guest_version" "$guest_architecture")"
+  if ! write_failure_document "$base_record" "$repository_failure_evidence" "$temporary"; then
+    rm -f -- "$temporary"
+    return 0
+  fi
   chown root:secpal-cloud "$temporary" && chmod 0440 "$temporary" && mv -T -- "$temporary" "$failure_output"
 }
 
@@ -201,13 +206,34 @@ repository_json_array() {
   printf ']'
 }
 
+write_failure_document() {
+  local base_record="$1" repository_record="$2" output="$3"
+  local document="$base_record"
+  if [[ -n "$repository_record" ]]; then
+    document="${base_record%?},\"repositories\":$repository_record}"
+  fi
+  printf '%s\n' "$document" >"$output" || return 1
+  if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && -n "$repository_record" ]]; then
+    printf '%s\n' "$base_record" >"$output" || return 1
+  fi
+  [[ "$(wc -c <"$output")" -le "$failure_evidence_max_bytes" ]]
+}
+
+clear_repository_failure() {
+  repository_failure_evidence=''
+  repository_enabled=()
+  repository_unexpected=()
+  repository_missing=()
+}
+
 record_repository_failure() {
-  local -n observed_ref="$1" unexpected_ref="$2" missing_ref="$3"
+  local stage="$1"
   repository_failure_evidence="$(
-    printf '{"enabled":%s,"unexpected_enabled":%s,"missing_required":%s}' \
-      "$(repository_json_array "${observed_ref[@]}")" \
-      "$(repository_json_array "${unexpected_ref[@]}")" \
-      "$(repository_json_array "${missing_ref[@]}")"
+    printf '{"stage":"%s","enabled":%s,"unexpected_enabled":%s,"missing_required":%s}' \
+      "$stage" \
+      "$(repository_json_array "${repository_enabled[@]}")" \
+      "$(repository_json_array "${repository_unexpected[@]}")" \
+      "$(repository_json_array "${repository_missing[@]}")"
   )"
 }
 
@@ -221,47 +247,57 @@ contains_repository() {
   return 1
 }
 
+observe_enabled_repositories() {
+  local stage="$1" repository
+  clear_repository_failure
+  if ! read_repository_ids --enabled; then
+    return 1
+  fi
+  repository_enabled=("${REPLY[@]}")
+  repository_unexpected=()
+  repository_missing=()
+  for repository in "${repository_enabled[@]}"; do
+    if ! contains_repository "$repository" "${final_repositories[@]}" && {
+      [[ "$stage" == final-admission ]] || ! contains_repository "$repository" "${provider_repositories[@]}"
+    }; then
+      repository_unexpected+=("$repository")
+    fi
+  done
+  for repository in "${final_repositories[@]}"; do
+    if ! contains_repository "$repository" "${repository_enabled[@]}"; then
+      repository_missing+=("$repository")
+    fi
+  done
+  record_repository_failure "$stage"
+}
+
 admit_repositories() {
-  local dnf_version repository
-  local -a enabled_repos available_repos provider_repos unexpected_repos missing_repos
+  local dnf_version repository provider_output
+  local -a available_repos missing_before_enable enabled_before_disable
   dnf_version="$(dnf4 --version)"
   [[ "${dnf_version%%$'\n'*}" =~ ^4(\.|$) ]] || {
     printf 'ERROR: repository admission requires DNF4.\n' >&2
     return 1
   }
-  if ! provider_repos="$(provider_bootstrap_repositories)"; then
+  if ! provider_output="$(provider_bootstrap_repositories)"; then
     printf 'ERROR: provider repository profile is invalid.\n' >&2
     return 1
   fi
-  mapfile -t provider_repos <<<"$provider_repos"
-  if ! read_repository_ids --enabled; then
+  mapfile -t provider_repositories <<<"$provider_output"
+  if ! observe_enabled_repositories pre-admission; then
     return 1
   fi
-  enabled_repos=("${REPLY[@]}")
-  unexpected_repos=()
-  missing_repos=()
-  for repository in "${enabled_repos[@]}"; do
-    if ! contains_repository "$repository" "${final_repositories[@]}" && ! contains_repository "$repository" "${provider_repos[@]}"; then
-      unexpected_repos+=("$repository")
-    fi
-  done
-  for repository in "${final_repositories[@]}"; do
-    if ! contains_repository "$repository" "${enabled_repos[@]}"; then
-      missing_repos+=("$repository")
-    fi
-  done
-  record_repository_failure enabled_repos unexpected_repos missing_repos
-  [[ "${#unexpected_repos[@]}" -eq 0 ]] || {
+  [[ "${#repository_unexpected[@]}" -eq 0 ]] || {
     printf 'ERROR: enabled repositories include an unreviewed provider or external repository.\n' >&2
     return 1
   }
-  if [[ "${#missing_repos[@]}" -eq 0 ]] && [[ "${#enabled_repos[@]}" -eq "${#final_repositories[@]}" ]]; then
-    repository_failure_evidence=''
+  if [[ "${#repository_missing[@]}" -eq 0 ]] && [[ "${#repository_enabled[@]}" -eq "${#final_repositories[@]}" ]]; then
+    clear_repository_failure
     return 0
   fi
   local provider_present=false
-  for repository in "${provider_repos[@]}"; do
-    if contains_repository "$repository" "${enabled_repos[@]}"; then
+  for repository in "${provider_repositories[@]}"; do
+    if contains_repository "$repository" "${repository_enabled[@]}"; then
       provider_present=true
     fi
   done
@@ -281,32 +317,33 @@ admit_repositories() {
   done
   dnf4 --assumeyes --releasever=10 --disablerepo='*' \
     --enablerepo=baseos,appstream,extras install dnf-plugins-core
-  for repository in "${provider_repos[@]}"; do
-    if contains_repository "$repository" "${enabled_repos[@]}"; then
+  missing_before_enable=("${repository_missing[@]}")
+  clear_repository_failure
+  for repository in "${missing_before_enable[@]}"; do
+    dnf4 config-manager --set-enabled "$repository"
+  done
+  if ! observe_enabled_repositories pre-admission; then
+    return 1
+  fi
+  [[ "${#repository_unexpected[@]}" -eq 0 && "${#repository_missing[@]}" -eq 0 ]] || {
+    printf 'ERROR: required final repositories are not all enabled before provider repository removal.\n' >&2
+    return 1
+  }
+  enabled_before_disable=("${repository_enabled[@]}")
+  clear_repository_failure
+  for repository in "${provider_repositories[@]}"; do
+    if contains_repository "$repository" "${enabled_before_disable[@]}"; then
       dnf4 config-manager --set-disabled "$repository"
     fi
   done
-  for repository in "${missing_repos[@]}"; do
-    dnf4 config-manager --set-enabled "$repository"
-  done
-  if ! read_repository_ids --enabled; then
+  if ! observe_enabled_repositories final-admission; then
     return 1
   fi
-  enabled_repos=("${REPLY[@]}")
-  unexpected_repos=()
-  missing_repos=()
-  for repository in "${enabled_repos[@]}"; do
-    contains_repository "$repository" "${final_repositories[@]}" || unexpected_repos+=("$repository")
-  done
-  for repository in "${final_repositories[@]}"; do
-    contains_repository "$repository" "${enabled_repos[@]}" || missing_repos+=("$repository")
-  done
-  record_repository_failure enabled_repos unexpected_repos missing_repos
-  [[ "${#unexpected_repos[@]}" -eq 0 && "${#missing_repos[@]}" -eq 0 && "${#enabled_repos[@]}" -eq "${#final_repositories[@]}" ]] || {
+  [[ "${#repository_unexpected[@]}" -eq 0 && "${#repository_missing[@]}" -eq 0 && "${#repository_enabled[@]}" -eq "${#final_repositories[@]}" ]] || {
     printf 'ERROR: final enabled repositories must be exactly appstream,baseos,extras.\n' >&2
     return 1
   }
-  repository_failure_evidence=''
+  clear_repository_failure
 }
 
 install_policy() {

@@ -92,7 +92,44 @@ def validate_evidence(kind: str, path: Path) -> dict[str, Any]:
         first = errors[0]
         location = ".".join(str(part) for part in first.path) or "<root>"
         raise ControlError(f"{kind} evidence rejected at {location}: {first.message}")
+    if kind == "preparation-failure":
+        validate_preparation_failure_semantics(document)
     return document
+
+
+def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
+    if document.get("phase") != "repositories" or "repositories" not in document:
+        return
+    observation = document["repositories"]
+    if not isinstance(observation, dict):
+        raise ControlError("repository failure observation must be an object")
+    stage = observation.get("stage")
+    enabled = observation.get("enabled")
+    supplied_unexpected = observation.get("unexpected_enabled")
+    supplied_missing = observation.get("missing_required")
+    if not isinstance(stage, str) or not all(
+        isinstance(value, list)
+        for value in (enabled, supplied_unexpected, supplied_missing)
+    ):
+        raise ControlError("repository failure observation is malformed")
+    profile_repositories = canonical_profile().get("repositories")
+    if not isinstance(profile_repositories, dict):
+        raise ControlError("reviewed repository profile is malformed")
+    final = profile_repositories.get("final_enabled_repositories")
+    provider = profile_repositories.get("pre_admission_provider_repositories")
+    if not isinstance(final, list) or not isinstance(provider, list):
+        raise ControlError("reviewed repository profile is malformed")
+    allowed = set(final)
+    if stage == "pre-admission":
+        allowed.update(provider)
+    elif stage != "final-admission":
+        raise ControlError("repository failure stage is outside the closed contract")
+    if enabled != sorted(set(enabled)):
+        raise ControlError("enabled repository IDs are not canonical")
+    expected_unexpected = sorted(set(enabled) - allowed)
+    expected_missing = sorted(set(final) - set(enabled))
+    if supplied_unexpected != expected_unexpected or supplied_missing != expected_missing:
+        raise ControlError("repository failure classification contradicts trusted profile")
 
 
 def discover_image(control_sha: str, output: Path) -> None:
