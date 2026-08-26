@@ -10,11 +10,13 @@ import json
 import re
 import base64
 import gzip
+import importlib.util
 from copy import deepcopy
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 from jsonschema import Draft202012Validator
@@ -253,7 +255,7 @@ class RockyCloudControlTests(unittest.TestCase):
             "repositories": {"enabled": ["baseos", "appstream", "extras"], "external_enabled": False},
             "updates": {"mechanism": "dnf4", "releasever": "10", "automatic": False, "automatic_reboot": False},
             "packages": [
-                {"name": name, "nevra": f"{name}-1-1.aarch64", "resolved_repository": "baseos", "signature_verified": True}
+                {"name": name, "nevra": f"{name}-1-1.aarch64", "resolved_repository": "baseos", "signature_verified": True, "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85", "payload_digest": "a" * 64}
                 for name in package_names
             ],
             "selinux": {"enabled": True, "mode": "Enforcing", "policy": "targeted", "container_selinux_installed": True, "label_disable_absent": True},
@@ -373,11 +375,47 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_cleanup_is_exact_state_and_janitor_never_uses_prefix(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        janitor = (ROOT / "scripts/ci-cloud/gcp-janitor.py").read_text(encoding="utf-8")
+        janitor = (ROOT / "scripts/ci-cloud/gcp-rocky-janitor.py").read_text(encoding="utf-8")
         self.assertIn("tofu destroy --auto-approve --input=false", workflow)
         self.assertIn("rocky-cloud-continuation", workflow)
         self.assertNotIn("startswith", janitor)
         self.assertNotIn("namePrefix", janitor)
+
+    def test_qualification_admission_is_observation_derived_and_pass_only(self) -> None:
+        schema = json.loads((ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json").read_text(encoding="utf-8"))
+        self.assertNotIn("positive_access", schema["required"])
+        runner = (ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh").read_text(encoding="utf-8")
+        for required in ("duplicate", "MCS relationship", "seccomp mode", "ausearch", "correlated enforcing AVC", "cleanup is incomplete"):
+            self.assertIn(required, runner)
+        self.assertNotIn('"mcs_distinct": passed', runner)
+        self.assertNotIn('"classification": "PASS" if passed', runner)
+
+    def test_transition_rejects_replacement_with_same_name_and_labels(self) -> None:
+        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
+        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        options = SimpleNamespace(instance="sprk-12345-1-instance", instance_id="987654", target_sha="b" * 40, control_sha="a" * 40, created_at="1800000000", expires_at="1800010800")
+        labels = {"secpal_ci_owner": "rocky-host-qualification", "repository": "secpal-deployment", "github_run_id": "12345", "github_run_attempt": "1", "target_sha": "b" * 40, "control_sha": "a" * 40, "provider_profile": "gcp-rocky-10-2-arm64", "created_at": "1800000000", "expires_at": "1800010800"}
+        accepted = {"name": options.instance, "id": "987654", "labels": labels, "serviceAccounts": []}
+        module.validate_instance(accepted, options)
+        replaced = dict(accepted, id="987655")
+        with self.assertRaises(module.TransitionError):
+            module.validate_instance(replaced, options)
+
+    def test_every_rocky_wif_auth_has_a_same_job_identity_gate(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        auth = "uses: google-github-actions/auth@"
+        self.assertEqual(4, workflow.count(auth))
+        self.assertGreaterEqual(workflow.count('[[ "$GCP_PROJECT_ID" == secpal-dev ]]'), 4)
+        self.assertGreaterEqual(workflow.count("gcp-service-account@secpal-dev.iam.gserviceaccount.com"), 4)
+
+    def test_rpm_provenance_uses_verified_official_payload_identity(self) -> None:
+        collector = (ROOT / "scripts/ci-cloud/collect-rocky-preparation.py").read_text(encoding="utf-8")
+        for required in ("rpmkeys", "--checksig", "ROCKY_FINGERPRINT", "PAYLOADDIGEST", "dnf4", "download", "TemporaryDirectory"):
+            self.assertIn(required, collector)
+        self.assertNotIn("%{RSAHEADER:pgpsig}", collector)
 
 
 if __name__ == "__main__":

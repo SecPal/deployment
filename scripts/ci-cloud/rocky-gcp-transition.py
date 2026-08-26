@@ -116,6 +116,8 @@ def validate_instance(instance: dict[str, Any], options: argparse.Namespace) -> 
     }
     if instance.get("name") != options.instance or instance.get("labels") != expected_labels:
         raise TransitionError("instance ownership does not exactly match the continuation")
+    if str(instance.get("id", "")) != options.instance_id:
+        raise TransitionError("live immutable instance ID does not match the continuation")
     service_accounts = instance.get("serviceAccounts", [])
     if service_accounts not in (
         [],
@@ -206,6 +208,7 @@ def update_runner_firewall(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--instance", required=True)
+    parser.add_argument("--instance-id", required=True)
     parser.add_argument("--target-sha", required=True)
     parser.add_argument("--control-sha", required=True)
     parser.add_argument("--created-at", required=True)
@@ -217,6 +220,8 @@ def main() -> int:
     try:
         if SHA.fullmatch(options.target_sha) is None or SHA.fullmatch(options.control_sha) is None:
             raise TransitionError("full lowercase target and control SHAs are required")
+        if re.fullmatch(r"[1-9][0-9]{0,29}", options.instance_id) is None:
+            raise TransitionError("expected instance ID is outside the closed numeric format")
         if len(options.ssh_public_key) > 128 or PUBLIC_KEY.fullmatch(
             options.ssh_public_key
         ) is None:

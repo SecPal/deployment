@@ -181,13 +181,19 @@
           "name",
           "nevra",
           "resolved_repository",
-          "signature_verified"
+          "signature_verified",
+          "signer_fingerprint",
+          "payload_digest"
         ],
         "properties": {
           "name": { "type": "string", "pattern": "^[a-zA-Z0-9+_.-]{1,64}$" },
           "nevra": { "type": "string", "minLength": 3, "maxLength": 256 },
           "resolved_repository": { "enum": ["baseos", "appstream", "extras"] },
-          "signature_verified": { "const": true }
+          "signature_verified": { "const": true },
+          "signer_fingerprint": {
+            "const": "fc226859c0860bf0ddb95b085b106c736fedfc85"
+          },
+          "payload_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
         }
       }
     },

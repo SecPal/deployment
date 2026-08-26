@@ -14,6 +14,7 @@ import pwd
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,8 @@ PACKAGES = (
 REPOSITORIES = {"baseos", "appstream", "extras"}
 FIXTURE = "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
 ARM_CHILD = "sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192"
+ROCKY_KEY_ID = "6fedfc85"
+ROCKY_FINGERPRINT = "fc226859c0860bf0ddb95b085b106c736fedfc85"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -190,15 +193,36 @@ def package_facts() -> list[dict[str, Any]]:
         official = sorted(set(repository) & REPOSITORIES)
         if len(official) != 1:
             raise CollectionError(f"installed NEVRA lacks one official resolution: {name}")
-        signature = run(["rpm", "-q", "--qf", "%{RSAHEADER:pgpsig}", name])
-        if not signature or signature == "(none)" or "Key ID" not in signature:
-            raise CollectionError(f"RPM signature verification failed: {name}")
+        installed_payload = run(["rpm", "-q", "--qf", "%{PAYLOADDIGEST}", name]).lower()
+        if re.fullmatch(r"[0-9a-f]{64}", installed_payload) is None:
+            raise CollectionError(f"installed RPM payload identity is invalid: {name}")
+        with tempfile.TemporaryDirectory(prefix=".secpal-rocky-rpm-", dir="/var/tmp") as directory:
+            run([
+                "dnf4", "--quiet", "--disablerepo=*", "--enablerepo=baseos,appstream,extras",
+                "download", "--destdir", directory, nevra,
+            ])
+            payloads = list(Path(directory).glob("*.rpm"))
+            if len(payloads) != 1:
+                raise CollectionError(f"exact repository RPM download is ambiguous: {name}")
+            payload = payloads[0]
+            signature = run(["rpmkeys", "--checksig", "--verbose", str(payload)])
+            if "digests signatures OK" not in signature or ROCKY_KEY_ID not in signature.lower():
+                raise CollectionError(f"RPM cryptographic verification failed: {name}")
+            admitted = run(["rpm", "-qa", "--qf", "%{SUMMARY} %{DESCRIPTION}\\n", "gpg-pubkey"])
+            if ROCKY_FINGERPRINT not in re.sub(r"[^0-9a-f]", "", admitted.lower()):
+                raise CollectionError("reviewed Rocky Linux 10 release key is not admitted")
+            official_nevra = run(["rpm", "-qp", "--qf", "%{NEVRA}", str(payload)])
+            official_payload = run(["rpm", "-qp", "--qf", "%{PAYLOADDIGEST}", str(payload)]).lower()
+            if official_nevra != nevra or official_payload != installed_payload:
+                raise CollectionError(f"installed RPM identity differs from verified official RPM: {name}")
         result.append(
             {
                 "name": name,
                 "nevra": nevra,
                 "resolved_repository": official[0],
                 "signature_verified": True,
+                "signer_fingerprint": ROCKY_FINGERPRINT,
+                "payload_digest": installed_payload,
             }
         )
     return result

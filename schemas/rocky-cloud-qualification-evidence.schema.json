@@ -13,7 +13,6 @@
     "process_contexts",
     "storage_context",
     "mcs_distinct",
-    "positive_access",
     "cross_mcs_denied",
     "avc_observed",
     "seccomp_enforced",
@@ -42,7 +41,6 @@
       "maxLength": 256
     },
     "mcs_distinct": { "const": true },
-    "positive_access": { "const": true },
     "cross_mcs_denied": { "const": true },
     "avc_observed": { "const": true },
     "seccomp_enforced": { "const": true },
