@@ -86,6 +86,12 @@ REPOSITORY_ID_OPERATION_DOMAINS = {
     "enable-required-rocky-repository": "final",
     "disable-reviewed-provider-repository": "provider",
 }
+FIXTURE_DIAGNOSTIC_REASONS = {
+    "pull-immutable-fixture": {"command-failed"},
+    "verify-immutable-fixture-present": {"command-failed"},
+    "inspect-resolved-arm64-child": {"command-failed"},
+    "validate-resolved-arm64-child": {"postcondition-failed"},
+}
 
 
 class ControlError(RuntimeError):
@@ -142,7 +148,22 @@ def validate_evidence(kind: str, path: Path) -> dict[str, Any]:
 
 
 def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
-    if document.get("phase") != "repositories":
+    phase = document.get("phase")
+    if phase == "fixture":
+        diagnostic = document.get("fixture_diagnostic")
+        if not isinstance(diagnostic, dict):
+            raise ControlError("fixture failure diagnostic must be an object")
+        operation = diagnostic.get("operation")
+        reason = diagnostic.get("reason")
+        if (
+            operation not in FIXTURE_DIAGNOSTIC_REASONS
+            or reason not in FIXTURE_DIAGNOSTIC_REASONS[operation]
+        ):
+            raise ControlError(
+                "fixture failure diagnostic contradicts the closed operation contract"
+            )
+        return
+    if phase != "repositories":
         return
     profile_repositories = canonical_profile().get("repositories")
     if not isinstance(profile_repositories, dict):

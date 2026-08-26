@@ -371,6 +371,8 @@ jobs:
               " repository_operation=" + (.repository_diagnostic.operation // "unavailable") +
               " repository_reason=" + (.repository_diagnostic.reason // "unavailable") +
               " repository_id=" + (.repository_diagnostic.repository_id // "unavailable") +
+              " fixture_operation=" + (.fixture_diagnostic.operation // "unavailable") +
+              " fixture_reason=" + (.fixture_diagnostic.reason // "unavailable") +
               " guest_id=" + .guest.id + " version_id=" + .guest.version_id +
               " uname_machine=" + .guest.uname_machine' \
               "$RUNNER_TEMP/rocky-cloud/preparation-failure.json" >&2

@@ -38,6 +38,7 @@ current_phase="guest-identity"
 reboot_requested=false
 repository_failure_evidence=''
 repository_diagnostic_evidence=''
+fixture_diagnostic_evidence=''
 repository_enabled=()
 repository_unexpected=()
 repository_missing=()
@@ -80,7 +81,7 @@ write_failure_evidence() {
   base_record="$(printf '{"schema_version":1,"target_sha":"%s","trusted_control_sha":"%s","run_id":"%s","run_attempt":"%s","phase":"%s","exit_status":%s,"guest":{"id":"%s","version_id":"%s","uname_machine":"%s"}}' \
     "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$current_phase" "$status" \
     "$guest_id" "$guest_version" "$guest_architecture")"
-  if ! write_failure_document "$base_record" "$repository_failure_evidence" "$repository_diagnostic_evidence" "$temporary"; then
+  if ! write_failure_document "$base_record" "$repository_failure_evidence" "$repository_diagnostic_evidence" "$fixture_diagnostic_evidence" "$temporary"; then
     rm -f -- "$temporary"
     return 0
   fi
@@ -215,23 +216,29 @@ repository_json_array() {
 }
 
 write_failure_document() {
-  local base_record="$1" repository_record="$2" diagnostic_record="$3" output="$4"
+  local base_record="$1" repository_record="$2" repository_diagnostic_record="$3" fixture_diagnostic_record="$4" output="$5"
   local document="$base_record"
   if [[ -n "$repository_record" ]]; then
     document="${base_record%?},\"repositories\":$repository_record}"
   fi
-  if [[ -n "$diagnostic_record" ]]; then
-    document="${document%?},\"repository_diagnostic\":$diagnostic_record}"
+  if [[ -n "$repository_diagnostic_record" ]]; then
+    document="${document%?},\"repository_diagnostic\":$repository_diagnostic_record}"
+  fi
+  if [[ -n "$fixture_diagnostic_record" ]]; then
+    document="${document%?},\"fixture_diagnostic\":$fixture_diagnostic_record}"
   fi
   printf '%s\n' "$document" >"$output" || return 1
   if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && -n "$repository_record" ]]; then
     document="$base_record"
-    if [[ -n "$diagnostic_record" ]]; then
-      document="${base_record%?},\"repository_diagnostic\":$diagnostic_record}"
+    if [[ -n "$repository_diagnostic_record" ]]; then
+      document="${base_record%?},\"repository_diagnostic\":$repository_diagnostic_record}"
+    fi
+    if [[ -n "$fixture_diagnostic_record" ]]; then
+      document="${document%?},\"fixture_diagnostic\":$fixture_diagnostic_record}"
     fi
     printf '%s\n' "$document" >"$output" || return 1
   fi
-  if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && -n "$diagnostic_record" ]]; then
+  if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && ( -n "$repository_diagnostic_record" || -n "$fixture_diagnostic_record" ) ]]; then
     printf '%s\n' "$base_record" >"$output" || return 1
   fi
   [[ "$(wc -c <"$output")" -le "$failure_evidence_max_bytes" ]]
@@ -255,6 +262,15 @@ set_repository_diagnostic() {
   else
     repository_diagnostic_evidence="$(printf '{\"operation\":\"%s\",\"reason\":\"%s\"}' "$operation" "$reason")"
   fi
+}
+
+set_fixture_diagnostic() {
+  local operation="$1" reason="$2"
+  case "$operation:$reason" in
+    pull-immutable-fixture:command-failed|verify-immutable-fixture-present:command-failed|inspect-resolved-arm64-child:command-failed|validate-resolved-arm64-child:postcondition-failed) ;;
+    *) return 1 ;;
+  esac
+  fixture_diagnostic_evidence="$(printf '{\"operation\":\"%s\",\"reason\":\"%s\"}' "$operation" "$reason")"
 }
 
 record_repository_failure() {
@@ -432,10 +448,16 @@ install_policy() {
   systemctl start "user@$runtime_uid.service"
   run_as_runtime systemctl --user mask podman.socket podman.service
   current_phase="fixture"
+  set_fixture_diagnostic pull-immutable-fixture command-failed
   run_as_runtime podman pull "$fixture"
+  set_fixture_diagnostic verify-immutable-fixture-present command-failed
   run_as_runtime podman image exists "$fixture"
+  set_fixture_diagnostic inspect-resolved-arm64-child command-failed
   resolved_child="$(run_as_runtime podman image inspect --format '{{.Digest}}' "$fixture")"
+  set_fixture_diagnostic validate-resolved-arm64-child postcondition-failed
   [[ "$resolved_child" == "$arm_child" ]]
+  fixture_diagnostic_evidence=''
+  current_phase="pre-reboot"
 
   cat >/etc/sudoers.d/secpal-cloud-rocky <<'SECPAL_CLOUD_SUDO'
 secpal-cloud ALL=(root) NOPASSWD: /usr/local/sbin/secpal-run-rocky-target-qualification [0-9a-f]*
@@ -444,7 +466,6 @@ SECPAL_CLOUD_SUDO
   chmod 0440 /etc/sudoers.d/secpal-cloud-rocky
   visudo --check --file=/etc/sudoers.d/secpal-cloud-rocky
 
-  current_phase="pre-reboot"
   install -d -o root -g secpal-cloud -m 0710 "$state_root"
   cat /proc/sys/kernel/random/boot_id >"$state_root/first-boot-id"
   chmod 0600 "$state_root/first-boot-id"

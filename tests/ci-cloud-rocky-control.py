@@ -485,6 +485,193 @@ class RockyCloudControlTests(unittest.TestCase):
             with self.subTest(diagnostic=diagnostic):
                 self.assertNotEqual(0, validate(diagnostic))
 
+    def test_fixture_failure_diagnostic_is_closed_and_independently_validated(self) -> None:
+        control = ROOT / "scripts/ci-cloud/rocky-control.py"
+
+        def validate(
+            diagnostic: dict[str, object] | None, *, phase: str = "fixture"
+        ) -> int:
+            document = {
+                "schema_version": 1,
+                "target_sha": "b" * 40,
+                "trusted_control_sha": "a" * 40,
+                "run_id": "12345",
+                "run_attempt": "1",
+                "phase": phase,
+                "exit_status": 1,
+                "guest": {"id": "rocky", "version_id": "10.2", "uname_machine": "aarch64"},
+            }
+            if diagnostic is not None:
+                document["fixture_diagnostic"] = diagnostic
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+                json.dump(document, path)
+                path.flush()
+                return subprocess.run(
+                    [control, "validate-evidence", "preparation-failure", path.name],
+                    check=False,
+                    capture_output=True,
+                ).returncode
+
+        accepted = (
+            {"operation": "pull-immutable-fixture", "reason": "command-failed"},
+            {"operation": "verify-immutable-fixture-present", "reason": "command-failed"},
+            {"operation": "inspect-resolved-arm64-child", "reason": "command-failed"},
+            {"operation": "validate-resolved-arm64-child", "reason": "postcondition-failed"},
+        )
+        for diagnostic in accepted:
+            with self.subTest(diagnostic=diagnostic):
+                self.assertEqual(0, validate(diagnostic))
+        rejected = (
+            {"operation": "arbitrary-command", "reason": "command-failed"},
+            {"operation": "pull-immutable-fixture", "reason": "postcondition-failed"},
+            {"operation": "validate-resolved-arm64-child", "reason": "command-failed"},
+            {
+                "operation": "pull-immutable-fixture",
+                "reason": "command-failed",
+                "stderr": "arbitrary podman output",
+            },
+        )
+        for diagnostic in rejected:
+            with self.subTest(diagnostic=diagnostic):
+                self.assertNotEqual(0, validate(diagnostic))
+        self.assertNotEqual(0, validate(None))
+        self.assertNotEqual(0, validate(accepted[0], phase="repositories"))
+
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        helper_start = preparation.index("set_fixture_diagnostic()")
+        helper_end = preparation.index("\n}\n", helper_start) + len("\n}\n")
+        helper = preparation[helper_start:helper_end]
+        invalid_writer_pair = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -euo pipefail\nfixture_diagnostic_evidence=''\n"
+                + helper
+                + "\nset_fixture_diagnostic pull-immutable-fixture postcondition-failed",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(0, invalid_writer_pair.returncode)
+
+    def _run_fixture_admission(
+        self, *, fail_pattern: str = "", inspected_digest: str = "expected-child"
+    ) -> subprocess.CompletedProcess[str]:
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        helper_start = preparation.index("set_fixture_diagnostic()")
+        helper_end = preparation.index("\n}\n", helper_start) + len("\n}\n")
+        helper = preparation[helper_start:helper_end]
+        block_start = preparation.index('  current_phase="fixture"')
+        block_end = preparation.index("\n\n  cat >/etc/sudoers.d/", block_start)
+        block = preparation[block_start:block_end]
+        script = (
+            "set -euo pipefail\n"
+            "readonly fixture=immutable-fixture\n"
+            "readonly arm_child=expected-child\n"
+            "fixture_diagnostic_evidence=''\n"
+            + helper
+            + "\nrun_as_runtime() {\n"
+            + "  if [[ -n \"$FAIL_PATTERN\" && \"$*\" == *\"$FAIL_PATTERN\"* ]]; then printf '%s\\n' 'untrusted fixture stderr' >&2; return 1; fi\n"
+            + "  if [[ \"$*\" == *'podman image inspect'* ]]; then printf '%s\\n' \"$INSPECTED_DIGEST\"; fi\n"
+            + "}\n"
+            + "set +e\n(\n  set -euo pipefail\n"
+            + "  trap 'status=$?; printf \"STATUS=%s\\nDIAGNOSTIC=%s\\n\" \"$status\" \"$fixture_diagnostic_evidence\"; exit \"$status\"' EXIT\n"
+            + block
+            + "\n)\nstatus=$?\nset -e\nexit \"$status\"\n"
+        )
+        environment = dict(os.environ)
+        environment.update(
+            {"FAIL_PATTERN": fail_pattern, "INSPECTED_DIGEST": inspected_digest}
+        )
+        return subprocess.run(
+            ["bash", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def test_fixture_failure_diagnostic_tracks_each_operation_without_untrusted_output(self) -> None:
+        cases = (
+            (
+                "podman pull",
+                "expected-child",
+                {"operation": "pull-immutable-fixture", "reason": "command-failed"},
+            ),
+            (
+                "podman image exists",
+                "expected-child",
+                {"operation": "verify-immutable-fixture-present", "reason": "command-failed"},
+            ),
+            (
+                "podman image inspect",
+                "expected-child",
+                {"operation": "inspect-resolved-arm64-child", "reason": "command-failed"},
+            ),
+            (
+                "",
+                "wrong-child",
+                {"operation": "validate-resolved-arm64-child", "reason": "postcondition-failed"},
+            ),
+        )
+        for fail_pattern, digest, expected in cases:
+            with self.subTest(operation=expected["operation"]):
+                completed = self._run_fixture_admission(
+                    fail_pattern=fail_pattern, inspected_digest=digest
+                )
+                self.assertNotEqual(0, completed.returncode)
+                diagnostic_line = next(
+                    line
+                    for line in completed.stdout.splitlines()
+                    if line.startswith("DIAGNOSTIC=")
+                )
+                self.assertEqual(
+                    expected, json.loads(diagnostic_line.removeprefix("DIAGNOSTIC="))
+                )
+                document = {
+                    "schema_version": 1,
+                    "target_sha": "b" * 40,
+                    "trusted_control_sha": "a" * 40,
+                    "run_id": "12345",
+                    "run_attempt": "1",
+                    "phase": "fixture",
+                    "exit_status": completed.returncode,
+                    "guest": {
+                        "id": "rocky",
+                        "version_id": "10.2",
+                        "uname_machine": "aarch64",
+                    },
+                    "fixture_diagnostic": expected,
+                }
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+                    json.dump(document, path)
+                    path.flush()
+                    self.assertEqual(
+                        0,
+                        subprocess.run(
+                            [
+                                ROOT / "scripts/ci-cloud/rocky-control.py",
+                                "validate-evidence",
+                                "preparation-failure",
+                                path.name,
+                            ],
+                            check=False,
+                            capture_output=True,
+                        ).returncode,
+                    )
+                if fail_pattern:
+                    self.assertIn("untrusted fixture stderr", completed.stderr)
+                self.assertNotIn("untrusted fixture stderr", completed.stdout)
+        successful = self._run_fixture_admission()
+        self.assertEqual(0, successful.returncode, successful.stderr)
+        self.assertIn("DIAGNOSTIC=", successful.stdout)
+        self.assertNotIn('DIAGNOSTIC={"operation"', successful.stdout)
+
     def _run_repository_admission(
         self,
         enabled_states: list[list[str]],
@@ -1006,6 +1193,29 @@ class RockyCloudControlTests(unittest.TestCase):
         )
         self.assertFalse(list(Draft202012Validator(schema).iter_errors(json.loads(document))))
         self.assertLessEqual(len(document), 4096)
+        fixture_document = {
+            "schema_version": 1,
+            "target_sha": "a" * 40,
+            "trusted_control_sha": "b" * 40,
+            "run_id": "9" * 20,
+            "run_attempt": "999",
+            "phase": "fixture",
+            "exit_status": 255,
+            "guest": {
+                "id": "c" * 64,
+                "version_id": "d" * 64,
+                "uname_machine": "e" * 64,
+            },
+            "fixture_diagnostic": {
+                "operation": "validate-resolved-arm64-child",
+                "reason": "postcondition-failed",
+            },
+        }
+        fixture_payload = (
+            json.dumps(fixture_document, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        self.assertFalse(list(Draft202012Validator(schema).iter_errors(fixture_document)))
+        self.assertLessEqual(len(fixture_payload), 4096)
         with tempfile.NamedTemporaryFile(mode="wb") as path:
             path.write(document)
             path.flush()
@@ -1034,7 +1244,25 @@ class RockyCloudControlTests(unittest.TestCase):
                     "-c",
                     "failure_evidence_max_bytes=20\n"
                     + function
-                    + "\nwrite_failure_document '{\"base\":1}' '{\"repositories\":\"oversized\"}' '{\"operation\":\"install-repository-management-prerequisite\",\"reason\":\"package-transaction-failed\"}' \"$1\"\ncat \"$1\"",
+                    + "\nwrite_failure_document '{\"base\":1}' '{\"repositories\":\"oversized\"}' '{\"operation\":\"install-repository-management-prerequisite\",\"reason\":\"package-transaction-failed\"}' '' \"$1\"\ncat \"$1\"",
+                    "bash",
+                    str(output),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual('{"base":1}\n', completed.stdout)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "fixture-failure.json"
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "failure_evidence_max_bytes=20\n"
+                    + function
+                    + "\nwrite_failure_document '{\"base\":1}' '' '' '{\"operation\":\"validate-resolved-arm64-child\",\"reason\":\"postcondition-failed\"}' \"$1\"\ncat \"$1\"",
                     "bash",
                     str(output),
                 ],
@@ -1060,6 +1288,8 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn("validate-evidence preparation-failure", workflow)
         self.assertIn("repository_operation=", workflow)
         self.assertIn("repository_reason=", workflow)
+        self.assertIn("fixture_operation=", workflow)
+        self.assertIn("fixture_reason=", workflow)
         self.assertIn("steps.preparation.outputs.failure == 'true'", workflow)
         self.assertIn('install -d -o root -g secpal-cloud -m 0710 "$state_root"', preparation)
         self.assertIn('install -d -o root -g secpal-cloud -m 0750 "$state_root/evidence"', preparation)
