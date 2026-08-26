@@ -189,42 +189,102 @@ def update_runner_firewall(
         raise TransitionError("cannot derive exact firewall identity")
     run_id, attempt = match.groups()
     name = f"sprk-{run_id}-{attempt}-ssh"
-    firewall = client.request("GET", f"global/firewalls/{name}")
     try:
-        description = json.loads(firewall.get("description", ""))
-    except (TypeError, json.JSONDecodeError) as error:
-        raise TransitionError("firewall ownership description is invalid") from error
-    if (
-        firewall.get("name") != name
-        or description
-        != {
-            "o": expected_labels["secpal_ci_owner"],
-            "r": expected_labels["repository"],
-            "i": expected_labels["github_run_id"],
-            "a": expected_labels["github_run_attempt"],
-            "t": expected_labels["target_sha"],
-            "c": expected_labels["control_sha"],
-            "p": expected_labels["provider_profile"],
-            "n": expected_labels["created_at"],
-            "x": expected_labels["expires_at"],
-        }
-        or firewall.get("direction") != "INGRESS"
-        or firewall.get("allowed") != [{"IPProtocol": "tcp", "ports": ["22"]}]
-        or firewall.get("targetTags") != [f"sprk-{run_id}-{attempt}"]
-    ):
-        raise TransitionError("firewall is outside the exact run-owned SSH contract")
-    payload = {
-        "fingerprint": firewall.get("fingerprint"),
-        "sourceRanges": [f"{runner_ipv4}/32"],
-    }
-    if not isinstance(payload["fingerprint"], str):
-        raise TransitionError("firewall fingerprint is missing")
+        address = ipaddress.ip_address(runner_ipv4)
+    except ValueError as error:
+        raise TransitionError("runner address is not an IPv4 address") from error
+    if address.version != 4:
+        raise TransitionError("runner address is not an IPv4 address")
+    requested_source_range = f"{address}/32"
+    firewall_path = f"global/firewalls/{name}"
+    firewall = client.request("GET", firewall_path)
+    validate_runner_firewall(
+        firewall,
+        name=name,
+        run_id=run_id,
+        attempt=attempt,
+        expected_labels=expected_labels,
+    )
     client.mutate(
-        f"global/firewalls/{name}",
-        payload,
+        firewall_path,
+        {"sourceRanges": [requested_source_range]},
         global_operation=True,
         method="PATCH",
     )
+    firewall = client.request("GET", firewall_path)
+    validate_runner_firewall(
+        firewall,
+        name=name,
+        run_id=run_id,
+        attempt=attempt,
+        expected_labels=expected_labels,
+        expected_source_range=requested_source_range,
+    )
+
+
+def validate_runner_firewall(
+    firewall: dict[str, Any],
+    *,
+    name: str,
+    run_id: str,
+    attempt: str,
+    expected_labels: dict[str, str],
+    expected_source_range: str | None = None,
+) -> None:
+    """Admit the stable security fields of one exact classic SSH firewall."""
+    try:
+        description = json.loads(firewall.get("description"))
+    except (TypeError, json.JSONDecodeError) as error:
+        raise TransitionError("firewall ownership description is invalid") from error
+    expected_description = {
+        "o": expected_labels["secpal_ci_owner"],
+        "r": expected_labels["repository"],
+        "i": expected_labels["github_run_id"],
+        "a": expected_labels["github_run_attempt"],
+        "t": expected_labels["target_sha"],
+        "c": expected_labels["control_sha"],
+        "p": expected_labels["provider_profile"],
+        "n": expected_labels["created_at"],
+        "x": expected_labels["expires_at"],
+    }
+    source_ranges = firewall.get("sourceRanges")
+    source_range_valid = (
+        isinstance(source_ranges, list)
+        and len(source_ranges) == 1
+        and isinstance(source_ranges[0], str)
+    )
+    if source_range_valid:
+        try:
+            source_network = ipaddress.ip_network(source_ranges[0], strict=True)
+        except ValueError:
+            source_range_valid = False
+        else:
+            source_range_valid = (
+                source_network.version == 4 and source_network.prefixlen == 32
+            )
+    empty_selectors = all(
+        isinstance(firewall.get(key, []), list) and not firewall.get(key, [])
+        for key in ("denied", "sourceTags", "sourceServiceAccounts", "targetServiceAccounts")
+    )
+    if (
+        firewall.get("name") != name
+        or description != expected_description
+        or firewall.get("network")
+        != f"https://www.googleapis.com/compute/v1/projects/{PROJECT}/global/networks/sprk-{run_id}-{attempt}-network"
+        or type(firewall.get("priority")) is not int
+        or firewall.get("priority") != 1000
+        or firewall.get("direction") != "INGRESS"
+        or firewall.get("allowed") != [{"IPProtocol": "tcp", "ports": ["22"]}]
+        or firewall.get("targetTags") != [f"sprk-{run_id}-{attempt}"]
+        or ("disabled" in firewall and firewall["disabled"] is not False)
+        or not empty_selectors
+        or not source_range_valid
+        or (
+            expected_source_range is not None
+            and source_ranges != [expected_source_range]
+        )
+    ):
+        raise TransitionError("firewall is outside the exact run-owned SSH contract")
 
 
 def main() -> int:
