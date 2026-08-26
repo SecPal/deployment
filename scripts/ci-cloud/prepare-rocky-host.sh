@@ -58,6 +58,7 @@ write_failure_evidence() {
   guest_id="$(safe_guest_fact "$(read_release_value ID 2>/dev/null || true)")"
   guest_version="$(safe_guest_fact "$(read_release_value VERSION_ID 2>/dev/null || true)")"
   guest_architecture="$(safe_guest_fact "$(uname -m 2>/dev/null || true)")"
+  install -d -o root -g secpal-cloud -m 0710 "$state_root" || return 0
   install -d -o root -g secpal-cloud -m 0750 "$state_root/evidence" || return 0
   if [[ "$evidence_output" == "$state_root/evidence/preparation.json" ]]; then
     rm -f -- "$evidence_output"
@@ -84,6 +85,7 @@ preparation_exit() {
 trap 'preparation_exit "$?"' EXIT
 
 prepare_evidence_transport() {
+  install -d -o root -g secpal-cloud -m 0710 "$state_root"
   install -d -o root -g secpal-cloud -m 0750 "$state_root/evidence"
   [[ ! -L "$failure_output" ]]
   rm -f -- "$failure_output"
@@ -194,7 +196,7 @@ SECPAL_CLOUD_SUDO
   visudo --check --file=/etc/sudoers.d/secpal-cloud-rocky
 
   current_phase="pre-reboot"
-  install -d -o root -g root -m 0700 "$state_root"
+  install -d -o root -g secpal-cloud -m 0710 "$state_root"
   cat /proc/sys/kernel/random/boot_id >"$state_root/first-boot-id"
   chmod 0600 "$state_root/first-boot-id"
   install -o root -g root -m 0600 /dev/null "$state_root/reboot-pending"
@@ -241,7 +243,7 @@ collect_after_reboot() {
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
     validate-evidence preparation "$evidence_output"
   chown root:secpal-cloud "$evidence_output"
-  chmod 0400 "$evidence_output"
+  chmod 0440 "$evidence_output"
   install -o root -g root -m 0600 /dev/null "$state_root/prepared"
 }
 

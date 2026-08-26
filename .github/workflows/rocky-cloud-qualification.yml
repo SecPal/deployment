@@ -319,7 +319,7 @@ jobs:
           ip="$(cat "$RUNNER_TEMP/rocky-cloud/ipv4_address")"
           preparation_state=none
           for attempt in {1..90}; do
-            preparation_state="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            if preparation_state="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               -o ConnectTimeout=5 -i "$RUNNER_TEMP/rocky-cloud/id_ed25519" \
               "secpal-cloud@$ip" '
                 success=/var/lib/secpal-rocky/evidence/preparation.json
@@ -333,7 +333,11 @@ jobs:
                 else
                   printf none
                 fi
-              ')"
+              ')"; then
+              :
+            else
+              preparation_state=none
+            fi
             case "$preparation_state" in
               success|failure) break ;;
               both)
@@ -346,7 +350,9 @@ jobs:
                 exit 1
                 ;;
             esac
-            [[ "$attempt" -lt 90 ]]
+            if [[ "$attempt" -eq 90 ]]; then
+              break
+            fi
             sleep 10
           done
           if [[ "$preparation_state" == failure ]]; then
