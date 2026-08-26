@@ -14,6 +14,8 @@ readonly state_root=/var/lib/secpal-rocky
 readonly profile_path=/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
 readonly final_repositories=(appstream baseos extras)
 readonly failure_evidence_max_bytes=4096
+readonly enabled_repository_max=16
+readonly available_repository_definition_max=64
 
 if [[ "$#" -ne 7 ]]; then
   printf 'usage: prepare-rocky-host.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT EXPIRES_AT IMAGE_SELF_LINK EVIDENCE_OUTPUT\n' >&2
@@ -144,7 +146,8 @@ configure_subids() {
 }
 
 read_repository_ids() {
-  local operation="$1" mode="$2" output ids
+  local operation="$1" mode="$2" maximum="$3" output ids
+  [[ "$maximum" =~ ^[1-9][0-9]{0,2}$ ]]
   set_repository_diagnostic "$operation" command-failed
   if ! output="$(dnf4 --quiet repolist "$mode")"; then
     printf 'ERROR: dnf4 repository observation failed.\n' >&2
@@ -168,7 +171,7 @@ read_repository_ids() {
     REPLY+=("$repository")
   done <<<"$ids"
   set_repository_diagnostic "$operation" observation-limit-exceeded
-  [[ "${#REPLY[@]}" -le 16 ]] || {
+  [[ "${#REPLY[@]}" -le "$maximum" ]] || {
     printf 'ERROR: repository observation exceeds the bounded limit.\n' >&2
     return 1
   }
@@ -278,7 +281,7 @@ contains_repository() {
 observe_enabled_repositories() {
   local operation="$1" stage="$2" repository
   clear_repository_failure
-  if ! read_repository_ids "$operation" --enabled; then
+  if ! read_repository_ids "$operation" --enabled "$enabled_repository_max"; then
     return 1
   fi
   repository_enabled=("${REPLY[@]}")
@@ -338,7 +341,7 @@ admit_repositories() {
     printf 'ERROR: required final repositories are missing without a reviewed provider bootstrap repository.\n' >&2
     return 1
   }
-  if ! read_repository_ids observe-available-repository-definitions --all; then
+  if ! read_repository_ids observe-available-repository-definitions --all "$available_repository_definition_max"; then
     return 1
   fi
   available_repos=("${REPLY[@]}")

@@ -551,6 +551,8 @@ class RockyCloudControlTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "readonly profile_path='" + str(profile) + "'\n"
                 "readonly final_repositories=(appstream baseos extras)\n"
+                "readonly enabled_repository_max=16\n"
+                "readonly available_repository_definition_max=64\n"
                 "repository_failure_evidence=''\n"
                 "repository_diagnostic_evidence=''\n"
                 + functions
@@ -643,6 +645,37 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn('"unexpected_enabled":["evil-external"]', unknown.stdout)
         self.assertNotIn(" install ", unknown.dnf_log)  # type: ignore[attr-defined]
         self.assertNotIn("config-manager --set-disabled", unknown.dnf_log)  # type: ignore[attr-defined]
+
+    def test_available_repository_definitions_have_a_separate_bounded_cardinality(self) -> None:
+        initial = [
+            "appstream",
+            "baseos",
+            "extras",
+            "google-cloud-sdk",
+            "google-compute-engine",
+        ]
+        available = [
+            "appstream",
+            "baseos",
+            "extras",
+            *(f"disabled-definition-{index:02d}" for index in range(14)),
+        ]
+        normalized = self._run_repository_admission(
+            [initial, initial, ["appstream", "baseos", "extras"]],
+            all_repositories=available,
+        )
+        self.assertEqual(0, normalized.returncode, normalized.stderr)
+        over_limit = self._run_repository_admission(
+            [initial],
+            all_repositories=[
+                "appstream",
+                "baseos",
+                "extras",
+                *(f"disabled-definition-{index:02d}" for index in range(62)),
+            ],
+        )
+        self.assertNotEqual(0, over_limit.returncode)
+        self.assertIn("repository observation exceeds the bounded limit", over_limit.stderr)
 
     def test_missing_rocky_repository_without_provider_staging_fails_closed(self) -> None:
         for repository in ("appstream", "baseos", "extras"):
