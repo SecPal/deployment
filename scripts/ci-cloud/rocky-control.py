@@ -151,18 +151,17 @@ def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
     phase = document.get("phase")
     if phase == "fixture":
         diagnostic = document.get("fixture_diagnostic")
-        if diagnostic is not None:
-            if not isinstance(diagnostic, dict):
-                raise ControlError("fixture failure diagnostic must be an object")
-            operation = diagnostic.get("operation")
-            reason = diagnostic.get("reason")
-            if (
-                operation not in FIXTURE_DIAGNOSTIC_REASONS
-                or reason not in FIXTURE_DIAGNOSTIC_REASONS[operation]
-            ):
-                raise ControlError(
-                    "fixture failure diagnostic contradicts the closed operation contract"
-                )
+        if not isinstance(diagnostic, dict):
+            raise ControlError("fixture failure diagnostic must be an object")
+        operation = diagnostic.get("operation")
+        reason = diagnostic.get("reason")
+        if (
+            operation not in FIXTURE_DIAGNOSTIC_REASONS
+            or reason not in FIXTURE_DIAGNOSTIC_REASONS[operation]
+        ):
+            raise ControlError(
+                "fixture failure diagnostic contradicts the closed operation contract"
+            )
         return
     if phase != "repositories":
         return

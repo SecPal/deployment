@@ -266,8 +266,10 @@ set_repository_diagnostic() {
 
 set_fixture_diagnostic() {
   local operation="$1" reason="$2"
-  [[ "$operation" =~ ^(pull-immutable-fixture|verify-immutable-fixture-present|inspect-resolved-arm64-child|validate-resolved-arm64-child)$ ]]
-  [[ "$reason" =~ ^(command-failed|postcondition-failed)$ ]]
+  case "$operation:$reason" in
+    pull-immutable-fixture:command-failed|verify-immutable-fixture-present:command-failed|inspect-resolved-arm64-child:command-failed|validate-resolved-arm64-child:postcondition-failed) ;;
+    *) return 1 ;;
+  esac
   fixture_diagnostic_evidence="$(printf '{\"operation\":\"%s\",\"reason\":\"%s\"}' "$operation" "$reason")"
 }
 

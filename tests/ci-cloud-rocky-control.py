@@ -488,7 +488,9 @@ class RockyCloudControlTests(unittest.TestCase):
     def test_fixture_failure_diagnostic_is_closed_and_independently_validated(self) -> None:
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
 
-        def validate(diagnostic: dict[str, object], *, phase: str = "fixture") -> int:
+        def validate(
+            diagnostic: dict[str, object] | None, *, phase: str = "fixture"
+        ) -> int:
             document = {
                 "schema_version": 1,
                 "target_sha": "b" * 40,
@@ -498,8 +500,9 @@ class RockyCloudControlTests(unittest.TestCase):
                 "phase": phase,
                 "exit_status": 1,
                 "guest": {"id": "rocky", "version_id": "10.2", "uname_machine": "aarch64"},
-                "fixture_diagnostic": diagnostic,
             }
+            if diagnostic is not None:
+                document["fixture_diagnostic"] = diagnostic
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
                 json.dump(document, path)
                 path.flush()
@@ -531,7 +534,28 @@ class RockyCloudControlTests(unittest.TestCase):
         for diagnostic in rejected:
             with self.subTest(diagnostic=diagnostic):
                 self.assertNotEqual(0, validate(diagnostic))
+        self.assertNotEqual(0, validate(None))
         self.assertNotEqual(0, validate(accepted[0], phase="repositories"))
+
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        helper_start = preparation.index("set_fixture_diagnostic()")
+        helper_end = preparation.index("\n}\n", helper_start) + len("\n}\n")
+        helper = preparation[helper_start:helper_end]
+        invalid_writer_pair = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -euo pipefail\nfixture_diagnostic_evidence=''\n"
+                + helper
+                + "\nset_fixture_diagnostic pull-immutable-fixture postcondition-failed",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(0, invalid_writer_pair.returncode)
 
     def _run_fixture_admission(
         self, *, fail_pattern: str = "", inspected_digest: str = "expected-child"

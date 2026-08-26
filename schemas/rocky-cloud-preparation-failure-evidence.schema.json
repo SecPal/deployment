@@ -163,7 +163,7 @@
         "properties": { "phase": { "const": "fixture" } },
         "required": ["phase"]
       },
-      "then": {},
+      "then": { "required": ["fixture_diagnostic"] },
       "else": { "not": { "required": ["fixture_diagnostic"] } }
     }
   ],
