@@ -558,7 +558,11 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotEqual(0, invalid_writer_pair.returncode)
 
     def _run_fixture_admission(
-        self, *, fail_pattern: str = "", inspected_digest: str = "expected-child"
+        self,
+        *,
+        fail_pattern: str = "",
+        inspected_digest: str = "sha256:" + "2" * 64,
+        repo_digests: object | None = None,
     ) -> subprocess.CompletedProcess[str]:
         preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
             encoding="utf-8"
@@ -569,15 +573,22 @@ class RockyCloudControlTests(unittest.TestCase):
         block_start = preparation.index('  current_phase="fixture"')
         block_end = preparation.index("\n\n  cat >/etc/sudoers.d/", block_start)
         block = preparation[block_start:block_end]
+        fixture = "docker.io/library/alpine@sha256:" + "1" * 64
+        arm_child = "sha256:" + "2" * 64
+        if repo_digests is None:
+            repo_digests = [f"docker.io/library/alpine@{arm_child}"]
         script = (
             "set -euo pipefail\n"
-            "readonly fixture=immutable-fixture\n"
-            "readonly arm_child=expected-child\n"
+            f"readonly fixture={fixture}\n"
+            f"readonly arm_child={arm_child}\n"
+            "readonly fixture_digest_identity_max=8\n"
+            "readonly fixture_digest_metadata_max_bytes=1024\n"
             "fixture_diagnostic_evidence=''\n"
             + helper
             + "\nrun_as_runtime() {\n"
             + "  if [[ -n \"$FAIL_PATTERN\" && \"$*\" == *\"$FAIL_PATTERN\"* ]]; then printf '%s\\n' 'untrusted fixture stderr' >&2; return 1; fi\n"
-            + "  if [[ \"$*\" == *'podman image inspect'* ]]; then printf '%s\\n' \"$INSPECTED_DIGEST\"; fi\n"
+            + "  if [[ \"$*\" == *'podman image inspect'*RepoDigests* ]]; then printf '%s\\n' \"$REPO_DIGESTS_JSON\";\n"
+            + "  elif [[ \"$*\" == *'podman image inspect'* ]]; then printf '%s\\n' \"$INSPECTED_DIGEST\"; fi\n"
             + "}\n"
             + "set +e\n(\n  set -euo pipefail\n"
             + "  trap 'status=$?; printf \"STATUS=%s\\nDIAGNOSTIC=%s\\n\" \"$status\" \"$fixture_diagnostic_evidence\"; exit \"$status\"' EXIT\n"
@@ -586,7 +597,11 @@ class RockyCloudControlTests(unittest.TestCase):
         )
         environment = dict(os.environ)
         environment.update(
-            {"FAIL_PATTERN": fail_pattern, "INSPECTED_DIGEST": inspected_digest}
+            {
+                "FAIL_PATTERN": fail_pattern,
+                "INSPECTED_DIGEST": inspected_digest,
+                "REPO_DIGESTS_JSON": json.dumps(repo_digests, separators=(",", ":")),
+            }
         )
         return subprocess.run(
             ["bash", "-c", script],
@@ -597,32 +612,41 @@ class RockyCloudControlTests(unittest.TestCase):
         )
 
     def test_fixture_failure_diagnostic_tracks_each_operation_without_untrusted_output(self) -> None:
+        expected_child = "sha256:" + "2" * 64
+        expected_reference = f"docker.io/library/alpine@{expected_child}"
+        wrong_reference = "docker.io/library/alpine@sha256:" + "3" * 64
         cases = (
             (
                 "podman pull",
-                "expected-child",
+                expected_child,
+                [expected_reference],
                 {"operation": "pull-immutable-fixture", "reason": "command-failed"},
             ),
             (
                 "podman image exists",
-                "expected-child",
+                expected_child,
+                [expected_reference],
                 {"operation": "verify-immutable-fixture-present", "reason": "command-failed"},
             ),
             (
                 "podman image inspect",
-                "expected-child",
+                expected_child,
+                [expected_reference],
                 {"operation": "inspect-resolved-arm64-child", "reason": "command-failed"},
             ),
             (
                 "",
-                "wrong-child",
+                "sha256:" + "3" * 64,
+                [wrong_reference],
                 {"operation": "validate-resolved-arm64-child", "reason": "postcondition-failed"},
             ),
         )
-        for fail_pattern, digest, expected in cases:
+        for fail_pattern, digest, repo_digests, expected in cases:
             with self.subTest(operation=expected["operation"]):
                 completed = self._run_fixture_admission(
-                    fail_pattern=fail_pattern, inspected_digest=digest
+                    fail_pattern=fail_pattern,
+                    inspected_digest=digest,
+                    repo_digests=repo_digests,
                 )
                 self.assertNotEqual(0, completed.returncode)
                 diagnostic_line = next(
@@ -671,6 +695,76 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertEqual(0, successful.returncode, successful.stderr)
         self.assertIn("DIAGNOSTIC=", successful.stdout)
         self.assertNotIn('DIAGNOSTIC={"operation"', successful.stdout)
+
+    def test_fixture_child_admission_uses_complete_bounded_digest_membership(self) -> None:
+        repository = "docker.io/library/alpine"
+        parent_digest = "sha256:" + "1" * 64
+        child_digest = "sha256:" + "2" * 64
+        wrong_child_digest = "sha256:" + "3" * 64
+        parent_reference = f"{repository}@{parent_digest}"
+        child_reference = f"{repository}@{child_digest}"
+        wrong_child_reference = f"{repository}@{wrong_child_digest}"
+
+        accepted = (
+            # Real run 33015901180: singular Digest may identify the parent while
+            # RepoDigests still carries the exact locally associated ARM64 child.
+            (parent_digest, [parent_reference, child_reference]),
+            (child_digest, [child_reference]),
+            (child_digest, [child_reference, parent_reference]),
+        )
+        for singular_digest, repo_digests in accepted:
+            with self.subTest(accepted=repo_digests):
+                completed = self._run_fixture_admission(
+                    inspected_digest=singular_digest, repo_digests=repo_digests
+                )
+                self.assertEqual(0, completed.returncode, completed.stderr)
+
+        rejected = (
+            [parent_reference, wrong_child_reference],
+            [parent_reference],
+            [f"{repository}@sha256:" + "2" * 63 + "3"],
+            [],
+            [child_reference, child_reference],
+            ["untrusted podman metadata"],
+            {"digest": child_reference},
+            [
+                f"{repository}@sha256:{index:064x}"
+                for index in range(1, 10)
+            ],
+            ["x" * 1100],
+        )
+        for repo_digests in rejected:
+            with self.subTest(rejected=repo_digests):
+                completed = self._run_fixture_admission(
+                    inspected_digest=parent_digest, repo_digests=repo_digests
+                )
+                self.assertNotEqual(0, completed.returncode)
+                diagnostic_line = next(
+                    line
+                    for line in completed.stdout.splitlines()
+                    if line.startswith("DIAGNOSTIC=")
+                )
+                self.assertEqual(
+                    {
+                        "operation": "validate-resolved-arm64-child",
+                        "reason": "postcondition-failed",
+                    },
+                    json.loads(diagnostic_line.removeprefix("DIAGNOSTIC=")),
+                )
+                self.assertNotIn("untrusted podman metadata", completed.stdout)
+
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        fixture_block = preparation[
+            preparation.index('  current_phase="fixture"') : preparation.index(
+                "\n\n  cat >/etc/sudoers.d/", preparation.index('  current_phase="fixture"')
+            )
+        ]
+        self.assertIn(".RepoDigests", fixture_block)
+        self.assertNotIn("{{.Digest}}", fixture_block)
+        self.assertIn("readonly fixture_digest_identity_max=8", preparation)
+        self.assertIn("readonly fixture_digest_metadata_max_bytes=1024", preparation)
 
     def _run_repository_admission(
         self,

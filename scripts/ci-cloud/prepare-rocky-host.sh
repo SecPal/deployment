@@ -10,6 +10,8 @@ readonly expected_architecture=aarch64
 readonly runtime_account=secpal-runtime
 readonly fixture='docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1'
 readonly arm_child='sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192'
+readonly fixture_digest_identity_max=8
+readonly fixture_digest_metadata_max_bytes=1024
 readonly state_root=/var/lib/secpal-rocky
 readonly profile_path=/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
 readonly final_repositories=(appstream baseos extras)
@@ -405,6 +407,7 @@ admit_repositories() {
 }
 
 install_policy() {
+  local fixture_digest_metadata runtime_uid
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="repositories"
@@ -437,7 +440,6 @@ install_policy() {
   configure_subids
   current_phase="systemd-user"
   loginctl enable-linger "$runtime_account"
-  local runtime_uid
   runtime_uid="$(id -u "$runtime_account")"
   current_phase="quadlet-authority"
   install -d -o root -g root -m 0755 "/etc/containers/systemd/users/$runtime_uid"
@@ -453,9 +455,28 @@ install_policy() {
   set_fixture_diagnostic verify-immutable-fixture-present command-failed
   run_as_runtime podman image exists "$fixture"
   set_fixture_diagnostic inspect-resolved-arm64-child command-failed
-  resolved_child="$(run_as_runtime podman image inspect --format '{{.Digest}}' "$fixture")"
+  # libimage's singular Digest may identify either the child or its manifest list;
+  # RepoDigests carries the complete local digest identities needed for membership.
+  fixture_digest_metadata="$(run_as_runtime podman image inspect --format '{{json .RepoDigests}}' "$fixture")"
   set_fixture_diagnostic validate-resolved-arm64-child postcondition-failed
-  [[ "$resolved_child" == "$arm_child" ]]
+  [[ -n "$fixture_digest_metadata" ]]
+  [[ "$(printf '%s' "$fixture_digest_metadata" | wc -c)" -le "$fixture_digest_metadata_max_bytes" ]]
+  jq -e \
+    --arg repository "${fixture%@*}" \
+    --arg expected "${fixture%@*}@$arm_child" \
+    --argjson maximum "$fixture_digest_identity_max" '
+      type == "array" and
+      length > 0 and
+      length <= $maximum and
+      (unique | length) == length and
+      all(.[];
+        type == "string" and
+        startswith($repository + "@sha256:") and
+        length == (($repository | length) + 72) and
+        (.[(($repository | length) + 8):] | test("^[0-9a-f]{64}$"))
+      ) and
+      index($expected) != null
+    ' <<<"$fixture_digest_metadata" >/dev/null
   fixture_diagnostic_evidence=''
   current_phase="pre-reboot"
 
