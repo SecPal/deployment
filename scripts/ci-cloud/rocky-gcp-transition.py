@@ -118,12 +118,34 @@ def validate_instance(instance: dict[str, Any], options: argparse.Namespace) -> 
         raise TransitionError("instance ownership does not exactly match the continuation")
     if str(instance.get("id", "")) != options.instance_id:
         raise TransitionError("live immutable instance ID does not match the continuation")
-    service_accounts = instance.get("serviceAccounts", [])
-    if service_accounts not in (
-        [],
-        [{"email": BOOTSTRAP_ACCOUNT, "scopes": []}],
-    ):
+    validate_service_accounts(instance)
+
+
+def validate_service_accounts(instance: dict[str, Any]) -> None:
+    """Admit only identity-free or the inert bootstrap identity.
+
+    Compute may omit an explicitly empty scopes field or return it as null.
+    Those forms have the same empty-scope meaning as the historical admission
+    rule, while cardinality, exact email, and non-empty/malformed scopes remain
+    fail-closed.
+    """
+    if "serviceAccounts" not in instance:
+        return
+    service_accounts = instance["serviceAccounts"]
+    if not isinstance(service_accounts, list):
+        raise TransitionError("instance serviceAccounts is not a list")
+    if not service_accounts:
+        return
+    if len(service_accounts) != 1 or not isinstance(service_accounts[0], dict):
+        raise TransitionError("instance has an unreviewed cloud identity")
+    account = service_accounts[0]
+    if account.get("email") != BOOTSTRAP_ACCOUNT:
         raise TransitionError("instance holds an unreviewed cloud identity")
+    scopes = account.get("scopes")
+    if scopes is None:
+        return
+    if not isinstance(scopes, list) or scopes:
+        raise TransitionError("bootstrap identity scopes are not exactly empty")
 
 
 def metadata_payload(instance: dict[str, Any], public_key: str) -> dict[str, Any]:
