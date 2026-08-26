@@ -95,6 +95,7 @@ class RockyCloudControlTests(unittest.TestCase):
                 "repositories": {
                     "final_enabled_repositories": ["appstream", "baseos", "extras"],
                     "pre_admission_provider_repositories": [
+                        "google-cloud-sdk",
                         "google-compute-engine"
                     ],
                 },
@@ -409,6 +410,7 @@ class RockyCloudControlTests(unittest.TestCase):
                 "appstream",
                 "baseos",
                 "extras",
+                "google-cloud-sdk",
                 "google-compute-engine",
             ]
             fake_bin = root / "bin"
@@ -464,24 +466,76 @@ class RockyCloudControlTests(unittest.TestCase):
             completed.dnf_log = (root / "dnf.log").read_text(encoding="utf-8")  # type: ignore[attr-defined]
             return completed
 
-    def test_repository_admission_normalizes_only_the_reviewed_gcp_bootstrap_repo(self) -> None:
+    def test_repository_admission_normalizes_only_the_reviewed_gcp_bootstrap_repositories(self) -> None:
         baseline = self._run_repository_admission([["appstream", "baseos", "extras"]])
         self.assertEqual(0, baseline.returncode, baseline.stderr)
         self.assertIn("FAILURE=", baseline.stdout)
         self.assertNotIn("config-manager", baseline.dnf_log)  # type: ignore[attr-defined]
-        normalized = self._run_repository_admission(
+        provider_sets = (
+            ("google-cloud-sdk",),
+            ("google-compute-engine",),
+            ("google-cloud-sdk", "google-compute-engine"),
+        )
+        for providers in provider_sets:
+            with self.subTest(providers=providers):
+                initial = ["appstream", "baseos", "extras", *providers]
+                normalized = self._run_repository_admission(
+                    [initial, initial, ["appstream", "baseos", "extras"]]
+                )
+                self.assertEqual(0, normalized.returncode, normalized.stderr)
+                log = normalized.dnf_log  # type: ignore[attr-defined]
+                for provider in providers:
+                    self.assertIn(f"config-manager --set-disabled {provider}", log)
+                for transaction in (line for line in log.splitlines() if " install " in line):
+                    self.assertIn("--disablerepo=*", transaction)
+                    self.assertIn("--enablerepo=baseos,appstream,extras", transaction)
+
+    def test_real_observed_provider_repositories_are_closed_and_unknown_repositories_fail(self) -> None:
+        real_observed = self._run_repository_admission(
             [
-                ["appstream", "baseos", "extras", "google-compute-engine"],
-                ["appstream", "baseos", "extras", "google-compute-engine"],
+                [
+                    "appstream",
+                    "baseos",
+                    "extras",
+                    "google-cloud-sdk",
+                    "google-compute-engine",
+                ],
+                [
+                    "appstream",
+                    "baseos",
+                    "extras",
+                    "google-cloud-sdk",
+                    "google-compute-engine",
+                ],
                 ["appstream", "baseos", "extras"],
             ]
         )
-        self.assertEqual(0, normalized.returncode, normalized.stderr)
-        log = normalized.dnf_log  # type: ignore[attr-defined]
-        self.assertIn("config-manager --set-disabled google-compute-engine", log)
-        for transaction in (line for line in log.splitlines() if " install " in line):
-            self.assertIn("--disablerepo=*", transaction)
-            self.assertIn("--enablerepo=baseos,appstream,extras", transaction)
+        self.assertEqual(0, real_observed.returncode, real_observed.stderr)
+        for provider in ("google-cloud-sdk", "google-compute-engine"):
+            self.assertIn(
+                f"config-manager --set-disabled {provider}",
+                real_observed.dnf_log,  # type: ignore[attr-defined]
+            )
+        unknown = self._run_repository_admission(
+            [["appstream", "baseos", "evil-external", "extras", "google-cloud-sdk"]]
+        )
+        self.assertNotEqual(0, unknown.returncode)
+        self.assertIn('"unexpected_enabled":["evil-external"]', unknown.stdout)
+        self.assertNotIn(" install ", unknown.dnf_log)  # type: ignore[attr-defined]
+        self.assertNotIn("config-manager --set-disabled", unknown.dnf_log)  # type: ignore[attr-defined]
+
+    def test_missing_rocky_repository_without_provider_staging_fails_closed(self) -> None:
+        for repository in ("appstream", "baseos", "extras"):
+            with self.subTest(repository=repository):
+                enabled = [
+                    item
+                    for item in ("appstream", "baseos", "extras")
+                    if item != repository
+                ]
+                failed = self._run_repository_admission([enabled])
+                self.assertNotEqual(0, failed.returncode)
+                self.assertIn(f'"missing_required":["{repository}"]', failed.stdout)
+                self.assertNotIn(" install ", failed.dnf_log)  # type: ignore[attr-defined]
 
     def test_repository_admission_fails_closed_for_unknown_or_unobservable_state(self) -> None:
         unknown = self._run_repository_admission(
@@ -594,7 +648,7 @@ class RockyCloudControlTests(unittest.TestCase):
             validate(
                 {
                     "stage": "pre-admission",
-                    "enabled": ["appstream", "baseos", "extras", "google-compute-engine"],
+                    "enabled": ["appstream", "baseos", "extras", "google-cloud-sdk", "google-compute-engine"],
                     "unexpected_enabled": [],
                     "missing_required": [],
                 }
@@ -624,7 +678,7 @@ class RockyCloudControlTests(unittest.TestCase):
         )
         rejected = (
             {"stage": "pre-admission", "enabled": ["epel"], "unexpected_enabled": [], "missing_required": []},
-            {"stage": "pre-admission", "enabled": ["appstream", "baseos", "google-compute-engine"], "unexpected_enabled": [], "missing_required": []},
+            {"stage": "pre-admission", "enabled": ["appstream", "baseos", "google-cloud-sdk", "google-compute-engine"], "unexpected_enabled": [], "missing_required": []},
             {"stage": "pre-admission", "enabled": ["appstream", "baseos", "epel", "extras", "zrepo"], "unexpected_enabled": ["epel"], "missing_required": []},
             {"stage": "pre-admission", "enabled": ["extras", "baseos", "appstream"], "unexpected_enabled": [], "missing_required": []},
         )
@@ -883,7 +937,10 @@ class RockyCloudControlTests(unittest.TestCase):
         collector = (ROOT / "scripts/ci-cloud/collect-rocky-preparation.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("google-compute-engine", PROFILE.read_text(encoding="utf-8"))
+        self.assertEqual(
+            ["google-cloud-sdk", "google-compute-engine"],
+            json.loads(PROFILE.read_text(encoding="utf-8"))["repositories"]["pre_admission_provider_repositories"],
+        )
         self.assertIn("config-manager --set-disabled", preparation)
         self.assertNotIn("remove google-guest-agent", preparation)
         self.assertNotIn("disable google-guest-agent", preparation)
