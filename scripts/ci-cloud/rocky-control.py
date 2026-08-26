@@ -79,9 +79,12 @@ REPOSITORY_DIAGNOSTIC_REASONS = {
     },
     "validate-final-repository-state": {"postcondition-failed"},
 }
-REPOSITORY_MUTATION_OPERATIONS = {
-    "enable-required-rocky-repository",
-    "disable-reviewed-provider-repository",
+# Repository IDs are only meaningful for operations on a single reviewed
+# repository.  Their allowed domain is bound to the canonical profile.
+REPOSITORY_ID_OPERATION_DOMAINS = {
+    "validate-required-repository-definitions": "final",
+    "enable-required-rocky-repository": "final",
+    "disable-reviewed-provider-repository": "provider",
 }
 
 
@@ -157,8 +160,9 @@ def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
         if operation not in REPOSITORY_DIAGNOSTIC_REASONS or reason not in REPOSITORY_DIAGNOSTIC_REASONS[operation]:
             raise ControlError("repository failure diagnostic contradicts the closed operation contract")
         repository_id = diagnostic.get("repository_id")
-        if operation in REPOSITORY_MUTATION_OPERATIONS:
-            expected_ids = final if operation == "enable-required-rocky-repository" else provider
+        repository_id_domain = REPOSITORY_ID_OPERATION_DOMAINS.get(operation)
+        if repository_id_domain is not None:
+            expected_ids = final if repository_id_domain == "final" else provider
             if repository_id not in expected_ids:
                 raise ControlError("repository failure diagnostic names an unreviewed repository")
         elif repository_id is not None:

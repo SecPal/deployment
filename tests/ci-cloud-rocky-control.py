@@ -422,6 +422,26 @@ class RockyCloudControlTests(unittest.TestCase):
             0,
             validate(
                 {
+                    "operation": "validate-required-repository-definitions",
+                    "reason": "required-repository-definition-unavailable",
+                    "repository_id": "extras",
+                }
+            ),
+        )
+        self.assertEqual(
+            0,
+            validate(
+                {
+                    "operation": "enable-required-rocky-repository",
+                    "reason": "repository-mutation-failed",
+                    "repository_id": "extras",
+                }
+            ),
+        )
+        self.assertEqual(
+            0,
+            validate(
+                {
                     "operation": "disable-reviewed-provider-repository",
                     "reason": "repository-mutation-failed",
                     "repository_id": "google-cloud-sdk",
@@ -431,6 +451,25 @@ class RockyCloudControlTests(unittest.TestCase):
         rejected = (
             {"operation": "arbitrary-command", "reason": "command-failed"},
             {"operation": "install-repository-management-prerequisite", "reason": "command-failed"},
+            {
+                "operation": "validate-required-repository-definitions",
+                "reason": "required-repository-definition-unavailable",
+            },
+            {
+                "operation": "validate-required-repository-definitions",
+                "reason": "required-repository-definition-unavailable",
+                "repository_id": "google-cloud-sdk",
+            },
+            {
+                "operation": "validate-required-repository-definitions",
+                "reason": "required-repository-definition-unavailable",
+                "repository_id": "evil-external",
+            },
+            {
+                "operation": "enable-required-rocky-repository",
+                "reason": "repository-mutation-failed",
+                "repository_id": "google-cloud-sdk",
+            },
             {
                 "operation": "disable-reviewed-provider-repository",
                 "reason": "repository-mutation-failed",
@@ -701,6 +740,52 @@ class RockyCloudControlTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertNotEqual(0, completed.returncode)
                 self.assertEqual(expected, diagnostic(completed))
+
+    def test_generated_missing_required_repository_diagnostic_is_trusted(self) -> None:
+        failed = self._run_repository_admission(
+            [["appstream", "baseos", "extras", "google-cloud-sdk", "google-compute-engine"]],
+            all_repositories=["appstream", "baseos"],
+        )
+        self.assertNotEqual(0, failed.returncode)
+
+        def output_record(name: str) -> dict[str, object]:
+            line = next(
+                line for line in failed.stdout.splitlines() if line.startswith(f"{name}=")
+            )
+            return json.loads(line.removeprefix(f"{name}="))
+
+        document = {
+            "schema_version": 1,
+            "target_sha": "b" * 40,
+            "trusted_control_sha": "a" * 40,
+            "run_id": "12345",
+            "run_attempt": "1",
+            "phase": "repositories",
+            "exit_status": 1,
+            "guest": {"id": "rocky", "version_id": "10.2", "uname_machine": "aarch64"},
+            "repositories": output_record("FAILURE"),
+            "repository_diagnostic": output_record("DIAGNOSTIC"),
+        }
+        self.assertEqual(
+            {
+                "operation": "validate-required-repository-definitions",
+                "reason": "required-repository-definition-unavailable",
+                "repository_id": "extras",
+            },
+            document["repository_diagnostic"],
+        )
+        control = ROOT / "scripts/ci-cloud/rocky-control.py"
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+            json.dump(document, path)
+            path.flush()
+            self.assertEqual(
+                0,
+                subprocess.run(
+                    [control, "validate-evidence", "preparation-failure", path.name],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+            )
 
     def test_repository_failure_diagnostic_does_not_retain_stale_operation_context(self) -> None:
         failed = self._run_repository_admission(

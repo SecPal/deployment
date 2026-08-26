@@ -112,6 +112,7 @@
             "properties": {
               "operation": {
                 "enum": [
+                  "validate-required-repository-definitions",
                   "enable-required-rocky-repository",
                   "disable-reviewed-provider-repository"
                 ]
