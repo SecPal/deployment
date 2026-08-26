@@ -52,6 +52,7 @@ required_files=(
   docs/frontend-image-consumption.md
   docs/quadlet-integration.md
   docs/ci-cloud-conformance.md
+  docs/rocky-cloud-qualification.md
   docs/roadmap.md
   infra/ci-cloud/digitalocean/.terraform.lock.hcl
   infra/ci-cloud/digitalocean/main.tf
@@ -64,8 +65,18 @@ required_files=(
   infra/ci-cloud/gcp/outputs.tf
   infra/ci-cloud/gcp/variables.tf
   infra/ci-cloud/gcp/versions.tf
+  infra/ci-cloud/gcp-rocky/.terraform.lock.hcl
+  infra/ci-cloud/gcp-rocky/main.tf
+  infra/ci-cloud/gcp-rocky/outputs.tf
+  infra/ci-cloud/gcp-rocky/variables.tf
+  infra/ci-cloud/gcp-rocky/versions.tf
   schemas/ci-cloud-bootstrap-failure.schema.json
   schemas/ci-cloud-evidence.schema.json
+  schemas/rocky-cloud-continuation.schema.json
+  schemas/rocky-cloud-discovery-evidence.schema.json
+  schemas/rocky-cloud-preparation-evidence.schema.json
+  schemas/rocky-cloud-qualification-evidence.schema.json
+  config/ci-cloud/gcp-rocky-10-2-arm64.json
   config/production/inventory.example.yaml
   config/production/state-contract.json
   config/quadlet/Caddyfile
@@ -93,6 +104,15 @@ required_files=(
   scripts/ci-cloud/install-diagnostic-ssh.sh
   scripts/ci-cloud/digitalocean-janitor.py
   scripts/ci-cloud/gcp-janitor.py
+  scripts/ci-cloud/gcp-rocky-janitor.py
+  scripts/ci-cloud/allocate-rocky-subids.py
+  scripts/ci-cloud/bootstrap-rocky-host.tftpl
+  scripts/ci-cloud/collect-rocky-preparation.py
+  scripts/ci-cloud/prepare-rocky-host.sh
+  scripts/ci-cloud/rocky-control.py
+  scripts/ci-cloud/rocky-gcp-transition.py
+  scripts/ci-cloud/run-rocky-target-qualification.sh
+  scripts/ci-cloud/wait-github-artifact.sh
   scripts/ci-cloud/detach-gcp-vm-identity.sh
   scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh
   scripts/ci-cloud/host-setup-failure.py
@@ -118,6 +138,8 @@ required_files=(
   tests/ci-cloud-collector.py
   tests/ci-cloud-evidence.py
   tests/ci-cloud-gcp-janitor.py
+  tests/ci-cloud-gcp-rocky-janitor.py
+  tests/ci-cloud-rocky-control.py
   tests/ci-cloud-gcp-identity.sh
   tests/ci-cloud-host-setup-failure.py
   tests/ci-cloud-janitor.py
@@ -148,6 +170,7 @@ required_files=(
   .github/actionlint.yaml
   .github/workflows/cloud-conformance.yml
   .github/workflows/cloud-janitor.yml
+  .github/workflows/rocky-cloud-qualification.yml
   LICENSES/AGPL-3.0-or-later.txt
   LICENSES/CC0-1.0.txt
   LICENSES/MIT.txt

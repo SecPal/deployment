@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+readonly metadata=http://169.254.169.254/computeMetadata/v1
+metadata_value() {
+  curl --noproxy '*' --fail --silent --show-error --max-time 5 \
+    -H 'Metadata-Flavor: Google' "$metadata/$1"
+}
+
+decode_script() {
+  local encoded="$1" destination="$2"
+  printf '%s' "$encoded" | base64 --decode | gzip --decompress >"$destination"
+  chown root:root "$destination"
+  chmod 0700 "$destination"
+}
+
+install -d -o root -g root -m 0700 /var/lib/secpal-rocky /var/lib/secpal-rocky/evidence
+install -d -o root -g root -m 0755 /opt/secpal-control/scripts/ci-cloud \
+  /opt/secpal-control/config/ci-cloud /opt/secpal-control/schemas
+decode_script '${prepare_script_base64gzip}' /usr/local/sbin/secpal-prepare-rocky-host
+decode_script '${target_runner_base64gzip}' /usr/local/sbin/secpal-run-rocky-target-qualification
+decode_script '${allocator_base64gzip}' /usr/local/sbin/secpal-allocate-rocky-subids
+decode_script '${collector_base64gzip}' /usr/local/sbin/secpal-collect-rocky-preparation
+decode_script '${control_utility_base64gzip}' /opt/secpal-control/scripts/ci-cloud/rocky-control.py
+decode_script '${discovery_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-discovery-evidence.schema.json
+decode_script '${continuation_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-continuation.schema.json
+decode_script '${preparation_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-preparation-evidence.schema.json
+decode_script '${qualification_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-qualification-evidence.schema.json
+decode_script '${profile_base64gzip}' /opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
+chmod 0644 /opt/secpal-control/schemas/*.json /opt/secpal-control/config/ci-cloud/*.json
+
+public_key="$(metadata_value instance/attributes/secpal-rocky-ssh-public-key)"
+[[ "$public_key" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,2}\ secpal-rocky-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}$ ]]
+if ! getent passwd secpal-cloud >/dev/null; then
+  useradd --system --create-home --home-dir /var/lib/secpal-cloud --shell /bin/bash secpal-cloud
+fi
+install -d -o secpal-cloud -g secpal-cloud -m 0700 /var/lib/secpal-cloud/.ssh
+printf '%s\n' "$public_key" >/var/lib/secpal-cloud/.ssh/authorized_keys
+chown secpal-cloud:secpal-cloud /var/lib/secpal-cloud/.ssh/authorized_keys
+chmod 0600 /var/lib/secpal-cloud/.ssh/authorized_keys
+
+admitted="$(metadata_value instance/attributes/secpal-rocky-cloud-identity-admitted)"
+[[ "$admitted" == true ]] || exit 0
+if identities="$(metadata_value instance/service-accounts/ 2>/dev/null)"; then
+  [[ -z "$identities" ]]
+fi
+install -o root -g root -m 0600 /dev/null /var/lib/secpal-rocky/cloud-identity-absent
+
+target_sha="$(metadata_value instance/attributes/secpal-rocky-target-sha)"
+control_sha="$(metadata_value instance/attributes/secpal-rocky-trusted-control-sha)"
+image="$(metadata_value instance/attributes/secpal-rocky-exact-image-self-link)"
+expires_at="$(metadata_value instance/attributes/secpal-rocky-expires-at)"
+hostname_value="$(hostname)"
+[[ "$hostname_value" =~ ^sprk-([1-9][0-9]{0,19})-([1-9][0-9]{0,2})-instance$ ]]
+run_id="$${BASH_REMATCH[1]}"
+run_attempt="$${BASH_REMATCH[2]}"
+
+/usr/local/sbin/secpal-prepare-rocky-host \
+  "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$expires_at" "$image" \
+  /var/lib/secpal-rocky/evidence/preparation.json

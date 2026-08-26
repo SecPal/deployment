@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/rocky-cloud-continuation.schema.json",
+  "title": "Rocky GCP retained-run continuation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "trusted_control_sha",
+    "target_sha",
+    "provider",
+    "profile",
+    "exact_image_self_link",
+    "instance_id",
+    "instance_name",
+    "zone",
+    "run_id",
+    "run_attempt",
+    "created_at",
+    "expires_at",
+    "state_artifact",
+    "ssh_authority"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "repository": { "const": "SecPal/deployment" },
+    "trusted_control_sha": { "$ref": "#/$defs/sha" },
+    "target_sha": { "$ref": "#/$defs/sha" },
+    "provider": { "const": "google" },
+    "profile": { "const": "gcp-rocky-10-2-arm64" },
+    "exact_image_self_link": {
+      "type": "string",
+      "pattern": "^https://www\\.googleapis\\.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-[a-z0-9-]{1,50}$",
+      "maxLength": 256
+    },
+    "instance_id": { "type": "string", "pattern": "^[1-9][0-9]{0,29}$" },
+    "instance_name": {
+      "type": "string",
+      "pattern": "^sprk-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}-instance$",
+      "maxLength": 63
+    },
+    "zone": { "const": "europe-west3-a" },
+    "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+    "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
+    "created_at": {
+      "type": "integer",
+      "minimum": 1600000000,
+      "maximum": 4102444800
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 1600000000,
+      "maximum": 4102444800
+    },
+    "state_artifact": {
+      "type": "string",
+      "pattern": "^rocky-cloud-state-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}$",
+      "maxLength": 64
+    },
+    "ssh_authority": { "const": "rotate-per-operation-before-identity-detach" }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+  }
+}

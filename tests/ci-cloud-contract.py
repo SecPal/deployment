@@ -999,6 +999,15 @@ class CloudCIContractTests(unittest.TestCase):
             "infra/ci-cloud/gcp/outputs.tf",
             "infra/ci-cloud/gcp/variables.tf",
             "infra/ci-cloud/gcp/versions.tf",
+            "infra/ci-cloud/gcp-rocky/.terraform.lock.hcl",
+            "infra/ci-cloud/gcp-rocky/main.tf",
+            "infra/ci-cloud/gcp-rocky/outputs.tf",
+            "infra/ci-cloud/gcp-rocky/variables.tf",
+            "infra/ci-cloud/gcp-rocky/versions.tf",
+            "scripts/ci-cloud/gcp-rocky-janitor.py",
+            "scripts/ci-cloud/rocky-control.py",
+            "tests/ci-cloud-gcp-rocky-janitor.py",
+            "tests/ci-cloud-rocky-control.py",
             "schemas/ci-cloud-bootstrap-failure.schema.json",
             "scripts/ci-cloud/gcp-janitor.py",
             "scripts/ci-cloud/detach-gcp-vm-identity.sh",
@@ -1032,6 +1041,7 @@ class CloudCIContractTests(unittest.TestCase):
         for relative in (
             ".github/workflows/cloud-conformance.yml",
             ".github/workflows/cloud-janitor.yml",
+            ".github/workflows/rocky-cloud-qualification.yml",
         ):
             with self.subTest(relative=relative):
                 self.assertIn(

@@ -123,6 +123,14 @@ deployment commit SHA without exposing cloud-control credentials to that
 commit, collect bounded host/runtime evidence, and destroy the exact OpenTofu
 state. Metadata-gated TTL janitors protect billable compute fixtures.
 
+The separate current
+[`Rocky 10.2 ephemeral-cloud qualification`](docs/rocky-cloud-qualification.md)
+contract fixes one GCP C4A ARM64 profile, resolves the official moving family to
+an immutable image before OpenTofu, and separates discovery, preparation,
+target-owned qualification, and exact destruction. Repository validation does
+not claim provider or native ARM success; protected WIF discovery and a real
+create→observe→destroy run remain post-merge evidence.
+
 The exact target implements only the fixed versioned `host`, workload
 publication, and workload cleanup phases. It derives the fixture identity and
 loopback port from the admitted commit, verifies the reviewed API and frontend

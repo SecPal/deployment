@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: CC0-1.0
 
 title: SecPal Cloud Conformance Operator
-description: Bounded Compute permissions for disposable Debian 13 conformance fixtures
+description: Bounded Compute permissions for disposable SecPal conformance fixtures
 stage: GA
 includedPermissions:
   - compute.disks.create
@@ -15,6 +15,7 @@ includedPermissions:
   - compute.firewalls.create
   - compute.firewalls.delete
   - compute.firewalls.get
+  - compute.firewalls.list
   - compute.firewalls.update
   - compute.globalOperations.get
   - compute.images.get
@@ -33,6 +34,7 @@ includedPermissions:
   - compute.networks.create
   - compute.networks.delete
   - compute.networks.get
+  - compute.networks.list
   # Required by the network field on subnetwork and firewall insert requests.
   - compute.networks.updatePolicy
   - compute.projects.get
@@ -40,6 +42,7 @@ includedPermissions:
   - compute.subnetworks.create
   - compute.subnetworks.delete
   - compute.subnetworks.get
+  - compute.subnetworks.list
   - compute.subnetworks.use
   - compute.subnetworks.useExternalIp
   - compute.zoneOperations.get

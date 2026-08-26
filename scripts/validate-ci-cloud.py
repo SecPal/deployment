@@ -58,6 +58,7 @@ GCP_IAM_PERMISSIONS = {
     "compute.firewalls.create",
     "compute.firewalls.delete",
     "compute.firewalls.get",
+    "compute.firewalls.list",
     "compute.firewalls.update",
     "compute.globalOperations.get",
     "compute.images.get",
@@ -76,6 +77,7 @@ GCP_IAM_PERMISSIONS = {
     "compute.networks.create",
     "compute.networks.delete",
     "compute.networks.get",
+    "compute.networks.list",
     # Required by the network field on subnetworks.insert and firewalls.insert.
     "compute.networks.updatePolicy",
     "compute.projects.get",
@@ -83,6 +85,7 @@ GCP_IAM_PERMISSIONS = {
     "compute.subnetworks.create",
     "compute.subnetworks.delete",
     "compute.subnetworks.get",
+    "compute.subnetworks.list",
     "compute.subnetworks.use",
     "compute.subnetworks.useExternalIp",
     "compute.zoneOperations.get",
@@ -565,7 +568,7 @@ def validate_janitor_workflow(root: Path) -> None:
     jobs = document.get("jobs")
     require(isinstance(jobs, dict) and set(jobs) == {"digitalocean", "gcp"}, "janitor provider scope changed")
     require(text.count("secrets.DIGITALOCEAN_ACCESS_TOKEN") == 1, "DigitalOcean janitor token scope changed")
-    require(text.count("GOOGLE_OAUTH_ACCESS_TOKEN") == 1, "GCP janitor token scope changed")
+    require(text.count("GOOGLE_OAUTH_ACCESS_TOKEN") == 2, "GCP janitor token scope changed")
     require(text.count("id-token: write") == 1, "janitor OIDC permission scope changed")
     require(text.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 1, "janitor auth action pin changed")
     require(
@@ -575,7 +578,12 @@ def validate_janitor_workflow(root: Path) -> None:
         "GCP janitor identity must be validated before authentication",
     )
     require(text.count("ref: ${{ github.sha }}") == 2 and text.count("persist-credentials: false") == 2, "janitor checkout trust changed")
-    require("scripts/ci-cloud/gcp-janitor.py" in text and "--zone europe-west3-a" in text, "bounded GCP janitor invocation is missing")
+    require(
+        "scripts/ci-cloud/gcp-janitor.py" in text
+        and "scripts/ci-cloud/gcp-rocky-janitor.py" in text
+        and "--zone europe-west3-a" in text,
+        "bounded GCP janitor invocation is missing",
+    )
     validate_action_pins(document, relative)
 
 
@@ -1949,12 +1957,136 @@ def validate_gcp_iam_role(root: Path) -> None:
     )
 
 
+def validate_rocky_control_plane(root: Path) -> None:
+    relative = ".github/workflows/rocky-cloud-qualification.yml"
+    # Historical mutation tests construct a deliberately minimal legacy tree.
+    # Repository presence is owned independently by repository-contract.sh.
+    if not (root / relative).is_file():
+        return
+    document, text = load_workflow(root, relative)
+    validate_action_pins(document, relative)
+    trigger = document.get("on")
+    require(isinstance(trigger, dict), "Rocky workflow trigger must be a mapping")
+    dispatch = trigger.get("workflow_dispatch")
+    require(isinstance(dispatch, dict), "Rocky workflow must be manually dispatched")
+    inputs = dispatch.get("inputs")
+    require(isinstance(inputs, dict), "Rocky workflow inputs must be closed")
+    require(
+        set(inputs)
+        == {
+            "operation",
+            "target_sha",
+            "provider_profile",
+            "continuation_run_id",
+            "continuation_run_attempt",
+        },
+        "Rocky workflow input set changed",
+    )
+    operation = inputs.get("operation")
+    profile = inputs.get("provider_profile")
+    require(
+        isinstance(operation, dict)
+        and operation.get("options")
+        == ["discover", "provision-and-prepare", "qualify", "destroy"],
+        "Rocky lifecycle operations must remain closed",
+    )
+    require(
+        isinstance(profile, dict)
+        and profile.get("options") == ["gcp-rocky-10-2-arm64"],
+        "Rocky provider profile must remain closed",
+    )
+    require(
+        "github.ref == 'refs/heads/main'" in text
+        and "^[0-9a-fA-F]{40}$" in text,
+        "Rocky control must execute trusted main for one immutable target SHA",
+    )
+    jobs = document.get("jobs")
+    require(isinstance(jobs, dict), "Rocky workflow jobs must be a mapping")
+    require(
+        set(jobs)
+        == {
+            "validate",
+            "discover",
+            "provision",
+            "resume_control",
+            "qualify_target",
+            "cleanup",
+        },
+        "Rocky lifecycle job set changed",
+    )
+    target_job = jobs["qualify_target"]
+    require(isinstance(target_job, dict), "target qualification job is malformed")
+    target_text = json.dumps(target_job, sort_keys=True)
+    for forbidden in (
+        "id-token",
+        "google-github-actions/auth",
+        "GOOGLE_OAUTH_ACCESS_TOKEN",
+        "GCP_SERVICE_ACCOUNT",
+        "credentials_file",
+        "ci-cloud-gcp",
+    ):
+        require(
+            forbidden not in target_text,
+            f"target qualification job retains cloud-control authority: {forbidden}",
+        )
+    require(
+        "run-rocky-target-qualification" in target_text
+        and "run-rocky-target-qualification" not in json.dumps(jobs["resume_control"]),
+        "only the uncredentialed target job may request target-owned execution",
+    )
+    require(
+        text.count("create_credentials_file: false") == 4
+        and text.count("export_environment_variables: false") == 4,
+        "Rocky WIF must stay in-memory and step-scoped",
+    )
+    require(
+        "credentials_json" not in text and "service_account_key" not in text,
+        "static GCP keys are forbidden",
+    )
+    main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
+    variables = read(root, "infra/ci-cloud/gcp-rocky/variables.tf")
+    versions = read(root, "infra/ci-cloud/gcp-rocky/versions.tf")
+    require(
+        'required_version = "= 1.12.5"' in versions
+        and 'version = "= 7.40.0"' in versions,
+        "Rocky OpenTofu and Google provider versions must be exact",
+    )
+    require(
+        'image  = var.exact_image_self_link' in main
+        and 'data "google_compute_image"' not in main
+        and "discovery_family" not in main,
+        "OpenTofu may consume only the pre-resolved exact image identity",
+    )
+    require(
+        "rocky-linux-cloud/global/images/" in variables
+        and main.count('resource "google_compute_instance"') == 1
+        and re.search(r"\bcount\s*=", main) is None,
+        "Rocky image and instance count are outside the closed contract",
+    )
+    for schema_name in (
+        "rocky-cloud-discovery-evidence.schema.json",
+        "rocky-cloud-continuation.schema.json",
+        "rocky-cloud-preparation-evidence.schema.json",
+        "rocky-cloud-qualification-evidence.schema.json",
+    ):
+        try:
+            schema = json.loads(read(root, f"schemas/{schema_name}"))
+            Draft202012Validator.check_schema(schema)
+        except (json.JSONDecodeError, SchemaError):
+            raise ContractError(f"Rocky evidence schema is invalid: {schema_name}") from None
+        require(
+            schema.get("additionalProperties") is False,
+            f"Rocky evidence schema is not closed: {schema_name}",
+        )
+
+
 def validate(root: Path) -> None:
     validate_conformance_workflow(root)
     validate_janitor_workflow(root)
     validate_opentofu(root)
     validate_janitor_script(root)
     validate_gcp_iam_role(root)
+    validate_rocky_control_plane(root)
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
     target = read(root, "scripts/ci-cloud/target-conformance.sh")
