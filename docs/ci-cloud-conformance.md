@@ -218,9 +218,12 @@ The provider must use issuer `https://token.actions.githubusercontent.com/`,
 default audience, the documented GitHub claim mappings, and a condition that
 requires repository `SecPal/deployment`, owner `SecPal`, ref
 `refs/heads/main`, one of the two environments above, and only
-`cloud-conformance.yml` or `cloud-janitor.yml` from `main`. The repository
-principal receives only `roles/iam.workloadIdentityUser` on the dedicated
-service account. Never create a service-account JSON key.
+`cloud-conformance.yml`, `cloud-janitor.yml`, or the reviewed
+`rocky-cloud-qualification.yml` from `main`. The same provider therefore
+admits the current Rocky control workflow only under the existing
+repository/owner/ref/environment boundaries. The repository principal receives
+only `roles/iam.workloadIdentityUser` on the dedicated service account. Never
+create a service-account JSON key.
 
 Create that bootstrap identity once with a deliberately chosen account ID. Do
 not use the default Compute service account or the WIF control identity. Grant

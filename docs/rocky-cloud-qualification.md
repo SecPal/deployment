@@ -103,3 +103,10 @@ or provider availability remains outstanding and must not be simulated.
 The reviewed custom role must first be reconciled to include the bounded list
 permissions used by the Rocky janitor; that IAM change is not performed by PR
 validation.
+
+The first real `provision-and-prepare` run (`32944693955`) created the exact
+run-owned infrastructure but failed closed before identity mutation: Compute
+represented the reviewed empty bootstrap scope set as an omitted/null field,
+while the original Rocky validator required literal object equality. Exact-state
+cleanup destroyed all seven resources. That run produced neither preparation
+PASS nor native ARM qualification PASS.

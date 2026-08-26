@@ -404,6 +404,41 @@ class RockyCloudControlTests(unittest.TestCase):
         with self.assertRaises(module.TransitionError):
             module.validate_instance(replaced, options)
 
+    def test_bootstrap_identity_admission_normalizes_only_empty_scope_forms(self) -> None:
+        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
+        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        bootstrap = "secpal-ci-bootstrap@secpal-dev.iam.gserviceaccount.com"
+        accepted = (
+            {},
+            {"serviceAccounts": []},
+            {"serviceAccounts": [{"email": bootstrap, "scopes": []}]},
+            {"serviceAccounts": [{"email": bootstrap}]},
+            {"serviceAccounts": [{"email": bootstrap, "scopes": None}]},
+        )
+        for instance in accepted:
+            with self.subTest(instance=instance):
+                module.validate_service_accounts(instance)
+        rejected = (
+            {"serviceAccounts": None},
+            {"serviceAccounts": {}},
+            {"serviceAccounts": [{"email": bootstrap}, {"email": bootstrap}]},
+            {"serviceAccounts": [{"email": "other@secpal-dev.iam.gserviceaccount.com"}]},
+            {"serviceAccounts": [{"email": "123-compute@developer.gserviceaccount.com"}]},
+            {"serviceAccounts": [{"email": "gcp-service-account@secpal-dev.iam.gserviceaccount.com"}]},
+            {"serviceAccounts": [{"email": bootstrap, "scopes": ["https://www.googleapis.com/auth/cloud-platform"]}]},
+            {"serviceAccounts": [{"email": bootstrap, "scopes": ["arbitrary"]}]},
+            {"serviceAccounts": [{"email": bootstrap, "scopes": ""}]},
+            {"serviceAccounts": [{"email": bootstrap, "scopes": {}}]},
+            {"serviceAccounts": [{"email": bootstrap, "scopes": True}]},
+            {"serviceAccounts": [{"email": bootstrap, "scopes": 0}]},
+        )
+        for instance in rejected:
+            with self.subTest(instance=instance), self.assertRaises(module.TransitionError):
+                module.validate_service_accounts(instance)
+
     def test_every_rocky_wif_auth_has_a_same_job_identity_gate(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         auth = "uses: google-github-actions/auth@"
