@@ -124,6 +124,22 @@
           "else": { "not": { "required": ["repository_id"] } }
         }
       ]
+    },
+    "fixture_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "reason"],
+      "properties": {
+        "operation": {
+          "enum": [
+            "pull-immutable-fixture",
+            "verify-immutable-fixture-present",
+            "inspect-resolved-arm64-child",
+            "validate-resolved-arm64-child"
+          ]
+        },
+        "reason": { "enum": ["command-failed", "postcondition-failed"] }
+      }
     }
   },
   "allOf": [
@@ -141,6 +157,14 @@
           ]
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "fixture" } },
+        "required": ["phase"]
+      },
+      "then": {},
+      "else": { "not": { "required": ["fixture_diagnostic"] } }
     }
   ],
   "$defs": {
