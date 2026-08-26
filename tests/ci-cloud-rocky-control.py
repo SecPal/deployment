@@ -11,6 +11,7 @@ import re
 import base64
 import gzip
 import importlib.util
+import os
 from copy import deepcopy
 import subprocess
 import tempfile
@@ -30,6 +31,7 @@ SCHEMA_NAMES = (
     "rocky-cloud-discovery-evidence.schema.json",
     "rocky-cloud-continuation.schema.json",
     "rocky-cloud-preparation-evidence.schema.json",
+    "rocky-cloud-preparation-failure-evidence.schema.json",
     "rocky-cloud-qualification-evidence.schema.json",
 )
 
@@ -285,6 +287,155 @@ class RockyCloudControlTests(unittest.TestCase):
                 candidate = deepcopy(document)
                 candidate[path[0]][path[1]] = value
                 self.assertTrue(list(validator.iter_errors(candidate)))
+
+    def test_preparation_failure_schema_is_closed_and_run_bound(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        validator = Draft202012Validator(schema)
+        evidence = {
+            "schema_version": 1,
+            "target_sha": "b" * 40,
+            "trusted_control_sha": "a" * 40,
+            "run_id": "12345",
+            "run_attempt": "1",
+            "phase": "guest-identity",
+            "exit_status": 1,
+            "guest": {"id": "rocky", "version_id": "10.3", "uname_machine": "aarch64"},
+        }
+        self.assertFalse(list(validator.iter_errors(evidence)))
+        control = ROOT / "scripts/ci-cloud/rocky-control.py"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preparation-failure.json"
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertEqual(
+                0,
+                subprocess.run(
+                    [control, "validate-evidence", "preparation-failure", path],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+            )
+        mutations = (
+            ("phase", "arbitrary-command"),
+            ("target_sha", "short"),
+            ("exit_status", "1"),
+            ("diagnostic", "arbitrary stderr"),
+        )
+        for key, value in mutations:
+            with self.subTest(key=key):
+                candidate = dict(evidence)
+                candidate[key] = value
+                self.assertTrue(list(validator.iter_errors(candidate)))
+
+    def test_preparation_failure_transport_is_closed_and_reboot_safe(self) -> None:
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('current_phase="guest-identity"', preparation)
+        self.assertIn("preparation-failure.json", preparation)
+        self.assertIn("trap 'preparation_exit", preparation)
+        self.assertIn("reboot_requested=true", preparation)
+        self.assertIn("preparation-failure.json", workflow)
+        self.assertIn("ROCKY_PREPARATION_EVIDENCE_TIMEOUT", workflow)
+        self.assertIn("rocky-cloud-preparation-failure-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
+        self.assertIn("validate-evidence preparation-failure", workflow)
+        self.assertIn("steps.preparation.outputs.failure == 'true'", workflow)
+        self.assertIn('install -d -o root -g secpal-cloud -m 0710 "$state_root"', preparation)
+        self.assertIn('install -d -o root -g secpal-cloud -m 0750 "$state_root/evidence"', preparation)
+        self.assertIn('chown root:secpal-cloud "$evidence_output"', preparation)
+        self.assertIn('chmod 0440 "$evidence_output"', preparation)
+        self.assertNotIn('chmod 0400 "$evidence_output"', preparation)
+        self.assertIn('chown root:secpal-cloud "$temporary" && chmod 0440', preparation)
+
+    def _run_workflow_preparation_poll(
+        self, states: list[str], *, include_timeout: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        start = workflow.index("          preparation_state=none")
+        if include_timeout:
+            end = workflow.index("\n\n      - name: Publish bounded preparation failure evidence", start)
+        else:
+            end = workflow.index('          if [[ "$preparation_state" == failure ]]', start)
+        block = "\n".join(
+            line[10:] if line.startswith("          ") else line
+            for line in workflow[start:end].splitlines()
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            states_path = root / "states"
+            states_path.write_text("\n".join(states) + "\n", encoding="utf-8")
+            (fake_bin / "ssh").write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "count=0\n"
+                "[[ -f \"$POLL_COUNTER\" ]] && count=$(cat \"$POLL_COUNTER\")\n"
+                "count=$((count + 1))\n"
+                "printf '%s' \"$count\" >\"$POLL_COUNTER\"\n"
+                "printf 'FAKE_SSH_ATTEMPT=%s\\n' \"$count\" >&2\n"
+                "state=$(sed -n \"${count}p\" \"$POLL_STATES\")\n"
+                "[[ \"$state\" == transport ]] && exit 255\n"
+                "printf '%s' \"$state\"\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            for executable in fake_bin.iterdir():
+                executable.chmod(0o700)
+            script = (
+                "set -euo pipefail\n"
+                "ip=198.51.100.10\n"
+                "RUNNER_TEMP=$(mktemp -d)\n"
+                "mkdir -p \"$RUNNER_TEMP/rocky-cloud\"\n"
+                "touch \"$RUNNER_TEMP/rocky-cloud/id_ed25519\"\n"
+                f"{block}\n"
+                "printf 'FINAL_STATE=%s\\n' \"$preparation_state\"\n"
+            )
+            environment = dict(os.environ)
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "POLL_COUNTER": str(root / "counter"),
+                    "POLL_STATES": str(states_path),
+                    "GITHUB_OUTPUT": str(root / "github-output"),
+                }
+            )
+            return subprocess.run(
+                ["bash", "-c", script],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+    def test_preparation_poll_retries_transport_failures_then_reaches_evidence(self) -> None:
+        failure = self._run_workflow_preparation_poll(
+            ["transport", "transport", "failure"]
+        )
+        self.assertEqual(0, failure.returncode, failure.stderr)
+        self.assertIn("FINAL_STATE=failure", failure.stdout)
+        self.assertEqual(3, failure.stderr.count("FAKE_SSH_ATTEMPT="))
+        success = self._run_workflow_preparation_poll(["transport", "success"])
+        self.assertEqual(0, success.returncode, success.stderr)
+        self.assertIn("FINAL_STATE=success", success.stdout)
+        self.assertEqual(2, success.stderr.count("FAKE_SSH_ATTEMPT="))
+
+    def test_preparation_poll_rejects_malformed_and_both_evidence_state(self) -> None:
+        for state in ("garbage", "both"):
+            with self.subTest(state=state):
+                completed = self._run_workflow_preparation_poll([state])
+                self.assertNotEqual(0, completed.returncode)
+                self.assertNotIn("FINAL_STATE=success", completed.stdout)
+
+    def test_preparation_poll_attempt_ninety_reaches_timeout_diagnostic(self) -> None:
+        completed = self._run_workflow_preparation_poll(["transport"] * 90, include_timeout=True)
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("ROCKY_PREPARATION_EVIDENCE_TIMEOUT", completed.stderr)
+        self.assertEqual(90, completed.stderr.count("FAKE_SSH_ATTEMPT="))
 
     def test_continuation_rejects_expiry_target_mismatch_and_instance_only(self) -> None:
         validator = ROOT / "scripts/ci-cloud/rocky-control.py"

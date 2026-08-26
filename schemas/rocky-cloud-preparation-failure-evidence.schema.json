@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/rocky-cloud-preparation-failure-evidence.schema.json",
+  "title": "Rocky GCP preparation failure evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "target_sha",
+    "trusted_control_sha",
+    "run_id",
+    "run_attempt",
+    "phase",
+    "exit_status",
+    "guest"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "target_sha": { "$ref": "#/$defs/sha" },
+    "trusted_control_sha": { "$ref": "#/$defs/sha" },
+    "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+    "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
+    "phase": {
+      "enum": [
+        "guest-identity",
+        "repositories",
+        "packages",
+        "selinux",
+        "runtime-account",
+        "subids",
+        "systemd-user",
+        "quadlet-authority",
+        "fixture",
+        "pre-reboot",
+        "post-reboot-identity",
+        "post-reboot-selinux",
+        "cloud-identity",
+        "evidence-collection",
+        "evidence-validation"
+      ]
+    },
+    "exit_status": { "type": "integer", "minimum": 1, "maximum": 255 },
+    "guest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version_id", "uname_machine"],
+      "properties": {
+        "id": { "$ref": "#/$defs/guest_fact" },
+        "version_id": { "$ref": "#/$defs/guest_fact" },
+        "uname_machine": { "$ref": "#/$defs/guest_fact" }
+      }
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "guest_fact": {
+      "anyOf": [
+        { "const": "unavailable" },
+        { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" }
+      ]
+    }
+  }
+}
