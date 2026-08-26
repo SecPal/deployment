@@ -439,6 +439,142 @@ class RockyCloudControlTests(unittest.TestCase):
             with self.subTest(instance=instance), self.assertRaises(module.TransitionError):
                 module.validate_service_accounts(instance)
 
+    def test_runner_firewall_rotation_uses_classic_patch_without_fingerprint(self) -> None:
+        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
+        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        labels = {
+            "secpal_ci_owner": "rocky-host-qualification",
+            "repository": "secpal-deployment",
+            "github_run_id": "12345",
+            "github_run_attempt": "1",
+            "target_sha": "b" * 40,
+            "control_sha": "a" * 40,
+            "provider_profile": "gcp-rocky-10-2-arm64",
+            "created_at": "1800000000",
+            "expires_at": "1800010800",
+        }
+        name = "sprk-12345-1-ssh"
+        expected_description = {
+            "o": labels["secpal_ci_owner"], "r": labels["repository"],
+            "i": labels["github_run_id"], "a": labels["github_run_attempt"],
+            "t": labels["target_sha"], "c": labels["control_sha"],
+            "p": labels["provider_profile"], "n": labels["created_at"],
+            "x": labels["expires_at"],
+        }
+
+        def firewall(source_ranges: list[str]) -> dict[str, object]:
+            return {
+                "name": name,
+                "description": json.dumps(expected_description, separators=(",", ":")),
+                "network": "https://www.googleapis.com/compute/v1/projects/secpal-dev/global/networks/sprk-12345-1-network",
+                "priority": 1000,
+                "direction": "INGRESS",
+                "allowed": [{"IPProtocol": "tcp", "ports": ["22"]}],
+                "targetTags": ["sprk-12345-1"],
+                "sourceRanges": source_ranges,
+            }
+
+        class FakeClient:
+            def __init__(self, responses: list[dict[str, object]]) -> None:
+                self.responses = responses
+                self.requests: list[tuple[str, str]] = []
+                self.mutations: list[tuple[str, dict[str, object], bool, str]] = []
+
+            def request(self, method: str, path: str) -> dict[str, object]:
+                self.requests.append((method, path))
+                return deepcopy(self.responses.pop(0))
+
+            def mutate(self, path: str, payload: dict[str, object], *, global_operation: bool, method: str) -> None:
+                self.mutations.append((path, payload, global_operation, method))
+
+        client = FakeClient([firewall(["198.51.100.10/32"]), firewall(["203.0.113.10/32"])])
+        module.update_runner_firewall(client, "sprk-12345-1-instance", "203.0.113.10", labels)
+        self.assertEqual(
+            [("global/firewalls/sprk-12345-1-ssh", {"sourceRanges": ["203.0.113.10/32"]}, True, "PATCH")],
+            client.mutations,
+        )
+        self.assertNotIn("fingerprint", client.mutations[0][1])
+        self.assertEqual(
+            [("GET", "global/firewalls/sprk-12345-1-ssh"), ("GET", "global/firewalls/sprk-12345-1-ssh")],
+            client.requests,
+        )
+
+    def test_runner_firewall_rotation_rejects_unreviewed_pre_or_post_patch_state(self) -> None:
+        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
+        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        labels = {
+            "secpal_ci_owner": "rocky-host-qualification", "repository": "secpal-deployment",
+            "github_run_id": "12345", "github_run_attempt": "1", "target_sha": "b" * 40,
+            "control_sha": "a" * 40, "provider_profile": "gcp-rocky-10-2-arm64",
+            "created_at": "1800000000", "expires_at": "1800010800",
+        }
+        name = "sprk-12345-1-ssh"
+        description = {"o": labels["secpal_ci_owner"], "r": labels["repository"], "i": labels["github_run_id"], "a": labels["github_run_attempt"], "t": labels["target_sha"], "c": labels["control_sha"], "p": labels["provider_profile"], "n": labels["created_at"], "x": labels["expires_at"]}
+
+        def valid() -> dict[str, object]:
+            return {"name": name, "description": json.dumps(description), "network": "https://www.googleapis.com/compute/v1/projects/secpal-dev/global/networks/sprk-12345-1-network", "priority": 1000, "direction": "INGRESS", "allowed": [{"IPProtocol": "tcp", "ports": ["22"]}], "targetTags": ["sprk-12345-1"], "sourceRanges": ["198.51.100.10/32"]}
+
+        class FakeClient:
+            def __init__(self, responses: list[dict[str, object]]) -> None:
+                self.responses, self.mutations = responses, []
+
+            def request(self, method: str, path: str) -> dict[str, object]:
+                return deepcopy(self.responses.pop(0))
+
+            def mutate(self, path: str, payload: dict[str, object], *, global_operation: bool, method: str) -> None:
+                self.mutations.append((path, payload, global_operation, method))
+
+        pre_mutations: list[tuple[str, object]] = [
+            ("name", "sprk-99999-1-ssh"), ("description", "{}"), ("network", "wrong"),
+            ("direction", "EGRESS"), ("priority", 999), ("disabled", True),
+            ("allowed", [{"IPProtocol": "tcp", "ports": ["2222"]}]),
+            ("targetTags", ["other"]), ("targetTags", ["sprk-12345-1", "other"]),
+            ("denied", [{"IPProtocol": "tcp"}]), ("sourceTags", ["source"]),
+            ("sourceServiceAccounts", ["source@example.com"]),
+            ("targetServiceAccounts", ["target@example.com"]), ("sourceRanges", None),
+            ("sourceRanges", ["198.51.100.10/32", "203.0.113.10/32"]),
+            ("sourceRanges", ["0.0.0.0/0"]), ("sourceRanges", ["198.51.100.0/24"]),
+            ("sourceRanges", "198.51.100.10/32"),
+        ]
+        for key, value in pre_mutations:
+            with self.subTest(pre_field=key, pre_value=value):
+                candidate = valid()
+                candidate[key] = value
+                client = FakeClient([candidate])
+                with self.assertRaises(module.TransitionError):
+                    module.update_runner_firewall(client, "sprk-12345-1-instance", "203.0.113.10", labels)
+                self.assertEqual([], client.mutations)
+        for label_key in ("o", "r", "i", "a", "t", "c", "p"):
+            with self.subTest(description_key=label_key):
+                candidate = valid()
+                changed = dict(description)
+                changed[label_key] = "wrong"
+                candidate["description"] = json.dumps(changed)
+                client = FakeClient([candidate])
+                with self.assertRaises(module.TransitionError):
+                    module.update_runner_firewall(client, "sprk-12345-1-instance", "203.0.113.10", labels)
+                self.assertEqual([], client.mutations)
+        post_mutations: list[tuple[str, object]] = [
+            ("sourceRanges", ["198.51.100.10/32"]), ("description", "{}"), ("network", "wrong"),
+            ("direction", "EGRESS"), ("allowed", [{"IPProtocol": "tcp", "ports": ["2222"]}]),
+            ("targetTags", ["other"]), ("disabled", True),
+        ]
+        for key, value in post_mutations:
+            with self.subTest(post_field=key, post_value=value):
+                before, after = valid(), valid()
+                after["sourceRanges"] = ["203.0.113.10/32"]
+                after[key] = value
+                client = FakeClient([before, after])
+                with self.assertRaises(module.TransitionError):
+                    module.update_runner_firewall(client, "sprk-12345-1-instance", "203.0.113.10", labels)
+                self.assertEqual(1, len(client.mutations))
+
     def test_every_rocky_wif_auth_has_a_same_job_identity_gate(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         auth = "uses: google-github-actions/auth@"
