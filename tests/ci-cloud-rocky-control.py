@@ -92,6 +92,12 @@ class RockyCloudControlTests(unittest.TestCase):
                     "discovery_family": "rocky-linux-10-arm64",
                 },
                 "guest": {"id": "rocky", "version_id": "10.2"},
+                "repositories": {
+                    "final_enabled_repositories": ["appstream", "baseos", "extras"],
+                    "pre_admission_provider_repositories": [
+                        "google-compute-engine"
+                    ],
+                },
                 "ttl_seconds": 10800,
                 "fixture": {
                     "input": "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
@@ -162,6 +168,8 @@ class RockyCloudControlTests(unittest.TestCase):
             (("disk", "size_gib"), 240),
             (("image", "project"), "other-images"),
             (("image", "discovery_family"), "rocky-linux-10"),
+            (("repositories", "final_enabled_repositories"), ["baseos"]),
+            (("repositories", "pre_admission_provider_repositories"), ["epel"]),
         )
         validator = ROOT / "scripts/ci-cloud/rocky-control.py"
         for path, value in mutations:
@@ -329,6 +337,176 @@ class RockyCloudControlTests(unittest.TestCase):
                 candidate = dict(evidence)
                 candidate[key] = value
                 self.assertTrue(list(validator.iter_errors(candidate)))
+
+    def test_repository_failure_observation_is_bounded_and_phase_scoped(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        validator = Draft202012Validator(schema)
+        base = {
+            "schema_version": 1,
+            "target_sha": "b" * 40,
+            "trusted_control_sha": "a" * 40,
+            "run_id": "12345",
+            "run_attempt": "1",
+            "phase": "repositories",
+            "exit_status": 1,
+            "guest": {"id": "rocky", "version_id": "10.2", "uname_machine": "aarch64"},
+            "repositories": {
+                "enabled": ["appstream", "baseos", "epel", "extras"],
+                "unexpected_enabled": ["epel"],
+                "missing_required": [],
+            },
+        }
+        self.assertFalse(list(validator.iter_errors(base)))
+        mutations = (
+            (("repositories", "enabled"), ["https://example.invalid/repo"]),
+            (("repositories", "enabled"), ["a" for _ in range(17)]),
+            (("repositories", "enabled"), ["bad repo id"]),
+            (("repositories", "diagnostic"), "arbitrary command output"),
+            (("phase",), "packages"),
+        )
+        for path, value in mutations:
+            with self.subTest(path=path):
+                candidate = deepcopy(base)
+                owner = candidate
+                for key in path[:-1]:
+                    owner = owner[key]
+                owner[path[-1]] = value
+                self.assertTrue(list(validator.iter_errors(candidate)))
+
+    def _run_repository_admission(
+        self,
+        enabled_states: list[list[str]],
+        *,
+        all_repositories: list[str] | None = None,
+        dnf_repolist_fails: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        start = preparation.index("read_repository_ids()")
+        end = preparation.index("\ninstall_policy()", start)
+        functions = preparation[start:end]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile.json"
+            profile.write_text(PROFILE.read_text(encoding="utf-8"), encoding="utf-8")
+            functions = functions.replace(
+                "/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json",
+                str(profile),
+            )
+            state_file = root / "enabled-states"
+            state_file.write_text(
+                "\n".join(",".join(state) for state in enabled_states) + "\n",
+                encoding="utf-8",
+            )
+            available = all_repositories or [
+                "appstream",
+                "baseos",
+                "extras",
+                "google-compute-engine",
+            ]
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            (fake_bin / "dnf4").write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "printf '%s\\n' \"$*\" >>\"$DNF_LOG\"\n"
+                "if [[ \"$*\" == *\"--version\"* ]]; then printf '4.20.0\\n'; exit 0; fi\n"
+                "if [[ \"$*\" == *\"repolist --enabled\"* ]]; then\n"
+                "  [[ \"${DNF_REPOLIST_FAIL:-false}\" == true ]] && exit 1\n"
+                "  count=0; [[ -f \"$DNF_COUNT\" ]] && count=$(cat \"$DNF_COUNT\")\n"
+                "  count=$((count + 1)); printf '%s' \"$count\" >\"$DNF_COUNT\"\n"
+                "  state=$(sed -n \"${count}p\" \"$DNF_STATES\")\n"
+                "  printf 'repo id repo name\\n'; tr ',' '\\n' <<<\"$state\" | awk 'NF {print $1 \" test\"}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$*\" == *\"repolist --all\"* ]]; then\n"
+                "  printf 'repo id repo name\\n'; tr ',' '\\n' <<<\"$DNF_ALL\" | awk 'NF {print $1 \" test\"}'; exit 0\n"
+                "fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "dnf4").chmod(0o700)
+            script = (
+                "set -euo pipefail\n"
+                "readonly profile_path='" + str(profile) + "'\n"
+                "readonly final_repositories=(appstream baseos extras)\n"
+                "repository_failure_evidence=''\n"
+                + functions
+                + "\nif admit_repositories; then status=0; else status=$?; fi\n"
+                + "printf 'STATUS=%s\\nFAILURE=%s\\n' \"$status\" \"$repository_failure_evidence\"\n"
+                + "exit \"$status\"\n"
+            )
+            environment = dict(os.environ)
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "DNF_LOG": str(root / "dnf.log"),
+                    "DNF_COUNT": str(root / "dnf.count"),
+                    "DNF_STATES": str(state_file),
+                    "DNF_ALL": ",".join(available),
+                    "DNF_REPOLIST_FAIL": "true" if dnf_repolist_fails else "false",
+                }
+            )
+            completed = subprocess.run(
+                ["bash", "-c", script], check=False, capture_output=True, text=True, env=environment
+            )
+            completed.dnf_log = (root / "dnf.log").read_text(encoding="utf-8")  # type: ignore[attr-defined]
+            return completed
+
+    def test_repository_admission_normalizes_only_the_reviewed_gcp_bootstrap_repo(self) -> None:
+        baseline = self._run_repository_admission([["appstream", "baseos", "extras"]])
+        self.assertEqual(0, baseline.returncode, baseline.stderr)
+        self.assertIn("FAILURE=", baseline.stdout)
+        self.assertNotIn("config-manager", baseline.dnf_log)  # type: ignore[attr-defined]
+        normalized = self._run_repository_admission(
+            [
+                ["appstream", "baseos", "extras", "google-compute-engine"],
+                ["appstream", "baseos", "extras"],
+            ]
+        )
+        self.assertEqual(0, normalized.returncode, normalized.stderr)
+        log = normalized.dnf_log  # type: ignore[attr-defined]
+        self.assertIn("config-manager --set-disabled google-compute-engine", log)
+        for transaction in (line for line in log.splitlines() if " install " in line):
+            self.assertIn("--disablerepo=*", transaction)
+            self.assertIn("--enablerepo=baseos,appstream,extras", transaction)
+
+    def test_repository_admission_fails_closed_for_unknown_or_unobservable_state(self) -> None:
+        unknown = self._run_repository_admission(
+            [["appstream", "baseos", "epel", "extras"]]
+        )
+        self.assertNotEqual(0, unknown.returncode)
+        self.assertIn('"unexpected_enabled":["epel"]', unknown.stdout)
+        self.assertNotIn(" install ", unknown.dnf_log)  # type: ignore[attr-defined]
+        dnf_failure = self._run_repository_admission(
+            [["appstream", "baseos", "extras"]], dnf_repolist_fails=True
+        )
+        self.assertNotEqual(0, dnf_failure.returncode)
+        self.assertIn("dnf4 repository observation failed", dnf_failure.stderr)
+        self.assertNotIn(" install ", dnf_failure.dnf_log)  # type: ignore[attr-defined]
+
+    def test_repository_admission_requires_final_state_after_provider_normalization(self) -> None:
+        missing_extras = self._run_repository_admission(
+            [
+                ["appstream", "baseos", "google-compute-engine"],
+                ["appstream", "baseos", "extras"],
+            ]
+        )
+        self.assertEqual(0, missing_extras.returncode, missing_extras.stderr)
+        self.assertIn("config-manager --set-enabled extras", missing_extras.dnf_log)  # type: ignore[attr-defined]
+        still_enabled = self._run_repository_admission(
+            [
+                ["appstream", "baseos", "extras", "google-compute-engine"],
+                ["appstream", "baseos", "extras", "google-compute-engine"],
+            ]
+        )
+        self.assertNotEqual(0, still_enabled.returncode)
+        self.assertIn('"unexpected_enabled":["google-compute-engine"]', still_enabled.stdout)
 
     def test_preparation_failure_transport_is_closed_and_reboot_safe(self) -> None:
         preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
@@ -523,6 +701,23 @@ class RockyCloudControlTests(unittest.TestCase):
             self.assertIn(required, preparation)
         for forbidden in ("apt-get", "AppArmor", "setenforce 0", "label=disable"):
             self.assertNotIn(forbidden, preparation)
+
+    def test_repository_staging_preserves_provider_guest_environment_and_final_contract(self) -> None:
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        collector = (ROOT / "scripts/ci-cloud/collect-rocky-preparation.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("google-compute-engine", PROFILE.read_text(encoding="utf-8"))
+        self.assertIn("config-manager --set-disabled", preparation)
+        self.assertNotIn("remove google-guest-agent", preparation)
+        self.assertNotIn("disable google-guest-agent", preparation)
+        self.assertIn("dnf-plugins-core", preparation)
+        self.assertIn("dnf-plugins-core", collector)
+        self.assertIn("--disablerepo='*'", preparation)
+        self.assertIn("--enablerepo=baseos,appstream,extras", preparation)
+        self.assertIn("if set(enabled_repos) != REPOSITORIES or len(enabled_repos) != 3", collector)
 
     def test_cleanup_is_exact_state_and_janitor_never_uses_prefix(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

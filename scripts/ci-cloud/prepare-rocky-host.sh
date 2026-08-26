@@ -11,6 +11,8 @@ readonly runtime_account=secpal-runtime
 readonly fixture='docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1'
 readonly arm_child='sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192'
 readonly state_root=/var/lib/secpal-rocky
+readonly profile_path=/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
+readonly final_repositories=(appstream baseos extras)
 
 if [[ "$#" -ne 7 ]]; then
   printf 'usage: prepare-rocky-host.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT EXPIRES_AT IMAGE_SELF_LINK EVIDENCE_OUTPUT\n' >&2
@@ -31,6 +33,7 @@ readonly failure_output="$state_root/evidence/preparation-failure.json"
 [[ "$evidence_output" == "$state_root/evidence/preparation.json" ]]
 current_phase="guest-identity"
 reboot_requested=false
+repository_failure_evidence=''
 
 read_release_value() {
   local key="$1"
@@ -47,7 +50,7 @@ safe_guest_fact() {
 }
 
 write_failure_evidence() {
-  local status="$1" temporary guest_id guest_version guest_architecture
+  local status="$1" temporary guest_id guest_version guest_architecture repository_fragment=''
   set +e
   trap - EXIT
   [[ "$status" =~ ^[1-9][0-9]{0,2}$ ]] || status=1
@@ -66,9 +69,12 @@ write_failure_evidence() {
   temporary="$(mktemp "$state_root/evidence/.preparation-failure.XXXXXX")" || return 0
   chown root:root "$temporary" || { rm -f -- "$temporary"; return 0; }
   chmod 0600 "$temporary" || { rm -f -- "$temporary"; return 0; }
-  printf '{"schema_version":1,"target_sha":"%s","trusted_control_sha":"%s","run_id":"%s","run_attempt":"%s","phase":"%s","exit_status":%s,"guest":{"id":"%s","version_id":"%s","uname_machine":"%s"}}\n' \
+  if [[ "$current_phase" == repositories && -n "$repository_failure_evidence" ]]; then
+    repository_fragment=",\"repositories\":$repository_failure_evidence"
+  fi
+  printf '{"schema_version":1,"target_sha":"%s","trusted_control_sha":"%s","run_id":"%s","run_attempt":"%s","phase":"%s","exit_status":%s,"guest":{"id":"%s","version_id":"%s","uname_machine":"%s"}%s}\n' \
     "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$current_phase" "$status" \
-    "$guest_id" "$guest_version" "$guest_architecture" >"$temporary" || { rm -f -- "$temporary"; return 0; }
+    "$guest_id" "$guest_version" "$guest_architecture" "$repository_fragment" >"$temporary" || { rm -f -- "$temporary"; return 0; }
   [[ "$(wc -c <"$temporary")" -le 2048 ]] || { rm -f -- "$temporary"; return 0; }
   chown root:secpal-cloud "$temporary" && chmod 0440 "$temporary" && mv -T -- "$temporary" "$failure_output"
 }
@@ -131,26 +137,190 @@ configure_subids() {
   done
 }
 
+read_repository_ids() {
+  local mode="$1" output ids
+  if ! output="$(dnf4 --quiet repolist "$mode")"; then
+    printf 'ERROR: dnf4 repository observation failed.\n' >&2
+    return 1
+  fi
+  if ! ids="$(printf '%s\n' "$output" | awk '
+    NF && tolower($1) != "repo" {print $1}
+  ' | LC_ALL=C sort -u)"; then
+    printf 'ERROR: repository ID parsing failed.\n' >&2
+    return 1
+  fi
+  REPLY=()
+  while IFS= read -r repository; do
+    [[ -z "$repository" ]] && continue
+    [[ "$repository" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || {
+      printf 'ERROR: repository ID is outside the closed syntax.\n' >&2
+      return 1
+    }
+    REPLY+=("$repository")
+  done <<<"$ids"
+  [[ "${#REPLY[@]}" -le 16 ]] || {
+    printf 'ERROR: repository observation exceeds the bounded limit.\n' >&2
+    return 1
+  }
+}
+
+provider_bootstrap_repositories() {
+  python3 - "$profile_path" <<'PY'
+import json
+import re
+import sys
+
+try:
+    document = json.load(open(sys.argv[1], encoding="utf-8"))
+    repositories = document["repositories"]
+    final = repositories["final_enabled_repositories"]
+    allowed = repositories["pre_admission_provider_repositories"]
+except (OSError, KeyError, TypeError, json.JSONDecodeError):
+    raise SystemExit(1)
+if final != ["appstream", "baseos", "extras"]:
+    raise SystemExit(1)
+if not isinstance(allowed, list) or not allowed or len(allowed) > 16:
+    raise SystemExit(1)
+if len(set(allowed)) != len(allowed) or any(
+    not isinstance(item, str) or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", item) is None
+    for item in allowed
+):
+    raise SystemExit(1)
+print("\n".join(sorted(allowed)))
+PY
+}
+
+repository_json_array() {
+  local item first=true
+  printf '['
+  for item in "$@"; do
+    [[ "$first" == true ]] || printf ','
+    first=false
+    printf '"%s"' "$item"
+  done
+  printf ']'
+}
+
+record_repository_failure() {
+  local -n observed_ref="$1" unexpected_ref="$2" missing_ref="$3"
+  repository_failure_evidence="$(
+    printf '{"enabled":%s,"unexpected_enabled":%s,"missing_required":%s}' \
+      "$(repository_json_array "${observed_ref[@]}")" \
+      "$(repository_json_array "${unexpected_ref[@]}")" \
+      "$(repository_json_array "${missing_ref[@]}")"
+  )"
+}
+
+contains_repository() {
+  local wanted="$1"
+  shift
+  local item
+  for item in "$@"; do
+    [[ "$item" == "$wanted" ]] && return 0
+  done
+  return 1
+}
+
+admit_repositories() {
+  local dnf_version repository
+  local -a enabled_repos available_repos provider_repos unexpected_repos missing_repos
+  dnf_version="$(dnf4 --version)"
+  [[ "${dnf_version%%$'\n'*}" =~ ^4(\.|$) ]] || {
+    printf 'ERROR: repository admission requires DNF4.\n' >&2
+    return 1
+  }
+  if ! provider_repos="$(provider_bootstrap_repositories)"; then
+    printf 'ERROR: provider repository profile is invalid.\n' >&2
+    return 1
+  fi
+  mapfile -t provider_repos <<<"$provider_repos"
+  if ! read_repository_ids --enabled; then
+    return 1
+  fi
+  enabled_repos=("${REPLY[@]}")
+  unexpected_repos=()
+  missing_repos=()
+  for repository in "${enabled_repos[@]}"; do
+    if ! contains_repository "$repository" "${final_repositories[@]}" && ! contains_repository "$repository" "${provider_repos[@]}"; then
+      unexpected_repos+=("$repository")
+    fi
+  done
+  for repository in "${final_repositories[@]}"; do
+    if ! contains_repository "$repository" "${enabled_repos[@]}"; then
+      missing_repos+=("$repository")
+    fi
+  done
+  record_repository_failure enabled_repos unexpected_repos missing_repos
+  [[ "${#unexpected_repos[@]}" -eq 0 ]] || {
+    printf 'ERROR: enabled repositories include an unreviewed provider or external repository.\n' >&2
+    return 1
+  }
+  if [[ "${#missing_repos[@]}" -eq 0 ]] && [[ "${#enabled_repos[@]}" -eq "${#final_repositories[@]}" ]]; then
+    repository_failure_evidence=''
+    return 0
+  fi
+  local provider_present=false
+  for repository in "${provider_repos[@]}"; do
+    if contains_repository "$repository" "${enabled_repos[@]}"; then
+      provider_present=true
+    fi
+  done
+  [[ "$provider_present" == true ]] || {
+    printf 'ERROR: required final repositories are missing without a reviewed provider bootstrap repository.\n' >&2
+    return 1
+  }
+  if ! read_repository_ids --all; then
+    return 1
+  fi
+  available_repos=("${REPLY[@]}")
+  for repository in "${final_repositories[@]}"; do
+    contains_repository "$repository" "${available_repos[@]}" || {
+      printf 'ERROR: a required Rocky repository definition is unavailable.\n' >&2
+      return 1
+    }
+  done
+  dnf4 --assumeyes --releasever=10 --disablerepo='*' \
+    --enablerepo=baseos,appstream,extras install dnf-plugins-core
+  for repository in "${provider_repos[@]}"; do
+    if contains_repository "$repository" "${enabled_repos[@]}"; then
+      dnf4 config-manager --set-disabled "$repository"
+    fi
+  done
+  for repository in "${missing_repos[@]}"; do
+    dnf4 config-manager --set-enabled "$repository"
+  done
+  if ! read_repository_ids --enabled; then
+    return 1
+  fi
+  enabled_repos=("${REPLY[@]}")
+  unexpected_repos=()
+  missing_repos=()
+  for repository in "${enabled_repos[@]}"; do
+    contains_repository "$repository" "${final_repositories[@]}" || unexpected_repos+=("$repository")
+  done
+  for repository in "${final_repositories[@]}"; do
+    contains_repository "$repository" "${enabled_repos[@]}" || missing_repos+=("$repository")
+  done
+  record_repository_failure enabled_repos unexpected_repos missing_repos
+  [[ "${#unexpected_repos[@]}" -eq 0 && "${#missing_repos[@]}" -eq 0 && "${#enabled_repos[@]}" -eq "${#final_repositories[@]}" ]] || {
+    printf 'ERROR: final enabled repositories must be exactly appstream,baseos,extras.\n' >&2
+    return 1
+  }
+  repository_failure_evidence=''
+}
+
 install_policy() {
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="repositories"
-  mapfile -t enabled_repos < <(
-    dnf4 --quiet repolist --enabled |
-      awk 'NF && tolower($1) != "repo" {print $1}' |
-      sort -u
-  )
-  if [[ "${enabled_repos[*]}" != 'appstream baseos extras' ]]; then
-    printf 'ERROR: enabled repositories must be exactly baseos,appstream,extras.\n' >&2
-    exit 1
-  fi
+  admit_repositories
   current_phase="packages"
   dnf4 --assumeyes --releasever=10 --disablerepo='*' \
     --enablerepo=baseos,appstream,extras install \
     podman conmon crun netavark aardvark-dns passt shadow-utils-subid systemd \
     container-selinux audit policycoreutils policycoreutils-python-utils \
     selinux-policy-targeted curl dnf git jq nftables openssh-server sudo \
-    python3-jsonschema
+    python3-jsonschema dnf-plugins-core
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="selinux"
