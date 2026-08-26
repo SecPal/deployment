@@ -28,6 +28,7 @@ path = [
   "schemas/rocky-cloud-continuation.schema.json",
   "schemas/rocky-cloud-discovery-evidence.schema.json",
   "schemas/rocky-cloud-preparation-evidence.schema.json",
+  "schemas/rocky-cloud-preparation-failure-evidence.schema.json",
   "schemas/rocky-cloud-qualification-evidence.schema.json",
 ]
 SPDX-FileCopyrightText = "2026 SecPal Contributors"

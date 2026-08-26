@@ -317,15 +317,61 @@ jobs:
         run: |
           unset GOOGLE_OAUTH_ACCESS_TOKEN GOOGLE_APPLICATION_CREDENTIALS
           ip="$(cat "$RUNNER_TEMP/rocky-cloud/ipv4_address")"
+          preparation_state=none
           for attempt in {1..90}; do
-            if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            preparation_state="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               -o ConnectTimeout=5 -i "$RUNNER_TEMP/rocky-cloud/id_ed25519" \
-              "secpal-cloud@$ip" test -r /var/lib/secpal-rocky/evidence/preparation.json; then
-              break
-            fi
+              "secpal-cloud@$ip" '
+                success=/var/lib/secpal-rocky/evidence/preparation.json
+                failure=/var/lib/secpal-rocky/evidence/preparation-failure.json
+                if test -r "$success" && test -r "$failure"; then
+                  printf both
+                elif test -r "$success"; then
+                  printf success
+                elif test -r "$failure"; then
+                  printf failure
+                else
+                  printf none
+                fi
+              ')"
+            case "$preparation_state" in
+              success|failure) break ;;
+              both)
+                printf 'ERROR: Rocky preparation published both success and failure evidence.\n' >&2
+                exit 1
+                ;;
+              none) ;;
+              *)
+                printf 'ERROR: Rocky preparation evidence state is outside the closed set.\n' >&2
+                exit 1
+                ;;
+            esac
             [[ "$attempt" -lt 90 ]]
             sleep 10
           done
+          if [[ "$preparation_state" == failure ]]; then
+            scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              -i "$RUNNER_TEMP/rocky-cloud/id_ed25519" \
+              "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/preparation-failure.json" \
+              "$RUNNER_TEMP/rocky-cloud/preparation-failure.json"
+            scripts/ci-cloud/rocky-control.py validate-evidence preparation-failure \
+              "$RUNNER_TEMP/rocky-cloud/preparation-failure.json"
+            jq -e --arg target_sha "$TARGET_SHA" --arg control_sha "$GITHUB_SHA" \
+              --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+              '.target_sha == $target_sha and .trusted_control_sha == $control_sha and
+               .run_id == $run_id and .run_attempt == $run_attempt' \
+              "$RUNNER_TEMP/rocky-cloud/preparation-failure.json"
+            jq -er '"ROCKY_PREPARATION_GUEST_FAILURE phase=" + .phase +
+              " guest_id=" + .guest.id + " version_id=" + .guest.version_id +
+              " uname_machine=" + .guest.uname_machine' \
+              "$RUNNER_TEMP/rocky-cloud/preparation-failure.json" >&2
+            printf 'failure=true\n' >>"$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [[ "$preparation_state" != success ]]; then
+            printf 'ERROR: ROCKY_PREPARATION_EVIDENCE_TIMEOUT\n' >&2
+            exit 1
+          fi
           scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -i "$RUNNER_TEMP/rocky-cloud/id_ed25519" \
             "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/preparation.json" \
@@ -347,6 +393,15 @@ jobs:
             --created-at "$(jq -er .created_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
             --expires-at "$(jq -er .expires_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
             --output "$RUNNER_TEMP/rocky-cloud/continuation.json"
+
+      - name: Publish bounded preparation failure evidence
+        if: ${{ always() && steps.preparation.outputs.failure == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-preparation-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-cloud/preparation-failure.json
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Publish preparation and non-secret continuation evidence
         if: ${{ steps.preparation.outcome == 'success' }}

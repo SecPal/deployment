@@ -26,6 +26,8 @@ SCHEMAS = {
     "discovery": ROOT / "schemas/rocky-cloud-discovery-evidence.schema.json",
     "continuation": ROOT / "schemas/rocky-cloud-continuation.schema.json",
     "preparation": ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json",
+    "preparation-failure": ROOT
+    / "schemas/rocky-cloud-preparation-failure-evidence.schema.json",
     "qualification": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
 }
 SHA = re.compile(r"^[0-9a-f]{40}$")

@@ -30,6 +30,7 @@ SCHEMA_NAMES = (
     "rocky-cloud-discovery-evidence.schema.json",
     "rocky-cloud-continuation.schema.json",
     "rocky-cloud-preparation-evidence.schema.json",
+    "rocky-cloud-preparation-failure-evidence.schema.json",
     "rocky-cloud-qualification-evidence.schema.json",
 )
 
@@ -285,6 +286,63 @@ class RockyCloudControlTests(unittest.TestCase):
                 candidate = deepcopy(document)
                 candidate[path[0]][path[1]] = value
                 self.assertTrue(list(validator.iter_errors(candidate)))
+
+    def test_preparation_failure_schema_is_closed_and_run_bound(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        validator = Draft202012Validator(schema)
+        evidence = {
+            "schema_version": 1,
+            "target_sha": "b" * 40,
+            "trusted_control_sha": "a" * 40,
+            "run_id": "12345",
+            "run_attempt": "1",
+            "phase": "guest-identity",
+            "exit_status": 1,
+            "guest": {"id": "rocky", "version_id": "10.3", "uname_machine": "aarch64"},
+        }
+        self.assertFalse(list(validator.iter_errors(evidence)))
+        control = ROOT / "scripts/ci-cloud/rocky-control.py"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preparation-failure.json"
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertEqual(
+                0,
+                subprocess.run(
+                    [control, "validate-evidence", "preparation-failure", path],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+            )
+        mutations = (
+            ("phase", "arbitrary-command"),
+            ("target_sha", "short"),
+            ("exit_status", "1"),
+            ("diagnostic", "arbitrary stderr"),
+        )
+        for key, value in mutations:
+            with self.subTest(key=key):
+                candidate = dict(evidence)
+                candidate[key] = value
+                self.assertTrue(list(validator.iter_errors(candidate)))
+
+    def test_preparation_failure_transport_is_closed_and_reboot_safe(self) -> None:
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('current_phase="guest-identity"', preparation)
+        self.assertIn("preparation-failure.json", preparation)
+        self.assertIn("trap 'preparation_exit", preparation)
+        self.assertIn("reboot_requested=true", preparation)
+        self.assertIn("preparation-failure.json", workflow)
+        self.assertIn("ROCKY_PREPARATION_EVIDENCE_TIMEOUT", workflow)
+        self.assertIn("rocky-cloud-preparation-failure-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
+        self.assertIn("validate-evidence preparation-failure", workflow)
+        self.assertIn("steps.preparation.outputs.failure == 'true'", workflow)
 
     def test_continuation_rejects_expiry_target_mismatch_and_instance_only(self) -> None:
         validator = ROOT / "scripts/ci-cloud/rocky-control.py"
