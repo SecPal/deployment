@@ -22,7 +22,10 @@
   },
   "repositories": {
     "final_enabled_repositories": ["appstream", "baseos", "extras"],
-    "pre_admission_provider_repositories": ["google-compute-engine"]
+    "pre_admission_provider_repositories": [
+      "google-cloud-sdk",
+      "google-compute-engine"
+    ]
   },
   "ttl_seconds": 10800,
   "fixture": {
