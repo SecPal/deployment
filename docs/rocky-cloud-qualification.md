@@ -105,19 +105,23 @@ admission in one large module; that the same semantic contract was restated
 across collector, schema, independent validator, static validator, tests, and
 documentation; and that tests could pass one layer without proving that an
 accepted real representation crosses the complete evidence boundary. Historical
-Issue #67 elevated `one authoritative definition per semantic invariant` to an
-explicit invariant, and #72 required replay of reviewed real-system evidence
-because repository-authored fixtures cannot prove external representation
-compatibility by themselves. PRs #63, #66, #73, and #74 are the implementation
-and review history for those findings.
+issue #67 elevated one authoritative definition per semantic invariant to an
+explicit invariant. Issue #68 owns pure layer-boundary enforcement from that
+design, while #72 required replay of reviewed real-system evidence because
+repository-authored fixtures cannot prove external representation compatibility
+by themselves. PRs #63, #66, #73, and #74 are the implementation and review
+history for those findings.
 
-The current Rocky planning retained those lessons but sequenced them
-incorrectly. #117 states that the #64/#67 layer and purity lessons are reusable,
-while also sequencing their reapplication only after current semantic evidence.
-Issues #120, #121, and #122 then scope the explicit layer/purity hardening to
-issue #119 workload evidence. That left #118 host/preparation evidence able to
-recreate the same structural failure mode before the later hardening work could
-apply.
+The earlier Rocky rebaseline retained the historical lessons but allowed the
+host/preparation evidence path in #118 to be implemented before equivalent
+structural protection became binding. Issues #120, #121, and #122 remain scoped
+to #119 workload evidence, so they did not protect #118 from recreating the same
+structural failure mode. Current #117 identifies #64/#68 and PRs #73/#74 as
+reusable design evidence and current #117 requires explicit observation,
+normalization, admission, and assembly ownership before further #118
+real-provider qualification. Current #150 is the concrete architecture
+prerequisite blocking #118 until that host evidence pipeline has enforceable
+layered ownership.
 
 The real Rocky remediation history demonstrates the recurrence. PR #145 and
 PR #146 successively exposed and repaired adjacent unbounded preparation
