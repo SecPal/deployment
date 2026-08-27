@@ -28,6 +28,25 @@ COLLECTOR_FILESYSTEM_CAPABILITIES = {
     "chmod", "exists", "glob", "is_file", "read_bytes", "read_text", "replace",
     "resolve", "unlink", "write_bytes", "write_text",
 }
+RUNTIME_ADMISSION_OPERATIONS = {
+    "admit-runtime-cgroup",
+    "admit-runtime-container-host-absence",
+    "admit-runtime-network-backend",
+    "admit-runtime-oci-runtime",
+    "admit-runtime-podman-version",
+    "admit-runtime-remote-socket-absence",
+    "admit-runtime-rootless",
+    "admit-runtime-seccomp",
+    "admit-runtime-socket-path-absence",
+    "admit-runtime-socket-unit-disabled",
+    "admit-runtime-systemd-user",
+}
+RUNTIME_INVARIANT_OWNERS = {
+    operation.removeprefix("admit-"): (
+        "rocky_preparation_contract." + operation.replace("-", "_")
+    )
+    for operation in RUNTIME_ADMISSION_OPERATIONS
+}
 
 
 class ArchitectureError(RuntimeError):
@@ -46,6 +65,31 @@ def assignment_string(tree: ast.Module, name: str) -> str | None:
         if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
             if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                 return node.value.value
+    return None
+
+
+def assignment_string_dict(tree: ast.Module, name: str) -> dict[str, str] | None:
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            return None
+        pairs: list[tuple[str, str]] = []
+        for key, value in zip(node.value.keys, node.value.values, strict=True):
+            if (
+                not isinstance(key, ast.Constant)
+                or not isinstance(key.value, str)
+                or not isinstance(value, ast.Constant)
+                or not isinstance(value.value, str)
+            ):
+                return None
+            pairs.append((key.value, value.value))
+        if len(pairs) != len(dict(pairs)):
+            return None
+        return dict(pairs)
     return None
 
 
@@ -71,9 +115,30 @@ def validate_pure_contract(path: Path) -> None:
         raise ArchitectureError("authoritative fixture invariant owner is absent")
     if '"rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key"' not in source:
         raise ArchitectureError("authoritative package-signing invariant owner is absent")
+    invariant_owners = assignment_string_dict(tree, "INVARIANT_OWNERS")
+    if invariant_owners is None or any(
+        invariant_owners.get(invariant) != owner
+        for invariant, owner in RUNTIME_INVARIANT_OWNERS.items()
+    ):
+        raise ArchitectureError("authoritative runtime invariant ownership is incomplete")
     functions = {
         node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
     }
+    rejection_operations = {
+        node.args[1].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "reject"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    }
+    if (
+        "admit-runtime" in rejection_operations
+        or not RUNTIME_ADMISSION_OPERATIONS <= rejection_operations
+    ):
+        raise ArchitectureError("runtime admission semantic boundaries are collapsed")
     for required in (
         "normalize_observations",
         "admit_facts",

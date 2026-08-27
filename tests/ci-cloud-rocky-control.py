@@ -401,6 +401,78 @@ class RockyCloudControlTests(unittest.TestCase):
                 candidate[key] = value
                 self.assertTrue(list(validator.iter_errors(candidate)))
 
+    def test_runtime_admission_diagnostics_are_closed_and_controller_validated(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        validator = Draft202012Validator(schema)
+        control = ROOT / "scripts/ci-cloud/rocky-control.py"
+        operations = (
+            "admit-runtime-rootless",
+            "admit-runtime-oci-runtime",
+            "admit-runtime-network-backend",
+            "admit-runtime-seccomp",
+            "admit-runtime-cgroup",
+            "admit-runtime-systemd-user",
+            "admit-runtime-socket-path-absence",
+            "admit-runtime-socket-unit-disabled",
+            "admit-runtime-container-host-absence",
+            "admit-runtime-remote-socket-absence",
+            "admit-runtime-podman-version",
+        )
+        base = {
+            "schema_version": 1,
+            "target_sha": "b" * 40,
+            "trusted_control_sha": "a" * 40,
+            "run_id": "12345",
+            "run_attempt": "1",
+            "phase": "evidence-collection",
+            "exit_status": 1,
+            "guest": {
+                "id": "rocky",
+                "version_id": "10.2",
+                "uname_machine": "aarch64",
+            },
+            "collection_diagnostic": {
+                "layer": "admission",
+                "operation": "admit-runtime-rootless",
+                "reason": "invariant-failed",
+            },
+        }
+        for operation in operations:
+            with self.subTest(operation=operation):
+                document = deepcopy(base)
+                document["collection_diagnostic"]["operation"] = operation
+                self.assertFalse(list(validator.iter_errors(document)))
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+                    json.dump(document, path)
+                    path.flush()
+                    completed = subprocess.run(
+                        [control, "validate-evidence", "preparation-failure", path.name],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                self.assertEqual(0, completed.returncode, completed.stderr)
+
+        collapsed = deepcopy(base)
+        collapsed["collection_diagnostic"]["operation"] = "admit-runtime"
+        self.assertTrue(list(validator.iter_errors(collapsed)))
+        with_subject = deepcopy(base)
+        with_subject["collection_diagnostic"]["subject"] = "podman"
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+            json.dump(with_subject, path)
+            path.flush()
+            completed = subprocess.run(
+                [control, "validate-evidence", "preparation-failure", path.name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+
     def test_repository_failure_observation_is_bounded_and_phase_scoped(self) -> None:
         schema = json.loads(
             (ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json").read_text(

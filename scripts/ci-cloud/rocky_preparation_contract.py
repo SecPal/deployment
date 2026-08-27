@@ -22,6 +22,17 @@ RESPONSIBILITY = "normalization,admission,assembly"
 INVARIANT_OWNERS = {
     "fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity",
     "rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key",
+    "runtime-cgroup": "rocky_preparation_contract.admit_runtime_cgroup",
+    "runtime-container-host-absence": "rocky_preparation_contract.admit_runtime_container_host_absence",
+    "runtime-network-backend": "rocky_preparation_contract.admit_runtime_network_backend",
+    "runtime-oci-runtime": "rocky_preparation_contract.admit_runtime_oci_runtime",
+    "runtime-podman-version": "rocky_preparation_contract.admit_runtime_podman_version",
+    "runtime-remote-socket-absence": "rocky_preparation_contract.admit_runtime_remote_socket_absence",
+    "runtime-rootless": "rocky_preparation_contract.admit_runtime_rootless",
+    "runtime-seccomp": "rocky_preparation_contract.admit_runtime_seccomp",
+    "runtime-socket-path-absence": "rocky_preparation_contract.admit_runtime_socket_path_absence",
+    "runtime-socket-unit-disabled": "rocky_preparation_contract.admit_runtime_socket_unit_disabled",
+    "runtime-systemd-user": "rocky_preparation_contract.admit_runtime_systemd_user",
 }
 PACKAGES = (
     "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
@@ -413,6 +424,85 @@ def normalize_observations(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def admit_runtime_rootless(host: dict[str, Any]) -> None:
+    if not bool(host.get("security", {}).get("rootless")):
+        reject("admission", "admit-runtime-rootless", "invariant-failed")
+
+
+def admit_runtime_oci_runtime(host: dict[str, Any]) -> None:
+    if host.get("ociRuntime", {}).get("name") != "crun":
+        reject("admission", "admit-runtime-oci-runtime", "invariant-failed")
+
+
+def admit_runtime_network_backend(host: dict[str, Any]) -> None:
+    if host.get("networkBackend") != "netavark":
+        reject("admission", "admit-runtime-network-backend", "invariant-failed")
+
+
+def admit_runtime_seccomp(host: dict[str, Any]) -> None:
+    if not bool(host.get("security", {}).get("seccompEnabled")):
+        reject("admission", "admit-runtime-seccomp", "invariant-failed")
+
+
+def admit_runtime_cgroup(facts: dict[str, Any]) -> None:
+    if facts["cgroup_filesystem"] != "cgroup2fs":
+        reject("admission", "admit-runtime-cgroup", "invariant-failed")
+
+
+def admit_runtime_systemd_user(facts: dict[str, Any]) -> None:
+    if facts["systemd_user"] != "active":
+        reject("admission", "admit-runtime-systemd-user", "invariant-failed")
+
+
+def admit_runtime_socket_path_absence(facts: dict[str, Any]) -> None:
+    if facts["socket_exists"]:
+        reject(
+            "admission", "admit-runtime-socket-path-absence", "invariant-failed"
+        )
+
+
+def admit_runtime_socket_unit_disabled(facts: dict[str, Any]) -> None:
+    if facts["podman_socket_enabled"]:
+        reject(
+            "admission", "admit-runtime-socket-unit-disabled", "invariant-failed"
+        )
+
+
+def admit_runtime_container_host_absence(facts: dict[str, Any]) -> None:
+    if facts["container_host_present"]:
+        reject(
+            "admission", "admit-runtime-container-host-absence", "invariant-failed"
+        )
+
+
+def admit_runtime_remote_socket_absence(host: dict[str, Any]) -> None:
+    if bool(host.get("remoteSocket", {}).get("exists")):
+        reject(
+            "admission", "admit-runtime-remote-socket-absence", "invariant-failed"
+        )
+
+
+def admit_runtime_podman_version(facts: dict[str, Any]) -> None:
+    if not isinstance(facts["podman_version"], str) or not facts["podman_version"]:
+        reject("admission", "admit-runtime-podman-version", "invariant-failed")
+
+
+def admit_runtime(facts: dict[str, Any]) -> None:
+    """Admit each runtime invariant in one stable semantic order."""
+    host = facts["podman_normalized"]["host"]
+    admit_runtime_rootless(host)
+    admit_runtime_oci_runtime(host)
+    admit_runtime_network_backend(host)
+    admit_runtime_seccomp(host)
+    admit_runtime_cgroup(facts)
+    admit_runtime_systemd_user(facts)
+    admit_runtime_socket_path_absence(facts)
+    admit_runtime_socket_unit_disabled(facts)
+    admit_runtime_container_host_absence(facts)
+    admit_runtime_remote_socket_absence(host)
+    admit_runtime_podman_version(facts)
+
+
 def admit_facts(facts: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
     if SHA.fullmatch(str(options.get("target_sha", ""))) is None or SHA.fullmatch(
         str(options.get("control_sha", ""))
@@ -495,22 +585,7 @@ def admit_facts(facts: dict[str, Any], options: dict[str, Any]) -> dict[str, Any
         <= 130_000_000_000
     ):
         reject("admission", "admit-hardware", "invariant-failed")
-    runtime_admitted = (
-        bool(host.get("security", {}).get("rootless"))
-        and host.get("ociRuntime", {}).get("name") == "crun"
-        and host.get("networkBackend") == "netavark"
-        and bool(host.get("security", {}).get("seccompEnabled"))
-        and facts["cgroup_filesystem"] == "cgroup2fs"
-        and facts["systemd_user"] == "active"
-        and not facts["socket_exists"]
-        and not facts["podman_socket_enabled"]
-        and not facts["container_host_present"]
-        and not bool(host.get("remoteSocket", {}).get("exists"))
-        and isinstance(facts["podman_version"], str)
-        and bool(facts["podman_version"])
-    )
-    if not runtime_admitted:
-        reject("admission", "admit-runtime", "invariant-failed")
+    admit_runtime(facts)
     if (
         account.get("shell") != "/usr/sbin/nologin"
         or facts["supplementary_groups"] != [account["gid"]]
