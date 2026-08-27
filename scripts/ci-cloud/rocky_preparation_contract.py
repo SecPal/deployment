@@ -10,6 +10,9 @@ clock capability.  The external collector supplies bounded raw observations.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import re
 from typing import Any
@@ -18,6 +21,7 @@ from typing import Any
 RESPONSIBILITY = "normalization,admission,assembly"
 INVARIANT_OWNERS = {
     "fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity",
+    "rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key",
 }
 PACKAGES = (
     "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
@@ -36,6 +40,13 @@ FIXTURE_REPOSITORY = FIXTURE.partition("@")[0]
 FIXTURE_DIGEST_IDENTITY_MAX = 8
 FIXTURE_DIGEST_METADATA_MAX_BYTES = 1024
 ROCKY_FINGERPRINT = "fc226859c0860bf0ddb95b085b106c736fedfc85"
+ROCKY_KEY_PACKAGE = "gpg-pubkey-6fedfc85-682ae1a9"
+ROCKY_KEY_VERSION = "6fedfc85"
+# The Rocky RPMDB contract test independently maps this exact OpenPGP packet to
+# ROCKY_FINGERPRINT; production admission needs no second crypto implementation.
+ROCKY_KEY_PACKET_SHA256 = (
+    "1f09530c1d1fdcbe03279b565e9b7ff1ec4d6fccd663ac2710d0b2f0119dbb7e"
+)
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REPO_DIGEST = re.compile(
     rf"^{re.escape(FIXTURE_REPOSITORY)}@sha256:[0-9a-f]{{64}}$"
@@ -45,6 +56,17 @@ IMAGE = re.compile(
     r"global/images/rocky-linux-10-[a-z0-9-]{1,50}$"
 )
 PAYLOAD_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+NEVRA = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:~^-]{2,255}$")
+HEADER_SIGNATURE = re.compile(
+    r"^RSA/SHA256, [ -~]{1,128}, Key ID [0-9a-f]{16}$"
+)
+VERIFIED_HEADER_LINES = frozenset(
+    {
+        "Header V4 RSA/SHA256 Signature, key ID 6fedfc85: OK",
+        "Header SHA256 digest: OK",
+        "Header SHA1 digest: OK",
+    }
+)
 
 
 class ContractError(RuntimeError):
@@ -230,6 +252,36 @@ def normalize_quadlet_authority(status: int) -> bool:
     return status == 0
 
 
+def normalize_rocky_signing_key(raw: str) -> dict[str, str]:
+    if not isinstance(raw, str):
+        reject("normalization", "normalize-rocky-signing-key", "wrong-type")
+    if len(raw.encode("utf-8")) > 4096:
+        reject("normalization", "normalize-rocky-signing-key", "observation-limit-exceeded")
+    lines = raw.splitlines()
+    if len(lines) < 2 or lines[0] != ROCKY_KEY_VERSION:
+        reject("normalization", "normalize-rocky-signing-key", "representation-invalid")
+    encoded = "".join(lines[1:])
+    try:
+        packet = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        reject("normalization", "normalize-rocky-signing-key", "representation-invalid")
+    if not 1 <= len(packet) <= 2048:
+        reject("normalization", "normalize-rocky-signing-key", "cardinality-invalid")
+    return {
+        "version": lines[0],
+        "packet_sha256": hashlib.sha256(packet).hexdigest(),
+    }
+
+
+def admit_rocky_signing_key(fact: dict[str, str]) -> str:
+    if fact != {
+        "version": ROCKY_KEY_VERSION,
+        "packet_sha256": ROCKY_KEY_PACKET_SHA256,
+    }:
+        reject("admission", "admit-rocky-signing-key", "invariant-failed")
+    return ROCKY_FINGERPRINT
+
+
 def normalize_package(raw: dict[str, Any]) -> dict[str, Any]:
     name = raw.get("name")
     if name not in PACKAGES:
@@ -237,45 +289,57 @@ def normalize_package(raw: dict[str, Any]) -> dict[str, Any]:
     repositories = raw.get("repositories")
     if not isinstance(repositories, list) or not all(isinstance(item, str) for item in repositories):
         reject("normalization", "normalize-package-evidence", "wrong-type", name)
-    installed_payload = raw.get("installed_payload")
-    if not isinstance(installed_payload, str) or PAYLOAD_DIGEST.fullmatch(installed_payload) is None:
+    if any(
+        not isinstance(raw.get(field), str)
+        or len(raw[field].encode("utf-8")) > 4096
+        for field in ("nevra", "signed_header", "verification")
+    ):
+        reject("normalization", "normalize-package-evidence", "wrong-type", name)
+    if (
+        NEVRA.fullmatch(raw["nevra"]) is None
+        or not raw["nevra"].startswith(f"{name}-")
+    ):
         reject("normalization", "normalize-package-evidence", "representation-invalid", name)
-    if type(raw.get("payload_count")) is not int:
-        reject("normalization", "normalize-package-evidence", "wrong-type", name)
-    text_fields = ("nevra", "signature", "rocky_keys", "official_nevra", "official_payload")
-    if any(not isinstance(raw.get(field), str) for field in text_fields):
-        reject("normalization", "normalize-package-evidence", "wrong-type", name)
+    header = raw["signed_header"].splitlines()
+    verification_lines = raw["verification"].splitlines()
+    verification = frozenset(
+        line for line in verification_lines if line.startswith("Header ")
+    )
+    if (
+        len(header) != 5
+        or not header[0]
+        or PAYLOAD_DIGEST.fullmatch(header[1]) is None
+        or header[2] != "8"
+        or PAYLOAD_DIGEST.fullmatch(header[3]) is None
+        or HEADER_SIGNATURE.fullmatch(header[4]) is None
+        or not header[4].lower().endswith("5b106c736fedfc85")
+        or verification != VERIFIED_HEADER_LINES
+        or any(
+            line.startswith("Header ") and line not in VERIFIED_HEADER_LINES
+            for line in verification_lines
+        )
+    ):
+        reject("normalization", "normalize-installed-signed-header", "representation-invalid", name)
     return {
         "name": name,
         "nevra": raw["nevra"],
         "repositories": repositories,
-        "installed_payload": installed_payload,
-        "payload_count": raw["payload_count"],
-        "signature": raw["signature"],
-        "rocky_keys": raw["rocky_keys"],
-        "official_nevra": raw["official_nevra"],
-        "official_payload": raw["official_payload"],
+        "header_nevra": header[0],
+        "payload_digest": header[1],
+        "payload_digest_algorithm": header[2],
+        "header_sha256": header[3],
+        "header_signature": header[4],
     }
 
 
-def admit_package(fact: dict[str, Any]) -> dict[str, Any]:
+def admit_package(fact: dict[str, Any], signer_fingerprint: str) -> dict[str, Any]:
     name = fact["name"]
     official = fact["repositories"]
     if len(official) != 1 or official[0] not in REPOSITORIES:
         reject("admission", "admit-package-repository", "cardinality-invalid", name)
-    if fact["payload_count"] != 1:
-        reject("admission", "admit-package-payload", "cardinality-invalid", name)
-    signature = fact["signature"]
-    rocky_keys = fact["rocky_keys"]
-    if (
-        not isinstance(signature, str)
-        or "digests signatures OK" not in signature
-        or "6fedfc85" not in signature.lower()
-        or not isinstance(rocky_keys, str)
-        or ROCKY_FINGERPRINT not in re.sub(r"[^0-9a-f]", "", rocky_keys.lower())
-    ):
+    if signer_fingerprint != ROCKY_FINGERPRINT:
         reject("admission", "admit-package-signature", "invariant-failed", name)
-    if fact["official_nevra"] != fact["nevra"] or fact["official_payload"] != fact["installed_payload"]:
+    if fact["header_nevra"] != fact["nevra"]:
         reject("admission", "admit-package-identity", "invariant-failed", name)
     return {
         "name": name,
@@ -283,7 +347,7 @@ def admit_package(fact: dict[str, Any]) -> dict[str, Any]:
         "resolved_repository": official[0],
         "signature_verified": True,
         "signer_fingerprint": ROCKY_FINGERPRINT,
-        "payload_digest": fact["installed_payload"],
+        "payload_digest": fact["payload_digest"],
     }
 
 
@@ -330,6 +394,9 @@ def normalize_observations(raw: dict[str, Any]) -> dict[str, Any]:
             raw["fixture_repo_digests"]
         ),
         "packages_normalized": [normalize_package(item) for item in raw["packages"]],
+        "rocky_signing_key_normalized": normalize_rocky_signing_key(
+            raw["rocky_signing_key"]
+        ),
         "memory_bytes": normalize_memory_bytes(raw["meminfo"]),
         "label_disable_absent": normalize_label_configuration(
             raw["container_configs"]
@@ -410,7 +477,13 @@ def admit_facts(facts: dict[str, Any], options: dict[str, Any]) -> dict[str, Any
         reject("admission", "admit-fixture-present", "invariant-failed")
     if facts["boot_id"] == options["first_boot_id"]:
         reject("admission", "admit-reboot-persistence", "invariant-failed")
-    packages = [admit_package(item) for item in facts["packages_normalized"]]
+    signer_fingerprint = admit_rocky_signing_key(
+        facts["rocky_signing_key_normalized"]
+    )
+    packages = [
+        admit_package(item, signer_fingerprint)
+        for item in facts["packages_normalized"]
+    ]
     if [item["name"] for item in packages] != list(PACKAGES):
         reject("admission", "admit-package-set", "invariant-failed")
     if (

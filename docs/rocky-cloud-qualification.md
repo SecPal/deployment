@@ -182,6 +182,72 @@ document does not redefine them. Current dependency and scheduling decisions
 remain exclusively in the native GitHub work graph; this historical record
 explains the structural omission and does not prescribe issue order.
 
+## Installed Rocky package provenance
+
+Runs `33090958348` and `33093312770` independently reached the same
+`download-official-package` boundary after installation and then failed during
+the first of 22 post-install mirror transfers. Rocky 10.2 experiments showed no
+deterministic selector, plugin, destination, architecture, or permission defect.
+The repeated failure instead exposed an unnecessary availability dependency in
+the evidence design: provenance of an installed artifact was being conditioned
+on a second copy remaining downloadable from a live mirror later.
+
+The admitted invariant is about the installed artifact, not current mirror
+payload availability. For every reviewed package, evidence proves:
+
+- its exact installed NEVRA;
+- successful RPM verification of the preserved immutable installed header,
+  including its RSA signature and SHA-256/SHA-1 header digests;
+- the SHA-256 payload digest and algorithm stored in that signed header;
+- the exact reviewed Rocky 10 signing-key packet and fingerprint; and
+- exact current NEVRA membership in one of `baseos`, `appstream`, or `extras`,
+  using repository metadata without transferring the RPM payload.
+
+RPM v4 immutable regions preserve the original signed header when
+installation-specific fields are added, specifically so installed metadata can
+still be verified. Header signatures cover the main header, while the
+`PAYLOADDIGEST`/`PAYLOADSHA256` tag is in that header. See the upstream
+[immutable-header description](https://rpm.org/docs/4.19.x/manual/hregions.html),
+[RPM v4 format](https://rpm.org/docs/6.0.x/manual/format_v4.html), and
+[signature/digest ranges](https://rpm.org/docs/6.0.x/manual/signatures_digests.html).
+
+The reviewed Rocky 10.2 representation is exercised against RPM 4.19.1.1 and
+DNF4 4.20.0. A single `rpm -qvv` read returns NEVRA, payload digest and
+algorithm, SHA-256 header digest, and RSA header signature while RPM verifies
+the same installed header. Admission requires the closed Rocky `OK` markers;
+exit status alone is insufficient because a missing key can produce `NOKEY`
+with status zero. A copied RPMDB with its key removed is rejected, and a
+byte-mutated immutable header produces `BAD` and non-zero status. The installed
+Rocky public-key packet is decoded and matched by exact SHA-256 to the reviewed
+full fingerprint rather than trusting a display string.
+
+Actual transaction characterization also established the limits of auxiliary
+DNF facts. A package installed by the current reviewed transaction records a
+reviewed `from_repo`, while a package already present in the official base image
+may retain an opaque image-build repository identifier. DNF documents
+`from_repo` as empty when history is unavailable and exposes repository checksum
+and installed-header checksum on different package representations; see the
+[DNF Package API](https://dnf.readthedocs.io/en/latest/api_package.html).
+Transaction history is therefore supporting evidence only. Default
+`keepcache=False` removes downloaded RPMs after a successful transaction, and
+even `keepcache=True` cannot provide the artifact for an unchanged base-image
+package; see the
+[DNF configuration reference](https://dnf.readthedocs.io/en/latest/conf_ref.html).
+
+| Architecture                                          | Provenance and artifact binding                                                                                                                              | Availability and applicability                                                                     | Decision |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | -------- |
+| Post-install re-download                              | Compares installed signed-header facts with a later mirror copy, adding temporal equality but not stronger evidence about the installed artifact             | Adds 22 live payload transfers and fails when a current mirror payload is unavailable              | Rejected |
+| RPMDB immutable header plus exact repository metadata | Directly verifies the installed artifact's preserved signed header, exact NEVRA, payload digest, reviewed signer, and current reviewed-repository membership | No post-install payload transfer; applies equally to base-image and transaction-installed packages | Selected |
+| Retained DNF transaction artifacts                    | Verifies the transaction's downloaded files                                                                                                                  | Does not cover unchanged base-image packages; adds cache ownership and stale-artifact semantics    | Rejected |
+| Pre-staged transaction bundle                         | Can bind installation to staged files                                                                                                                        | Retains the initial availability dependency and adds bundle lifecycle and substitution surfaces    | Rejected |
+
+A same-NEVRA artifact published later by a mirror is a different temporal
+observation. The selected contract admits the installed artifact only when its
+own immutable header verifies under the reviewed Rocky key. It does not claim
+that today's mirror payload is byte-identical, and losing that comparison does
+not weaken provenance of what is installed. The architecture gate rejects any
+collector mutation that restores a post-install `dnf4 download` observation.
+
 ## Post-merge evidence
 
 Repository validation cannot claim provider success. After this trusted control

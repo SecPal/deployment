@@ -158,6 +158,7 @@ required_files=(
   tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
   tests/rocky-dnf4-nevra-contract.sh
+  tests/rocky-rpmdb-provenance-contract.sh
   tests/preflight-origin-contract.sh
   tests/sensitive-path-contract.sh
   tests/workflow-action-pin-contract.sh

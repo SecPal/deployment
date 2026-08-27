@@ -34,6 +34,14 @@ jobs:
           docker.io/rockylinux/rockylinux@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
           bash tests/rocky-dnf4-nevra-contract.sh
 
+      - name: Exercise Rocky 10.2 RPMDB provenance semantics
+        run: >-
+          podman run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace:ro"
+          --workdir /workspace
+          docker.io/rockylinux/rockylinux@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
+          bash tests/rocky-rpmdb-provenance-contract.sh
+
   architecture-gate:
     name: Architecture Gate (Python ${{ matrix.python }})
     runs-on: ubuntu-latest

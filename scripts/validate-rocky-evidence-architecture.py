@@ -69,6 +69,8 @@ def validate_pure_contract(path: Path) -> None:
     source = path.read_text(encoding="utf-8")
     if '"fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity"' not in source:
         raise ArchitectureError("authoritative fixture invariant owner is absent")
+    if '"rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key"' not in source:
+        raise ArchitectureError("authoritative package-signing invariant owner is absent")
     functions = {
         node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
     }
@@ -306,6 +308,18 @@ def validate_collector(path: Path) -> None:
         raise ArchitectureError("fixture observation must use complete RepoDigests membership")
     if "ObservationOperation" not in source:
         raise ArchitectureError("closed observation operation set is absent")
+    for sequence in ast.walk(tree):
+        if not isinstance(sequence, (ast.List, ast.Tuple)):
+            continue
+        arguments = {
+            value.value
+            for value in ast.walk(sequence)
+            if isinstance(value, ast.Constant) and isinstance(value.value, str)
+        }
+        if {"dnf4", "download"} <= arguments:
+            raise ArchitectureError(
+                "post-install package payload transfer is forbidden"
+            )
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
