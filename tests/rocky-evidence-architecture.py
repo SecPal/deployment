@@ -195,6 +195,38 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 "        command = arguments\n",
                 1,
             ),
+            "aliased-import": source.replace(
+                "import subprocess\n",
+                "import subprocess as sp\nsp.run(['uname', '-m'])\n",
+                1,
+            ),
+            "from-import": source.replace(
+                "import subprocess\n",
+                "from subprocess import run\nrun(['uname', '-m'])\n",
+                1,
+            ),
+            "nested-default": source.replace(
+                "        command = arguments\n",
+                "        def hidden(value=subprocess.run(['uname', '-m'])):\n"
+                "            return value\n"
+                "        command = arguments\n",
+                1,
+            ),
+            "nested-decorator": source.replace(
+                "        command = arguments\n",
+                "        @subprocess.run(['uname', '-m'])\n"
+                "        def hidden():\n"
+                "            return None\n"
+                "        command = arguments\n",
+                1,
+            ),
+            "nested-annotation": source.replace(
+                "        command = arguments\n",
+                "        def hidden(value: subprocess.run(['uname', '-m'])):\n"
+                "            return value\n"
+                "        command = arguments\n",
+                1,
+            ),
         }
         for name, mutation in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:

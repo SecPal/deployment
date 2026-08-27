@@ -217,6 +217,21 @@ def is_direct_observer_method(tree: ast.Module, target: ast.AST) -> bool:
 
 
 def validate_subprocess_scopes(source: str, path: Path) -> None:
+    tree = parse(path)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(
+                alias.name == "subprocess" and alias.asname is not None
+                for alias in node.names
+            ):
+                raise ArchitectureError(
+                    "opaque observation uses an aliased subprocess import"
+                )
+        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            raise ArchitectureError(
+                "opaque observation uses a subprocess from-import"
+            )
+
     try:
         root = symtable.symtable(source, str(path), "exec")
     except SyntaxError as error:
@@ -249,7 +264,6 @@ def validate_subprocess_scopes(source: str, path: Path) -> None:
 
     visit(root, None)
 
-    tree = parse(path)
     parents = {
         child: parent
         for parent in ast.walk(tree)
@@ -265,6 +279,10 @@ def validate_subprocess_scopes(source: str, path: Path) -> None:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Name) or node.id != "subprocess":
             continue
+        if not is_direct_observer_method(tree, node):
+            raise ArchitectureError(
+                "opaque observation exists outside direct Observer.run scope"
+            )
         current = parents.get(node)
         while current is not None and not isinstance(
             current, (ast.FunctionDef, ast.AsyncFunctionDef)
