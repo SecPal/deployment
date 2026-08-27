@@ -437,7 +437,7 @@ class RockyCloudControlTests(unittest.TestCase):
             "admit-runtime-socket-path-absence",
             "admit-runtime-socket-unit-disabled",
             "admit-runtime-container-host-absence",
-            "admit-runtime-remote-socket-absence",
+            "admit-runtime-service-locality",
             "admit-runtime-podman-version",
         )
         base = {

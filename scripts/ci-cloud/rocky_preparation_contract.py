@@ -27,9 +27,9 @@ INVARIANT_OWNERS = {
     "runtime-network-backend": "rocky_preparation_contract.admit_runtime_network_backend",
     "runtime-oci-runtime": "rocky_preparation_contract.admit_runtime_oci_runtime",
     "runtime-podman-version": "rocky_preparation_contract.admit_runtime_podman_version",
-    "runtime-remote-socket-absence": "rocky_preparation_contract.admit_runtime_remote_socket_absence",
     "runtime-rootless": "rocky_preparation_contract.admit_runtime_rootless",
     "runtime-seccomp": "rocky_preparation_contract.admit_runtime_seccomp",
+    "runtime-service-locality": "rocky_preparation_contract.admit_runtime_service_locality",
     "runtime-socket-path-absence": "rocky_preparation_contract.admit_runtime_socket_path_absence",
     "runtime-socket-unit-disabled": "rocky_preparation_contract.admit_runtime_socket_unit_disabled",
     "runtime-systemd-user": "rocky_preparation_contract.admit_runtime_systemd_user",
@@ -220,8 +220,10 @@ def normalize_podman(raw: str) -> dict[str, Any]:
     host = value["host"]
     if any(
         not isinstance(host.get(field), dict)
-        for field in ("security", "ociRuntime", "remoteSocket")
+        for field in ("security", "ociRuntime")
     ):
+        reject("normalization", "normalize-podman-info", "wrong-type")
+    if type(host.get("serviceIsRemote")) is not bool:
         reject("normalization", "normalize-podman-info", "wrong-type")
     if not isinstance(value["store"].get("graphRoot"), str):
         reject("normalization", "normalize-podman-info", "wrong-type")
@@ -475,11 +477,15 @@ def admit_runtime_container_host_absence(facts: dict[str, Any]) -> None:
         )
 
 
-def admit_runtime_remote_socket_absence(host: dict[str, Any]) -> None:
-    if bool(host.get("remoteSocket", {}).get("exists")):
-        reject(
-            "admission", "admit-runtime-remote-socket-absence", "invariant-failed"
-        )
+def admit_runtime_service_locality(host: dict[str, Any]) -> None:
+    """Require the invoked Podman client to use the local libpod engine.
+
+    Podman 5.6's informational ``remoteSocket.exists`` can be true for an absent
+    default Unix socket.  Direct path, unit, and environment observations own
+    socket/API absence; ``serviceIsRemote`` independently rejects remote mode.
+    """
+    if host["serviceIsRemote"]:
+        reject("admission", "admit-runtime-service-locality", "invariant-failed")
 
 
 def admit_runtime_podman_version(facts: dict[str, Any]) -> None:
@@ -499,7 +505,7 @@ def admit_runtime(facts: dict[str, Any]) -> None:
     admit_runtime_socket_path_absence(facts)
     admit_runtime_socket_unit_disabled(facts)
     admit_runtime_container_host_absence(facts)
-    admit_runtime_remote_socket_absence(host)
+    admit_runtime_service_locality(host)
     admit_runtime_podman_version(facts)
 
 
