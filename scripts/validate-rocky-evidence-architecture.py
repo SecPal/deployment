@@ -126,8 +126,7 @@ def validate_pure_contract(path: Path) -> None:
     }
     if any(
         isinstance(value, ast.Constant) and value.value == "remoteSocket"
-        for name, function in functions.items()
-        if name.startswith("admit_runtime")
+        for function in functions.values()
         for value in ast.walk(function)
     ):
         raise ArchitectureError(

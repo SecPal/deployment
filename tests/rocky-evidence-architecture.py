@@ -388,11 +388,13 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_architecture_gate_rejects_remote_socket_info_as_admission(self) -> None:
         source = CONTRACT.read_text(encoding="utf-8")
         mutation = source.replace(
-            "    admit_runtime_podman_version(facts)\n",
-            "    if bool(host.get('remoteSocket', {}).get('exists')):\n"
+            "def admit_runtime_podman_version(facts: dict[str, Any]) -> None:\n",
+            "def forbidden_remote_socket_present(host: dict[str, Any]) -> bool:\n"
+            "    return bool(host.get('remoteSocket', {}).get('exists'))\n\n\n"
+            "def admit_runtime_podman_version(facts: dict[str, Any]) -> None:\n"
+            "    if forbidden_remote_socket_present(facts['podman_normalized']['host']):\n"
             "        reject('admission', 'admit-runtime-remote-socket-absence', "
-            "'invariant-failed')\n"
-            "    admit_runtime_podman_version(facts)\n",
+            "'invariant-failed')\n",
             1,
         )
         with tempfile.TemporaryDirectory() as directory:
