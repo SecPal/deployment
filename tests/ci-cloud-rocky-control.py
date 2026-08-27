@@ -58,10 +58,12 @@ class RockyCloudControlTests(unittest.TestCase):
             "target_runner_base64gzip": ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh",
             "allocator_base64gzip": ROOT / "scripts/ci-cloud/allocate-rocky-subids.py",
             "collector_base64gzip": ROOT / "scripts/ci-cloud/collect-rocky-preparation.py",
+            "preparation_contract_base64gzip": ROOT / "scripts/ci-cloud/rocky_preparation_contract.py",
             "control_utility_base64gzip": ROOT / "scripts/ci-cloud/rocky-control.py",
             "discovery_schema_base64gzip": ROOT / "schemas/rocky-cloud-discovery-evidence.schema.json",
             "continuation_schema_base64gzip": ROOT / "schemas/rocky-cloud-continuation.schema.json",
             "preparation_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json",
+            "preparation_failure_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json",
             "qualification_schema_base64gzip": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
             "profile_base64gzip": PROFILE,
         }
@@ -579,14 +581,19 @@ class RockyCloudControlTests(unittest.TestCase):
         preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
             encoding="utf-8"
         )
+        preparation = preparation.replace(
+            "/usr/local/sbin/secpal-collect-rocky-preparation",
+            str(ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"),
+        )
         helper_start = preparation.index("set_fixture_diagnostic()")
         helper_end = preparation.index("\n}\n", helper_start) + len("\n}\n")
         helper = preparation[helper_start:helper_end]
         block_start = preparation.index('  current_phase="fixture"')
         block_end = preparation.index("\n\n  cat >/etc/sudoers.d/", block_start)
         block = preparation[block_start:block_end]
-        fixture = "docker.io/library/alpine@sha256:" + "1" * 64
-        arm_child = "sha256:" + "2" * 64
+        fixture_contract = json.loads(PROFILE.read_text(encoding="utf-8"))["fixture"]
+        fixture = fixture_contract["input"]
+        arm_child = fixture_contract["arm64_child"]
         if repo_digests is None:
             repo_digests = [f"docker.io/library/alpine@{arm_child}"]
         script = (
@@ -624,7 +631,7 @@ class RockyCloudControlTests(unittest.TestCase):
         )
 
     def test_fixture_failure_diagnostic_tracks_each_operation_without_untrusted_output(self) -> None:
-        expected_child = "sha256:" + "2" * 64
+        expected_child = json.loads(PROFILE.read_text(encoding="utf-8"))["fixture"]["arm64_child"]
         expected_reference = f"docker.io/library/alpine@{expected_child}"
         wrong_reference = "docker.io/library/alpine@sha256:" + "3" * 64
         cases = (
@@ -711,7 +718,7 @@ class RockyCloudControlTests(unittest.TestCase):
     def test_fixture_child_admission_uses_complete_bounded_digest_membership(self) -> None:
         repository = "docker.io/library/alpine"
         parent_digest = "sha256:" + "1" * 64
-        child_digest = "sha256:" + "2" * 64
+        child_digest = json.loads(PROFILE.read_text(encoding="utf-8"))["fixture"]["arm64_child"]
         wrong_child_digest = "sha256:" + "3" * 64
         parent_reference = f"{repository}@{parent_digest}"
         child_reference = f"{repository}@{child_digest}"
@@ -775,7 +782,7 @@ class RockyCloudControlTests(unittest.TestCase):
         ]
         self.assertIn(".RepoDigests", fixture_block)
         self.assertNotIn("{{.Digest}}", fixture_block)
-        self.assertIn("readonly fixture_digest_identity_max=8", preparation)
+        self.assertIn("--admit-fixture-repo-digests", fixture_block)
         self.assertIn("readonly fixture_digest_metadata_max_bytes=1024", preparation)
 
     def test_preparation_collector_uses_the_same_complete_fixture_digest_membership(self) -> None:
@@ -796,7 +803,7 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotIn("{{.Digest}}", collector_source)
         self.assertEqual(8, collector.FIXTURE_DIGEST_IDENTITY_MAX)
         self.assertEqual(1024, collector.FIXTURE_DIGEST_METADATA_MAX_BYTES)
-        self.assertIn("readonly fixture_digest_identity_max=8", preparation)
+        self.assertIn("--admit-fixture-repo-digests", preparation)
         self.assertIn("readonly fixture_digest_metadata_max_bytes=1024", preparation)
         self.assertEqual(
             collector.FIXTURE,
@@ -1425,7 +1432,7 @@ class RockyCloudControlTests(unittest.TestCase):
                     "-c",
                     "failure_evidence_max_bytes=20\n"
                     + function
-                    + "\nwrite_failure_document '{\"base\":1}' '{\"repositories\":\"oversized\"}' '{\"operation\":\"install-repository-management-prerequisite\",\"reason\":\"package-transaction-failed\"}' '' \"$1\"\ncat \"$1\"",
+                    + "\nwrite_failure_document '{\"base\":1}' '{\"repositories\":\"oversized\"}' '{\"operation\":\"install-repository-management-prerequisite\",\"reason\":\"package-transaction-failed\"}' '' '' \"$1\"\ncat \"$1\"",
                     "bash",
                     str(output),
                 ],
@@ -1443,7 +1450,7 @@ class RockyCloudControlTests(unittest.TestCase):
                     "-c",
                     "failure_evidence_max_bytes=20\n"
                     + function
-                    + "\nwrite_failure_document '{\"base\":1}' '' '' '{\"operation\":\"validate-resolved-arm64-child\",\"reason\":\"postcondition-failed\"}' \"$1\"\ncat \"$1\"",
+                    + "\nwrite_failure_document '{\"base\":1}' '' '' '{\"operation\":\"validate-resolved-arm64-child\",\"reason\":\"postcondition-failed\"}' '' \"$1\"\ncat \"$1\"",
                     "bash",
                     str(output),
                 ],
@@ -1667,10 +1674,13 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotIn("remove google-guest-agent", preparation)
         self.assertNotIn("disable google-guest-agent", preparation)
         self.assertIn("dnf-plugins-core", preparation)
-        self.assertIn("dnf-plugins-core", collector)
+        self.assertIn("dnf-plugins-core", (ROOT / "scripts/ci-cloud/rocky_preparation_contract.py").read_text(encoding="utf-8"))
         self.assertIn("--disablerepo='*'", preparation)
         self.assertIn("--enablerepo=baseos,appstream,extras", preparation)
-        self.assertIn("if set(enabled_repos) != REPOSITORIES or len(enabled_repos) != 3", collector)
+        evidence_contract = (
+            ROOT / "scripts/ci-cloud/rocky_preparation_contract.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("if set(repositories) != REPOSITORIES or len(repositories) != 3", evidence_contract)
 
     def test_cleanup_is_exact_state_and_janitor_never_uses_prefix(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

@@ -92,6 +92,21 @@ FIXTURE_DIAGNOSTIC_REASONS = {
     "inspect-resolved-arm64-child": {"command-failed"},
     "validate-resolved-arm64-child": {"postcondition-failed"},
 }
+PACKAGE_COLLECTION_OPERATIONS = {
+    "query-package-nevra",
+    "resolve-package-repository",
+    "query-installed-payload-digest",
+    "download-official-package",
+    "inspect-official-package-payload",
+    "verify-package-signature",
+    "verify-rocky-signing-key",
+    "normalize-package-evidence",
+    "admit-package-repository",
+    "admit-package-payload",
+    "admit-package-signature",
+    "admit-package-identity",
+}
+UNIT_COLLECTION_OPERATIONS = {"query-update-unit", "query-podman-socket"}
 
 
 class ControlError(RuntimeError):
@@ -149,6 +164,12 @@ def validate_evidence(kind: str, path: Path) -> dict[str, Any]:
 
 def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
     phase = document.get("phase")
+    if phase == "evidence-collection":
+        diagnostic = document.get("collection_diagnostic")
+        if not isinstance(diagnostic, dict):
+            raise ControlError("collection failure diagnostic must be an object")
+        validate_collection_diagnostic_semantics(diagnostic)
+        return
     if phase == "fixture":
         diagnostic = document.get("fixture_diagnostic")
         if not isinstance(diagnostic, dict):
@@ -213,6 +234,69 @@ def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
     expected_missing = sorted(set(final) - set(enabled))
     if supplied_unexpected != expected_unexpected or supplied_missing != expected_missing:
         raise ControlError("repository failure classification contradicts trusted profile")
+
+
+def validate_collection_diagnostic(path: Path) -> None:
+    diagnostic = load_object(path)
+    document = {
+        "schema_version": 1,
+        "target_sha": "a" * 40,
+        "trusted_control_sha": "b" * 40,
+        "run_id": "1",
+        "run_attempt": "1",
+        "phase": "evidence-collection",
+        "exit_status": 1,
+        "guest": {"id": "rocky", "version_id": "10.2", "uname_machine": "aarch64"},
+        "collection_diagnostic": diagnostic,
+    }
+    schema = load_object(SCHEMAS["preparation-failure"])
+    errors = list(Draft202012Validator(schema).iter_errors(document))
+    if errors:
+        raise ControlError("collection diagnostic is outside the closed failure schema")
+    validate_collection_diagnostic_semantics(diagnostic)
+
+
+def validate_collection_diagnostic_semantics(diagnostic: dict[str, Any]) -> None:
+    operation = diagnostic.get("operation")
+    reason = diagnostic.get("reason")
+    subject = diagnostic.get("subject")
+    schema = load_object(SCHEMAS["preparation-failure"])
+    reason_groups = schema["properties"]["collection_diagnostic"].get(
+        "x-secpal-operation-reason-groups"
+    )
+    if not isinstance(reason_groups, list):
+        raise ControlError("collection diagnostic reason contract is unavailable")
+    matching_groups = [
+        group
+        for group in reason_groups
+        if isinstance(group, dict)
+        and isinstance(group.get("operations"), list)
+        and operation in group["operations"]
+    ]
+    if len(matching_groups) != 1 or reason not in matching_groups[0].get(
+        "reasons", []
+    ):
+        raise ControlError("collection diagnostic reason contradicts its operation")
+    if operation in PACKAGE_COLLECTION_OPERATIONS:
+        preparation_schema = load_object(SCHEMAS["preparation"])
+        package_branches = preparation_schema["properties"]["packages"]["allOf"]
+        allowed = {
+            branch["contains"]["properties"]["name"]["const"]
+            for branch in package_branches
+        }
+        if subject not in allowed:
+            raise ControlError("package diagnostic does not name a reviewed package")
+    elif operation in UNIT_COLLECTION_OPERATIONS:
+        if subject not in {
+            "dnf-automatic.timer",
+            "dnf-automatic-install.timer",
+            "dnf-automatic-download.timer",
+            "dnf-automatic-notifyonly.timer",
+            "podman.socket",
+        }:
+            raise ControlError("unit diagnostic does not name a reviewed unit")
+    elif subject is not None:
+        raise ControlError("collection diagnostic has an inappropriate subject")
 
 
 def discover_image(control_sha: str, output: Path) -> None:
@@ -358,6 +442,8 @@ def parser() -> argparse.ArgumentParser:
     evidence = subparsers.add_parser("validate-evidence")
     evidence.add_argument("kind", choices=sorted(SCHEMAS))
     evidence.add_argument("path", type=Path)
+    collection = subparsers.add_parser("validate-collection-diagnostic")
+    collection.add_argument("path", type=Path)
     discovery = subparsers.add_parser("discover-image")
     discovery.add_argument("--control-sha", required=True)
     discovery.add_argument("--output", required=True, type=Path)
@@ -393,6 +479,8 @@ def main(arguments: list[str]) -> int:
             validate_profile(options.path)
         elif options.command == "validate-evidence":
             validate_evidence(options.kind, options.path)
+        elif options.command == "validate-collection-diagnostic":
+            validate_collection_diagnostic(options.path)
         elif options.command == "discover-image":
             discover_image(options.control_sha, options.output)
         elif options.command == "validate-continuation":

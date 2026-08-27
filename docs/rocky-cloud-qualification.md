@@ -92,6 +92,44 @@ qualification: SELinux process/storage contexts, MCS separation, negative
 cross-MCS access, AVC, seccomp workload behavior, and cleanup PASS are populated
 only by the exact target revision's harness.
 
+### Host-evidence responsibility and ownership map
+
+The Rocky preparation transport installs two components. The collector owns
+only bounded host observation and orchestration. The separately transported
+`rocky_preparation_contract.py` owns pure normalization, pure admission, and
+closed evidence assembly. The latter imports no process, filesystem, network,
+environment, or clock capability. A single transported script would not permit
+these responsibilities to collapse.
+
+| Evidence concept                          | External representation / observation owner                                    | Normalization and authoritative admission owner                                | Assembly / schema / independent validation                                                                 | Diagnostic operation family                                                                   |
+| ----------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Immutable run, target, and image identity | workflow inputs and exact image self-link                                      | pure Rocky preparation contract                                                | pure assembly; preparation schema; `rocky-control.py`                                                      | `admit-immutable-shas`, `admit-provider-image`                                                |
+| Guest OS and architecture                 | `/etc/os-release`, `uname` through the collector observer                      | pure OS parser and `admit-guest-identity`                                      | pure assembly; preparation schema; trusted controller                                                      | `read-os-release`, `query-architecture`                                                       |
+| DNF and enabled repositories              | bounded `dnf4`/RPM observations                                                | pure repository parser and update/repository admission                         | pure assembly; preparation schema; trusted controller                                                      | `query-dnf-version`, `query-releasever`, `query-enabled-repositories`                         |
+| Installed package provenance              | bounded RPM/DNF/rpmkeys observations, one reviewed package subject at a time   | pure package normalization and repository/signature/payload admission          | pure assembly; preparation schema; trusted controller                                                      | closed `query-`, `resolve-`, `download-`, `inspect-`, and `verify-package-*` operations       |
+| SELinux and container labeling            | `getenforce`, `selinuxenabled`, `sestatus`, and bounded container config reads | pure SELinux and label-configuration admission                                 | pure assembly; preparation schema; trusted controller                                                      | `query-selinux-*`, `read-container-config`                                                    |
+| Service account and subordinate IDs       | passwd/group databases plus bounded subuid/subgid reads                        | pure account, range, cardinality, and overlap admission                        | pure assembly; preparation schema; trusted controller                                                      | `resolve-service-account`, `read-subuid`, `read-subgid`, identity operations                  |
+| Rootless Podman/runtime boundary          | bounded Podman JSON, systemd, cgroup, socket, and environment observations     | pure Podman normalization and runtime admission                                | pure assembly; preparation schema; trusted controller                                                      | `query-podman-*`, `query-systemd-user`, `query-cgroup-filesystem`                             |
+| Immutable ARM64 fixture identity          | Podman's complete bounded `.RepoDigests` representation                        | `rocky_preparation_contract.admit_fixture_identity` is the sole semantic owner | preparation delegates through the same contract CLI; pure assembly; preparation schema; trusted controller | `inspect-fixture-repo-digests`, `normalize-fixture-repo-digests`, `admit-fixture-arm64-child` |
+| Reboot and hardware persistence           | boot ID, CPU, memory, and root filesystem observations                         | pure representation normalization and persistence admission                    | pure assembly; preparation schema; trusted controller                                                      | `read-boot-id`, `query-cpu-count`, `read-memory-info`, `query-root-filesystem`                |
+| Cloud-identity absence                    | identity-transition marker and closed environment facts                        | pure cloud-boundary admission                                                  | pure assembly; preparation schema; trusted controller                                                      | `query-cloud-identity-marker`, `query-environment-authority`                                  |
+
+Every fallible collector operation is selected from `ObservationOperation` and
+emits only a closed layer, operation, reason, and, where applicable, a reviewed
+package or unit subject. The failure schema rejects command text, arbitrary
+stdout/stderr, URLs, environment material, and unreviewed subjects. The trusted
+controller independently validates the diagnostic before the preparation shell
+publishes it. The workflow exposes only those bounded fields.
+
+`scripts/validate-rocky-evidence-architecture.py` is the pre-provider gate. It
+rejects forbidden capabilities in pure surfaces, opaque observer calls,
+duplicate declared invariant ownership, semantic four-layer collapse, a
+multi-domain collector without its reviewed coherent contract, fixture
+admission outside the authoritative owner, and diagnostic operations absent
+from the closed schema. Mutation tests prove each guard is live. The workflow's
+non-OIDC validation job runs this gate before any job with provider identity or
+OpenTofu resource authority can start.
+
 ## Historical evidence-architecture findings and binding lesson
 
 The Rocky implementation must not treat the historical Debian cloud work as
