@@ -23,6 +23,10 @@ FORBIDDEN_PURE_IMPORTS = {
     "shutil", "socket", "subprocess", "tempfile", "time", "urllib",
 }
 FORBIDDEN_PURE_CALLS = {"open", "exec", "eval", "compile", "__import__"}
+COLLECTOR_FILESYSTEM_CAPABILITIES = {
+    "chmod", "exists", "glob", "read_bytes", "read_text", "replace",
+    "resolve", "unlink", "write_bytes", "write_text",
+}
 
 
 class ArchitectureError(RuntimeError):
@@ -193,6 +197,18 @@ def validate_collector(path: Path) -> None:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in COLLECTOR_FILESYSTEM_CAPABILITIES
+            and enclosing_class(tree, node) != "Observer"
+        ):
+            if node.func.attr == "resolve" and enclosing_function(tree, node) is None:
+                continue
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "observer":
+                continue
+            raise ArchitectureError(
+                "filesystem observation exists outside the Observer owner"
+            )
         if isinstance(node.func, ast.Attribute) and node.func.attr == "run":
             owner = node.func.value
             if isinstance(owner, ast.Name) and owner.id == "subprocess":

@@ -193,6 +193,7 @@
             "verify-package-signature",
             "verify-rocky-signing-key",
             "write-evidence",
+            "write-collection-diagnostic",
             "normalize-os-release",
             "normalize-repositories",
             "normalize-subuid",
@@ -328,7 +329,8 @@
                   "inspect-official-package-payload",
                   "verify-package-signature",
                   "verify-rocky-signing-key",
-                  "write-evidence"
+                  "write-evidence",
+                  "write-collection-diagnostic"
                 ]
               }
             },

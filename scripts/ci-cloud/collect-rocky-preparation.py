@@ -85,6 +85,7 @@ class ObservationOperation(str, Enum):
     PACKAGE_SIGNATURE = "verify-package-signature"
     ROCKY_KEY = "verify-rocky-signing-key"
     WRITE_EVIDENCE = "write-evidence"
+    WRITE_DIAGNOSTIC = "write-collection-diagnostic"
 
 
 class ObservationError(RuntimeError):
@@ -264,12 +265,17 @@ class Observer:
                 _, official_payload, _ = self.run(ObservationOperation.PACKAGE_PAYLOAD, ["rpm", "-qp", "--qf", "%{PAYLOADDIGEST}", str(payload)], subject=name)
         return {"name": name, "nevra": nevra, "repositories": repositories.splitlines(), "installed_payload": installed_payload.lower(), "payload_count": payload_count, "signature": signature, "rocky_keys": rocky_keys, "official_nevra": official_nevra, "official_payload": official_payload.lower()}
 
-    def write(self, path: Path, document: dict[str, Any]) -> None:
+    def write(
+        self,
+        operation: ObservationOperation,
+        path: Path,
+        document: dict[str, Any],
+    ) -> None:
         try:
             path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             path.chmod(0o600)
         except OSError as error:
-            raise ObservationError(ObservationOperation.WRITE_EVIDENCE, "observation-failed") from error
+            raise ObservationError(operation, "observation-failed") from error
 
 
 def admitted_fixture_arm64_child(repo_digests_metadata: str) -> str:
@@ -282,13 +288,6 @@ def diagnostic_document(error: ObservationError | contract.ContractError) -> dic
     return contract.assemble_collection_diagnostic(
         layer, error.operation, error.reason, error.subject
     )
-
-
-def write_diagnostic(path: Path, diagnostic: dict[str, str]) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(diagnostic, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.chmod(0o600)
-    temporary.replace(path)
 
 
 def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
@@ -367,19 +366,32 @@ def main() -> int:
     options = parser().parse_args()
     observer = Observer()
     try:
-        observer.write(options.output, collect(observer, options))
-        if options.diagnostic_output.exists():
-            options.diagnostic_output.unlink()
+        observer.write(
+            ObservationOperation.WRITE_EVIDENCE,
+            options.output,
+            collect(observer, options),
+        )
     except (ObservationError, contract.ContractError) as error:
-        write_diagnostic(options.diagnostic_output, diagnostic_document(error))
+        try:
+            observer.write(
+                ObservationOperation.WRITE_DIAGNOSTIC,
+                options.diagnostic_output,
+                diagnostic_document(error),
+            )
+        except ObservationError:
+            pass
         return 1
     except (AttributeError, KeyError, TypeError, ValueError, OSError):
-        write_diagnostic(
-            options.diagnostic_output,
-            contract.assemble_collection_diagnostic(
-                "assembly", "assemble-evidence", "internal-error"
-            ),
-        )
+        try:
+            observer.write(
+                ObservationOperation.WRITE_DIAGNOSTIC,
+                options.diagnostic_output,
+                contract.assemble_collection_diagnostic(
+                    "assembly", "assemble-evidence", "internal-error"
+                ),
+            )
+        except ObservationError:
+            pass
         return 1
     return 0
 

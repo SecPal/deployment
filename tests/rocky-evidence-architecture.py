@@ -149,6 +149,26 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("opaque observation", completed.stderr)
 
+    def test_architecture_gate_rejects_filesystem_observation_outside_owner(self) -> None:
+        source = COLLECTOR.read_text(encoding="utf-8")
+        mutation = source.replace(
+            "def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:",
+            "def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:\n"
+            "    Path('/etc/os-release').read_text(encoding='utf-8')",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / COLLECTOR.name
+            path.write_text(mutation, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--collector", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("outside the Observer owner", completed.stderr)
+
     def test_architecture_gate_rejects_semantic_layer_collapse(self) -> None:
         source = COLLECTOR.read_text(encoding="utf-8").replace(
             'RESPONSIBILITY = "observation,orchestration"',
