@@ -308,15 +308,12 @@ def validate_collector(path: Path) -> None:
         raise ArchitectureError("fixture observation must use complete RepoDigests membership")
     if "ObservationOperation" not in source:
         raise ArchitectureError("closed observation operation set is absent")
-    for sequence in ast.walk(tree):
-        if not isinstance(sequence, (ast.List, ast.Tuple)):
-            continue
-        arguments = {
-            value.value
-            for value in ast.walk(sequence)
-            if isinstance(value, ast.Constant) and isinstance(value.value, str)
-        }
-        if {"dnf4", "download"} <= arguments:
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value == "download"
+        ):
             raise ArchitectureError(
                 "post-install package payload transfer is forbidden"
             )

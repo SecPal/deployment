@@ -276,6 +276,14 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 "    @staticmethod\n    def package_repository_query",
                 1,
             ),
+            source.replace(
+                "        _, repositories, _ = self.run(\n",
+                "        action = 'download'\n"
+                "        self.run(ObservationOperation.PACKAGE_REPOSITORY, "
+                "['dnf4'] + [action, nevra], subject=name)\n"
+                "        _, repositories, _ = self.run(\n",
+                1,
+            ),
         )
         for mutation in mutations:
             with tempfile.TemporaryDirectory() as directory:
@@ -496,6 +504,16 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         contract = load_contract()
         raw = self.realistic_raw(contract)
         document = contract.normalize_and_admit(raw, self.realistic_options())
+        uppercase = json.loads(json.dumps(raw))
+        uppercase_header = uppercase["packages"][0]["signed_header"].splitlines()
+        uppercase_header[1] = uppercase_header[1].upper()
+        uppercase_header[3] = uppercase_header[3].upper()
+        uppercase_header[4] = uppercase_header[4][:-16] + uppercase_header[4][-16:].upper()
+        uppercase["packages"][0]["signed_header"] = "\n".join(uppercase_header)
+        uppercase_document = contract.normalize_and_admit(
+            uppercase, self.realistic_options()
+        )
+        self.assertEqual("a" * 64, uppercase_document["packages"][0]["payload_digest"])
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "preparation.json"

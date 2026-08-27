@@ -55,10 +55,11 @@ IMAGE = re.compile(
     r"^https://www\.googleapis\.com/compute/v1/projects/rocky-linux-cloud/"
     r"global/images/rocky-linux-10-[a-z0-9-]{1,50}$"
 )
-PAYLOAD_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+PAYLOAD_DIGEST = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 NEVRA = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:~^-]{2,255}$")
 HEADER_SIGNATURE = re.compile(
-    r"^RSA/SHA256, [ -~]{1,128}, Key ID [0-9a-f]{16}$"
+    r"^RSA/SHA256, [ -~]{1,128}, Key ID [0-9a-f]{16}$",
+    re.IGNORECASE,
 )
 VERIFIED_HEADER_LINES = frozenset(
     {
@@ -325,10 +326,10 @@ def normalize_package(raw: dict[str, Any]) -> dict[str, Any]:
         "nevra": raw["nevra"],
         "repositories": repositories,
         "header_nevra": header[0],
-        "payload_digest": header[1],
+        "payload_digest": header[1].lower(),
         "payload_digest_algorithm": header[2],
-        "header_sha256": header[3],
-        "header_signature": header[4],
+        "header_sha256": header[3].lower(),
+        "header_signature": header[4][:-16] + header[4][-16:].lower(),
     }
 
 
