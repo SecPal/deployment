@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Collect effective Rocky preparation facts into the closed evidence shape."""
+"""Observe Rocky host facts and hand them to the pure evidence contract."""
 
 from __future__ import annotations
 
@@ -11,402 +11,375 @@ import grp
 import json
 import os
 import pwd
-import re
 import subprocess
 import sys
 import tempfile
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import rocky_preparation_contract as contract
 
-PACKAGES = (
-    "podman",
-    "conmon",
-    "crun",
-    "netavark",
-    "aardvark-dns",
-    "passt",
-    "shadow-utils-subid",
-    "systemd",
-    "container-selinux",
-    "audit",
-    "policycoreutils",
-    "policycoreutils-python-utils",
-    "selinux-policy-targeted",
-    "curl",
-    "dnf",
-    "git",
-    "jq",
-    "nftables",
-    "openssh-server",
-    "sudo",
-    "python3-jsonschema",
-    "dnf-plugins-core",
+
+RESPONSIBILITY = "observation,orchestration"
+EXTERNAL_DOMAINS = frozenset({"host", "rpm", "podman", "systemd"})
+COHERENT_EXTERNAL_CONTRACT = "rocky-preparation-evidence-v1"
+PACKAGES = contract.PACKAGES
+FIXTURE = contract.FIXTURE
+ARM_CHILD = contract.ARM_CHILD
+FIXTURE_REPOSITORY = contract.FIXTURE_REPOSITORY
+FIXTURE_DIGEST_IDENTITY_MAX = contract.FIXTURE_DIGEST_IDENTITY_MAX
+FIXTURE_DIGEST_METADATA_MAX_BYTES = contract.FIXTURE_DIGEST_METADATA_MAX_BYTES
+ROCKY_FINGERPRINT = contract.ROCKY_FINGERPRINT
+SHA = contract.SHA
+CollectionError = contract.ContractError
+AUTOMATIC_UNITS = (
+    "dnf-automatic.timer",
+    "dnf-automatic-install.timer",
+    "dnf-automatic-download.timer",
+    "dnf-automatic-notifyonly.timer",
 )
-REPOSITORIES = {"baseos", "appstream", "extras"}
-FIXTURE = "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
-ARM_CHILD = "sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192"
-FIXTURE_REPOSITORY = FIXTURE.partition("@")[0]
-FIXTURE_DIGEST_IDENTITY_MAX = 8
-FIXTURE_DIGEST_METADATA_MAX_BYTES = 1024
-FIXTURE_REPO_DIGEST = re.compile(
-    rf"^{re.escape(FIXTURE_REPOSITORY)}@sha256:[0-9a-f]{{64}}$"
-)
-ROCKY_KEY_ID = "6fedfc85"
-ROCKY_FINGERPRINT = "fc226859c0860bf0ddb95b085b106c736fedfc85"
-SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-class CollectionError(RuntimeError):
-    pass
+class ObservationOperation(str, Enum):
+    OS_RELEASE = "read-os-release"
+    ARCHITECTURE = "query-architecture"
+    DNF_VERSION = "query-dnf-version"
+    RELEASEVER = "query-releasever"
+    SELINUX_MODE = "query-selinux-mode"
+    SELINUX_ENABLED = "query-selinux-enabled"
+    SELINUX_POLICY = "query-selinux-policy"
+    REPOSITORIES = "query-enabled-repositories"
+    SERVICE_ACCOUNT = "resolve-service-account"
+    SUBUID = "read-subuid"
+    SUBGID = "read-subgid"
+    EFFECTIVE_IDS = "query-effective-identities"
+    SUPPLEMENTARY_GROUPS = "query-supplementary-groups"
+    PODMAN_INFO = "query-podman-info"
+    RESOLVE_GRAPHROOT = "resolve-rootless-graphroot"
+    RESOLVE_ACCOUNT_HOME = "resolve-service-account-home"
+    FIXTURE_REPO_DIGESTS = "inspect-fixture-repo-digests"
+    BOOT_ID = "read-boot-id"
+    MEMORY = "read-memory-info"
+    ROOT_FILESYSTEM = "query-root-filesystem"
+    CPU_COUNT = "query-cpu-count"
+    UPDATE_UNIT = "query-update-unit"
+    CONTAINER_CONFIG = "read-container-config"
+    PODMAN_VERSION = "query-podman-version"
+    CGROUP_FILESYSTEM = "query-cgroup-filesystem"
+    SYSTEMD_USER = "query-systemd-user"
+    PODMAN_SOCKET = "query-podman-socket"
+    SOCKET_PATH = "query-podman-socket-path"
+    ENVIRONMENT_AUTHORITY = "query-environment-authority"
+    SUDO_AUTHORITY = "query-sudo-authority"
+    QUADLET_AUTHORITY = "query-quadlet-authority"
+    LINGER = "query-linger"
+    FIXTURE_PRESENT = "verify-fixture-present"
+    CLOUD_IDENTITY = "query-cloud-identity-marker"
+    PACKAGE_NEVRA = "query-package-nevra"
+    PACKAGE_REPOSITORY = "resolve-package-repository"
+    PACKAGE_INSTALLED_PAYLOAD = "query-installed-payload-digest"
+    PACKAGE_DOWNLOAD = "download-official-package"
+    PACKAGE_PAYLOAD = "inspect-official-package-payload"
+    PACKAGE_SIGNATURE = "verify-package-signature"
+    ROCKY_KEY = "verify-rocky-signing-key"
+    WRITE_EVIDENCE = "write-evidence"
+
+
+class ObservationError(RuntimeError):
+    def __init__(self, operation: ObservationOperation, reason: str, subject: str | None = None) -> None:
+        super().__init__(operation.value)
+        self.operation = operation.value
+        self.reason = reason
+        self.subject = subject
+
+
+class Observer:
+    """The sole owner of process/filesystem/environment observations."""
+
+    PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+    def run(
+        self,
+        operation: ObservationOperation,
+        arguments: list[str],
+        *, user: str | None = None,
+        subject: str | None = None,
+        accepted: frozenset[int] = frozenset({0}),
+        maximum: int = 262_144,
+    ) -> tuple[int, str, str]:
+        command = arguments
+        if user is not None:
+            try:
+                account = pwd.getpwnam(user)
+            except KeyError as error:
+                raise ObservationError(operation, "observation-failed", subject) from error
+            command = [
+                "runuser", "--user", user, "--", "env",
+                f"HOME={account.pw_dir}", f"XDG_RUNTIME_DIR=/run/user/{account.pw_uid}",
+                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{account.pw_uid}/bus",
+                *arguments,
+            ]
+        try:
+            completed = subprocess.run(
+                command, check=False, capture_output=True, timeout=60,
+                env={"PATH": self.PATH},
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ObservationError(operation, "command-failed", subject) from error
+        if completed.returncode not in accepted:
+            raise ObservationError(operation, "command-failed", subject)
+        if len(completed.stdout) > maximum or len(completed.stderr) > maximum:
+            raise ObservationError(operation, "observation-limit-exceeded", subject)
+        try:
+            stdout = completed.stdout.decode("utf-8").strip()
+            stderr = completed.stderr.decode("utf-8").strip()
+        except UnicodeDecodeError as error:
+            raise ObservationError(operation, "representation-invalid", subject) from error
+        return completed.returncode, stdout, stderr
+
+    def text(self, operation: ObservationOperation, path: Path, *, maximum: int = 262_144, encoding: str = "utf-8") -> str:
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise ObservationError(operation, "observation-failed") from error
+        if len(payload) > maximum:
+            raise ObservationError(operation, "observation-limit-exceeded")
+        try:
+            return payload.decode(encoding).strip()
+        except UnicodeDecodeError as error:
+            raise ObservationError(operation, "representation-invalid") from error
+
+    def account(self) -> dict[str, Any]:
+        try:
+            account = pwd.getpwnam("secpal-runtime")
+        except KeyError as error:
+            raise ObservationError(ObservationOperation.SERVICE_ACCOUNT, "observation-failed") from error
+        return {"name": account.pw_name, "uid": account.pw_uid, "gid": account.pw_gid, "home": account.pw_dir, "shell": account.pw_shell}
+
+    def effective_ids(self) -> list[int]:
+        try:
+            users, groups = pwd.getpwall(), grp.getgrall()
+        except OSError as error:
+            raise ObservationError(ObservationOperation.EFFECTIVE_IDS, "observation-failed") from error
+        values = {entry.pw_uid for entry in users}
+        values.update(entry.pw_gid for entry in users)
+        values.update(entry.gr_gid for entry in groups)
+        return sorted(values)
+
+    def supplementary_groups(self, account: dict[str, Any]) -> list[int]:
+        try:
+            return os.getgrouplist(account["name"], account["gid"])
+        except OSError as error:
+            raise ObservationError(ObservationOperation.SUPPLEMENTARY_GROUPS, "observation-failed") from error
+
+    def resolved(self, operation: ObservationOperation, path: str) -> str:
+        try:
+            return str(Path(path).resolve(strict=True))
+        except OSError as error:
+            raise ObservationError(operation, "observation-failed") from error
+
+    def exists(self, operation: ObservationOperation, path: Path) -> bool:
+        try:
+            return path.exists()
+        except OSError as error:
+            raise ObservationError(operation, "observation-failed") from error
+
+    def cpu_count(self) -> int | None:
+        result = os.cpu_count()
+        if result is None:
+            raise ObservationError(ObservationOperation.CPU_COUNT, "observation-failed")
+        return result
+
+    def filesystem_bytes(self) -> int:
+        try:
+            facts = os.statvfs("/")
+        except OSError as error:
+            raise ObservationError(ObservationOperation.ROOT_FILESYSTEM, "observation-failed") from error
+        return facts.f_blocks * facts.f_frsize
+
+    def environment_present(self, name: str) -> bool:
+        if name not in {"CONTAINER_HOST", "GOOGLE_APPLICATION_CREDENTIALS"}:
+            raise ObservationError(ObservationOperation.ENVIRONMENT_AUTHORITY, "subject-invalid")
+        return bool(os.environ.get(name))
+
+    def unit_status(self, unit: str) -> int:
+        allowed = set(AUTOMATIC_UNITS) | {"podman.socket"}
+        if unit not in allowed:
+            raise ObservationError(ObservationOperation.UPDATE_UNIT, "subject-invalid")
+        operation = ObservationOperation.PODMAN_SOCKET if unit == "podman.socket" else ObservationOperation.UPDATE_UNIT
+        status, _, _ = self.run(operation, ["systemctl", "is-enabled", unit], subject=unit, accepted=frozenset(range(6)), maximum=4096)
+        return status
+
+    def sudo_observation(self, account: str) -> dict[str, Any]:
+        status, stdout, stderr = self.run(
+            ObservationOperation.SUDO_AUTHORITY, ["sudo", "-l", "-U", account],
+            accepted=frozenset(range(256)), maximum=8192,
+        )
+        return {"status": status, "output": f"{stdout}\n{stderr}"}
+
+    def quadlet_status(self, account: dict[str, Any]) -> int:
+        status, _, _ = self.run(
+            ObservationOperation.QUADLET_AUTHORITY,
+            ["runuser", "--user", account["name"], "--", "test", "-w", f"/etc/containers/systemd/users/{account['uid']}"],
+            accepted=frozenset({0, 1}), maximum=4096,
+        )
+        return status
+
+    def container_configs(self, home: str) -> list[str]:
+        result: list[str] = []
+        for path in (Path("/etc/containers/containers.conf"), Path(home) / ".config/containers/containers.conf"):
+            if self.exists(ObservationOperation.CONTAINER_CONFIG, path):
+                result.append(self.text(ObservationOperation.CONTAINER_CONFIG, path, maximum=65_536))
+        return result
+
+    def package(self, name: str) -> dict[str, Any]:
+        if name not in PACKAGES:
+            raise ObservationError(ObservationOperation.PACKAGE_NEVRA, "subject-invalid")
+        _, nevra, _ = self.run(ObservationOperation.PACKAGE_NEVRA, ["rpm", "-q", "--qf", "%{NEVRA}", name], subject=name)
+        _, repositories, _ = self.run(ObservationOperation.PACKAGE_REPOSITORY, ["dnf4", "--quiet", "--disablerepo=*", "--enablerepo=baseos,appstream,extras", "repoquery", "--qf", "%{repoid}", "--nevra", nevra], subject=name)
+        _, installed_payload, _ = self.run(ObservationOperation.PACKAGE_INSTALLED_PAYLOAD, ["rpm", "-q", "--qf", "%{PAYLOADDIGEST}", name], subject=name)
+        try:
+            temporary = tempfile.TemporaryDirectory(
+                prefix=".secpal-rocky-rpm-", dir="/var/tmp"
+            )
+        except OSError as error:
+            raise ObservationError(
+                ObservationOperation.PACKAGE_DOWNLOAD, "observation-failed", name
+            ) from error
+        with temporary as directory:
+            self.run(ObservationOperation.PACKAGE_DOWNLOAD, ["dnf4", "--quiet", "--disablerepo=*", "--enablerepo=baseos,appstream,extras", "download", "--destdir", directory, nevra], subject=name)
+            try:
+                payloads = list(Path(directory).glob("*.rpm"))
+            except OSError as error:
+                raise ObservationError(ObservationOperation.PACKAGE_DOWNLOAD, "observation-failed", name) from error
+            payload_count = len(payloads)
+            signature = rocky_keys = official_nevra = official_payload = ""
+            if payload_count == 1:
+                payload = payloads[0]
+                _, signature, _ = self.run(ObservationOperation.PACKAGE_SIGNATURE, ["rpmkeys", "--checksig", "--verbose", str(payload)], subject=name)
+                _, rocky_keys, _ = self.run(ObservationOperation.ROCKY_KEY, ["rpm", "-qa", "--qf", "%{SUMMARY} %{DESCRIPTION}\\n", "gpg-pubkey"], subject=name)
+                _, official_nevra, _ = self.run(ObservationOperation.PACKAGE_PAYLOAD, ["rpm", "-qp", "--qf", "%{NEVRA}", str(payload)], subject=name)
+                _, official_payload, _ = self.run(ObservationOperation.PACKAGE_PAYLOAD, ["rpm", "-qp", "--qf", "%{PAYLOADDIGEST}", str(payload)], subject=name)
+        return {"name": name, "nevra": nevra, "repositories": repositories.splitlines(), "installed_payload": installed_payload.lower(), "payload_count": payload_count, "signature": signature, "rocky_keys": rocky_keys, "official_nevra": official_nevra, "official_payload": official_payload.lower()}
+
+    def write(self, path: Path, document: dict[str, Any]) -> None:
+        try:
+            path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            path.chmod(0o600)
+        except OSError as error:
+            raise ObservationError(ObservationOperation.WRITE_EVIDENCE, "observation-failed") from error
 
 
 def admitted_fixture_arm64_child(repo_digests_metadata: str) -> str:
-    """Require the reviewed ARM64 child among bounded local digest identities."""
-
-    if len(repo_digests_metadata.encode("utf-8")) > FIXTURE_DIGEST_METADATA_MAX_BYTES:
-        raise CollectionError("fixture digest metadata exceeds the closed bound")
-    try:
-        identities = json.loads(repo_digests_metadata)
-    except json.JSONDecodeError as error:
-        raise CollectionError("fixture digest metadata is not structured JSON") from error
-    if not isinstance(identities, list) or not 1 <= len(identities) <= FIXTURE_DIGEST_IDENTITY_MAX:
-        raise CollectionError("fixture digest identity collection is outside the closed bound")
-    if not all(isinstance(identity, str) for identity in identities):
-        raise CollectionError("fixture digest identity collection contains a non-string")
-    if len(set(identities)) != len(identities):
-        raise CollectionError("fixture digest identity collection contains duplicates")
-    if not all(FIXTURE_REPO_DIGEST.fullmatch(identity) for identity in identities):
-        raise CollectionError("fixture digest identity is not canonical")
-    expected = f"{FIXTURE_REPOSITORY}@{ARM_CHILD}"
-    if expected not in identities:
-        raise CollectionError("fixture did not admit the reviewed ARM64 child")
-    return ARM_CHILD
+    """Compatibility name; the pure contract remains the authoritative owner."""
+    return contract.admit_fixture_repo_digests(repo_digests_metadata)
 
 
-def run(arguments: list[str], *, user: str | None = None) -> str:
-    command = arguments
-    if user is not None:
-        account = pwd.getpwnam(user)
-        command = [
-            "runuser",
-            "--user",
-            user,
-            "--",
-            "env",
-            f"HOME={account.pw_dir}",
-            f"XDG_RUNTIME_DIR=/run/user/{account.pw_uid}",
-            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{account.pw_uid}/bus",
-            *arguments,
-        ]
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+def diagnostic_document(error: ObservationError | contract.ContractError) -> dict[str, str]:
+    layer = "observation" if isinstance(error, ObservationError) else error.layer
+    return contract.assemble_collection_diagnostic(
+        layer, error.operation, error.reason, error.subject
     )
-    if completed.returncode:
-        raise CollectionError(f"fact command failed: {arguments[0]}")
-    return completed.stdout.strip()
 
 
-def os_release() -> dict[str, str]:
-    result: dict[str, str] = {}
-    for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
-        key, separator, value = line.partition("=")
-        if separator and key in {"ID", "VERSION_ID"}:
-            result[key] = value.strip('"')
-    return result
+def write_diagnostic(path: Path, diagnostic: dict[str, str]) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(diagnostic, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
 
 
-def one_subid(path: Path, account: str) -> tuple[int, int]:
-    matches: list[tuple[int, int]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        name, separator, tail = line.partition(":")
-        if name != account or not separator:
-            continue
-        start, separator, count = tail.partition(":")
-        if not separator or not start.isdecimal() or not count.isdecimal():
-            raise CollectionError(f"malformed {path.name} entry")
-        matches.append((int(start), int(count)))
-    if len(matches) != 1 or matches[0][1] != 65536:
-        raise CollectionError(f"{path.name} must contain one 65536-entry range")
-    return matches[0]
-
-
-def all_subid_ranges(path: Path) -> list[range]:
-    result: list[range] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line or line.startswith("#"):
-            continue
-        _, separator, tail = line.partition(":")
-        start, separator2, count = tail.partition(":")
-        if not separator or not separator2 or not start.isdecimal() or not count.isdecimal():
-            raise CollectionError(f"malformed {path.name} entry")
-        result.append(range(int(start), int(start) + int(count)))
-    return result
-
-
-def subids_are_independent(candidate: tuple[int, int]) -> bool:
-    selected = range(candidate[0], candidate[0] + candidate[1])
-    all_ranges = all_subid_ranges(Path("/etc/subuid")) + all_subid_ranges(Path("/etc/subgid"))
-    identical = sum(item.start == selected.start and item.stop == selected.stop for item in all_ranges)
-    effective_ids = {entry.pw_uid for entry in pwd.getpwall()}
-    effective_ids.update(entry.pw_gid for entry in pwd.getpwall())
-    effective_ids.update(entry.gr_gid for entry in grp.getgrall())
-    return (
-        identical == 2
-        and all(
-            (item.start == selected.start and item.stop == selected.stop)
-            or selected.stop <= item.start
-            or selected.start >= item.stop
-            for item in all_ranges
+def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
+    account = observer.account()
+    _, architecture, _ = observer.run(ObservationOperation.ARCHITECTURE, ["uname", "-m"])
+    _, dnf_version, _ = observer.run(ObservationOperation.DNF_VERSION, ["dnf4", "--version"])
+    _, releasever, _ = observer.run(ObservationOperation.RELEASEVER, ["rpm", "--eval", "%{rhel}"])
+    _, getenforce, _ = observer.run(ObservationOperation.SELINUX_MODE, ["getenforce"])
+    observer.run(ObservationOperation.SELINUX_ENABLED, ["selinuxenabled"])
+    _, sestatus, _ = observer.run(ObservationOperation.SELINUX_POLICY, ["sestatus"])
+    _, repositories, _ = observer.run(ObservationOperation.REPOSITORIES, ["dnf4", "--quiet", "repolist", "--enabled"])
+    _, podman_info, _ = observer.run(ObservationOperation.PODMAN_INFO, ["podman", "info", "--format", "json"], user=account["name"])
+    graphroot_raw = contract.normalize_podman(podman_info)["store"].get("graphRoot")
+    if not isinstance(graphroot_raw, str):
+        raise contract.ContractError(
+            "normalization", "normalize-podman-info", "representation-invalid"
         )
-        and all(identifier not in selected for identifier in effective_ids)
-    )
+    _, fixture_repo_digests, _ = observer.run(ObservationOperation.FIXTURE_REPO_DIGESTS, ["podman", "image", "inspect", "--format", "{{json .RepoDigests}}", FIXTURE], user=account["name"], maximum=FIXTURE_DIGEST_METADATA_MAX_BYTES)
+    _, podman_version, _ = observer.run(ObservationOperation.PODMAN_VERSION, ["podman", "--version"])
+    _, cgroup_filesystem, _ = observer.run(ObservationOperation.CGROUP_FILESYSTEM, ["stat", "-fc", "%T", "/sys/fs/cgroup"])
+    _, systemd_user, _ = observer.run(ObservationOperation.SYSTEMD_USER, ["systemctl", "is-active", f"user@{account['uid']}.service"])
+    raw = {
+        "os_release": observer.text(ObservationOperation.OS_RELEASE, Path("/etc/os-release"), maximum=65_536),
+        "architecture": architecture, "dnf_version": dnf_version, "releasever": releasever,
+        "getenforce": getenforce, "selinux_enabled": True, "sestatus": sestatus,
+        "repositories": repositories, "account": account,
+        "subuid": observer.text(ObservationOperation.SUBUID, Path("/etc/subuid"), maximum=262_144),
+        "subgid": observer.text(ObservationOperation.SUBGID, Path("/etc/subgid"), maximum=262_144),
+        "effective_ids": observer.effective_ids(), "supplementary_groups": observer.supplementary_groups(account),
+        "podman_info": podman_info,
+        "graphroot": observer.resolved(ObservationOperation.RESOLVE_GRAPHROOT, graphroot_raw),
+        "account_home": observer.resolved(ObservationOperation.RESOLVE_ACCOUNT_HOME, account["home"]),
+        "fixture_repo_digests": fixture_repo_digests,
+        "automatic_unit_statuses": [observer.unit_status(unit) for unit in AUTOMATIC_UNITS],
+        "boot_id": observer.text(ObservationOperation.BOOT_ID, Path("/proc/sys/kernel/random/boot_id"), maximum=128, encoding="ascii"),
+        "meminfo": observer.text(ObservationOperation.MEMORY, Path("/proc/meminfo"), maximum=65_536, encoding="ascii"),
+        "root_filesystem_bytes": observer.filesystem_bytes(), "cpu_count": observer.cpu_count(),
+        "packages": [observer.package(name) for name in PACKAGES],
+        "container_configs": observer.container_configs(account["home"]), "podman_version": podman_version,
+        "cgroup_filesystem": cgroup_filesystem, "systemd_user": systemd_user,
+        "socket_exists": observer.exists(ObservationOperation.SOCKET_PATH, Path(f"/run/user/{account['uid']}/podman/podman.sock")),
+        "podman_socket_status": observer.unit_status("podman.socket"),
+        "container_host_present": observer.environment_present("CONTAINER_HOST"),
+        "sudo_observation": observer.sudo_observation(account["name"]),
+        "quadlet_status": observer.quadlet_status(account),
+        "linger": observer.exists(ObservationOperation.LINGER, Path(f"/var/lib/systemd/linger/{account['name']}")),
+        "fixture_present": observer.run(ObservationOperation.FIXTURE_PRESENT, ["podman", "image", "exists", FIXTURE], user=account["name"])[0] == 0,
+        "cloud_identity_marker": observer.exists(ObservationOperation.CLOUD_IDENTITY, Path("/var/lib/secpal-rocky/cloud-identity-absent")),
+        "google_credentials_present": observer.environment_present("GOOGLE_APPLICATION_CREDENTIALS"),
+    }
+    return contract.normalize_and_admit(raw, vars(options))
 
 
-def sudo_authorized(account: str) -> bool:
-    completed = subprocess.run(
-        ["sudo", "-l", "-U", account],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    output = f"{completed.stdout}\n{completed.stderr}".lower()
-    return completed.returncode == 0 and "not allowed to run sudo" not in output
-
-
-def unit_enabled(unit: str) -> bool:
-    return subprocess.run(
-        ["systemctl", "is-enabled", unit],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=10,
-    ).returncode == 0
-
-
-def label_disable_absent(account: pwd.struct_passwd) -> bool:
-    paths = [
-        Path("/etc/containers/containers.conf"),
-        Path(account.pw_dir) / ".config/containers/containers.conf",
-    ]
-    for path in paths:
-        if path.exists():
-            text = path.read_text(encoding="utf-8")
-            if re.search(r"(?im)^\s*label\s*=\s*(?:false|['\"]?disable)", text):
-                return False
-    return True
-
-
-def package_facts() -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for name in PACKAGES:
-        nevra = run(["rpm", "-q", "--qf", "%{NEVRA}", name])
-        repository = run(
-            [
-                "dnf4",
-                "--quiet",
-                "--disablerepo=*",
-                "--enablerepo=baseos,appstream,extras",
-                "repoquery",
-                "--qf",
-                "%{repoid}",
-                "--nevra",
-                nevra,
-            ]
-        ).splitlines()
-        official = sorted(set(repository) & REPOSITORIES)
-        if len(official) != 1:
-            raise CollectionError(f"installed NEVRA lacks one official resolution: {name}")
-        installed_payload = run(["rpm", "-q", "--qf", "%{PAYLOADDIGEST}", name]).lower()
-        if re.fullmatch(r"[0-9a-f]{64}", installed_payload) is None:
-            raise CollectionError(f"installed RPM payload identity is invalid: {name}")
-        with tempfile.TemporaryDirectory(prefix=".secpal-rocky-rpm-", dir="/var/tmp") as directory:
-            run([
-                "dnf4", "--quiet", "--disablerepo=*", "--enablerepo=baseos,appstream,extras",
-                "download", "--destdir", directory, nevra,
-            ])
-            payloads = list(Path(directory).glob("*.rpm"))
-            if len(payloads) != 1:
-                raise CollectionError(f"exact repository RPM download is ambiguous: {name}")
-            payload = payloads[0]
-            signature = run(["rpmkeys", "--checksig", "--verbose", str(payload)])
-            if "digests signatures OK" not in signature or ROCKY_KEY_ID not in signature.lower():
-                raise CollectionError(f"RPM cryptographic verification failed: {name}")
-            admitted = run(["rpm", "-qa", "--qf", "%{SUMMARY} %{DESCRIPTION}\\n", "gpg-pubkey"])
-            if ROCKY_FINGERPRINT not in re.sub(r"[^0-9a-f]", "", admitted.lower()):
-                raise CollectionError("reviewed Rocky Linux 10 release key is not admitted")
-            official_nevra = run(["rpm", "-qp", "--qf", "%{NEVRA}", str(payload)])
-            official_payload = run(["rpm", "-qp", "--qf", "%{PAYLOADDIGEST}", str(payload)]).lower()
-            if official_nevra != nevra or official_payload != installed_payload:
-                raise CollectionError(f"installed RPM identity differs from verified official RPM: {name}")
-        result.append(
-            {
-                "name": name,
-                "nevra": nevra,
-                "resolved_repository": official[0],
-                "signature_verified": True,
-                "signer_fingerprint": ROCKY_FINGERPRINT,
-                "payload_digest": installed_payload,
-            }
-        )
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser()
+    result.add_argument("--target-sha", required=True)
+    result.add_argument("--control-sha", required=True)
+    result.add_argument("--run-id", required=True)
+    result.add_argument("--run-attempt", required=True)
+    result.add_argument("--expires-at", required=True, type=int)
+    result.add_argument("--image", required=True)
+    result.add_argument("--first-boot-id", required=True)
+    result.add_argument("--output", required=True, type=Path)
+    result.add_argument("--diagnostic-output", required=True, type=Path)
     return result
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--target-sha", required=True)
-    parser.add_argument("--control-sha", required=True)
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument("--run-attempt", required=True)
-    parser.add_argument("--expires-at", required=True, type=int)
-    parser.add_argument("--image", required=True)
-    parser.add_argument("--first-boot-id", required=True)
-    parser.add_argument("--output", required=True, type=Path)
-    options = parser.parse_args()
+    if sys.argv[1:] == ["--admit-fixture-repo-digests"]:
+        try:
+            raw = sys.stdin.read(FIXTURE_DIGEST_METADATA_MAX_BYTES + 1)
+            contract.admit_fixture_repo_digests(raw)
+        except contract.ContractError:
+            return 1
+        return 0
+    options = parser().parse_args()
+    observer = Observer()
     try:
-        if SHA.fullmatch(options.target_sha) is None or SHA.fullmatch(options.control_sha) is None:
-            raise CollectionError("full immutable SHAs are required")
-        release = os_release()
-        if release != {"ID": "rocky", "VERSION_ID": "10.2"}:
-            raise CollectionError("guest must report exactly Rocky 10.2")
-        if run(["uname", "-m"]) != "aarch64":
-            raise CollectionError("guest must be native aarch64")
-        dnf_version = run(["dnf4", "--version"]).splitlines()[0]
-        if re.match(r"^4(?:\.|$)", dnf_version) is None:
-            raise CollectionError("update mechanism must be DNF4")
-        releasever = run(["rpm", "--eval", "%{rhel}"])
-        if releasever != "10":
-            raise CollectionError("effective RPM releasever must be 10")
-        if run(["getenforce"]) != "Enforcing" or run(["selinuxenabled"]) != "":
-            raise CollectionError("SELinux must be enabled and Enforcing")
-        if run(["sestatus"]).find("targeted") < 0:
-            raise CollectionError("SELinux targeted policy is not effective")
-        enabled_repos = sorted(
-            line.split()[0]
-            for line in run(["dnf4", "--quiet", "repolist", "--enabled"]).splitlines()
-            if line and not line.lower().startswith("repo id")
+        observer.write(options.output, collect(observer, options))
+        if options.diagnostic_output.exists():
+            options.diagnostic_output.unlink()
+    except (ObservationError, contract.ContractError) as error:
+        write_diagnostic(options.diagnostic_output, diagnostic_document(error))
+        return 1
+    except (AttributeError, KeyError, TypeError, ValueError, OSError):
+        write_diagnostic(
+            options.diagnostic_output,
+            contract.assemble_collection_diagnostic(
+                "assembly", "assemble-evidence", "internal-error"
+            ),
         )
-        if set(enabled_repos) != REPOSITORIES or len(enabled_repos) != 3:
-            raise CollectionError("enabled repository set is not closed")
-        account = pwd.getpwnam("secpal-runtime")
-        subuid = one_subid(Path("/etc/subuid"), account.pw_name)
-        subgid = one_subid(Path("/etc/subgid"), account.pw_name)
-        if subuid != subgid:
-            raise CollectionError("subuid and subgid ranges must match")
-        subids_independent = subids_are_independent(subuid)
-        supplementary = os.getgrouplist(account.pw_name, account.pw_gid)
-        podman_info = json.loads(run(["podman", "info", "--format", "json"], user=account.pw_name))
-        runtime = podman_info["host"]
-        graphroot = Path(podman_info["store"]["graphRoot"]).resolve(strict=True)
-        account_home = Path(account.pw_dir).resolve(strict=True)
-        if not graphroot.is_relative_to(account_home):
-            raise CollectionError("rootless graphroot must remain inside the account home")
-        # libimage's singular Digest can be either an image or manifest-list
-        # digest. RepoDigests exposes the complete local identities needed for
-        # an exact reviewed-child membership assertion.
-        fixture_digest_metadata = run(
-            ["podman", "image", "inspect", "--format", "{{json .RepoDigests}}", FIXTURE],
-            user=account.pw_name,
-        )
-        resolved_fixture = admitted_fixture_arm64_child(fixture_digest_metadata)
-        automatic_units = (
-            "dnf-automatic.timer",
-            "dnf-automatic-install.timer",
-            "dnf-automatic-download.timer",
-            "dnf-automatic-notifyonly.timer",
-        )
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-        if boot_id == options.first_boot_id:
-            raise CollectionError("preparation reboot did not occur")
-        memory_kib = next(
-            int(line.split()[1])
-            for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines()
-            if line.startswith("MemTotal:")
-        )
-        filesystem = os.statvfs("/")
-        document = {
-            "schema_version": 1,
-            "target_sha": options.target_sha,
-            "run": {
-                "repository": "SecPal/deployment",
-                "trusted_control_sha": options.control_sha,
-                "profile": "gcp-rocky-10-2-arm64",
-                "run_id": options.run_id,
-                "run_attempt": options.run_attempt,
-                "expires_at": options.expires_at,
-            },
-            "image": {"project": "rocky-linux-cloud", "exact_self_link": options.image},
-            "guest": {"id": release["ID"], "version_id": release["VERSION_ID"], "uname_machine": "aarch64"},
-            "hardware": {
-                "cpu_count": os.cpu_count(),
-                "memory_bytes": memory_kib * 1024,
-                "root_filesystem_bytes": filesystem.f_blocks * filesystem.f_frsize,
-            },
-            "repositories": {"enabled": enabled_repos, "external_enabled": False},
-            "updates": {
-                "mechanism": "dnf4",
-                "releasever": releasever,
-                "automatic": any(unit_enabled(unit) for unit in automatic_units),
-                "automatic_reboot": any(unit_enabled(unit) for unit in automatic_units),
-            },
-            "packages": package_facts(),
-            "selinux": {"enabled": True, "mode": "Enforcing", "policy": "targeted", "container_selinux_installed": True, "label_disable_absent": label_disable_absent(account)},
-            "runtime": {
-                "podman": run(["podman", "--version"]),
-                "rootless": bool(runtime.get("security", {}).get("rootless")),
-                "graphroot": str(graphroot),
-                "oci_runtime": runtime.get("ociRuntime", {}).get("name"),
-                "cgroup_version": 2 if run(["stat", "-fc", "%T", "/sys/fs/cgroup"]) == "cgroup2fs" else 0,
-                "systemd_user": run(["systemctl", "is-active", f"user@{account.pw_uid}.service"]) == "active",
-                "network_backend": runtime.get("networkBackend"),
-                "seccomp_available": bool(runtime.get("security", {}).get("seccompEnabled")),
-                "socket_absent": not Path(f"/run/user/{account.pw_uid}/podman/podman.sock").exists() and not unit_enabled("podman.socket"),
-                "api_dependency_absent": not os.environ.get("CONTAINER_HOST") and not bool(runtime.get("remoteSocket", {}).get("exists")),
-            },
-            "service_account": {
-                "name": account.pw_name,
-                "uid": account.pw_uid,
-                "gid": account.pw_gid,
-                "home": account.pw_dir,
-                "shell": account.pw_shell,
-                "sudo": sudo_authorized(account.pw_name),
-                "privileged_supplementary_groups": supplementary != [account.pw_gid],
-                "subuid_start": subuid[0],
-                "subuid_count": subuid[1],
-                "subgid_start": subgid[0],
-                "subgid_count": subgid[1],
-                "subids_non_overlapping": subids_independent,
-                "linger": Path(f"/var/lib/systemd/linger/{account.pw_name}").exists(),
-                "quadlet_authority_writable": subprocess.run(
-                    ["runuser", "--user", account.pw_name, "--", "test", "-w", f"/etc/containers/systemd/users/{account.pw_uid}"],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                ).returncode == 0,
-            },
-            "fixture": {
-                "input": FIXTURE,
-                "resolved_arm64_child": resolved_fixture,
-                "pre_staged": run(["podman", "image", "exists", FIXTURE], user=account.pw_name) == "",
-            },
-            "persistence": {"rebooted": True, "boot_id_changed": True, "survived_reboot": True},
-            "cloud_identity": {
-                "control_service_account_absent": Path("/var/lib/secpal-rocky/cloud-identity-absent").is_file(),
-                "credential_file_absent": not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
-                "metadata_token_unavailable": True,
-                "useful_project_authority_absent": Path("/var/lib/secpal-rocky/cloud-identity-absent").is_file(),
-            },
-        }
-        options.output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        options.output.chmod(0o600)
-    except (CollectionError, KeyError, OSError, ValueError, subprocess.TimeoutExpired) as error:
-        print(f"ERROR: Rocky preparation evidence collection failed: {error}", file=sys.stderr)
         return 1
     return 0
 

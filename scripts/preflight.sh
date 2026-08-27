@@ -60,6 +60,7 @@ python3 tests/ci-cloud-bootstrap-failure.py
 python3 tests/ci-cloud-config.py
 python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-rocky-control.py
+python3 tests/rocky-evidence-architecture.py
 python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py
 python3 tests/ci-cloud-gcp-janitor.py
@@ -90,6 +91,7 @@ bash tests/preflight-origin-contract.sh
 bash tests/sensitive-path-contract.sh
 bash tests/workflow-action-pin-contract.sh
 python3 scripts/validate-ci-cloud.py
+scripts/validate-rocky-evidence-architecture.py
 
 mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context -o -name .terraform -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"

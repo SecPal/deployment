@@ -9,8 +9,6 @@ readonly expected_version='VERSION_ID=10.2'
 readonly expected_architecture=aarch64
 readonly runtime_account=secpal-runtime
 readonly fixture='docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1'
-readonly arm_child='sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192'
-readonly fixture_digest_identity_max=8
 readonly fixture_digest_metadata_max_bytes=1024
 readonly state_root=/var/lib/secpal-rocky
 readonly profile_path=/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
@@ -31,6 +29,7 @@ readonly expires_at="$5"
 readonly image_self_link="$6"
 readonly evidence_output="$7"
 readonly failure_output="$state_root/evidence/preparation-failure.json"
+readonly collection_diagnostic_output="$state_root/evidence/collection-diagnostic.json"
 [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
 [[ "$control_sha" =~ ^[0-9a-f]{40}$ ]]
 [[ "$run_id" =~ ^[1-9][0-9]{0,19}$ ]]
@@ -41,6 +40,7 @@ reboot_requested=false
 repository_failure_evidence=''
 repository_diagnostic_evidence=''
 fixture_diagnostic_evidence=''
+collection_diagnostic_evidence=''
 repository_enabled=()
 repository_unexpected=()
 repository_missing=()
@@ -83,7 +83,7 @@ write_failure_evidence() {
   base_record="$(printf '{"schema_version":1,"target_sha":"%s","trusted_control_sha":"%s","run_id":"%s","run_attempt":"%s","phase":"%s","exit_status":%s,"guest":{"id":"%s","version_id":"%s","uname_machine":"%s"}}' \
     "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$current_phase" "$status" \
     "$guest_id" "$guest_version" "$guest_architecture")"
-  if ! write_failure_document "$base_record" "$repository_failure_evidence" "$repository_diagnostic_evidence" "$fixture_diagnostic_evidence" "$temporary"; then
+  if ! write_failure_document "$base_record" "$repository_failure_evidence" "$repository_diagnostic_evidence" "$fixture_diagnostic_evidence" "$collection_diagnostic_evidence" "$temporary"; then
     rm -f -- "$temporary"
     return 0
   fi
@@ -106,6 +106,7 @@ prepare_evidence_transport() {
   install -d -o root -g secpal-cloud -m 0750 "$state_root/evidence"
   [[ ! -L "$failure_output" ]]
   rm -f -- "$failure_output"
+  rm -f -- "$collection_diagnostic_output"
 }
 
 assert_guest_identity() {
@@ -218,7 +219,7 @@ repository_json_array() {
 }
 
 write_failure_document() {
-  local base_record="$1" repository_record="$2" repository_diagnostic_record="$3" fixture_diagnostic_record="$4" output="$5"
+  local base_record="$1" repository_record="$2" repository_diagnostic_record="$3" fixture_diagnostic_record="$4" collection_diagnostic_record="$5" output="$6"
   local document="$base_record"
   if [[ -n "$repository_record" ]]; then
     document="${base_record%?},\"repositories\":$repository_record}"
@@ -229,6 +230,9 @@ write_failure_document() {
   if [[ -n "$fixture_diagnostic_record" ]]; then
     document="${document%?},\"fixture_diagnostic\":$fixture_diagnostic_record}"
   fi
+  if [[ -n "$collection_diagnostic_record" ]]; then
+    document="${document%?},\"collection_diagnostic\":$collection_diagnostic_record}"
+  fi
   printf '%s\n' "$document" >"$output" || return 1
   if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && -n "$repository_record" ]]; then
     document="$base_record"
@@ -238,9 +242,12 @@ write_failure_document() {
     if [[ -n "$fixture_diagnostic_record" ]]; then
       document="${document%?},\"fixture_diagnostic\":$fixture_diagnostic_record}"
     fi
+    if [[ -n "$collection_diagnostic_record" ]]; then
+      document="${document%?},\"collection_diagnostic\":$collection_diagnostic_record}"
+    fi
     printf '%s\n' "$document" >"$output" || return 1
   fi
-  if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && ( -n "$repository_diagnostic_record" || -n "$fixture_diagnostic_record" ) ]]; then
+  if [[ "$(wc -c <"$output")" -gt "$failure_evidence_max_bytes" && ( -n "$repository_diagnostic_record" || -n "$fixture_diagnostic_record" || -n "$collection_diagnostic_record" ) ]]; then
     printf '%s\n' "$base_record" >"$output" || return 1
   fi
   [[ "$(wc -c <"$output")" -le "$failure_evidence_max_bytes" ]]
@@ -461,22 +468,9 @@ install_policy() {
   set_fixture_diagnostic validate-resolved-arm64-child postcondition-failed
   [[ -n "$fixture_digest_metadata" ]]
   [[ "$(printf '%s' "$fixture_digest_metadata" | wc -c)" -le "$fixture_digest_metadata_max_bytes" ]]
-  jq -e \
-    --arg repository "${fixture%@*}" \
-    --arg expected "${fixture%@*}@$arm_child" \
-    --argjson maximum "$fixture_digest_identity_max" '
-      type == "array" and
-      length > 0 and
-      length <= $maximum and
-      (unique | length) == length and
-      all(.[];
-        type == "string" and
-        startswith($repository + "@sha256:") and
-        length == (($repository | length) + 72) and
-        (.[(($repository | length) + 8):] | test("^[0-9a-f]{64}$"))
-      ) and
-      index($expected) != null
-    ' <<<"$fixture_digest_metadata" >/dev/null
+  printf '%s' "$fixture_digest_metadata" |
+    /usr/local/sbin/secpal-collect-rocky-preparation \
+      --admit-fixture-repo-digests
   fixture_diagnostic_evidence=''
   current_phase="pre-reboot"
 
@@ -521,7 +515,7 @@ collect_after_reboot() {
   [[ -z "${GOOGLE_OAUTH_ACCESS_TOKEN:-}" ]]
 
   current_phase="evidence-collection"
-  /usr/local/sbin/secpal-collect-rocky-preparation \
+  if ! /usr/local/sbin/secpal-collect-rocky-preparation \
     --target-sha "$target_sha" \
     --control-sha "$control_sha" \
     --run-id "$run_id" \
@@ -529,7 +523,14 @@ collect_after_reboot() {
     --expires-at "$expires_at" \
     --image "$image_self_link" \
     --first-boot-id "$(cat "$state_root/first-boot-id")" \
-    --output "$evidence_output"
+    --output "$evidence_output" \
+    --diagnostic-output "$collection_diagnostic_output"; then
+    collection_diagnostic_evidence='{"layer":"assembly","operation":"validate-collector-diagnostic","reason":"postcondition-failed"}'
+    /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+      validate-collection-diagnostic "$collection_diagnostic_output"
+    collection_diagnostic_evidence="$(cat "$collection_diagnostic_output")"
+    return 1
+  fi
   current_phase="evidence-validation"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
     validate-evidence preparation "$evidence_output"

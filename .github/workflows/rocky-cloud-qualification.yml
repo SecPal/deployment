@@ -60,6 +60,15 @@ jobs:
       source_continuation_artifact: ${{ steps.closed.outputs.source_continuation_artifact }}
       source_state_artifact: ${{ steps.closed.outputs.source_state_artifact }}
     steps:
+      - name: Checkout trusted architecture gate from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Validate Rocky evidence architecture before provider authority
+        run: scripts/validate-rocky-evidence-architecture.py
+
       - name: Validate immutable inputs
         id: closed
         env:
@@ -373,6 +382,10 @@ jobs:
               " repository_id=" + (.repository_diagnostic.repository_id // "unavailable") +
               " fixture_operation=" + (.fixture_diagnostic.operation // "unavailable") +
               " fixture_reason=" + (.fixture_diagnostic.reason // "unavailable") +
+              " collection_layer=" + (.collection_diagnostic.layer // "unavailable") +
+              " collection_operation=" + (.collection_diagnostic.operation // "unavailable") +
+              " collection_reason=" + (.collection_diagnostic.reason // "unavailable") +
+              " collection_subject=" + (.collection_diagnostic.subject // "unavailable") +
               " guest_id=" + .guest.id + " version_id=" + .guest.version_id +
               " uname_machine=" + .guest.uname_machine' \
               "$RUNNER_TEMP/rocky-cloud/preparation-failure.json" >&2

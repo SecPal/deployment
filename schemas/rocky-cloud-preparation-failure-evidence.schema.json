@@ -140,6 +140,275 @@
         },
         "reason": { "enum": ["command-failed", "postcondition-failed"] }
       }
+    },
+    "collection_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "operation", "reason"],
+      "properties": {
+        "layer": {
+          "enum": ["observation", "normalization", "admission", "assembly"]
+        },
+        "operation": {
+          "enum": [
+            "read-os-release",
+            "query-architecture",
+            "query-dnf-version",
+            "query-releasever",
+            "query-selinux-mode",
+            "query-selinux-enabled",
+            "query-selinux-policy",
+            "query-enabled-repositories",
+            "resolve-service-account",
+            "read-subuid",
+            "read-subgid",
+            "query-effective-identities",
+            "query-supplementary-groups",
+            "query-podman-info",
+            "resolve-rootless-graphroot",
+            "resolve-service-account-home",
+            "inspect-fixture-repo-digests",
+            "read-boot-id",
+            "read-memory-info",
+            "query-root-filesystem",
+            "query-cpu-count",
+            "query-update-unit",
+            "read-container-config",
+            "query-podman-version",
+            "query-cgroup-filesystem",
+            "query-systemd-user",
+            "query-podman-socket",
+            "query-podman-socket-path",
+            "query-environment-authority",
+            "query-sudo-authority",
+            "query-quadlet-authority",
+            "query-linger",
+            "verify-fixture-present",
+            "query-cloud-identity-marker",
+            "query-package-nevra",
+            "resolve-package-repository",
+            "query-installed-payload-digest",
+            "download-official-package",
+            "inspect-official-package-payload",
+            "verify-package-signature",
+            "verify-rocky-signing-key",
+            "write-evidence",
+            "normalize-os-release",
+            "normalize-repositories",
+            "normalize-subuid",
+            "normalize-subgid",
+            "normalize-subuid-population",
+            "normalize-subgid-population",
+            "normalize-fixture-repo-digests",
+            "admit-fixture-arm64-child",
+            "validate-fixture-evidence",
+            "normalize-memory",
+            "normalize-podman-info",
+            "normalize-container-label-config",
+            "normalize-package-evidence",
+            "admit-package-repository",
+            "admit-package-payload",
+            "admit-package-signature",
+            "admit-package-identity",
+            "admit-immutable-shas",
+            "admit-provider-image",
+            "admit-guest-identity",
+            "admit-update-contract",
+            "admit-selinux",
+            "admit-repositories",
+            "normalize-service-account",
+            "normalize-unit-status",
+            "normalize-sudo-authority",
+            "normalize-quadlet-authority",
+            "admit-subids",
+            "admit-rootless-graphroot",
+            "admit-reboot-persistence",
+            "admit-package-set",
+            "assemble-evidence",
+            "admit-run-identity",
+            "admit-fixture-present",
+            "admit-hardware",
+            "admit-runtime",
+            "admit-service-account",
+            "admit-cloud-identity",
+            "validate-collector-diagnostic"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "command-failed",
+            "observation-failed",
+            "observation-limit-exceeded",
+            "representation-invalid",
+            "subject-invalid",
+            "wrong-type",
+            "duplicate-observation",
+            "cardinality-invalid",
+            "invariant-failed",
+            "internal-error",
+            "postcondition-failed"
+          ]
+        },
+        "subject": {
+          "enum": [
+            "podman",
+            "conmon",
+            "crun",
+            "netavark",
+            "aardvark-dns",
+            "passt",
+            "shadow-utils-subid",
+            "systemd",
+            "container-selinux",
+            "audit",
+            "policycoreutils",
+            "policycoreutils-python-utils",
+            "selinux-policy-targeted",
+            "curl",
+            "dnf",
+            "git",
+            "jq",
+            "nftables",
+            "openssh-server",
+            "sudo",
+            "python3-jsonschema",
+            "dnf-plugins-core",
+            "dnf-automatic.timer",
+            "dnf-automatic-install.timer",
+            "dnf-automatic-download.timer",
+            "dnf-automatic-notifyonly.timer",
+            "podman.socket"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "read-os-release",
+                  "query-architecture",
+                  "query-dnf-version",
+                  "query-releasever",
+                  "query-selinux-mode",
+                  "query-selinux-enabled",
+                  "query-selinux-policy",
+                  "query-enabled-repositories",
+                  "resolve-service-account",
+                  "read-subuid",
+                  "read-subgid",
+                  "query-effective-identities",
+                  "query-supplementary-groups",
+                  "query-podman-info",
+                  "resolve-rootless-graphroot",
+                  "resolve-service-account-home",
+                  "inspect-fixture-repo-digests",
+                  "read-boot-id",
+                  "read-memory-info",
+                  "query-root-filesystem",
+                  "query-cpu-count",
+                  "query-update-unit",
+                  "read-container-config",
+                  "query-podman-version",
+                  "query-cgroup-filesystem",
+                  "query-systemd-user",
+                  "query-podman-socket",
+                  "query-podman-socket-path",
+                  "query-environment-authority",
+                  "query-sudo-authority",
+                  "query-quadlet-authority",
+                  "query-linger",
+                  "verify-fixture-present",
+                  "query-cloud-identity-marker",
+                  "query-package-nevra",
+                  "resolve-package-repository",
+                  "query-installed-payload-digest",
+                  "download-official-package",
+                  "inspect-official-package-payload",
+                  "verify-package-signature",
+                  "verify-rocky-signing-key",
+                  "write-evidence"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "layer": { "const": "observation" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "normalize-os-release",
+                  "normalize-repositories",
+                  "normalize-subuid",
+                  "normalize-subgid",
+                  "normalize-subuid-population",
+                  "normalize-subgid-population",
+                  "normalize-fixture-repo-digests",
+                  "normalize-memory",
+                  "normalize-podman-info",
+                  "normalize-container-label-config",
+                  "normalize-package-evidence",
+                  "normalize-service-account",
+                  "normalize-unit-status",
+                  "normalize-sudo-authority",
+                  "normalize-quadlet-authority"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "layer": { "const": "normalization" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "admit-fixture-arm64-child",
+                  "validate-fixture-evidence",
+                  "admit-package-repository",
+                  "admit-package-payload",
+                  "admit-package-signature",
+                  "admit-package-identity",
+                  "admit-immutable-shas",
+                  "admit-provider-image",
+                  "admit-guest-identity",
+                  "admit-update-contract",
+                  "admit-selinux",
+                  "admit-repositories",
+                  "admit-subids",
+                  "admit-rootless-graphroot",
+                  "admit-reboot-persistence",
+                  "admit-package-set",
+                  "admit-run-identity",
+                  "admit-fixture-present",
+                  "admit-hardware",
+                  "admit-runtime",
+                  "admit-service-account",
+                  "admit-cloud-identity"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "layer": { "const": "admission" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": ["assemble-evidence", "validate-collector-diagnostic"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "layer": { "const": "assembly" } } }
+        }
+      ]
     }
   },
   "allOf": [
@@ -165,6 +434,14 @@
       },
       "then": { "required": ["fixture_diagnostic"] },
       "else": { "not": { "required": ["fixture_diagnostic"] } }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "evidence-collection" } },
+        "required": ["phase"]
+      },
+      "then": { "required": ["collection_diagnostic"] },
+      "else": { "not": { "required": ["collection_diagnostic"] } }
     }
   ],
   "$defs": {
