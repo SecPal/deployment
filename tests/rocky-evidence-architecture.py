@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -37,17 +39,30 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     @staticmethod
     def realistic_raw(contract):
         payload = "a" * 64
+        header = "b" * 64
+        key_packet = b"reviewed Rocky 10 signing key packet"
+        contract.ROCKY_KEY_PACKET_SHA256 = hashlib.sha256(key_packet).hexdigest()
         packages = [
             {
                 "name": name,
                 "nevra": f"{name}-1-1.aarch64",
                 "repositories": ["appstream"],
-                "installed_payload": payload,
-                "payload_count": 1,
-                "signature": "digests signatures OK key ID 6fedfc85",
-                "rocky_keys": contract.ROCKY_FINGERPRINT,
-                "official_nevra": f"{name}-1-1.aarch64",
-                "official_payload": payload,
+                "signed_header": "\n".join(
+                    (
+                        f"{name}-1-1.aarch64",
+                        payload,
+                        "8",
+                        header,
+                        "RSA/SHA256, Wed May 21 13:19:52 2025, Key ID 5b106c736fedfc85",
+                    )
+                ),
+                "verification": "\n".join(
+                    (
+                        "Header V4 RSA/SHA256 Signature, key ID 6fedfc85: OK",
+                        "Header SHA256 digest: OK",
+                        "Header SHA1 digest: OK",
+                    )
+                ),
             }
             for name in contract.PACKAGES
         ]
@@ -76,6 +91,8 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             "root_filesystem_bytes": 120000000000,
             "cpu_count": 4,
             "packages": packages,
+            "rocky_signing_key": "6fedfc85\n"
+            + base64.b64encode(key_packet).decode("ascii"),
             "container_configs": ["[engine]\nlabel=true"],
             "podman_version": "podman version 5.8.2",
             "cgroup_filesystem": "cgroup2fs",
@@ -241,6 +258,48 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 self.assertNotEqual(0, completed.returncode)
                 self.assertIn("opaque observation", completed.stderr)
 
+    def test_architecture_gate_rejects_post_install_package_transfer(self) -> None:
+        source = COLLECTOR.read_text(encoding="utf-8")
+        mutations = (
+            source.replace(
+                "        _, repositories, _ = self.run(\n",
+                "        self.run(ObservationOperation.PACKAGE_REPOSITORY, "
+                "['dnf4', 'download', nevra], subject=name)\n"
+                "        _, repositories, _ = self.run(\n",
+                1,
+            ),
+            source.replace(
+                "    @staticmethod\n    def package_repository_query",
+                "    @staticmethod\n"
+                "    def package_download_query(nevra: str) -> list[str]:\n"
+                "        return ['dnf4', '--quiet', 'download', nevra]\n\n"
+                "    @staticmethod\n    def package_repository_query",
+                1,
+            ),
+            source.replace(
+                "        _, repositories, _ = self.run(\n",
+                "        action = 'download'\n"
+                "        self.run(ObservationOperation.PACKAGE_REPOSITORY, "
+                "['dnf4'] + [action, nevra], subject=name)\n"
+                "        _, repositories, _ = self.run(\n",
+                1,
+            ),
+        )
+        for mutation in mutations:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / COLLECTOR.name
+                path.write_text(mutation, encoding="utf-8")
+                completed = subprocess.run(
+                    [VALIDATOR, "--collector", path],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn(
+                "post-install package payload transfer", completed.stderr
+            )
+
     def test_architecture_gate_rejects_filesystem_observation_outside_owner(self) -> None:
         source = COLLECTOR.read_text(encoding="utf-8")
         mutation = source.replace(
@@ -315,16 +374,17 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
         accepted = {
             "layer": "observation",
-            "operation": "verify-package-signature",
+            "operation": "inspect-installed-signed-header",
             "reason": "command-failed",
             "subject": "container-selinux",
         }
         rejected = (
             {**accepted, "operation": "run-command"},
+            {**accepted, "operation": "download-official-package"},
             {**accepted, "reason": "arbitrary stderr"},
             {**accepted, "subject": "https://example.invalid/secret"},
             {**accepted, "stderr": "unbounded"},
-            {"layer": "observation", "operation": "verify-package-signature", "reason": "command-failed"},
+            {"layer": "observation", "operation": "inspect-installed-signed-header", "reason": "command-failed"},
             {"layer": "observation", "operation": "query-architecture", "reason": "command-failed", "subject": "podman"},
             {**accepted, "layer": "assembly"},
             {
@@ -355,6 +415,31 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                             capture_output=True,
                         ).returncode,
                     )
+
+            key_diagnostic = {
+                "layer": "observation",
+                "operation": "inspect-rocky-signing-key",
+                "reason": "command-failed",
+            }
+            path.write_text(json.dumps(key_diagnostic), encoding="utf-8")
+            self.assertEqual(
+                0,
+                subprocess.run(
+                    [control, "validate-collection-diagnostic", path],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+            )
+            key_diagnostic["subject"] = "podman"
+            path.write_text(json.dumps(key_diagnostic), encoding="utf-8")
+            self.assertNotEqual(
+                0,
+                subprocess.run(
+                    [control, "validate-collection-diagnostic", path],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+            )
 
     def test_fixture_identity_has_one_owner_and_rejects_digest_regression(self) -> None:
         contract = load_contract()
@@ -419,6 +504,16 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         contract = load_contract()
         raw = self.realistic_raw(contract)
         document = contract.normalize_and_admit(raw, self.realistic_options())
+        uppercase = json.loads(json.dumps(raw))
+        uppercase_header = uppercase["packages"][0]["signed_header"].splitlines()
+        uppercase_header[1] = uppercase_header[1].upper()
+        uppercase_header[3] = uppercase_header[3].upper()
+        uppercase_header[4] = uppercase_header[4][:-16] + uppercase_header[4][-16:].upper()
+        uppercase["packages"][0]["signed_header"] = "\n".join(uppercase_header)
+        uppercase_document = contract.normalize_and_admit(
+            uppercase, self.realistic_options()
+        )
+        self.assertEqual("a" * 64, uppercase_document["packages"][0]["payload_digest"])
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "preparation.json"
@@ -475,13 +570,55 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         ]
         with self.assertRaises(contract.ContractError):
             contract.normalize_and_admit(ambiguous_package, self.realistic_options())
-
-        wrong_package_type = json.loads(json.dumps(raw))
-        wrong_package_type["packages"][0]["payload_count"] = "1"
+        unavailable_package = json.loads(json.dumps(raw))
+        unavailable_package["packages"][0]["repositories"] = []
         with self.assertRaises(contract.ContractError):
             contract.normalize_and_admit(
-                wrong_package_type, self.realistic_options()
+                unavailable_package, self.realistic_options()
             )
+
+        package_failures = {
+            "wrong-nevra": {"signed_header": raw["packages"][0]["signed_header"].replace("podman-1-1.aarch64", "podman-2-1.aarch64", 1)},
+            "wrong-signer": {"signed_header": raw["packages"][0]["signed_header"].replace("6fedfc85", "deadbeef")},
+            "missing-signature": {"verification": "Header SHA256 digest: OK\nHeader SHA1 digest: OK"},
+            "unknown-signer": {"verification": raw["packages"][0]["verification"].replace("6fedfc85", "deadbeef")},
+            "bad-signature": {"verification": raw["packages"][0]["verification"].replace(": OK", ": BAD", 1)},
+            "missing-payload": {"signed_header": "\n".join(raw["packages"][0]["signed_header"].splitlines()[:1] + [""] + raw["packages"][0]["signed_header"].splitlines()[2:])},
+            "wrong-payload-algorithm": {"signed_header": raw["packages"][0]["signed_header"].replace("\n8\n", "\n1\n", 1)},
+        }
+        for name, changes in package_failures.items():
+            with self.subTest(package_failure=name):
+                candidate = json.loads(json.dumps(raw))
+                candidate["packages"][0].update(changes)
+                with self.assertRaises(contract.ContractError):
+                    contract.normalize_and_admit(candidate, self.realistic_options())
+
+        wrong_key = dict(raw)
+        wrong_key["rocky_signing_key"] = "6fedfc85\n" + base64.b64encode(
+            b"untrusted key packet"
+        ).decode("ascii")
+        with self.assertRaises(contract.ContractError):
+            contract.normalize_and_admit(wrong_key, self.realistic_options())
+
+        missing_history = json.loads(json.dumps(raw))
+        for package in missing_history["packages"]:
+            self.assertNotIn("from_repo", package)
+        document_without_history = contract.normalize_and_admit(
+            missing_history, self.realistic_options()
+        )
+        self.assertEqual(contract.ROCKY_FINGERPRINT, document_without_history["packages"][0]["signer_fingerprint"])
+
+        # Current mirror payload bytes are intentionally absent. A same-NEVRA
+        # republish is a temporal mirror fact, not evidence about the artifact
+        # whose immutable signed header is installed and admitted here.
+        for package in raw["packages"]:
+            self.assertNotIn("downloaded_payload", package)
+            self.assertNotIn("official_payload", package)
+
+        malformed_key = dict(raw)
+        malformed_key["rocky_signing_key"] = "6fedfc85\nnot-base64!"
+        with self.assertRaises(contract.ContractError):
+            contract.normalize_and_admit(malformed_key, self.realistic_options())
 
         security_inequivalent = json.loads(json.dumps(raw))
         security_inequivalent["podman_info"] = json.dumps(

@@ -13,7 +13,6 @@ import os
 import pwd
 import subprocess
 import sys
-import tempfile
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -79,11 +78,8 @@ class ObservationOperation(str, Enum):
     CLOUD_IDENTITY = "query-cloud-identity-marker"
     PACKAGE_NEVRA = "query-package-nevra"
     PACKAGE_REPOSITORY = "resolve-package-repository"
-    PACKAGE_INSTALLED_PAYLOAD = "query-installed-payload-digest"
-    PACKAGE_DOWNLOAD = "download-official-package"
-    PACKAGE_PAYLOAD = "inspect-official-package-payload"
-    PACKAGE_SIGNATURE = "verify-package-signature"
-    ROCKY_KEY = "verify-rocky-signing-key"
+    PACKAGE_SIGNED_HEADER = "inspect-installed-signed-header"
+    ROCKY_KEY = "inspect-rocky-signing-key"
     WRITE_EVIDENCE = "write-evidence"
     WRITE_DIAGNOSTIC = "write-collection-diagnostic"
 
@@ -281,30 +277,35 @@ class Observer:
             self.package_repository_query(nevra),
             subject=name,
         )
-        _, installed_payload, _ = self.run(ObservationOperation.PACKAGE_INSTALLED_PAYLOAD, ["rpm", "-q", "--qf", "%{PAYLOADDIGEST}", name], subject=name)
-        try:
-            temporary = tempfile.TemporaryDirectory(
-                prefix=".secpal-rocky-rpm-", dir="/var/tmp"
-            )
-        except OSError as error:
-            raise ObservationError(
-                ObservationOperation.PACKAGE_DOWNLOAD, "observation-failed", name
-            ) from error
-        with temporary as directory:
-            self.run(ObservationOperation.PACKAGE_DOWNLOAD, ["dnf4", "--quiet", "--disablerepo=*", "--enablerepo=baseos,appstream,extras", "download", "--destdir", directory, nevra], subject=name)
-            try:
-                payloads = list(Path(directory).glob("*.rpm"))
-            except OSError as error:
-                raise ObservationError(ObservationOperation.PACKAGE_DOWNLOAD, "observation-failed", name) from error
-            payload_count = len(payloads)
-            signature = rocky_keys = official_nevra = official_payload = ""
-            if payload_count == 1:
-                payload = payloads[0]
-                _, signature, _ = self.run(ObservationOperation.PACKAGE_SIGNATURE, ["rpmkeys", "--checksig", "--verbose", str(payload)], subject=name)
-                _, rocky_keys, _ = self.run(ObservationOperation.ROCKY_KEY, ["rpm", "-qa", "--qf", "%{SUMMARY} %{DESCRIPTION}\\n", "gpg-pubkey"], subject=name)
-                _, official_nevra, _ = self.run(ObservationOperation.PACKAGE_PAYLOAD, ["rpm", "-qp", "--qf", "%{NEVRA}", str(payload)], subject=name)
-                _, official_payload, _ = self.run(ObservationOperation.PACKAGE_PAYLOAD, ["rpm", "-qp", "--qf", "%{PAYLOADDIGEST}", str(payload)], subject=name)
-        return {"name": name, "nevra": nevra, "repositories": repositories.splitlines(), "installed_payload": installed_payload.lower(), "payload_count": payload_count, "signature": signature, "rocky_keys": rocky_keys, "official_nevra": official_nevra, "official_payload": official_payload.lower()}
+        _, signed_header, verification = self.run(
+            ObservationOperation.PACKAGE_SIGNED_HEADER,
+            [
+                "rpm", "-qvv", "--qf",
+                "%{NEVRA}\\n%{PAYLOADDIGEST}\\n%{PAYLOADDIGESTALGO}\\n"
+                "%{SHA256HEADER}\\n%{RSAHEADER:pgpsig}\\n",
+                nevra,
+            ],
+            subject=name,
+            maximum=4096,
+        )
+        return {
+            "name": name,
+            "nevra": nevra,
+            "repositories": repositories.splitlines(),
+            "signed_header": signed_header,
+            "verification": verification,
+        }
+
+    def rocky_signing_key(self) -> str:
+        _, key, _ = self.run(
+            ObservationOperation.ROCKY_KEY,
+            [
+                "rpm", "-q", "--qf", "%{VERSION}\\n%{PUBKEYS}\\n",
+                contract.ROCKY_KEY_PACKAGE,
+            ],
+            maximum=4096,
+        )
+        return key
 
     def write(
         self,
@@ -363,6 +364,7 @@ def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
         "meminfo": observer.text(ObservationOperation.MEMORY, Path("/proc/meminfo"), maximum=65_536, encoding="ascii"),
         "root_filesystem_bytes": observer.filesystem_bytes(), "cpu_count": observer.cpu_count(),
         "packages": [observer.package(name) for name in PACKAGES],
+        "rocky_signing_key": observer.rocky_signing_key(),
         "container_configs": observer.container_configs(account["home"]), "podman_version": podman_version,
         "cgroup_filesystem": cgroup_filesystem, "systemd_user": systemd_user,
         "socket_exists": observer.exists(ObservationOperation.SOCKET_PATH, Path(f"/run/user/{account['uid']}/podman/podman.sock")),

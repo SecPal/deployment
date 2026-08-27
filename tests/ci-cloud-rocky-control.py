@@ -69,19 +69,33 @@ class RockyCloudControlTests(unittest.TestCase):
         )
 
         observer = collector.Observer()
+        signed_header = "\n".join(
+            (
+                nevra,
+                "a" * 64,
+                "8",
+                "b" * 64,
+                "RSA/SHA256, Wed May 21 13:19:52 2025, Key ID 5b106c736fedfc85",
+            )
+        )
         with mock.patch.object(
             observer,
             "run",
             side_effect=(
                 (0, nevra, ""),
                 (0, "appstream", ""),
-                (0, "sha256:installed", ""),
-                (0, "", ""),
+                (
+                    0,
+                    signed_header,
+                    "Header V4 RSA/SHA256 Signature, key ID 6fedfc85: OK\n"
+                    "Header SHA256 digest: OK\nHeader SHA1 digest: OK",
+                ),
             ),
         ) as run:
             observed = observer.package("podman")
         self.assertEqual(nevra, observed["nevra"])
         self.assertEqual(nevra, run.call_args_list[1].args[1][-1])
+        self.assertEqual(nevra, run.call_args_list[2].args[1][-1])
 
     def test_rendered_rocky_startup_script_is_bounded_valid_bash(self) -> None:
         template = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
@@ -1925,11 +1939,25 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertGreaterEqual(workflow.count('[[ "$GCP_PROJECT_ID" == secpal-dev ]]'), 4)
         self.assertGreaterEqual(workflow.count("gcp-service-account@secpal-dev.iam.gserviceaccount.com"), 4)
 
-    def test_rpm_provenance_uses_verified_official_payload_identity(self) -> None:
+    def test_rpm_provenance_uses_installed_signed_header_identity(self) -> None:
         collector = (ROOT / "scripts/ci-cloud/collect-rocky-preparation.py").read_text(encoding="utf-8")
-        for required in ("rpmkeys", "--checksig", "ROCKY_FINGERPRINT", "PAYLOADDIGEST", "dnf4", "download", "TemporaryDirectory"):
+        for required in (
+            "-qvv",
+            "PAYLOADDIGEST",
+            "PAYLOADDIGESTALGO",
+            "SHA256HEADER",
+            "%{RSAHEADER:pgpsig}",
+            "%{PUBKEYS}",
+            "repoquery-nevra",
+        ):
             self.assertIn(required, collector)
-        self.assertNotIn("%{RSAHEADER:pgpsig}", collector)
+        for forbidden in (
+            "rpmkeys",
+            "--checksig",
+            '"dnf4", "download"',
+            "TemporaryDirectory",
+        ):
+            self.assertNotIn(forbidden, collector)
 
 
 if __name__ == "__main__":

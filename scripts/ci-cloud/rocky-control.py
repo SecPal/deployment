@@ -95,14 +95,10 @@ FIXTURE_DIAGNOSTIC_REASONS = {
 PACKAGE_COLLECTION_OPERATIONS = {
     "query-package-nevra",
     "resolve-package-repository",
-    "query-installed-payload-digest",
-    "download-official-package",
-    "inspect-official-package-payload",
-    "verify-package-signature",
-    "verify-rocky-signing-key",
+    "inspect-installed-signed-header",
     "normalize-package-evidence",
+    "normalize-installed-signed-header",
     "admit-package-repository",
-    "admit-package-payload",
     "admit-package-signature",
     "admit-package-identity",
 }

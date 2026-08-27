@@ -187,11 +187,8 @@
             "query-cloud-identity-marker",
             "query-package-nevra",
             "resolve-package-repository",
-            "query-installed-payload-digest",
-            "download-official-package",
-            "inspect-official-package-payload",
-            "verify-package-signature",
-            "verify-rocky-signing-key",
+            "inspect-installed-signed-header",
+            "inspect-rocky-signing-key",
             "write-evidence",
             "write-collection-diagnostic",
             "normalize-os-release",
@@ -207,10 +204,12 @@
             "normalize-podman-info",
             "normalize-container-label-config",
             "normalize-package-evidence",
+            "normalize-installed-signed-header",
+            "normalize-rocky-signing-key",
             "admit-package-repository",
-            "admit-package-payload",
             "admit-package-signature",
             "admit-package-identity",
+            "admit-rocky-signing-key",
             "admit-immutable-shas",
             "admit-provider-image",
             "admit-guest-identity",
@@ -304,11 +303,8 @@
             "verify-fixture-present",
             "query-package-nevra",
             "resolve-package-repository",
-            "query-installed-payload-digest",
-            "download-official-package",
-            "inspect-official-package-payload",
-            "verify-package-signature",
-            "verify-rocky-signing-key"
+            "inspect-installed-signed-header",
+            "inspect-rocky-signing-key"
           ],
           "reasons": [
             "command-failed",
@@ -400,7 +396,20 @@
           "reasons": ["representation-invalid", "subject-invalid", "wrong-type"]
         },
         {
-          "operations": ["admit-package-repository", "admit-package-payload"],
+          "operations": ["normalize-installed-signed-header"],
+          "reasons": ["representation-invalid"]
+        },
+        {
+          "operations": ["normalize-rocky-signing-key"],
+          "reasons": [
+            "cardinality-invalid",
+            "observation-limit-exceeded",
+            "representation-invalid",
+            "wrong-type"
+          ]
+        },
+        {
+          "operations": ["admit-package-repository"],
           "reasons": ["cardinality-invalid"]
         },
         {
@@ -409,6 +418,7 @@
             "validate-fixture-evidence",
             "admit-package-signature",
             "admit-package-identity",
+            "admit-rocky-signing-key",
             "admit-immutable-shas",
             "admit-provider-image",
             "admit-guest-identity",
@@ -479,11 +489,8 @@
                   "query-cloud-identity-marker",
                   "query-package-nevra",
                   "resolve-package-repository",
-                  "query-installed-payload-digest",
-                  "download-official-package",
-                  "inspect-official-package-payload",
-                  "verify-package-signature",
-                  "verify-rocky-signing-key",
+                  "inspect-installed-signed-header",
+                  "inspect-rocky-signing-key",
                   "write-evidence",
                   "write-collection-diagnostic"
                 ]
@@ -509,6 +516,8 @@
                   "normalize-podman-info",
                   "normalize-container-label-config",
                   "normalize-package-evidence",
+                  "normalize-installed-signed-header",
+                  "normalize-rocky-signing-key",
                   "normalize-service-account",
                   "normalize-unit-status",
                   "normalize-sudo-authority",
@@ -528,9 +537,9 @@
                   "admit-fixture-arm64-child",
                   "validate-fixture-evidence",
                   "admit-package-repository",
-                  "admit-package-payload",
                   "admit-package-signature",
                   "admit-package-identity",
+                  "admit-rocky-signing-key",
                   "admit-immutable-shas",
                   "admit-provider-image",
                   "admit-guest-identity",
