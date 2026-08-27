@@ -34,9 +34,9 @@ RUNTIME_ADMISSION_OPERATIONS = {
     "admit-runtime-network-backend",
     "admit-runtime-oci-runtime",
     "admit-runtime-podman-version",
-    "admit-runtime-remote-socket-absence",
     "admit-runtime-rootless",
     "admit-runtime-seccomp",
+    "admit-runtime-service-locality",
     "admit-runtime-socket-path-absence",
     "admit-runtime-socket-unit-disabled",
     "admit-runtime-systemd-user",
@@ -124,6 +124,14 @@ def validate_pure_contract(path: Path) -> None:
     functions = {
         node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
     }
+    if any(
+        isinstance(value, ast.Constant) and value.value == "remoteSocket"
+        for function in functions.values()
+        for value in ast.walk(function)
+    ):
+        raise ArchitectureError(
+            "Podman remoteSocket information is not authoritative admission input"
+        )
     rejection_operations = {
         node.args[1].value
         for node in ast.walk(tree)

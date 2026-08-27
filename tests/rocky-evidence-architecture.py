@@ -49,7 +49,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         "admit-runtime-socket-path-absence",
         "admit-runtime-socket-unit-disabled",
         "admit-runtime-container-host-absence",
-        "admit-runtime-remote-socket-absence",
+        "admit-runtime-service-locality",
         "admit-runtime-podman-version",
     )
 
@@ -98,7 +98,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             "subgid": "secpal-runtime:1048576:65536",
             "effective_ids": [0, 991],
             "supplementary_groups": [991],
-            "podman_info": json.dumps({"host": {"security": {"rootless": True, "seccompEnabled": True}, "ociRuntime": {"name": "crun"}, "networkBackend": "netavark", "remoteSocket": {"exists": False}}, "store": {"graphRoot": "/home/secpal-runtime/.local/share/containers/storage"}}),
+            "podman_info": json.dumps({"host": {"security": {"rootless": True, "seccompEnabled": True}, "ociRuntime": {"name": "crun"}, "networkBackend": "netavark", "remoteSocket": {"path": "/run/user/991/podman/podman.sock", "exists": True}, "serviceIsRemote": False}, "store": {"graphRoot": "/home/secpal-runtime/.local/share/containers/storage"}}),
             "graphroot": "/home/secpal-runtime/.local/share/containers/storage",
             "account_home": "/home/secpal-runtime",
             "fixture_repo_digests": json.dumps([expected]),
@@ -163,24 +163,33 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
 
     def test_architecture_gate_rejects_disconnected_runtime_owner(self) -> None:
         source = CONTRACT.read_text(encoding="utf-8")
-        mutation = source.replace(
-            "    admit_runtime_rootless(host)\n",
-            "    # deliberately disconnected runtime owner\n",
-            1,
+        owner_calls = (
+            "admit_runtime_rootless(host)",
+            "admit_runtime_socket_path_absence(facts)",
+            "admit_runtime_socket_unit_disabled(facts)",
+            "admit_runtime_container_host_absence(facts)",
+            "admit_runtime_service_locality(host)",
         )
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / CONTRACT.name
-            path.write_text(mutation, encoding="utf-8")
-            completed = subprocess.run(
-                [VALIDATOR, "--contract", path],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        self.assertNotEqual(0, completed.returncode)
-        self.assertIn("runtime admission", completed.stderr)
+        for owner_call in owner_calls:
+            with self.subTest(owner_call=owner_call):
+                mutation = source.replace(
+                    f"    {owner_call}\n",
+                    "    # deliberately disconnected runtime owner\n",
+                    1,
+                )
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / CONTRACT.name
+                    path.write_text(mutation, encoding="utf-8")
+                    completed = subprocess.run(
+                        [VALIDATOR, "--contract", path],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("runtime admission", completed.stderr)
 
-    def test_runtime_admission_preserves_compound_success_semantics(self) -> None:
+    def test_runtime_admission_matches_authoritative_direct_invariants(self) -> None:
         contract = load_contract()
         for states in itertools.product((False, True), repeat=11):
             (
@@ -193,36 +202,47 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 socket_absent,
                 socket_unit_disabled,
                 container_host_absent,
-                remote_socket_absent,
+                service_local,
                 podman_version_present,
             ) = states
-            facts = {
-                "podman_normalized": {
-                    "host": {
-                        "security": {
-                            "rootless": rootless,
-                            "seccompEnabled": seccomp,
+            for remote_socket_exists in (False, True):
+                facts = {
+                    "podman_normalized": {
+                        "host": {
+                            "security": {
+                                "rootless": rootless,
+                                "seccompEnabled": seccomp,
+                            },
+                            "ociRuntime": {"name": "crun" if crun else "runc"},
+                            "networkBackend": "netavark" if netavark else "cni",
+                            "remoteSocket": {
+                                "path": "/run/user/991/podman/podman.sock",
+                                "exists": remote_socket_exists,
+                            },
+                            "serviceIsRemote": not service_local,
                         },
-                        "ociRuntime": {"name": "crun" if crun else "runc"},
-                        "networkBackend": "netavark" if netavark else "cni",
-                        "remoteSocket": {"exists": not remote_socket_absent},
-                    }
-                },
-                "cgroup_filesystem": "cgroup2fs" if cgroup2 else "tmpfs",
-                "systemd_user": "active" if systemd_user else "inactive",
-                "socket_exists": not socket_absent,
-                "podman_socket_enabled": not socket_unit_disabled,
-                "container_host_present": not container_host_absent,
-                "podman_version": "podman version 5.8.2" if podman_version_present else "",
-            }
-            old_accepts = all(states)
-            try:
-                contract.admit_runtime(facts)
-            except contract.ContractError:
-                new_accepts = False
-            else:
-                new_accepts = True
-            self.assertEqual(old_accepts, new_accepts, states)
+                    },
+                    "cgroup_filesystem": "cgroup2fs" if cgroup2 else "tmpfs",
+                    "systemd_user": "active" if systemd_user else "inactive",
+                    "socket_exists": not socket_absent,
+                    "podman_socket_enabled": not socket_unit_disabled,
+                    "container_host_present": not container_host_absent,
+                    "podman_version": (
+                        "podman version 5.8.2" if podman_version_present else ""
+                    ),
+                }
+                intended_accepts = all(states)
+                try:
+                    contract.admit_runtime(facts)
+                except contract.ContractError:
+                    new_accepts = False
+                else:
+                    new_accepts = True
+                self.assertEqual(
+                    intended_accepts,
+                    new_accepts,
+                    (states, remote_socket_exists),
+                )
 
     def test_runtime_admission_reports_each_exact_semantic_boundary(self) -> None:
         contract = load_contract()
@@ -249,7 +269,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             ("admit-runtime-socket-path-absence", lambda raw: raw.__setitem__("socket_exists", True)),
             ("admit-runtime-socket-unit-disabled", lambda raw: raw.__setitem__("podman_socket_status", 0)),
             ("admit-runtime-container-host-absence", lambda raw: raw.__setitem__("container_host_present", True)),
-            ("admit-runtime-remote-socket-absence", mutate_podman(("host", "remoteSocket", "exists"), True)),
+            ("admit-runtime-service-locality", mutate_podman(("host", "serviceIsRemote"), True)),
             ("admit-runtime-podman-version", lambda raw: raw.__setitem__("podman_version", "")),
         )
         for operation, mutate in mutations:
@@ -312,6 +332,82 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         with self.assertRaises(contract.ContractError) as raised:
             contract.normalize_and_admit(raw, self.realistic_options())
         self.assertEqual("admit-runtime-rootless", raised.exception.operation)
+
+    def test_remote_socket_info_is_not_authoritative_for_socket_absence(self) -> None:
+        contract = load_contract()
+        raw = self.realistic_raw(contract)
+        document = contract.normalize_and_admit(raw, self.realistic_options())
+        self.assertTrue(document["runtime"]["socket_absent"])
+        self.assertTrue(document["runtime"]["api_dependency_absent"])
+        without_remote_socket = copy.deepcopy(raw)
+        podman = json.loads(without_remote_socket["podman_info"])
+        del podman["host"]["remoteSocket"]
+        without_remote_socket["podman_info"] = json.dumps(podman)
+        self.assertEqual(
+            document,
+            contract.normalize_and_admit(
+                without_remote_socket, self.realistic_options()
+            ),
+        )
+
+        direct_failures = (
+            ("socket_exists", True, "admit-runtime-socket-path-absence"),
+            (
+                "podman_socket_status",
+                0,
+                "admit-runtime-socket-unit-disabled",
+            ),
+            (
+                "container_host_present",
+                True,
+                "admit-runtime-container-host-absence",
+            ),
+        )
+        for key, value, operation in direct_failures:
+            with self.subTest(operation=operation):
+                candidate = copy.deepcopy(raw)
+                candidate[key] = value
+                with self.assertRaises(contract.ContractError) as raised:
+                    contract.normalize_and_admit(
+                        candidate, self.realistic_options()
+                    )
+                self.assertEqual(operation, raised.exception.operation)
+
+        remote_client = copy.deepcopy(raw)
+        podman = json.loads(remote_client["podman_info"])
+        podman["host"]["serviceIsRemote"] = True
+        remote_client["podman_info"] = json.dumps(podman)
+        with self.assertRaises(contract.ContractError) as raised:
+            contract.normalize_and_admit(
+                remote_client, self.realistic_options()
+            )
+        self.assertEqual(
+            "admit-runtime-service-locality", raised.exception.operation
+        )
+
+    def test_architecture_gate_rejects_remote_socket_info_as_admission(self) -> None:
+        source = CONTRACT.read_text(encoding="utf-8")
+        mutation = source.replace(
+            "def admit_runtime_podman_version(facts: dict[str, Any]) -> None:\n",
+            "def forbidden_remote_socket_present(host: dict[str, Any]) -> bool:\n"
+            "    return bool(host.get('remoteSocket', {}).get('exists'))\n\n\n"
+            "def admit_runtime_podman_version(facts: dict[str, Any]) -> None:\n"
+            "    if forbidden_remote_socket_present(facts['podman_normalized']['host']):\n"
+            "        reject('admission', 'admit-runtime-remote-socket-absence', "
+            "'invariant-failed')\n",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / CONTRACT.name
+            path.write_text(mutation, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--contract", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("remoteSocket", completed.stderr)
 
     def test_cloud_identity_marker_observation_requires_regular_file(self) -> None:
         specification = importlib.util.spec_from_file_location(
@@ -726,7 +822,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                         "host": {
                             "security": [],
                             "ociRuntime": {"name": "crun"},
-                            "remoteSocket": {"exists": False},
+                            "serviceIsRemote": False,
                         },
                         "store": {
                             "graphRoot": "/home/secpal-runtime/.local/share/containers/storage"
@@ -811,7 +907,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                     "security": {"rootless": False, "seccompEnabled": True},
                     "ociRuntime": {"name": "crun"},
                     "networkBackend": "netavark",
-                    "remoteSocket": {"exists": False},
+                    "serviceIsRemote": False,
                 },
                 "store": {
                     "graphRoot": "/home/secpal-runtime/.local/share/containers/storage"

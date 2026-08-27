@@ -437,7 +437,7 @@ class RockyCloudControlTests(unittest.TestCase):
             "admit-runtime-socket-path-absence",
             "admit-runtime-socket-unit-disabled",
             "admit-runtime-container-host-absence",
-            "admit-runtime-remote-socket-absence",
+            "admit-runtime-service-locality",
             "admit-runtime-podman-version",
         )
         base = {
@@ -1796,6 +1796,15 @@ class RockyCloudControlTests(unittest.TestCase):
             self.assertIn(required, preparation)
         for forbidden in ("apt-get", "AppArmor", "setenforce 0", "label=disable"):
             self.assertNotIn(forbidden, preparation)
+        self.assertIn(
+            "systemctl mask --now podman.socket podman.service", preparation
+        )
+        self.assertIn(
+            "run_as_runtime systemctl --user mask --now podman.socket podman.service",
+            preparation,
+        )
+        self.assertIn("-u CONTAINER_HOST", preparation)
+        self.assertIn("-u CONTAINER_CONNECTION", preparation)
 
     def test_repository_staging_preserves_provider_guest_environment_and_final_contract(self) -> None:
         preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(

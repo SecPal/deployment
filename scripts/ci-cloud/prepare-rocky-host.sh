@@ -121,6 +121,8 @@ run_as_runtime() {
   home="$(getent passwd "$runtime_account" | awk -F: '{print $6}')"
   [[ "$home" == /* && -d "$home" ]]
   runuser --user "$runtime_account" -- env \
+    -u CONTAINER_HOST \
+    -u CONTAINER_CONNECTION \
     HOME="$home" \
     XDG_RUNTIME_DIR="/run/user/$uid" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
@@ -434,7 +436,7 @@ install_policy() {
 
   systemctl disable --now dnf-automatic.timer dnf-automatic-install.timer \
     dnf-automatic-download.timer dnf-automatic-notifyonly.timer 2>/dev/null || true
-  systemctl mask podman.socket podman.service
+  systemctl mask --now podman.socket podman.service
 
   current_phase="runtime-account"
   if ! getent passwd "$runtime_account" >/dev/null; then
@@ -455,7 +457,7 @@ install_policy() {
     exit 1
   fi
   systemctl start "user@$runtime_uid.service"
-  run_as_runtime systemctl --user mask podman.socket podman.service
+  run_as_runtime systemctl --user mask --now podman.socket podman.service
   current_phase="fixture"
   set_fixture_diagnostic pull-immutable-fixture command-failed
   run_as_runtime podman pull "$fixture"

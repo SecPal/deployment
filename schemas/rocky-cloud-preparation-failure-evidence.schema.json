@@ -237,7 +237,7 @@
             "admit-runtime-socket-path-absence",
             "admit-runtime-socket-unit-disabled",
             "admit-runtime-container-host-absence",
-            "admit-runtime-remote-socket-absence",
+            "admit-runtime-service-locality",
             "admit-runtime-podman-version",
             "admit-service-account",
             "admit-cloud-identity",
@@ -451,7 +451,7 @@
             "admit-runtime-socket-path-absence",
             "admit-runtime-socket-unit-disabled",
             "admit-runtime-container-host-absence",
-            "admit-runtime-remote-socket-absence",
+            "admit-runtime-service-locality",
             "admit-runtime-podman-version",
             "admit-service-account",
             "admit-cloud-identity"
@@ -582,7 +582,7 @@
                   "admit-runtime-socket-path-absence",
                   "admit-runtime-socket-unit-disabled",
                   "admit-runtime-container-host-absence",
-                  "admit-runtime-remote-socket-absence",
+                  "admit-runtime-service-locality",
                   "admit-runtime-podman-version",
                   "admit-service-account",
                   "admit-cloud-identity"
