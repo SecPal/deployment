@@ -232,6 +232,15 @@ class Observer:
         status, _, _ = self.run(operation, ["systemctl", "is-enabled", unit], subject=unit, accepted=frozenset(range(6)), maximum=4096)
         return status
 
+    def systemd_user_state(self, uid: int) -> str:
+        _, state, _ = self.run(
+            ObservationOperation.SYSTEMD_USER,
+            ["systemctl", "is-active", f"user@{uid}.service"],
+            accepted=frozenset({0, 3}),
+            maximum=4096,
+        )
+        return state
+
     def sudo_observation(self, account: str) -> dict[str, Any]:
         status, stdout, stderr = self.run(
             ObservationOperation.SUDO_AUTHORITY, ["sudo", "-l", "-U", account],
@@ -346,7 +355,7 @@ def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
     _, fixture_repo_digests, _ = observer.run(ObservationOperation.FIXTURE_REPO_DIGESTS, ["podman", "image", "inspect", "--format", "{{json .RepoDigests}}", FIXTURE], user=account["name"], maximum=FIXTURE_DIGEST_METADATA_MAX_BYTES)
     _, podman_version, _ = observer.run(ObservationOperation.PODMAN_VERSION, ["podman", "--version"])
     _, cgroup_filesystem, _ = observer.run(ObservationOperation.CGROUP_FILESYSTEM, ["stat", "-fc", "%T", "/sys/fs/cgroup"])
-    _, systemd_user, _ = observer.run(ObservationOperation.SYSTEMD_USER, ["systemctl", "is-active", f"user@{account['uid']}.service"])
+    systemd_user = observer.systemd_user_state(account["uid"])
     raw = {
         "os_release": observer.text(ObservationOperation.OS_RELEASE, Path("/etc/os-release"), maximum=65_536),
         "architecture": architecture, "dnf_version": dnf_version, "releasever": releasever,

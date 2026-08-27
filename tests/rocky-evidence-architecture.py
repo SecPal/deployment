@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import importlib.util
+import itertools
 import json
 import subprocess
 import tempfile
@@ -22,6 +24,7 @@ CONTRACT = ROOT / "scripts/ci-cloud/rocky_preparation_contract.py"
 COLLECTOR = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
 PREPARATION = ROOT / "scripts/ci-cloud/prepare-rocky-host.sh"
 WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
 
 
 def load_contract():
@@ -36,6 +39,20 @@ def load_contract():
 
 
 class RockyEvidenceArchitectureTests(unittest.TestCase):
+    RUNTIME_ADMISSION_OPERATIONS = (
+        "admit-runtime-rootless",
+        "admit-runtime-oci-runtime",
+        "admit-runtime-network-backend",
+        "admit-runtime-seccomp",
+        "admit-runtime-cgroup",
+        "admit-runtime-systemd-user",
+        "admit-runtime-socket-path-absence",
+        "admit-runtime-socket-unit-disabled",
+        "admit-runtime-container-host-absence",
+        "admit-runtime-remote-socket-absence",
+        "admit-runtime-podman-version",
+    )
+
     @staticmethod
     def realistic_raw(contract):
         payload = "a" * 64
@@ -127,6 +144,174 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode, completed.stderr)
         collector = COLLECTOR.read_text(encoding="utf-8")
         self.assertNotIn("contract.normalize_podman", collector)
+
+    def test_architecture_gate_rejects_collapsed_runtime_admission(self) -> None:
+        source = CONTRACT.read_text(encoding="utf-8")
+        for operation in self.RUNTIME_ADMISSION_OPERATIONS:
+            source = source.replace(f'"{operation}"', '"admit-runtime"')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / CONTRACT.name
+            path.write_text(source, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--contract", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("runtime admission", completed.stderr)
+
+    def test_architecture_gate_rejects_disconnected_runtime_owner(self) -> None:
+        source = CONTRACT.read_text(encoding="utf-8")
+        mutation = source.replace(
+            "    admit_runtime_rootless(host)\n",
+            "    # deliberately disconnected runtime owner\n",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / CONTRACT.name
+            path.write_text(mutation, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--contract", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("runtime admission", completed.stderr)
+
+    def test_runtime_admission_preserves_compound_success_semantics(self) -> None:
+        contract = load_contract()
+        for states in itertools.product((False, True), repeat=11):
+            (
+                rootless,
+                crun,
+                netavark,
+                seccomp,
+                cgroup2,
+                systemd_user,
+                socket_absent,
+                socket_unit_disabled,
+                container_host_absent,
+                remote_socket_absent,
+                podman_version_present,
+            ) = states
+            facts = {
+                "podman_normalized": {
+                    "host": {
+                        "security": {
+                            "rootless": rootless,
+                            "seccompEnabled": seccomp,
+                        },
+                        "ociRuntime": {"name": "crun" if crun else "runc"},
+                        "networkBackend": "netavark" if netavark else "cni",
+                        "remoteSocket": {"exists": not remote_socket_absent},
+                    }
+                },
+                "cgroup_filesystem": "cgroup2fs" if cgroup2 else "tmpfs",
+                "systemd_user": "active" if systemd_user else "inactive",
+                "socket_exists": not socket_absent,
+                "podman_socket_enabled": not socket_unit_disabled,
+                "container_host_present": not container_host_absent,
+                "podman_version": "podman version 5.8.2" if podman_version_present else "",
+            }
+            old_accepts = all(states)
+            try:
+                contract.admit_runtime(facts)
+            except contract.ContractError:
+                new_accepts = False
+            else:
+                new_accepts = True
+            self.assertEqual(old_accepts, new_accepts, states)
+
+    def test_runtime_admission_reports_each_exact_semantic_boundary(self) -> None:
+        contract = load_contract()
+        baseline = self.realistic_raw(contract)
+
+        def mutate_podman(path, value):
+            def mutation(raw):
+                podman = json.loads(raw["podman_info"])
+                target = podman
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                raw["podman_info"] = json.dumps(podman)
+
+            return mutation
+
+        mutations = (
+            ("admit-runtime-rootless", mutate_podman(("host", "security", "rootless"), False)),
+            ("admit-runtime-oci-runtime", mutate_podman(("host", "ociRuntime", "name"), "runc")),
+            ("admit-runtime-network-backend", mutate_podman(("host", "networkBackend"), "cni")),
+            ("admit-runtime-seccomp", mutate_podman(("host", "security", "seccompEnabled"), False)),
+            ("admit-runtime-cgroup", lambda raw: raw.__setitem__("cgroup_filesystem", "tmpfs")),
+            ("admit-runtime-systemd-user", lambda raw: raw.__setitem__("systemd_user", "inactive")),
+            ("admit-runtime-socket-path-absence", lambda raw: raw.__setitem__("socket_exists", True)),
+            ("admit-runtime-socket-unit-disabled", lambda raw: raw.__setitem__("podman_socket_status", 0)),
+            ("admit-runtime-container-host-absence", lambda raw: raw.__setitem__("container_host_present", True)),
+            ("admit-runtime-remote-socket-absence", mutate_podman(("host", "remoteSocket", "exists"), True)),
+            ("admit-runtime-podman-version", lambda raw: raw.__setitem__("podman_version", "")),
+        )
+        for operation, mutate in mutations:
+            with self.subTest(operation=operation):
+                candidate = copy.deepcopy(baseline)
+                mutate(candidate)
+                with self.assertRaises(contract.ContractError) as raised:
+                    contract.normalize_and_admit(candidate, self.realistic_options())
+                self.assertEqual("admission", raised.exception.layer)
+                self.assertEqual(operation, raised.exception.operation)
+                self.assertEqual("invariant-failed", raised.exception.reason)
+                self.assertIsNone(raised.exception.subject)
+                diagnostic = contract.assemble_collection_diagnostic(
+                    raised.exception.layer,
+                    raised.exception.operation,
+                    raised.exception.reason,
+                    raised.exception.subject,
+                )
+                failure = {
+                    "schema_version": 1,
+                    "target_sha": "b" * 40,
+                    "trusted_control_sha": "a" * 40,
+                    "run_id": "12345",
+                    "run_attempt": "1",
+                    "phase": "evidence-collection",
+                    "exit_status": 1,
+                    "guest": {
+                        "id": "rocky",
+                        "version_id": "10.2",
+                        "uname_machine": "aarch64",
+                    },
+                    "collection_diagnostic": diagnostic,
+                }
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8"
+                ) as artifact:
+                    json.dump(failure, artifact)
+                    artifact.flush()
+                    completed = subprocess.run(
+                        [
+                            CONTROL,
+                            "validate-evidence",
+                            "preparation-failure",
+                            artifact.name,
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_combined_runtime_failures_use_stable_semantic_order(self) -> None:
+        contract = load_contract()
+        raw = self.realistic_raw(contract)
+        podman = json.loads(raw["podman_info"])
+        podman["host"]["security"]["rootless"] = False
+        podman["host"]["ociRuntime"]["name"] = "runc"
+        raw["podman_info"] = json.dumps(podman)
+        raw["podman_version"] = ""
+        with self.assertRaises(contract.ContractError) as raised:
+            contract.normalize_and_admit(raw, self.realistic_options())
+        self.assertEqual("admit-runtime-rootless", raised.exception.operation)
 
     def test_cloud_identity_marker_observation_requires_regular_file(self) -> None:
         specification = importlib.util.spec_from_file_location(
@@ -514,14 +699,13 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             uppercase, self.realistic_options()
         )
         self.assertEqual("a" * 64, uppercase_document["packages"][0]["payload_digest"])
-        control = ROOT / "scripts/ci-cloud/rocky-control.py"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "preparation.json"
             path.write_text(json.dumps(document), encoding="utf-8")
             self.assertEqual(
                 0,
                 subprocess.run(
-                    [control, "validate-evidence", "preparation", path],
+                    [CONTROL, "validate-evidence", "preparation", path],
                     check=False,
                     capture_output=True,
                 ).returncode,
@@ -651,7 +835,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             self.assertNotEqual(
                 0,
                 subprocess.run(
-                    [control, "validate-evidence", "preparation", path],
+                    [CONTROL, "validate-evidence", "preparation", path],
                     check=False,
                     capture_output=True,
                 ).returncode,
