@@ -105,7 +105,7 @@ admission in one large module; that the same semantic contract was restated
 across collector, schema, independent validator, static validator, tests, and
 documentation; and that tests could pass one layer without proving that an
 accepted real representation crosses the complete evidence boundary. Historical
-#67 elevated `one authoritative definition per semantic invariant` to an
+Issue #67 elevated `one authoritative definition per semantic invariant` to an
 explicit invariant, and #72 required replay of reviewed real-system evidence
 because repository-authored fixtures cannot prove external representation
 compatibility by themselves. PRs #63, #66, #73, and #74 are the implementation
@@ -114,13 +114,16 @@ and review history for those findings.
 The current Rocky planning retained those lessons but sequenced them
 incorrectly. #117 states that the #64/#68 layer and purity lessons are reusable,
 while also sequencing their reapplication only after current semantic evidence.
-#120-#122 then scope the explicit layer/purity hardening to #119 workload
-evidence. That left #118 host/preparation evidence able to recreate the same
-structural failure mode before the later hardening work could apply.
+Issues #120, #121, and #122 then scope the explicit layer/purity hardening to
+issue #119 workload evidence. That left #118 host/preparation evidence able to
+recreate the same structural failure mode before the later hardening work could
+apply.
 
-The real Rocky remediation history demonstrates the recurrence. PRs #145 and
-#147 had to add narrower diagnostics only after real-provider runs reached broad
-repository and fixture phases. PR #148 corrected fixture-child admission from
+The real Rocky remediation history demonstrates the recurrence. PR #145 and
+PR #146 successively exposed and repaired adjacent unbounded preparation
+failures;
+PR #147 then had to add narrower diagnostics after real-provider runs reached
+broad repository and fixture phases. PR #148 corrected fixture-child admission from
 Podman's ambiguous singular `.Digest` representation to bounded exact
 `.RepoDigests` membership. PR #149 was then required because
 `collect-rocky-preparation.py` had independently reimplemented the same semantic
@@ -129,30 +132,12 @@ predicate. Real run `33021568439` subsequently failed again only at the broad
 `evidence-collection` boundary, with no bounded sub-operation identifying which
 collector observation failed.
 
-This history is therefore a binding architecture input for all current and
-future conformance evidence work:
-
-- observation, representation normalization, admission, and evidence assembly
-  are separate responsibilities and must not be collapsed into one semantic
-  unit for convenience;
-- every semantic invariant has one authoritative owner; independent enforcement
-  at a trust boundary must demonstrably follow that owner or have an executable
-  agreement proof;
-- repository-authored fixtures do not establish compatibility with an external
-  provider/runtime representation; reviewed realistic or real evidence must
-  cross the complete applicable normalization→schema→validation/admission path;
-- before a paid/destructive real-provider run, every reachable fallible trusted
-  operation must have a closed bounded diagnostic identity. A broad phase such
-  as `evidence-collection` is insufficient when it contains multiple
-  independently fallible operations;
-- a repeated mismatch between authored fixtures and real-system representations
-  is an architecture signal requiring adjacent representation and duplicate
-  invariant audit before another provider run, not another isolated
-  compatibility branch.
-
-These rules are repository-wide agent instructions in `AGENTS.md`; they are not
-optional follow-up hardening for #119 and do not wait for semantic real-provider
-evidence before applying to #118 host evidence.
+This history is therefore the source record for applying the organization-wide
+`SecPal/.github/docs/evidence-architecture-contract.md` to deployment. That
+canonical companion owns the resulting pipeline-responsibility,
+invariant-ownership, representation, diagnosability, and anti-loop rules; this
+document does not redefine them. They apply before further #118 host evidence
+and are not optional follow-up hardening reserved for #119.
 
 ## Post-merge evidence
 

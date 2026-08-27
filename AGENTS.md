@@ -19,6 +19,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - Follow `SecPal/.github/docs/work-graph-contract.md` as the single authority
   for work-graph, delivery, replanning, and evidence semantics. This repository
   adds only deployment-specific implementation and security constraints.
+- Follow `SecPal/.github/docs/evidence-architecture-contract.md` as the
+  authoritative companion for evidence-pipeline and external-system
+  architecture. Do not restate its observation, normalization, admission,
+  assembly, invariant-ownership, diagnosability, or anti-loop rules here.
 - The native GitHub graph state is authoritative. Human-readable diagrams and
   prose are explanatory only and must not duplicate native relationship or
   progress state.
@@ -81,41 +85,10 @@ Never print secret values to logs.
 - Every semantic invariant has exactly one authoritative definition.
   Independent enforcement remains legitimate at trust boundaries when each
   enforcement point names or demonstrably follows that owner.
-- Treat evidence pipelines as four distinct responsibilities: side-effecting
-  observation, pure representation normalization, pure admission, and evidence
-  assembly. Do not let one function or module own more than one responsibility
-  merely for convenience. When target transport requires one self-contained
-  file, keep the responsibilities explicit and executable-test their boundaries
-  rather than collapsing them semantically.
-- Observation may execute commands, read files, or query runtime state, but it
-  emits only bounded typed facts and does not decide conformance. Normalization
-  converts reviewed external representations into canonical facts and performs
-  no process, filesystem, clock, or network access. Admission consumes only
-  canonical facts and returns named invariant decisions without system access.
-  Assembly builds the closed evidence document from already observed or
-  admitted facts and performs no new observation.
-- Do not independently reimplement the same semantic invariant in preparation,
-  collection, schema admission, or another phase. Share the authoritative
-  implementation when the trust/transport model permits it; otherwise require
-  an executable agreement test that proves the independent enforcement points
-  accept and reject the same reviewed representations.
-- Before a real-provider or other destructive/paid external-system run, every
-  reachable fallible trusted operation must have a closed, bounded diagnostic
-  identity sufficient to locate the failed semantic operation without retaining
-  arbitrary stdout/stderr or secrets. A broad phase such as
-  `evidence-collection` is not sufficient when multiple independently fallible
-  operations exist inside it. Do not dispatch the external run until that
-  property is testable in repository preflight.
-- Cross-layer evidence tests must start from reviewed realistic external-system
-  representations and exercise the complete applicable path through
-  normalization, closed schema, independent validation, and admission. Fixtures
-  authored solely from the implementation's own expected shape do not prove
-  representation compatibility.
-- A repeated real-system finding that exposes a mismatch between authored
-  fixtures and actual runtime/provider representation is an architecture signal,
-  not permission to add another isolated compatibility branch. Before another
-  external run, audit adjacent representations and duplicate invariants for the
-  same failure class.
+- Apply the canonical evidence-architecture companion before dispatching any
+  deployment-owned cloud, host, registry, migration, or conformance operation.
+  Deployment preflight must fail closed when its reachable trusted operations
+  cannot produce the required bounded semantic diagnostics.
 - Prefer standard-library, language, runtime, and platform primitives over
   hand-written equivalents. Python scope analysis uses `symtable` for this
   reason. Custom deployment-domain validation remains legitimate where no
