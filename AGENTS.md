@@ -21,8 +21,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   adds only deployment-specific implementation and security constraints.
 - Follow `SecPal/.github/docs/evidence-architecture-contract.md` as the
   authoritative companion for evidence-pipeline and external-system
-  architecture. Do not restate its observation, normalization, admission,
-  assembly, invariant-ownership, diagnosability, or anti-loop rules here.
+  architecture. Do not create independent generic definitions of its
+  observation, normalization, admission, assembly, invariant-ownership,
+  diagnosability, or anti-loop rules here. Deployment-specific constraints in
+  this baseline may strengthen those rules at deployment trust boundaries but
+  do not replace their canonical definitions.
 - The native GitHub graph state is authoritative. Human-readable diagrams and
   prose are explanatory only and must not duplicate native relationship or
   progress state.

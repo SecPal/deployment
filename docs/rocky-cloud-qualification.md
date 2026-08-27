@@ -112,7 +112,7 @@ compatibility by themselves. PRs #63, #66, #73, and #74 are the implementation
 and review history for those findings.
 
 The current Rocky planning retained those lessons but sequenced them
-incorrectly. #117 states that the #64/#68 layer and purity lessons are reusable,
+incorrectly. #117 states that the #64/#67 layer and purity lessons are reusable,
 while also sequencing their reapplication only after current semantic evidence.
 Issues #120, #121, and #122 then scope the explicit layer/purity hardening to
 issue #119 workload evidence. That left #118 host/preparation evidence able to
