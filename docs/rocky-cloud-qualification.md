@@ -92,6 +92,58 @@ qualification: SELinux process/storage contexts, MCS separation, negative
 cross-MCS access, AVC, seccomp workload behavior, and cleanup PASS are populated
 only by the exact target revision's harness.
 
+## Historical evidence-architecture findings and binding lesson
+
+The Rocky implementation must not treat the historical Debian cloud work as
+irrelevant merely because Debian/APT/AppArmor semantics are obsolete. The old
+track already identified a reusable architecture failure mode that is independent
+of operating-system semantics.
+
+Historical issue #64 identified that `collect-workload-evidence.py` combined
+side-effecting collection, representation normalization, provenance checks, and
+admission in one large module; that the same semantic contract was restated
+across collector, schema, independent validator, static validator, tests, and
+documentation; and that tests could pass one layer without proving that an
+accepted real representation crosses the complete evidence boundary. Historical
+issue #67 elevated one authoritative definition per semantic invariant to an
+explicit invariant. Issue #68 owns pure layer-boundary enforcement from that
+design, while #72 required replay of reviewed real-system evidence because
+repository-authored fixtures cannot prove external representation compatibility
+by themselves. PRs #63, #66, #73, and #74 are the implementation and review
+history for those findings.
+
+The earlier Rocky rebaseline retained the historical lessons but allowed the
+host/preparation evidence path in #118 to be implemented before equivalent
+structural protection became binding. Issues #120, #121, and #122 remain scoped
+to #119 workload evidence, so they did not protect #118 from recreating the same
+structural failure mode. Current #117 identifies #64/#68 and PRs #73/#74 as
+reusable design evidence and current #117 requires explicit observation,
+normalization, admission, and assembly ownership before further #118
+real-provider qualification. Current #150 is the concrete architecture
+prerequisite blocking #118 until that host evidence pipeline has enforceable
+layered ownership.
+
+The real Rocky remediation history demonstrates the recurrence. PR #145 and
+PR #146 successively exposed and repaired adjacent unbounded preparation
+failures;
+PR #147 then had to add narrower diagnostics after real-provider runs reached
+broad repository and fixture phases. PR #148 corrected fixture-child admission from
+Podman's ambiguous singular `.Digest` representation to bounded exact
+`.RepoDigests` membership. PR #149 was then required because
+`collect-rocky-preparation.py` had independently reimplemented the same semantic
+fixture-child invariant and still used the obsolete singular `.Digest`
+predicate. Real run `33021568439` subsequently failed again only at the broad
+`evidence-collection` boundary, with no bounded sub-operation identifying which
+collector observation failed.
+
+This history is therefore the source record for applying the organization-wide
+`SecPal/.github/docs/evidence-architecture-contract.md` to deployment. That
+canonical companion owns the resulting pipeline-responsibility,
+invariant-ownership, representation, diagnosability, and anti-loop rules; this
+document does not redefine them. Current dependency and scheduling decisions
+remain exclusively in the native GitHub work graph; this historical record
+explains the structural omission and does not prescribe issue order.
+
 ## Post-merge evidence
 
 Repository validation cannot claim provider success. After this trusted control

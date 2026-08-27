@@ -19,6 +19,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - Follow `SecPal/.github/docs/work-graph-contract.md` as the single authority
   for work-graph, delivery, replanning, and evidence semantics. This repository
   adds only deployment-specific implementation and security constraints.
+- Follow `SecPal/.github/docs/evidence-architecture-contract.md` as the
+  authoritative companion for evidence-pipeline and external-system
+  architecture. Do not create independent generic definitions of its
+  observation, normalization, admission, assembly, invariant-ownership,
+  diagnosability, or anti-loop rules here. Deployment-specific constraints in
+  this baseline may strengthen those rules at deployment trust boundaries but
+  do not replace their canonical definitions.
 - The native GitHub graph state is authoritative. Human-readable diagrams and
   prose are explanatory only and must not duplicate native relationship or
   progress state.
@@ -78,9 +85,14 @@ Never print secret values to logs.
 
 ## Validator and evidence design
 
-- Every semantic invariant has exactly one authoritative definition.
-  Independent enforcement remains legitimate at trust boundaries when each
-  enforcement point names or demonstrably follows that owner.
+- When deployment independently enforces a canonical invariant at a cloud,
+  host, registry, or migration trust boundary, that enforcement must name the
+  canonical owner and include executable agreement evidence; it does not
+  become a second definition of the invariant.
+- Apply the canonical evidence-architecture companion before dispatching any
+  deployment-owned cloud, host, registry, migration, or conformance operation.
+  Deployment preflight must fail closed when its reachable trusted operations
+  cannot produce the required bounded semantic diagnostics.
 - Prefer standard-library, language, runtime, and platform primitives over
   hand-written equivalents. Python scope analysis uses `symtable` for this
   reason. Custom deployment-domain validation remains legitimate where no
