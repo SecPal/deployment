@@ -139,6 +139,36 @@ def validate_pure_contract(path: Path) -> None:
         or not RUNTIME_ADMISSION_OPERATIONS <= rejection_operations
     ):
         raise ArchitectureError("runtime admission semantic boundaries are collapsed")
+    runtime_helpers = {
+        operation: operation.replace("-", "_")
+        for operation in RUNTIME_ADMISSION_OPERATIONS
+    }
+    runtime_orchestrator = functions.get("admit_runtime")
+    if runtime_orchestrator is None:
+        raise ArchitectureError("runtime admission orchestrator is absent")
+    orchestrator_calls = [
+        node.func.id
+        for node in ast.walk(runtime_orchestrator)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    if sorted(orchestrator_calls) != sorted(runtime_helpers.values()):
+        raise ArchitectureError("runtime admission owners are not exactly reachable")
+    for operation, helper_name in runtime_helpers.items():
+        helper = functions.get(helper_name)
+        if helper is None:
+            raise ArchitectureError("runtime admission owner is absent")
+        helper_rejections = [
+            node.args[1].value
+            for node in ast.walk(helper)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "reject"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ]
+        if helper_rejections != [operation]:
+            raise ArchitectureError("runtime admission owner has an invalid boundary")
     for required in (
         "normalize_observations",
         "admit_facts",
@@ -147,6 +177,13 @@ def validate_pure_contract(path: Path) -> None:
     ):
         if required not in functions:
             raise ArchitectureError("explicit layered responsibility surface is absent")
+    admit_facts_calls = [
+        node.func.id
+        for node in ast.walk(functions["admit_facts"])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    if admit_facts_calls.count("admit_runtime") != 1:
+        raise ArchitectureError("runtime admission orchestrator is not reachable")
     for name, node in functions.items():
         calls = {
             call.func.id

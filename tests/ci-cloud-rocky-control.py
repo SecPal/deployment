@@ -50,6 +50,24 @@ def load_rocky_preparation_collector():
 
 
 class RockyCloudControlTests(unittest.TestCase):
+    def test_inactive_systemd_user_state_reaches_runtime_admission(self) -> None:
+        collector = load_rocky_preparation_collector()
+        observed: dict[str, object] = {}
+
+        class RecordingObserver(collector.Observer):
+            def run(self, operation, arguments, **options):
+                observed["operation"] = operation
+                observed["arguments"] = arguments
+                observed["accepted"] = options.get("accepted")
+                return 3, "inactive", ""
+
+        self.assertEqual("inactive", RecordingObserver().systemd_user_state(991))
+        self.assertEqual(collector.ObservationOperation.SYSTEMD_USER, observed["operation"])
+        self.assertEqual(
+            ["systemctl", "is-active", "user@991.service"], observed["arguments"]
+        )
+        self.assertEqual(frozenset({0, 3}), observed["accepted"])
+
     def test_package_repository_observation_uses_exact_nevra_query(self) -> None:
         collector = load_rocky_preparation_collector()
         nevra = "podman-5.6.0-12.el10_2.aarch64"

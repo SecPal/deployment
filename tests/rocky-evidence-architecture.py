@@ -161,6 +161,25 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("runtime admission", completed.stderr)
 
+    def test_architecture_gate_rejects_disconnected_runtime_owner(self) -> None:
+        source = CONTRACT.read_text(encoding="utf-8")
+        mutation = source.replace(
+            "    admit_runtime_rootless(host)\n",
+            "    # deliberately disconnected runtime owner\n",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / CONTRACT.name
+            path.write_text(mutation, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--contract", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("runtime admission", completed.stderr)
+
     def test_runtime_admission_preserves_compound_success_semantics(self) -> None:
         contract = load_contract()
         for states in itertools.product((False, True), repeat=11):
