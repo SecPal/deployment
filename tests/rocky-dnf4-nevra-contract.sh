@@ -11,7 +11,18 @@ test "$VERSION_ID" = 10.2
 test "$(uname -m)" = x86_64
 test "$(dnf4 --version | head -n 1)" = 4.20.0
 
-nevra="$(rpm -q --qf '%{NEVRA}' bash)"
+nevra="$(
+  dnf4 --quiet \
+    '--disablerepo=*' \
+    '--enablerepo=baseos,appstream,extras' \
+    repoquery \
+    --available \
+    --arch "$(uname -m)" \
+    --latest-limit 1 \
+    --nevra \
+    bash
+)"
+[[ "$nevra" =~ ^bash-[^-]+-[^-]+\.el10[^.]*\.x86_64$ ]]
 
 old_status=0
 old_error="$(mktemp)"
