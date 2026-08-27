@@ -85,9 +85,10 @@ Never print secret values to logs.
 
 ## Validator and evidence design
 
-- Every semantic invariant has exactly one authoritative definition.
-  Independent enforcement remains legitimate at trust boundaries when each
-  enforcement point names or demonstrably follows that owner.
+- When deployment independently enforces a canonical invariant at a cloud,
+  host, registry, or migration trust boundary, that enforcement must name the
+  canonical owner and include executable agreement evidence; it does not
+  become a second definition of the invariant.
 - Apply the canonical evidence-architecture companion before dispatching any
   deployment-owned cloud, host, registry, migration, or conformance operation.
   Deployment preflight must fail closed when its reachable trusted operations

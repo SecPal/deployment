@@ -136,8 +136,9 @@ This history is therefore the source record for applying the organization-wide
 `SecPal/.github/docs/evidence-architecture-contract.md` to deployment. That
 canonical companion owns the resulting pipeline-responsibility,
 invariant-ownership, representation, diagnosability, and anti-loop rules; this
-document does not redefine them. They apply before further #118 host evidence
-and are not optional follow-up hardening reserved for #119.
+document does not redefine them. Current dependency and scheduling decisions
+remain exclusively in the native GitHub work graph; this historical record
+explains the structural omission and does not prescribe issue order.
 
 ## Post-merge evidence
 

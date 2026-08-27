@@ -34,6 +34,21 @@ class WorkGraphGovernanceTests(unittest.TestCase):
                 "and evidence semantics",
                 "This repository adds only deployment-specific implementation "
                 "and security constraints",
+                "SecPal/.github/docs/evidence-architecture-contract.md",
+                "authoritative companion for evidence-pipeline and "
+                "external-system architecture",
+            )
+        )
+
+    def test_deployment_external_operations_fail_closed(self) -> None:
+        self.require_clauses(
+            (
+                "Apply the canonical evidence-architecture companion before "
+                "dispatching any deployment-owned cloud, host, registry, "
+                "migration, or conformance operation",
+                "Deployment preflight must fail closed when its reachable "
+                "trusted operations cannot produce the required bounded "
+                "semantic diagnostics",
             )
         )
 
