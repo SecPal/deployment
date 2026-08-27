@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import yaml
 from jsonschema import Draft202012Validator
@@ -49,6 +50,39 @@ def load_rocky_preparation_collector():
 
 
 class RockyCloudControlTests(unittest.TestCase):
+    def test_package_repository_observation_uses_exact_nevra_query(self) -> None:
+        collector = load_rocky_preparation_collector()
+        nevra = "podman-5.6.0-12.el10_2.aarch64"
+
+        self.assertEqual(
+            [
+                "dnf4",
+                "--quiet",
+                "--disablerepo=*",
+                "--enablerepo=baseos,appstream,extras",
+                "repoquery-nevra",
+                "--qf",
+                "%{repoid}",
+                nevra,
+            ],
+            collector.Observer.package_repository_query(nevra),
+        )
+
+        observer = collector.Observer()
+        with mock.patch.object(
+            observer,
+            "run",
+            side_effect=(
+                (0, nevra, ""),
+                (0, "appstream", ""),
+                (0, "sha256:installed", ""),
+                (0, "", ""),
+            ),
+        ) as run:
+            observed = observer.package("podman")
+        self.assertEqual(nevra, observed["nevra"])
+        self.assertEqual(nevra, run.call_args_list[1].args[1][-1])
+
     def test_rendered_rocky_startup_script_is_bounded_valid_bash(self) -> None:
         template = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
             encoding="utf-8"

@@ -157,6 +157,7 @@ required_files=(
   tests/production-state-native-lifecycle.sh
   tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
+  tests/rocky-dnf4-nevra-contract.sh
   tests/preflight-origin-contract.sh
   tests/sensitive-path-contract.sh
   tests/workflow-action-pin-contract.sh

@@ -258,11 +258,29 @@ class Observer:
                 result.append(self.text(ObservationOperation.CONTAINER_CONFIG, path, maximum=65_536))
         return result
 
+    @staticmethod
+    def package_repository_query(nevra: str) -> list[str]:
+        """Select one exact NEVRA while formatting its repository identity."""
+        return [
+            "dnf4",
+            "--quiet",
+            "--disablerepo=*",
+            "--enablerepo=baseos,appstream,extras",
+            "repoquery-nevra",
+            "--qf",
+            "%{repoid}",
+            nevra,
+        ]
+
     def package(self, name: str) -> dict[str, Any]:
         if name not in PACKAGES:
             raise ObservationError(ObservationOperation.PACKAGE_NEVRA, "subject-invalid")
         _, nevra, _ = self.run(ObservationOperation.PACKAGE_NEVRA, ["rpm", "-q", "--qf", "%{NEVRA}", name], subject=name)
-        _, repositories, _ = self.run(ObservationOperation.PACKAGE_REPOSITORY, ["dnf4", "--quiet", "--disablerepo=*", "--enablerepo=baseos,appstream,extras", "repoquery", "--qf", "%{repoid}", "--nevra", nevra], subject=name)
+        _, repositories, _ = self.run(
+            ObservationOperation.PACKAGE_REPOSITORY,
+            self.package_repository_query(nevra),
+            subject=name,
+        )
         _, installed_payload, _ = self.run(ObservationOperation.PACKAGE_INSTALLED_PAYLOAD, ["rpm", "-q", "--qf", "%{PAYLOADDIGEST}", name], subject=name)
         try:
             temporary = tempfile.TemporaryDirectory(
