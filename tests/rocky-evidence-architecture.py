@@ -108,6 +108,33 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             [VALIDATOR], check=False, capture_output=True, text=True
         )
         self.assertEqual(0, completed.returncode, completed.stderr)
+        collector = COLLECTOR.read_text(encoding="utf-8")
+        self.assertNotIn("contract.normalize_podman", collector)
+
+    def test_cloud_identity_marker_observation_requires_regular_file(self) -> None:
+        specification = importlib.util.spec_from_file_location(
+            "rocky_preparation_collector", COLLECTOR
+        )
+        if specification is None or specification.loader is None:
+            raise RuntimeError("cannot load Rocky preparation collector")
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        observer = module.Observer()
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "cloud-identity-absent"
+            marker.mkdir()
+            self.assertFalse(
+                observer.is_regular_file(
+                    module.ObservationOperation.CLOUD_IDENTITY, marker
+                )
+            )
+            marker.rmdir()
+            marker.write_text("absent\n", encoding="utf-8")
+            self.assertTrue(
+                observer.is_regular_file(
+                    module.ObservationOperation.CLOUD_IDENTITY, marker
+                )
+            )
 
     def test_architecture_gate_rejects_forbidden_pure_capabilities(self) -> None:
         source = CONTRACT.read_text(encoding="utf-8")
@@ -149,6 +176,25 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("opaque observation", completed.stderr)
 
+        nested = source.replace(
+            "        command = arguments\n",
+            "        def hidden():\n"
+            "            return subprocess.run(['uname', '-m'])\n"
+            "        command = arguments\n",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / COLLECTOR.name
+            path.write_text(nested, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--collector", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("opaque observation", completed.stderr)
+
     def test_architecture_gate_rejects_filesystem_observation_outside_owner(self) -> None:
         source = COLLECTOR.read_text(encoding="utf-8")
         mutation = source.replace(
@@ -160,6 +206,25 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / COLLECTOR.name
             path.write_text(mutation, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--collector", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("outside the Observer owner", completed.stderr)
+
+        nested = source.replace(
+            "        command = arguments\n",
+            "        def hidden():\n"
+            "            return Path('/etc/os-release').read_text()\n"
+            "        command = arguments\n",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / COLLECTOR.name
+            path.write_text(nested, encoding="utf-8")
             completed = subprocess.run(
                 [VALIDATOR, "--collector", path],
                 check=False,
@@ -216,6 +281,11 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             {"layer": "observation", "operation": "verify-package-signature", "reason": "command-failed"},
             {"layer": "observation", "operation": "query-architecture", "reason": "command-failed", "subject": "podman"},
             {**accepted, "layer": "assembly"},
+            {
+                "layer": "normalization",
+                "operation": "normalize-os-release",
+                "reason": "command-failed",
+            },
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "diagnostic.json"

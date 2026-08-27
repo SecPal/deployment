@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import symtable
 import sys
 from pathlib import Path
 
@@ -24,7 +25,7 @@ FORBIDDEN_PURE_IMPORTS = {
 }
 FORBIDDEN_PURE_CALLS = {"open", "exec", "eval", "compile", "__import__"}
 COLLECTOR_FILESYSTEM_CAPABILITIES = {
-    "chmod", "exists", "glob", "read_bytes", "read_text", "replace",
+    "chmod", "exists", "glob", "is_file", "read_bytes", "read_text", "replace",
     "resolve", "unlink", "write_bytes", "write_text",
 }
 
@@ -130,6 +131,9 @@ def validate_diagnostic_contract(contract_path: Path, collector_path: Path) -> N
         schema_operations = set(diagnostic["operation"]["enum"])
         schema_reasons = set(diagnostic["reason"]["enum"])
         layer_rules = schema["properties"]["collection_diagnostic"]["allOf"]
+        reason_groups = schema["properties"]["collection_diagnostic"][
+            "x-secpal-operation-reason-groups"
+        ]
         layered_operation_list = [
             operation
             for rule in layer_rules
@@ -157,6 +161,22 @@ def validate_diagnostic_contract(contract_path: Path, collector_path: Path) -> N
         raise ArchitectureError(f"diagnostic operations missing from closed schema: {','.join(missing)}")
     if layer_operations != schema_operations or len(layered_operation_list) != len(layer_operations):
         raise ArchitectureError("every diagnostic operation must have exactly one layer contract")
+    reason_operation_list = [
+        operation
+        for group in reason_groups
+        for operation in group["operations"]
+    ]
+    if (
+        set(reason_operation_list) != schema_operations
+        or len(reason_operation_list) != len(schema_operations)
+        or any(
+            not set(group["reasons"]) <= schema_reasons
+            for group in reason_groups
+        )
+    ):
+        raise ArchitectureError(
+            "every diagnostic operation must have exactly one closed reason contract"
+        )
     required_reasons = {
         "command-failed", "observation-failed", "observation-limit-exceeded",
         "representation-invalid", "subject-invalid", "wrong-type",
@@ -167,25 +187,66 @@ def validate_diagnostic_contract(contract_path: Path, collector_path: Path) -> N
         raise ArchitectureError("diagnostic reasons are incomplete")
 
 
-def enclosing_class(tree: ast.Module, target: ast.AST) -> str | None:
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and any(child is target for child in ast.walk(node)):
-            return node.name
-    return None
-
-
 def enclosing_function(tree: ast.Module, target: ast.AST) -> str | None:
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
-            child is target for child in ast.walk(node)
-        ):
-            return node.name
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    current = parents.get(target)
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return current.name
+        current = parents.get(current)
     return None
+
+
+def is_direct_observer_method(tree: ast.Module, target: ast.AST) -> bool:
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    current = parents.get(target)
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            owner = parents.get(current)
+            return isinstance(owner, ast.ClassDef) and owner.name == "Observer"
+        current = parents.get(current)
+    return False
+
+
+def validate_subprocess_scopes(source: str, path: Path) -> None:
+    try:
+        root = symtable.symtable(source, str(path), "exec")
+    except SyntaxError as error:
+        raise ArchitectureError("cannot build collector scope table") from error
+
+    def visit(table: symtable.SymbolTable, parent: symtable.SymbolTable | None) -> None:
+        if "subprocess" in table.get_identifiers():
+            symbol = table.lookup("subprocess")
+            if symbol.is_referenced():
+                allowed = (
+                    table.get_type() == symtable.SymbolTableType.FUNCTION
+                    and table.get_name() == "run"
+                    and parent is not None
+                    and parent.get_type() == symtable.SymbolTableType.CLASS
+                    and parent.get_name() == "Observer"
+                )
+                if not allowed:
+                    raise ArchitectureError(
+                        "opaque observation lacks a closed semantic operation"
+                    )
+        for child in table.get_children():
+            visit(child, table)
+
+    visit(root, None)
 
 
 def validate_collector(path: Path) -> None:
     tree = parse(path)
     source = path.read_text(encoding="utf-8")
+    validate_subprocess_scopes(source, path)
     if not {"observation", "orchestration"} <= responsibility_set(tree):
         raise ArchitectureError("collector responsibility declaration is invalid")
     if "COHERENT_EXTERNAL_CONTRACT = \"rocky-preparation-evidence-v1\"" not in source:
@@ -200,7 +261,7 @@ def validate_collector(path: Path) -> None:
         if (
             isinstance(node.func, ast.Attribute)
             and node.func.attr in COLLECTOR_FILESYSTEM_CAPABILITIES
-            and enclosing_class(tree, node) != "Observer"
+            and not is_direct_observer_method(tree, node)
         ):
             if node.func.attr == "resolve" and enclosing_function(tree, node) is None:
                 continue
@@ -209,11 +270,16 @@ def validate_collector(path: Path) -> None:
             raise ArchitectureError(
                 "filesystem observation exists outside the Observer owner"
             )
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "contract"
+            and node.func.attr.startswith("normalize_")
+            and node.func.attr != "normalize_and_admit"
+        ):
+            raise ArchitectureError("collector performs normalization before handoff")
         if isinstance(node.func, ast.Attribute) and node.func.attr == "run":
             owner = node.func.value
-            if isinstance(owner, ast.Name) and owner.id == "subprocess":
-                if enclosing_class(tree, node) != "Observer" or enclosing_function(tree, node) != "run":
-                    raise ArchitectureError("opaque observation lacks a closed semantic operation")
             if isinstance(owner, ast.Name) and owner.id == "observer":
                 if not node.args or not isinstance(node.args[0], ast.Attribute) or not isinstance(node.args[0].value, ast.Name) or node.args[0].value.id != "ObservationOperation":
                     raise ArchitectureError("opaque observation lacks a closed semantic operation")

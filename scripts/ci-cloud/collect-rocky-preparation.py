@@ -181,9 +181,32 @@ class Observer:
         except OSError as error:
             raise ObservationError(operation, "observation-failed") from error
 
+    def podman_graphroot(self, raw: str) -> str:
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise ObservationError(
+                ObservationOperation.PODMAN_INFO, "representation-invalid"
+            ) from error
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get("store"), dict)
+            or not isinstance(value["store"].get("graphRoot"), str)
+        ):
+            raise ObservationError(
+                ObservationOperation.PODMAN_INFO, "representation-invalid"
+            )
+        return value["store"]["graphRoot"]
+
     def exists(self, operation: ObservationOperation, path: Path) -> bool:
         try:
             return path.exists()
+        except OSError as error:
+            raise ObservationError(operation, "observation-failed") from error
+
+    def is_regular_file(self, operation: ObservationOperation, path: Path) -> bool:
+        try:
+            return path.is_file()
         except OSError as error:
             raise ObservationError(operation, "observation-failed") from error
 
@@ -300,11 +323,7 @@ def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
     _, sestatus, _ = observer.run(ObservationOperation.SELINUX_POLICY, ["sestatus"])
     _, repositories, _ = observer.run(ObservationOperation.REPOSITORIES, ["dnf4", "--quiet", "repolist", "--enabled"])
     _, podman_info, _ = observer.run(ObservationOperation.PODMAN_INFO, ["podman", "info", "--format", "json"], user=account["name"])
-    graphroot_raw = contract.normalize_podman(podman_info)["store"].get("graphRoot")
-    if not isinstance(graphroot_raw, str):
-        raise contract.ContractError(
-            "normalization", "normalize-podman-info", "representation-invalid"
-        )
+    graphroot_raw = observer.podman_graphroot(podman_info)
     _, fixture_repo_digests, _ = observer.run(ObservationOperation.FIXTURE_REPO_DIGESTS, ["podman", "image", "inspect", "--format", "{{json .RepoDigests}}", FIXTURE], user=account["name"], maximum=FIXTURE_DIGEST_METADATA_MAX_BYTES)
     _, podman_version, _ = observer.run(ObservationOperation.PODMAN_VERSION, ["podman", "--version"])
     _, cgroup_filesystem, _ = observer.run(ObservationOperation.CGROUP_FILESYSTEM, ["stat", "-fc", "%T", "/sys/fs/cgroup"])
@@ -335,7 +354,7 @@ def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
         "quadlet_status": observer.quadlet_status(account),
         "linger": observer.exists(ObservationOperation.LINGER, Path(f"/var/lib/systemd/linger/{account['name']}")),
         "fixture_present": observer.run(ObservationOperation.FIXTURE_PRESENT, ["podman", "image", "exists", FIXTURE], user=account["name"])[0] == 0,
-        "cloud_identity_marker": observer.exists(ObservationOperation.CLOUD_IDENTITY, Path("/var/lib/secpal-rocky/cloud-identity-absent")),
+        "cloud_identity_marker": observer.is_regular_file(ObservationOperation.CLOUD_IDENTITY, Path("/var/lib/secpal-rocky/cloud-identity-absent")),
         "google_credentials_present": observer.environment_present("GOOGLE_APPLICATION_CREDENTIALS"),
     }
     return contract.normalize_and_admit(raw, vars(options))

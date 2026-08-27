@@ -258,7 +258,25 @@ def validate_collection_diagnostic(path: Path) -> None:
 
 def validate_collection_diagnostic_semantics(diagnostic: dict[str, Any]) -> None:
     operation = diagnostic.get("operation")
+    reason = diagnostic.get("reason")
     subject = diagnostic.get("subject")
+    schema = load_object(SCHEMAS["preparation-failure"])
+    reason_groups = schema["properties"]["collection_diagnostic"].get(
+        "x-secpal-operation-reason-groups"
+    )
+    if not isinstance(reason_groups, list):
+        raise ControlError("collection diagnostic reason contract is unavailable")
+    matching_groups = [
+        group
+        for group in reason_groups
+        if isinstance(group, dict)
+        and isinstance(group.get("operations"), list)
+        and operation in group["operations"]
+    ]
+    if len(matching_groups) != 1 or reason not in matching_groups[0].get(
+        "reasons", []
+    ):
+        raise ControlError("collection diagnostic reason contradicts its operation")
     if operation in PACKAGE_COLLECTION_OPERATIONS:
         preparation_schema = load_object(SCHEMAS["preparation"])
         package_branches = preparation_schema["properties"]["packages"]["allOf"]

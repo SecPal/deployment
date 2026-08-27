@@ -282,6 +282,161 @@
           ]
         }
       },
+      "x-secpal-operation-reason-groups": [
+        {
+          "operations": [
+            "query-architecture",
+            "query-dnf-version",
+            "query-releasever",
+            "query-selinux-mode",
+            "query-selinux-enabled",
+            "query-selinux-policy",
+            "query-enabled-repositories",
+            "query-podman-info",
+            "inspect-fixture-repo-digests",
+            "query-update-unit",
+            "query-podman-version",
+            "query-cgroup-filesystem",
+            "query-systemd-user",
+            "query-podman-socket",
+            "query-sudo-authority",
+            "query-quadlet-authority",
+            "verify-fixture-present",
+            "query-package-nevra",
+            "resolve-package-repository",
+            "query-installed-payload-digest",
+            "download-official-package",
+            "inspect-official-package-payload",
+            "verify-package-signature",
+            "verify-rocky-signing-key"
+          ],
+          "reasons": [
+            "command-failed",
+            "observation-limit-exceeded",
+            "representation-invalid"
+          ]
+        },
+        {
+          "operations": [
+            "read-os-release",
+            "read-subuid",
+            "read-subgid",
+            "read-boot-id",
+            "read-memory-info",
+            "read-container-config"
+          ],
+          "reasons": [
+            "observation-failed",
+            "observation-limit-exceeded",
+            "representation-invalid"
+          ]
+        },
+        {
+          "operations": [
+            "resolve-service-account",
+            "query-effective-identities",
+            "query-supplementary-groups",
+            "resolve-rootless-graphroot",
+            "resolve-service-account-home",
+            "query-root-filesystem",
+            "query-cpu-count",
+            "query-podman-socket-path",
+            "query-linger",
+            "query-cloud-identity-marker",
+            "write-evidence",
+            "write-collection-diagnostic"
+          ],
+          "reasons": ["observation-failed"]
+        },
+        {
+          "operations": ["query-environment-authority"],
+          "reasons": ["subject-invalid"]
+        },
+        {
+          "operations": ["normalize-os-release"],
+          "reasons": ["duplicate-observation", "representation-invalid"]
+        },
+        {
+          "operations": [
+            "normalize-repositories",
+            "normalize-subuid-population",
+            "normalize-subgid-population",
+            "normalize-memory",
+            "normalize-service-account",
+            "normalize-unit-status",
+            "normalize-sudo-authority",
+            "normalize-quadlet-authority"
+          ],
+          "reasons": ["representation-invalid"]
+        },
+        {
+          "operations": ["normalize-subuid", "normalize-subgid"],
+          "reasons": ["cardinality-invalid", "representation-invalid"]
+        },
+        {
+          "operations": ["normalize-fixture-repo-digests"],
+          "reasons": [
+            "cardinality-invalid",
+            "duplicate-observation",
+            "observation-limit-exceeded",
+            "representation-invalid",
+            "wrong-type"
+          ]
+        },
+        {
+          "operations": ["normalize-podman-info"],
+          "reasons": [
+            "observation-limit-exceeded",
+            "representation-invalid",
+            "wrong-type"
+          ]
+        },
+        {
+          "operations": ["normalize-container-label-config"],
+          "reasons": ["observation-limit-exceeded"]
+        },
+        {
+          "operations": ["normalize-package-evidence"],
+          "reasons": ["representation-invalid", "subject-invalid", "wrong-type"]
+        },
+        {
+          "operations": ["admit-package-repository", "admit-package-payload"],
+          "reasons": ["cardinality-invalid"]
+        },
+        {
+          "operations": [
+            "admit-fixture-arm64-child",
+            "validate-fixture-evidence",
+            "admit-package-signature",
+            "admit-package-identity",
+            "admit-immutable-shas",
+            "admit-provider-image",
+            "admit-guest-identity",
+            "admit-update-contract",
+            "admit-selinux",
+            "admit-repositories",
+            "admit-subids",
+            "admit-rootless-graphroot",
+            "admit-reboot-persistence",
+            "admit-package-set",
+            "admit-run-identity",
+            "admit-fixture-present",
+            "admit-hardware",
+            "admit-runtime",
+            "admit-service-account",
+            "admit-cloud-identity"
+          ],
+          "reasons": ["invariant-failed"]
+        },
+        {
+          "operations": ["assemble-evidence"],
+          "reasons": ["internal-error"]
+        },
+        {
+          "operations": ["validate-collector-diagnostic"],
+          "reasons": ["postcondition-failed"]
+        }
+      ],
       "allOf": [
         {
           "if": {
