@@ -18,6 +18,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dnf4-exact-nevra:
+    name: DNF4 Exact NEVRA Contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Exercise Rocky 10.2 DNF4 semantics
+        run: >-
+          podman run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace:ro"
+          --workdir /workspace
+          docker.io/rockylinux/rockylinux@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
+          bash tests/rocky-dnf4-nevra-contract.sh
+
   architecture-gate:
     name: Architecture Gate (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
