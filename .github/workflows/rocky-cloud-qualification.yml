@@ -66,6 +66,11 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
+      - name: Set up reviewed architecture-gate Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.13"
+
       - name: Validate Rocky evidence architecture before provider authority
         run: scripts/validate-rocky-evidence-architecture.py
 
