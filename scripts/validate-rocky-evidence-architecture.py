@@ -217,20 +217,42 @@ def is_direct_observer_method(tree: ast.Module, target: ast.AST) -> bool:
 
 
 def validate_subprocess_scopes(source: str, path: Path) -> None:
+    tree = parse(path)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(
+                alias.name == "subprocess" and alias.asname is not None
+                for alias in node.names
+            ):
+                raise ArchitectureError(
+                    "opaque observation uses an aliased subprocess import"
+                )
+        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            raise ArchitectureError(
+                "opaque observation uses a subprocess from-import"
+            )
+
     try:
         root = symtable.symtable(source, str(path), "exec")
     except SyntaxError as error:
         raise ArchitectureError("cannot build collector scope table") from error
+
+    def table_kind(table: symtable.SymbolTable) -> str:
+        kind = table.get_type()
+        value = getattr(kind, "value", kind)
+        if not isinstance(value, str):
+            raise ArchitectureError("unknown Python symbol-table scope kind")
+        return value
 
     def visit(table: symtable.SymbolTable, parent: symtable.SymbolTable | None) -> None:
         if "subprocess" in table.get_identifiers():
             symbol = table.lookup("subprocess")
             if symbol.is_referenced():
                 allowed = (
-                    table.get_type() == symtable.SymbolTableType.FUNCTION
+                    table_kind(table) == "function"
                     and table.get_name() == "run"
                     and parent is not None
-                    and parent.get_type() == symtable.SymbolTableType.CLASS
+                    and table_kind(parent) == "class"
                     and parent.get_name() == "Observer"
                 )
                 if not allowed:
@@ -241,6 +263,35 @@ def validate_subprocess_scopes(source: str, path: Path) -> None:
             visit(child, table)
 
     visit(root, None)
+
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    hidden_scopes = (
+        ast.Lambda,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+    )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Name) or node.id != "subprocess":
+            continue
+        if not is_direct_observer_method(tree, node):
+            raise ArchitectureError(
+                "opaque observation exists outside direct Observer.run scope"
+            )
+        current = parents.get(node)
+        while current is not None and not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            if isinstance(current, hidden_scopes):
+                raise ArchitectureError(
+                    "opaque observation exists in a hidden expression scope"
+                )
+            current = parents.get(current)
 
 
 def validate_collector(path: Path) -> None:

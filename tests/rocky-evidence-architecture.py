@@ -157,43 +157,89 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
 
     def test_architecture_gate_rejects_opaque_observation(self) -> None:
         source = COLLECTOR.read_text(encoding="utf-8")
-        mutation = source.replace(
-            "    def run(\n",
-            "    def run_opaque(self):\n"
-            "        return subprocess.run(['uname', '-m'])\n\n"
-            "    def run(\n",
-            1,
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / COLLECTOR.name
-            path.write_text(mutation, encoding="utf-8")
-            completed = subprocess.run(
-                [VALIDATOR, "--collector", path],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        self.assertNotEqual(0, completed.returncode)
-        self.assertIn("opaque observation", completed.stderr)
-
-        nested = source.replace(
-            "        command = arguments\n",
-            "        def hidden():\n"
-            "            return subprocess.run(['uname', '-m'])\n"
-            "        command = arguments\n",
-            1,
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / COLLECTOR.name
-            path.write_text(nested, encoding="utf-8")
-            completed = subprocess.run(
-                [VALIDATOR, "--collector", path],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        self.assertNotEqual(0, completed.returncode)
-        self.assertIn("opaque observation", completed.stderr)
+        mutations = {
+            "module": source.replace(
+                "import subprocess\n", "import subprocess\nsubprocess.run(['uname', '-m'])\n", 1
+            ),
+            "another-observer-method": source.replace(
+                "    def run(\n",
+                "    def run_opaque(self):\n"
+                "        return subprocess.run(['uname', '-m'])\n\n"
+                "    def run(\n",
+                1,
+            ),
+            "another-class": source.replace(
+                "class Observer:\n",
+                "class OpaqueObserver:\n"
+                "    def run(self):\n"
+                "        return subprocess.run(['uname', '-m'])\n\n"
+                "class Observer:\n",
+                1,
+            ),
+            "nested-function": source.replace(
+                "        command = arguments\n",
+                "        def hidden():\n"
+                "            return subprocess.run(['uname', '-m'])\n"
+                "        command = arguments\n",
+                1,
+            ),
+            "nested-lambda": source.replace(
+                "        command = arguments\n",
+                "        hidden = lambda: subprocess.run(['uname', '-m'])\n"
+                "        command = arguments\n",
+                1,
+            ),
+            "nested-comprehension": source.replace(
+                "        command = arguments\n",
+                "        hidden = [subprocess.run(['uname', '-m']) for _ in range(1)]\n"
+                "        command = arguments\n",
+                1,
+            ),
+            "aliased-import": source.replace(
+                "import subprocess\n",
+                "import subprocess as sp\nsp.run(['uname', '-m'])\n",
+                1,
+            ),
+            "from-import": source.replace(
+                "import subprocess\n",
+                "from subprocess import run\nrun(['uname', '-m'])\n",
+                1,
+            ),
+            "nested-default": source.replace(
+                "        command = arguments\n",
+                "        def hidden(value=subprocess.run(['uname', '-m'])):\n"
+                "            return value\n"
+                "        command = arguments\n",
+                1,
+            ),
+            "nested-decorator": source.replace(
+                "        command = arguments\n",
+                "        @subprocess.run(['uname', '-m'])\n"
+                "        def hidden():\n"
+                "            return None\n"
+                "        command = arguments\n",
+                1,
+            ),
+            "nested-annotation": source.replace(
+                "        command = arguments\n",
+                "        def hidden(value: subprocess.run(['uname', '-m'])):\n"
+                "            return value\n"
+                "        command = arguments\n",
+                1,
+            ),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / COLLECTOR.name
+                path.write_text(mutation, encoding="utf-8")
+                completed = subprocess.run(
+                    [VALIDATOR, "--collector", path],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("opaque observation", completed.stderr)
 
     def test_architecture_gate_rejects_filesystem_observation_outside_owner(self) -> None:
         source = COLLECTOR.read_text(encoding="utf-8")
@@ -479,6 +525,14 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         validate = workflow.index("jobs:\n  validate:")
         discover = workflow.index("\n  discover:", validate)
         validation_job = workflow[validate:discover]
+        checkout = validation_job.index("Checkout trusted architecture gate from main")
+        setup = validation_job.index("Set up reviewed architecture-gate Python")
+        architecture = validation_job.index("Validate Rocky evidence architecture")
+        closed_inputs = validation_job.index("Validate immutable inputs")
+        self.assertLess(checkout, setup)
+        self.assertLess(setup, architecture)
+        self.assertLess(architecture, closed_inputs)
+        self.assertIn('python-version: "3.12.13"', validation_job)
         self.assertIn("validate-rocky-evidence-architecture.py", validation_job)
         self.assertNotIn("id-token: write", validation_job)
         self.assertNotIn("google-github-actions/auth", validation_job)
