@@ -10,6 +10,7 @@ readonly source_failure="$evidence_root/target-source-failure.json"
 readonly qualification_failure="$evidence_root/target-qualification-failure.json"
 readonly qualification_trace="$evidence_root/target-qualification.trace"
 readonly qualification_marker="$evidence_root/target-qualification.marker"
+readonly reload_adjacency="$evidence_root/quadlet-reload-adjacency.json"
 
 if [[ "$#" -ne 4 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
   ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ]]; then
@@ -53,7 +54,8 @@ write_source_failure() {
     validate-target-source-failure "$source_failure" --target-sha "$target_sha"
 }
 
-rm -f -- "$source_failure" "$qualification_failure" "$qualification_trace" "$qualification_marker"
+rm -f -- "$source_failure" "$qualification_failure" "$qualification_trace" \
+  "$qualification_marker" "$reload_adjacency"
 if ! getent ahostsv4 github.com >/dev/null 2>&1; then
   write_source_failure resolve-target-source command-failed 1
   exit 81
@@ -85,6 +87,26 @@ fi
 
 stdout="$evidence_root/qualification.stdout"
 audit_baseline="$(date -u '+%m/%d/%Y %H:%M:%S')"
+journal_baseline="$(date -u '+%Y-%m-%d %H:%M:%S.%6N UTC')"
+boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+[[ "$boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+reload_event="$work_root/quadlet-reload.event"
+reload_ack="$work_root/quadlet-reload.ack"
+observer_pid=""
+if [[ "$target_sha" == d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6 ]] &&
+  [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" == \
+    ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53 ]]; then
+  mkfifo -m 0600 "$reload_event" "$reload_ack"
+  /opt/secpal-control/scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py \
+    --event "$reload_event" --ack "$reload_ack" --output "$reload_adjacency" \
+    --target-sha "$target_sha" --control-sha "$control_sha" \
+    --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
+    --boot-id "$boot_id" --journal-baseline "$journal_baseline" \
+    --audit-baseline "$audit_baseline" &
+  observer_pid=$!
+  exec 4<>"$reload_event"
+  exec 5<>"$reload_ack"
+fi
 set +e
 (
   ulimit -f 128
@@ -95,6 +117,11 @@ set +e
     3>"$qualification_trace"
 )
 status=$?
+if [[ -n "$observer_pid" ]]; then
+  exec 4>&-
+  exec 5<&-
+  wait "$observer_pid" >/dev/null 2>&1
+fi
 set -e
 stdout_size="$(stat -c %s "$stdout")"
 trace_size="$(stat -c %s "$qualification_trace")"
@@ -109,7 +136,8 @@ if [[ "$status" -ne 0 ]]; then
     --target-sha "$target_sha" --control-sha "$control_sha" \
     --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
     --harness "$work_root/scripts/qualify-production-host.sh" \
-    --stdout "$stdout" --trace "$qualification_trace" --exit-status "$status" \
+    --stdout "$stdout" --trace "$qualification_trace" \
+    --reload-adjacency "$reload_adjacency" --exit-status "$status" \
     "${representation_option[@]}" \
     --output "$qualification_failure"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \

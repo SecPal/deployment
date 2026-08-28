@@ -18,8 +18,9 @@ EXPECTED_TARGET_SHA = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
 EXPECTED_HARNESS_SHA256 = "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"
 MAX_STDOUT_BYTES = 65_536
 MAX_TRACE_BYTES = 4_096
-MAX_ARTIFACT_BYTES = 2_048
+MAX_ARTIFACT_BYTES = 4_096
 MAX_CAPTURE_FILE_BYTES = 65_536
+MAX_ADJACENCY_BYTES = 4_096
 MAX_TRACE_FRAMES = 8
 MAX_TRACE_LINE = 9_999
 
@@ -141,6 +142,54 @@ MARKER_PATTERN = re.compile(
 )
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,19}$")
+BOOT_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+SAFE_BASENAME = re.compile(r"^[A-Za-z0-9_.@+-]{1,128}$")
+SELINUX_TYPE = re.compile(r"^[a-zA-Z0-9_]{1,64}$")
+
+ADJACENCY_KEYS = frozenset(
+    {
+        "schema_version",
+        "target_sha",
+        "trusted_control_sha",
+        "qualification_run_id",
+        "qualification_run_attempt",
+        "boot_id",
+        "failure_status",
+        "failure_event_sha256",
+        "captured_before_cleanup",
+        "capture_monotonic_ns",
+        "manager_active_after_reload_failure",
+        "bus_available_after_reload_failure",
+        "control_reachable_after_reload_failure",
+        "quadlet_input",
+        "podman_generator_executed",
+        "podman_generator_exit_status",
+        "podman_generator_accepted_actual_input",
+        "generator_failures",
+        "generator_failure_ambiguous",
+        "selinux_avc_observed",
+        "selinux_avc",
+        "selinux_avc_ambiguous",
+    }
+)
+INPUT_KEYS = frozenset(
+    {
+        "match_count",
+        "present",
+        "regular_file",
+        "not_symlink",
+        "owner_uid",
+        "owner_gid",
+        "mode",
+        "size",
+        "sha256",
+    }
+)
+AVC_KEYS = frozenset(
+    {"source_type", "target_type", "object_class", "denied_permission"}
+)
 
 
 def operation_for_line(line: int) -> str | None:
@@ -223,6 +272,304 @@ def classify_failure(
     return "qualification-harness", "unclassified-target-failure"
 
 
+def unavailable_daemon_reload_adjacency() -> dict[str, object]:
+    return {
+        "classification": "diagnostic-unavailable",
+        "capture_complete": False,
+        "captured_before_cleanup": False,
+        "boot_id": None,
+        "manager_active_after_reload_failure": None,
+        "bus_available_after_reload_failure": None,
+        "control_reachable_after_reload_failure": None,
+        "quadlet_input_admitted": False,
+        "quadlet_input": None,
+        "podman_generator_executed": False,
+        "podman_generator_exit_status": None,
+        "podman_generator_accepted_actual_input": False,
+        "generator_failure_observed": False,
+        "generator_failures": [],
+        "generator_failure_ambiguous": True,
+        "selinux_avc_observed": False,
+        "selinux_avc": None,
+        "selinux_avc_ambiguous": True,
+    }
+
+
+def _closed_boolean(document: dict[str, object], name: str) -> bool:
+    value = document.get(name)
+    if type(value) is not bool:
+        raise ValueError(f"{name} is not a closed boolean")
+    return value
+
+
+def _admitted_input(value: object) -> tuple[dict[str, object], bool]:
+    if not isinstance(value, dict) or set(value) != INPUT_KEYS:
+        raise ValueError("Quadlet input observation is not closed")
+    match_count = value["match_count"]
+    if type(match_count) is not int or not 0 <= match_count <= 2:
+        raise ValueError("Quadlet input count is outside its bound")
+    present = _closed_boolean(value, "present")
+    regular = _closed_boolean(value, "regular_file")
+    not_symlink = _closed_boolean(value, "not_symlink")
+    if present != (match_count == 1):
+        raise ValueError("Quadlet input presence contradicts its count")
+    for name in ("owner_uid", "owner_gid"):
+        item = value[name]
+        if item is not None and (type(item) is not int or not 0 <= item <= 2**31 - 1):
+            raise ValueError(f"Quadlet input {name} is outside its bound")
+    mode = value["mode"]
+    if mode is not None and re.fullmatch(r"[0-7]{4}", str(mode)) is None:
+        raise ValueError("Quadlet input mode is malformed")
+    size = value["size"]
+    if size is not None and (type(size) is not int or not 0 <= size <= 4_097):
+        raise ValueError("Quadlet input size is outside its bound")
+    digest = value["sha256"]
+    if digest is not None and re.fullmatch(r"[0-9a-f]{64}", str(digest)) is None:
+        raise ValueError("Quadlet input digest is malformed")
+    readable = (
+        regular
+        and not_symlink
+        and size is not None
+        and size <= 4_096
+        and digest is not None
+    )
+    admitted = (
+        present
+        and readable
+        and value["owner_uid"] == 0
+        and value["owner_gid"] == 0
+        and mode == "0644"
+    )
+    return value, admitted
+
+
+def _admitted_generator_failures(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) > 3:
+        raise ValueError("generator failures are outside their count bound")
+    failures: list[dict[str, object]] = []
+    for failure in value:
+        if not isinstance(failure, dict) or set(failure) != {"basename", "exit_status"}:
+            raise ValueError("generator failure is not closed")
+        basename = failure["basename"]
+        status = failure["exit_status"]
+        if (
+            not isinstance(basename, str)
+            or SAFE_BASENAME.fullmatch(basename) is None
+            or type(status) is not int
+            or not 1 <= status <= 255
+            or failure in failures
+        ):
+            raise ValueError("generator failure is malformed or duplicated")
+        failures.append(failure)
+    return failures
+
+
+def _admitted_avc(value: object, observed: bool) -> dict[str, str] | None:
+    if value is None:
+        if observed:
+            raise ValueError("observed SELinux denial lacks closed fields")
+        return None
+    if not observed or not isinstance(value, dict) or set(value) != AVC_KEYS:
+        raise ValueError("SELinux adjacency is inconsistent")
+    for name, item in value.items():
+        if not isinstance(item, str) or SELINUX_TYPE.fullmatch(item) is None:
+            raise ValueError(f"SELinux adjacency {name} is malformed")
+    return value
+
+
+def daemon_reload_classification(
+    *,
+    manager_active: bool,
+    bus_available: bool,
+    control_reachable: bool,
+    input_admitted: bool,
+    generator_executed: bool,
+    generator_accepted: bool,
+    failures: list[dict[str, object]],
+    generator_ambiguous: bool,
+    avc_observed: bool,
+    avc_ambiguous: bool,
+) -> str:
+    if not (manager_active and bus_available and control_reachable):
+        return "manager-continuity-lost"
+    if not input_admitted:
+        return "target-input-invalid"
+    if not generator_executed:
+        return "diagnostic-unavailable"
+    if not generator_accepted:
+        return "podman-generator-rejected"
+    if generator_ambiguous or any(
+        failure["basename"] == "podman-system-generator" for failure in failures
+    ):
+        return "diagnostic-unavailable"
+    if failures:
+        return "other-generator-failed"
+    if avc_ambiguous:
+        return "diagnostic-unavailable"
+    if avc_observed:
+        return "selinux-reload-denied"
+    return "manager-reload-transaction-failed"
+
+
+def admit_daemon_reload_adjacency(
+    observation: object, expected: dict[str, object]
+) -> dict[str, object]:
+    """Purely admit one failure-time observation under the d892 contract."""
+    unavailable = unavailable_daemon_reload_adjacency()
+    try:
+        if not isinstance(observation, dict) or set(observation) != ADJACENCY_KEYS:
+            raise ValueError("daemon-reload observation is not closed")
+        if observation["schema_version"] != 1:
+            raise ValueError("daemon-reload observation version is unsupported")
+        for name in (
+            "target_sha",
+            "trusted_control_sha",
+            "qualification_run_id",
+            "qualification_run_attempt",
+            "failure_status",
+        ):
+            if observation[name] != expected[name]:
+                raise ValueError("daemon-reload observation binding disagrees")
+        if BOOT_ID.fullmatch(str(observation["boot_id"])) is None:
+            raise ValueError("daemon-reload boot identity is malformed")
+        if re.fullmatch(r"[0-9a-f]{64}", str(observation["failure_event_sha256"])) is None:
+            raise ValueError("daemon-reload event digest is malformed")
+        if (
+            type(observation["capture_monotonic_ns"]) is not int
+            or observation["capture_monotonic_ns"] <= 0
+            or not _closed_boolean(observation, "captured_before_cleanup")
+        ):
+            raise ValueError("daemon-reload capture is not failure-time bound")
+        manager_active = _closed_boolean(
+            observation, "manager_active_after_reload_failure"
+        )
+        bus_available = _closed_boolean(
+            observation, "bus_available_after_reload_failure"
+        )
+        control_reachable = _closed_boolean(
+            observation, "control_reachable_after_reload_failure"
+        )
+        quadlet_input, input_admitted = _admitted_input(observation["quadlet_input"])
+        generator_executed = _closed_boolean(observation, "podman_generator_executed")
+        generator_accepted = _closed_boolean(
+            observation, "podman_generator_accepted_actual_input"
+        )
+        generator_status = observation["podman_generator_exit_status"]
+        if generator_status is not None and (
+            type(generator_status) is not int or not 0 <= generator_status <= 255
+        ):
+            raise ValueError("Podman generator status is outside its bound")
+        if (
+            generator_executed != (generator_status is not None)
+            or generator_accepted != (generator_status == 0)
+        ):
+            raise ValueError("Podman generator observation is inconsistent")
+        failures = _admitted_generator_failures(observation["generator_failures"])
+        generator_ambiguous = _closed_boolean(
+            observation, "generator_failure_ambiguous"
+        )
+        avc_observed = _closed_boolean(observation, "selinux_avc_observed")
+        avc_ambiguous = _closed_boolean(observation, "selinux_avc_ambiguous")
+        avc = _admitted_avc(observation["selinux_avc"], avc_observed)
+
+        classification = daemon_reload_classification(
+            manager_active=manager_active,
+            bus_available=bus_available,
+            control_reachable=control_reachable,
+            input_admitted=input_admitted,
+            generator_executed=generator_executed,
+            generator_accepted=generator_accepted,
+            failures=failures,
+            generator_ambiguous=generator_ambiguous,
+            avc_observed=avc_observed,
+            avc_ambiguous=avc_ambiguous,
+        )
+
+        return {
+            "classification": classification,
+            "capture_complete": True,
+            "captured_before_cleanup": True,
+            "boot_id": observation["boot_id"],
+            "manager_active_after_reload_failure": manager_active,
+            "bus_available_after_reload_failure": bus_available,
+            "control_reachable_after_reload_failure": control_reachable,
+            "quadlet_input_admitted": input_admitted,
+            "quadlet_input": quadlet_input,
+            "podman_generator_executed": generator_executed,
+            "podman_generator_exit_status": generator_status,
+            "podman_generator_accepted_actual_input": generator_accepted,
+            "generator_failure_observed": bool(failures),
+            "generator_failures": failures,
+            "generator_failure_ambiguous": generator_ambiguous,
+            "selinux_avc_observed": avc_observed,
+            "selinux_avc": avc,
+            "selinux_avc_ambiguous": avc_ambiguous,
+        }
+    except (KeyError, TypeError, ValueError):
+        return unavailable
+
+
+def validate_admitted_daemon_reload_adjacency(document: object) -> None:
+    """Reject a final adjacency whose classification contradicts its facts."""
+    if document == unavailable_daemon_reload_adjacency():
+        return
+    if not isinstance(document, dict):
+        raise ValueError("admitted daemon-reload adjacency is not an object")
+    try:
+        if (
+            document["capture_complete"] is not True
+            or document["captured_before_cleanup"] is not True
+        ):
+            raise ValueError("admitted daemon-reload capture is incomplete")
+        if BOOT_ID.fullmatch(str(document["boot_id"])) is None:
+            raise ValueError("admitted daemon-reload boot identity is malformed")
+        manager_active = _closed_boolean(
+            document, "manager_active_after_reload_failure"
+        )
+        bus_available = _closed_boolean(document, "bus_available_after_reload_failure")
+        control_reachable = _closed_boolean(
+            document, "control_reachable_after_reload_failure"
+        )
+        _, input_admitted = _admitted_input(document["quadlet_input"])
+        if document["quadlet_input_admitted"] is not input_admitted:
+            raise ValueError("admitted Quadlet input decision contradicts its facts")
+        generator_executed = _closed_boolean(document, "podman_generator_executed")
+        generator_accepted = _closed_boolean(
+            document, "podman_generator_accepted_actual_input"
+        )
+        generator_status = document["podman_generator_exit_status"]
+        if (
+            generator_executed != (generator_status is not None)
+            or generator_accepted != (generator_status == 0)
+        ):
+            raise ValueError("admitted Podman generator facts are inconsistent")
+        failures = _admitted_generator_failures(document["generator_failures"])
+        if document["generator_failure_observed"] is not bool(failures):
+            raise ValueError("admitted generator failure presence is inconsistent")
+        generator_ambiguous = _closed_boolean(
+            document, "generator_failure_ambiguous"
+        )
+        avc_observed = _closed_boolean(document, "selinux_avc_observed")
+        avc_ambiguous = _closed_boolean(document, "selinux_avc_ambiguous")
+        _admitted_avc(document["selinux_avc"], avc_observed)
+        expected = daemon_reload_classification(
+            manager_active=manager_active,
+            bus_available=bus_available,
+            control_reachable=control_reachable,
+            input_admitted=input_admitted,
+            generator_executed=generator_executed,
+            generator_accepted=generator_accepted,
+            failures=failures,
+            generator_ambiguous=generator_ambiguous,
+            avc_observed=avc_observed,
+            avc_ambiguous=avc_ambiguous,
+        )
+        if document["classification"] != expected:
+            raise ValueError("daemon-reload classification contradicts its facts")
+    except (KeyError, TypeError) as error:
+        raise ValueError("admitted daemon-reload adjacency is malformed") from error
+
+
 def bounded_bytes(path: Path, maximum: int) -> bytes:
     descriptor = -1
     try:
@@ -270,6 +617,7 @@ def main() -> int:
     parser.add_argument("--harness", required=True, type=Path)
     parser.add_argument("--stdout", required=True, type=Path)
     parser.add_argument("--trace", required=True, type=Path)
+    parser.add_argument("--reload-adjacency", type=Path)
     parser.add_argument("--exit-status", required=True, type=int)
     parser.add_argument("--trusted-marker", type=Path)
     parser.add_argument("--representation-invalid", action="store_true")
@@ -300,6 +648,28 @@ def main() -> int:
         trusted_marker=marker,
         representation_invalid=options.representation_invalid,
     )
+    adjacency_bytes = b""
+    adjacency: dict[str, object] | None = None
+    if operation == "qualify-quadlet-daemon-reload" and reason == "command-failed":
+        raw_adjacency: object = None
+        if options.reload_adjacency is not None and options.reload_adjacency.exists():
+            try:
+                adjacency_bytes = bounded_bytes(
+                    options.reload_adjacency, MAX_ADJACENCY_BYTES
+                )
+                raw_adjacency = json.loads(adjacency_bytes)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                raw_adjacency = None
+        adjacency = admit_daemon_reload_adjacency(
+            raw_adjacency,
+            {
+                "target_sha": options.target_sha,
+                "trusted_control_sha": options.control_sha,
+                "qualification_run_id": options.run_id,
+                "qualification_run_attempt": options.run_attempt,
+                "failure_status": options.exit_status,
+            },
+        )
     document: dict[str, object] = {
         "schema_version": 1,
         "phase": "target-qualification",
@@ -312,10 +682,15 @@ def main() -> int:
         "reason": reason,
         "exit_status": options.exit_status,
         "diagnostic_input_sha256": hashlib.sha256(
-            stdout + b"\0" + trace + b"\0" + marker_bytes
+            stdout + b"\0" + trace + b"\0" + marker_bytes + b"\0" + adjacency_bytes
         ).hexdigest(),
-        "diagnostic_input_bytes": len(stdout) + len(trace) + len(marker_bytes),
+        "diagnostic_input_bytes": len(stdout)
+        + len(trace)
+        + len(marker_bytes)
+        + len(adjacency_bytes),
     }
+    if adjacency is not None:
+        document["daemon_reload_adjacency"] = adjacency
     write_document(options.output, document)
     return 0
 

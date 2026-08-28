@@ -2045,6 +2045,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_failure_trace = read(
         root, "scripts/ci-cloud/rocky-target-qualification-trace.sh"
     )
+    reload_adjacency_observer = read(
+        root, "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+    )
     bootstrap = read(root, "scripts/ci-cloud/bootstrap-rocky-host.tftpl")
     readiness_publisher = read(
         root, "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
@@ -2219,9 +2222,87 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "validate-target-qualification-failure" in target_runner
         and target_runner.count("exit 91") == 2
         and "qualification_failure_expected" in target_text
-        and "head -c 2049" in target_text
+        and "head -c 4097" in target_text
         and "target-qualification-failure.json" in target_text,
         "target harness failures must retain one bounded negative-only semantic identity",
+    )
+    require(
+        "SECPAL_QUADLET_RELOAD_FAILURE_V1:%s:%s" in target_failure_trace
+        and "10#$frame == 242" in target_failure_trace
+        and "trap - ERR" in target_failure_trace
+        and "read -r -t 25 -u 5" in target_failure_trace
+        and "return \"$status\"" in target_failure_trace
+        and "mkfifo -m 0600" in target_runner
+        and '"$target_sha" == d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6'
+        in target_runner
+        and "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"
+        in target_runner
+        and target_runner.index("observe-rocky-quadlet-reload-adjacency.py")
+        < target_runner.index("bash \"$work_root/scripts/qualify-production-host.sh\"")
+        < target_runner.index(
+            "\nstatus=$?\n",
+            target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
+        )
+        < target_runner.index("wait \"$observer_pid\"")
+        and "--reload-adjacency \"$reload_adjacency\"" in target_runner
+        and "reload_observer_base64gzip" in main
+        and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap,
+        "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
+    )
+    require(
+        literal_constant(reload_adjacency_observer, "MAX_INPUT_BYTES") == 4_096
+        and literal_constant(reload_adjacency_observer, "MAX_COMMAND_BYTES") == 65_536
+        and literal_constant(reload_adjacency_observer, "MAX_OBSERVATION_BYTES") == 4_096
+        and literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS") == 3
+        and literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS") == 8
+        and 4
+        * literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS")
+        + literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS")
+        < 25
+        and "os.O_NOFOLLOW" in reload_adjacency_observer
+        and "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW"
+        in reload_adjacency_observer
+        and "stat.S_ISFIFO" in reload_adjacency_observer
+        and "metadata.st_uid != 0" in reload_adjacency_observer
+        and "metadata.st_gid != 0" in reload_adjacency_observer
+        and "stat.S_IMODE(metadata.st_mode) != 0o600" in reload_adjacency_observer
+        and 'Path(f"/etc/containers/systemd/users/{runtime_uid}")'
+        in reload_adjacency_observer
+        and '"owner_uid": metadata.st_uid' in reload_adjacency_observer
+        and '"owner_gid": metadata.st_gid' in reload_adjacency_observer
+        and 'f"{stat.S_IMODE(metadata.st_mode):04o}"' in reload_adjacency_observer
+        and "hashlib.sha256(payload).hexdigest()" in reload_adjacency_observer
+        and 'f"QUADLET_UNIT_DIRS={input_path.parent}"' in reload_adjacency_observer
+        and '"--user",\n                "--dryrun"' in reload_adjacency_observer
+        and 'f"--machine={RUNTIME_ACCOUNT}@.host"' in reload_adjacency_observer
+        and '"show-environment"' in reload_adjacency_observer
+        and '"daemon-reload"' not in reload_adjacency_observer
+        and all(
+            operation not in reload_adjacency_observer
+            for operation in ('"start"', '"restart"', '"stop"', '"reset-failed"')
+        ),
+        "daemon-reload adjacency observation must remain bounded, closed, and non-mutating",
+    )
+    require(
+        "def admit_daemon_reload_adjacency(" in target_failure_classifier
+        and '"manager-continuity-lost"' in target_failure_classifier
+        and '"target-input-invalid"' in target_failure_classifier
+        and '"podman-generator-rejected"' in target_failure_classifier
+        and '"other-generator-failed"' in target_failure_classifier
+        and '"selinux-reload-denied"' in target_failure_classifier
+        and '"manager-reload-transaction-failed"' in target_failure_classifier
+        and '"diagnostic-unavailable"' in target_failure_classifier
+        and "captured_before_cleanup" in target_failure_classifier
+        and '_closed_boolean(observation, "captured_before_cleanup")'
+        in target_failure_classifier
+        and "failure_event_sha256" in target_failure_classifier
+        and 're.fullmatch(r"[0-9a-f]{64}", str(observation["failure_event_sha256"]))'
+        in target_failure_classifier
+        and "generator_failure_ambiguous" in target_failure_classifier
+        and '_closed_boolean(\n            observation, "generator_failure_ambiguous"\n        )'
+        in target_failure_classifier
+        and "selinux_avc_ambiguous" in target_failure_classifier,
+        "daemon-reload adjacency admission must preserve the closed fail-safe decision tree",
     )
     require(
         target_text.index("Retrieve and validate bounded target-qualification failure")

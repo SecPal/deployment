@@ -7,11 +7,14 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import yaml
@@ -25,6 +28,7 @@ WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
 CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
 RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
 TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+OBSERVER = ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
 
 
 def load_classifier():
@@ -38,10 +42,22 @@ def load_classifier():
     return module
 
 
+def load_observer():
+    specification = importlib.util.spec_from_file_location(
+        "rocky_quadlet_reload_observer", OBSERVER
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError("cannot load Quadlet reload adjacency observer")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
 class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.classifier = load_classifier()
+        cls.observer = load_observer()
 
     def classify(
         self,
@@ -140,6 +156,360 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                     (operation, "command-failed"),
                     self.classify(trace=trace),
                 )
+
+    def test_daemon_reload_event_captures_actual_input_before_exit_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "qualify-production-host.sh"
+            target_input = root / "secpal-host-qualification-fixture.container"
+            trace = root / "trace"
+            lines = ["set -euo pipefail"] + [""] * 241
+            definitions = {
+                52: "user_systemctl() {",
+                53: "  false",
+                54: "}",
+                62: "cleanup() {",
+                63: "  local exit_status=$?",
+                64: '  rm -f -- "$FIXTURE_INPUT"',
+                65: '  exit "$exit_status"',
+                66: "}",
+                204: "trap cleanup EXIT",
+                216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
+                242: "user_systemctl daemon-reload",
+            }
+            for line_number, source in definitions.items():
+                lines[line_number - 1] = source
+            harness.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            event_read, event_write = os.pipe()
+            ack_read, ack_write = os.pipe()
+            captured: dict[str, object] = {}
+
+            def observe() -> None:
+                with os.fdopen(event_read, "rb", closefd=True) as events:
+                    event = events.readline(512)
+                captured["event"] = event
+                if event:
+                    captured["present"] = target_input.is_file()
+                    if target_input.is_file():
+                        captured["sha256"] = hashlib.sha256(
+                            target_input.read_bytes()
+                        ).hexdigest()
+                    os.write(ack_write, b"SECPAL_RELOAD_ADJACENCY_CAPTURED_V1\n")
+                os.close(ack_write)
+
+            observer = threading.Thread(target=observe)
+            observer.start()
+            with trace.open("wb") as descriptor:
+                process = subprocess.Popen(
+                    ["bash", harness],
+                    env={
+                        **os.environ,
+                        "BASH_ENV": str(TRACE),
+                        "FIXTURE_INPUT": str(target_input),
+                    },
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    pass_fds=tuple(
+                        {3, 4, 5, descriptor.fileno(), event_write, ack_read}
+                    ),
+                    close_fds=True,
+                    preexec_fn=lambda: (
+                        os.dup2(descriptor.fileno(), 3),
+                        os.dup2(event_write, 4),
+                        os.dup2(ack_read, 5),
+                    ),
+                )
+                os.close(event_write)
+                os.close(ack_read)
+                self.assertEqual(1, process.wait(timeout=10))
+            observer.join(timeout=10)
+            self.assertFalse(observer.is_alive())
+            self.assertRegex(
+                captured.get("event", b"").decode("ascii"),
+                r"^SECPAL_QUADLET_RELOAD_FAILURE_V1:1:[0-9]+(?:,[0-9]+){0,7}\n$",
+            )
+            self.assertIs(True, captured.get("present"))
+            self.assertEqual(
+                hashlib.sha256(b"actual input\n").hexdigest(),
+                captured.get("sha256"),
+            )
+            self.assertFalse(target_input.exists())
+
+    def test_daemon_reload_adjacency_has_a_closed_fail_safe_decision_matrix(self) -> None:
+        admitted_input = {
+            "match_count": 1,
+            "present": True,
+            "regular_file": True,
+            "not_symlink": True,
+            "owner_uid": 0,
+            "owner_gid": 0,
+            "mode": "0644",
+            "size": 320,
+            "sha256": "a" * 64,
+        }
+        baseline = {
+            "schema_version": 1,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "boot_id": "12345678-1234-1234-1234-123456789abc",
+            "failure_status": 1,
+            "failure_event_sha256": "e" * 64,
+            "captured_before_cleanup": True,
+            "capture_monotonic_ns": 123456789,
+            "manager_active_after_reload_failure": True,
+            "bus_available_after_reload_failure": True,
+            "control_reachable_after_reload_failure": True,
+            "quadlet_input": admitted_input,
+            "podman_generator_executed": True,
+            "podman_generator_exit_status": 0,
+            "podman_generator_accepted_actual_input": True,
+            "generator_failures": [],
+            "generator_failure_ambiguous": False,
+            "selinux_avc_observed": False,
+            "selinux_avc": None,
+            "selinux_avc_ambiguous": False,
+        }
+        mutations = (
+            (
+                "manager-continuity-lost",
+                {"manager_active_after_reload_failure": False},
+            ),
+            (
+                "target-input-invalid",
+                {"quadlet_input": dict(admitted_input, present=False, match_count=0)},
+            ),
+            (
+                "target-input-invalid",
+                {
+                    "quadlet_input": dict(
+                        admitted_input, regular_file=False, not_symlink=False
+                    )
+                },
+            ),
+            (
+                "target-input-invalid",
+                {"quadlet_input": dict(admitted_input, owner_uid=994, mode="0600")},
+            ),
+            (
+                "podman-generator-rejected",
+                {
+                    "podman_generator_exit_status": 1,
+                    "podman_generator_accepted_actual_input": False,
+                },
+            ),
+            (
+                "other-generator-failed",
+                {
+                    "generator_failures": [
+                        {"basename": "example-generator", "exit_status": 1}
+                    ]
+                },
+            ),
+            (
+                "selinux-reload-denied",
+                {
+                    "selinux_avc_observed": True,
+                    "selinux_avc": {
+                        "source_type": "container_runtime_t",
+                        "target_type": "etc_t",
+                        "object_class": "file",
+                        "denied_permission": "read",
+                    },
+                },
+            ),
+            ("manager-reload-transaction-failed", {}),
+            ("diagnostic-unavailable", {"generator_failure_ambiguous": True}),
+        )
+        expected = {
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "failure_status": 1,
+        }
+        for classification, mutation in mutations:
+            observation = {**baseline, **mutation}
+            with self.subTest(classification=classification):
+                admitted = self.classifier.admit_daemon_reload_adjacency(
+                    observation, expected
+                )
+                self.assertEqual(classification, admitted["classification"])
+
+        malformed = (
+            {**baseline, "extra": True},
+            {**baseline, "captured_before_cleanup": False},
+            {**baseline, "trusted_control_sha": "d" * 40},
+            {**baseline, "manager_active_after_reload_failure": 1},
+            {
+                **baseline,
+                "podman_generator_executed": False,
+                "podman_generator_exit_status": 0,
+            },
+            {
+                **baseline,
+                "selinux_avc_observed": True,
+                "selinux_avc": None,
+            },
+        )
+        for observation in malformed:
+            with self.subTest(malformed=observation):
+                self.assertEqual(
+                    self.classifier.unavailable_daemon_reload_adjacency(),
+                    self.classifier.admit_daemon_reload_adjacency(
+                        observation, expected
+                    ),
+                )
+
+    def test_reviewed_systemd_generator_message_normalizes_without_free_text(self) -> None:
+        boot_id = "12345678-1234-1234-1234-123456789abc"
+        entry = {
+            "_UID": "994",
+            "_BOOT_ID": boot_id.replace("-", ""),
+            "CODE_FILE": "src/shared/exec-util.c",
+            "CODE_FUNC": "do_execute",
+            "MESSAGE": "/usr/lib/systemd/user-generators/example-generator failed with exit status 7, ignoring.",
+        }
+        with mock.patch.object(
+            self.observer,
+            "admitted_generator",
+            return_value=Path(
+                "/usr/lib/systemd/user-generators/example-generator"
+            ),
+        ):
+            failures, ambiguous = self.observer.generator_failures(
+                (json.dumps(entry) + "\n").encode(), 994, boot_id
+            )
+        self.assertEqual(
+            [{"basename": "example-generator", "exit_status": 7}], failures
+        )
+        self.assertFalse(ambiguous)
+
+        malformed = dict(entry, MESSAGE="arbitrary localized generator output")
+        failures, ambiguous = self.observer.generator_failures(
+            (json.dumps(malformed) + "\n").encode(), 994, boot_id
+        )
+        self.assertEqual([], failures)
+        self.assertFalse(ambiguous)
+
+    def test_selinux_adjacency_emits_only_closed_correlated_fields(self) -> None:
+        target_input = Path(
+            "/etc/containers/systemd/users/994/"
+            "secpal-host-qualification-Ab12Cd.container"
+        )
+        audit = (
+            'type=AVC msg=audit(1.2:3): avc:  denied  { read } for '
+            'comm="podman-system-g" '
+            'scontext=system_u:system_r:container_runtime_t:s0 '
+            'tcontext=system_u:object_r:etc_t:s0 tclass=file permissive=0\n'
+        ).encode()
+        observed, fields, ambiguous = self.observer.selinux_adjacency(
+            audit, target_input
+        )
+        self.assertTrue(observed)
+        self.assertEqual(
+            {
+                "source_type": "container_runtime_t",
+                "target_type": "etc_t",
+                "object_class": "file",
+                "denied_permission": "read",
+            },
+            fields,
+        )
+        self.assertFalse(ambiguous)
+
+    def test_exact_d892_quadlet_shape_has_one_bounded_deterministic_digest(self) -> None:
+        unit_name = "secpal-host-qualification-Ab12Cd"
+        image = (
+            "docker.io/library/alpine@sha256:"
+            "4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
+        )
+        payload = (
+            "[Unit]\n"
+            "Description=SecPal bounded Rocky host qualification fixture\n"
+            "[Container]\n"
+            f"Image={image}\n"
+            f"ContainerName={unit_name}\n"
+            "Pull=never\n"
+            "User=65532:65532\n"
+            "DropCapability=all\n"
+            "Network=none\n"
+            "Exec=sleep infinity\n"
+            "PodmanArgs=--security-opt=no-new-privileges\n"
+            "[Service]\n"
+            "TimeoutStopSec=15\n"
+        ).encode()
+        self.assertLessEqual(len(payload), self.observer.MAX_INPUT_BYTES)
+        self.assertEqual(
+            "f79c269f607174feb6bbdc4d553f0881f536243f265e2d71c998ebfdcd769fff",
+            hashlib.sha256(payload).hexdigest(),
+        )
+        self.assertNotIn(b"AutoUpdate=", payload)
+        self.assertNotIn(b"Privileged=true", payload)
+
+    def test_diagnostic_ack_failure_preserves_original_status_and_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "qualify-production-host.sh"
+            target_input = root / "fixture.container"
+            trace = root / "trace"
+            lines = ["set -euo pipefail"] + [""] * 241
+            for line_number, source in {
+                52: "user_systemctl() {",
+                53: "  return 7",
+                54: "}",
+                62: "cleanup() {",
+                63: "  local exit_status=$?",
+                64: '  rm -f -- "$FIXTURE_INPUT"',
+                65: '  exit "$exit_status"',
+                66: "}",
+                204: "trap cleanup EXIT",
+                216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
+                242: "user_systemctl daemon-reload",
+            }.items():
+                lines[line_number - 1] = source
+            harness.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            event_read, event_write = os.pipe()
+            ack_read, ack_write = os.pipe()
+
+            def fail_observation() -> None:
+                with os.fdopen(event_read, "rb", closefd=True) as events:
+                    events.readline(512)
+                os.close(ack_write)
+
+            observer = threading.Thread(target=fail_observation)
+            observer.start()
+            with trace.open("wb") as descriptor:
+                process = subprocess.Popen(
+                    ["bash", harness],
+                    env={
+                        **os.environ,
+                        "BASH_ENV": str(TRACE),
+                        "FIXTURE_INPUT": str(target_input),
+                    },
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    pass_fds=tuple(
+                        {3, 4, 5, descriptor.fileno(), event_write, ack_read}
+                    ),
+                    close_fds=True,
+                    preexec_fn=lambda: (
+                        os.dup2(descriptor.fileno(), 3),
+                        os.dup2(event_write, 4),
+                        os.dup2(ack_read, 5),
+                    ),
+                )
+                os.close(event_write)
+                os.close(ack_read)
+                self.assertEqual(7, process.wait(timeout=10))
+            observer.join(timeout=10)
+            self.assertFalse(observer.is_alive())
+            self.assertFalse(target_input.exists())
+            records = trace.read_text(encoding="ascii").splitlines()
+            self.assertEqual(1, len(records))
+            self.assertRegex(records[0], r"^SECPAL_TARGET_ERR_V2:7:")
 
     def test_reachable_bash_control_constructs_preserve_closed_diagnostics(self) -> None:
         definitions = {
@@ -437,7 +807,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             dict(document, operation="arbitrary-command"),
             dict(document, reason="some-error-text"),
             dict(document, qualification_run_id="0"),
-            dict(document, diagnostic_input_bytes=131_329),
+            dict(document, diagnostic_input_bytes=135_425),
         ):
             self.assertTrue(list(validator.iter_errors(mutation)))
         unbound = dict(
@@ -453,6 +823,16 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                     dict(unbound, operation="qualify-seccomp", reason="invariant-failed")
                 )
             )
+        )
+
+        daemon_reload = dict(
+            document,
+            operation="qualify-quadlet-daemon-reload",
+            reason="command-failed",
+        )
+        self.assertTrue(
+            list(validator.iter_errors(daemon_reload)),
+            "the exact daemon-reload failure must carry its pre-cleanup adjacency",
         )
 
     def test_trusted_validator_binds_the_exact_control_target_and_run(self) -> None:
@@ -496,6 +876,97 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 subprocess.run(command, check=False, capture_output=True).returncode,
             )
 
+    def test_trusted_validator_recomputes_daemon_reload_classification(self) -> None:
+        observation = {
+            "schema_version": 1,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "boot_id": "12345678-1234-1234-1234-123456789abc",
+            "failure_status": 1,
+            "failure_event_sha256": "e" * 64,
+            "captured_before_cleanup": True,
+            "capture_monotonic_ns": 123456789,
+            "manager_active_after_reload_failure": True,
+            "bus_available_after_reload_failure": True,
+            "control_reachable_after_reload_failure": True,
+            "quadlet_input": {
+                "match_count": 1,
+                "present": True,
+                "regular_file": True,
+                "not_symlink": True,
+                "owner_uid": 0,
+                "owner_gid": 0,
+                "mode": "0644",
+                "size": 320,
+                "sha256": "a" * 64,
+            },
+            "podman_generator_executed": True,
+            "podman_generator_exit_status": 0,
+            "podman_generator_accepted_actual_input": True,
+            "generator_failures": [],
+            "generator_failure_ambiguous": False,
+            "selinux_avc_observed": False,
+            "selinux_avc": None,
+            "selinux_avc_ambiguous": False,
+        }
+        adjacency = self.classifier.admit_daemon_reload_adjacency(
+            observation,
+            {
+                "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+                "trusted_control_sha": "c" * 40,
+                "qualification_run_id": "12345",
+                "qualification_run_attempt": "1",
+                "failure_status": 1,
+            },
+        )
+        document = {
+            "schema_version": 1,
+            "phase": "target-qualification",
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
+            "operation": "qualify-quadlet-daemon-reload",
+            "reason": "command-failed",
+            "exit_status": 1,
+            "diagnostic_input_sha256": "b" * 64,
+            "diagnostic_input_bytes": 100,
+            "daemon_reload_adjacency": adjacency,
+        }
+        validator = Draft202012Validator(
+            json.loads(SCHEMA.read_text(encoding="utf-8"))
+        )
+        self.assertEqual([], list(validator.iter_errors(document)))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "failure.json"
+            command = [
+                CONTROL,
+                "validate-target-qualification-failure",
+                path,
+                "--target-sha",
+                self.classifier.EXPECTED_TARGET_SHA,
+                "--control-sha",
+                "c" * 40,
+                "--run-id",
+                "12345",
+                "--run-attempt",
+                "1",
+            ]
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+            document["daemon_reload_adjacency"]["classification"] = (
+                "target-input-invalid"
+            )
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+
     def test_success_and_failure_transport_are_disjoint(self) -> None:
         workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         steps = {
@@ -511,8 +982,8 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         )
         self.assertNotIn("qualification.json", failure["run"])
         self.assertNotIn("target-qualification-failure.json", success["run"])
-        self.assertIn("head -c 2049", failure["run"])
-        self.assertIn("-le 2048", failure["run"])
+        self.assertIn("head -c 4097", failure["run"])
+        self.assertIn("-le 4096", failure["run"])
 
         runner = RUNNER.read_text(encoding="utf-8")
         direct_failure = runner.split('if [[ "$status" -ne 0 ]]; then', 1)[1].split(
@@ -521,7 +992,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         self.assertNotIn("--trusted-marker", direct_failure)
         self.assertIn(
             'rm -f -- "$source_failure" "$qualification_failure" '
-            '"$qualification_trace" "$qualification_marker"',
+            '"$qualification_trace" \\\n  "$qualification_marker" "$reload_adjacency"',
             runner,
         )
         self.assertIn(

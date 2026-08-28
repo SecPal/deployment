@@ -403,6 +403,8 @@ class RockyCloudControlTests(unittest.TestCase):
             / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
             "target_trace_base64gzip": ROOT
             / "scripts/ci-cloud/rocky-target-qualification-trace.sh",
+            "reload_observer_base64gzip": ROOT
+            / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py",
             "allocator_base64gzip": ROOT / "scripts/ci-cloud/allocate-rocky-subids.py",
             "collector_base64gzip": ROOT / "scripts/ci-cloud/collect-rocky-preparation.py",
             "preparation_contract_base64gzip": ROOT / "scripts/ci-cloud/rocky_preparation_contract.py",
