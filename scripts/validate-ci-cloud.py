@@ -150,6 +150,26 @@ def string_collection_constant(text: str, name: str) -> set[str]:
     raise ContractError(f"{name} must be a literal string collection")
 
 
+def literal_constant(text: str, name: str) -> object:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        raise ContractError(f"trusted Python source containing {name} is invalid") from None
+    values: list[object] = []
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+        ):
+            try:
+                values.append(ast.literal_eval(node.value))
+            except (ValueError, TypeError, SyntaxError):
+                raise ContractError(f"{name} must be a literal constant") from None
+    if len(values) != 1:
+        raise ContractError(f"{name} must have exactly one top-level assignment")
+    return values[0]
+
+
 def integer_mapping_literal(text: str, key: str) -> int:
     try:
         tree = ast.parse(text)
@@ -2022,6 +2042,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_failure_classifier = read(
         root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
     )
+    target_failure_trace = read(
+        root, "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+    )
     for forbidden in (
         "id-token",
         "google-github-actions/auth",
@@ -2092,7 +2115,27 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_classifier
         and "EXPECTED_HARNESS_SHA256" in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
-        and "SECPAL_TARGET_ERR_V1" in target_failure_classifier
+        and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
+        and "SECPAL_TARGET_ERR_V1" not in target_failure_classifier
+        and "${BASH_LINENO[@]}" in target_failure_trace
+        and "SECPAL_TARGET_ERR_V2:%s:%s" in target_failure_trace
+        and "frame_count >= 8" in target_failure_trace
+        and all(
+            forbidden not in target_failure_trace
+            for forbidden in ("BASH_COMMAND", "BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
+        )
+        and literal_constant(target_failure_classifier, "MAX_TRACE_FRAMES") == 8
+        and all(
+            isinstance(rule, tuple)
+            and len(rule) == 3
+            and type(rule[0]) is int
+            and type(rule[1]) is int
+            and rule[0] > 91
+            for rule in literal_constant(target_failure_classifier, "LINE_RULES")
+        )
+        and "if len(explicit) == 1 and len(traced_operations) == 1:" in target_failure_classifier
+        and "if len(explicit) == 1 and len(traced_operations) > 1:" in target_failure_classifier
+        and "if len(traced_operations) == 1:" in target_failure_classifier
         and "validate-target-qualification-failure" in target_runner
         and target_runner.count("exit 91") == 2
         and "qualification_failure_expected" in target_text
