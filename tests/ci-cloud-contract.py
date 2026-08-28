@@ -1105,10 +1105,16 @@ class CloudCIContractTests(unittest.TestCase):
             (observer, "time.monotonic() > deadline", "False"),
             (
                 observer,
+                'raise ObservationError("adjacency command could not execute")',
+                "return 125",
+            ),
+            (
+                observer,
                 "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW",
                 "os.O_RDONLY | os.O_CLOEXEC",
             ),
             (observer, "stat.S_ISFIFO", "stat.S_ISREG"),
+            (observer, "stat.S_ISLNK(link_metadata.st_mode)", "False"),
             (
                 observer,
                 "directory.resolve(strict=True) == directory",
@@ -1117,6 +1123,7 @@ class CloudCIContractTests(unittest.TestCase):
             (observer, 'f"QUADLET_UNIT_DIRS={input_path.parent}"', '"QUADLET_UNIT_DIRS=/"'),
             (observer, '"--dryrun"', '"daemon-reload"'),
             (observer, '"show-environment"', '"daemon-reload"'),
+            (observer, 'comm="podman-system-g"', 'comm="systemd"'),
             (
                 classifier,
                 '_closed_boolean(observation, "captured_before_cleanup")',

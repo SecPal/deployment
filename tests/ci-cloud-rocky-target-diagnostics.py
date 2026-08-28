@@ -394,6 +394,64 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         self.assertEqual([], failures)
         self.assertFalse(ambiguous)
 
+    def test_observer_execution_failure_is_not_a_generator_rejection(self) -> None:
+        with mock.patch.object(
+            self.observer.subprocess,
+            "Popen",
+            side_effect=OSError("unavailable"),
+        ), self.assertRaisesRegex(
+            self.observer.ObservationError,
+            "could not execute",
+        ):
+            self.observer.command_status(["fixed-diagnostic"])
+
+        process = mock.Mock(pid=123)
+        process.wait.side_effect = [
+            self.observer.subprocess.TimeoutExpired(["fixed-diagnostic"], 3),
+            self.observer.subprocess.TimeoutExpired(["fixed-diagnostic"], 2),
+        ]
+        with mock.patch.object(
+            self.observer.subprocess,
+            "Popen",
+            return_value=process,
+        ), mock.patch.object(
+            self.observer.os,
+            "killpg",
+            side_effect=PermissionError("denied"),
+        ), self.assertRaisesRegex(
+            self.observer.ObservationError,
+            "exceeded its timeout",
+        ):
+            self.observer.command_status(["fixed-diagnostic"])
+
+    def test_trusted_packaged_generator_symlink_is_admitted(self) -> None:
+        candidate = Path(
+            "/usr/lib/systemd/user-generators/podman-system-generator"
+        )
+        resolved = Path("/usr/libexec/podman/quadlet")
+        directory_metadata = mock.Mock(st_mode=0o040755, st_uid=0, st_gid=0)
+        link_metadata = mock.Mock(st_mode=0o120777, st_uid=0, st_gid=0)
+        executable_metadata = mock.Mock(st_mode=0o100755, st_uid=0, st_gid=0)
+
+        def lstat(target: Path):
+            return link_metadata if target == candidate else directory_metadata
+
+        def resolve(target: Path, *, strict: bool):
+            self.assertTrue(strict)
+            return resolved if target == candidate else target
+
+        with mock.patch.object(
+            Path, "lstat", autospec=True, side_effect=lstat
+        ), mock.patch.object(
+            Path, "resolve", autospec=True, side_effect=resolve
+        ), mock.patch.object(
+            Path, "stat", autospec=True, return_value=executable_metadata
+        ):
+            self.assertEqual(
+                candidate,
+                self.observer.admitted_generator(candidate, podman=True),
+            )
+
     def test_selinux_adjacency_emits_only_closed_correlated_fields(self) -> None:
         target_input = Path(
             "/etc/containers/systemd/users/994/"
@@ -406,7 +464,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             'tcontext=system_u:object_r:etc_t:s0 tclass=file permissive=0\n'
         ).encode()
         observed, fields, ambiguous = self.observer.selinux_adjacency(
-            audit, target_input
+            audit, target_input, set()
         )
         self.assertTrue(observed)
         self.assertEqual(
@@ -418,6 +476,14 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             },
             fields,
         )
+        self.assertFalse(ambiguous)
+
+        unrelated = audit.replace(b'comm="podman-system-g"', b'comm="systemd"')
+        observed, fields, ambiguous = self.observer.selinux_adjacency(
+            unrelated, target_input, set()
+        )
+        self.assertFalse(observed)
+        self.assertIsNone(fields)
         self.assertFalse(ambiguous)
 
     def test_exact_d892_quadlet_shape_has_one_bounded_deterministic_digest(self) -> None:

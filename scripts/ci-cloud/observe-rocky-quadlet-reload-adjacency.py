@@ -68,9 +68,12 @@ class ObservationError(RuntimeError):
 def terminate_group(process: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except OSError:
         pass
-    process.wait(timeout=2)
+    try:
+        process.wait(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def command_status(command: list[str], *, timeout: int = COMMAND_TIMEOUT_SECONDS) -> int:
@@ -84,11 +87,13 @@ def command_status(command: list[str], *, timeout: int = COMMAND_TIMEOUT_SECONDS
         )
         status = process.wait(timeout=timeout)
     except OSError:
-        return 125
+        raise ObservationError("adjacency command could not execute")
     except subprocess.TimeoutExpired:
         terminate_group(process)
-        return 124
-    return status if 0 <= status <= 255 else 125
+        raise ObservationError("adjacency command exceeded its timeout")
+    if not 0 <= status <= 255:
+        raise ObservationError("adjacency command status is outside its bound")
+    return status
 
 
 def bounded_command_output(command: list[str], *, timeout: int) -> tuple[int, bytes]:
@@ -131,26 +136,41 @@ def bounded_command_output(command: list[str], *, timeout: int) -> tuple[int, by
 
 
 def admitted_generator(path: Path, *, podman: bool = False) -> Path | None:
+    roots = (
+        ADMITTED_PODMAN_GENERATOR_ROOTS if podman else ADMITTED_USER_GENERATOR_ROOTS
+    )
     try:
+        link_metadata = path.lstat()
+        parent_metadata = path.parent.lstat()
+        parent_resolved = path.parent.resolve(strict=True)
         resolved = path.resolve(strict=True)
         metadata = resolved.stat()
     except OSError:
         return None
     if (
-        not stat.S_ISREG(metadata.st_mode)
+        not any(path.is_relative_to(root) for root in roots)
+        or parent_resolved != path.parent
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != 0
+        or parent_metadata.st_gid != 0
+        or parent_metadata.st_mode & 0o022
+        or not (
+            stat.S_ISREG(link_metadata.st_mode)
+            or stat.S_ISLNK(link_metadata.st_mode)
+        )
+        or link_metadata.st_uid != 0
+        or link_metadata.st_gid != 0
+        or not stat.S_ISREG(metadata.st_mode)
         or metadata.st_uid != 0
+        or metadata.st_gid != 0
         or metadata.st_mode & 0o022
-        or not SAFE_BASENAME.fullmatch(resolved.name)
+        or metadata.st_mode & 0o111 == 0
+        or not SAFE_BASENAME.fullmatch(path.name)
     ):
         return None
-    roots = (
-        ADMITTED_PODMAN_GENERATOR_ROOTS if podman else ADMITTED_USER_GENERATOR_ROOTS
-    )
-    if not any(resolved.is_relative_to(root) for root in roots):
+    if podman and path.name != "podman-system-generator":
         return None
-    if podman and resolved.name != "podman-system-generator":
-        return None
-    return resolved
+    return path
 
 
 def podman_generator_path() -> Path | None:
@@ -289,7 +309,9 @@ def generator_failures(
 
 
 def selinux_adjacency(
-    payload: bytes, input_path: Path | None
+    payload: bytes,
+    input_path: Path | None,
+    generator_basenames: set[str],
 ) -> tuple[bool, dict[str, str] | None, bool]:
     observations: list[dict[str, str]] = []
     input_tokens = set()
@@ -301,9 +323,9 @@ def selinux_adjacency(
         relevant = any(token and token in event for token in input_tokens) or any(
             marker in event
             for marker in (
-                'comm="systemd"',
-                'comm="podman-system-g',
-                'exe="/usr/lib/systemd/',
+                'comm="podman-system-g"',
+                "podman-system-generator",
+                *generator_basenames,
             )
         )
         if not relevant:
@@ -397,7 +419,11 @@ def collect_observation(
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
     avc_observed, avc, avc_ambiguous = (
-        selinux_adjacency(audit, input_path)
+        selinux_adjacency(
+            audit,
+            input_path,
+            {str(failure["basename"]) for failure in failures},
+        )
         if audit_status in (0, 1)
         else (False, None, True)
     )

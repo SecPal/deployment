@@ -2264,6 +2264,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "time.monotonic() > deadline" in reload_adjacency_observer
         and "write_document(arguments.output, document, deadline)"
         in reload_adjacency_observer
+        and 'raise ObservationError("adjacency command could not execute")'
+        in reload_adjacency_observer
+        and "except (OSError, subprocess.TimeoutExpired)" in reload_adjacency_observer
         and "os.O_NOFOLLOW" in reload_adjacency_observer
         and "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW"
         in reload_adjacency_observer
@@ -2281,6 +2284,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "not directory_metadata.st_mode & 0o022" in reload_adjacency_observer
         and "directory.resolve(strict=True) == directory"
         in reload_adjacency_observer
+        and "stat.S_ISLNK(link_metadata.st_mode)" in reload_adjacency_observer
+        and "parent_resolved != path.parent" in reload_adjacency_observer
+        and "metadata.st_mode & 0o111 == 0" in reload_adjacency_observer
         and '"owner_uid": metadata.st_uid' in reload_adjacency_observer
         and '"owner_gid": metadata.st_gid' in reload_adjacency_observer
         and 'f"{stat.S_IMODE(metadata.st_mode):04o}"' in reload_adjacency_observer
@@ -2290,6 +2296,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'f"--machine={RUNTIME_ACCOUNT}@.host"' in reload_adjacency_observer
         and '"show-environment"' in reload_adjacency_observer
         and '"daemon-reload"' not in reload_adjacency_observer
+        and 'comm="systemd"' not in reload_adjacency_observer
         and all(
             operation not in reload_adjacency_observer
             for operation in ('"start"', '"restart"', '"stop"', '"reset-failed"')
