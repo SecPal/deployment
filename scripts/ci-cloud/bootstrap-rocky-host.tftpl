@@ -27,6 +27,7 @@ decode_script '${readiness_publisher_base64gzip}' /usr/local/sbin/secpal-publish
 decode_script '${target_runner_base64gzip}' /usr/local/sbin/secpal-run-rocky-target-qualification
 decode_script '${target_failure_classifier_base64gzip}' /usr/local/sbin/secpal-classify-rocky-target-failure
 decode_script '${target_trace_base64gzip}' /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh
+decode_script '${reload_observer_base64gzip}' /opt/secpal-control/scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py
 decode_script '${allocator_base64gzip}' /usr/local/sbin/secpal-allocate-rocky-subids
 decode_script '${collector_base64gzip}' /usr/local/sbin/secpal-collect-rocky-preparation
 decode_script '${preparation_contract_base64gzip}' /usr/local/sbin/rocky_preparation_contract.py

@@ -753,9 +753,9 @@ jobs:
             -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip" \
-            'test -f /var/lib/secpal-rocky/evidence/target-qualification-failure.json && test ! -L /var/lib/secpal-rocky/evidence/target-qualification-failure.json && head -c 2049 /var/lib/secpal-rocky/evidence/target-qualification-failure.json' \
+            'test -f /var/lib/secpal-rocky/evidence/target-qualification-failure.json && test ! -L /var/lib/secpal-rocky/evidence/target-qualification-failure.json && head -c 4097 /var/lib/secpal-rocky/evidence/target-qualification-failure.json' \
             >"$RUNNER_TEMP/rocky-target/target-qualification-failure.json"
-          test "$(stat -c %s "$RUNNER_TEMP/rocky-target/target-qualification-failure.json")" -le 2048
+          test "$(stat -c %s "$RUNNER_TEMP/rocky-target/target-qualification-failure.json")" -le 4096
           scripts/ci-cloud/rocky-control.py validate-target-qualification-failure \
             "$RUNNER_TEMP/rocky-target/target-qualification-failure.json" \
             --target-sha "${{ needs.validate.outputs.target_sha }}" \

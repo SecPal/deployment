@@ -1079,6 +1079,71 @@ class CloudCIContractTests(unittest.TestCase):
             with self.subTest(new=new):
                 self.assert_mutation_rejected(classifier, old, new)
 
+    def test_rejects_weakened_daemon_reload_failure_adjacency(self) -> None:
+        trace = "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        observer = "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        mutations = (
+            (
+                trace,
+                "SECPAL_QUADLET_RELOAD_FAILURE_V1:%s:%s",
+                "SECPAL_UNBOUNDED_RELOAD_FAILURE:%s:%s",
+            ),
+            (trace, "10#$frame == 242", "10#$frame == 243"),
+            (trace, "read -r -t 25 -u 5", "read -r -u 5"),
+            (trace, "trap - ERR", ":"),
+            (
+                runner,
+                "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53",
+                "",
+            ),
+            (runner, "mkfifo -m 0600", "install -m 0600 /dev/null"),
+            (runner, '--reload-adjacency "$reload_adjacency"', ""),
+            (observer, "MAX_INPUT_BYTES = 4_096", "MAX_INPUT_BYTES = 65_536"),
+            (observer, "CAPTURE_DEADLINE_SECONDS = 22", "CAPTURE_DEADLINE_SECONDS = 26"),
+            (observer, "time.monotonic() > deadline", "False"),
+            (
+                observer,
+                'raise ObservationError("adjacency command could not execute")',
+                "return 125",
+            ),
+            (
+                observer,
+                "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW",
+                "os.O_RDONLY | os.O_CLOEXEC",
+            ),
+            (observer, "stat.S_ISFIFO", "stat.S_ISREG"),
+            (observer, "stat.S_ISLNK(link_metadata.st_mode)", "False"),
+            (
+                observer,
+                "directory.resolve(strict=True) == directory",
+                "directory.resolve(strict=True) != directory",
+            ),
+            (observer, 'f"QUADLET_UNIT_DIRS={input_path.parent}"', '"QUADLET_UNIT_DIRS=/"'),
+            (observer, '"--dryrun"', '"daemon-reload"'),
+            (observer, '"show-environment"', '"daemon-reload"'),
+            (observer, 'comm="podman-system-g"', 'comm="systemd"'),
+            (
+                classifier,
+                '_closed_boolean(observation, "captured_before_cleanup")',
+                "True",
+            ),
+            (
+                classifier,
+                '_closed_boolean(\n            observation, "generator_failure_ambiguous"\n        )',
+                "False",
+            ),
+            (
+                classifier,
+                're.fullmatch(r"[0-9a-f]{64}", str(observation["failure_event_sha256"]))',
+                "None",
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
     def test_preflight_prunes_generated_opentofu_cache(self) -> None:
         preflight = (ROOT / "scripts" / "preflight.sh").read_text(encoding="utf-8")
         self.assertEqual(

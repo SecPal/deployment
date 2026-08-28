@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import importlib.util
 import ipaddress
 import json
 import os
@@ -287,6 +288,28 @@ def validate_target_qualification_failure(
     }
     if any(document[key] != value for key, value in expected.items()):
         raise ControlError("target qualification failure is not bound to this exact run")
+    adjacency = document.get("daemon_reload_adjacency")
+    if adjacency is not None:
+        candidates = (
+            ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            Path("/usr/local/sbin/secpal-classify-rocky-target-failure"),
+        )
+        classifier_path = next((path for path in candidates if path.is_file()), None)
+        if classifier_path is None:
+            raise ControlError("target qualification classifier is unavailable")
+        specification = importlib.util.spec_from_file_location(
+            "secpal_target_qualification_failure", classifier_path
+        )
+        if specification is None or specification.loader is None:
+            raise ControlError("target qualification classifier cannot be loaded")
+        classifier = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(classifier)
+        try:
+            classifier.validate_admitted_daemon_reload_adjacency(adjacency)
+        except (AttributeError, ValueError) as error:
+            raise ControlError(
+                "target qualification daemon-reload adjacency contradicts its facts"
+            ) from error
 
 
 def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:

@@ -80,10 +80,192 @@
     "diagnostic_input_bytes": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 131328
+      "maximum": 135424
+    },
+    "daemon_reload_adjacency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "capture_complete",
+        "captured_before_cleanup",
+        "boot_id",
+        "manager_active_after_reload_failure",
+        "bus_available_after_reload_failure",
+        "control_reachable_after_reload_failure",
+        "quadlet_input_admitted",
+        "quadlet_input",
+        "podman_generator_executed",
+        "podman_generator_exit_status",
+        "podman_generator_accepted_actual_input",
+        "generator_failure_observed",
+        "generator_failures",
+        "generator_failure_ambiguous",
+        "selinux_avc_observed",
+        "selinux_avc",
+        "selinux_avc_ambiguous"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "manager-continuity-lost",
+            "target-input-invalid",
+            "podman-generator-rejected",
+            "other-generator-failed",
+            "selinux-reload-denied",
+            "manager-reload-transaction-failed",
+            "diagnostic-unavailable"
+          ]
+        },
+        "capture_complete": { "type": "boolean" },
+        "captured_before_cleanup": { "type": "boolean" },
+        "boot_id": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "manager_active_after_reload_failure": {
+          "type": ["boolean", "null"]
+        },
+        "bus_available_after_reload_failure": {
+          "type": ["boolean", "null"]
+        },
+        "control_reachable_after_reload_failure": {
+          "type": ["boolean", "null"]
+        },
+        "quadlet_input_admitted": { "type": "boolean" },
+        "quadlet_input": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "match_count",
+                "present",
+                "regular_file",
+                "not_symlink",
+                "owner_uid",
+                "owner_gid",
+                "mode",
+                "size",
+                "sha256"
+              ],
+              "properties": {
+                "match_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                "present": { "type": "boolean" },
+                "regular_file": { "type": "boolean" },
+                "not_symlink": { "type": "boolean" },
+                "owner_uid": {
+                  "type": ["integer", "null"],
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "owner_gid": {
+                  "type": ["integer", "null"],
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "mode": {
+                  "type": ["string", "null"],
+                  "pattern": "^[0-7]{4}$"
+                },
+                "size": {
+                  "type": ["integer", "null"],
+                  "minimum": 0,
+                  "maximum": 4097
+                },
+                "sha256": {
+                  "type": ["string", "null"],
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          ]
+        },
+        "podman_generator_executed": { "type": "boolean" },
+        "podman_generator_exit_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "podman_generator_accepted_actual_input": { "type": "boolean" },
+        "generator_failure_observed": { "type": "boolean" },
+        "generator_failures": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["basename", "exit_status"],
+            "properties": {
+              "basename": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.@+-]{1,128}$"
+              },
+              "exit_status": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 255
+              }
+            }
+          }
+        },
+        "generator_failure_ambiguous": { "type": "boolean" },
+        "selinux_avc_observed": { "type": "boolean" },
+        "selinux_avc": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_type",
+                "target_type",
+                "object_class",
+                "denied_permission"
+              ],
+              "properties": {
+                "source_type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "target_type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "object_class": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "denied_permission": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                }
+              }
+            }
+          ]
+        },
+        "selinux_avc_ambiguous": { "type": "boolean" }
+      }
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": { "const": "qualify-quadlet-daemon-reload" },
+          "reason": { "const": "command-failed" }
+        },
+        "required": ["operation", "reason"]
+      },
+      "then": { "required": ["daemon_reload_adjacency"] },
+      "else": { "not": { "required": ["daemon_reload_adjacency"] } }
+    },
     {
       "if": {
         "properties": {
