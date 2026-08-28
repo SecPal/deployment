@@ -976,6 +976,69 @@ class CloudCIContractTests(unittest.TestCase):
         result = self.run_validator()
         self.assertEqual(0, result.returncode, result.stdout)
 
+    def test_rejects_weakened_current_boot_runtime_user_readiness(self) -> None:
+        publisher = "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
+        mutations = (
+            (
+                publisher,
+                '["systemctl", "is-active", "--quiet", f"user@{runtime_uid}.service"]',
+                '["true"]',
+            ),
+            (
+                publisher,
+                "def observe_runtime_user(\n",
+                "# loginctl enable-linger is not readiness\n"
+                "def observe_runtime_user(\n",
+            ),
+            (
+                publisher,
+                "def observe_runtime_user(\n",
+                "# runtime.systemd_user from preparation\n"
+                "def observe_runtime_user(\n",
+            ),
+            (
+                publisher,
+                'stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)',
+                "True",
+            ),
+            (publisher, '"show-environment"', '"daemon-reload"'),
+            (publisher, "WAIT_SECONDS = 60", "WAIT_SECONDS = 0"),
+            (
+                publisher,
+                "timeout=min(COMMAND_TIMEOUT_SECONDS, remaining)",
+                "timeout=COMMAND_TIMEOUT_SECONDS",
+            ),
+            (
+                publisher,
+                "sleep(min(interval, remaining))",
+                "time.sleep(WAIT_SECONDS)",
+            ),
+            (
+                publisher,
+                '"runtime_user_bus_available": result.observation.bus_available,',
+                '"runtime_user_bus_available": result.observation.manager_active,',
+            ),
+            (
+                publisher,
+                "if current_boot_id() != arguments.boot_id:\n",
+                "if False:\n",
+            ),
+            (
+                "scripts/ci-cloud/bootstrap-rocky-host.tftpl",
+                '  --boot-id "$boot_id" \\\n',
+                "",
+            ),
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "set -euo pipefail\n",
+                "set -euo pipefail\n"
+                "/usr/local/sbin/secpal-publish-rocky-qualification-readiness\n",
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
     def test_rejects_collapsed_quadlet_target_diagnostics(self) -> None:
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         for old, new in (

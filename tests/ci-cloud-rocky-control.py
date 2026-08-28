@@ -396,6 +396,8 @@ class RockyCloudControlTests(unittest.TestCase):
         )
         sources = {
             "prepare_script_base64gzip": ROOT / "scripts/ci-cloud/prepare-rocky-host.sh",
+            "readiness_publisher_base64gzip": ROOT
+            / "scripts/ci-cloud/publish-rocky-qualification-readiness.py",
             "target_runner_base64gzip": ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh",
             "target_failure_classifier_base64gzip": ROOT
             / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
