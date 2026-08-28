@@ -1087,9 +1087,10 @@ class CloudCIContractTests(unittest.TestCase):
         mutations = (
             (
                 trace,
-                "SECPAL_QUADLET_RELOAD_FAILURE_V1:%s:%s",
+                "SECPAL_QUADLET_RELOAD_FAILURE_V2:%s:%s:%s",
                 "SECPAL_UNBOUNDED_RELOAD_FAILURE:%s:%s",
             ),
+            (trace, '"$status" "$$" "$frames"', '"$status" "1" "$frames"'),
             (trace, "10#$frame == 242", "10#$frame == 243"),
             (trace, "read -r -t 25 -u 5", "read -r -u 5"),
             (trace, "trap - ERR", ":"),
@@ -1148,6 +1149,24 @@ class CloudCIContractTests(unittest.TestCase):
                 "max_bytes=MAX_GENERATOR_JOURNAL_BYTES",
                 "max_bytes=MAX_COMMAND_BYTES",
             ),
+            (
+                observer,
+                'ROCKY_SYSTEMD_SOURCE_RPM = "systemd-257-23.el10_2.2.rocky.0.1.src.rpm"',
+                'ROCKY_SYSTEMD_SOURCE_RPM = "upstream-main"',
+            ),
+            (
+                observer,
+                'f"--output-fields={RELOAD_OUTPUT_FIELDS}"',
+                '"--output=json-pretty"',
+            ),
+            (observer, 'f"_PID={manager_pid}"', '"_UID=0"'),
+            (observer, 'os.statvfs("/run/systemd")', 'os.statvfs("/run")'),
+            (observer, '"tclass=system"', '"tclass=file"'),
+            (
+                observer,
+                'r"avc:\\s+denied\\s+\\{\\s*reload\\s*\\}"',
+                'r"avc:.*denied"',
+            ),
             (observer, 'comm="podman-system-g"', 'comm="systemd"'),
             (
                 classifier,
@@ -1168,6 +1187,21 @@ class CloudCIContractTests(unittest.TestCase):
                 classifier,
                 're.fullmatch(r"[0-9a-f]{64}", str(observation["failure_event_sha256"]))',
                 "None",
+            ),
+            (
+                classifier,
+                'return "reload-authorization-denied", "none"',
+                'return "reload-reply-transport-failed", "none"',
+            ),
+            (
+                classifier,
+                'return "reload-rate-limited", "none"',
+                'return "manager-reload-transaction-failed", "none"',
+            ),
+            (
+                classifier,
+                'return "reload-reply-transport-failed", "none"\n',
+                'return "manager-reload-transaction-failed", "none"\n',
             ),
         )
         for relative, old, new in mutations:

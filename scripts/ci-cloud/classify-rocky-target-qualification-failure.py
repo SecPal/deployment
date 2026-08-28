@@ -18,9 +18,9 @@ EXPECTED_TARGET_SHA = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
 EXPECTED_HARNESS_SHA256 = "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"
 MAX_STDOUT_BYTES = 65_536
 MAX_TRACE_BYTES = 4_096
-MAX_ARTIFACT_BYTES = 4_096
+MAX_ARTIFACT_BYTES = 8_192
 MAX_CAPTURE_FILE_BYTES = 65_536
-MAX_ADJACENCY_BYTES = 4_096
+MAX_ADJACENCY_BYTES = 8_192
 MAX_TRACE_FRAMES = 8
 MAX_TRACE_LINE = 9_999
 
@@ -160,6 +160,42 @@ GENERATOR_OBSERVATION_REASONS = frozenset(
         "observation-unavailable",
     }
 )
+RELOAD_OBSERVATION_REASONS = frozenset(
+    {
+        "none",
+        "journal-command-failed",
+        "journal-timeout",
+        "journal-output-bound-exceeded",
+        "candidate-representation-invalid",
+        "candidate-count-exceeded",
+        "manager-pid-unavailable",
+        "multiple-causes",
+        "observation-unavailable",
+    }
+)
+RELOAD_INTERNAL_FAILURES = frozenset(
+    {
+        "none",
+        "serialization-file-failed",
+        "resource-allocation-failed",
+        "serialization-failed",
+        "serialization-seek-failed",
+        "internal-reload-failure-unclassified",
+    }
+)
+CLIENT_RELOAD_ERRORS = frozenset(
+    {
+        "rate-limited",
+        "interactive-auth-required",
+        "selinux-access-denied",
+        "access-denied",
+        "timeout",
+        "connection-reset",
+        "transport-unavailable",
+        "other-admitted-bus-error",
+        "unavailable",
+    }
+)
 
 ADJACENCY_KEYS = frozenset(
     {
@@ -176,6 +212,14 @@ ADJACENCY_KEYS = frozenset(
         "manager_active_after_reload_failure",
         "bus_available_after_reload_failure",
         "control_reachable_after_reload_failure",
+        "manager_pid",
+        "control_process_pid",
+        "control_process_selinux_type",
+        "manager_process_selinux_type",
+        "run_systemd_statvfs_success",
+        "run_systemd_free_bytes",
+        "run_systemd_reload_minimum_bytes",
+        "run_systemd_space_sufficient",
         "quadlet_input",
         "podman_generator_executed",
         "podman_generator_exit_status",
@@ -183,6 +227,16 @@ ADJACENCY_KEYS = frozenset(
         "generator_failures",
         "generator_failure_ambiguous",
         "generator_observation_reason",
+        "reload_request_logged",
+        "reload_rate_limit_rejected",
+        "reload_started",
+        "reload_finished",
+        "reload_internal_failure",
+        "reload_reply_send_failed",
+        "reload_journal_observation_reason",
+        "reload_access_avc_observed",
+        "reload_access_avc",
+        "reload_access_avc_ambiguous",
         "selinux_avc_observed",
         "selinux_avc",
         "selinux_avc_ambiguous",
@@ -295,6 +349,14 @@ def unavailable_daemon_reload_adjacency() -> dict[str, object]:
         "manager_active_after_reload_failure": None,
         "bus_available_after_reload_failure": None,
         "control_reachable_after_reload_failure": None,
+        "manager_pid": None,
+        "control_process_pid": None,
+        "control_process_selinux_type": None,
+        "manager_process_selinux_type": None,
+        "run_systemd_statvfs_success": False,
+        "run_systemd_free_bytes": None,
+        "run_systemd_reload_minimum_bytes": 16 * 1024 * 1024,
+        "run_systemd_space_sufficient": False,
         "quadlet_input_admitted": False,
         "quadlet_input": None,
         "podman_generator_executed": False,
@@ -304,6 +366,19 @@ def unavailable_daemon_reload_adjacency() -> dict[str, object]:
         "generator_failures": [],
         "generator_failure_ambiguous": True,
         "generator_observation_reason": "observation-unavailable",
+        "client_reload_error": "unavailable",
+        "reload_authorization_outcome": "observation-unavailable",
+        "reload_request_logged": False,
+        "reload_rate_limit_rejected": False,
+        "reload_started": False,
+        "reload_finished": False,
+        "reload_internal_failure": "none",
+        "reload_reply_send_failed": False,
+        "reload_journal_observation_reason": "observation-unavailable",
+        "reload_access_avc_observed": False,
+        "reload_access_avc": None,
+        "reload_access_avc_ambiguous": True,
+        "reload_diagnostic_reason": "observation-unavailable",
         "selinux_avc_observed": False,
         "selinux_avc": None,
         "selinux_avc_ambiguous": True,
@@ -392,6 +467,54 @@ def _admitted_avc(value: object, observed: bool) -> dict[str, str] | None:
     return value
 
 
+def reload_client_error(payload: bytes) -> str:
+    """Normalize only the exact installed systemctl daemon-reload error line."""
+    try:
+        lines = payload.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return "unavailable"
+    messages = [
+        line.removeprefix("Reload daemon failed: ")
+        for line in lines
+        if line.startswith("Reload daemon failed: ")
+        and 1 <= len(line.encode("utf-8")) <= 768
+    ]
+    if len(messages) != 1:
+        return "unavailable"
+    message = messages[0]
+    if message == "Reload() request rejected due to rate limit.":
+        return "rate-limited"
+    if message == "Interactive authentication required.":
+        return "interactive-auth-required"
+    if message.startswith("SELinux policy denies access: "):
+        return "selinux-access-denied"
+    if message == "Access denied":
+        return "access-denied"
+    if message == "Connection timed out":
+        return "timeout"
+    if message == "Connection reset by peer":
+        return "connection-reset"
+    if message in {
+        "Transport endpoint is not connected",
+        "No route to host",
+        "Connection refused",
+    }:
+        return "transport-unavailable"
+    return "other-admitted-bus-error"
+
+
+def reload_authorization_outcome(request_logged: bool, client_error: str) -> str:
+    if request_logged:
+        return "authorized"
+    if client_error == "interactive-auth-required":
+        return "interactive-auth-required"
+    if client_error == "access-denied":
+        return "denied"
+    if client_error in {"other-admitted-bus-error", "unavailable"}:
+        return "observation-unavailable"
+    return "not-reached-or-transport-failed"
+
+
 def daemon_reload_classification(
     *,
     manager_active: bool,
@@ -404,30 +527,70 @@ def daemon_reload_classification(
     generator_ambiguous: bool,
     avc_observed: bool,
     avc_ambiguous: bool,
-) -> str:
+    run_space_observed: bool,
+    run_space_sufficient: bool,
+    client_error: str,
+    reload_request_logged: bool,
+    reload_rate_limit_rejected: bool,
+    reload_started: bool,
+    reload_finished: bool,
+    reload_internal_failure: str,
+    reload_reply_send_failed: bool,
+    reload_journal_reason: str,
+    reload_access_avc_observed: bool,
+    reload_access_avc_ambiguous: bool,
+) -> tuple[str, str]:
     if not (manager_active and bus_available and control_reachable):
-        return "manager-continuity-lost"
+        return "manager-continuity-lost", "none"
     if not input_admitted:
-        return "target-input-invalid"
+        return "target-input-invalid", "none"
     if not generator_executed:
-        return "diagnostic-unavailable"
+        return "diagnostic-unavailable", "podman-generator-not-executed"
     if not generator_accepted:
-        return "podman-generator-rejected"
+        return "podman-generator-rejected", "none"
     if generator_ambiguous or any(
         failure["basename"] == "podman-system-generator" for failure in failures
     ):
-        return "diagnostic-unavailable"
+        return "diagnostic-unavailable", "generator-observation-unavailable"
     if failures:
-        return "other-generator-failed"
+        return "other-generator-failed", "none"
     if avc_ambiguous:
-        return "diagnostic-unavailable"
+        return "diagnostic-unavailable", "quadlet-selinux-observation-unavailable"
     if avc_observed:
-        return "selinux-reload-denied"
-    return "manager-reload-transaction-failed"
+        return "selinux-reload-denied", "none"
+    if not run_space_observed:
+        return "diagnostic-unavailable", "run-space-observation-unavailable"
+    if not run_space_sufficient:
+        return "reload-run-space-rejected", "none"
+    if reload_journal_reason != "none":
+        return "diagnostic-unavailable", f"reload-{reload_journal_reason}"
+    if reload_access_avc_ambiguous:
+        return "diagnostic-unavailable", "reload-selinux-observation-ambiguous"
+    if reload_access_avc_observed or client_error == "selinux-access-denied":
+        return "reload-selinux-access-denied", "none"
+    if not reload_request_logged:
+        if client_error == "interactive-auth-required":
+            return "reload-authorization-interactive-required", "none"
+        if client_error == "access-denied":
+            return "reload-authorization-denied", "none"
+        if client_error in {"timeout", "connection-reset", "transport-unavailable"}:
+            return "reload-reply-transport-failed", "none"
+        return "diagnostic-unavailable", "reload-authorization-observation-unavailable"
+    if reload_rate_limit_rejected or client_error == "rate-limited":
+        return "reload-rate-limited", "none"
+    if reload_reply_send_failed:
+        return "reload-reply-transport-failed", "none"
+    if not reload_started:
+        return "diagnostic-unavailable", "reload-main-loop-entry-not-observed"
+    if not reload_finished:
+        return "reload-manager-serialization-failed", "none"
+    return "reload-reply-transport-failed", "none"
 
 
 def admit_daemon_reload_adjacency(
-    observation: object, expected: dict[str, object]
+    observation: object,
+    expected: dict[str, object],
+    client_error: str = "unavailable",
 ) -> dict[str, object]:
     """Purely admit one failure-time observation under the d892 contract."""
     unavailable = unavailable_daemon_reload_adjacency()
@@ -464,6 +627,42 @@ def admit_daemon_reload_adjacency(
         control_reachable = _closed_boolean(
             observation, "control_reachable_after_reload_failure"
         )
+        manager_pid = observation["manager_pid"]
+        if manager_pid is not None and (
+            type(manager_pid) is not int or not 1 <= manager_pid <= 2**31 - 1
+        ):
+            raise ValueError("user manager PID is outside its bound")
+        control_pid = observation["control_process_pid"]
+        if type(control_pid) is not int or not 1 <= control_pid <= 2**31 - 1:
+            raise ValueError("Reload control PID is outside its bound")
+        for name in (
+            "control_process_selinux_type",
+            "manager_process_selinux_type",
+        ):
+            value = observation[name]
+            if value is not None and (
+                not isinstance(value, str) or SELINUX_TYPE.fullmatch(value) is None
+            ):
+                raise ValueError("Reload SELinux process type is malformed")
+        run_space_observed = _closed_boolean(
+            observation, "run_systemd_statvfs_success"
+        )
+        run_space_sufficient = _closed_boolean(
+            observation, "run_systemd_space_sufficient"
+        )
+        free_bytes = observation["run_systemd_free_bytes"]
+        if free_bytes is not None and (
+            type(free_bytes) is not int or not 0 <= free_bytes <= 2**63 - 1
+        ):
+            raise ValueError("Reload run-space value is outside its bound")
+        if observation["run_systemd_reload_minimum_bytes"] != 16 * 1024 * 1024:
+            raise ValueError("Reload run-space minimum contradicts exact systemd source")
+        if (
+            run_space_observed != (free_bytes is not None)
+            or run_space_sufficient
+            != (run_space_observed and free_bytes >= 16 * 1024 * 1024)
+        ):
+            raise ValueError("Reload run-space facts are inconsistent")
         quadlet_input, input_admitted = _admitted_input(observation["quadlet_input"])
         generator_executed = _closed_boolean(observation, "podman_generator_executed")
         generator_accepted = _closed_boolean(
@@ -493,7 +692,51 @@ def admit_daemon_reload_adjacency(
         avc_ambiguous = _closed_boolean(observation, "selinux_avc_ambiguous")
         avc = _admitted_avc(observation["selinux_avc"], avc_observed)
 
-        classification = daemon_reload_classification(
+        reload_request_logged = _closed_boolean(
+            observation, "reload_request_logged"
+        )
+        reload_rate_limit_rejected = _closed_boolean(
+            observation, "reload_rate_limit_rejected"
+        )
+        reload_started = _closed_boolean(observation, "reload_started")
+        reload_finished = _closed_boolean(observation, "reload_finished")
+        reload_reply_send_failed = _closed_boolean(
+            observation, "reload_reply_send_failed"
+        )
+        reload_internal_failure = observation["reload_internal_failure"]
+        reload_journal_reason = observation["reload_journal_observation_reason"]
+        if (
+            reload_internal_failure not in RELOAD_INTERNAL_FAILURES
+            or reload_journal_reason not in RELOAD_OBSERVATION_REASONS
+            or client_error not in CLIENT_RELOAD_ERRORS
+            or reload_finished and not reload_started
+            or reload_rate_limit_rejected and not reload_request_logged
+        ):
+            raise ValueError("Reload stage facts are inconsistent")
+        if (
+            reload_internal_failure == "none"
+            and reload_started
+            and not reload_finished
+        ):
+            # Exact Rocky systemd 257 only omits "Reloading finished" here
+            # when manager_reload() returned before its point of no return.
+            reload_internal_failure = "internal-reload-failure-unclassified"
+        reload_access_avc_observed = _closed_boolean(
+            observation, "reload_access_avc_observed"
+        )
+        reload_access_avc_ambiguous = _closed_boolean(
+            observation, "reload_access_avc_ambiguous"
+        )
+        reload_access_avc = _admitted_avc(
+            observation["reload_access_avc"], reload_access_avc_observed
+        )
+        if reload_access_avc is not None and (
+            reload_access_avc["object_class"] != "system"
+            or reload_access_avc["denied_permission"] != "reload"
+        ):
+            raise ValueError("SELinux denial is not the exact Reload access check")
+
+        classification, diagnostic_reason = daemon_reload_classification(
             manager_active=manager_active,
             bus_available=bus_available,
             control_reachable=control_reachable,
@@ -504,6 +747,18 @@ def admit_daemon_reload_adjacency(
             generator_ambiguous=generator_ambiguous,
             avc_observed=avc_observed,
             avc_ambiguous=avc_ambiguous,
+            run_space_observed=run_space_observed,
+            run_space_sufficient=run_space_sufficient,
+            client_error=client_error,
+            reload_request_logged=reload_request_logged,
+            reload_rate_limit_rejected=reload_rate_limit_rejected,
+            reload_started=reload_started,
+            reload_finished=reload_finished,
+            reload_internal_failure=reload_internal_failure,
+            reload_reply_send_failed=reload_reply_send_failed,
+            reload_journal_reason=reload_journal_reason,
+            reload_access_avc_observed=reload_access_avc_observed,
+            reload_access_avc_ambiguous=reload_access_avc_ambiguous,
         )
 
         return {
@@ -514,6 +769,18 @@ def admit_daemon_reload_adjacency(
             "manager_active_after_reload_failure": manager_active,
             "bus_available_after_reload_failure": bus_available,
             "control_reachable_after_reload_failure": control_reachable,
+            "manager_pid": manager_pid,
+            "control_process_pid": control_pid,
+            "control_process_selinux_type": observation[
+                "control_process_selinux_type"
+            ],
+            "manager_process_selinux_type": observation[
+                "manager_process_selinux_type"
+            ],
+            "run_systemd_statvfs_success": run_space_observed,
+            "run_systemd_free_bytes": free_bytes,
+            "run_systemd_reload_minimum_bytes": 16 * 1024 * 1024,
+            "run_systemd_space_sufficient": run_space_sufficient,
             "quadlet_input_admitted": input_admitted,
             "quadlet_input": quadlet_input,
             "podman_generator_executed": generator_executed,
@@ -523,6 +790,21 @@ def admit_daemon_reload_adjacency(
             "generator_failures": failures,
             "generator_failure_ambiguous": generator_ambiguous,
             "generator_observation_reason": generator_reason,
+            "client_reload_error": client_error,
+            "reload_authorization_outcome": reload_authorization_outcome(
+                reload_request_logged, client_error
+            ),
+            "reload_request_logged": reload_request_logged,
+            "reload_rate_limit_rejected": reload_rate_limit_rejected,
+            "reload_started": reload_started,
+            "reload_finished": reload_finished,
+            "reload_internal_failure": reload_internal_failure,
+            "reload_reply_send_failed": reload_reply_send_failed,
+            "reload_journal_observation_reason": reload_journal_reason,
+            "reload_access_avc_observed": reload_access_avc_observed,
+            "reload_access_avc": reload_access_avc,
+            "reload_access_avc_ambiguous": reload_access_avc_ambiguous,
+            "reload_diagnostic_reason": diagnostic_reason,
             "selinux_avc_observed": avc_observed,
             "selinux_avc": avc,
             "selinux_avc_ambiguous": avc_ambiguous,
@@ -552,6 +834,41 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
         control_reachable = _closed_boolean(
             document, "control_reachable_after_reload_failure"
         )
+        manager_pid = document["manager_pid"]
+        if manager_pid is not None and (
+            type(manager_pid) is not int or not 1 <= manager_pid <= 2**31 - 1
+        ):
+            raise ValueError("admitted user manager PID is outside its bound")
+        control_pid = document["control_process_pid"]
+        if type(control_pid) is not int or not 1 <= control_pid <= 2**31 - 1:
+            raise ValueError("admitted Reload control PID is outside its bound")
+        for name in (
+            "control_process_selinux_type",
+            "manager_process_selinux_type",
+        ):
+            value = document[name]
+            if value is not None and (
+                not isinstance(value, str) or SELINUX_TYPE.fullmatch(value) is None
+            ):
+                raise ValueError("admitted Reload SELinux type is malformed")
+        run_space_observed = _closed_boolean(
+            document, "run_systemd_statvfs_success"
+        )
+        run_space_sufficient = _closed_boolean(
+            document, "run_systemd_space_sufficient"
+        )
+        free_bytes = document["run_systemd_free_bytes"]
+        if (
+            document["run_systemd_reload_minimum_bytes"] != 16 * 1024 * 1024
+            or run_space_observed != (free_bytes is not None)
+            or (
+                free_bytes is not None
+                and (type(free_bytes) is not int or not 0 <= free_bytes <= 2**63 - 1)
+            )
+            or run_space_sufficient
+            != (run_space_observed and free_bytes >= 16 * 1024 * 1024)
+        ):
+            raise ValueError("admitted Reload run-space facts are inconsistent")
         _, input_admitted = _admitted_input(document["quadlet_input"])
         if document["quadlet_input_admitted"] is not input_admitted:
             raise ValueError("admitted Quadlet input decision contradicts its facts")
@@ -580,7 +897,45 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
         avc_observed = _closed_boolean(document, "selinux_avc_observed")
         avc_ambiguous = _closed_boolean(document, "selinux_avc_ambiguous")
         _admitted_avc(document["selinux_avc"], avc_observed)
-        expected = daemon_reload_classification(
+        client_error = document["client_reload_error"]
+        reload_request_logged = _closed_boolean(document, "reload_request_logged")
+        reload_rate_limit_rejected = _closed_boolean(
+            document, "reload_rate_limit_rejected"
+        )
+        reload_started = _closed_boolean(document, "reload_started")
+        reload_finished = _closed_boolean(document, "reload_finished")
+        reload_reply_send_failed = _closed_boolean(
+            document, "reload_reply_send_failed"
+        )
+        reload_internal_failure = document["reload_internal_failure"]
+        reload_journal_reason = document["reload_journal_observation_reason"]
+        if (
+            client_error not in CLIENT_RELOAD_ERRORS
+            or reload_internal_failure not in RELOAD_INTERNAL_FAILURES
+            or reload_journal_reason not in RELOAD_OBSERVATION_REASONS
+            or reload_finished and not reload_started
+            or reload_rate_limit_rejected and not reload_request_logged
+        ):
+            raise ValueError("admitted Reload stages are inconsistent")
+        if document["reload_authorization_outcome"] != reload_authorization_outcome(
+            reload_request_logged, client_error
+        ):
+            raise ValueError("admitted Reload authorization contradicts source order")
+        reload_access_avc_observed = _closed_boolean(
+            document, "reload_access_avc_observed"
+        )
+        reload_access_avc_ambiguous = _closed_boolean(
+            document, "reload_access_avc_ambiguous"
+        )
+        reload_access_avc = _admitted_avc(
+            document["reload_access_avc"], reload_access_avc_observed
+        )
+        if reload_access_avc is not None and (
+            reload_access_avc["object_class"] != "system"
+            or reload_access_avc["denied_permission"] != "reload"
+        ):
+            raise ValueError("admitted SELinux denial is not Reload-specific")
+        expected, diagnostic_reason = daemon_reload_classification(
             manager_active=manager_active,
             bus_available=bus_available,
             control_reachable=control_reachable,
@@ -591,8 +946,23 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
             generator_ambiguous=generator_ambiguous,
             avc_observed=avc_observed,
             avc_ambiguous=avc_ambiguous,
+            run_space_observed=run_space_observed,
+            run_space_sufficient=run_space_sufficient,
+            client_error=client_error,
+            reload_request_logged=reload_request_logged,
+            reload_rate_limit_rejected=reload_rate_limit_rejected,
+            reload_started=reload_started,
+            reload_finished=reload_finished,
+            reload_internal_failure=reload_internal_failure,
+            reload_reply_send_failed=reload_reply_send_failed,
+            reload_journal_reason=reload_journal_reason,
+            reload_access_avc_observed=reload_access_avc_observed,
+            reload_access_avc_ambiguous=reload_access_avc_ambiguous,
         )
-        if document["classification"] != expected:
+        if (
+            document["classification"] != expected
+            or document["reload_diagnostic_reason"] != diagnostic_reason
+        ):
             raise ValueError("daemon-reload classification contradicts its facts")
     except (KeyError, TypeError) as error:
         raise ValueError("admitted daemon-reload adjacency is malformed") from error
@@ -697,6 +1067,7 @@ def main() -> int:
                 "qualification_run_attempt": options.run_attempt,
                 "failure_status": options.exit_status,
             },
+            reload_client_error(stdout),
         )
     document: dict[str, object] = {
         "schema_version": 1,

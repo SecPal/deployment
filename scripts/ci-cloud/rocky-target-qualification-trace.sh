@@ -36,8 +36,8 @@ secpal_target_qualification_err() {
   fi
   if [[ "$daemon_reload_frame" == true ]] &&
     { : >&4; } 2>/dev/null && { : <&5; } 2>/dev/null; then
-    if ! printf 'SECPAL_QUADLET_RELOAD_FAILURE_V1:%s:%s\n' \
-      "$status" "$frames" >&4; then
+    if ! printf 'SECPAL_QUADLET_RELOAD_FAILURE_V2:%s:%s:%s\n' \
+      "$status" "$$" "$frames" >&4; then
       :
     fi
     if ! IFS= read -r -t 25 -u 5 adjacency_ack; then

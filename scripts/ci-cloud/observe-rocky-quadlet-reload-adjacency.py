@@ -22,7 +22,8 @@ from typing import IO, Any
 
 
 EVENT = re.compile(
-    rb"^SECPAL_QUADLET_RELOAD_FAILURE_V1:([1-9][0-9]{0,2}):"
+    rb"^SECPAL_QUADLET_RELOAD_FAILURE_V2:([1-9][0-9]{0,2}):"
+    rb"([1-9][0-9]{0,9}):"
     rb"([1-9][0-9]{0,3}(?:,[1-9][0-9]{0,3}){0,7})\n$"
 )
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -44,8 +45,14 @@ MAX_GENERATOR_CANDIDATE_RECORDS = 3
 MAX_GENERATOR_JOURNAL_BYTES = (MAX_GENERATOR_RECORD_BYTES + 1) * (
     MAX_GENERATOR_CANDIDATE_RECORDS + 1
 )
-MAX_OBSERVATION_BYTES = 4_096
+MAX_RELOAD_RECORD_BYTES = 2_048
+MAX_RELOAD_CANDIDATE_RECORDS = 8
+MAX_RELOAD_JOURNAL_BYTES = (MAX_RELOAD_RECORD_BYTES + 1) * (
+    MAX_RELOAD_CANDIDATE_RECORDS + 1
+)
+MAX_OBSERVATION_BYTES = 8_192
 COMMAND_TIMEOUT_SECONDS = 3
+RELOAD_JOURNAL_TIMEOUT_SECONDS = 1
 GENERATOR_TIMEOUT_SECONDS = 8
 CAPTURE_DEADLINE_SECONDS = 22
 RUNTIME_ACCOUNT = "secpal-runtime"
@@ -68,6 +75,29 @@ GENERATOR_CODE_FUNC = "do_execute"
 # Rocky's reviewed systemd 257 build records this compiled relative source path.
 GENERATOR_CODE_FILE = "../src/shared/exec-util.c"
 GENERATOR_OUTPUT_FIELDS = "_UID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"
+ROCKY_SYSTEMD_SOURCE_RPM = "systemd-257-23.el10_2.2.rocky.0.1.src.rpm"
+RELOAD_SPACE_MINIMUM_BYTES = 16 * 1024 * 1024
+RELOAD_OUTPUT_FIELDS = "_PID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"
+RELOAD_EVENT_SOURCES = (
+    ("../src/core/dbus-manager.c", "log_caller"),
+    ("../src/core/dbus-manager.c", "method_reload"),
+    ("../src/core/main.c", "invoke_main_loop"),
+    ("../src/core/manager.c", "manager_reload"),
+    ("../src/core/manager-serialize.c", "manager_serialize"),
+    ("../src/core/dbus.c", "bus_send_pending_reload_message"),
+)
+RELOAD_OBSERVATION_REASONS = frozenset(
+    {
+        "none",
+        "journal-command-failed",
+        "journal-timeout",
+        "journal-output-bound-exceeded",
+        "candidate-representation-invalid",
+        "candidate-count-exceeded",
+        "manager-pid-unavailable",
+        "multiple-causes",
+    }
+)
 GENERATOR_OBSERVATION_REASONS = frozenset(
     {
         "none",
@@ -384,6 +414,160 @@ def generator_observation(
     return [], reason
 
 
+def empty_reload_stage_markers() -> dict[str, Any]:
+    return {
+        "reload_request_logged": False,
+        "reload_rate_limit_rejected": False,
+        "reload_started": False,
+        "reload_finished": False,
+        "reload_internal_failure": "none",
+        "reload_reply_send_failed": False,
+    }
+
+
+def reload_journal_command(
+    manager_pid: int, boot_id: str, journal_baseline: str
+) -> list[str]:
+    command = [
+        "journalctl",
+        "--no-pager",
+        "--output=json",
+        f"--output-fields={RELOAD_OUTPUT_FIELDS}",
+        f"--boot={boot_id.replace('-', '')}",
+        f"--since={journal_baseline}",
+    ]
+    for index, (code_file, code_func) in enumerate(RELOAD_EVENT_SOURCES):
+        if index:
+            command.append("+")
+        command.extend(
+            [
+                f"_PID={manager_pid}",
+                f"CODE_FUNC={code_func}",
+                f"CODE_FILE={code_file}",
+            ]
+        )
+    return command
+
+
+def reload_stage_markers(
+    payload: bytes, manager_pid: int, boot_id: str
+) -> tuple[dict[str, Any], str]:
+    facts = empty_reload_stage_markers()
+    reasons: set[str] = set()
+    internal_failures: set[str] = set()
+    candidate_count = 0
+    for raw_line in payload.splitlines():
+        candidate_count += 1
+        if candidate_count > MAX_RELOAD_CANDIDATE_RECORDS:
+            reasons.add("candidate-count-exceeded")
+            continue
+        if len(raw_line) > MAX_RELOAD_RECORD_BYTES:
+            reasons.add("candidate-representation-invalid")
+            continue
+        try:
+            entry = json.loads(raw_line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            reasons.add("candidate-representation-invalid")
+            continue
+        if not isinstance(entry, dict):
+            reasons.add("candidate-representation-invalid")
+            continue
+        code_file = entry.get("CODE_FILE")
+        code_func = entry.get("CODE_FUNC")
+        message = entry.get("MESSAGE")
+        if (
+            str(entry.get("_PID")) != str(manager_pid)
+            or entry.get("_BOOT_ID") != boot_id.replace("-", "")
+            or (code_file, code_func) not in RELOAD_EVENT_SOURCES
+            or not isinstance(message, str)
+            or len(message.encode("utf-8")) > 1_024
+        ):
+            reasons.add("candidate-representation-invalid")
+            continue
+
+        if (code_file, code_func) == ("../src/core/dbus-manager.c", "log_caller"):
+            if re.fullmatch(
+                r"Reload requested from client PID [1-9][0-9]{0,9}"
+                r"(?: \('[A-Za-z0-9_.@+-]{1,64}'\))?"
+                r"(?: \(unit [A-Za-z0-9_.@+-]{1,128}\))?\.\.\.",
+                message,
+            ):
+                facts["reload_request_logged"] = True
+                continue
+        elif (code_file, code_func) == (
+            "../src/core/dbus-manager.c",
+            "method_reload",
+        ):
+            if message == "Reloading request rejected due to rate limit.":
+                facts["reload_rate_limit_rejected"] = True
+                continue
+        elif (code_file, code_func) == ("../src/core/main.c", "invoke_main_loop"):
+            if message == "Reloading...":
+                facts["reload_started"] = True
+                continue
+            if re.fullmatch(r"Reloading finished in [0-9]{1,12} ms\.", message):
+                facts["reload_finished"] = True
+                continue
+        elif (code_file, code_func) == ("../src/core/manager.c", "manager_reload"):
+            if message.startswith("Failed to create serialization file: "):
+                internal_failures.add("serialization-file-failed")
+                continue
+            if message == "Out of memory.":
+                internal_failures.add("resource-allocation-failed")
+                continue
+            if message.startswith("Failed to seek to beginning of serialization: "):
+                internal_failures.add("serialization-seek-failed")
+                continue
+        elif (code_file, code_func) == (
+            "../src/core/manager-serialize.c",
+            "manager_serialize",
+        ):
+            if message == "Out of memory.":
+                internal_failures.add("resource-allocation-failed")
+                continue
+            if message.startswith((
+                "Failed to flush serialization: ",
+                "Failed to add bus sockets to serialization: ",
+            )):
+                internal_failures.add("serialization-failed")
+                continue
+        elif (code_file, code_func) == (
+            "../src/core/dbus.c",
+            "bus_send_pending_reload_message",
+        ):
+            if message.startswith("Failed to send queued reload message, ignoring: "):
+                facts["reload_reply_send_failed"] = True
+                continue
+        reasons.add("candidate-representation-invalid")
+
+    if len(internal_failures) == 1:
+        facts["reload_internal_failure"] = next(iter(internal_failures))
+    elif len(internal_failures) > 1:
+        reasons.add("multiple-causes")
+    if not reasons:
+        return facts, "none"
+    if len(reasons) == 1:
+        return facts, next(iter(reasons))
+    return facts, "multiple-causes"
+
+
+def reload_stage_observation(
+    status: int,
+    payload: bytes,
+    command_failure: str | None,
+    manager_pid: int,
+    boot_id: str,
+) -> tuple[dict[str, Any], str]:
+    if status == 0 and command_failure is None:
+        return reload_stage_markers(payload, manager_pid, boot_id)
+    reason = {
+        "timeout": "journal-timeout",
+        "output-bound-exceeded": "journal-output-bound-exceeded",
+        "command-failed": "journal-command-failed",
+    }.get(command_failure, "journal-command-failed")
+    return empty_reload_stage_markers(), reason
+
+
 def selinux_adjacency(
     payload: bytes,
     input_path: Path | None,
@@ -431,15 +615,110 @@ def selinux_adjacency(
     return True, observations[0], len(observations) > 1
 
 
+def run_space_observation() -> tuple[bool, int | None]:
+    try:
+        filesystem = os.statvfs("/run/systemd")
+    except OSError:
+        return False, None
+    free_bytes = filesystem.f_bfree * filesystem.f_bsize
+    if not 0 <= free_bytes <= 2**63 - 1:
+        return False, None
+    return True, free_bytes
+
+
+def manager_state(runtime_uid: int) -> tuple[bool, int | None]:
+    status, payload, failure = bounded_command_output(
+        [
+            "systemctl",
+            "show",
+            f"user@{runtime_uid}.service",
+            "--property=ActiveState",
+            "--property=MainPID",
+        ],
+        timeout=COMMAND_TIMEOUT_SECONDS,
+        max_bytes=128,
+    )
+    if status != 0 or failure is not None:
+        return False, None
+    try:
+        values = dict(
+            line.split("=", 1)
+            for line in payload.decode("ascii").splitlines()
+            if "=" in line
+        )
+    except UnicodeDecodeError:
+        return False, None
+    if set(values) != {"ActiveState", "MainPID"} or values["ActiveState"] != "active":
+        return False, None
+    if re.fullmatch(r"[1-9][0-9]{0,9}", values["MainPID"]) is None:
+        return True, None
+    value = int(values["MainPID"])
+    return True, value if value <= 2**31 - 1 else None
+
+
+def process_selinux_type(pid: int) -> str | None:
+    try:
+        payload = Path(f"/proc/{pid}/attr/current").read_bytes()
+    except OSError:
+        return None
+    if len(payload) > 512:
+        return None
+    try:
+        fields = payload.decode("ascii").strip().split(":")
+    except UnicodeDecodeError:
+        return None
+    if len(fields) < 3 or re.fullmatch(r"[A-Za-z0-9_]{1,64}", fields[2]) is None:
+        return None
+    return fields[2]
+
+
+def reload_access_avc(
+    payload: bytes,
+) -> tuple[bool, dict[str, str] | None, bool]:
+    observations: list[dict[str, str]] = []
+    for event in payload.decode("utf-8", errors="replace").split("----"):
+        if (
+            "avc:  denied" not in event
+            or "permissive=0" not in event
+            or "tclass=system" not in event
+            or re.search(r"avc:\s+denied\s+\{\s*reload\s*\}", event) is None
+        ):
+            continue
+        context = re.search(
+            r"scontext=([^\s]+).*tcontext=([^\s]+).*tclass=(system)",
+            event,
+            re.DOTALL,
+        )
+        if context is None:
+            return True, None, True
+        source = context.group(1).split(":")
+        target = context.group(2).split(":")
+        if len(source) < 3 or len(target) < 3:
+            return True, None, True
+        observation = {
+            "source_type": source[2],
+            "target_type": target[2],
+            "object_class": "system",
+            "denied_permission": "reload",
+        }
+        if observation not in observations:
+            observations.append(observation)
+    if not observations:
+        return False, None, False
+    return True, observations[0], len(observations) > 1
+
+
 def collect_observation(
-    arguments: argparse.Namespace, failure_status: int, event: bytes
+    arguments: argparse.Namespace,
+    failure_status: int,
+    event: bytes,
+    run_space_before: tuple[bool, int | None],
+    control_pid: int,
 ) -> dict[str, Any]:
     runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
     runtime_uid = runtime.pw_uid
     bus_path = Path(f"/run/user/{runtime_uid}/bus")
-    manager_active = command_status(
-        ["systemctl", "is-active", "--quiet", f"user@{runtime_uid}.service"]
-    ) == 0
+    manager_active, manager_pid = manager_state(runtime_uid)
     try:
         bus_available = stat.S_ISSOCK(bus_path.stat().st_mode)
     except OSError:
@@ -452,6 +731,11 @@ def collect_observation(
             "show-environment",
         ]
     ) == 0
+    manager_selinux_type = (
+        process_selinux_type(manager_pid) if manager_pid is not None else None
+    )
+    control_selinux_type = process_selinux_type(control_pid)
+    run_space_after = run_space_observation()
     quadlet_input, input_path = input_facts(runtime_uid)
     generator = podman_generator_path()
     generator_executed = input_path is not None and generator is not None
@@ -489,6 +773,24 @@ def collect_observation(
         arguments.boot_id,
     )
     generator_ambiguous = generator_reason != "none"
+    if manager_pid is None:
+        reload_facts = empty_reload_stage_markers()
+        reload_reason = "manager-pid-unavailable"
+    else:
+        reload_status, reload_journal, reload_failure = bounded_command_output(
+            reload_journal_command(
+                manager_pid, arguments.boot_id, arguments.journal_baseline
+            ),
+            timeout=RELOAD_JOURNAL_TIMEOUT_SECONDS,
+            max_bytes=MAX_RELOAD_JOURNAL_BYTES,
+        )
+        reload_facts, reload_reason = reload_stage_observation(
+            reload_status,
+            reload_journal,
+            reload_failure,
+            manager_pid,
+            arguments.boot_id,
+        )
     audit_status, audit, _ = bounded_command_output(
         ["ausearch", "-m", "AVC", "-ts", arguments.audit_baseline, "-i"],
         timeout=COMMAND_TIMEOUT_SECONDS,
@@ -501,6 +803,19 @@ def collect_observation(
         )
         if audit_status in (0, 1)
         else (False, None, True)
+    )
+    reload_avc_observed, reload_avc, reload_avc_ambiguous = (
+        reload_access_avc(audit)
+        if audit_status in (0, 1)
+        else (False, None, True)
+    )
+    run_space_success = run_space_before[0] and run_space_after[0]
+    run_space_free = (
+        min(run_space_before[1], run_space_after[1])
+        if run_space_success
+        and run_space_before[1] is not None
+        and run_space_after[1] is not None
+        else None
     )
     return {
         "schema_version": 1,
@@ -516,6 +831,18 @@ def collect_observation(
         "manager_active_after_reload_failure": manager_active,
         "bus_available_after_reload_failure": bus_available,
         "control_reachable_after_reload_failure": control_reachable,
+        "manager_pid": manager_pid,
+        "control_process_pid": control_pid,
+        "control_process_selinux_type": control_selinux_type,
+        "manager_process_selinux_type": manager_selinux_type,
+        "run_systemd_statvfs_success": run_space_success,
+        "run_systemd_free_bytes": run_space_free,
+        "run_systemd_reload_minimum_bytes": RELOAD_SPACE_MINIMUM_BYTES,
+        "run_systemd_space_sufficient": bool(
+            run_space_success
+            and run_space_free is not None
+            and run_space_free >= RELOAD_SPACE_MINIMUM_BYTES
+        ),
         "quadlet_input": quadlet_input,
         "podman_generator_executed": generator_executed,
         "podman_generator_exit_status": generator_status,
@@ -523,6 +850,11 @@ def collect_observation(
         "generator_failures": failures,
         "generator_failure_ambiguous": generator_ambiguous,
         "generator_observation_reason": generator_reason,
+        **reload_facts,
+        "reload_journal_observation_reason": reload_reason,
+        "reload_access_avc_observed": reload_avc_observed,
+        "reload_access_avc": reload_avc,
+        "reload_access_avc_ambiguous": reload_avc_ambiguous,
         "selinux_avc_observed": avc_observed,
         "selinux_avc": avc,
         "selinux_avc_ambiguous": avc_ambiguous,
@@ -568,6 +900,7 @@ def admitted_fifo(path: Path, flags: int) -> IO[bytes]:
 def observe(arguments: argparse.Namespace) -> int:
     acknowledgement: IO[bytes] | None = None
     try:
+        run_space_before = run_space_observation()
         event_channel = admitted_fifo(arguments.event, os.O_RDONLY)
         acknowledgement = admitted_fifo(arguments.ack, os.O_WRONLY)
         with event_channel:
@@ -576,11 +909,14 @@ def observe(arguments: argparse.Namespace) -> int:
         if match is None or len(event) > 512:
             raise ObservationError("daemon-reload event is malformed")
         failure_status = int(match.group(1))
-        frames = {int(frame) for frame in match.group(2).split(b",")}
-        if failure_status > 255 or 242 not in frames:
+        control_pid = int(match.group(2))
+        frames = {int(frame) for frame in match.group(3).split(b",")}
+        if failure_status > 255 or control_pid > 2**31 - 1 or 242 not in frames:
             raise ObservationError("daemon-reload event is outside the exact call site")
         deadline = time.monotonic() + CAPTURE_DEADLINE_SECONDS
-        document = collect_observation(arguments, failure_status, event)
+        document = collect_observation(
+            arguments, failure_status, event, run_space_before, control_pid
+        )
         write_document(arguments.output, document, deadline)
         acknowledgement.write(b"SECPAL_RELOAD_ADJACENCY_CAPTURED_V1\n")
         return 0

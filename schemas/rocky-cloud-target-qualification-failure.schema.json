@@ -93,6 +93,14 @@
         "manager_active_after_reload_failure",
         "bus_available_after_reload_failure",
         "control_reachable_after_reload_failure",
+        "manager_pid",
+        "control_process_pid",
+        "control_process_selinux_type",
+        "manager_process_selinux_type",
+        "run_systemd_statvfs_success",
+        "run_systemd_free_bytes",
+        "run_systemd_reload_minimum_bytes",
+        "run_systemd_space_sufficient",
         "quadlet_input_admitted",
         "quadlet_input",
         "podman_generator_executed",
@@ -102,6 +110,19 @@
         "generator_failures",
         "generator_failure_ambiguous",
         "generator_observation_reason",
+        "client_reload_error",
+        "reload_authorization_outcome",
+        "reload_request_logged",
+        "reload_rate_limit_rejected",
+        "reload_started",
+        "reload_finished",
+        "reload_internal_failure",
+        "reload_reply_send_failed",
+        "reload_journal_observation_reason",
+        "reload_access_avc_observed",
+        "reload_access_avc",
+        "reload_access_avc_ambiguous",
+        "reload_diagnostic_reason",
         "selinux_avc_observed",
         "selinux_avc",
         "selinux_avc_ambiguous"
@@ -115,6 +136,13 @@
             "other-generator-failed",
             "selinux-reload-denied",
             "manager-reload-transaction-failed",
+            "reload-run-space-rejected",
+            "reload-selinux-access-denied",
+            "reload-authorization-denied",
+            "reload-authorization-interactive-required",
+            "reload-rate-limited",
+            "reload-manager-serialization-failed",
+            "reload-reply-transport-failed",
             "diagnostic-unavailable"
           ]
         },
@@ -133,6 +161,32 @@
         "control_reachable_after_reload_failure": {
           "type": ["boolean", "null"]
         },
+        "manager_pid": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "control_process_pid": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "control_process_selinux_type": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_]{1,64}$"
+        },
+        "manager_process_selinux_type": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_]{1,64}$"
+        },
+        "run_systemd_statvfs_success": { "type": "boolean" },
+        "run_systemd_free_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "run_systemd_reload_minimum_bytes": { "const": 16777216 },
+        "run_systemd_space_sufficient": { "type": "boolean" },
         "quadlet_input_admitted": { "type": "boolean" },
         "quadlet_input": {
           "oneOf": [
@@ -227,6 +281,105 @@
             "candidate-generator-unadmitted",
             "candidate-count-exceeded",
             "multiple-causes",
+            "observation-unavailable"
+          ]
+        },
+        "client_reload_error": {
+          "enum": [
+            "rate-limited",
+            "interactive-auth-required",
+            "selinux-access-denied",
+            "access-denied",
+            "timeout",
+            "connection-reset",
+            "transport-unavailable",
+            "other-admitted-bus-error",
+            "unavailable"
+          ]
+        },
+        "reload_authorization_outcome": {
+          "enum": [
+            "authorized",
+            "denied",
+            "interactive-auth-required",
+            "not-reached-or-transport-failed",
+            "observation-unavailable"
+          ]
+        },
+        "reload_request_logged": { "type": "boolean" },
+        "reload_rate_limit_rejected": { "type": "boolean" },
+        "reload_started": { "type": "boolean" },
+        "reload_finished": { "type": "boolean" },
+        "reload_internal_failure": {
+          "enum": [
+            "none",
+            "serialization-file-failed",
+            "resource-allocation-failed",
+            "serialization-failed",
+            "serialization-seek-failed",
+            "internal-reload-failure-unclassified"
+          ]
+        },
+        "reload_reply_send_failed": { "type": "boolean" },
+        "reload_journal_observation_reason": {
+          "enum": [
+            "none",
+            "journal-command-failed",
+            "journal-timeout",
+            "journal-output-bound-exceeded",
+            "candidate-representation-invalid",
+            "candidate-count-exceeded",
+            "manager-pid-unavailable",
+            "multiple-causes",
+            "observation-unavailable"
+          ]
+        },
+        "reload_access_avc_observed": { "type": "boolean" },
+        "reload_access_avc": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_type",
+                "target_type",
+                "object_class",
+                "denied_permission"
+              ],
+              "properties": {
+                "source_type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "target_type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "object_class": { "const": "system" },
+                "denied_permission": { "const": "reload" }
+              }
+            }
+          ]
+        },
+        "reload_access_avc_ambiguous": { "type": "boolean" },
+        "reload_diagnostic_reason": {
+          "enum": [
+            "none",
+            "podman-generator-not-executed",
+            "generator-observation-unavailable",
+            "quadlet-selinux-observation-unavailable",
+            "run-space-observation-unavailable",
+            "reload-journal-command-failed",
+            "reload-journal-timeout",
+            "reload-journal-output-bound-exceeded",
+            "reload-candidate-representation-invalid",
+            "reload-candidate-count-exceeded",
+            "reload-manager-pid-unavailable",
+            "reload-multiple-causes",
+            "reload-selinux-observation-ambiguous",
+            "reload-authorization-observation-unavailable",
+            "reload-main-loop-entry-not-observed",
             "observation-unavailable"
           ]
         },
