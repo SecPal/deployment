@@ -33,6 +33,8 @@ SCHEMAS = {
     "preparation-failure": ROOT
     / "schemas/rocky-cloud-preparation-failure-evidence.schema.json",
     "qualification": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
+    "qualification-readiness-failure": ROOT
+    / "schemas/rocky-cloud-qualification-readiness-failure.schema.json",
 }
 SHA = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")

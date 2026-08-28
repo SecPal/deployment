@@ -34,6 +34,7 @@ SCHEMA_NAMES = (
     "rocky-cloud-preparation-evidence.schema.json",
     "rocky-cloud-preparation-failure-evidence.schema.json",
     "rocky-cloud-qualification-evidence.schema.json",
+    "rocky-cloud-qualification-readiness-failure.schema.json",
 )
 
 
@@ -2083,6 +2084,34 @@ class RockyCloudControlTests(unittest.TestCase):
             with self.subTest(instance=instance), self.assertRaises(module.TransitionError):
                 module.validate_service_accounts(instance)
 
+    def test_transition_binds_each_boot_to_the_current_access_run(self) -> None:
+        transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
+        spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        instance = {
+            "metadata": {
+                "fingerprint": "exact-fingerprint",
+                "items": [
+                    {"key": "startup-script", "value": "trusted"},
+                    {"key": "secpal-rocky-access-run-id", "value": "old"},
+                    {"key": "secpal-rocky-access-run-attempt", "value": "old"},
+                ],
+            }
+        }
+        payload = module.metadata_payload(
+            instance,
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJg27OkflrkqeiB5KIy9PTGqXLI22JkP42HA2U5zAF6n secpal-rocky-33146182082-1",
+            "33146182082",
+            "1",
+        )
+        items = {item["key"]: item["value"] for item in payload["items"]}
+        self.assertEqual("33146182082", items["secpal-rocky-access-run-id"])
+        self.assertEqual("1", items["secpal-rocky-access-run-attempt"])
+        self.assertEqual("true", items["secpal-rocky-cloud-identity-admitted"])
+        self.assertEqual("trusted", items["startup-script"])
+        self.assertEqual(len(items), len(payload["items"]))
     def test_runner_firewall_rotation_uses_classic_patch_without_fingerprint(self) -> None:
         transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
         spec = importlib.util.spec_from_file_location("rocky_transition", transition_path)

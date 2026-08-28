@@ -321,6 +321,8 @@ jobs:
             --expires-at "$(jq -er .expires_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
             --ssh-public-key "$(cat "$RUNNER_TEMP/rocky-cloud/id_ed25519.pub")" \
             --runner-ipv4 "$(jq -er .runner_ipv4 infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
+            --access-run-id "$GITHUB_RUN_ID" \
+            --access-run-attempt "$GITHUB_RUN_ATTEMPT" \
             --ipv4-output "$RUNNER_TEMP/rocky-cloud/ipv4_address"
 
       - name: Collect trusted preparation evidence without cloud credentials
@@ -556,6 +558,8 @@ jobs:
             --expires-at "$(jq -er .expires_at "$variables")" \
             --ssh-public-key "$(jq -er .ssh_public_key "$request")" \
             --runner-ipv4 "$(jq -er .runner_ipv4 "$request")" \
+            --access-run-id "$GITHUB_RUN_ID" \
+            --access-run-attempt "$GITHUB_RUN_ATTEMPT" \
             --ipv4-output "$RUNNER_TEMP/rocky-exchange/ipv4_address"
 
       - name: Publish the identity-free guest handoff
@@ -635,20 +639,60 @@ jobs:
              .cloud_identity_removed == true' \
             "$RUNNER_TEMP/rocky-exchange/access-ready.json"
 
-      - name: Execute exact target SHA only on the identity-free guest
+      - name: Wait for authenticated current-boot guest readiness
+        id: guest_readiness
+        continue-on-error: true
         env:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
         run: |
           ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+          scripts/ci-cloud/wait-rocky-qualification-readiness.py \
+            --ipv4 "$ip" \
+            --identity "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            --public-key "$RUNNER_TEMP/rocky-target/id_ed25519.pub" \
+            --known-hosts "$RUNNER_TEMP/rocky-target/known_hosts" \
+            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --diagnostic-output "$RUNNER_TEMP/rocky-target/readiness-failure.json"
+
+      - name: Validate bounded qualification-readiness failure
+        if: ${{ steps.guest_readiness.outcome == 'failure' }}
+        run: |
+          scripts/ci-cloud/rocky-control.py validate-evidence \
+            qualification-readiness-failure \
+            "$RUNNER_TEMP/rocky-target/readiness-failure.json"
+
+      - name: Publish bounded qualification-readiness failure
+        if: ${{ steps.guest_readiness.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-qualification-readiness-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-target/readiness-failure.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce guest qualification readiness
+        env:
+          READINESS_OUTCOME: ${{ steps.guest_readiness.outcome }}
+        run: test "$READINESS_OUTCOME" = success
+
+      - name: Execute exact target SHA once on the ready identity-free guest
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip" \
             sudo /usr/local/sbin/secpal-run-rocky-target-qualification "$TARGET_SHA"
           scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/qualification.json" \
             "$RUNNER_TEMP/rocky-target/qualification.json"
           scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/qualification.stdout" \
             "$RUNNER_TEMP/rocky-target/qualification.stdout"
