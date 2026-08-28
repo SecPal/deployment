@@ -1123,6 +1123,31 @@ class CloudCIContractTests(unittest.TestCase):
             (observer, 'f"QUADLET_UNIT_DIRS={input_path.parent}"', '"QUADLET_UNIT_DIRS=/"'),
             (observer, '"--dryrun"', '"daemon-reload"'),
             (observer, '"show-environment"', '"daemon-reload"'),
+            (
+                observer,
+                'f"CODE_FUNC={GENERATOR_CODE_FUNC}"',
+                'f"IGNORED_CODE_FUNC={GENERATOR_CODE_FUNC}"',
+            ),
+            (
+                observer,
+                'f"CODE_FILE={GENERATOR_CODE_FILE}"',
+                'f"IGNORED_CODE_FILE={GENERATOR_CODE_FILE}"',
+            ),
+            (
+                observer,
+                'f"--boot={boot_id.replace(\'-\', \'\')}"',
+                'f"--boot={boot_id}"',
+            ),
+            (
+                observer,
+                'f"--output-fields={GENERATOR_OUTPUT_FIELDS}"',
+                '"--output=json-pretty"',
+            ),
+            (
+                observer,
+                "max_bytes=MAX_GENERATOR_JOURNAL_BYTES",
+                "max_bytes=MAX_COMMAND_BYTES",
+            ),
             (observer, 'comm="podman-system-g"', 'comm="systemd"'),
             (
                 classifier,
@@ -1132,6 +1157,11 @@ class CloudCIContractTests(unittest.TestCase):
             (
                 classifier,
                 '_closed_boolean(\n            observation, "generator_failure_ambiguous"\n        )',
+                "False",
+            ),
+            (
+                classifier,
+                'generator_ambiguous != (generator_reason != "none")',
                 "False",
             ),
             (

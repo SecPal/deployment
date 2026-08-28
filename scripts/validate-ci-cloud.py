@@ -2253,6 +2253,12 @@ def validate_rocky_control_plane(root: Path) -> None:
     require(
         literal_constant(reload_adjacency_observer, "MAX_INPUT_BYTES") == 4_096
         and literal_constant(reload_adjacency_observer, "MAX_COMMAND_BYTES") == 65_536
+        and literal_constant(reload_adjacency_observer, "MAX_GENERATOR_RECORD_BYTES")
+        == 2_048
+        and literal_constant(
+            reload_adjacency_observer, "MAX_GENERATOR_CANDIDATE_RECORDS"
+        )
+        == 3
         and literal_constant(reload_adjacency_observer, "MAX_OBSERVATION_BYTES") == 4_096
         and literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS") == 3
         and literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS") == 8
@@ -2296,6 +2302,22 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"--user",\n                "--dryrun"' in reload_adjacency_observer
         and 'f"--machine={RUNTIME_ACCOUNT}@.host"' in reload_adjacency_observer
         and '"show-environment"' in reload_adjacency_observer
+        and 'GENERATOR_CODE_FUNC = "do_execute"' in reload_adjacency_observer
+        and 'GENERATOR_CODE_FILE = "../src/shared/exec-util.c"'
+        in reload_adjacency_observer
+        and 'GENERATOR_OUTPUT_FIELDS = "_UID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"'
+        in reload_adjacency_observer
+        and 'f"CODE_FUNC={GENERATOR_CODE_FUNC}"' in reload_adjacency_observer
+        and 'f"CODE_FILE={GENERATOR_CODE_FILE}"' in reload_adjacency_observer
+        and 'f"--boot={boot_id.replace(\'-\', \'\')}"'
+        in reload_adjacency_observer
+        and 'f"--output-fields={GENERATOR_OUTPUT_FIELDS}"'
+        in reload_adjacency_observer
+        and "max_bytes=MAX_GENERATOR_JOURNAL_BYTES"
+        in reload_adjacency_observer
+        and '"journal-output-bound-exceeded"' in reload_adjacency_observer
+        and '"candidate-generator-unadmitted"' in reload_adjacency_observer
+        and '"candidate-count-exceeded"' in reload_adjacency_observer
         and '"daemon-reload"' not in reload_adjacency_observer
         and 'comm="systemd"' not in reload_adjacency_observer
         and all(
@@ -2322,6 +2344,11 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "generator_failure_ambiguous" in target_failure_classifier
         and '_closed_boolean(\n            observation, "generator_failure_ambiguous"\n        )'
         in target_failure_classifier
+        and "generator_observation_reason" in target_failure_classifier
+        and target_failure_classifier.count(
+            'generator_ambiguous != (generator_reason != "none")'
+        )
+        == 2
         and "selinux_avc_ambiguous" in target_failure_classifier,
         "daemon-reload adjacency admission must preserve the closed fail-safe decision tree",
     )
