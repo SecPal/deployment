@@ -986,15 +986,15 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 publisher,
-                "def observe_runtime_user() -> RuntimeUserObservation:\n",
+                "def observe_runtime_user(\n",
                 "# loginctl enable-linger is not readiness\n"
-                "def observe_runtime_user() -> RuntimeUserObservation:\n",
+                "def observe_runtime_user(\n",
             ),
             (
                 publisher,
-                "def observe_runtime_user() -> RuntimeUserObservation:\n",
+                "def observe_runtime_user(\n",
                 "# runtime.systemd_user from preparation\n"
-                "def observe_runtime_user() -> RuntimeUserObservation:\n",
+                "def observe_runtime_user(\n",
             ),
             (
                 publisher,
@@ -1003,7 +1003,16 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (publisher, '"show-environment"', '"daemon-reload"'),
             (publisher, "WAIT_SECONDS = 60", "WAIT_SECONDS = 0"),
-            (publisher, "sleep(interval)", "time.sleep(WAIT_SECONDS)"),
+            (
+                publisher,
+                "timeout=min(COMMAND_TIMEOUT_SECONDS, remaining)",
+                "timeout=COMMAND_TIMEOUT_SECONDS",
+            ),
+            (
+                publisher,
+                "sleep(min(interval, remaining))",
+                "time.sleep(WAIT_SECONDS)",
+            ),
             (
                 publisher,
                 '"runtime_user_bus_available": result.observation.bus_available,',

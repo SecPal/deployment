@@ -31,11 +31,13 @@ def load_publisher():
 
 class StepClock:
     def __init__(self) -> None:
-        self.value = -1
+        self.value = 0
 
     def __call__(self) -> int:
-        self.value += 1
         return self.value
+
+    def sleep(self, seconds: float) -> None:
+        self.value += seconds
 
 
 class RockyRuntimeUserReadinessTests(unittest.TestCase):
@@ -46,18 +48,19 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
     def wait(self, observations):
         calls = 0
 
-        def probe():
+        def probe(_deadline):
             nonlocal calls
             observation = observations[min(calls, len(observations) - 1)]
             calls += 1
             return observation
 
+        clock = StepClock()
         result = self.module.wait_for_runtime_user(
             probe,
             deadline=4,
             interval=1,
-            monotonic=StepClock(),
-            sleep=lambda _: None,
+            monotonic=clock,
+            sleep=clock.sleep,
         )
         return result, calls
 
@@ -66,7 +69,7 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
         result, calls = self.wait([observation])
         self.assertFalse(result.ready)
         self.assertEqual(observation, result.observation)
-        self.assertEqual(5, calls)
+        self.assertEqual(4, calls)
 
     def test_active_manager_without_bus_never_becomes_readiness(self) -> None:
         observation = self.module.RuntimeUserObservation(True, False, False)
@@ -97,7 +100,7 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
         observation = self.module.RuntimeUserObservation(False, False, False)
         probes = 0
 
-        def probe():
+        def probe(_deadline):
             nonlocal probes
             probes += 1
             return observation
@@ -140,7 +143,7 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
         ), mock.patch.object(
             self.module.subprocess, "run", side_effect=(completed, completed)
         ) as run:
-            observed = self.module.observe_runtime_user()
+            observed = self.module.observe_runtime_user(deadline=10, monotonic=lambda: 0)
         self.assertEqual(self.module.RuntimeUserObservation(True, True, True), observed)
         self.assertEqual(
             ["systemctl", "is-active", "--quiet", "user@994.service"],
@@ -169,9 +172,39 @@ class RockyRuntimeUserReadinessTests(unittest.TestCase):
         ), mock.patch.object(
             self.module.subprocess, "run", return_value=completed
         ) as run:
-            observed = self.module.observe_runtime_user()
+            observed = self.module.observe_runtime_user(deadline=10, monotonic=lambda: 0)
         self.assertEqual(self.module.RuntimeUserObservation(True, False, False), observed)
         self.assertEqual(1, run.call_count)
+
+    def test_sleep_and_each_command_timeout_use_only_the_remaining_budget(self) -> None:
+        clock = mock.Mock(side_effect=(0.0, 0.75, 1.0))
+        sleeps = []
+        observation = self.module.RuntimeUserObservation(False, False, False)
+        result = self.module.wait_for_runtime_user(
+            lambda _deadline: observation,
+            deadline=1.0,
+            interval=5.0,
+            monotonic=clock,
+            sleep=sleeps.append,
+        )
+        self.assertFalse(result.ready)
+        self.assertEqual([0.25], sleeps)
+
+        completed = subprocess.CompletedProcess([], 0)
+        socket_metadata = mock.Mock(st_mode=stat.S_IFSOCK | 0o600)
+        with mock.patch.object(
+            self.module.pwd, "getpwnam", return_value=mock.Mock(pw_uid=994)
+        ), mock.patch.object(
+            self.module.os, "stat", return_value=socket_metadata
+        ), mock.patch.object(
+            self.module.subprocess, "run", side_effect=(completed, completed)
+        ) as run:
+            self.module.observe_runtime_user(
+                deadline=60.0,
+                monotonic=mock.Mock(side_effect=(59.0, 59.6)),
+            )
+        self.assertEqual(1.0, run.call_args_list[0].kwargs["timeout"])
+        self.assertAlmostEqual(0.4, run.call_args_list[1].kwargs["timeout"])
 
     def test_publisher_owns_no_target_or_mutating_systemd_operation(self) -> None:
         source = PUBLISHER.read_text(encoding="utf-8")

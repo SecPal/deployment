@@ -41,28 +41,40 @@ class RuntimeUserResult(NamedTuple):
     observation: RuntimeUserObservation
 
 
-def quiet_run(command: list[str]) -> bool:
+def quiet_run(
+    command: list[str],
+    *,
+    deadline: float,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> bool:
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return False
     try:
         result = subprocess.run(
             command,
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=COMMAND_TIMEOUT_SECONDS,
+            timeout=min(COMMAND_TIMEOUT_SECONDS, remaining),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
 
 
-def observe_runtime_user() -> RuntimeUserObservation:
+def observe_runtime_user(
+    *, deadline: float, monotonic: Callable[[], float] = time.monotonic
+) -> RuntimeUserObservation:
     try:
         runtime_uid = pwd.getpwnam(RUNTIME_ACCOUNT).pw_uid
     except KeyError:
         return RuntimeUserObservation(False, False, False)
 
     manager_active = quiet_run(
-        ["systemctl", "is-active", "--quiet", f"user@{runtime_uid}.service"]
+        ["systemctl", "is-active", "--quiet", f"user@{runtime_uid}.service"],
+        deadline=deadline,
+        monotonic=monotonic,
     )
     try:
         bus_available = stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)
@@ -77,13 +89,15 @@ def observe_runtime_user() -> RuntimeUserObservation:
                 f"--machine={RUNTIME_ACCOUNT}@.host",
                 "--user",
                 "show-environment",
-            ]
+            ],
+            deadline=deadline,
+            monotonic=monotonic,
         )
     return RuntimeUserObservation(manager_active, bus_available, control_reachable)
 
 
 def wait_for_runtime_user(
-    probe: Callable[[], RuntimeUserObservation],
+    probe: Callable[[float], RuntimeUserObservation],
     *,
     deadline: float,
     interval: float,
@@ -92,12 +106,15 @@ def wait_for_runtime_user(
 ) -> RuntimeUserResult:
     observation = RuntimeUserObservation(False, False, False)
     for probe_number in range(MAX_PROBES):
-        observation = probe()
+        if deadline - monotonic() <= 0:
+            return RuntimeUserResult(False, observation)
+        observation = probe(deadline)
         if all(observation):
             return RuntimeUserResult(True, observation)
-        if monotonic() >= deadline or probe_number + 1 == MAX_PROBES:
+        remaining = deadline - monotonic()
+        if remaining <= 0 or probe_number + 1 == MAX_PROBES:
             return RuntimeUserResult(False, observation)
-        sleep(interval)
+        sleep(min(interval, remaining))
     raise AssertionError("bounded runtime-user loop exhausted unexpectedly")
 
 
@@ -174,7 +191,7 @@ def main() -> int:
     if current_boot_id() != arguments.boot_id:
         raise RuntimeError("startup boot identity changed before readiness observation")
     result = wait_for_runtime_user(
-        observe_runtime_user,
+        lambda deadline: observe_runtime_user(deadline=deadline),
         deadline=time.monotonic() + WAIT_SECONDS,
         interval=PROBE_INTERVAL_SECONDS,
     )

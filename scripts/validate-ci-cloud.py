@@ -2128,6 +2128,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         literal_constant(readiness_publisher, "WAIT_SECONDS") == 60
         and literal_constant(readiness_publisher, "PROBE_INTERVAL_SECONDS") == 5
         and literal_constant(readiness_publisher, "MAX_PROBES") == 13
+        and "timeout=min(COMMAND_TIMEOUT_SECONDS, remaining)" in readiness_publisher
+        and "sleep(min(interval, remaining))" in readiness_publisher
         and '"systemctl", "is-active", "--quiet", f"user@{runtime_uid}.service"'
         in readiness_publisher
         and 'stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)'
