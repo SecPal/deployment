@@ -35,6 +35,7 @@ SCHEMA_NAMES = (
     "rocky-cloud-preparation-failure-evidence.schema.json",
     "rocky-cloud-qualification-evidence.schema.json",
     "rocky-cloud-qualification-readiness-failure.schema.json",
+    "rocky-cloud-target-source-failure.schema.json",
 )
 
 
@@ -51,6 +52,91 @@ def load_rocky_preparation_collector():
 
 
 class RockyCloudControlTests(unittest.TestCase):
+    def test_gce_metadata_policy_separates_dns_from_metadata_api(self) -> None:
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        function = preparation.split("block_metadata_credentials() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        udp_dns = "ip daddr 169.254.169.254 udp dport 53 accept"
+        tcp_dns = "ip daddr 169.254.169.254 tcp dport 53 accept"
+        metadata_reject = "ip daddr 169.254.169.254 reject"
+        self.assertIn(udp_dns, function)
+        self.assertIn(tcp_dns, function)
+        self.assertIn(metadata_reject, function)
+        self.assertLess(function.index(udp_dns), function.index(metadata_reject))
+        self.assertLess(function.index(tcp_dns), function.index(metadata_reject))
+        self.assertNotIn("8.8.8.8", function)
+        self.assertNotIn("1.1.1.1", function)
+
+        policy = [
+            line.strip()
+            for line in function.splitlines()
+            if line.strip().startswith("ip daddr 169.254.169.254")
+        ][-3:]
+
+        def decision(protocol: str, port: int) -> str:
+            exact = f"ip daddr 169.254.169.254 {protocol} dport {port} accept"
+            for rule in policy:
+                if rule == exact:
+                    return "accept"
+                if rule == metadata_reject:
+                    return "reject"
+            return "accept"
+
+        self.assertEqual("accept", decision("udp", 53))
+        self.assertEqual("accept", decision("tcp", 53))
+        self.assertEqual("reject", decision("tcp", 80))
+        self.assertEqual("reject", decision("tcp", 443))
+        self.assertEqual("reject", decision("udp", 123))
+        self.assertEqual("reject", decision("tcp", 22))
+
+    def test_target_source_resolution_has_a_closed_failure_contract(self) -> None:
+        runner = (ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("getent ahostsv4 github.com", runner)
+        self.assertIn("resolve-target-source", runner)
+        self.assertIn("fetch-exact-target", runner)
+        self.assertIn("checkout-exact-target", runner)
+        self.assertIn("verify-target-sha", runner)
+        schema = json.loads(
+            (ROOT / "schemas/rocky-cloud-target-source-failure.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        validator = Draft202012Validator(schema)
+        base = {
+            "schema_version": 1,
+            "phase": "qualify-target",
+            "operation": "resolve-target-source",
+            "reason": "command-failed",
+            "exit_status": 1,
+            "source_host": "github.com",
+            "target_sha": "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6",
+        }
+        self.assertEqual([], list(validator.iter_errors(base)))
+        for mutation in (
+            dict(base, source_host="example.com"),
+            dict(base, operation="arbitrary-command"),
+            dict(base, stdout="untrusted"),
+        ):
+            self.assertTrue(list(validator.iter_errors(mutation)))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "failure.json"
+            path.write_text(json.dumps(base), encoding="utf-8")
+            command = [
+                str(ROOT / "scripts/ci-cloud/rocky-control.py"),
+                "validate-target-source-failure",
+                str(path),
+                "--target-sha",
+                base["target_sha"],
+            ]
+            self.assertEqual(0, subprocess.run(command, check=False).returncode)
+            command[-1] = "a" * 40
+            self.assertNotEqual(0, subprocess.run(command, check=False).returncode)
+
     def test_access_request_validation_is_exact_bound_and_order_independent(self) -> None:
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
         target_sha = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
@@ -320,6 +406,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "preparation_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json",
             "preparation_failure_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json",
             "qualification_schema_base64gzip": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
+            "target_source_failure_schema_base64gzip": ROOT
+            / "schemas/rocky-cloud-target-source-failure.schema.json",
             "profile_base64gzip": PROFILE,
         }
         rendered = template

@@ -2017,6 +2017,8 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_job = jobs["qualify_target"]
     require(isinstance(target_job, dict), "target qualification job is malformed")
     target_text = json.dumps(target_job, sort_keys=True)
+    preparation = read(root, "scripts/ci-cloud/prepare-rocky-host.sh")
+    target_runner = read(root, "scripts/ci-cloud/run-rocky-target-qualification.sh")
     for forbidden in (
         "id-token",
         "google-github-actions/auth",
@@ -2033,6 +2035,42 @@ def validate_rocky_control_plane(root: Path) -> None:
         "run-rocky-target-qualification" in target_text
         and "run-rocky-target-qualification" not in json.dumps(jobs["resume_control"]),
         "only the uncredentialed target job may request target-owned execution",
+    )
+    metadata_policy = required_block(
+        preparation,
+        "block_metadata_credentials() {\n",
+        "\n}\n\nconfigure_subids() {",
+        "Rocky metadata credential policy",
+    )
+    udp_dns = "ip daddr 169.254.169.254 udp dport 53 accept"
+    tcp_dns = "ip daddr 169.254.169.254 tcp dport 53 accept"
+    metadata_reject = "ip daddr 169.254.169.254 reject"
+    require(
+        metadata_policy.count(udp_dns) == 2
+        and metadata_policy.count(tcp_dns) == 2
+        and metadata_policy.count(metadata_reject) == 2
+        and metadata_policy.index(udp_dns) < metadata_policy.index(metadata_reject)
+        and metadata_policy.index(tcp_dns) < metadata_policy.index(metadata_reject)
+        and "8.8.8.8" not in metadata_policy
+        and "1.1.1.1" not in metadata_policy,
+        "GCE DNS must remain usable while all non-DNS metadata channels fail closed",
+    )
+    require(
+        "getent ahostsv4 github.com" in target_runner
+        and "resolve-target-source" in target_runner
+        and "fetch-exact-target" in target_runner
+        and "checkout-exact-target" in target_runner
+        and "verify-target-sha" in target_runner
+        and "https://github.com/SecPal/deployment.git" in target_runner
+        and "validate-target-source-failure" in target_runner,
+        "target source acquisition must be exact and emit only closed guest-owned failures",
+    )
+    require(
+        text.index("Wait for authenticated current-boot guest readiness")
+        < text.index("Execute exact target SHA once on the ready identity-free guest")
+        < text.index("Retrieve and validate bounded target-source failure")
+        and "validate-target-source-failure" in target_text,
+        "target source diagnostics must remain after readiness and before evidence admission",
     )
     require(
         text.count("create_credentials_file: false") == 4
@@ -2068,6 +2106,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         "rocky-cloud-continuation.schema.json",
         "rocky-cloud-preparation-evidence.schema.json",
         "rocky-cloud-qualification-evidence.schema.json",
+        "rocky-cloud-qualification-readiness-failure.schema.json",
+        "rocky-cloud-target-source-failure.schema.json",
     ):
         try:
             schema = json.loads(read(root, f"schemas/{schema_name}"))

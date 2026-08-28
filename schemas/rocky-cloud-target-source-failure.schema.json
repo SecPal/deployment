@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secpal.example/schemas/rocky-cloud-target-source-failure.schema.json",
+  "title": "Rocky target source acquisition failure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase",
+    "operation",
+    "reason",
+    "exit_status",
+    "source_host",
+    "target_sha"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "phase": { "const": "qualify-target" },
+    "operation": {
+      "enum": [
+        "resolve-target-source",
+        "fetch-exact-target",
+        "checkout-exact-target",
+        "verify-target-sha"
+      ]
+    },
+    "reason": { "enum": ["command-failed", "postcondition-failed"] },
+    "exit_status": { "type": "integer", "minimum": 1, "maximum": 255 },
+    "source_host": { "const": "github.com" },
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "resolve-target-source",
+              "fetch-exact-target",
+              "checkout-exact-target"
+            ]
+          }
+        }
+      },
+      "then": { "properties": { "reason": { "const": "command-failed" } } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "verify-target-sha" } } },
+      "then": {
+        "properties": { "reason": { "const": "postcondition-failed" } }
+      }
+    }
+  ]
+}

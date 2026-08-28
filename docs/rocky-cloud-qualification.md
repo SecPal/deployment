@@ -26,6 +26,23 @@ guest key and firewall, verifies the exact retained instance and ownership
 metadata, detaches cloud identity, and publishes only the resulting public IP.
 The private key never leaves the uncredentialed runner process.
 
+Compute Engine's normal IPv4 resolver and metadata API share
+`169.254.169.254`, but they are different security channels. Google requires
+that address as the [VM nameserver](https://cloud.google.com/dns/docs/vpc-name-res-order),
+while [metadata endpoints](https://cloud.google.com/compute/docs/metadata/overview)
+are exposed over HTTP and, for supported Shielded VMs, HTTPS. The guest-owned nftables policy therefore
+admits only UDP/TCP port 53 to that exact address and rejects every other
+protocol and port to it. The instance service account remains detached, no
+credential environment or file reaches target execution, and the target still
+proves that the metadata token endpoint is unavailable before resolving
+`github.com` and fetching the one exact public repository and target SHA. No
+alternate resolver, source mirror, or Git retry is part of the contract.
+
+GCE DHCP documentation also describes an NTP-server option at the metadata
+address. The current SecPal target-source and host-qualification contract does
+not consume or admit that service, so UDP port 123 remains rejected by the
+guest policy; this leaf does not create a time-service dependency.
+
 ## Closed profile and image handoff
 
 `gcp-rocky-10-2-arm64` is the only current Rocky profile. It fixes Google,

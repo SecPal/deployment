@@ -35,6 +35,8 @@ SCHEMAS = {
     "qualification": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
     "qualification-readiness-failure": ROOT
     / "schemas/rocky-cloud-qualification-readiness-failure.schema.json",
+    "target-source-failure": ROOT
+    / "schemas/rocky-cloud-target-source-failure.schema.json",
 }
 SHA = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
@@ -253,6 +255,14 @@ def validate_evidence(kind: str, path: Path) -> dict[str, Any]:
     if kind == "preparation-failure":
         validate_preparation_failure_semantics(document)
     return document
+
+
+def validate_target_source_failure(path: Path, target_sha: str) -> None:
+    if SHA.fullmatch(target_sha) is None:
+        raise ControlError("target SHA must be one exact lowercase commit")
+    document = validate_evidence("target-source-failure", path)
+    if document["target_sha"] != target_sha:
+        raise ControlError("target source failure is not bound to the exact target SHA")
 
 
 def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
@@ -535,6 +545,9 @@ def parser() -> argparse.ArgumentParser:
     evidence = subparsers.add_parser("validate-evidence")
     evidence.add_argument("kind", choices=sorted(SCHEMAS))
     evidence.add_argument("path", type=Path)
+    target_source_failure = subparsers.add_parser("validate-target-source-failure")
+    target_source_failure.add_argument("path", type=Path)
+    target_source_failure.add_argument("--target-sha", required=True)
     collection = subparsers.add_parser("validate-collection-diagnostic")
     collection.add_argument("path", type=Path)
     access_request = subparsers.add_parser("validate-access-request")
@@ -577,6 +590,8 @@ def main(arguments: list[str]) -> int:
             validate_profile(options.path)
         elif options.command == "validate-evidence":
             validate_evidence(options.kind, options.path)
+        elif options.command == "validate-target-source-failure":
+            validate_target_source_failure(options.path, options.target_sha)
         elif options.command == "validate-collection-diagnostic":
             validate_collection_diagnostic(options.path)
         elif options.command == "validate-access-request":

@@ -6,6 +6,7 @@ set -euo pipefail
 
 readonly fixture='docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1'
 readonly evidence_root=/var/lib/secpal-rocky/evidence
+readonly source_failure="$evidence_root/target-source-failure.json"
 
 if [[ "$#" -ne 1 || ! "$1" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'usage: run-rocky-target-qualification.sh FULL_TARGET_SHA\n' >&2
@@ -30,11 +31,49 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+write_source_failure() {
+  local operation="$1" reason="$2" exit_status="$3" temporary
+  [[ "$operation" =~ ^(resolve-target-source|fetch-exact-target|checkout-exact-target|verify-target-sha)$ ]]
+  [[ "$reason" =~ ^(command-failed|postcondition-failed)$ ]]
+  [[ "$exit_status" =~ ^[1-9][0-9]{0,2}$ && "$exit_status" -le 255 ]]
+  temporary="$(mktemp "$evidence_root/.target-source-failure.XXXXXX")"
+  printf '{"schema_version":1,"phase":"qualify-target","operation":"%s","reason":"%s","exit_status":%s,"source_host":"github.com","target_sha":"%s"}\n' \
+    "$operation" "$reason" "$exit_status" "$target_sha" >"$temporary"
+  chown secpal-cloud:secpal-cloud "$temporary"
+  chmod 0400 "$temporary"
+  mv -T -- "$temporary" "$source_failure"
+  /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+    validate-target-source-failure "$source_failure" --target-sha "$target_sha"
+}
+
+rm -f -- "$source_failure"
+if ! getent ahostsv4 github.com >/dev/null 2>&1; then
+  write_source_failure resolve-target-source command-failed 1
+  exit 1
+fi
+
 git -C "$work_root" init --quiet
 git -C "$work_root" remote add origin https://github.com/SecPal/deployment.git
+set +e
 git -C "$work_root" fetch --quiet --depth=1 origin "$target_sha"
+fetch_status=$?
+set -e
+if [[ "$fetch_status" -ne 0 ]]; then
+  write_source_failure fetch-exact-target command-failed "$fetch_status"
+  exit "$fetch_status"
+fi
+set +e
 git -C "$work_root" checkout --quiet --detach FETCH_HEAD
-[[ "$(git -C "$work_root" rev-parse HEAD)" == "$target_sha" ]]
+checkout_status=$?
+set -e
+if [[ "$checkout_status" -ne 0 ]]; then
+  write_source_failure checkout-exact-target command-failed "$checkout_status"
+  exit "$checkout_status"
+fi
+if [[ "$(git -C "$work_root" rev-parse HEAD)" != "$target_sha" ]]; then
+  write_source_failure verify-target-sha postcondition-failed 1
+  exit 1
+fi
 [[ -x "$work_root/scripts/qualify-production-host.sh" ]]
 
 stdout="$evidence_root/qualification.stdout"

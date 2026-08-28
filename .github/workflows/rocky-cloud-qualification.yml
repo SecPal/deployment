@@ -677,6 +677,8 @@ jobs:
         run: test "$READINESS_OUTCOME" = success
 
       - name: Execute exact target SHA once on the ready identity-free guest
+        id: target_execution
+        continue-on-error: true
         env:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
         run: |
@@ -686,6 +688,43 @@ jobs:
             -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip" \
             sudo /usr/local/sbin/secpal-run-rocky-target-qualification "$TARGET_SHA"
+
+      - name: Retrieve and validate bounded target-source failure
+        id: target_source_failure
+        if: ${{ steps.target_execution.outcome == 'failure' }}
+        continue-on-error: true
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/target-source-failure.json" \
+            "$RUNNER_TEMP/rocky-target/target-source-failure.json"
+          scripts/ci-cloud/rocky-control.py validate-target-source-failure \
+            "$RUNNER_TEMP/rocky-target/target-source-failure.json" \
+            --target-sha "${{ needs.validate.outputs.target_sha }}"
+
+      - name: Publish bounded target-source failure
+        if: >-
+          ${{ always() && steps.target_execution.outcome == 'failure' &&
+          steps.target_source_failure.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-target-source-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-target/target-source-failure.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce exact target execution
+        env:
+          TARGET_EXECUTION_OUTCOME: ${{ steps.target_execution.outcome }}
+        run: test "$TARGET_EXECUTION_OUTCOME" = success
+
+      - name: Retrieve and validate target-owned qualification evidence
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
           scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
