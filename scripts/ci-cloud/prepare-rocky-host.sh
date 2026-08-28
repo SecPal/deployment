@@ -130,11 +130,23 @@ run_as_runtime() {
 }
 
 block_metadata_credentials() {
-  nft add table inet secpal_metadata 2>/dev/null || true
-  nft 'add chain inet secpal_metadata output { type filter hook output priority -150; policy accept; }' 2>/dev/null || true
-  if ! nft list chain inet secpal_metadata output | grep -Fq 'ip daddr 169.254.169.254 reject'; then
-    nft add rule inet secpal_metadata output ip daddr 169.254.169.254 reject
+  local current_rules
+  if current_rules="$(nft list chain inet secpal_metadata output 2>/dev/null)"; then
+    current_rules="$(printf '%s\n' "$current_rules" | sed -n \
+      '/^[[:space:]]*ip daddr 169\.254\.169\.254/p' | sed 's/^[[:space:]]*//')"
+    [[ "$current_rules" == $'ip daddr 169.254.169.254 udp dport 53 accept\nip daddr 169.254.169.254 tcp dport 53 accept\nip daddr 169.254.169.254 reject' ]]
+    return
   fi
+  nft -f - <<'NFT_POLICY'
+table inet secpal_metadata {
+  chain output {
+    type filter hook output priority -150; policy accept;
+    ip daddr 169.254.169.254 udp dport 53 accept
+    ip daddr 169.254.169.254 tcp dport 53 accept
+    ip daddr 169.254.169.254 reject
+  }
+}
+NFT_POLICY
 }
 
 configure_subids() {
