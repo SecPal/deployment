@@ -429,6 +429,12 @@ class RockyCloudControlTests(unittest.TestCase):
         rendered = rendered.replace("$${", "${")
         self.assertLessEqual(len(rendered.encode("utf-8")), (256 * 1024) - 256)
         self.assertNotRegex(rendered, r"\$\{[a-z_]+_base64gzip\}")
+        self.assertIn(
+            "decode_script '${target_failure_classifier_base64gzip}' "
+            "/usr/local/sbin/secpal-classify-rocky-target-failure",
+            template,
+        )
+        self.assertIn('chmod 0700 "$destination"', template)
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as script:
             script.write(rendered)
             script.flush()
