@@ -280,6 +280,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "podman_generator_accepted_actual_input": True,
             "generator_failures": [],
             "generator_failure_ambiguous": False,
+            "generator_observation_reason": "none",
             "selinux_avc_observed": False,
             "selinux_avc": None,
             "selinux_avc_ambiguous": False,
@@ -333,7 +334,13 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 },
             ),
             ("manager-reload-transaction-failed", {}),
-            ("diagnostic-unavailable", {"generator_failure_ambiguous": True}),
+            (
+                "diagnostic-unavailable",
+                {
+                    "generator_failure_ambiguous": True,
+                    "generator_observation_reason": "journal-timeout",
+                },
+            ),
         )
         expected = {
             "target_sha": self.classifier.EXPECTED_TARGET_SHA,
@@ -365,6 +372,16 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "selinux_avc_observed": True,
                 "selinux_avc": None,
             },
+            {
+                **baseline,
+                "generator_failure_ambiguous": True,
+                "generator_observation_reason": "none",
+            },
+            {
+                **baseline,
+                "generator_failure_ambiguous": False,
+                "generator_observation_reason": "journal-timeout",
+            },
         )
         for observation in malformed:
             with self.subTest(malformed=observation):
@@ -380,7 +397,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         entry = {
             "_UID": "994",
             "_BOOT_ID": boot_id.replace("-", ""),
-            "CODE_FILE": "src/shared/exec-util.c",
+            "CODE_FILE": "../src/shared/exec-util.c",
             "CODE_FUNC": "do_execute",
             "MESSAGE": "/usr/lib/systemd/user-generators/example-generator failed with exit status 7, ignoring.",
         }
@@ -391,20 +408,112 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "/usr/lib/systemd/user-generators/example-generator"
             ),
         ):
-            failures, ambiguous = self.observer.generator_failures(
+            failures, reason = self.observer.generator_failures(
                 (json.dumps(entry) + "\n").encode(), 994, boot_id
             )
         self.assertEqual(
             [{"basename": "example-generator", "exit_status": 7}], failures
         )
-        self.assertFalse(ambiguous)
+        self.assertEqual("none", reason)
 
         malformed = dict(entry, MESSAGE="arbitrary localized generator output")
-        failures, ambiguous = self.observer.generator_failures(
+        failures, reason = self.observer.generator_failures(
             (json.dumps(malformed) + "\n").encode(), 994, boot_id
         )
         self.assertEqual([], failures)
-        self.assertFalse(ambiguous)
+        self.assertEqual("candidate-representation-invalid", reason)
+
+    def test_generator_journal_is_narrowed_before_bounded_collection(self) -> None:
+        boot_id = "12345678-1234-1234-1234-123456789abc"
+        command = self.observer.generator_journal_command(994, boot_id, "@123")
+        self.assertEqual(
+            [
+                "journalctl",
+                "--no-pager",
+                "--output=json",
+                "--output-fields=_UID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE",
+                f"--boot={boot_id.replace('-', '')}",
+                "--since=@123",
+                "_UID=994",
+                "CODE_FUNC=do_execute",
+                "CODE_FILE=../src/shared/exec-util.c",
+            ],
+            command,
+        )
+        irrelevant = {
+            "_UID": "994",
+            "_BOOT_ID": boot_id.replace("-", ""),
+            "CODE_FUNC": "unrelated",
+            "CODE_FILE": "src/unrelated.c",
+            "MESSAGE": "x" * 3_000,
+        }
+        self.assertNotEqual(
+            f"CODE_FUNC={irrelevant['CODE_FUNC']}", command[-2]
+        )
+        broad_journal = ((json.dumps(irrelevant) + "\n") * 100).encode()
+        self.assertGreater(len(broad_journal), self.observer.MAX_COMMAND_BYTES)
+        self.assertNotIn(
+            "CODE_FUNC=unrelated",
+            command,
+        )
+        failures, reason = self.observer.generator_failures(b"", 994, boot_id)
+        self.assertEqual([], failures)
+        self.assertEqual("none", reason)
+
+    def test_generator_candidate_failures_have_closed_reasons(self) -> None:
+        boot_id = "12345678-1234-1234-1234-123456789abc"
+        base = {
+            "_UID": "994",
+            "_BOOT_ID": boot_id.replace("-", ""),
+            "CODE_FILE": "../src/shared/exec-util.c",
+            "CODE_FUNC": "do_execute",
+            "MESSAGE": "/usr/lib/systemd/user-generators/example-generator failed with exit status 7, ignoring.",
+        }
+        oversized = dict(base, MESSAGE="x" * 3_000)
+        failures, reason = self.observer.generator_failures(
+            (json.dumps(oversized) + "\n").encode(), 994, boot_id
+        )
+        self.assertEqual([], failures)
+        self.assertEqual("candidate-representation-invalid", reason)
+
+        with mock.patch.object(
+            self.observer, "admitted_generator", return_value=None
+        ):
+            failures, reason = self.observer.generator_failures(
+                (json.dumps(base) + "\n").encode(), 994, boot_id
+            )
+        self.assertEqual([], failures)
+        self.assertEqual("candidate-generator-unadmitted", reason)
+
+        payload = (json.dumps(base) + "\n").encode() * 4
+        with mock.patch.object(
+            self.observer,
+            "admitted_generator",
+            return_value=Path(
+                "/usr/lib/systemd/user-generators/example-generator"
+            ),
+        ):
+            failures, reason = self.observer.generator_failures(payload, 994, boot_id)
+        self.assertEqual(
+            [{"basename": "example-generator", "exit_status": 7}], failures
+        )
+        self.assertEqual("candidate-count-exceeded", reason)
+
+    def test_generator_command_failures_have_closed_reasons(self) -> None:
+        boot_id = "12345678-1234-1234-1234-123456789abc"
+        cases = (
+            (125, "command-failed", "journal-command-failed"),
+            (124, "timeout", "journal-timeout"),
+            (125, "output-bound-exceeded", "journal-output-bound-exceeded"),
+            (1, None, "journal-command-failed"),
+        )
+        for status, command_reason, expected in cases:
+            with self.subTest(expected=expected):
+                failures, reason = self.observer.generator_observation(
+                    status, b"", command_reason, 994, boot_id
+                )
+                self.assertEqual([], failures)
+                self.assertEqual(expected, reason)
 
     def test_observer_execution_failure_is_not_a_generator_rejection(self) -> None:
         with mock.patch.object(
@@ -985,6 +1094,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "podman_generator_accepted_actual_input": True,
             "generator_failures": [],
             "generator_failure_ambiguous": False,
+            "generator_observation_reason": "none",
             "selinux_avc_observed": False,
             "selinux_avc": None,
             "selinux_avc_ambiguous": False,
@@ -1079,6 +1189,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "podman_generator_accepted_actual_input": True,
             "generator_failures": [],
             "generator_failure_ambiguous": False,
+            "generator_observation_reason": "none",
             "selinux_avc_observed": False,
             "selinux_avc": None,
             "selinux_avc_ambiguous": False,

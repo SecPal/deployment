@@ -39,6 +39,11 @@ GENERATOR_MESSAGE = re.compile(
 )
 MAX_INPUT_BYTES = 4_096
 MAX_COMMAND_BYTES = 65_536
+MAX_GENERATOR_RECORD_BYTES = 2_048
+MAX_GENERATOR_CANDIDATE_RECORDS = 3
+MAX_GENERATOR_JOURNAL_BYTES = (MAX_GENERATOR_RECORD_BYTES + 1) * (
+    MAX_GENERATOR_CANDIDATE_RECORDS + 1
+)
 MAX_OBSERVATION_BYTES = 4_096
 COMMAND_TIMEOUT_SECONDS = 3
 GENERATOR_TIMEOUT_SECONDS = 8
@@ -58,6 +63,22 @@ ADMITTED_USER_GENERATOR_ROOTS = (
 ADMITTED_PODMAN_GENERATOR_ROOTS = (
     *ADMITTED_USER_GENERATOR_ROOTS,
     Path("/usr/lib/systemd/system-generators"),
+)
+GENERATOR_CODE_FUNC = "do_execute"
+# Rocky's reviewed systemd 257 build records this compiled relative source path.
+GENERATOR_CODE_FILE = "../src/shared/exec-util.c"
+GENERATOR_OUTPUT_FIELDS = "_UID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"
+GENERATOR_OBSERVATION_REASONS = frozenset(
+    {
+        "none",
+        "journal-command-failed",
+        "journal-timeout",
+        "journal-output-bound-exceeded",
+        "candidate-representation-invalid",
+        "candidate-generator-unadmitted",
+        "candidate-count-exceeded",
+        "multiple-causes",
+    }
 )
 
 
@@ -96,7 +117,9 @@ def command_status(command: list[str], *, timeout: int = COMMAND_TIMEOUT_SECONDS
     return status
 
 
-def bounded_command_output(command: list[str], *, timeout: int) -> tuple[int, bytes]:
+def bounded_command_output(
+    command: list[str], *, timeout: int, max_bytes: int = MAX_COMMAND_BYTES
+) -> tuple[int, bytes, str | None]:
     try:
         process = subprocess.Popen(
             command,
@@ -106,7 +129,7 @@ def bounded_command_output(command: list[str], *, timeout: int) -> tuple[int, by
             start_new_session=True,
         )
     except OSError:
-        return 125, b""
+        return 125, b"", "command-failed"
     assert process.stdout is not None
     descriptor = process.stdout.fileno()
     os.set_blocking(descriptor, False)
@@ -120,19 +143,23 @@ def bounded_command_output(command: list[str], *, timeout: int) -> tuple[int, by
                 raise subprocess.TimeoutExpired(command, timeout)
             readable, _, _ = select.select([descriptor], [], [], remaining)
             if readable:
-                chunk = os.read(descriptor, min(8_192, MAX_COMMAND_BYTES + 1 - observed))
+                chunk = os.read(descriptor, min(8_192, max_bytes + 1 - observed))
                 if not chunk:
-                    return process.wait(timeout=max(0.1, remaining)), b"".join(chunks)
+                    return (
+                        process.wait(timeout=max(0.1, remaining)),
+                        b"".join(chunks),
+                        None,
+                    )
                 chunks.append(chunk)
                 observed += len(chunk)
-                if observed > MAX_COMMAND_BYTES:
+                if observed > max_bytes:
                     terminate_group(process)
-                    return 125, b""
+                    return 125, b"", "output-bound-exceeded"
             elif process.poll() is not None:
-                return process.returncode, b"".join(chunks)
+                return process.returncode, b"".join(chunks), None
     except (OSError, subprocess.TimeoutExpired):
         terminate_group(process)
-        return 124, b""
+        return 124, b"", "timeout"
 
 
 def admitted_generator(path: Path, *, podman: bool = False) -> Path | None:
@@ -264,31 +291,41 @@ def input_facts(runtime_uid: int) -> tuple[dict[str, Any], Path | None]:
 
 def generator_failures(
     payload: bytes, runtime_uid: int, boot_id: str
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[dict[str, Any]], str]:
     failures: list[dict[str, Any]] = []
-    ambiguous = False
+    reasons: set[str] = set()
+    candidate_count = 0
     for raw_line in payload.splitlines():
-        if len(raw_line) > 2_048:
-            ambiguous = True
+        candidate_count += 1
+        if candidate_count > MAX_GENERATOR_CANDIDATE_RECORDS:
+            reasons.add("candidate-count-exceeded")
+            continue
+        if len(raw_line) > MAX_GENERATOR_RECORD_BYTES:
+            reasons.add("candidate-representation-invalid")
             continue
         try:
             entry = json.loads(raw_line)
         except (UnicodeDecodeError, json.JSONDecodeError):
-            ambiguous = True
+            reasons.add("candidate-representation-invalid")
             continue
         if not isinstance(entry, dict):
-            ambiguous = True
+            reasons.add("candidate-representation-invalid")
             continue
         if str(entry.get("_UID")) != str(runtime_uid):
+            reasons.add("candidate-representation-invalid")
             continue
         if entry.get("_BOOT_ID") != boot_id.replace("-", ""):
+            reasons.add("candidate-representation-invalid")
             continue
-        if entry.get("CODE_FUNC") != "do_execute" or not str(
-            entry.get("CODE_FILE", "")
-        ).endswith("src/shared/exec-util.c"):
+        if (
+            entry.get("CODE_FUNC") != GENERATOR_CODE_FUNC
+            or entry.get("CODE_FILE") != GENERATOR_CODE_FILE
+        ):
+            reasons.add("candidate-representation-invalid")
             continue
         match = GENERATOR_MESSAGE.fullmatch(str(entry.get("MESSAGE", "")))
         if match is None:
+            reasons.add("candidate-representation-invalid")
             continue
         generator_path = Path(match.group("path"))
         resolved = admitted_generator(
@@ -297,15 +334,51 @@ def generator_failures(
         )
         status = int(match.group("status"))
         if resolved is None or status > 255:
-            ambiguous = True
+            reasons.add("candidate-generator-unadmitted")
             continue
         failure = {"basename": resolved.name, "exit_status": status}
         if failure not in failures:
             failures.append(failure)
-        if len(failures) > 3:
-            ambiguous = True
-            failures = failures[:3]
-    return failures, ambiguous
+    if not reasons:
+        return failures, "none"
+    if len(reasons) == 1:
+        return failures, next(iter(reasons))
+    return failures, "multiple-causes"
+
+
+def generator_journal_command(
+    runtime_uid: int, boot_id: str, journal_baseline: str
+) -> list[str]:
+    return [
+        "journalctl",
+        "--no-pager",
+        "--output=json",
+        f"--output-fields={GENERATOR_OUTPUT_FIELDS}",
+        f"--boot={boot_id.replace('-', '')}",
+        f"--since={journal_baseline}",
+        f"_UID={runtime_uid}",
+        f"CODE_FUNC={GENERATOR_CODE_FUNC}",
+        f"CODE_FILE={GENERATOR_CODE_FILE}",
+    ]
+
+
+def generator_observation(
+    status: int,
+    payload: bytes,
+    command_failure: str | None,
+    runtime_uid: int,
+    boot_id: str,
+) -> tuple[list[dict[str, Any]], str]:
+    if status == 0 and command_failure is None:
+        return generator_failures(payload, runtime_uid, boot_id)
+    reason = {
+        "timeout": "journal-timeout",
+        "output-bound-exceeded": "journal-output-bound-exceeded",
+        "command-failed": "journal-command-failed",
+    }.get(command_failure, "journal-command-failed")
+    if reason not in GENERATOR_OBSERVATION_REASONS:
+        return [], "candidate-representation-invalid"
+    return [], reason
 
 
 def selinux_adjacency(
@@ -398,23 +471,22 @@ def collect_observation(
             ],
             timeout=GENERATOR_TIMEOUT_SECONDS,
         )
-    journal_status, journal = bounded_command_output(
-        [
-            "journalctl",
-            "--no-pager",
-            "--output=json",
-            f"--boot={arguments.boot_id}",
-            f"--since={arguments.journal_baseline}",
-            f"_UID={runtime_uid}",
-        ],
+    journal_status, journal, journal_failure = bounded_command_output(
+        generator_journal_command(
+            runtime_uid, arguments.boot_id, arguments.journal_baseline
+        ),
         timeout=COMMAND_TIMEOUT_SECONDS,
+        max_bytes=MAX_GENERATOR_JOURNAL_BYTES,
     )
-    failures, generator_ambiguous = (
-        generator_failures(journal, runtime_uid, arguments.boot_id)
-        if journal_status == 0
-        else ([], True)
+    failures, generator_reason = generator_observation(
+        journal_status,
+        journal,
+        journal_failure,
+        runtime_uid,
+        arguments.boot_id,
     )
-    audit_status, audit = bounded_command_output(
+    generator_ambiguous = generator_reason != "none"
+    audit_status, audit, _ = bounded_command_output(
         ["ausearch", "-m", "AVC", "-ts", arguments.audit_baseline, "-i"],
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
@@ -447,6 +519,7 @@ def collect_observation(
         "podman_generator_accepted_actual_input": generator_status == 0,
         "generator_failures": failures,
         "generator_failure_ambiguous": generator_ambiguous,
+        "generator_observation_reason": generator_reason,
         "selinux_avc_observed": avc_observed,
         "selinux_avc": avc,
         "selinux_avc_ambiguous": avc_ambiguous,
