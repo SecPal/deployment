@@ -101,6 +101,7 @@
         "generator_failure_observed",
         "generator_failures",
         "generator_failure_ambiguous",
+        "generator_observation_reason",
         "selinux_avc_observed",
         "selinux_avc",
         "selinux_avc_ambiguous"
@@ -216,6 +217,19 @@
           }
         },
         "generator_failure_ambiguous": { "type": "boolean" },
+        "generator_observation_reason": {
+          "enum": [
+            "none",
+            "journal-command-failed",
+            "journal-timeout",
+            "journal-output-bound-exceeded",
+            "candidate-representation-invalid",
+            "candidate-generator-unadmitted",
+            "candidate-count-exceeded",
+            "multiple-causes",
+            "observation-unavailable"
+          ]
+        },
         "selinux_avc_observed": { "type": "boolean" },
         "selinux_avc": {
           "oneOf": [

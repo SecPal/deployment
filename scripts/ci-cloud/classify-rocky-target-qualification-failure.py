@@ -147,6 +147,19 @@ BOOT_ID = re.compile(
 )
 SAFE_BASENAME = re.compile(r"^[A-Za-z0-9_.@+-]{1,128}$")
 SELINUX_TYPE = re.compile(r"^[a-zA-Z0-9_]{1,64}$")
+GENERATOR_OBSERVATION_REASONS = frozenset(
+    {
+        "none",
+        "journal-command-failed",
+        "journal-timeout",
+        "journal-output-bound-exceeded",
+        "candidate-representation-invalid",
+        "candidate-generator-unadmitted",
+        "candidate-count-exceeded",
+        "multiple-causes",
+        "observation-unavailable",
+    }
+)
 
 ADJACENCY_KEYS = frozenset(
     {
@@ -169,6 +182,7 @@ ADJACENCY_KEYS = frozenset(
         "podman_generator_accepted_actual_input",
         "generator_failures",
         "generator_failure_ambiguous",
+        "generator_observation_reason",
         "selinux_avc_observed",
         "selinux_avc",
         "selinux_avc_ambiguous",
@@ -289,6 +303,7 @@ def unavailable_daemon_reload_adjacency() -> dict[str, object]:
         "generator_failure_observed": False,
         "generator_failures": [],
         "generator_failure_ambiguous": True,
+        "generator_observation_reason": "observation-unavailable",
         "selinux_avc_observed": False,
         "selinux_avc": None,
         "selinux_avc_ambiguous": True,
@@ -468,6 +483,12 @@ def admit_daemon_reload_adjacency(
         generator_ambiguous = _closed_boolean(
             observation, "generator_failure_ambiguous"
         )
+        generator_reason = observation["generator_observation_reason"]
+        if (
+            generator_reason not in GENERATOR_OBSERVATION_REASONS
+            or generator_ambiguous != (generator_reason != "none")
+        ):
+            raise ValueError("generator observation reason contradicts ambiguity")
         avc_observed = _closed_boolean(observation, "selinux_avc_observed")
         avc_ambiguous = _closed_boolean(observation, "selinux_avc_ambiguous")
         avc = _admitted_avc(observation["selinux_avc"], avc_observed)
@@ -501,6 +522,7 @@ def admit_daemon_reload_adjacency(
             "generator_failure_observed": bool(failures),
             "generator_failures": failures,
             "generator_failure_ambiguous": generator_ambiguous,
+            "generator_observation_reason": generator_reason,
             "selinux_avc_observed": avc_observed,
             "selinux_avc": avc,
             "selinux_avc_ambiguous": avc_ambiguous,
@@ -549,6 +571,12 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
         generator_ambiguous = _closed_boolean(
             document, "generator_failure_ambiguous"
         )
+        generator_reason = document["generator_observation_reason"]
+        if (
+            generator_reason not in GENERATOR_OBSERVATION_REASONS
+            or generator_ambiguous != (generator_reason != "none")
+        ):
+            raise ValueError("admitted generator reason contradicts ambiguity")
         avc_observed = _closed_boolean(document, "selinux_avc_observed")
         avc_ambiguous = _closed_boolean(document, "selinux_avc_ambiguous")
         _admitted_avc(document["selinux_avc"], avc_observed)
