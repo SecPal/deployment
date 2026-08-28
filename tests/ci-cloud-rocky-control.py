@@ -211,9 +211,11 @@ class RockyCloudControlTests(unittest.TestCase):
                 f'"target_sha":"{target_sha}"}}',
                 encoding="utf-8",
             )
-            self.assertNotEqual(
-                0, subprocess.run(command, check=False, capture_output=True).returncode
+            duplicate = subprocess.run(
+                command, check=False, capture_output=True, text=True
             )
+            self.assertNotEqual(0, duplicate.returncode)
+            self.assertIn("duplicate object key", duplicate.stderr)
             request.write_text(json.dumps(valid) + " " * 1024, encoding="utf-8")
             self.assertNotEqual(
                 0, subprocess.run(command, check=False, capture_output=True).returncode
