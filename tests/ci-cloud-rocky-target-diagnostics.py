@@ -683,6 +683,10 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     def test_reload_client_error_is_normalized_without_raw_output(self) -> None:
         cases = (
             (b"Reload daemon failed: Reload() request rejected due to rate limit.\n", "rate-limited"),
+            (
+                b"Reload daemon failed: Refusing to reload, not enough space available on /run/systemd. Currently, 1B are free, but a safety buffer of 16.0M is enforced.\n",
+                "run-space-rejected",
+            ),
             (b"Reload daemon failed: Interactive authentication required.\n", "interactive-auth-required"),
             (b"Reload daemon failed: SELinux policy denies access: Permission denied\n", "selinux-access-denied"),
             (b"Reload daemon failed: Access denied\n", "access-denied"),
@@ -722,7 +726,16 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "systemd_source_contract_admitted": True,
         }
         cases = (
-            ("reload-run-space-rejected", {"run_space_sufficient": False}),
+            (
+                "reload-run-space-rejected",
+                {
+                    "run_space_sufficient": False,
+                    "client_error": "run-space-rejected",
+                    "reload_request_logged": False,
+                    "reload_started": False,
+                    "reload_finished": False,
+                },
+            ),
             ("reload-selinux-access-denied", {"reload_access_avc_observed": True}),
             (
                 "reload-authorization-denied",
@@ -758,13 +771,6 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                     "reload_internal_failure": "serialization-file-failed",
                 },
             ),
-            (
-                "reload-manager-serialization-failed",
-                {
-                    "reload_finished": False,
-                    "reload_internal_failure": "none",
-                },
-            ),
             ("reload-reply-transport-failed", {}),
         )
         for expected, mutation in cases:
@@ -780,6 +786,29 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         )
         self.assertEqual("diagnostic-unavailable", classification)
         self.assertEqual("reload-journal-timeout", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "reload_finished": False,
+                "reload_internal_failure": "none",
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-completion-not-observed", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "run_space_sufficient": False,
+                "client_error": "access-denied",
+                "reload_request_logged": False,
+                "reload_started": False,
+                "reload_finished": False,
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-stage-evidence-contradictory", reason)
 
         classification, reason = self.classifier.daemon_reload_classification(
             **{**baseline, "reload_selinux_contexts_admitted": False}

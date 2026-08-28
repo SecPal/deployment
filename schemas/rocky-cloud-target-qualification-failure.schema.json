@@ -295,6 +295,7 @@
         "client_reload_error": {
           "enum": [
             "rate-limited",
+            "run-space-rejected",
             "interactive-auth-required",
             "selinux-access-denied",
             "access-denied",
@@ -329,8 +330,7 @@
             "serialization-file-failed",
             "resource-allocation-failed",
             "serialization-failed",
-            "serialization-seek-failed",
-            "internal-reload-failure-unclassified"
+            "serialization-seek-failed"
           ]
         },
         "reload_reply_send_failed": { "type": "boolean" },
@@ -395,8 +395,10 @@
             "reload-multiple-causes",
             "reload-selinux-context-observation-unavailable",
             "reload-selinux-observation-ambiguous",
+            "reload-stage-evidence-contradictory",
             "reload-authorization-observation-unavailable",
             "reload-main-loop-entry-not-observed",
+            "reload-completion-not-observed",
             "observation-unavailable"
           ]
         },

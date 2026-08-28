@@ -2283,14 +2283,29 @@ def validate_rocky_control_plane(root: Path) -> None:
         == 8_192
         and literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS") == 3
         and literal_constant(
+            reload_adjacency_observer, "MANAGER_CONTINUITY_TIMEOUT_SECONDS"
+        )
+        == 2
+        and literal_constant(
+            reload_adjacency_observer, "PACKAGE_QUERY_TIMEOUT_SECONDS"
+        )
+        == 1
+        and literal_constant(
             reload_adjacency_observer, "RELOAD_JOURNAL_TIMEOUT_SECONDS"
         )
         == 1
         and literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS") == 8
         and literal_constant(reload_adjacency_observer, "CAPTURE_DEADLINE_SECONDS")
         == 22
-        and 4
+        and 2
         * literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS")
+        + 2
+        * literal_constant(
+            reload_adjacency_observer, "MANAGER_CONTINUITY_TIMEOUT_SECONDS"
+        )
+        + literal_constant(
+            reload_adjacency_observer, "PACKAGE_QUERY_TIMEOUT_SECONDS"
+        )
         + literal_constant(
             reload_adjacency_observer, "RELOAD_JOURNAL_TIMEOUT_SECONDS"
         )
@@ -2400,6 +2415,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"reload-rate-limited"' in target_failure_classifier
         and '"reload-manager-serialization-failed"' in target_failure_classifier
         and '"reload-reply-transport-failed"' in target_failure_classifier
+        and '"reload-stage-evidence-contradictory"'
+        in target_failure_classifier
+        and '"reload-completion-not-observed"' in target_failure_classifier
         and '"diagnostic-unavailable"' in target_failure_classifier
         and "captured_before_cleanup" in target_failure_classifier
         and '_closed_boolean(observation, "captured_before_cleanup")'

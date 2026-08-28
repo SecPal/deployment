@@ -55,6 +55,8 @@ MAX_RELOAD_JOURNAL_BYTES = (MAX_RELOAD_RECORD_BYTES + 1) * (
 )
 MAX_OBSERVATION_BYTES = 8_192
 COMMAND_TIMEOUT_SECONDS = 3
+MANAGER_CONTINUITY_TIMEOUT_SECONDS = 2
+PACKAGE_QUERY_TIMEOUT_SECONDS = 1
 RELOAD_JOURNAL_TIMEOUT_SECONDS = 1
 GENERATOR_TIMEOUT_SECONDS = 8
 CAPTURE_DEADLINE_SECONDS = 22
@@ -686,7 +688,7 @@ def systemd_package_identity() -> str | None:
             "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\\n",
             "systemd",
         ],
-        timeout=COMMAND_TIMEOUT_SECONDS,
+        timeout=PACKAGE_QUERY_TIMEOUT_SECONDS,
         max_bytes=128,
     )
     if status != 0 or failure is not None:
@@ -707,7 +709,7 @@ def manager_state(runtime_uid: int) -> tuple[bool, int | None]:
             "--property=ActiveState",
             "--property=MainPID",
         ],
-        timeout=COMMAND_TIMEOUT_SECONDS,
+        timeout=MANAGER_CONTINUITY_TIMEOUT_SECONDS,
         max_bytes=128,
     )
     if status != 0 or failure is not None:
@@ -803,7 +805,8 @@ def collect_observation(
             f"--machine={RUNTIME_ACCOUNT}@.host",
             "--user",
             "show-environment",
-        ]
+        ],
+        timeout=MANAGER_CONTINUITY_TIMEOUT_SECONDS,
     ) == 0
     manager_selinux_type = (
         process_selinux_type(manager_pid) if manager_pid is not None else None

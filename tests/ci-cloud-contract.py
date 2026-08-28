@@ -1117,6 +1117,16 @@ class CloudCIContractTests(unittest.TestCase):
             (runner, '--reload-adjacency "$reload_adjacency"', ""),
             (observer, "MAX_INPUT_BYTES = 4_096", "MAX_INPUT_BYTES = 65_536"),
             (observer, "CAPTURE_DEADLINE_SECONDS = 22", "CAPTURE_DEADLINE_SECONDS = 26"),
+            (
+                observer,
+                "MANAGER_CONTINUITY_TIMEOUT_SECONDS = 2",
+                "MANAGER_CONTINUITY_TIMEOUT_SECONDS = 4",
+            ),
+            (
+                observer,
+                "PACKAGE_QUERY_TIMEOUT_SECONDS = 1",
+                "PACKAGE_QUERY_TIMEOUT_SECONDS = 4",
+            ),
             (observer, "time.monotonic() > deadline", "False"),
             (
                 observer,

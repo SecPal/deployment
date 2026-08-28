@@ -187,12 +187,12 @@ RELOAD_INTERNAL_FAILURES = frozenset(
         "resource-allocation-failed",
         "serialization-failed",
         "serialization-seek-failed",
-        "internal-reload-failure-unclassified",
     }
 )
 CLIENT_RELOAD_ERRORS = frozenset(
     {
         "rate-limited",
+        "run-space-rejected",
         "interactive-auth-required",
         "selinux-access-denied",
         "access-denied",
@@ -495,6 +495,10 @@ def reload_client_error(payload: bytes) -> str:
     message = messages[0]
     if message == "Reload() request rejected due to rate limit.":
         return "rate-limited"
+    if message.startswith(
+        "Refusing to reload, not enough space available on /run/systemd."
+    ):
+        return "run-space-rejected"
     if message == "Interactive authentication required.":
         return "interactive-auth-required"
     if message.startswith("SELinux policy denies access: "):
@@ -577,7 +581,11 @@ def daemon_reload_classification(
     if not run_space_observed:
         return "diagnostic-unavailable", "run-space-observation-unavailable"
     if not run_space_sufficient:
-        return "reload-run-space-rejected", "none"
+        if client_error == "run-space-rejected" and not reload_request_logged:
+            return "reload-run-space-rejected", "none"
+        return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
+    if client_error == "run-space-rejected":
+        return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
     if reload_journal_reason != "none":
         return "diagnostic-unavailable", f"reload-{reload_journal_reason}"
     if not reload_selinux_contexts_admitted:
@@ -602,8 +610,10 @@ def daemon_reload_classification(
         return "reload-reply-transport-failed", "none"
     if not reload_started:
         return "diagnostic-unavailable", "reload-main-loop-entry-not-observed"
-    if not reload_finished:
+    if reload_internal_failure != "none":
         return "reload-manager-serialization-failed", "none"
+    if not reload_finished:
+        return "diagnostic-unavailable", "reload-completion-not-observed"
     return "reload-reply-transport-failed", "none"
 
 
@@ -742,14 +752,6 @@ def admit_daemon_reload_adjacency(
             or reload_request_logged != (reload_request_client_pid is not None)
         ):
             raise ValueError("Reload stage facts are inconsistent")
-        if (
-            reload_internal_failure == "none"
-            and reload_started
-            and not reload_finished
-        ):
-            # Exact Rocky systemd 257 only omits "Reloading finished" here
-            # when manager_reload() returned before its point of no return.
-            reload_internal_failure = "internal-reload-failure-unclassified"
         reload_access_avc_observed = _closed_boolean(
             observation, "reload_access_avc_observed"
         )
