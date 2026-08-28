@@ -1070,6 +1070,11 @@ class CloudCIContractTests(unittest.TestCase):
             'EXPECTED_TARGET_SHA = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"',
             'EXPECTED_TARGET_SHA = ""',
         )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            "MAX_TRACE_FRAMES = 8",
+            "MAX_TRACE_FRAMES = 8\nMAX_TRACE_FRAMES = 7",
+        )
 
     def test_gcp_provider_disables_automatic_attribution_label(self) -> None:
         versions = (ROOT / "infra/ci-cloud/gcp/versions.tf").read_text(

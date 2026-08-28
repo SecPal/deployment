@@ -155,16 +155,19 @@ def literal_constant(text: str, name: str) -> object:
         tree = ast.parse(text)
     except SyntaxError:
         raise ContractError(f"trusted Python source containing {name} is invalid") from None
+    values: list[object] = []
     for node in tree.body:
         if (
             isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
         ):
             try:
-                return ast.literal_eval(node.value)
+                values.append(ast.literal_eval(node.value))
             except (ValueError, TypeError, SyntaxError):
-                break
-    raise ContractError(f"{name} must be a literal constant")
+                raise ContractError(f"{name} must be a literal constant") from None
+    if len(values) != 1:
+        raise ContractError(f"{name} must have exactly one top-level assignment")
+    return values[0]
 
 
 def integer_mapping_literal(text: str, key: str) -> int:
