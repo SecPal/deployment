@@ -13,4 +13,6 @@ secpal_target_qualification_err() {
   return "$status"
 }
 
-trap secpal_target_qualification_err ERR
+if { : >&3; } 2>/dev/null; then
+  trap secpal_target_qualification_err ERR
+fi

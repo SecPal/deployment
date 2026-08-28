@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from pathlib import Path
 
@@ -18,6 +19,7 @@ EXPECTED_HARNESS_SHA256 = "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69
 MAX_STDOUT_BYTES = 65_536
 MAX_TRACE_BYTES = 4_096
 MAX_ARTIFACT_BYTES = 2_048
+MAX_CAPTURE_FILE_BYTES = 65_536
 
 OPERATIONS = frozenset(
     {
@@ -146,7 +148,10 @@ def classify_failure(
     *,
     target_bound: bool,
     trusted_marker: str | None = None,
+    representation_invalid: bool = False,
 ) -> tuple[str, str]:
+    if representation_invalid:
+        return "qualification-harness", "representation-invalid"
     if trusted_marker is not None:
         match = MARKER_PATTERN.fullmatch(trusted_marker.strip())
         if match is not None and match.group(1) in OPERATIONS and match.group(2) in REASONS:
@@ -186,10 +191,23 @@ def classify_failure(
 
 
 def bounded_bytes(path: Path, maximum: int) -> bytes:
-    size = path.stat().st_size
-    if not path.is_file() or path.is_symlink() or size > maximum:
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum:
+            raise ValueError("diagnostic input is outside its closed file bound")
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = -1
+            payload = source.read(maximum + 1)
+    except OSError as error:
+        raise ValueError("diagnostic input is outside its closed file bound") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(payload) > maximum:
         raise ValueError("diagnostic input is outside its closed file bound")
-    return path.read_bytes()
+    return payload
 
 
 def write_document(path: Path, document: dict[str, object]) -> None:
@@ -221,6 +239,7 @@ def main() -> int:
     parser.add_argument("--trace", required=True, type=Path)
     parser.add_argument("--exit-status", required=True, type=int)
     parser.add_argument("--trusted-marker", type=Path)
+    parser.add_argument("--representation-invalid", action="store_true")
     parser.add_argument("--output", required=True, type=Path)
     options = parser.parse_args()
     if not HEX40.fullmatch(options.target_sha) or not HEX40.fullmatch(options.control_sha):
@@ -231,7 +250,7 @@ def main() -> int:
         raise SystemExit("target harness status is outside the closed range")
 
     stdout = bounded_bytes(options.stdout, MAX_STDOUT_BYTES)
-    trace = bounded_bytes(options.trace, MAX_TRACE_BYTES)
+    trace = bounded_bytes(options.trace, MAX_CAPTURE_FILE_BYTES)
     harness = bounded_bytes(options.harness, 128 * 1024)
     harness_sha256 = hashlib.sha256(harness).hexdigest()
     target_bound = options.target_sha == EXPECTED_TARGET_SHA and harness_sha256 == EXPECTED_HARNESS_SHA256
@@ -246,6 +265,7 @@ def main() -> int:
         options.exit_status,
         target_bound=target_bound,
         trusted_marker=marker,
+        representation_invalid=options.representation_invalid,
     )
     document: dict[str, object] = {
         "schema_version": 1,

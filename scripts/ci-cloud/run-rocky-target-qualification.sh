@@ -96,8 +96,13 @@ set +e
 )
 status=$?
 set -e
-[[ "$(stat -c %s "$stdout")" -le 65536 ]]
-[[ "$(stat -c %s "$qualification_trace")" -le 4096 ]]
+stdout_size="$(stat -c %s "$stdout")"
+trace_size="$(stat -c %s "$qualification_trace")"
+representation_option=()
+if [[ "$stdout_size" -gt 65536 || "$trace_size" -gt 4096 ]]; then
+  representation_option=(--representation-invalid)
+  status=1
+fi
 
 if [[ "$status" -ne 0 ]]; then
   /usr/local/sbin/secpal-classify-rocky-target-failure \
@@ -105,6 +110,7 @@ if [[ "$status" -ne 0 ]]; then
     --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
     --harness "$work_root/scripts/qualify-production-host.sh" \
     --stdout "$stdout" --trace "$qualification_trace" --exit-status "$status" \
+    "${representation_option[@]}" \
     --output "$qualification_failure"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
     validate-target-qualification-failure "$qualification_failure" \

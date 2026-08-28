@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -153,12 +154,12 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 result = subprocess.run(
                     ["bash", harness],
                     check=False,
-                    env={"BASH_ENV": str(TRACE)},
+                    env={**os.environ, "BASH_ENV": str(TRACE)},
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     pass_fds=(descriptor.fileno(),),
                     close_fds=True,
-                    preexec_fn=lambda: __import__("os").dup2(descriptor.fileno(), 3),
+                    preexec_fn=lambda: os.dup2(descriptor.fileno(), 3),
                 )
             self.assertEqual(1, result.returncode)
             self.assertRegex(
@@ -184,7 +185,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "trusted_control_sha": "c" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
-            "harness_sha256": "a" * 64,
+            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
             "operation": "qualify-seccomp",
             "reason": "invariant-failed",
             "exit_status": 1,
@@ -197,9 +198,23 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             dict(document, operation="arbitrary-command"),
             dict(document, reason="some-error-text"),
             dict(document, qualification_run_id="0"),
-            dict(document, diagnostic_input_bytes=69_889),
+            dict(document, diagnostic_input_bytes=131_329),
         ):
             self.assertTrue(list(validator.iter_errors(mutation)))
+        unbound = dict(
+            document,
+            harness_sha256="a" * 64,
+            operation="qualification-harness",
+            reason="representation-invalid",
+        )
+        self.assertEqual([], list(validator.iter_errors(unbound)))
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    dict(unbound, operation="qualify-seccomp", reason="invariant-failed")
+                )
+            )
+        )
 
     def test_trusted_validator_binds_the_exact_control_target_and_run(self) -> None:
         document = {
@@ -209,7 +224,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "trusted_control_sha": "c" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
-            "harness_sha256": "a" * 64,
+            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
             "operation": "qualify-seccomp",
             "reason": "invariant-failed",
             "exit_status": 1,
@@ -275,6 +290,46 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             runner,
         )
         self.assertIn('rm -f -- "$qualification_marker"\nset +e\npython3 -', runner)
+        self.assertIn("representation_option=(--representation-invalid)", runner)
+
+    def test_trace_overflow_and_unsafe_inputs_fail_closed(self) -> None:
+        self.assertEqual(
+            ("qualification-harness", "representation-invalid"),
+            self.classifier.classify_failure(
+                b"",
+                b"x" * (self.classifier.MAX_TRACE_BYTES + 1),
+                1,
+                target_bound=True,
+                representation_invalid=True,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing"
+            with self.assertRaises(ValueError):
+                self.classifier.bounded_bytes(missing, 1)
+            target = root / "target"
+            target.write_bytes(b"ok")
+            link = root / "link"
+            link.symlink_to(target)
+            with self.assertRaises(ValueError):
+                self.classifier.bounded_bytes(link, 2)
+            with self.assertRaises(ValueError):
+                self.classifier.bounded_bytes(target, 1)
+
+    def test_trace_helper_is_inert_without_its_dedicated_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = Path(directory) / "harness.sh"
+            harness.write_text("set -euo pipefail\nfalse\n", encoding="utf-8")
+            result = subprocess.run(
+                ["bash", harness],
+                check=False,
+                env={**os.environ, "BASH_ENV": str(TRACE)},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(1, result.returncode)
+            self.assertNotIn("Bad file descriptor", result.stderr)
 
 
 if __name__ == "__main__":

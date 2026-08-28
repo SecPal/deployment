@@ -78,7 +78,7 @@
     "diagnostic_input_bytes": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 69888
+      "maximum": 131328
     }
   },
   "allOf": [
@@ -96,6 +96,22 @@
       "if": { "properties": { "reason": { "const": "cleanup-failed" } } },
       "then": {
         "properties": { "operation": { "const": "qualify-fixture-cleanup" } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "harness_sha256": {
+            "const": "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"
+          }
+        },
+        "required": ["harness_sha256"]
+      },
+      "else": {
+        "properties": {
+          "operation": { "const": "qualification-harness" },
+          "reason": { "const": "representation-invalid" }
+        }
       }
     }
   ]
