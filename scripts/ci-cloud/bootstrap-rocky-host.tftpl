@@ -24,6 +24,8 @@ install -d -o root -g root -m 0755 /opt/secpal-control/scripts/ci-cloud \
   /opt/secpal-control/config/ci-cloud /opt/secpal-control/schemas
 decode_script '${prepare_script_base64gzip}' /usr/local/sbin/secpal-prepare-rocky-host
 decode_script '${target_runner_base64gzip}' /usr/local/sbin/secpal-run-rocky-target-qualification
+decode_script '${target_failure_classifier_base64gzip}' /usr/local/sbin/secpal-classify-rocky-target-failure
+decode_script '${target_trace_base64gzip}' /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh
 decode_script '${allocator_base64gzip}' /usr/local/sbin/secpal-allocate-rocky-subids
 decode_script '${collector_base64gzip}' /usr/local/sbin/secpal-collect-rocky-preparation
 decode_script '${preparation_contract_base64gzip}' /usr/local/sbin/rocky_preparation_contract.py
@@ -34,6 +36,7 @@ decode_script '${preparation_schema_base64gzip}' /opt/secpal-control/schemas/roc
 decode_script '${preparation_failure_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-preparation-failure-evidence.schema.json
 decode_script '${qualification_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-qualification-evidence.schema.json
 decode_script '${target_source_failure_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-target-source-failure.schema.json
+decode_script '${target_qualification_failure_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-target-qualification-failure.schema.json
 decode_script '${profile_base64gzip}' /opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
 chmod 0644 /opt/secpal-control/schemas/*.json /opt/secpal-control/config/ci-cloud/*.json
 

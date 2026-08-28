@@ -941,8 +941,11 @@ class CloudCIContractTests(unittest.TestCase):
             ".gitignore",
             ".github/workflows/cloud-conformance.yml",
             ".github/workflows/cloud-janitor.yml",
+            ".github/workflows/rocky-cloud-qualification.yml",
+            "config/ci-cloud/gcp-rocky-10-2-arm64.json",
             "infra/ci-cloud/digitalocean",
             "infra/ci-cloud/gcp",
+            "infra/ci-cloud/gcp-rocky",
             "schemas",
             "scripts/ci-cloud",
             "scripts/fetch-oci-attestation.py",
@@ -1008,6 +1011,7 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/rocky-control.py",
             "tests/ci-cloud-gcp-rocky-janitor.py",
             "tests/ci-cloud-rocky-control.py",
+            "tests/ci-cloud-rocky-target-diagnostics.py",
             "schemas/ci-cloud-bootstrap-failure.schema.json",
             "scripts/ci-cloud/gcp-janitor.py",
             "scripts/ci-cloud/detach-gcp-vm-identity.sh",
@@ -1017,6 +1021,20 @@ class CloudCIContractTests(unittest.TestCase):
         ):
             with self.subTest(relative=relative):
                 self.assertIn(relative, repository_contract)
+
+    def test_static_contract_rejects_opaque_target_harness_failure_regression(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-rocky-target-qualification.sh",
+            "exit 91",
+            "printf 'qualification harness failed with exit status %s\\n' \"$status\" >&2\n  exit 1",
+        )
+        self.assert_mutation_rejected(
+            ".github/workflows/rocky-cloud-qualification.yml",
+            "Retrieve and validate bounded target-qualification failure",
+            "Discard target-qualification failure",
+        )
 
     def test_gcp_provider_disables_automatic_attribution_label(self) -> None:
         versions = (ROOT / "infra/ci-cloud/gcp/versions.tf").read_text(

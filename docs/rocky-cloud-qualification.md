@@ -88,6 +88,16 @@ probe cadence. Target revision code executes exactly once only after the
 current-boot record is admitted; transport, authentication, missing/stale state,
 and binding failure remain separate closed outcomes.
 
+The exact target harness remains the owner of workload qualification, while
+trusted control remains the sole authority for PASS. For the reviewed target
+commit, trusted control binds the fetched harness to its immutable SHA-256 and
+maps only its finite reviewed error messages and Bash failure call sites to a
+closed negative diagnostic. That diagnostic can only stop qualification; it
+cannot supply or replace success evidence. Unknown, ambiguous, or unbound
+failures remain `qualification-harness/unclassified-target-failure`. The
+transport retains only the operation, closed reason, exit status, run bindings,
+and bounded diagnostic-input hash and length—not target stdout or stderr.
+
 Normal and failure cleanup use `tofu destroy` against the saved state. The Rocky
 janitor independently revalidates the complete ownership description or label
 set immediately before each ordered deletion. A prefix is never ownership, and

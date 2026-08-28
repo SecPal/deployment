@@ -61,6 +61,7 @@ python3 tests/ci-cloud-config.py
 python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-rocky-control.py
 python3 tests/ci-cloud-rocky-readiness.py
+python3 tests/ci-cloud-rocky-target-diagnostics.py
 python3 tests/rocky-evidence-architecture.py
 python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py

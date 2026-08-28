@@ -36,6 +36,7 @@ SCHEMA_NAMES = (
     "rocky-cloud-qualification-evidence.schema.json",
     "rocky-cloud-qualification-readiness-failure.schema.json",
     "rocky-cloud-target-source-failure.schema.json",
+    "rocky-cloud-target-qualification-failure.schema.json",
 )
 
 
@@ -396,6 +397,10 @@ class RockyCloudControlTests(unittest.TestCase):
         sources = {
             "prepare_script_base64gzip": ROOT / "scripts/ci-cloud/prepare-rocky-host.sh",
             "target_runner_base64gzip": ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh",
+            "target_failure_classifier_base64gzip": ROOT
+            / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            "target_trace_base64gzip": ROOT
+            / "scripts/ci-cloud/rocky-target-qualification-trace.sh",
             "allocator_base64gzip": ROOT / "scripts/ci-cloud/allocate-rocky-subids.py",
             "collector_base64gzip": ROOT / "scripts/ci-cloud/collect-rocky-preparation.py",
             "preparation_contract_base64gzip": ROOT / "scripts/ci-cloud/rocky_preparation_contract.py",
@@ -407,6 +412,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "qualification_schema_base64gzip": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
             "target_source_failure_schema_base64gzip": ROOT
             / "schemas/rocky-cloud-target-source-failure.schema.json",
+            "target_qualification_failure_schema_base64gzip": ROOT
+            / "schemas/rocky-cloud-target-qualification-failure.schema.json",
             "profile_base64gzip": PROFILE,
         }
         rendered = template
@@ -505,7 +512,10 @@ class RockyCloudControlTests(unittest.TestCase):
         publication = steps["Publish bounded target-source failure"]
         execution_run = execution["run"]
         retrieval_run = retrieval["run"]
-        self.assertIn("81|82|83|84) source_failure_expected=true", execution_run)
+        self.assertIn("81|82|83|84)", execution_run)
+        self.assertIn("source_failure_expected=true", execution_run)
+        self.assertIn("91)", execution_run)
+        self.assertIn("qualification_failure_expected=true", execution_run)
         self.assertIn(
             "steps.target_execution.outputs.source_failure_expected == 'true'",
             retrieval["if"],
@@ -524,7 +534,9 @@ class RockyCloudControlTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for status in (81, 82, 83, 84):
             self.assertIn(f"exit {status}", runner)
-        self.assertIn('if [[ "$status" -ne 0 ]]; then\n  status=1\nfi', runner)
+        self.assertIn('if [[ "$status" -ne 0 ]]; then', runner)
+        self.assertIn("validate-target-qualification-failure", runner)
+        self.assertIn("exit 91", runner)
 
     def test_opentofu_consumes_only_exact_image_identity(self) -> None:
         main = (TF_ROOT / "main.tf").read_text(encoding="utf-8")
