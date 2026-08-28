@@ -76,6 +76,7 @@ required_files=(
   schemas/rocky-cloud-discovery-evidence.schema.json
   schemas/rocky-cloud-preparation-evidence.schema.json
   schemas/rocky-cloud-qualification-evidence.schema.json
+  schemas/rocky-cloud-qualification-readiness-failure.schema.json
   config/ci-cloud/gcp-rocky-10-2-arm64.json
   config/production/inventory.example.yaml
   config/production/state-contract.json
@@ -111,6 +112,7 @@ required_files=(
   scripts/ci-cloud/prepare-rocky-host.sh
   scripts/ci-cloud/rocky-control.py
   scripts/ci-cloud/rocky-gcp-transition.py
+  scripts/ci-cloud/wait-rocky-qualification-readiness.py
   scripts/ci-cloud/run-rocky-target-qualification.sh
   scripts/ci-cloud/wait-github-artifact.sh
   scripts/ci-cloud/detach-gcp-vm-identity.sh
@@ -140,6 +142,7 @@ required_files=(
   tests/ci-cloud-gcp-janitor.py
   tests/ci-cloud-gcp-rocky-janitor.py
   tests/ci-cloud-rocky-control.py
+  tests/ci-cloud-rocky-readiness.py
   tests/ci-cloud-gcp-identity.sh
   tests/ci-cloud-host-setup-failure.py
   tests/ci-cloud-janitor.py

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secpal.example/schemas/rocky-cloud-qualification-readiness-failure.schema.json",
+  "title": "Rocky qualification readiness failure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase",
+    "operation",
+    "reason",
+    "target_sha",
+    "trusted_control_sha",
+    "run_id",
+    "run_attempt",
+    "probe_count",
+    "elapsed_seconds"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "phase": { "const": "qualification-readiness" },
+    "operation": {
+      "enum": ["ssh-transport", "ssh-authentication", "guest-state"]
+    },
+    "reason": {
+      "enum": ["not-ready-timeout", "missing-or-stale", "binding-mismatch"]
+    },
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "trusted_control_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+    "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
+    "probe_count": { "type": "integer", "minimum": 1, "maximum": 181 },
+    "elapsed_seconds": { "type": "integer", "minimum": 0, "maximum": 900 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "ssh-transport" } } },
+      "then": { "properties": { "reason": { "const": "not-ready-timeout" } } }
+    },
+    {
+      "if": {
+        "properties": { "operation": { "const": "ssh-authentication" } }
+      },
+      "then": { "properties": { "reason": { "const": "not-ready-timeout" } } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "guest-state" } } },
+      "then": {
+        "properties": {
+          "reason": { "enum": ["missing-or-stale", "binding-mismatch"] }
+        }
+      }
+    }
+  ]
+}

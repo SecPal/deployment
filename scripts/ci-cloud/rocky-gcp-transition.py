@@ -25,6 +25,7 @@ PROJECT_ROOT = f"https://compute.googleapis.com/compute/v1/projects/{PROJECT}"
 API_ROOT = f"{PROJECT_ROOT}/zones/{ZONE}"
 INSTANCE = re.compile(r"^sprk-([1-9][0-9]{0,19})-([1-9][0-9]{0,2})-instance$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+NUMBER = re.compile(r"^[1-9][0-9]{0,19}$")
 PUBLIC_KEY = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/]+={0,2} secpal-rocky-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}$")
 BOOTSTRAP_ACCOUNT = "secpal-ci-bootstrap@secpal-dev.iam.gserviceaccount.com"
 
@@ -148,7 +149,12 @@ def validate_service_accounts(instance: dict[str, Any]) -> None:
         raise TransitionError("bootstrap identity scopes are not exactly empty")
 
 
-def metadata_payload(instance: dict[str, Any], public_key: str) -> dict[str, Any]:
+def metadata_payload(
+    instance: dict[str, Any],
+    public_key: str,
+    access_run_id: str,
+    access_run_attempt: str,
+) -> dict[str, Any]:
     metadata = instance.get("metadata")
     if not isinstance(metadata, dict) or not isinstance(metadata.get("fingerprint"), str):
         raise TransitionError("instance metadata has no exact fingerprint")
@@ -158,6 +164,8 @@ def metadata_payload(instance: dict[str, Any], public_key: str) -> dict[str, Any
     replacements = {
         "secpal-rocky-ssh-public-key": public_key,
         "secpal-rocky-cloud-identity-admitted": "true",
+        "secpal-rocky-access-run-id": access_run_id,
+        "secpal-rocky-access-run-attempt": access_run_attempt,
     }
     retained = [item for item in items if item.get("key") not in replacements]
     retained.extend({"key": key, "value": value} for key, value in replacements.items())
@@ -297,6 +305,8 @@ def main() -> int:
     parser.add_argument("--expires-at", required=True)
     parser.add_argument("--ssh-public-key", required=True)
     parser.add_argument("--runner-ipv4", required=True)
+    parser.add_argument("--access-run-id", required=True)
+    parser.add_argument("--access-run-attempt", required=True)
     parser.add_argument("--ipv4-output", required=True, type=Path)
     options = parser.parse_args()
     try:
@@ -304,6 +314,10 @@ def main() -> int:
             raise TransitionError("full lowercase target and control SHAs are required")
         if re.fullmatch(r"[1-9][0-9]{0,29}", options.instance_id) is None:
             raise TransitionError("expected instance ID is outside the closed numeric format")
+        if NUMBER.fullmatch(options.access_run_id) is None or re.fullmatch(
+            r"[1-9][0-9]{0,2}", options.access_run_attempt
+        ) is None:
+            raise TransitionError("qualification access run identity is outside the closed format")
         if len(options.ssh_public_key) > 128 or PUBLIC_KEY.fullmatch(
             options.ssh_public_key
         ) is None:
@@ -329,7 +343,12 @@ def main() -> int:
             raise TransitionError("cloud identity remains after detachment")
         client.mutate(
             f"instances/{options.instance}/setMetadata",
-            metadata_payload(instance, options.ssh_public_key),
+            metadata_payload(
+                instance,
+                options.ssh_public_key,
+                options.access_run_id,
+                options.access_run_attempt,
+            ),
         )
         client.mutate(f"instances/{options.instance}/start", {})
         instance = wait_status(client, options.instance, "RUNNING")

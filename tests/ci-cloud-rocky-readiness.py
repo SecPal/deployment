@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+"""Behavioral contract for Rocky qualification guest readiness."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WAITER = ROOT / "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
+WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+BOOTSTRAP = ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl"
+TRANSITION = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
+
+
+def load_waiter():
+    specification = importlib.util.spec_from_file_location("rocky_readiness", WAITER)
+    if specification is None or specification.loader is None:
+        raise RuntimeError("unable to load Rocky readiness waiter")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+class RockyQualificationReadinessTests(unittest.TestCase):
+    target = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
+    control = "5" * 40
+    boot = "22222222-2222-4222-8222-222222222222"
+    key_digest = "a" * 64
+
+    def setUp(self) -> None:
+        self.module = load_waiter()
+        self.expected = self.module.Expectation(
+            target_sha=self.target,
+            trusted_control_sha=self.control,
+            access_run_id="33146182082",
+            access_run_attempt="1",
+            ssh_public_key_sha256=self.key_digest,
+        )
+
+    def marker(self, **changes: object) -> dict[str, object]:
+        marker: dict[str, object] = {
+            "schema_version": 1,
+            "target_sha": self.target,
+            "trusted_control_sha": self.control,
+            "access_run_id": "33146182082",
+            "access_run_attempt": "1",
+            "boot_id": self.boot,
+            "ssh_public_key_sha256": self.key_digest,
+            "cloud_identity_absent": True,
+            "guest_startup_complete": True,
+        }
+        marker.update(changes)
+        return marker
+
+    def run_sequence(self, outcomes: list[object]):
+        calls = 0
+
+        def probe():
+            nonlocal calls
+            outcome = outcomes[min(calls, len(outcomes) - 1)]
+            calls += 1
+            return outcome
+
+        result = self.module.wait_for_readiness(
+            probe,
+            self.expected,
+            deadline=4,
+            interval=1,
+            monotonic=self.module.StepClock(),
+            sleep=lambda _: None,
+        )
+        return result, calls
+
+    def test_delayed_transport_does_not_execute_target_early(self) -> None:
+        ready = self.module.ProbeResult.ready(self.boot, self.marker())
+        result, calls = self.run_sequence(
+            [self.module.ProbeResult.transport(), self.module.ProbeResult.transport(), ready]
+        )
+        self.assertEqual(self.boot, result["boot_id"])
+        self.assertEqual(3, calls)
+
+    def test_permanent_transport_refusal_is_bounded_and_closed(self) -> None:
+        with self.assertRaises(self.module.ReadinessFailure) as failure:
+            self.run_sequence([self.module.ProbeResult.transport()])
+        self.assertEqual(
+            ("ssh-transport", "not-ready-timeout"),
+            (failure.exception.operation, failure.exception.reason),
+        )
+
+    def test_delayed_authentication_waits_for_exact_rotated_authority(self) -> None:
+        ready = self.module.ProbeResult.ready(self.boot, self.marker())
+        result, calls = self.run_sequence(
+            [self.module.ProbeResult.authentication(), ready]
+        )
+        self.assertTrue(result["guest_startup_complete"])
+        self.assertEqual(2, calls)
+
+    def test_missing_marker_never_admits_target_execution(self) -> None:
+        with self.assertRaises(self.module.ReadinessFailure) as failure:
+            self.run_sequence([self.module.ProbeResult.missing(self.boot)])
+        self.assertEqual(
+            ("guest-state", "missing-or-stale"),
+            (failure.exception.operation, failure.exception.reason),
+        )
+
+    def test_stale_or_mismatched_marker_fails_closed(self) -> None:
+        cases = (
+            {"boot_id": "11111111-1111-4111-8111-111111111111"},
+            {"target_sha": "f" * 40},
+            {"trusted_control_sha": "e" * 40},
+            {"access_run_id": "33145864214"},
+            {"access_run_attempt": "2"},
+            {"ssh_public_key_sha256": "b" * 64},
+            {"cloud_identity_absent": False},
+            {"guest_startup_complete": False},
+        )
+        for mutation in cases:
+            with self.subTest(mutation=mutation), self.assertRaises(
+                self.module.ReadinessFailure
+            ) as failure:
+                self.run_sequence(
+                    [self.module.ProbeResult.ready(self.boot, self.marker(**mutation))]
+                )
+            self.assertEqual(
+                ("guest-state", "binding-mismatch"),
+                (failure.exception.operation, failure.exception.reason),
+            )
+
+    def test_current_marker_is_exact_and_order_independent(self) -> None:
+        reversed_marker = dict(reversed(list(self.marker().items())))
+        result, calls = self.run_sequence(
+            [self.module.ProbeResult.ready(self.boot, reversed_marker)]
+        )
+        self.assertEqual(self.marker(), result)
+        self.assertEqual(1, calls)
+
+    def test_startup_and_workflow_enforce_the_new_lifecycle_boundary(self) -> None:
+        bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+        transition = TRANSITION.read_text(encoding="utf-8")
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("qualification-readiness.json", bootstrap)
+        self.assertLess(
+            bootstrap.index('rm -f -- "$qualification_readiness"'),
+            bootstrap.index('printf \'%s\\n\' "$public_key"'),
+        )
+        self.assertLess(
+            bootstrap.index("/usr/local/sbin/secpal-prepare-rocky-host"),
+            bootstrap.index('mv -T -- "$readiness_temporary" "$qualification_readiness"'),
+        )
+        self.assertIn("secpal-rocky-access-run-id", transition)
+        waiter = "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
+        target = "sudo /usr/local/sbin/secpal-run-rocky-target-qualification"
+        self.assertIn(waiter, workflow)
+        self.assertLess(workflow.index(waiter), workflow.index(target))
+        self.assertEqual(1, workflow.count(target))
+        target_job = workflow.split("  qualify_target:", 1)[1].split("\n  cleanup:", 1)[0]
+        self.assertNotIn("id-token: write", target_job)
+        self.assertNotIn("google-github-actions/auth", target_job)
+        self.assertNotRegex(target_job, r"(?m)^\s*-\s+run:\s+sleep\s+[0-9]+")
+
+    def test_failure_diagnostic_is_bounded_and_contains_no_transport_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "failure.json"
+            failure = self.module.ReadinessFailure(
+                "ssh-authentication", "not-ready-timeout"
+            )
+            self.module.write_failure(
+                output,
+                failure,
+                self.expected,
+                probe_count=90,
+                elapsed_seconds=450,
+            )
+            document = json.loads(output.read_text(encoding="utf-8"))
+            self.assertLessEqual(output.stat().st_size, 2048)
+            self.assertEqual("qualification-readiness", document["phase"])
+            self.assertNotIn("stdout", document)
+            self.assertNotIn("stderr", document)
+            self.assertNotIn("command", document)
+
+
+if __name__ == "__main__":
+    unittest.main()

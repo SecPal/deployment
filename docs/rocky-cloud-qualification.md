@@ -60,6 +60,17 @@ profile, immutable image, instance ID and name, zone, originating run and
 attempt, expiry, and exact state artifact. Instance names, prefixes, or
 operator-selected resource IDs cannot resume a guest.
 
+Provider `RUNNING`, identity-free restart completion, and the public access
+handoff are not guest qualification readiness. Each admitted boot invalidates
+prior readiness, installs the current public SSH authority, completes the
+trusted idempotent startup path, and only then atomically publishes a bounded
+guest-owned record. The record binds the current boot, target, trusted control,
+qualification run and attempt, cloud-identity absence, and public-key digest.
+The uncredentialed target job uses that exact key in a bounded authenticated
+probe cadence. Target revision code executes exactly once only after the
+current-boot record is admitted; transport, authentication, missing/stale state,
+and binding failure remain separate closed outcomes.
+
 Normal and failure cleanup use `tofu destroy` against the saved state. The Rocky
 janitor independently revalidates the complete ownership description or label
 set immediately before each ordered deletion. A prefix is never ownership, and
