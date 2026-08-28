@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -185,6 +186,38 @@ class RockyQualificationReadinessTests(unittest.TestCase):
             self.assertNotIn("stdout", document)
             self.assertNotIn("stderr", document)
             self.assertNotIn("command", document)
+
+    def test_unreviewed_probe_cadence_is_rejected_before_network_access(self) -> None:
+        result = subprocess.run(
+            [
+                WAITER,
+                "--ipv4",
+                "8.8.8.8",
+                "--identity",
+                "/does/not/exist",
+                "--public-key",
+                "/does/not/exist",
+                "--known-hosts",
+                "/does/not/exist",
+                "--target-sha",
+                self.target,
+                "--control-sha",
+                self.control,
+                "--run-id",
+                "33146182082",
+                "--run-attempt",
+                "1",
+                "--diagnostic-output",
+                "/does/not/exist",
+                "--interval-seconds",
+                "1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(64, result.returncode)
+        self.assertIn(b"readiness budget is outside the reviewed bound", result.stderr)
 
 
 if __name__ == "__main__":

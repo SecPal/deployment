@@ -291,7 +291,7 @@ def main() -> int:
             raise ValueError("full lowercase SHAs required")
         if NUMBER.fullmatch(options.run_id) is None or ATTEMPT.fullmatch(options.run_attempt) is None:
             raise ValueError("bounded run identity required")
-        if not 30 <= options.timeout_seconds <= 900 or not 1 <= options.interval_seconds <= 10:
+        if not 30 <= options.timeout_seconds <= 900 or not 5 <= options.interval_seconds <= 10:
             raise ValueError("readiness budget is outside the reviewed bound")
         public_key = options.public_key.read_text(encoding="ascii").strip()
         if len(public_key) > 128 or KEY.fullmatch(public_key) is None:
