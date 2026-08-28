@@ -78,11 +78,13 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "control_process_pid": 2048,
             "control_process_selinux_type": "unconfined_service_t",
             "manager_process_selinux_type": "unconfined_service_t",
+            "systemd_nevra": "systemd-257-23.el10_2.2.rocky.0.1.x86_64",
             "run_systemd_statvfs_success": True,
             "run_systemd_free_bytes": 64 * 1024 * 1024,
             "run_systemd_reload_minimum_bytes": 16 * 1024 * 1024,
             "run_systemd_space_sufficient": True,
             "reload_request_logged": True,
+            "reload_request_client_pid": 42,
             "reload_rate_limit_rejected": False,
             "reload_started": True,
             "reload_finished": True,
@@ -198,6 +200,16 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             harness = root / "qualify-production-host.sh"
             target_input = root / "secpal-host-qualification-fixture.container"
             trace = root / "trace"
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            for name, body in {
+                "journalctl": "printf '%s\\n' '-- cursor: s=abc;i=1;b=def;m=2;t=3;x=4'",
+                "stat": "printf '%s\\n' '10 4096'",
+                "date": "printf '%s\\n' '20260828235959'",
+            }.items():
+                executable = fake_bin / name
+                executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+                executable.chmod(0o700)
             lines = ["set -euo pipefail"] + [""] * 241
             definitions = {
                 52: "user_systemctl() {",
@@ -242,6 +254,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                         **os.environ,
                         "BASH_ENV": str(TRACE),
                         "FIXTURE_INPUT": str(target_input),
+                        "PATH": f"{fake_bin}:{os.environ['PATH']}",
                     },
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -262,7 +275,8 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             self.assertFalse(observer.is_alive())
             self.assertRegex(
                 captured.get("event", b"").decode("ascii"),
-                r"^SECPAL_QUADLET_RELOAD_FAILURE_V2:1:[1-9][0-9]{0,9}:"
+                r"^SECPAL_QUADLET_RELOAD_FAILURE_V3:1:[1-9][0-9]{0,9}:"
+                r"40960:20260828235959:s=abc;i=1;b=def;m=2;t=3;x=4:"
                 r"[0-9]+(?:,[0-9]+){0,7}\n$",
             )
             self.assertIs(True, captured.get("present"))
@@ -547,6 +561,10 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "systemd-257-23.el10_2.2.rocky.0.1.src.rpm",
             self.observer.ROCKY_SYSTEMD_SOURCE_RPM,
         )
+        self.assertEqual(
+            self.observer.ADMITTED_SYSTEMD_NEVRAS,
+            self.classifier.ADMITTED_SYSTEMD_NEVRAS,
+        )
         self.assertEqual(16 * 1024 * 1024, self.observer.RELOAD_SPACE_MINIMUM_BYTES)
         command = self.observer.reload_journal_command(
             1087,
@@ -554,6 +572,8 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "@123",
         )
         self.assertIn("_PID=1087", command)
+        self.assertIn("--after-cursor=@123", command)
+        self.assertNotIn("--since=@123", command)
         self.assertIn("CODE_FUNC=log_caller", command)
         self.assertIn("CODE_FUNC=method_reload", command)
         self.assertIn("CODE_FUNC=invoke_main_loop", command)
@@ -605,6 +625,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         self.assertEqual(
             {
                 "reload_request_logged": True,
+                "reload_request_client_pid": 42,
                 "reload_rate_limit_rejected": False,
                 "reload_started": True,
                 "reload_finished": True,
@@ -637,6 +658,27 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 )
                 self.assertEqual("none", reason)
                 self.assertEqual(expected, facts["reload_internal_failure"])
+
+    def test_reload_stage_rejects_multiple_request_clients(self) -> None:
+        boot_id = "12345678-1234-1234-1234-123456789abc"
+        payload = b"".join(
+            (
+                json.dumps(
+                    {
+                        "_PID": "1087",
+                        "_BOOT_ID": boot_id.replace("-", ""),
+                        "CODE_FILE": "../src/core/dbus-manager.c",
+                        "CODE_FUNC": "log_caller",
+                        "MESSAGE": f"Reload requested from client PID {pid} ('systemctl')...",
+                    }
+                )
+                + "\n"
+            ).encode()
+            for pid in (42, 43)
+        )
+        facts, reason = self.observer.reload_stage_markers(payload, 1087, boot_id)
+        self.assertEqual("multiple-causes", reason)
+        self.assertIsNone(facts["reload_request_client_pid"])
 
     def test_reload_client_error_is_normalized_without_raw_output(self) -> None:
         cases = (
@@ -677,6 +719,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "reload_access_avc_ambiguous": False,
             "reload_selinux_contexts_admitted": True,
             "reload_access_avc_matches_contexts": True,
+            "systemd_source_contract_admitted": True,
         }
         cases = (
             ("reload-run-space-rejected", {"run_space_sufficient": False}),
@@ -749,6 +792,12 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         )
         self.assertEqual("diagnostic-unavailable", classification)
         self.assertEqual("reload-selinux-observation-ambiguous", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{**baseline, "systemd_source_contract_admitted": False}
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("systemd-source-contract-mismatch", reason)
 
     def test_reload_selinux_access_is_distinct_from_quadlet_avc(self) -> None:
         payload = b"""type=AVC msg=audit(1.2:3): avc:  denied  { reload } for  pid=7 scontext=system_u:system_r:unconfined_service_t:s0 tcontext=system_u:system_r:init_t:s0 tclass=system permissive=0
@@ -1251,6 +1300,11 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         self.assertEqual(
             self.classifier.REASONS,
             set(schema["properties"]["reason"]["enum"]),
+        )
+        self.assertNotIn(
+            "manager-reload-transaction-failed",
+            schema["properties"]["daemon_reload_adjacency"]["properties"]
+            ["classification"]["enum"],
         )
         document = {
             "schema_version": 1,

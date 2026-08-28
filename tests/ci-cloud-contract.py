@@ -1087,10 +1087,24 @@ class CloudCIContractTests(unittest.TestCase):
         mutations = (
             (
                 trace,
-                "SECPAL_QUADLET_RELOAD_FAILURE_V2:%s:%s:%s",
+                "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s",
                 "SECPAL_UNBOUNDED_RELOAD_FAILURE:%s:%s",
             ),
-            (trace, '"$status" "$$" "$frames"', '"$status" "1" "$frames"'),
+            (
+                trace,
+                '"$status" "$$" "$secpal_reload_run_space_bytes"',
+                '"$status" "1" "$secpal_reload_run_space_bytes"',
+            ),
+            (
+                trace,
+                "timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0",
+                "journalctl --no-pager --lines=1000",
+            ),
+            (
+                trace,
+                "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd",
+                "stat --file-system --format='%a %S' -- /run",
+            ),
             (trace, "10#$frame == 242", "10#$frame == 243"),
             (trace, "read -r -t 25 -u 5", "read -r -u 5"),
             (trace, "trap - ERR", ":"),
@@ -1160,6 +1174,16 @@ class CloudCIContractTests(unittest.TestCase):
                 '"--output=json-pretty"',
             ),
             (observer, 'f"_PID={manager_pid}"', '"_UID=0"'),
+            (
+                observer,
+                'f"--after-cursor={journal_cursor}"',
+                'f"--since={arguments.journal_baseline}"',
+            ),
+            (
+                observer,
+                '"systemd-257-23.el10_2.2.rocky.0.1.aarch64"',
+                '"systemd-257-99.el10.aarch64"',
+            ),
             (observer, 'os.statvfs("/run/systemd")', 'os.statvfs("/run")'),
             (observer, '"tclass=system"', '"tclass=file"'),
             (

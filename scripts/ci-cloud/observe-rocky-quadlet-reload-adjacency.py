@@ -22,8 +22,11 @@ from typing import IO, Any
 
 
 EVENT = re.compile(
-    rb"^SECPAL_QUADLET_RELOAD_FAILURE_V2:([1-9][0-9]{0,2}):"
+    rb"^SECPAL_QUADLET_RELOAD_FAILURE_V3:([1-9][0-9]{0,2}):"
     rb"([1-9][0-9]{0,9}):"
+    rb"(unavailable|[0-9]{1,19}):"
+    rb"(unavailable|[0-9]{14}):"
+    rb"(unavailable|[A-Za-z0-9=;._-]{1,384}):"
     rb"([1-9][0-9]{0,3}(?:,[1-9][0-9]{0,3}){0,7})\n$"
 )
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -76,6 +79,12 @@ GENERATOR_CODE_FUNC = "do_execute"
 GENERATOR_CODE_FILE = "../src/shared/exec-util.c"
 GENERATOR_OUTPUT_FIELDS = "_UID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"
 ROCKY_SYSTEMD_SOURCE_RPM = "systemd-257-23.el10_2.2.rocky.0.1.src.rpm"
+ADMITTED_SYSTEMD_NEVRAS = frozenset(
+    {
+        "systemd-257-23.el10_2.2.rocky.0.1.aarch64",
+        "systemd-257-23.el10_2.2.rocky.0.1.x86_64",
+    }
+)
 RELOAD_SPACE_MINIMUM_BYTES = 16 * 1024 * 1024
 RELOAD_OUTPUT_FIELDS = "_PID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"
 RELOAD_EVENT_SOURCES = (
@@ -95,6 +104,7 @@ RELOAD_OBSERVATION_REASONS = frozenset(
         "candidate-representation-invalid",
         "candidate-count-exceeded",
         "manager-pid-unavailable",
+        "journal-cursor-unavailable",
         "multiple-causes",
     }
 )
@@ -417,6 +427,7 @@ def generator_observation(
 def empty_reload_stage_markers() -> dict[str, Any]:
     return {
         "reload_request_logged": False,
+        "reload_request_client_pid": None,
         "reload_rate_limit_rejected": False,
         "reload_started": False,
         "reload_finished": False,
@@ -426,7 +437,7 @@ def empty_reload_stage_markers() -> dict[str, Any]:
 
 
 def reload_journal_command(
-    manager_pid: int, boot_id: str, journal_baseline: str
+    manager_pid: int, boot_id: str, journal_cursor: str
 ) -> list[str]:
     command = [
         "journalctl",
@@ -434,7 +445,7 @@ def reload_journal_command(
         "--output=json",
         f"--output-fields={RELOAD_OUTPUT_FIELDS}",
         f"--boot={boot_id.replace('-', '')}",
-        f"--since={journal_baseline}",
+        f"--after-cursor={journal_cursor}",
     ]
     for index, (code_file, code_func) in enumerate(RELOAD_EVENT_SOURCES):
         if index:
@@ -455,6 +466,9 @@ def reload_stage_markers(
     facts = empty_reload_stage_markers()
     reasons: set[str] = set()
     internal_failures: set[str] = set()
+    request_client_pids: set[int] = set()
+    stage_counts: dict[int, int] = {}
+    last_stage = -1
     candidate_count = 0
     for raw_line in payload.splitlines():
         candidate_count += 1
@@ -486,12 +500,18 @@ def reload_stage_markers(
             continue
 
         if (code_file, code_func) == ("../src/core/dbus-manager.c", "log_caller"):
-            if re.fullmatch(
-                r"Reload requested from client PID [1-9][0-9]{0,9}"
+            request = re.fullmatch(
+                r"Reload requested from client PID (?P<pid>[1-9][0-9]{0,9})"
                 r"(?: \('[A-Za-z0-9_.@+-]{1,64}'\))?"
                 r"(?: \(unit [A-Za-z0-9_.@+-]{1,128}\))?\.\.\.",
                 message,
-            ):
+            )
+            if request is not None and int(request.group("pid")) <= 2**31 - 1:
+                stage_counts[0] = stage_counts.get(0, 0) + 1
+                if stage_counts[0] > 1 or last_stage >= 0:
+                    reasons.add("multiple-causes")
+                last_stage = max(last_stage, 0)
+                request_client_pids.add(int(request.group("pid")))
                 facts["reload_request_logged"] = True
                 continue
         elif (code_file, code_func) == (
@@ -499,43 +519,70 @@ def reload_stage_markers(
             "method_reload",
         ):
             if message == "Reloading request rejected due to rate limit.":
+                stage_counts[1] = stage_counts.get(1, 0) + 1
+                if stage_counts[1] > 1 or last_stage > 1:
+                    reasons.add("multiple-causes")
+                last_stage = max(last_stage, 1)
                 facts["reload_rate_limit_rejected"] = True
                 continue
         elif (code_file, code_func) == ("../src/core/main.c", "invoke_main_loop"):
             if message == "Reloading...":
+                stage_counts[2] = stage_counts.get(2, 0) + 1
+                if stage_counts[2] > 1 or last_stage > 2:
+                    reasons.add("multiple-causes")
+                last_stage = max(last_stage, 2)
                 facts["reload_started"] = True
                 continue
             if re.fullmatch(r"Reloading finished in [0-9]{1,12} ms\.", message):
+                stage_counts[4] = stage_counts.get(4, 0) + 1
+                if stage_counts[4] > 1 or last_stage > 4:
+                    reasons.add("multiple-causes")
+                last_stage = max(last_stage, 4)
                 facts["reload_finished"] = True
                 continue
         elif (code_file, code_func) == ("../src/core/manager.c", "manager_reload"):
+            internal_reason: str | None = None
             if message.startswith("Failed to create serialization file: "):
-                internal_failures.add("serialization-file-failed")
-                continue
-            if message == "Out of memory.":
-                internal_failures.add("resource-allocation-failed")
-                continue
-            if message.startswith("Failed to seek to beginning of serialization: "):
-                internal_failures.add("serialization-seek-failed")
+                internal_reason = "serialization-file-failed"
+            elif message == "Out of memory.":
+                internal_reason = "resource-allocation-failed"
+            elif message.startswith("Failed to seek to beginning of serialization: "):
+                internal_reason = "serialization-seek-failed"
+            if internal_reason is not None:
+                stage_counts[3] = stage_counts.get(3, 0) + 1
+                if stage_counts[3] > 1 or last_stage > 3:
+                    reasons.add("multiple-causes")
+                last_stage = max(last_stage, 3)
+                internal_failures.add(internal_reason)
                 continue
         elif (code_file, code_func) == (
             "../src/core/manager-serialize.c",
             "manager_serialize",
         ):
+            internal_reason = None
             if message == "Out of memory.":
-                internal_failures.add("resource-allocation-failed")
-                continue
+                internal_reason = "resource-allocation-failed"
             if message.startswith((
                 "Failed to flush serialization: ",
                 "Failed to add bus sockets to serialization: ",
             )):
-                internal_failures.add("serialization-failed")
+                internal_reason = "serialization-failed"
+            if internal_reason is not None:
+                stage_counts[3] = stage_counts.get(3, 0) + 1
+                if stage_counts[3] > 1 or last_stage > 3:
+                    reasons.add("multiple-causes")
+                last_stage = max(last_stage, 3)
+                internal_failures.add(internal_reason)
                 continue
         elif (code_file, code_func) == (
             "../src/core/dbus.c",
             "bus_send_pending_reload_message",
         ):
             if message.startswith("Failed to send queued reload message, ignoring: "):
+                stage_counts[5] = stage_counts.get(5, 0) + 1
+                if stage_counts[5] > 1:
+                    reasons.add("multiple-causes")
+                last_stage = max(last_stage, 5)
                 facts["reload_reply_send_failed"] = True
                 continue
         reasons.add("candidate-representation-invalid")
@@ -543,6 +590,10 @@ def reload_stage_markers(
     if len(internal_failures) == 1:
         facts["reload_internal_failure"] = next(iter(internal_failures))
     elif len(internal_failures) > 1:
+        reasons.add("multiple-causes")
+    if len(request_client_pids) == 1:
+        facts["reload_request_client_pid"] = next(iter(request_client_pids))
+    elif len(request_client_pids) > 1:
         reasons.add("multiple-causes")
     if not reasons:
         return facts, "none"
@@ -624,6 +675,27 @@ def run_space_observation() -> tuple[bool, int | None]:
     if not 0 <= free_bytes <= 2**63 - 1:
         return False, None
     return True, free_bytes
+
+
+def systemd_package_identity() -> str | None:
+    status, payload, failure = bounded_command_output(
+        [
+            "rpm",
+            "-q",
+            "--qf",
+            "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\\n",
+            "systemd",
+        ],
+        timeout=COMMAND_TIMEOUT_SECONDS,
+        max_bytes=128,
+    )
+    if status != 0 or failure is not None:
+        return None
+    try:
+        value = payload.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    return value if value in ADMITTED_SYSTEMD_NEVRAS else None
 
 
 def manager_state(runtime_uid: int) -> tuple[bool, int | None]:
@@ -714,6 +786,8 @@ def collect_observation(
     event: bytes,
     run_space_before: tuple[bool, int | None],
     control_pid: int,
+    journal_cursor: str | None,
+    audit_baseline: str | None,
 ) -> dict[str, Any]:
     runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
     runtime_uid = runtime.pw_uid
@@ -735,6 +809,7 @@ def collect_observation(
         process_selinux_type(manager_pid) if manager_pid is not None else None
     )
     control_selinux_type = process_selinux_type(control_pid)
+    systemd_nevra = systemd_package_identity()
     run_space_after = run_space_observation()
     quadlet_input, input_path = input_facts(runtime_uid)
     generator = podman_generator_path()
@@ -776,10 +851,13 @@ def collect_observation(
     if manager_pid is None:
         reload_facts = empty_reload_stage_markers()
         reload_reason = "manager-pid-unavailable"
+    elif journal_cursor is None:
+        reload_facts = empty_reload_stage_markers()
+        reload_reason = "journal-cursor-unavailable"
     else:
         reload_status, reload_journal, reload_failure = bounded_command_output(
             reload_journal_command(
-                manager_pid, arguments.boot_id, arguments.journal_baseline
+                manager_pid, arguments.boot_id, journal_cursor
             ),
             timeout=RELOAD_JOURNAL_TIMEOUT_SECONDS,
             max_bytes=MAX_RELOAD_JOURNAL_BYTES,
@@ -791,10 +869,19 @@ def collect_observation(
             manager_pid,
             arguments.boot_id,
         )
-    audit_status, audit, _ = bounded_command_output(
-        ["ausearch", "-m", "AVC", "-ts", arguments.audit_baseline, "-i"],
-        timeout=COMMAND_TIMEOUT_SECONDS,
-    )
+    if audit_baseline is None:
+        audit_status, audit = 125, b""
+    else:
+        audit_date = (
+            f"{audit_baseline[4:6]}/{audit_baseline[6:8]}/{audit_baseline[0:4]}"
+        )
+        audit_time = (
+            f"{audit_baseline[8:10]}:{audit_baseline[10:12]}:{audit_baseline[12:14]}"
+        )
+        audit_status, audit, _ = bounded_command_output(
+            ["ausearch", "-m", "AVC", "-ts", audit_date, audit_time, "-i"],
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
     avc_observed, avc, avc_ambiguous = (
         selinux_adjacency(
             audit,
@@ -835,6 +922,7 @@ def collect_observation(
         "control_process_pid": control_pid,
         "control_process_selinux_type": control_selinux_type,
         "manager_process_selinux_type": manager_selinux_type,
+        "systemd_nevra": systemd_nevra,
         "run_systemd_statvfs_success": run_space_success,
         "run_systemd_free_bytes": run_space_free,
         "run_systemd_reload_minimum_bytes": RELOAD_SPACE_MINIMUM_BYTES,
@@ -900,7 +988,6 @@ def admitted_fifo(path: Path, flags: int) -> IO[bytes]:
 def observe(arguments: argparse.Namespace) -> int:
     acknowledgement: IO[bytes] | None = None
     try:
-        run_space_before = run_space_observation()
         event_channel = admitted_fifo(arguments.event, os.O_RDONLY)
         acknowledgement = admitted_fifo(arguments.ack, os.O_WRONLY)
         with event_channel:
@@ -910,12 +997,28 @@ def observe(arguments: argparse.Namespace) -> int:
             raise ObservationError("daemon-reload event is malformed")
         failure_status = int(match.group(1))
         control_pid = int(match.group(2))
-        frames = {int(frame) for frame in match.group(3).split(b",")}
+        run_space_raw = match.group(3).decode("ascii")
+        audit_raw = match.group(4).decode("ascii")
+        cursor_raw = match.group(5).decode("ascii")
+        frames = {int(frame) for frame in match.group(6).split(b",")}
         if failure_status > 255 or control_pid > 2**31 - 1 or 242 not in frames:
             raise ObservationError("daemon-reload event is outside the exact call site")
+        run_space_before = (
+            (True, int(run_space_raw))
+            if run_space_raw != "unavailable"
+            else (False, None)
+        )
+        if run_space_before[1] is not None and run_space_before[1] > 2**63 - 1:
+            raise ObservationError("daemon-reload run space is outside its bound")
         deadline = time.monotonic() + CAPTURE_DEADLINE_SECONDS
         document = collect_observation(
-            arguments, failure_status, event, run_space_before, control_pid
+            arguments,
+            failure_status,
+            event,
+            run_space_before,
+            control_pid,
+            cursor_raw if cursor_raw != "unavailable" else None,
+            audit_raw if audit_raw != "unavailable" else None,
         )
         write_document(arguments.output, document, deadline)
         acknowledgement.write(b"SECPAL_RELOAD_ADJACENCY_CAPTURED_V1\n")
@@ -943,7 +1046,6 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--run-attempt", required=True)
     result.add_argument("--boot-id", required=True)
     result.add_argument("--journal-baseline", required=True)
-    result.add_argument("--audit-baseline", required=True)
     return result
 
 

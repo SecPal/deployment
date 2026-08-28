@@ -2192,8 +2192,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "frame_count >= 8" in target_failure_trace
         and all(
             forbidden not in target_failure_trace
-            for forbidden in ("BASH_COMMAND", "BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
+            for forbidden in ("BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
         )
+        and target_failure_trace.count("BASH_COMMAND") == 1
         and literal_constant(target_failure_classifier, "MAX_TRACE_FRAMES") == 8
         and literal_constant(target_failure_classifier, "MAX_TRACE_LINE") == 9_999
         and all(
@@ -2228,8 +2229,20 @@ def validate_rocky_control_plane(root: Path) -> None:
         "target harness failures must retain one bounded negative-only semantic identity",
     )
     require(
-        "SECPAL_QUADLET_RELOAD_FAILURE_V2:%s:%s:%s" in target_failure_trace
-        and '"$status" "$$" "$frames"' in target_failure_trace
+        "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s"
+        in target_failure_trace
+        and '"$status" "$$" "$secpal_reload_run_space_bytes"'
+        in target_failure_trace
+        and '"$secpal_reload_audit_baseline" "$secpal_reload_journal_cursor"'
+        in target_failure_trace
+        and '[[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]'
+        in target_failure_trace
+        and "timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0"
+        in target_failure_trace
+        and "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd"
+        in target_failure_trace
+        and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
+        in target_failure_trace
         and "10#$frame == 242" in target_failure_trace
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
@@ -2337,6 +2350,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"candidate-count-exceeded"' in reload_adjacency_observer
         and 'ROCKY_SYSTEMD_SOURCE_RPM = "systemd-257-23.el10_2.2.rocky.0.1.src.rpm"'
         in reload_adjacency_observer
+        and '"systemd-257-23.el10_2.2.rocky.0.1.aarch64"'
+        in reload_adjacency_observer
+        and '"systemd-257-23.el10_2.2.rocky.0.1.x86_64"'
+        in reload_adjacency_observer
         and "RELOAD_SPACE_MINIMUM_BYTES = 16 * 1024 * 1024"
         in reload_adjacency_observer
         and 'RELOAD_OUTPUT_FIELDS = "_PID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"'
@@ -2344,6 +2361,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'f"--output-fields={RELOAD_OUTPUT_FIELDS}"'
         in reload_adjacency_observer
         and 'f"_PID={manager_pid}"' in reload_adjacency_observer
+        and 'f"--after-cursor={journal_cursor}"' in reload_adjacency_observer
+        and '"rpm",\n            "-q",' in reload_adjacency_observer
         and '("../src/core/dbus-manager.c", "log_caller")'
         in reload_adjacency_observer
         and '("../src/core/dbus-manager.c", "method_reload")'

@@ -169,8 +169,15 @@ RELOAD_OBSERVATION_REASONS = frozenset(
         "candidate-representation-invalid",
         "candidate-count-exceeded",
         "manager-pid-unavailable",
+        "journal-cursor-unavailable",
         "multiple-causes",
         "observation-unavailable",
+    }
+)
+ADMITTED_SYSTEMD_NEVRAS = frozenset(
+    {
+        "systemd-257-23.el10_2.2.rocky.0.1.aarch64",
+        "systemd-257-23.el10_2.2.rocky.0.1.x86_64",
     }
 )
 RELOAD_INTERNAL_FAILURES = frozenset(
@@ -216,6 +223,7 @@ ADJACENCY_KEYS = frozenset(
         "control_process_pid",
         "control_process_selinux_type",
         "manager_process_selinux_type",
+        "systemd_nevra",
         "run_systemd_statvfs_success",
         "run_systemd_free_bytes",
         "run_systemd_reload_minimum_bytes",
@@ -228,6 +236,7 @@ ADJACENCY_KEYS = frozenset(
         "generator_failure_ambiguous",
         "generator_observation_reason",
         "reload_request_logged",
+        "reload_request_client_pid",
         "reload_rate_limit_rejected",
         "reload_started",
         "reload_finished",
@@ -353,6 +362,7 @@ def unavailable_daemon_reload_adjacency() -> dict[str, object]:
         "control_process_pid": None,
         "control_process_selinux_type": None,
         "manager_process_selinux_type": None,
+        "systemd_nevra": None,
         "run_systemd_statvfs_success": False,
         "run_systemd_free_bytes": None,
         "run_systemd_reload_minimum_bytes": 16 * 1024 * 1024,
@@ -369,6 +379,7 @@ def unavailable_daemon_reload_adjacency() -> dict[str, object]:
         "client_reload_error": "unavailable",
         "reload_authorization_outcome": "observation-unavailable",
         "reload_request_logged": False,
+        "reload_request_client_pid": None,
         "reload_rate_limit_rejected": False,
         "reload_started": False,
         "reload_finished": False,
@@ -541,6 +552,7 @@ def daemon_reload_classification(
     reload_access_avc_ambiguous: bool,
     reload_selinux_contexts_admitted: bool,
     reload_access_avc_matches_contexts: bool,
+    systemd_source_contract_admitted: bool,
 ) -> tuple[str, str]:
     if not (manager_active and bus_available and control_reachable):
         return "manager-continuity-lost", "none"
@@ -560,6 +572,8 @@ def daemon_reload_classification(
         return "diagnostic-unavailable", "quadlet-selinux-observation-unavailable"
     if avc_observed:
         return "selinux-reload-denied", "none"
+    if not systemd_source_contract_admitted:
+        return "diagnostic-unavailable", "systemd-source-contract-mismatch"
     if not run_space_observed:
         return "diagnostic-unavailable", "run-space-observation-unavailable"
     if not run_space_sufficient:
@@ -650,6 +664,8 @@ def admit_daemon_reload_adjacency(
                 not isinstance(value, str) or SELINUX_TYPE.fullmatch(value) is None
             ):
                 raise ValueError("Reload SELinux process type is malformed")
+        systemd_nevra = observation["systemd_nevra"]
+        systemd_source_contract_admitted = systemd_nevra in ADMITTED_SYSTEMD_NEVRAS
         run_space_observed = _closed_boolean(
             observation, "run_systemd_statvfs_success"
         )
@@ -701,6 +717,12 @@ def admit_daemon_reload_adjacency(
         reload_request_logged = _closed_boolean(
             observation, "reload_request_logged"
         )
+        reload_request_client_pid = observation["reload_request_client_pid"]
+        if reload_request_client_pid is not None and (
+            type(reload_request_client_pid) is not int
+            or not 1 <= reload_request_client_pid <= 2**31 - 1
+        ):
+            raise ValueError("Reload request client PID is outside its bound")
         reload_rate_limit_rejected = _closed_boolean(
             observation, "reload_rate_limit_rejected"
         )
@@ -717,6 +739,7 @@ def admit_daemon_reload_adjacency(
             or client_error not in CLIENT_RELOAD_ERRORS
             or reload_finished and not reload_started
             or reload_rate_limit_rejected and not reload_request_logged
+            or reload_request_logged != (reload_request_client_pid is not None)
         ):
             raise ValueError("Reload stage facts are inconsistent")
         if (
@@ -780,6 +803,7 @@ def admit_daemon_reload_adjacency(
             reload_access_avc_ambiguous=reload_access_avc_ambiguous,
             reload_selinux_contexts_admitted=reload_selinux_contexts_admitted,
             reload_access_avc_matches_contexts=reload_access_avc_matches_contexts,
+            systemd_source_contract_admitted=systemd_source_contract_admitted,
         )
 
         return {
@@ -798,6 +822,7 @@ def admit_daemon_reload_adjacency(
             "manager_process_selinux_type": observation[
                 "manager_process_selinux_type"
             ],
+            "systemd_nevra": systemd_nevra,
             "run_systemd_statvfs_success": run_space_observed,
             "run_systemd_free_bytes": free_bytes,
             "run_systemd_reload_minimum_bytes": 16 * 1024 * 1024,
@@ -816,6 +841,7 @@ def admit_daemon_reload_adjacency(
                 reload_request_logged, client_error
             ),
             "reload_request_logged": reload_request_logged,
+            "reload_request_client_pid": reload_request_client_pid,
             "reload_rate_limit_rejected": reload_rate_limit_rejected,
             "reload_started": reload_started,
             "reload_finished": reload_finished,
@@ -872,6 +898,8 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
                 not isinstance(value, str) or SELINUX_TYPE.fullmatch(value) is None
             ):
                 raise ValueError("admitted Reload SELinux type is malformed")
+        systemd_nevra = document["systemd_nevra"]
+        systemd_source_contract_admitted = systemd_nevra in ADMITTED_SYSTEMD_NEVRAS
         run_space_observed = _closed_boolean(
             document, "run_systemd_statvfs_success"
         )
@@ -920,6 +948,12 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
         _admitted_avc(document["selinux_avc"], avc_observed)
         client_error = document["client_reload_error"]
         reload_request_logged = _closed_boolean(document, "reload_request_logged")
+        reload_request_client_pid = document["reload_request_client_pid"]
+        if reload_request_client_pid is not None and (
+            type(reload_request_client_pid) is not int
+            or not 1 <= reload_request_client_pid <= 2**31 - 1
+        ):
+            raise ValueError("admitted Reload request client PID is outside its bound")
         reload_rate_limit_rejected = _closed_boolean(
             document, "reload_rate_limit_rejected"
         )
@@ -936,6 +970,7 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
             or reload_journal_reason not in RELOAD_OBSERVATION_REASONS
             or reload_finished and not reload_started
             or reload_rate_limit_rejected and not reload_request_logged
+            or reload_request_logged != (reload_request_client_pid is not None)
         ):
             raise ValueError("admitted Reload stages are inconsistent")
         if document["reload_authorization_outcome"] != reload_authorization_outcome(
@@ -994,6 +1029,7 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
             reload_access_avc_ambiguous=reload_access_avc_ambiguous,
             reload_selinux_contexts_admitted=reload_selinux_contexts_admitted,
             reload_access_avc_matches_contexts=reload_access_avc_matches_contexts,
+            systemd_source_contract_admitted=systemd_source_contract_admitted,
         )
         if (
             document["classification"] != expected

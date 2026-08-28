@@ -101,8 +101,7 @@ if [[ "$target_sha" == d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6 ]] &&
     --event "$reload_event" --ack "$reload_ack" --output "$reload_adjacency" \
     --target-sha "$target_sha" --control-sha "$control_sha" \
     --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
-    --boot-id "$boot_id" --journal-baseline "$journal_baseline" \
-    --audit-baseline "$audit_baseline" &
+    --boot-id "$boot_id" --journal-baseline "$journal_baseline" &
   observer_pid=$!
   exec 4<>"$reload_event"
   exec 5<>"$reload_ack"
