@@ -514,17 +514,10 @@ jobs:
             "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
             "rocky-cloud-access-request-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             "$RUNNER_TEMP/rocky-exchange"
-          jq -e \
-            --arg target_sha "$TARGET_SHA" \
-            --arg run_id "$GITHUB_RUN_ID" \
-            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
-            --arg key_pattern "^ssh-ed25519 [A-Za-z0-9+/]+={0,2} secpal-rocky-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}$" \
-            'keys == ["runner_ipv4", "run_attempt", "run_id", "ssh_public_key", "target_sha"] and
-             .target_sha == $target_sha and .run_id == $run_id and
-             .run_attempt == $run_attempt and
-             (.runner_ipv4 | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$")) and
-             (.ssh_public_key | test($key_pattern))' \
-            "$RUNNER_TEMP/rocky-exchange/access-request.json"
+          scripts/ci-cloud/rocky-control.py validate-access-request \
+            "$RUNNER_TEMP/rocky-exchange/access-request.json" \
+            --target-sha "$TARGET_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       - name: Authenticate only trusted resume control through OIDC
         env:
@@ -608,13 +601,6 @@ jobs:
           chmod 0600 "$RUNNER_TEMP/rocky-target/id_ed25519"
           runner_ipv4="$(curl --proto '=https' --tlsv1.2 --fail --silent \
             --show-error --max-time 15 https://api.ipify.org)"
-          python3 - "$runner_ipv4" <<'PY'
-          import ipaddress
-          import sys
-          address = ipaddress.ip_address(sys.argv[1])
-          if address.version != 4 or not address.is_global:
-              raise SystemExit("runner address is not a public IPv4 address")
-          PY
           jq -n --arg runner_ipv4 "$runner_ipv4" \
             --arg ssh_public_key "$(cat "$RUNNER_TEMP/rocky-target/id_ed25519.pub")" \
             --arg target_sha "$TARGET_SHA" --arg run_id "$GITHUB_RUN_ID" \
@@ -622,6 +608,10 @@ jobs:
             '{runner_ipv4: $runner_ipv4, ssh_public_key: $ssh_public_key,
               target_sha: $target_sha, run_id: $run_id, run_attempt: $run_attempt}' \
             >"$RUNNER_TEMP/rocky-exchange/access-request.json"
+          scripts/ci-cloud/rocky-control.py validate-access-request \
+            "$RUNNER_TEMP/rocky-exchange/access-request.json" \
+            --target-sha "$TARGET_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       - name: Upload only the public access request
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

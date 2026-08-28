@@ -7,9 +7,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import ipaddress
 import json
 import os
 import re
+import struct
 import sys
 import urllib.error
 import urllib.request
@@ -33,6 +37,18 @@ SCHEMAS = {
 SHA = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
 RUN_ATTEMPT = re.compile(r"^[1-9][0-9]{0,2}$")
+ACCESS_REQUEST_FIELDS = {
+    "runner_ipv4",
+    "run_attempt",
+    "run_id",
+    "ssh_public_key",
+    "target_sha",
+}
+ACCESS_REQUEST_MAX_BYTES = 1024
+ED25519_KEY = re.compile(
+    r"^ssh-ed25519 ([A-Za-z0-9+/]+={0,2}) "
+    r"(secpal-rocky-([1-9][0-9]{0,19})-([1-9][0-9]{0,2}))$"
+)
 IMAGE_NAME = re.compile(r"^rocky-linux-10-[a-z0-9-]{1,50}$")
 IMAGE_PREFIX = (
     "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/"
@@ -109,6 +125,31 @@ class ControlError(RuntimeError):
     pass
 
 
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ControlError("JSON input contains a duplicate object key")
+        result[key] = value
+    return result
+
+
+def load_bounded_object(path: Path, maximum_bytes: int) -> dict[str, Any]:
+    try:
+        payload = path.read_bytes()
+    except OSError as error:
+        raise ControlError(f"cannot read {path}") from error
+    if len(payload) > maximum_bytes:
+        raise ControlError(f"JSON input is too large: {path}")
+    try:
+        document = json.loads(payload, object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ControlError(f"invalid JSON: {path}") from error
+    if not isinstance(document, dict):
+        raise ControlError(f"JSON input must be an object: {path}")
+    return document
+
+
 def load_object(path: Path) -> dict[str, Any]:
     try:
         payload = path.read_bytes()
@@ -123,6 +164,60 @@ def load_object(path: Path) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ControlError(f"JSON input must be an object: {path}")
     return document
+
+
+def validate_ed25519_public_key(value: str, run_id: str, run_attempt: str) -> None:
+    if len(value.encode("utf-8")) > 128:
+        raise ControlError("access request public key exceeds the size bound")
+    match = ED25519_KEY.fullmatch(value)
+    if match is None or match.group(3) != run_id or match.group(4) != run_attempt:
+        raise ControlError("access request public key is outside the per-run format")
+    try:
+        blob = base64.b64decode(match.group(1), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ControlError("access request public key is not valid base64") from error
+    try:
+        algorithm_size = struct.unpack(">I", blob[:4])[0]
+        algorithm_end = 4 + algorithm_size
+        key_size = struct.unpack(">I", blob[algorithm_end : algorithm_end + 4])[0]
+        key_end = algorithm_end + 4 + key_size
+    except struct.error as error:
+        raise ControlError("access request public key blob is malformed") from error
+    if (
+        blob[4:algorithm_end] != b"ssh-ed25519"
+        or key_size != 32
+        or key_end != len(blob)
+    ):
+        raise ControlError("access request public key is not an Ed25519 key")
+
+
+def validate_access_request(
+    path: Path, target_sha: str, run_id: str, run_attempt: str
+) -> None:
+    if (
+        SHA.fullmatch(target_sha) is None
+        or RUN_ID.fullmatch(run_id) is None
+        or RUN_ATTEMPT.fullmatch(run_attempt) is None
+    ):
+        raise ControlError("access request bindings are outside the closed format")
+    document = load_bounded_object(path, ACCESS_REQUEST_MAX_BYTES)
+    if set(document) != ACCESS_REQUEST_FIELDS:
+        raise ControlError("access request does not contain the exact field set")
+    if any(type(document[field]) is not str for field in ACCESS_REQUEST_FIELDS):
+        raise ControlError("access request fields must be strings")
+    if (
+        document["target_sha"] != target_sha
+        or document["run_id"] != run_id
+        or document["run_attempt"] != run_attempt
+    ):
+        raise ControlError("access request does not match this qualification run")
+    try:
+        address = ipaddress.ip_address(document["runner_ipv4"])
+    except ValueError as error:
+        raise ControlError("access request runner address is malformed") from error
+    if not isinstance(address, ipaddress.IPv4Address) or not address.is_global:
+        raise ControlError("access request runner address is not public IPv4")
+    validate_ed25519_public_key(document["ssh_public_key"], run_id, run_attempt)
 
 
 def write_object(path: Path, document: dict[str, Any]) -> None:
@@ -440,6 +535,11 @@ def parser() -> argparse.ArgumentParser:
     evidence.add_argument("path", type=Path)
     collection = subparsers.add_parser("validate-collection-diagnostic")
     collection.add_argument("path", type=Path)
+    access_request = subparsers.add_parser("validate-access-request")
+    access_request.add_argument("path", type=Path)
+    access_request.add_argument("--target-sha", required=True)
+    access_request.add_argument("--run-id", required=True)
+    access_request.add_argument("--run-attempt", required=True)
     discovery = subparsers.add_parser("discover-image")
     discovery.add_argument("--control-sha", required=True)
     discovery.add_argument("--output", required=True, type=Path)
@@ -477,6 +577,13 @@ def main(arguments: list[str]) -> int:
             validate_evidence(options.kind, options.path)
         elif options.command == "validate-collection-diagnostic":
             validate_collection_diagnostic(options.path)
+        elif options.command == "validate-access-request":
+            validate_access_request(
+                options.path,
+                options.target_sha,
+                options.run_id,
+                options.run_attempt,
+            )
         elif options.command == "discover-image":
             discover_image(options.control_sha, options.output)
         elif options.command == "validate-continuation":
