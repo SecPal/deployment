@@ -50,6 +50,192 @@ def load_rocky_preparation_collector():
 
 
 class RockyCloudControlTests(unittest.TestCase):
+    def test_access_request_validation_is_exact_bound_and_order_independent(self) -> None:
+        control = ROOT / "scripts/ci-cloud/rocky-control.py"
+        target_sha = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
+        run_id = "33123855032"
+        run_attempt = "1"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = root / "id_ed25519"
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-C",
+                    f"secpal-rocky-{run_id}-{run_attempt}",
+                    "-f",
+                    key,
+                ],
+                check=True,
+            )
+            public_key = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
+            request = {
+                "runner_ipv4": "8.8.8.8",
+                "run_attempt": run_attempt,
+                "run_id": run_id,
+                "ssh_public_key": public_key,
+                "target_sha": target_sha,
+            }
+            command = [
+                control,
+                "validate-access-request",
+                root / "access-request.json",
+                "--target-sha",
+                target_sha,
+                "--run-id",
+                run_id,
+                "--run-attempt",
+                run_attempt,
+            ]
+            with (root / "access-request.json").open("wb") as output:
+                subprocess.run(
+                    [
+                        "jq",
+                        "-n",
+                        "--arg",
+                        "runner_ipv4",
+                        request["runner_ipv4"],
+                        "--arg",
+                        "ssh_public_key",
+                        request["ssh_public_key"],
+                        "--arg",
+                        "target_sha",
+                        request["target_sha"],
+                        "--arg",
+                        "run_id",
+                        request["run_id"],
+                        "--arg",
+                        "run_attempt",
+                        request["run_attempt"],
+                        "{runner_ipv4: $runner_ipv4, ssh_public_key: $ssh_public_key, "
+                        "target_sha: $target_sha, run_id: $run_id, "
+                        "run_attempt: $run_attempt}",
+                    ],
+                    check=True,
+                    stdout=output,
+                )
+            completed = subprocess.run(command, check=False, capture_output=True)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            for fields in (
+                tuple(request),
+                tuple(reversed(request)),
+                ("target_sha", "runner_ipv4", "ssh_public_key", "run_id", "run_attempt"),
+            ):
+                with self.subTest(fields=fields):
+                    (root / "access-request.json").write_text(
+                        json.dumps({field: request[field] for field in fields}),
+                        encoding="utf-8",
+                    )
+                    completed = subprocess.run(command, check=False, capture_output=True)
+                    self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_access_request_validation_rejects_every_closed_contract_mismatch(self) -> None:
+        control = ROOT / "scripts/ci-cloud/rocky-control.py"
+        target_sha = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
+        run_id = "33123855032"
+        run_attempt = "1"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = root / "id_ed25519"
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-C",
+                    f"secpal-rocky-{run_id}-{run_attempt}",
+                    "-f",
+                    key,
+                ],
+                check=True,
+            )
+            public_key = key.with_suffix(".pub").read_text(encoding="utf-8").strip()
+            valid = {
+                "runner_ipv4": "8.8.8.8",
+                "run_attempt": run_attempt,
+                "run_id": run_id,
+                "ssh_public_key": public_key,
+                "target_sha": target_sha,
+            }
+            request = root / "access-request.json"
+            command = [
+                control,
+                "validate-access-request",
+                request,
+                "--target-sha",
+                target_sha,
+                "--run-id",
+                run_id,
+                "--run-attempt",
+                run_attempt,
+            ]
+            mutations = {
+                "missing": {key: value for key, value in valid.items() if key != "runner_ipv4"},
+                "extra": {**valid, "unexpected": "value"},
+                "wrong-target": {**valid, "target_sha": "a" * 40},
+                "wrong-run": {**valid, "run_id": "33123855033"},
+                "wrong-attempt": {**valid, "run_attempt": "2"},
+                "empty-key": {**valid, "ssh_public_key": ""},
+                "wrong-key-type": {**valid, "ssh_public_key": "ssh-rsa AAAA comment"},
+                "wrong-key-comment": {
+                    **valid,
+                    "ssh_public_key": public_key.rsplit(" ", 1)[0] + " wrong-comment",
+                },
+                "malformed-ipv4": {**valid, "runner_ipv4": "999.1.1.1"},
+                "non-public-ipv4": {**valid, "runner_ipv4": "192.0.2.1"},
+                "ipv6": {**valid, "runner_ipv4": "2001:4860:4860::8888"},
+                "wrong-type": {**valid, "run_attempt": 1},
+                "scalar": "access-request",
+                "list": list(valid),
+                "null": None,
+            }
+            for name, document in mutations.items():
+                with self.subTest(name=name):
+                    request.write_text(json.dumps(document), encoding="utf-8")
+                    self.assertNotEqual(
+                        0,
+                        subprocess.run(command, check=False, capture_output=True).returncode,
+                    )
+            request.write_text(
+                '{"runner_ipv4":"8.8.8.8","runner_ipv4":"1.1.1.1",'
+                f'"run_attempt":"{run_attempt}","run_id":"{run_id}",'
+                f'"ssh_public_key":{json.dumps(public_key)},'
+                f'"target_sha":"{target_sha}"}}',
+                encoding="utf-8",
+            )
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+            request.write_text(json.dumps(valid) + " " * 1024, encoding="utf-8")
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+
+    def test_access_request_contract_has_one_owner_before_resume_oidc(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        canonical_call = "rocky-control.py validate-access-request"
+        self.assertEqual(2, workflow.count(canonical_call))
+        self.assertNotIn(
+            'keys == ["runner_ipv4", "run_attempt", "run_id", "ssh_public_key", "target_sha"]',
+            workflow,
+        )
+        resume = workflow.index("Wait for the uncredentialed target runner access request")
+        resume_validation = workflow.index(canonical_call, resume)
+        resume_oidc = workflow.index("google-github-actions/auth@", resume_validation)
+        self.assertLess(resume_validation, resume_oidc)
+        producer = workflow.index("Generate runner-local SSH key and public access request")
+        producer_validation = workflow.index(canonical_call, producer)
+        producer_upload = workflow.index("Upload only the public access request", producer)
+        self.assertLess(producer_validation, producer_upload)
+
     def test_inactive_systemd_user_state_reaches_runtime_admission(self) -> None:
         collector = load_rocky_preparation_collector()
         observed: dict[str, object] = {}
