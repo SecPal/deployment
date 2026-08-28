@@ -9,11 +9,13 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+from importlib.machinery import SourceFileLoader
 import importlib.util
 import ipaddress
 import json
 import os
 import re
+import stat
 import struct
 import sys
 import urllib.error
@@ -26,6 +28,13 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 
 ROOT = Path(__file__).resolve().parents[2]
+INSTALLED_TARGET_FAILURE_CLASSIFIER = Path(
+    "/usr/local/sbin/secpal-classify-rocky-target-failure"
+)
+CLASSIFIER_TRUSTED_UID = 0
+CLASSIFIER_TRUSTED_GID = 0
+MAX_TARGET_FAILURE_CLASSIFIER_BYTES = 131_072
+TARGET_FAILURE_CLASSIFIER_SYMBOL = "validate_admitted_daemon_reload_adjacency"
 PROFILE_PATH = ROOT / "config/ci-cloud/gcp-rocky-10-2-arm64.json"
 SCHEMAS = {
     "discovery": ROOT / "schemas/rocky-cloud-discovery-evidence.schema.json",
@@ -268,6 +277,53 @@ def validate_target_source_failure(path: Path, target_sha: str) -> None:
         raise ControlError("target source failure is not bound to the exact target SHA")
 
 
+def load_target_failure_classifier() -> Any:
+    """Load one admitted, exact-path classifier without module-path resolution."""
+    repository_path = ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+    if repository_path.exists():
+        classifier_path = repository_path
+        installed = False
+    else:
+        classifier_path = INSTALLED_TARGET_FAILURE_CLASSIFIER
+        installed = True
+
+    try:
+        metadata = classifier_path.lstat()
+    except OSError as error:
+        raise ControlError("target qualification classifier is unavailable") from error
+    if not classifier_path.is_absolute() or not stat.S_ISREG(metadata.st_mode):
+        raise ControlError("target qualification classifier representation is invalid")
+    if metadata.st_mode & 0o022:
+        raise ControlError("target qualification classifier representation is invalid")
+    if not 0 < metadata.st_size <= MAX_TARGET_FAILURE_CLASSIFIER_BYTES:
+        raise ControlError("target qualification classifier representation is invalid")
+    if installed and (
+        metadata.st_uid != CLASSIFIER_TRUSTED_UID
+        or metadata.st_gid != CLASSIFIER_TRUSTED_GID
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise ControlError("target qualification classifier representation is invalid")
+
+    loader = SourceFileLoader(
+        "secpal_target_qualification_failure", os.fspath(classifier_path)
+    )
+    specification = importlib.util.spec_from_loader(loader.name, loader)
+    if specification is None or specification.loader is None:
+        raise ControlError("target qualification classifier cannot be loaded")
+    classifier = importlib.util.module_from_spec(specification)
+    write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(classifier)
+    except Exception as error:
+        raise ControlError("target qualification classifier cannot be loaded") from error
+    finally:
+        sys.dont_write_bytecode = write_bytecode
+    if not callable(getattr(classifier, TARGET_FAILURE_CLASSIFIER_SYMBOL, None)):
+        raise ControlError("target qualification classifier cannot be loaded")
+    return classifier
+
+
 def validate_target_qualification_failure(
     path: Path,
     target_sha: str,
@@ -290,22 +346,9 @@ def validate_target_qualification_failure(
         raise ControlError("target qualification failure is not bound to this exact run")
     adjacency = document.get("daemon_reload_adjacency")
     if adjacency is not None:
-        candidates = (
-            ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            Path("/usr/local/sbin/secpal-classify-rocky-target-failure"),
-        )
-        classifier_path = next((path for path in candidates if path.is_file()), None)
-        if classifier_path is None:
-            raise ControlError("target qualification classifier is unavailable")
-        specification = importlib.util.spec_from_file_location(
-            "secpal_target_qualification_failure", classifier_path
-        )
-        if specification is None or specification.loader is None:
-            raise ControlError("target qualification classifier cannot be loaded")
-        classifier = importlib.util.module_from_spec(specification)
-        specification.loader.exec_module(classifier)
+        classifier = load_target_failure_classifier()
         try:
-            classifier.validate_admitted_daemon_reload_adjacency(adjacency)
+            getattr(classifier, TARGET_FAILURE_CLASSIFIER_SYMBOL)(adjacency)
         except (AttributeError, ValueError) as error:
             raise ControlError(
                 "target qualification daemon-reload adjacency contradicts its facts"

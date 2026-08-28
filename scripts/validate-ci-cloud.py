@@ -2042,6 +2042,7 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_failure_classifier = read(
         root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
     )
+    rocky_control = read(root, "scripts/ci-cloud/rocky-control.py")
     target_failure_trace = read(
         root, "scripts/ci-cloud/rocky-target-qualification-trace.sh"
     )
@@ -2323,6 +2324,19 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_classifier
         and "selinux_avc_ambiguous" in target_failure_classifier,
         "daemon-reload adjacency admission must preserve the closed fail-safe decision tree",
+    )
+    require(
+        'INSTALLED_TARGET_FAILURE_CLASSIFIER = Path(\n    "/usr/local/sbin/secpal-classify-rocky-target-failure"\n)'
+        in rocky_control
+        and "SourceFileLoader" in rocky_control
+        and "spec_from_loader(loader.name, loader)" in rocky_control
+        and "TARGET_FAILURE_CLASSIFIER_SYMBOL" in rocky_control
+        and "classifier_path.lstat()" in rocky_control
+        and "metadata.st_mode & 0o022" in rocky_control
+        and "metadata.st_uid != CLASSIFIER_TRUSTED_UID" in rocky_control
+        and "stat.S_IMODE(metadata.st_mode) != 0o700" in rocky_control
+        and "spec_from_file_location" not in rocky_control,
+        "Rocky control must load only the admitted extensionless installed classifier",
     )
     require(
         target_text.index("Retrieve and validate bounded target-qualification failure")
