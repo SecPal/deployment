@@ -42,6 +42,7 @@ MAX_COMMAND_BYTES = 65_536
 MAX_OBSERVATION_BYTES = 4_096
 COMMAND_TIMEOUT_SECONDS = 3
 GENERATOR_TIMEOUT_SECONDS = 8
+CAPTURE_DEADLINE_SECONDS = 22
 RUNTIME_ACCOUNT = "secpal-runtime"
 GENERATOR_CANDIDATES = (
     Path("/usr/lib/systemd/user-generators/podman-system-generator"),
@@ -426,7 +427,7 @@ def collect_observation(
     }
 
 
-def write_document(path: Path, document: dict[str, Any]) -> None:
+def write_document(path: Path, document: dict[str, Any], deadline: float) -> None:
     encoded = (
         json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode()
@@ -439,6 +440,8 @@ def write_document(path: Path, document: dict[str, Any]) -> None:
             temporary.flush()
             os.fsync(temporary.fileno())
         os.chmod(temporary_name, 0o600)
+        if time.monotonic() > deadline:
+            raise ObservationError("adjacency publication missed its pre-cleanup bound")
         os.replace(temporary_name, path)
     finally:
         if os.path.exists(temporary_name):
@@ -474,8 +477,9 @@ def observe(arguments: argparse.Namespace) -> int:
         frames = {int(frame) for frame in match.group(2).split(b",")}
         if failure_status > 255 or 242 not in frames:
             raise ObservationError("daemon-reload event is outside the exact call site")
+        deadline = time.monotonic() + CAPTURE_DEADLINE_SECONDS
         document = collect_observation(arguments, failure_status, event)
-        write_document(arguments.output, document)
+        write_document(arguments.output, document, deadline)
         acknowledgement.write(b"SECPAL_RELOAD_ADJACENCY_CAPTURED_V1\n")
         return 0
     except (OSError, ObservationError, KeyError, pwd.error, ValueError):

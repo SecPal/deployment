@@ -2255,10 +2255,15 @@ def validate_rocky_control_plane(root: Path) -> None:
         and literal_constant(reload_adjacency_observer, "MAX_OBSERVATION_BYTES") == 4_096
         and literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS") == 3
         and literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS") == 8
+        and literal_constant(reload_adjacency_observer, "CAPTURE_DEADLINE_SECONDS")
+        == 22
         and 4
         * literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS")
         + literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS")
         < 25
+        and "time.monotonic() > deadline" in reload_adjacency_observer
+        and "write_document(arguments.output, document, deadline)"
+        in reload_adjacency_observer
         and "os.O_NOFOLLOW" in reload_adjacency_observer
         and "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW"
         in reload_adjacency_observer

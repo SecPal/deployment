@@ -1101,6 +1101,8 @@ class CloudCIContractTests(unittest.TestCase):
             (runner, "mkfifo -m 0600", "install -m 0600 /dev/null"),
             (runner, '--reload-adjacency "$reload_adjacency"', ""),
             (observer, "MAX_INPUT_BYTES = 4_096", "MAX_INPUT_BYTES = 65_536"),
+            (observer, "CAPTURE_DEADLINE_SECONDS = 22", "CAPTURE_DEADLINE_SECONDS = 26"),
+            (observer, "time.monotonic() > deadline", "False"),
             (
                 observer,
                 "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW",
