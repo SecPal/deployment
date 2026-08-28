@@ -1107,6 +1107,11 @@ class CloudCIContractTests(unittest.TestCase):
                 "os.O_RDONLY | os.O_CLOEXEC",
             ),
             (observer, "stat.S_ISFIFO", "stat.S_ISREG"),
+            (
+                observer,
+                "directory.resolve(strict=True) == directory",
+                "directory.resolve(strict=True) != directory",
+            ),
             (observer, 'f"QUADLET_UNIT_DIRS={input_path.parent}"', '"QUADLET_UNIT_DIRS=/"'),
             (observer, '"--dryrun"', '"daemon-reload"'),
             (observer, '"show-environment"', '"daemon-reload"'),

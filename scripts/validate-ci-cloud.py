@@ -2268,6 +2268,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "stat.S_IMODE(metadata.st_mode) != 0o600" in reload_adjacency_observer
         and 'Path(f"/etc/containers/systemd/users/{runtime_uid}")'
         in reload_adjacency_observer
+        and "directory_metadata = directory.lstat()" in reload_adjacency_observer
+        and "not stat.S_ISLNK(directory_metadata.st_mode)"
+        in reload_adjacency_observer
+        and "directory_metadata.st_uid == 0" in reload_adjacency_observer
+        and "directory_metadata.st_gid == 0" in reload_adjacency_observer
+        and "not directory_metadata.st_mode & 0o022" in reload_adjacency_observer
+        and "directory.resolve(strict=True) == directory"
+        in reload_adjacency_observer
         and '"owner_uid": metadata.st_uid' in reload_adjacency_observer
         and '"owner_gid": metadata.st_gid' in reload_adjacency_observer
         and 'f"{stat.S_IMODE(metadata.st_mode):04o}"' in reload_adjacency_observer
