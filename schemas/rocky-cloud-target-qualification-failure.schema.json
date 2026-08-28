@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secpal.example/schemas/rocky-cloud-target-qualification-failure.schema.json",
+  "title": "Bounded negative Rocky target-qualification diagnostic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase",
+    "target_sha",
+    "trusted_control_sha",
+    "qualification_run_id",
+    "qualification_run_attempt",
+    "harness_sha256",
+    "operation",
+    "reason",
+    "exit_status",
+    "diagnostic_input_sha256",
+    "diagnostic_input_bytes"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "phase": { "const": "target-qualification" },
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "trusted_control_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "qualification_run_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "qualification_run_attempt": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,2}$"
+    },
+    "harness_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "operation": {
+      "enum": [
+        "qualification-harness",
+        "qualify-host-identity",
+        "qualify-administrator-execution",
+        "qualify-fixture-reference",
+        "qualify-service-account",
+        "qualify-selinux-host",
+        "qualify-package-prerequisites",
+        "qualify-native-architecture",
+        "qualify-cgroup",
+        "qualify-rootless-runtime",
+        "qualify-fixture-presence",
+        "qualify-fixture-setup",
+        "qualify-quadlet-authority",
+        "qualify-quadlet-runtime",
+        "qualify-selinux-storage",
+        "qualify-workload-primary",
+        "qualify-seccomp",
+        "qualify-workload-secondary",
+        "qualify-mcs-relationship",
+        "qualify-cross-mcs-denial",
+        "qualify-avc-correlation",
+        "qualify-selinux-policy-restoration",
+        "qualify-runtime-fallback-absence",
+        "qualify-fixture-cleanup"
+      ]
+    },
+    "reason": {
+      "enum": [
+        "invariant-failed",
+        "command-failed",
+        "representation-invalid",
+        "cleanup-failed",
+        "timeout",
+        "unclassified-target-failure"
+      ]
+    },
+    "exit_status": { "type": "integer", "minimum": 1, "maximum": 255 },
+    "diagnostic_input_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "diagnostic_input_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 69888
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "reason": { "enum": ["timeout", "unclassified-target-failure"] }
+        }
+      },
+      "then": {
+        "properties": { "operation": { "const": "qualification-harness" } }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "cleanup-failed" } } },
+      "then": {
+        "properties": { "operation": { "const": "qualify-fixture-cleanup" } }
+      }
+    }
+  ]
+}

@@ -37,6 +37,8 @@ SCHEMAS = {
     / "schemas/rocky-cloud-qualification-readiness-failure.schema.json",
     "target-source-failure": ROOT
     / "schemas/rocky-cloud-target-source-failure.schema.json",
+    "target-qualification-failure": ROOT
+    / "schemas/rocky-cloud-target-qualification-failure.schema.json",
 }
 SHA = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
@@ -263,6 +265,28 @@ def validate_target_source_failure(path: Path, target_sha: str) -> None:
     document = validate_evidence("target-source-failure", path)
     if document["target_sha"] != target_sha:
         raise ControlError("target source failure is not bound to the exact target SHA")
+
+
+def validate_target_qualification_failure(
+    path: Path,
+    target_sha: str,
+    control_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> None:
+    if SHA.fullmatch(target_sha) is None or SHA.fullmatch(control_sha) is None:
+        raise ControlError("target and control SHAs must be exact lowercase commits")
+    if RUN_ID.fullmatch(run_id) is None or RUN_ATTEMPT.fullmatch(run_attempt) is None:
+        raise ControlError("qualification run identity is outside the closed format")
+    document = validate_evidence("target-qualification-failure", path)
+    expected = {
+        "target_sha": target_sha,
+        "trusted_control_sha": control_sha,
+        "qualification_run_id": run_id,
+        "qualification_run_attempt": run_attempt,
+    }
+    if any(document[key] != value for key, value in expected.items()):
+        raise ControlError("target qualification failure is not bound to this exact run")
 
 
 def validate_preparation_failure_semantics(document: dict[str, Any]) -> None:
@@ -548,6 +572,14 @@ def parser() -> argparse.ArgumentParser:
     target_source_failure = subparsers.add_parser("validate-target-source-failure")
     target_source_failure.add_argument("path", type=Path)
     target_source_failure.add_argument("--target-sha", required=True)
+    target_qualification_failure = subparsers.add_parser(
+        "validate-target-qualification-failure"
+    )
+    target_qualification_failure.add_argument("path", type=Path)
+    target_qualification_failure.add_argument("--target-sha", required=True)
+    target_qualification_failure.add_argument("--control-sha", required=True)
+    target_qualification_failure.add_argument("--run-id", required=True)
+    target_qualification_failure.add_argument("--run-attempt", required=True)
     collection = subparsers.add_parser("validate-collection-diagnostic")
     collection.add_argument("path", type=Path)
     access_request = subparsers.add_parser("validate-access-request")
@@ -592,6 +624,14 @@ def main(arguments: list[str]) -> int:
             validate_evidence(options.kind, options.path)
         elif options.command == "validate-target-source-failure":
             validate_target_source_failure(options.path, options.target_sha)
+        elif options.command == "validate-target-qualification-failure":
+            validate_target_qualification_failure(
+                options.path,
+                options.target_sha,
+                options.control_sha,
+                options.run_id,
+                options.run_attempt,
+            )
         elif options.command == "validate-collection-diagnostic":
             validate_collection_diagnostic(options.path)
         elif options.command == "validate-access-request":

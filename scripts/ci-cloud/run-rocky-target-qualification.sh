@@ -7,12 +7,19 @@ set -euo pipefail
 readonly fixture='docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1'
 readonly evidence_root=/var/lib/secpal-rocky/evidence
 readonly source_failure="$evidence_root/target-source-failure.json"
+readonly qualification_failure="$evidence_root/target-qualification-failure.json"
+readonly qualification_trace="$evidence_root/target-qualification.trace"
+readonly qualification_marker="$evidence_root/target-qualification.marker"
 
-if [[ "$#" -ne 1 || ! "$1" =~ ^[0-9a-f]{40}$ ]]; then
-  printf 'usage: run-rocky-target-qualification.sh FULL_TARGET_SHA\n' >&2
+if [[ "$#" -ne 4 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
+  ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ]]; then
+  printf 'usage: run-rocky-target-qualification.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT\n' >&2
   exit 64
 fi
 readonly target_sha="$1"
+readonly control_sha="$2"
+readonly qualification_run_id="$3"
+readonly qualification_run_attempt="$4"
 [[ -f /var/lib/secpal-rocky/prepared ]]
 [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]
 [[ -z "${GOOGLE_OAUTH_ACCESS_TOKEN:-}" ]]
@@ -46,7 +53,7 @@ write_source_failure() {
     validate-target-source-failure "$source_failure" --target-sha "$target_sha"
 }
 
-rm -f -- "$source_failure"
+rm -f -- "$source_failure" "$qualification_failure" "$qualification_trace" "$qualification_marker"
 if ! getent ahostsv4 github.com >/dev/null 2>&1; then
   write_source_failure resolve-target-source command-failed 1
   exit 81
@@ -79,20 +86,41 @@ fi
 stdout="$evidence_root/qualification.stdout"
 audit_baseline="$(date -u '+%m/%d/%Y %H:%M:%S')"
 set +e
-timeout --signal=TERM --kill-after=30s 45m \
-  "$work_root/scripts/qualify-production-host.sh" \
-  --image "$fixture" --service-account secpal-runtime >"$stdout" 2>&1
+(
+  ulimit -f 128
+  timeout --signal=TERM --kill-after=30s 45m \
+    env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
+    bash "$work_root/scripts/qualify-production-host.sh" \
+    --image "$fixture" --service-account secpal-runtime >"$stdout" 2>&1 \
+    3>"$qualification_trace"
+)
 status=$?
 set -e
 [[ "$(stat -c %s "$stdout")" -le 65536 ]]
+[[ "$(stat -c %s "$qualification_trace")" -le 4096 ]]
 
-# Source-acquisition failures use reserved wrapper-owned exit statuses above.
-# Never let target-owned code manufacture one of those workflow classifications.
 if [[ "$status" -ne 0 ]]; then
-  status=1
+  /usr/local/sbin/secpal-classify-rocky-target-failure \
+    --target-sha "$target_sha" --control-sha "$control_sha" \
+    --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
+    --harness "$work_root/scripts/qualify-production-host.sh" \
+    --stdout "$stdout" --trace "$qualification_trace" --exit-status "$status" \
+    --output "$qualification_failure"
+  /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+    validate-target-qualification-failure "$qualification_failure" \
+    --target-sha "$target_sha" --control-sha "$control_sha" \
+    --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
+  chown secpal-cloud:secpal-cloud "$qualification_failure"
+  chmod 0400 "$qualification_failure"
+  exit 91
 fi
 
-python3 - "$target_sha" "$status" "$stdout" "$audit_baseline" "$evidence_root/qualification.json" <<'PY'
+# The target cannot pre-seed the trusted admission marker. The marker is absent
+# when trusted success admission starts and is written only by reject().
+rm -f -- "$qualification_marker"
+set +e
+python3 - "$target_sha" "$status" "$stdout" "$audit_baseline" \
+  "$evidence_root/qualification.json" "$qualification_marker" <<'PY'
 import hashlib
 import json
 import pwd
@@ -101,43 +129,54 @@ import subprocess
 import sys
 from pathlib import Path
 
-target_sha, raw_status, stdout_path, audit_baseline, output_path = sys.argv[1:]
+target_sha, raw_status, stdout_path, audit_baseline, output_path, marker_path = sys.argv[1:]
+
+
+def reject(operation: str, reason: str, message: str) -> None:
+    Path(marker_path).write_text(f"{operation} {reason}\n", encoding="ascii")
+    raise SystemExit(message)
+
+
 payload = Path(stdout_path).read_bytes()
 try:
     text = payload.decode("utf-8")
 except UnicodeDecodeError as error:
-    raise SystemExit("qualification stdout is not UTF-8") from error
+    reject("qualification-harness", "representation-invalid", "qualification stdout is not UTF-8")
 if int(raw_status) != 0:
-    raise SystemExit(f"qualification harness failed with exit status {raw_status}")
+    reject("qualification-harness", "unclassified-target-failure", "qualification harness returned nonzero")
 if text.count("PASS: Rocky Linux 10.2 native") != 1:
-    raise SystemExit("qualification harness did not emit exactly one PASS marker")
+    reject("qualification-harness", "representation-invalid", "qualification PASS marker is not singular")
 facts = {}
 for key, value in re.findall(r"^(process_a|process_b|storage_a|seccomp_mode)=([^\r\n]+)$", text, re.MULTILINE):
     if key in facts:
-        raise SystemExit(f"qualification stdout has duplicate {key}")
+        reject("qualification-harness", "representation-invalid", "qualification facts are duplicated")
     facts[key] = value
 if set(facts) != {"process_a", "process_b", "storage_a", "seccomp_mode"}:
-    raise SystemExit("qualification stdout lacks exact trusted context facts")
+    reject("qualification-harness", "representation-invalid", "qualification facts are incomplete")
 context = re.compile(r"^([^:]+):([^:]+):(container_t|container_file_t):(s0(?::c[0-9]+(?:,c[0-9]+)?)?)$")
 parsed = {}
 for key in ("process_a", "process_b", "storage_a"):
     match = context.fullmatch(facts[key])
     if match is None:
-        raise SystemExit(f"qualification {key} SELinux context is malformed")
+        reject("qualify-selinux-storage", "representation-invalid", "qualification SELinux context is malformed")
     parsed[key] = match.groups()
 if parsed["process_a"][2] != "container_t" or parsed["process_b"][2] != "container_t" or parsed["storage_a"][2] != "container_file_t":
-    raise SystemExit("qualification SELinux types are not admitted")
+    reject("qualify-selinux-storage", "invariant-failed", "qualification SELinux types are not admitted")
 if parsed["process_a"][3] != parsed["storage_a"][3] or parsed["process_b"][3] == parsed["process_a"][3]:
-    raise SystemExit("qualification MCS relationship is not admitted")
+    reject("qualify-mcs-relationship", "invariant-failed", "qualification MCS relationship is not admitted")
 if facts["seccomp_mode"] != "2":
-    raise SystemExit("qualification seccomp mode is not enforcing")
+    reject("qualify-seccomp", "invariant-failed", "qualification seccomp mode is not enforcing")
 audit = subprocess.run(["ausearch", "-m", "AVC", "-ts", audit_baseline], check=False, capture_output=True, text=True, timeout=30)
 if audit.returncode not in (0, 1) or len(audit.stdout.encode()) > 65536:
-    raise SystemExit("qualification audit observation failed")
+    reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
 avc_pattern = re.compile(r"scontext=(\S+).*tcontext=(\S+).*permissive=0", re.DOTALL)
 avcs = [(source, target) for source, target in avc_pattern.findall(audit.stdout) if source == facts["process_b"] and target == facts["storage_a"]]
 if len(avcs) != 1:
-    raise SystemExit("qualification did not produce one correlated enforcing AVC")
+    reject(
+        "qualify-avc-correlation",
+        "invariant-failed",
+        "qualification lacks one correlated enforcing AVC",
+    )
 runtime_account = pwd.getpwnam("secpal-runtime")
 cleanup_checks = [
     [
@@ -162,7 +201,7 @@ cleanup_complete = all(
     for result in cleanup_results
 )
 if not cleanup_complete:
-    raise SystemExit("qualification cleanup is incomplete")
+    reject("qualify-fixture-cleanup", "cleanup-failed", "qualification cleanup is incomplete")
 document = {
     "schema_version": 1,
     "target_sha": target_sha,
@@ -180,8 +219,27 @@ document = {
 }
 Path(output_path).write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+admission_status=$?
+set -e
+if [[ "$admission_status" -ne 0 ]]; then
+  /usr/local/sbin/secpal-classify-rocky-target-failure \
+    --target-sha "$target_sha" --control-sha "$control_sha" \
+    --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
+    --harness "$work_root/scripts/qualify-production-host.sh" \
+    --stdout "$stdout" --trace "$qualification_trace" \
+    --exit-status "$admission_status" --trusted-marker "$qualification_marker" \
+    --output "$qualification_failure"
+  /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+    validate-target-qualification-failure "$qualification_failure" \
+    --target-sha "$target_sha" --control-sha "$control_sha" \
+    --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
+  chown secpal-cloud:secpal-cloud "$qualification_failure"
+  chmod 0400 "$qualification_failure"
+  exit 91
+fi
 chmod 0600 "$evidence_root/qualification.json" "$stdout"
 /opt/secpal-control/scripts/ci-cloud/rocky-control.py validate-evidence qualification \
   "$evidence_root/qualification.json"
 chown secpal-cloud:secpal-cloud "$evidence_root/qualification.json" "$stdout"
 chmod 0400 "$evidence_root/qualification.json" "$stdout"
+rm -f -- "$qualification_trace" "$qualification_marker"

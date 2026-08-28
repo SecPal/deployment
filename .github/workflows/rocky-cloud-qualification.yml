@@ -688,14 +688,26 @@ jobs:
             -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip" \
-            sudo /usr/local/sbin/secpal-run-rocky-target-qualification "$TARGET_SHA"
+            sudo /usr/local/sbin/secpal-run-rocky-target-qualification \
+            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
           status=$?
           set -e
           case "$status" in
-            81|82|83|84) source_failure_expected=true ;;
-            *) source_failure_expected=false ;;
+            81|82|83|84)
+              source_failure_expected=true
+              qualification_failure_expected=false
+              ;;
+            91)
+              source_failure_expected=false
+              qualification_failure_expected=true
+              ;;
+            *)
+              source_failure_expected=false
+              qualification_failure_expected=false
+              ;;
           esac
           printf 'source_failure_expected=%s\n' "$source_failure_expected" >>"$GITHUB_OUTPUT"
+          printf 'qualification_failure_expected=%s\n' "$qualification_failure_expected" >>"$GITHUB_OUTPUT"
           exit "$status"
 
       - name: Retrieve and validate bounded target-source failure
@@ -729,12 +741,47 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Retrieve and validate bounded target-qualification failure
+        id: target_qualification_failure
+        if: >-
+          ${{ steps.target_execution.outcome == 'failure' &&
+          steps.target_execution.outputs.qualification_failure_expected == 'true' }}
+        continue-on-error: true
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip" \
+            'test -f /var/lib/secpal-rocky/evidence/target-qualification-failure.json && test ! -L /var/lib/secpal-rocky/evidence/target-qualification-failure.json && head -c 2049 /var/lib/secpal-rocky/evidence/target-qualification-failure.json' \
+            >"$RUNNER_TEMP/rocky-target/target-qualification-failure.json"
+          test "$(stat -c %s "$RUNNER_TEMP/rocky-target/target-qualification-failure.json")" -le 2048
+          scripts/ci-cloud/rocky-control.py validate-target-qualification-failure \
+            "$RUNNER_TEMP/rocky-target/target-qualification-failure.json" \
+            --target-sha "${{ needs.validate.outputs.target_sha }}" \
+            --control-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Publish bounded target-qualification failure
+        if: >-
+          ${{ always() && steps.target_execution.outcome == 'failure' &&
+          steps.target_execution.outputs.qualification_failure_expected == 'true' &&
+          steps.target_qualification_failure.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-target-qualification-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-target/target-qualification-failure.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Enforce exact target execution
+        if: ${{ always() }}
         env:
           TARGET_EXECUTION_OUTCOME: ${{ steps.target_execution.outcome }}
         run: test "$TARGET_EXECUTION_OUTCOME" = success
 
       - name: Retrieve and validate target-owned qualification evidence
+        if: ${{ steps.target_execution.outcome == 'success' }}
         env:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
         run: |
@@ -771,6 +818,7 @@ jobs:
           PY
 
       - name: Publish bounded target-owned qualification evidence
+        if: ${{ steps.target_execution.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rocky-cloud-qualification-${{ github.run_id }}-${{ github.run_attempt }}

@@ -2019,6 +2019,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_text = json.dumps(target_job, sort_keys=True)
     preparation = read(root, "scripts/ci-cloud/prepare-rocky-host.sh")
     target_runner = read(root, "scripts/ci-cloud/run-rocky-target-qualification.sh")
+    target_failure_classifier = read(
+        root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+    )
     for forbidden in (
         "id-token",
         "google-github-actions/auth",
@@ -2085,6 +2088,26 @@ def validate_rocky_control_plane(root: Path) -> None:
         "target source diagnostics must remain after readiness and before evidence admission",
     )
     require(
+        "EXPECTED_TARGET_SHA = \"d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6\""
+        in target_failure_classifier
+        and "EXPECTED_HARNESS_SHA256" in target_failure_classifier
+        and "unclassified-target-failure" in target_failure_classifier
+        and "SECPAL_TARGET_ERR_V1" in target_failure_classifier
+        and "validate-target-qualification-failure" in target_runner
+        and target_runner.count("exit 91") == 2
+        and "qualification_failure_expected" in target_text
+        and "head -c 2049" in target_text
+        and "target-qualification-failure.json" in target_text,
+        "target harness failures must retain one bounded negative-only semantic identity",
+    )
+    require(
+        target_text.index("Retrieve and validate bounded target-qualification failure")
+        < target_text.index("Enforce exact target execution")
+        < target_text.index("Retrieve and validate target-owned qualification evidence")
+        and "steps.target_execution.outcome == 'success'" in target_text,
+        "negative target diagnostics must be transported before failure enforcement and never grant success",
+    )
+    require(
         text.count("create_credentials_file: false") == 4
         and text.count("export_environment_variables: false") == 4,
         "Rocky WIF must stay in-memory and step-scoped",
@@ -2120,6 +2143,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         "rocky-cloud-qualification-evidence.schema.json",
         "rocky-cloud-qualification-readiness-failure.schema.json",
         "rocky-cloud-target-source-failure.schema.json",
+        "rocky-cloud-target-qualification-failure.schema.json",
     ):
         try:
             schema = json.loads(read(root, f"schemas/{schema_name}"))
