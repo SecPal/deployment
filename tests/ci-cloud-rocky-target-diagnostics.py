@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -48,6 +49,17 @@ def load_observer():
     )
     if specification is None or specification.loader is None:
         raise RuntimeError("cannot load Quadlet reload adjacency observer")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def load_rocky_control():
+    specification = importlib.util.spec_from_file_location(
+        "rocky_control", CONTROL
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError("cannot load Rocky control validator")
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
@@ -1032,6 +1044,226 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             self.assertNotEqual(
                 0, subprocess.run(command, check=False, capture_output=True).returncode
             )
+
+    def test_canonical_validator_accepts_the_bootstrap_installed_classifier_name(
+        self,
+    ) -> None:
+        """The extensionless installed classifier is the guest representation."""
+        observation = {
+            "schema_version": 1,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "boot_id": "12345678-1234-1234-1234-123456789abc",
+            "failure_status": 1,
+            "failure_event_sha256": "e" * 64,
+            "captured_before_cleanup": True,
+            "capture_monotonic_ns": 123456789,
+            "manager_active_after_reload_failure": True,
+            "bus_available_after_reload_failure": True,
+            "control_reachable_after_reload_failure": True,
+            "quadlet_input": {
+                "match_count": 1,
+                "present": True,
+                "regular_file": True,
+                "not_symlink": True,
+                "owner_uid": 0,
+                "owner_gid": 0,
+                "mode": "0644",
+                "size": 320,
+                "sha256": "a" * 64,
+            },
+            "podman_generator_executed": True,
+            "podman_generator_exit_status": 0,
+            "podman_generator_accepted_actual_input": True,
+            "generator_failures": [],
+            "generator_failure_ambiguous": False,
+            "selinux_avc_observed": False,
+            "selinux_avc": None,
+            "selinux_avc_ambiguous": False,
+        }
+        adjacency = self.classifier.admit_daemon_reload_adjacency(
+            observation,
+            {
+                "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+                "trusted_control_sha": "c" * 40,
+                "qualification_run_id": "12345",
+                "qualification_run_attempt": "1",
+                "failure_status": 1,
+            },
+        )
+        document = {
+            "schema_version": 1,
+            "phase": "target-qualification",
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
+            "operation": "qualify-quadlet-daemon-reload",
+            "reason": "command-failed",
+            "exit_status": 1,
+            "diagnostic_input_sha256": "b" * 64,
+            "diagnostic_input_bytes": 100,
+            "daemon_reload_adjacency": adjacency,
+        }
+        control = load_rocky_control()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository_classifier = (
+                root
+                / "repository/scripts/ci-cloud"
+                / "classify-rocky-target-qualification-failure.py"
+            )
+            repository_classifier.parent.mkdir(parents=True)
+            classifier_bytes = CLASSIFIER.read_bytes()
+            repository_classifier.write_bytes(classifier_bytes)
+            installed_classifier = root / "secpal-classify-rocky-target-failure"
+            installed_classifier.write_bytes(classifier_bytes)
+            installed_classifier.chmod(0o700)
+            document_path = root / "failure.json"
+            document_path.write_text(json.dumps(document), encoding="utf-8")
+
+            with mock.patch.object(control, "ROOT", root / "repository"):
+                control.validate_target_qualification_failure(
+                    document_path,
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "c" * 40,
+                    "12345",
+                    "1",
+                )
+                malformed = json.loads(json.dumps(document))
+                malformed["daemon_reload_adjacency"]["classification"] = (
+                    "target-input-invalid"
+                )
+                document_path.write_text(json.dumps(malformed), encoding="utf-8")
+                with self.assertRaises(control.ControlError):
+                    control.validate_target_qualification_failure(
+                        document_path,
+                        self.classifier.EXPECTED_TARGET_SHA,
+                        "c" * 40,
+                        "12345",
+                        "1",
+                    )
+                document_path.write_text(json.dumps(document), encoding="utf-8")
+
+            with (
+                mock.patch.object(control, "ROOT", root / "missing-repository"),
+                mock.patch.object(
+                    control, "INSTALLED_TARGET_FAILURE_CLASSIFIER", installed_classifier
+                ),
+                mock.patch.object(control, "CLASSIFIER_TRUSTED_UID", os.getuid()),
+                mock.patch.object(control, "CLASSIFIER_TRUSTED_GID", os.getgid()),
+            ):
+                control.validate_target_qualification_failure(
+                    document_path,
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "c" * 40,
+                    "12345",
+                    "1",
+                )
+
+                malformed = json.loads(json.dumps(document))
+                malformed["daemon_reload_adjacency"]["classification"] = (
+                    "target-input-invalid"
+                )
+                document_path.write_text(json.dumps(malformed), encoding="utf-8")
+                with self.assertRaises(control.ControlError):
+                    control.validate_target_qualification_failure(
+                        document_path,
+                        self.classifier.EXPECTED_TARGET_SHA,
+                        "c" * 40,
+                        "12345",
+                        "1",
+                    )
+
+                document["daemon_reload_adjacency"] = (
+                    self.classifier.unavailable_daemon_reload_adjacency()
+                )
+                document_path.write_text(json.dumps(document), encoding="utf-8")
+                control.validate_target_qualification_failure(
+                    document_path,
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "c" * 40,
+                    "12345",
+                    "1",
+                )
+
+    def test_installed_classifier_loader_fails_closed_on_path_and_module_mutations(
+        self,
+    ) -> None:
+        control = load_rocky_control()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            installed = root / "secpal-classify-rocky-target-failure"
+            installed.write_bytes(CLASSIFIER.read_bytes())
+            installed.chmod(0o700)
+
+            def load(path: Path):
+                with (
+                    mock.patch.object(control, "ROOT", root / "missing-repository"),
+                    mock.patch.object(control, "INSTALLED_TARGET_FAILURE_CLASSIFIER", path),
+                    mock.patch.object(control, "CLASSIFIER_TRUSTED_UID", os.getuid()),
+                    mock.patch.object(control, "CLASSIFIER_TRUSTED_GID", os.getgid()),
+                ):
+                    return control.load_target_failure_classifier()
+
+            self.assertTrue(
+                callable(
+                    getattr(
+                        load(installed),
+                        "validate_admitted_daemon_reload_adjacency",
+                    )
+                )
+            )
+
+            substitute = root / "secpal_target_qualification_failure.py"
+            substitute.write_text("raise RuntimeError('substituted')\n", encoding="utf-8")
+            with mock.patch.object(sys, "path", [str(root), *sys.path]):
+                self.assertEqual(str(installed), load(installed).__file__)
+
+            for writable_mode in (0o720, 0o707):
+                installed.chmod(writable_mode)
+                with self.assertRaisesRegex(
+                    control.ControlError, "representation is invalid"
+                ):
+                    load(installed)
+            installed.chmod(0o700)
+
+            with self.assertRaisesRegex(control.ControlError, "is unavailable"):
+                load(root / "wrong-installed-classifier")
+
+            syntax_error = root / "syntax-error"
+            syntax_error.write_text("not valid python!", encoding="utf-8")
+            syntax_error.chmod(0o700)
+            with self.assertRaisesRegex(control.ControlError, "cannot be loaded"):
+                load(syntax_error)
+
+            missing_symbol = root / "missing-symbol"
+            missing_symbol.write_text("value = 1\n", encoding="utf-8")
+            missing_symbol.chmod(0o700)
+            with self.assertRaisesRegex(control.ControlError, "cannot be loaded"):
+                load(missing_symbol)
+
+            non_callable_symbol = root / "non-callable-symbol"
+            non_callable_symbol.write_text(
+                "validate_admitted_daemon_reload_adjacency = object()\n",
+                encoding="utf-8",
+            )
+            non_callable_symbol.chmod(0o700)
+            with self.assertRaisesRegex(control.ControlError, "cannot be loaded"):
+                load(non_callable_symbol)
+
+            replacement = root / "replacement"
+            replacement.write_bytes(CLASSIFIER.read_bytes())
+            replacement.chmod(0o700)
+            symlink = root / "symlink"
+            symlink.symlink_to(replacement)
+            with self.assertRaisesRegex(
+                control.ControlError, "representation is invalid"
+            ):
+                load(symlink)
 
     def test_success_and_failure_transport_are_disjoint(self) -> None:
         workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
