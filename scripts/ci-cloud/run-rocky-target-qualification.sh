@@ -49,7 +49,7 @@ write_source_failure() {
 rm -f -- "$source_failure"
 if ! getent ahostsv4 github.com >/dev/null 2>&1; then
   write_source_failure resolve-target-source command-failed 1
-  exit 1
+  exit 81
 fi
 
 git -C "$work_root" init --quiet
@@ -60,7 +60,7 @@ fetch_status=$?
 set -e
 if [[ "$fetch_status" -ne 0 ]]; then
   write_source_failure fetch-exact-target command-failed "$fetch_status"
-  exit "$fetch_status"
+  exit 82
 fi
 set +e
 git -C "$work_root" checkout --quiet --detach FETCH_HEAD
@@ -68,11 +68,11 @@ checkout_status=$?
 set -e
 if [[ "$checkout_status" -ne 0 ]]; then
   write_source_failure checkout-exact-target command-failed "$checkout_status"
-  exit "$checkout_status"
+  exit 83
 fi
 if [[ "$(git -C "$work_root" rev-parse HEAD)" != "$target_sha" ]]; then
   write_source_failure verify-target-sha postcondition-failed 1
-  exit 1
+  exit 84
 fi
 [[ -x "$work_root/scripts/qualify-production-host.sh" ]]
 
@@ -85,6 +85,12 @@ timeout --signal=TERM --kill-after=30s 45m \
 status=$?
 set -e
 [[ "$(stat -c %s "$stdout")" -le 65536 ]]
+
+# Source-acquisition failures use reserved wrapper-owned exit statuses above.
+# Never let target-owned code manufacture one of those workflow classifications.
+if [[ "$status" -ne 0 ]]; then
+  status=1
+fi
 
 python3 - "$target_sha" "$status" "$stdout" "$audit_baseline" "$evidence_root/qualification.json" <<'PY'
 import hashlib

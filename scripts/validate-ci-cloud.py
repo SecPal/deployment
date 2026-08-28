@@ -2045,12 +2045,16 @@ def validate_rocky_control_plane(root: Path) -> None:
     udp_dns = "ip daddr 169.254.169.254 udp dport 53 accept"
     tcp_dns = "ip daddr 169.254.169.254 tcp dport 53 accept"
     metadata_reject = "ip daddr 169.254.169.254 reject"
+    applied_metadata_policy = [
+        line.strip()
+        for line in metadata_policy.splitlines()
+        if line.strip().startswith("ip daddr 169.254.169.254")
+    ][-3:]
     require(
         metadata_policy.count(udp_dns) == 2
         and metadata_policy.count(tcp_dns) == 2
         and metadata_policy.count(metadata_reject) == 2
-        and metadata_policy.index(udp_dns) < metadata_policy.index(metadata_reject)
-        and metadata_policy.index(tcp_dns) < metadata_policy.index(metadata_reject)
+        and applied_metadata_policy == [udp_dns, tcp_dns, metadata_reject]
         and "8.8.8.8" not in metadata_policy
         and "1.1.1.1" not in metadata_policy,
         "GCE DNS must remain usable while all non-DNS metadata channels fail closed",
@@ -2061,6 +2065,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "fetch-exact-target" in target_runner
         and "checkout-exact-target" in target_runner
         and "verify-target-sha" in target_runner
+        and "exit 81" in target_runner
+        and "exit 82" in target_runner
+        and "exit 83" in target_runner
+        and "exit 84" in target_runner
         and "https://github.com/SecPal/deployment.git" in target_runner
         and "validate-target-source-failure" in target_runner,
         "target source acquisition must be exact and emit only closed guest-owned failures",
@@ -2069,6 +2077,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         text.index("Wait for authenticated current-boot guest readiness")
         < text.index("Execute exact target SHA once on the ready identity-free guest")
         < text.index("Retrieve and validate bounded target-source failure")
+        and "source_failure_expected" in target_text
+        and "head -c 1025" in target_text
+        and "stat -c %s" in target_text
+        and "target-source-failure.json" in target_text
         and "validate-target-source-failure" in target_text,
         "target source diagnostics must remain after readiness and before evidence admission",
     )

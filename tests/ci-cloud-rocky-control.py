@@ -57,7 +57,7 @@ class RockyCloudControlTests(unittest.TestCase):
             encoding="utf-8"
         )
         function = preparation.split("block_metadata_credentials() {", 1)[1].split(
-            "\n}\n", 1
+            "\n}\n\nconfigure_subids() {", 1
         )[0]
         udp_dns = "ip daddr 169.254.169.254 udp dport 53 accept"
         tcp_dns = "ip daddr 169.254.169.254 tcp dport 53 accept"
@@ -65,8 +65,6 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn(udp_dns, function)
         self.assertIn(tcp_dns, function)
         self.assertIn(metadata_reject, function)
-        self.assertLess(function.index(udp_dns), function.index(metadata_reject))
-        self.assertLess(function.index(tcp_dns), function.index(metadata_reject))
         self.assertNotIn("8.8.8.8", function)
         self.assertNotIn("1.1.1.1", function)
 
@@ -75,6 +73,7 @@ class RockyCloudControlTests(unittest.TestCase):
             for line in function.splitlines()
             if line.strip().startswith("ip daddr 169.254.169.254")
         ][-3:]
+        self.assertEqual([udp_dns, tcp_dns, metadata_reject], policy)
 
         def decision(protocol: str, port: int) -> str:
             exact = f"ip daddr 169.254.169.254 {protocol} dport {port} accept"
@@ -491,6 +490,41 @@ class RockyCloudControlTests(unittest.TestCase):
             "credentials_file",
         ):
             self.assertNotIn(forbidden, target_text)
+
+    def test_target_source_failure_is_wrapper_owned_and_bounded(self) -> None:
+        document = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        steps = {
+            step["name"]: step
+            for step in document["jobs"]["qualify_target"]["steps"]
+            if "name" in step
+        }
+        execution = steps[
+            "Execute exact target SHA once on the ready identity-free guest"
+        ]
+        retrieval = steps["Retrieve and validate bounded target-source failure"]
+        publication = steps["Publish bounded target-source failure"]
+        execution_run = execution["run"]
+        retrieval_run = retrieval["run"]
+        self.assertIn("81|82|83|84) source_failure_expected=true", execution_run)
+        self.assertIn(
+            "steps.target_execution.outputs.source_failure_expected == 'true'",
+            retrieval["if"],
+        )
+        self.assertIn(
+            "steps.target_execution.outputs.source_failure_expected == 'true'",
+            publication["if"],
+        )
+        self.assertIn("test ! -L", retrieval_run)
+        self.assertIn("head -c 1025", retrieval_run)
+        self.assertIn("stat -c %s", retrieval_run)
+        self.assertIn("-le 1024", retrieval_run)
+
+        runner = (
+            ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        ).read_text(encoding="utf-8")
+        for status in (81, 82, 83, 84):
+            self.assertIn(f"exit {status}", runner)
+        self.assertIn('if [[ "$status" -ne 0 ]]; then\n  status=1\nfi', runner)
 
     def test_opentofu_consumes_only_exact_image_identity(self) -> None:
         main = (TF_ROOT / "main.tf").read_text(encoding="utf-8")
