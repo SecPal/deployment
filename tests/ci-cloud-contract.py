@@ -976,6 +976,46 @@ class CloudCIContractTests(unittest.TestCase):
         result = self.run_validator()
         self.assertEqual(0, result.returncode, result.stdout)
 
+    def test_rejects_collapsed_quadlet_target_diagnostics(self) -> None:
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        for old, new in (
+            (
+                '(242, 242, "qualify-quadlet-daemon-reload"),',
+                '(242, 242, "qualify-quadlet-runtime"),',
+            ),
+            (
+                '(243, 243, "qualify-quadlet-start"),',
+                '(243, 243, "qualify-quadlet-daemon-reload"),',
+            ),
+            (
+                '(244, 244, "qualify-quadlet-active-state"),',
+                '(244, 244, "qualify-quadlet-start"),',
+            ),
+        ):
+            with self.subTest(new=new):
+                self.assert_mutation_rejected(classifier, old, new)
+
+    def test_rejects_weakened_target_trace_binding_bounds_and_ambiguity(self) -> None:
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        for old, new in (
+            (
+                'EXPECTED_TARGET_SHA = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"',
+                'EXPECTED_TARGET_SHA = ""',
+            ),
+            (
+                'EXPECTED_HARNESS_SHA256 = "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"',
+                'EXPECTED_HARNESS_SHA256 = ""',
+            ),
+            ("MAX_TRACE_FRAMES = 8", "MAX_TRACE_FRAMES = 9"),
+            ("MAX_TRACE_LINE = 9_999", "MAX_TRACE_LINE = 10_000"),
+            (
+                'if len(traced_operations) == 1:\n        return traced_operations.pop(), "command-failed"\n    return "qualification-harness", "unclassified-target-failure"',
+                'if traced_operations:\n        return sorted(traced_operations)[0], "command-failed"\n    return "qualification-harness", "unclassified-target-failure"',
+            ),
+        ):
+            with self.subTest(new=new):
+                self.assert_mutation_rejected(classifier, old, new)
+
     def test_preflight_prunes_generated_opentofu_cache(self) -> None:
         preflight = (ROOT / "scripts" / "preflight.sh").read_text(encoding="utf-8")
         self.assertEqual(

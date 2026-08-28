@@ -2045,6 +2045,7 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_failure_trace = read(
         root, "scripts/ci-cloud/rocky-target-qualification-trace.sh"
     )
+    target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
     for forbidden in (
         "id-token",
         "google-github-actions/auth",
@@ -2113,7 +2114,8 @@ def validate_rocky_control_plane(root: Path) -> None:
     require(
         "EXPECTED_TARGET_SHA = \"d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256" in target_failure_classifier
+        and "EXPECTED_HARNESS_SHA256 = \"ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53\""
+        in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V1" not in target_failure_classifier
@@ -2125,17 +2127,31 @@ def validate_rocky_control_plane(root: Path) -> None:
             for forbidden in ("BASH_COMMAND", "BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
         )
         and literal_constant(target_failure_classifier, "MAX_TRACE_FRAMES") == 8
+        and literal_constant(target_failure_classifier, "MAX_TRACE_LINE") == 9_999
         and all(
             isinstance(rule, tuple)
             and len(rule) == 3
             and type(rule[0]) is int
             and type(rule[1]) is int
             and rule[0] > 91
-            for rule in literal_constant(target_failure_classifier, "LINE_RULES")
+            for rule in target_line_rules
         )
+        and [rule for rule in target_line_rules if rule[0] <= 244 and rule[1] >= 242]
+        == [
+            (242, 242, "qualify-quadlet-daemon-reload"),
+            (243, 243, "qualify-quadlet-start"),
+            (244, 244, "qualify-quadlet-active-state"),
+        ]
+        and "qualify-quadlet-runtime" not in target_failure_classifier
+        and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
+        in target_failure_classifier
         and "if len(explicit) == 1 and len(traced_operations) == 1:" in target_failure_classifier
         and "if len(explicit) == 1 and len(traced_operations) > 1:" in target_failure_classifier
         and "if len(traced_operations) == 1:" in target_failure_classifier
+        and 'return "qualification-harness", "unclassified-target-failure"'
+        in target_failure_classifier.split(
+            'if len(traced_operations) == 1:', 1
+        )[1]
         and "validate-target-qualification-failure" in target_runner
         and target_runner.count("exit 91") == 2
         and "qualification_failure_expected" in target_text

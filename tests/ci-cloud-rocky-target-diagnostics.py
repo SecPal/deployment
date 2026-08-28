@@ -121,7 +121,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         cases = (
             (117, 'value="$(read_os_release_value)"', "qualify-host-identity"),
             (183, "rootless_podman", "qualify-rootless-runtime"),
-            (243, "user_systemctl", "qualify-quadlet-runtime"),
+            (242, "user_systemctl", "qualify-quadlet-daemon-reload"),
+            (243, "user_systemctl", "qualify-quadlet-start"),
+            (244, "user_systemctl", "qualify-quadlet-active-state"),
             (257, "rootless_podman", "qualify-workload-primary"),
             (269, "rootless_podman", "qualify-workload-secondary"),
             (271, "rootless_podman", "qualify-selinux-storage"),
@@ -193,7 +195,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             ("ERROR: digest-only fixture image is not pre-staged for the service account.", "", "qualify-fixture-presence", "invariant-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:196", "qualify-fixture-setup", "command-failed"),
             ("ERROR: service account can write the administrator Quadlet directory.", "", "qualify-quadlet-authority", "invariant-failed"),
-            ("", "SECPAL_TARGET_ERR_V2:1:243", "qualify-quadlet-runtime", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:242", "qualify-quadlet-daemon-reload", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:243", "qualify-quadlet-start", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:244", "qualify-quadlet-active-state", "command-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:251", "qualify-selinux-storage", "command-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:257", "qualify-workload-primary", "command-failed"),
             ("ERROR: representative rootless workload is not effectively seccomp-confined.", "", "qualify-seccomp", "invariant-failed"),
@@ -289,7 +293,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     def test_helper_frames_resolve_only_through_reviewed_outer_call_sites(self) -> None:
         cases = (
             ("qualify-rootless-runtime", (40, 49, 183)),
-            ("qualify-quadlet-runtime", (53, 243)),
+            ("qualify-quadlet-daemon-reload", (53, 242)),
+            ("qualify-quadlet-start", (53, 243)),
+            ("qualify-quadlet-active-state", (53, 244)),
             ("qualify-workload-primary", (40, 49, 257)),
             ("qualify-workload-secondary", (40, 49, 269)),
             ("qualify-selinux-storage", (40, 49, 271)),
@@ -339,6 +345,24 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             ("qualification-harness", "unclassified-target-failure"),
             self.classify(trace="SECPAL_TARGET_ERR_V2:1:183,243"),
         )
+        for line, operation in (
+            (242, "qualify-quadlet-daemon-reload"),
+            (243, "qualify-quadlet-start"),
+            (244, "qualify-quadlet-active-state"),
+        ):
+            with self.subTest(operation=operation):
+                self.assertEqual(
+                    (operation, "command-failed"),
+                    self.classify(
+                        trace=f"SECPAL_TARGET_ERR_V2:1:{line},{line}"
+                    ),
+                )
+        for frames in ("242,243", "243,244", "242,244"):
+            with self.subTest(frames=frames):
+                self.assertEqual(
+                    ("qualification-harness", "unclassified-target-failure"),
+                    self.classify(trace=f"SECPAL_TARGET_ERR_V2:1:{frames}"),
+                )
 
     def test_explicit_message_and_stack_must_agree(self) -> None:
         self.assertEqual(
