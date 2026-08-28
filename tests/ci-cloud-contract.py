@@ -1036,6 +1036,41 @@ class CloudCIContractTests(unittest.TestCase):
             "Discard target-qualification failure",
         )
 
+    def test_static_contract_rejects_target_call_stack_coverage_regressions(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/rocky-target-qualification-trace.sh",
+            '"${BASH_LINENO[@]}"',
+            '"${BASH_LINENO[0]}"',
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/rocky-target-qualification-trace.sh",
+            "if ((frame_count >= 8)); then",
+            "if false; then",
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/rocky-target-qualification-trace.sh",
+            'local frames=""',
+            'local frames="${FUNCNAME[*]}"',
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            'LINE_RULES = (\n    (117, 123, "qualify-host-identity"),',
+            'LINE_RULES = (\n    (48, 50, "qualify-rootless-runtime"),\n'
+            '    (117, 123, "qualify-host-identity"),',
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            "if len(explicit) == 1 and len(traced_operations) > 1:",
+            "if False:",
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            'EXPECTED_TARGET_SHA = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"',
+            'EXPECTED_TARGET_SHA = ""',
+        )
+
     def test_gcp_provider_disables_automatic_attribution_label(self) -> None:
         versions = (ROOT / "infra/ci-cloud/gcp/versions.tf").read_text(
             encoding="utf-8"

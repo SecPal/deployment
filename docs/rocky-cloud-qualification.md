@@ -98,6 +98,24 @@ failures remain `qualification-harness/unclassified-target-failure`. The
 transport retains only the operation, closed reason, exit status, run bindings,
 and bounded diagnostic-input hash and length—not target stdout or stderr.
 
+The trusted Bash trace uses `SECPAL_TARGET_ERR_V2`: one numeric exit status and
+at most eight numeric `BASH_LINENO` frames. The classifier ignores generic
+helper implementation frames and resolves only immutable reviewed outer call
+sites under the exact target and harness hashes. Repeated frames agreeing on one
+operation are one decision; zero mapped operations, conflicting operations, or
+conflict with an explicit reviewed message remain fail-closed. V1 single-frame
+traces are not a current emission or validation surface; historical artifacts
+retain only their already validated input digest and length.
+
+The exact harness helper audit assigns `read_os_release_value` and unconditional
+uses of `run_as_service_account`, `rootless_podman`, and `user_systemctl` to
+their semantic callers through that stack. Negated/conditional helper uses and
+`matching_marker_avc` already emit finite target messages when they reject.
+`cleanup` and cleanup-time helper calls are not primary target predicates;
+trusted post-harness admission owns cleanup completeness. A generic helper is
+never mapped directly because the same helper serves runtime, fixture,
+Quadlet, workload, SELinux, AVC, fallback, and cleanup boundaries.
+
 Normal and failure cleanup use `tofu destroy` against the saved state. The Rocky
 janitor independently revalidates the complete ownership description or label
 set immediately before each ordered deletion. A prefix is never ownership, and

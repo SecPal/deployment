@@ -20,6 +20,8 @@ MAX_STDOUT_BYTES = 65_536
 MAX_TRACE_BYTES = 4_096
 MAX_ARTIFACT_BYTES = 2_048
 MAX_CAPTURE_FILE_BYTES = 65_536
+MAX_TRACE_FRAMES = 8
+MAX_TRACE_LINE = 9_999
 
 OPERATIONS = frozenset(
     {
@@ -125,7 +127,10 @@ LINE_RULES = (
     (337, 337, "qualification-harness"),
 )
 
-TRACE_PATTERN = re.compile(r"^SECPAL_TARGET_ERR_V1:([0-9]{1,4}):([1-9][0-9]{0,2})$")
+TRACE_PATTERN = re.compile(
+    r"^SECPAL_TARGET_ERR_V2:([1-9][0-9]{0,2}):"
+    r"([1-9][0-9]{0,3}(?:,[1-9][0-9]{0,3}){0,7})$"
+)
 MARKER_PATTERN = re.compile(
     r"^(qualification-harness|qualify-[a-z0-9-]+) "
     r"(invariant-failed|command-failed|representation-invalid|cleanup-failed)$"
@@ -139,6 +144,27 @@ def operation_for_line(line: int) -> str | None:
         if first <= line <= last:
             return operation
     return None
+
+
+def trace_operations(trace_text: str, exit_status: int) -> tuple[set[str], bool]:
+    operations: set[str] = set()
+    if not trace_text:
+        return operations, True
+    for raw_line in trace_text.splitlines():
+        match = TRACE_PATTERN.fullmatch(raw_line)
+        if match is None or int(match.group(1)) != exit_status:
+            return set(), False
+        frames = match.group(2).split(",")
+        if not 1 <= len(frames) <= MAX_TRACE_FRAMES:
+            return set(), False
+        for raw_frame in frames:
+            line = int(raw_frame)
+            if not 1 <= line <= MAX_TRACE_LINE:
+                return set(), False
+            operation = operation_for_line(line)
+            if operation is not None:
+                operations.add(operation)
+    return operations, True
 
 
 def classify_failure(
@@ -159,32 +185,35 @@ def classify_failure(
         return "qualification-harness", "unclassified-target-failure"
     if not target_bound:
         return "qualification-harness", "representation-invalid"
-    if exit_status in (124, 137):
-        return "qualification-harness", "timeout"
     try:
         text = stdout.decode("utf-8")
         trace_text = trace.decode("ascii")
     except UnicodeDecodeError:
         return "qualification-harness", "representation-invalid"
+    traced_operations, trace_valid = trace_operations(trace_text, exit_status)
+    if not trace_valid:
+        return "qualification-harness", "representation-invalid"
+    if exit_status in (124, 137):
+        return "qualification-harness", "timeout"
 
     explicit = {
         (operation, reason)
         for prefix, operation, reason in EXPLICIT_RULES
         if any(line.startswith(prefix) for line in text.splitlines())
     }
-    if len(explicit) == 1:
-        return next(iter(explicit))
     if len(explicit) > 1:
         return "qualification-harness", "unclassified-target-failure"
 
-    traced_operations: set[str] = set()
-    for raw_line in trace_text.splitlines():
-        match = TRACE_PATTERN.fullmatch(raw_line)
-        if match is None or int(match.group(2)) != exit_status:
-            continue
-        operation = operation_for_line(int(match.group(1)))
-        if operation is not None:
-            traced_operations.add(operation)
+    if len(explicit) == 1 and len(traced_operations) == 1:
+        explicit_result = next(iter(explicit))
+        traced_operation = next(iter(traced_operations))
+        if explicit_result[0] != traced_operation:
+            return "qualification-harness", "unclassified-target-failure"
+        return explicit_result
+    if len(explicit) == 1 and len(traced_operations) > 1:
+        return "qualification-harness", "unclassified-target-failure"
+    if len(explicit) == 1:
+        return next(iter(explicit))
     if len(traced_operations) == 1:
         return traced_operations.pop(), "command-failed"
     return "qualification-harness", "unclassified-target-failure"

@@ -60,6 +60,125 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             trusted_marker=marker,
         )
 
+    def run_traced_bash(
+        self, script: str
+    ) -> tuple[subprocess.CompletedProcess[bytes], str]:
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / "trace"
+            with trace.open("wb") as descriptor:
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    check=False,
+                    env={**os.environ, "BASH_ENV": str(TRACE)},
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    pass_fds=(descriptor.fileno(),),
+                    close_fds=True,
+                    preexec_fn=lambda: os.dup2(descriptor.fileno(), 3),
+                )
+            return result, trace.read_text(encoding="ascii")
+
+    def test_real_bash_trace_retains_bounded_semantic_call_stack(self) -> None:
+        cases = (
+            ("set -eEuo pipefail\nfalse\n", (2,)),
+            (
+                "set -eEuo pipefail\nhelper() {\n  false\n}\nhelper\n",
+                (3, 5),
+            ),
+            (
+                "set -eEuo pipefail\ninner() {\n  false\n}\n"
+                "outer() {\n  inner\n}\nouter\n",
+                (3, 6, 8),
+            ),
+        )
+        for script, required_lines in cases:
+            with self.subTest(required_lines=required_lines):
+                result, trace = self.run_traced_bash(script)
+                self.assertEqual(1, result.returncode)
+                match = self.classifier.TRACE_PATTERN.fullmatch(trace.strip())
+                self.assertIsNotNone(match)
+                self.assertEqual(1, int(match.group(1)))
+                frames = tuple(int(value) for value in match.group(2).split(","))
+                self.assertLessEqual(len(frames), self.classifier.MAX_TRACE_FRAMES)
+                for line in required_lines:
+                    self.assertIn(line, frames)
+
+    def test_real_bash_helper_failures_classify_by_outer_semantic_call_site(self) -> None:
+        definitions = {
+            27: "read_os_release_value() {",
+            28: "  false",
+            29: "}",
+            39: "run_as_service_account() {",
+            40: "  false",
+            41: "}",
+            48: "rootless_podman() {",
+            49: "  run_as_service_account",
+            50: "}",
+            52: "user_systemctl() {",
+            53: "  false",
+            54: "}",
+        }
+        cases = (
+            (117, 'value="$(read_os_release_value)"', "qualify-host-identity"),
+            (183, "rootless_podman", "qualify-rootless-runtime"),
+            (243, "user_systemctl", "qualify-quadlet-runtime"),
+            (257, "rootless_podman", "qualify-workload-primary"),
+            (269, "rootless_podman", "qualify-workload-secondary"),
+            (271, "rootless_podman", "qualify-selinux-storage"),
+        )
+        for call_line, command, operation in cases:
+            lines = ["set -eEuo pipefail"] + [""] * (call_line - 1)
+            for line_number, source in definitions.items():
+                lines[line_number - 1] = source
+            lines[call_line - 1] = command
+            with self.subTest(operation=operation):
+                result, trace = self.run_traced_bash("\n".join(lines) + "\n")
+                self.assertEqual(1, result.returncode)
+                self.assertEqual(
+                    (operation, "command-failed"),
+                    self.classify(trace=trace),
+                )
+
+    def test_reachable_bash_control_constructs_preserve_closed_diagnostics(self) -> None:
+        definitions = {
+            39: "run_as_service_account() {",
+            40: "  false",
+            41: "}",
+            48: "rootless_podman() {",
+            49: "  run_as_service_account",
+            50: "}",
+        }
+        for call_line, command, operation in (
+            (183, 'value="$(rootless_podman)"', "qualify-rootless-runtime"),
+            (271, "rootless_podman | cat", "qualify-selinux-storage"),
+        ):
+            lines = ["set -eEuo pipefail"] + [""] * (call_line - 1)
+            for line_number, source in definitions.items():
+                lines[line_number - 1] = source
+            lines[call_line - 1] = command
+            with self.subTest(operation=operation):
+                result, trace = self.run_traced_bash("\n".join(lines) + "\n")
+                self.assertEqual(1, result.returncode)
+                self.assertEqual(
+                    (operation, "command-failed"),
+                    self.classify(trace=trace),
+                )
+
+        conditional = (
+            "set -eEuo pipefail\nhelper() { false; }\n"
+            "if ! helper; then\n"
+            "  printf 'ERROR: service-account home is not usable by secpal-runtime\\n'\n"
+            "  exit 1\n"
+            "fi\n"
+        )
+        result, trace = self.run_traced_bash(conditional)
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", trace)
+        self.assertEqual(
+            ("qualify-service-account", "invariant-failed"),
+            self.classify(result.stdout.decode("utf-8"), trace),
+        )
+
     def test_every_reviewed_semantic_surface_has_an_exact_failure_identity(self) -> None:
         cases = (
             ("NOT RUN: Rocky Linux 10.2 native qualification requires ID=rocky", "", "qualify-host-identity", "invariant-failed"),
@@ -67,18 +186,18 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             ("ERROR: --image must be a fully qualified, pre-staged digest reference.", "", "qualify-fixture-reference", "invariant-failed"),
             ("ERROR: required service account does not exist: secpal-runtime", "", "qualify-service-account", "invariant-failed"),
             ("ERROR: SELinux is not Enforcing.", "", "qualify-selinux-host", "invariant-failed"),
-            ("", "SECPAL_TARGET_ERR_V1:162:1", "qualify-package-prerequisites", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:162", "qualify-package-prerequisites", "command-failed"),
             ("ERROR: unsupported native architecture: ppc64le", "", "qualify-native-architecture", "invariant-failed"),
             ("ERROR: unified cgroup v2 is not effective.", "", "qualify-cgroup", "invariant-failed"),
             ("ERROR: rootless Podman does not select crun.", "", "qualify-rootless-runtime", "invariant-failed"),
             ("ERROR: digest-only fixture image is not pre-staged for the service account.", "", "qualify-fixture-presence", "invariant-failed"),
-            ("", "SECPAL_TARGET_ERR_V1:196:1", "qualify-fixture-setup", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:196", "qualify-fixture-setup", "command-failed"),
             ("ERROR: service account can write the administrator Quadlet directory.", "", "qualify-quadlet-authority", "invariant-failed"),
-            ("", "SECPAL_TARGET_ERR_V1:243:1", "qualify-quadlet-runtime", "command-failed"),
-            ("", "SECPAL_TARGET_ERR_V1:251:1", "qualify-selinux-storage", "command-failed"),
-            ("", "SECPAL_TARGET_ERR_V1:257:1", "qualify-workload-primary", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:243", "qualify-quadlet-runtime", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:251", "qualify-selinux-storage", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:257", "qualify-workload-primary", "command-failed"),
             ("ERROR: representative rootless workload is not effectively seccomp-confined.", "", "qualify-seccomp", "invariant-failed"),
-            ("", "SECPAL_TARGET_ERR_V1:269:1", "qualify-workload-secondary", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:269", "qualify-workload-secondary", "command-failed"),
             ("ERROR: representative SELinux MCS boundaries are not distinct and effective.", "", "qualify-mcs-relationship", "invariant-failed"),
             ("ERROR: cross-boundary read unexpectedly succeeded.", "", "qualify-cross-mcs-denial", "invariant-failed"),
             ("ERROR: cross-boundary failure lacks a matching SELinux AVC denial.", "", "qualify-avc-correlation", "invariant-failed"),
@@ -117,7 +236,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         )
         self.assertEqual(
             ("qualification-harness", "unclassified-target-failure"),
-            self.classify(trace="SECPAL_TARGET_ERR_V1:243:1\nSECPAL_TARGET_ERR_V1:257:1"),
+            self.classify(trace="SECPAL_TARGET_ERR_V2:1:243,257"),
         )
 
     def test_timeout_and_malformed_representations_fail_closed(self) -> None:
@@ -140,7 +259,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             with self.subTest(line=first):
                 self.assertEqual(
                     (operation, "command-failed"),
-                    self.classify(trace=f"SECPAL_TARGET_ERR_V1:{first}:1"),
+                    self.classify(trace=f"SECPAL_TARGET_ERR_V2:1:{first}"),
                 )
                 self.assertLessEqual(first, last)
 
@@ -164,8 +283,104 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertRegex(
                 trace.read_text(encoding="ascii"),
-                r"^SECPAL_TARGET_ERR_V1:[0-9]+:1\n$",
+                r"^SECPAL_TARGET_ERR_V2:1:[0-9]+(?:,[0-9]+){0,7}\n$",
             )
+
+    def test_helper_frames_resolve_only_through_reviewed_outer_call_sites(self) -> None:
+        cases = (
+            ("qualify-rootless-runtime", (40, 49, 183)),
+            ("qualify-quadlet-runtime", (53, 243)),
+            ("qualify-workload-primary", (40, 49, 257)),
+            ("qualify-workload-secondary", (40, 49, 269)),
+            ("qualify-selinux-storage", (40, 49, 271)),
+        )
+        for operation, frames in cases:
+            with self.subTest(operation=operation):
+                trace = "SECPAL_TARGET_ERR_V2:1:" + ",".join(map(str, frames))
+                self.assertEqual(
+                    (operation, "command-failed"), self.classify(trace=trace)
+                )
+                for helper_line in frames[:-1]:
+                    self.assertIsNone(self.classifier.operation_for_line(helper_line))
+
+        self.assertEqual(
+            ("qualify-service-account", "invariant-failed"),
+            self.classify("ERROR: service-account home is not usable by secpal-runtime"),
+        )
+        explicit_conditionals = (
+            (
+                "ERROR: digest-only fixture image is not pre-staged",
+                "qualify-fixture-presence",
+            ),
+            (
+                "ERROR: cross-boundary read unexpectedly succeeded.",
+                "qualify-cross-mcs-denial",
+            ),
+            (
+                "ERROR: cross-boundary failure lacks a matching SELinux AVC denial.",
+                "qualify-avc-correlation",
+            ),
+            (
+                "ERROR: effective runtime facts contain a forbidden security fallback.",
+                "qualify-runtime-fallback-absence",
+            ),
+        )
+        for message, operation in explicit_conditionals:
+            self.assertEqual(
+                (operation, "invariant-failed"), self.classify(message)
+            )
+
+    def test_same_operation_frames_agree_but_different_operations_are_ambiguous(self) -> None:
+        self.assertEqual(
+            ("qualify-rootless-runtime", "command-failed"),
+            self.classify(trace="SECPAL_TARGET_ERR_V2:1:40,49,183,187"),
+        )
+        self.assertEqual(
+            ("qualification-harness", "unclassified-target-failure"),
+            self.classify(trace="SECPAL_TARGET_ERR_V2:1:183,243"),
+        )
+
+    def test_explicit_message_and_stack_must_agree(self) -> None:
+        self.assertEqual(
+            ("qualify-selinux-host", "invariant-failed"),
+            self.classify(
+                "ERROR: SELinux is not Enforcing.",
+                "SECPAL_TARGET_ERR_V2:1:153",
+            ),
+        )
+        self.assertEqual(
+            ("qualification-harness", "unclassified-target-failure"),
+            self.classify(
+                "ERROR: SELinux is not Enforcing.",
+                "SECPAL_TARGET_ERR_V2:1:179",
+            ),
+        )
+
+    def test_v2_trace_bounds_and_unknown_frames_fail_closed(self) -> None:
+        self.assertEqual(
+            ("qualification-harness", "unclassified-target-failure"),
+            self.classify(trace="SECPAL_TARGET_ERR_V2:1:40,49,9999"),
+        )
+        malformed = (
+            "SECPAL_TARGET_ERR_V1:183:1",
+            "SECPAL_TARGET_ERR_V2:0:183",
+            "SECPAL_TARGET_ERR_V2:2:183",
+            "SECPAL_TARGET_ERR_V2:1:183,command",
+            "SECPAL_TARGET_ERR_V2:1:" + ",".join(["183"] * 9),
+        )
+        for trace in malformed:
+            with self.subTest(trace=trace):
+                self.assertEqual(
+                    ("qualification-harness", "representation-invalid"),
+                    self.classify(trace=trace),
+                )
+        self.assertEqual(
+            ("qualification-harness", "representation-invalid"),
+            self.classify(
+                "ERROR: SELinux is not Enforcing.",
+                "SECPAL_TARGET_ERR_V1:153:1",
+            ),
+        )
 
     def test_failure_schema_is_closed_bounded_and_run_bound(self) -> None:
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
