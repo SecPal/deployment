@@ -20,7 +20,14 @@
     "schema_version": { "const": 1 },
     "phase": { "const": "qualification-readiness" },
     "operation": {
-      "enum": ["ssh-transport", "ssh-authentication", "guest-state"]
+      "enum": [
+        "ssh-transport",
+        "ssh-authentication",
+        "guest-state",
+        "runtime-user-manager",
+        "runtime-user-bus",
+        "runtime-user-control"
+      ]
     },
     "reason": {
       "enum": ["not-ready-timeout", "missing-or-stale", "binding-mismatch"]
@@ -53,6 +60,20 @@
           "reason": { "enum": ["missing-or-stale", "binding-mismatch"] }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "runtime-user-manager",
+              "runtime-user-bus",
+              "runtime-user-control"
+            ]
+          }
+        }
+      },
+      "then": { "properties": { "reason": { "const": "not-ready-timeout" } } }
     }
   ]
 }

@@ -147,6 +147,7 @@ resource "google_compute_instance" "qualification" {
     secpal-rocky-ssh-public-key          = trimspace(var.ssh_public_key)
     "startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-rocky-host.tftpl", {
       prepare_script_base64gzip                      = base64gzip(file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh"))
+      readiness_publisher_base64gzip                 = base64gzip(file("${path.module}/../../../scripts/ci-cloud/publish-rocky-qualification-readiness.py"))
       target_runner_base64gzip                       = base64gzip(file("${path.module}/../../../scripts/ci-cloud/run-rocky-target-qualification.sh"))
       target_failure_classifier_base64gzip           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/classify-rocky-target-qualification-failure.py"))
       target_trace_base64gzip                        = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-target-qualification-trace.sh"))

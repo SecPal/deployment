@@ -13,12 +13,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WAITER = ROOT / "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
 WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
 BOOTSTRAP = ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl"
 TRANSITION = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"
+PUBLISHER = ROOT / "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
+READINESS_SCHEMA = ROOT / "schemas/rocky-cloud-qualification-readiness.schema.json"
 
 
 def load_waiter():
@@ -57,6 +61,9 @@ class RockyQualificationReadinessTests(unittest.TestCase):
             "ssh_public_key_sha256": self.key_digest,
             "cloud_identity_absent": True,
             "guest_startup_complete": True,
+            "runtime_user_manager_active": True,
+            "runtime_user_bus_available": True,
+            "runtime_user_control_reachable": True,
         }
         marker.update(changes)
         return marker
@@ -135,6 +142,52 @@ class RockyQualificationReadinessTests(unittest.TestCase):
                 (failure.exception.operation, failure.exception.reason),
             )
 
+    def test_runtime_user_readiness_failures_remain_independently_actionable(self) -> None:
+        cases = (
+            (
+                {"guest_startup_complete": False, "runtime_user_manager_active": False},
+                "runtime-user-manager",
+            ),
+            (
+                {"guest_startup_complete": False, "runtime_user_bus_available": False},
+                "runtime-user-bus",
+            ),
+            (
+                {"guest_startup_complete": False, "runtime_user_control_reachable": False},
+                "runtime-user-control",
+            ),
+        )
+        for mutation, operation in cases:
+            with self.subTest(operation=operation), self.assertRaises(
+                self.module.ReadinessFailure
+            ) as failure:
+                self.run_sequence(
+                    [self.module.ProbeResult.ready(self.boot, self.marker(**mutation))]
+                )
+            self.assertEqual(
+                (operation, "not-ready-timeout"),
+                (failure.exception.operation, failure.exception.reason),
+            )
+
+    def test_legacy_missing_mistyped_and_extra_runtime_facts_fail_closed(self) -> None:
+        for mutation in (
+            {"runtime_user_manager_active": None},
+            {"runtime_user_bus_available": "true"},
+            {"runtime_user_control_reachable": 1},
+            {"unexpected": True},
+        ):
+            marker = self.marker(**mutation)
+            if mutation == {"runtime_user_manager_active": None}:
+                marker.pop("runtime_user_manager_active")
+            with self.subTest(mutation=mutation), self.assertRaises(
+                self.module.ReadinessFailure
+            ) as failure:
+                self.run_sequence([self.module.ProbeResult.ready(self.boot, marker)])
+            self.assertEqual(
+                ("guest-state", "binding-mismatch"),
+                (failure.exception.operation, failure.exception.reason),
+            )
+
     def test_current_marker_is_exact_and_order_independent(self) -> None:
         reversed_marker = dict(reversed(list(self.marker().items())))
         result, calls = self.run_sequence(
@@ -145,6 +198,7 @@ class RockyQualificationReadinessTests(unittest.TestCase):
 
     def test_startup_and_workflow_enforce_the_new_lifecycle_boundary(self) -> None:
         bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+        publisher = PUBLISHER.read_text(encoding="utf-8")
         transition = TRANSITION.read_text(encoding="utf-8")
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("qualification-readiness.json", bootstrap)
@@ -154,8 +208,13 @@ class RockyQualificationReadinessTests(unittest.TestCase):
         )
         self.assertLess(
             bootstrap.index("/usr/local/sbin/secpal-prepare-rocky-host"),
-            bootstrap.index('mv -T -- "$readiness_temporary" "$qualification_readiness"'),
+            bootstrap.index("/usr/local/sbin/secpal-publish-rocky-qualification-readiness"),
         )
+        self.assertIn("runtime_user_manager_active", publisher)
+        self.assertIn("runtime_user_bus_available", publisher)
+        self.assertIn("runtime_user_control_reachable", publisher)
+        self.assertNotIn("daemon-reload", publisher)
+        self.assertNotRegex(publisher, r"(?m)^\s*(?:time\.)?sleep\(60\)")
         self.assertIn("secpal-rocky-access-run-id", transition)
         waiter = "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
         target = "sudo /usr/local/sbin/secpal-run-rocky-target-qualification"
@@ -186,6 +245,23 @@ class RockyQualificationReadinessTests(unittest.TestCase):
             self.assertNotIn("stdout", document)
             self.assertNotIn("stderr", document)
             self.assertNotIn("command", document)
+
+    def test_success_schema_requires_exact_true_runtime_user_facts(self) -> None:
+        schema = json.loads(READINESS_SCHEMA.read_text(encoding="utf-8"))
+        validator = Draft202012Validator(schema)
+        self.assertEqual([], list(validator.iter_errors(self.marker())))
+        for mutation in (
+            {"runtime_user_manager_active": False},
+            {"runtime_user_bus_available": False},
+            {"runtime_user_control_reachable": False},
+            {"runtime_user_manager_active": "true"},
+            {"unexpected": True},
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertTrue(list(validator.iter_errors(self.marker(**mutation))))
+        missing = self.marker()
+        missing.pop("runtime_user_manager_active")
+        self.assertTrue(list(validator.iter_errors(missing)))
 
     def test_unreviewed_probe_cadence_is_rejected_before_network_access(self) -> None:
         result = subprocess.run(

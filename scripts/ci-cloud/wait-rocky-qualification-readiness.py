@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from typing import Callable, NamedTuple
 
+from jsonschema import Draft202012Validator
+
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 NUMBER = re.compile(r"^[1-9][0-9]{0,19}$")
@@ -41,7 +43,14 @@ MARKER_KEYS = {
     "ssh_public_key_sha256",
     "cloud_identity_absent",
     "guest_startup_complete",
+    "runtime_user_manager_active",
+    "runtime_user_bus_available",
+    "runtime_user_control_reachable",
 }
+READINESS_SCHEMA = (
+    Path(__file__).resolve().parents[2]
+    / "schemas/rocky-cloud-qualification-readiness.schema.json"
+)
 REMOTE_READ = (
     "boot=$(cat /proc/sys/kernel/random/boot_id) || exit 1; "
     "printf '%s\\n' \"$boot\"; "
@@ -112,10 +121,31 @@ def admit_marker(
         "access_run_attempt": expected.access_run_attempt,
         "boot_id": current_boot_id,
         "ssh_public_key_sha256": expected.ssh_public_key_sha256,
-        "cloud_identity_absent": True,
-        "guest_startup_complete": True,
     }
     if any(document.get(key) != value for key, value in bindings.items()):
+        raise ReadinessFailure("guest-state", "binding-mismatch")
+    boolean_fields = (
+        "cloud_identity_absent",
+        "guest_startup_complete",
+        "runtime_user_manager_active",
+        "runtime_user_bus_available",
+        "runtime_user_control_reachable",
+    )
+    if any(type(document.get(key)) is not bool for key in boolean_fields):
+        raise ReadinessFailure("guest-state", "binding-mismatch")
+    if document["cloud_identity_absent"] is not True:
+        raise ReadinessFailure("guest-state", "binding-mismatch")
+    if document["guest_startup_complete"] is False:
+        for field, operation in (
+            ("runtime_user_manager_active", "runtime-user-manager"),
+            ("runtime_user_bus_available", "runtime-user-bus"),
+            ("runtime_user_control_reachable", "runtime-user-control"),
+        ):
+            if document[field] is False:
+                raise ReadinessFailure(operation, "not-ready-timeout")
+        raise ReadinessFailure("guest-state", "binding-mismatch")
+    schema = json.loads(READINESS_SCHEMA.read_text(encoding="utf-8"))
+    if next(Draft202012Validator(schema).iter_errors(document), None) is not None:
         raise ReadinessFailure("guest-state", "binding-mismatch")
     return document
 

@@ -2045,6 +2045,14 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_failure_trace = read(
         root, "scripts/ci-cloud/rocky-target-qualification-trace.sh"
     )
+    bootstrap = read(root, "scripts/ci-cloud/bootstrap-rocky-host.tftpl")
+    readiness_publisher = read(
+        root, "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
+    )
+    readiness_waiter = read(
+        root, "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
+    )
+    main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
     for forbidden in (
         "id-token",
@@ -2111,6 +2119,60 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "validate-target-source-failure" in target_text,
         "target source diagnostics must remain after readiness and before evidence admission",
     )
+    readiness_facts = {
+        "runtime_user_manager_active",
+        "runtime_user_bus_available",
+        "runtime_user_control_reachable",
+    }
+    require(
+        literal_constant(readiness_publisher, "WAIT_SECONDS") == 60
+        and literal_constant(readiness_publisher, "PROBE_INTERVAL_SECONDS") == 5
+        and literal_constant(readiness_publisher, "MAX_PROBES") == 13
+        and '"systemctl", "is-active", "--quiet", f"user@{runtime_uid}.service"'
+        in readiness_publisher
+        and 'stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)'
+        in readiness_publisher
+        and 'f"--machine={RUNTIME_ACCOUNT}@.host"' in readiness_publisher
+        and '"show-environment"' in readiness_publisher
+        and all(readiness_publisher.count(f'"{fact}"') == 1 for fact in readiness_facts)
+        and '"runtime_user_manager_active": result.observation.manager_active'
+        in readiness_publisher
+        and '"runtime_user_bus_available": result.observation.bus_available'
+        in readiness_publisher
+        and '"runtime_user_control_reachable": result.observation.control_reachable'
+        in readiness_publisher
+        and "loginctl" not in readiness_publisher
+        and "runtime.systemd_user" not in readiness_publisher
+        and "daemon-reload" not in readiness_publisher
+        and all(
+            operation not in readiness_publisher
+            for operation in ('"start"', '"restart"', '"stop"', '"reset-failed"')
+        )
+        and "time.sleep(WAIT_SECONDS)" not in readiness_publisher,
+        "current-boot runtime-user readiness must remain bounded, independent, and non-mutating",
+    )
+    require(
+        all(f'"{fact}"' in readiness_waiter for fact in readiness_facts)
+        and 'Path(__file__).resolve().parents[2]' in readiness_waiter
+        and "rocky-cloud-qualification-readiness.schema.json" in readiness_waiter
+        and '"runtime-user-manager"' in readiness_waiter
+        and '"runtime-user-bus"' in readiness_waiter
+        and '"runtime-user-control"' in readiness_waiter,
+        "qualification admission must preserve each closed runtime-user boundary",
+    )
+    require(
+        "readiness_publisher_base64gzip" in main
+        and "secpal-publish-rocky-qualification-readiness" in bootstrap
+        and '--boot-id "$boot_id"' in bootstrap
+        and readiness_publisher.count("current_boot_id() != arguments.boot_id") == 2
+        and "secpal-publish-rocky-qualification-readiness" not in target_runner
+        and bootstrap.index('rm -f -- "$qualification_readiness"')
+        < bootstrap.index("/usr/local/sbin/secpal-prepare-rocky-host")
+        < bootstrap.index('boot_id="$(cat /proc/sys/kernel/random/boot_id)"')
+        < bootstrap.rindex("/usr/local/sbin/secpal-publish-rocky-qualification-readiness")
+        and "guest_startup_complete\":true" not in bootstrap,
+        "startup must bind one invalidated current-boot marker to runtime-user admission",
+    )
     require(
         "EXPECTED_TARGET_SHA = \"d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6\""
         in target_failure_classifier
@@ -2175,7 +2237,6 @@ def validate_rocky_control_plane(root: Path) -> None:
         "credentials_json" not in text and "service_account_key" not in text,
         "static GCP keys are forbidden",
     )
-    main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     variables = read(root, "infra/ci-cloud/gcp-rocky/variables.tf")
     versions = read(root, "infra/ci-cloud/gcp-rocky/versions.tf")
     require(
@@ -2200,6 +2261,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         "rocky-cloud-continuation.schema.json",
         "rocky-cloud-preparation-evidence.schema.json",
         "rocky-cloud-qualification-evidence.schema.json",
+        "rocky-cloud-qualification-readiness.schema.json",
         "rocky-cloud-qualification-readiness-failure.schema.json",
         "rocky-cloud-target-source-failure.schema.json",
         "rocky-cloud-target-qualification-failure.schema.json",
