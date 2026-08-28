@@ -675,6 +675,8 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "reload_journal_reason": "none",
             "reload_access_avc_observed": False,
             "reload_access_avc_ambiguous": False,
+            "reload_selinux_contexts_admitted": True,
+            "reload_access_avc_matches_contexts": True,
         }
         cases = (
             ("reload-run-space-rejected", {"run_space_sufficient": False}),
@@ -735,6 +737,18 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         )
         self.assertEqual("diagnostic-unavailable", classification)
         self.assertEqual("reload-journal-timeout", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{**baseline, "reload_selinux_contexts_admitted": False}
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-selinux-context-observation-unavailable", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{**baseline, "reload_access_avc_matches_contexts": False}
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-selinux-observation-ambiguous", reason)
 
     def test_reload_selinux_access_is_distinct_from_quadlet_avc(self) -> None:
         payload = b"""type=AVC msg=audit(1.2:3): avc:  denied  { reload } for  pid=7 scontext=system_u:system_r:unconfined_service_t:s0 tcontext=system_u:system_r:init_t:s0 tclass=system permissive=0

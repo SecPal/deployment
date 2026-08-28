@@ -2396,6 +2396,16 @@ def validate_rocky_control_plane(root: Path) -> None:
             'generator_ambiguous != (generator_reason != "none")'
         )
         == 2
+        and target_failure_classifier.count(
+            'reload_access_avc["source_type"]'
+        )
+        == 2
+        and target_failure_classifier.count(
+            'reload_access_avc["target_type"]'
+        )
+        == 2
+        and 'reload-selinux-context-observation-unavailable'
+        in target_failure_classifier
         and "selinux_avc_ambiguous" in target_failure_classifier,
         "daemon-reload adjacency admission must preserve the closed fail-safe decision tree",
     )

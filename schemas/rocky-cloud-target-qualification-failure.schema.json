@@ -377,6 +377,7 @@
             "reload-candidate-count-exceeded",
             "reload-manager-pid-unavailable",
             "reload-multiple-causes",
+            "reload-selinux-context-observation-unavailable",
             "reload-selinux-observation-ambiguous",
             "reload-authorization-observation-unavailable",
             "reload-main-loop-entry-not-observed",

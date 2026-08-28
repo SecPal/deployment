@@ -1190,6 +1190,11 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 classifier,
+                'reload_access_avc["source_type"]',
+                'observation["control_process_selinux_type"]',
+            ),
+            (
+                classifier,
                 'return "reload-authorization-denied", "none"',
                 'return "reload-reply-transport-failed", "none"',
             ),

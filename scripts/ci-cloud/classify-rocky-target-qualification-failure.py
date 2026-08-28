@@ -539,6 +539,8 @@ def daemon_reload_classification(
     reload_journal_reason: str,
     reload_access_avc_observed: bool,
     reload_access_avc_ambiguous: bool,
+    reload_selinux_contexts_admitted: bool,
+    reload_access_avc_matches_contexts: bool,
 ) -> tuple[str, str]:
     if not (manager_active and bus_available and control_reachable):
         return "manager-continuity-lost", "none"
@@ -564,6 +566,10 @@ def daemon_reload_classification(
         return "reload-run-space-rejected", "none"
     if reload_journal_reason != "none":
         return "diagnostic-unavailable", f"reload-{reload_journal_reason}"
+    if not reload_selinux_contexts_admitted:
+        return "diagnostic-unavailable", "reload-selinux-context-observation-unavailable"
+    if not reload_access_avc_matches_contexts:
+        return "diagnostic-unavailable", "reload-selinux-observation-ambiguous"
     if reload_access_avc_ambiguous:
         return "diagnostic-unavailable", "reload-selinux-observation-ambiguous"
     if reload_access_avc_observed or client_error == "selinux-access-denied":
@@ -735,6 +741,19 @@ def admit_daemon_reload_adjacency(
             or reload_access_avc["denied_permission"] != "reload"
         ):
             raise ValueError("SELinux denial is not the exact Reload access check")
+        reload_selinux_contexts_admitted = (
+            observation["control_process_selinux_type"] is not None
+            and observation["manager_process_selinux_type"] is not None
+        )
+        reload_access_avc_matches_contexts = (
+            reload_access_avc is None
+            or (
+                reload_access_avc["source_type"]
+                == observation["control_process_selinux_type"]
+                and reload_access_avc["target_type"]
+                == observation["manager_process_selinux_type"]
+            )
+        )
 
         classification, diagnostic_reason = daemon_reload_classification(
             manager_active=manager_active,
@@ -759,6 +778,8 @@ def admit_daemon_reload_adjacency(
             reload_journal_reason=reload_journal_reason,
             reload_access_avc_observed=reload_access_avc_observed,
             reload_access_avc_ambiguous=reload_access_avc_ambiguous,
+            reload_selinux_contexts_admitted=reload_selinux_contexts_admitted,
+            reload_access_avc_matches_contexts=reload_access_avc_matches_contexts,
         )
 
         return {
@@ -935,6 +956,19 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
             or reload_access_avc["denied_permission"] != "reload"
         ):
             raise ValueError("admitted SELinux denial is not Reload-specific")
+        reload_selinux_contexts_admitted = (
+            document["control_process_selinux_type"] is not None
+            and document["manager_process_selinux_type"] is not None
+        )
+        reload_access_avc_matches_contexts = (
+            reload_access_avc is None
+            or (
+                reload_access_avc["source_type"]
+                == document["control_process_selinux_type"]
+                and reload_access_avc["target_type"]
+                == document["manager_process_selinux_type"]
+            )
+        )
         expected, diagnostic_reason = daemon_reload_classification(
             manager_active=manager_active,
             bus_available=bus_available,
@@ -958,6 +992,8 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
             reload_journal_reason=reload_journal_reason,
             reload_access_avc_observed=reload_access_avc_observed,
             reload_access_avc_ambiguous=reload_access_avc_ambiguous,
+            reload_selinux_contexts_admitted=reload_selinux_contexts_admitted,
+            reload_access_avc_matches_contexts=reload_access_avc_matches_contexts,
         )
         if (
             document["classification"] != expected
