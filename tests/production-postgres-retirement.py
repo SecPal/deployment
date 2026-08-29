@@ -21,13 +21,35 @@ ROOT = Path(__file__).resolve().parents[1]
 RENDERER_PATH = ROOT / "scripts" / "render-production-quadlets.py"
 CONTRACT_PATH = ROOT / "config" / "production" / "state-contract.json"
 QUADLET_ROOT = ROOT / "config" / "production" / "quadlet"
-CURRENT_EXECUTION_PATHS = (
-    ROOT / ".github" / "workflows" / "local-integration.yml",
-    ROOT / "scripts" / "preflight.sh",
-    ROOT / "tests" / "production-state-contract.py",
-    ROOT / "tests" / "production-state-native-lifecycle.sh",
-    ROOT / "tests" / "repository-contract.sh",
+CURRENT_ACCEPTANCE_PATHS = (
+    Path("scripts/preflight.sh"),
+    Path("tests/production-state-contract.py"),
+    Path("tests/production-state-native-lifecycle.sh"),
+    Path("tests/repository-contract.sh"),
 )
+
+
+def current_execution_paths(root: Path) -> tuple[Path, ...]:
+    """Return every current workflow plus the production acceptance entry points."""
+    workflows = root / ".github" / "workflows"
+    workflow_paths = (
+        sorted(
+            path
+            for path in workflows.iterdir()
+            if path.is_file() and path.suffix in {".yaml", ".yml"}
+        )
+        if workflows.is_dir()
+        else []
+    )
+    acceptance_paths = [
+        root / relative
+        for relative in CURRENT_ACCEPTANCE_PATHS
+        if (root / relative).is_file()
+    ]
+    return tuple((*workflow_paths, *acceptance_paths))
+
+
+CURRENT_EXECUTION_PATHS = current_execution_paths(ROOT)
 DELETED_PATHS = (
     ROOT / "config" / "production" / "quadlet" / "secpal-postgres-init.container",
     ROOT / "config" / "production" / "quadlet" / "secpal-postgres.container",
@@ -58,7 +80,7 @@ DIRECT_CONTAINER = re.compile(
 CLIENT_ONLY = re.compile(r"(?<![a-z0-9_])(?:psql|pg_isready|pg_dump|pg_restore)(?![a-z0-9_-])")
 WORKFLOW_VARIABLE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
 SHELL_LITERAL_ASSIGNMENT = re.compile(
-    r"^\s*([A-Za-z_][A-Za-z0-9_]*)="
+    r"^\s*(?:(?:export|readonly)\s+)?([A-Za-z_][A-Za-z0-9_]*)="
     r"(?:\"([^\"\n]*)\"|'([^'\n]*)'|([^\s;&|]+))\s*$"
 )
 
@@ -307,12 +329,32 @@ def renderer_construction_indicators(content: str, renderer_path: Path) -> set[s
 def production_helper_paths(root: Path, authority_content: str) -> list[Path]:
     """Select production helpers without depending on a database filename."""
     scripts = root / "scripts"
-    return sorted(
-        path
-        for path in scripts.iterdir()
-        if path.is_file()
-        and ("production" in path.name or path.name in authority_content)
+    if not scripts.is_dir():
+        return []
+    authority = authority_content + "\n" + "\n".join(
+        path.read_text(encoding="utf-8") for path in current_execution_paths(root)
     )
+    selected: set[Path] = set()
+    while True:
+        discovered = {
+            path
+            for path in scripts.iterdir()
+            if path.is_file()
+            and path not in selected
+            and (
+                "production" in path.name
+                or (
+                    path.suffix == ".sh"
+                    and (path.name in authority or path.relative_to(root).as_posix() in authority)
+                )
+            )
+        }
+        if not discovered:
+            return sorted(selected)
+        selected.update(discovered)
+        authority += "\n" + "\n".join(
+            path.read_text(encoding="utf-8") for path in sorted(discovered)
+        )
 
 
 def load_renderer():
@@ -534,6 +576,47 @@ jobs:
                         workflow_execution_indicators(workflow), set()
                     )
 
+    def test_exported_shell_assignment_cannot_hide_the_server_image(self) -> None:
+        image = (
+            "docker.io/library/postgres@sha256:"
+            "38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
+        )
+        for declaration in ("export", "readonly"):
+            with self.subTest(declaration=declaration):
+                workflow = f"""jobs:
+  reviewed-storage:
+    steps:
+      - run: |
+          {declaration} STORAGE_IMAGE={image}
+          podman run --detach --name secpal-storage "$STORAGE_IMAGE"
+"""
+                self.assertNotEqual(workflow_execution_indicators(workflow), set())
+
+    def test_every_current_workflow_is_retirement_authority(self) -> None:
+        workflow_paths = {
+            path
+            for path in (ROOT / ".github" / "workflows").iterdir()
+            if path.suffix in {".yaml", ".yml"}
+        }
+        self.assertEqual(workflow_paths - set(CURRENT_EXECUTION_PATHS), set())
+
+    def test_acceptance_referenced_shell_helper_cannot_hide_the_server(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            preflight = scripts / "preflight.sh"
+            preflight.write_text("scripts/database-entrypoint.sh\n", encoding="utf-8")
+            helper = scripts / "database-entrypoint.sh"
+            helper.write_text(
+                "#!/bin/bash\n"
+                "podman run --detach --name secpal-db "
+                "docker.io/library/postgres@sha256:"
+                "38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74\n",
+                encoding="utf-8",
+            )
+            self.assertIn(helper, production_helper_paths(root, ""))
+
     def test_imported_image_cannot_hide_a_latent_renderer_branch(self) -> None:
         renderer_branch = RENDERER_PATH.read_text(encoding="utf-8") + """
 from integration_runtime_contract import POSTGRES_IMAGE
@@ -615,6 +698,16 @@ jobs:
           printf 'client configuration only\\n'
 """
         self.assertEqual(workflow_execution_indicators(unused_shell_assignment), set())
+        unused_exported_assignment = """jobs:
+  reviewed-storage:
+    steps:
+      - run: |
+          export STORAGE_IMAGE=docker.io/library/postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          printf 'client configuration only\\n'
+"""
+        self.assertEqual(
+            workflow_execution_indicators(unused_exported_assignment), set()
+        )
         unused_renderer_import = RENDERER_PATH.read_text(encoding="utf-8") + """
 from integration_runtime_contract import POSTGRES_IMAGE as CLIENT_IMAGE
 CLIENT_COMMAND = (\"psql\", \"--host\", \"postgres\")

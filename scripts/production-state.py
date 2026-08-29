@@ -530,6 +530,9 @@ def _validate_secret_deliveries(
     root = Path(contract["secret_policy"]["delivery_root"])
     _assert_safe_component(root, True, 0o710)
     _assert_no_extended_acl(root)
+    retired_server_delivery = root / "postgres"
+    if retired_server_delivery.exists() or retired_server_delivery.is_symlink():
+        fail("retired PostgreSQL server secret delivery remains")
     expected_root_uid = 65534 if namespace_view else 0
     expected_root_gid = 0 if namespace_view else contract["rootless_mapping"]["service_gid"]
     _assert_owner(root, expected_root_uid, expected_root_gid)

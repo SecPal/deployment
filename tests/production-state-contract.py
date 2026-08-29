@@ -545,6 +545,34 @@ class ProductionStateContractTest(unittest.TestCase):
                     contract, namespace_view=True, require_secrets=True
                 )
 
+    def test_retired_postgres_secret_delivery_is_rejected(self) -> None:
+        import copy
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "secrets"
+            root.mkdir(mode=0o710)
+            root.chmod(0o710)
+            contract = copy.deepcopy(self.contract)
+            contract["secret_policy"]["delivery_root"] = os.fspath(root)
+            for delivery_name, delivery in contract["secret_delivery"].items():
+                directory = root / delivery_name
+                delivery["directory"] = os.fspath(directory)
+                directory.mkdir(mode=int(delivery["directory_mode"], 8))
+                directory.chmod(int(delivery["directory_mode"], 8))
+                for name, spec in delivery["files"].items():
+                    path = directory / name
+                    path.write_bytes(b"fixture")
+                    path.chmod(int(spec["mode"], 8))
+            retired = root / "postgres"
+            retired.mkdir(mode=0o710)
+            (retired / "password").write_bytes(b"retired-server-secret\n")
+            (retired / "password").chmod(0o400)
+            with mock.patch.object(self.state, "_assert_owner"):
+                with self.assertRaises(self.state.ContractError):
+                    self.state._validate_secret_deliveries(
+                        contract, namespace_view=True, require_secrets=True
+                    )
+
     def test_atomic_secret_publication_cleans_interruption_and_never_overwrites(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
