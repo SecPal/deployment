@@ -57,6 +57,10 @@ DIRECT_CONTAINER = re.compile(
 )
 CLIENT_ONLY = re.compile(r"(?<![a-z0-9_])(?:psql|pg_isready|pg_dump|pg_restore)(?![a-z0-9_-])")
 WORKFLOW_VARIABLE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+SHELL_LITERAL_ASSIGNMENT = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)="
+    r"(?:\"([^\"\n]*)\"|'([^'\n]*)'|([^\s;&|]+))\s*$"
+)
 
 
 def _code_lines(content: str) -> list[str]:
@@ -135,9 +139,9 @@ def _workflow_environment(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
     return {
-        name: item
+        name: str(item)
         for name, item in value.items()
-        if isinstance(name, str) and isinstance(item, str)
+        if isinstance(name, str) and isinstance(item, (str, int, float, bool))
     }
 
 
@@ -149,22 +153,42 @@ def _resolve_workflow_variables(command: str, environment: dict[str, str]) -> st
     return WORKFLOW_VARIABLE.sub(replace, command)
 
 
+def _shell_execution_indicators(command: str, environment: dict[str, str]) -> set[str]:
+    indicators: set[str] = set()
+    shell_environment = dict(environment)
+    for line in command.replace("\\\n", " ").splitlines():
+        assignment = SHELL_LITERAL_ASSIGNMENT.fullmatch(line)
+        if assignment is not None:
+            value = next(
+                item for item in assignment.groups()[1:] if item is not None
+            )
+            if not WORKFLOW_VARIABLE.search(value) and "${{" not in value:
+                shell_environment[assignment.group(1)] = value
+            continue
+        resolved = _resolve_workflow_variables(line, shell_environment)
+        indicators.update(production_execution_indicators(resolved))
+    return indicators
+
+
 def workflow_execution_indicators(content: str) -> set[str]:
     """Resolve simple workflow environment use inside direct execution steps."""
     loaded = yaml.safe_load(content)
     if not isinstance(loaded, dict) or not isinstance(loaded.get("jobs"), dict):
         return set()
     indicators: set[str] = set()
+    workflow_environment = _workflow_environment(loaded.get("env"))
     for job in loaded["jobs"].values():
         if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
             continue
-        job_environment = _workflow_environment(job.get("env"))
+        job_environment = {
+            **workflow_environment,
+            **_workflow_environment(job.get("env")),
+        }
         for step in job["steps"]:
             if not isinstance(step, dict) or not isinstance(step.get("run"), str):
                 continue
             environment = {**job_environment, **_workflow_environment(step.get("env"))}
-            resolved = _resolve_workflow_variables(step["run"], environment)
-            indicators.update(production_execution_indicators(resolved))
+            indicators.update(_shell_execution_indicators(step["run"], environment))
     return indicators
 
 
@@ -438,6 +462,78 @@ exec /usr/bin/postgres -D /var/lib/postgresql/data
 """
         self.assertNotEqual(workflow_execution_indicators(job_environment), set())
 
+    def test_workflow_environment_cannot_hide_the_server_image(self) -> None:
+        workflow = """env:
+  STORAGE_IMAGE: docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+jobs:
+  reviewed-storage:
+    steps:
+      - run: podman run --detach --name secpal-storage "$STORAGE_IMAGE"
+"""
+        self.assertNotEqual(workflow_execution_indicators(workflow), set())
+        harmless_override = """env:
+  STORAGE_IMAGE: docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+jobs:
+  reviewed-storage:
+    env:
+      STORAGE_IMAGE: registry.example.invalid/secpal/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    steps:
+      - run: podman run --detach --name secpal-storage "$STORAGE_IMAGE"
+"""
+        self.assertEqual(workflow_execution_indicators(harmless_override), set())
+        harmless_step_override = """env:
+  STORAGE_IMAGE: docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+jobs:
+  reviewed-storage:
+    steps:
+      - env:
+          STORAGE_IMAGE: registry.example.invalid/secpal/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        run: podman run --detach --name secpal-storage "$STORAGE_IMAGE"
+"""
+        self.assertEqual(
+            workflow_execution_indicators(harmless_step_override), set()
+        )
+        nearest_server_override = """env:
+  STORAGE_IMAGE: registry.example.invalid/secpal/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+jobs:
+  reviewed-storage:
+    env:
+      STORAGE_IMAGE: registry.example.invalid/secpal/frontend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    steps:
+      - env:
+          STORAGE_IMAGE: docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+        run: podman run --detach --name secpal-storage "${STORAGE_IMAGE}"
+"""
+        self.assertNotEqual(
+            workflow_execution_indicators(nearest_server_override), set()
+        )
+
+    def test_shell_assignment_cannot_hide_the_server_image(self) -> None:
+        image = (
+            "docker.io/library/postgres@sha256:"
+            "38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
+        )
+        assignments = (
+            f"STORAGE_IMAGE={image}",
+            f'STORAGE_IMAGE="{image}"',
+            f"STORAGE_IMAGE='{image}'",
+        )
+        for assignment in assignments:
+            for reference in ("$STORAGE_IMAGE", "${STORAGE_IMAGE}"):
+                with self.subTest(assignment=assignment, reference=reference):
+                    workflow = f"""env:
+  STORAGE_IMAGE: registry.example.invalid/secpal/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+jobs:
+  reviewed-storage:
+    steps:
+      - run: |
+          {assignment}
+          podman run --detach --name secpal-storage "{reference}"
+"""
+                    self.assertNotEqual(
+                        workflow_execution_indicators(workflow), set()
+                    )
+
     def test_imported_image_cannot_hide_a_latent_renderer_branch(self) -> None:
         renderer_branch = RENDERER_PATH.read_text(encoding="utf-8") + """
 from integration_runtime_contract import POSTGRES_IMAGE
@@ -491,6 +587,34 @@ Exec=--host postgres --command SELECT-1
         run: printf 'client configuration only\\n'
 """
         self.assertEqual(workflow_execution_indicators(unused_workflow_image), set())
+        unused_workflow_environment = """env:
+  STORAGE_IMAGE: docker.io/library/postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+jobs:
+  reviewed-storage:
+    steps:
+      - run: printf 'client configuration only\\n'
+"""
+        self.assertEqual(
+            workflow_execution_indicators(unused_workflow_environment), set()
+        )
+        harmless_shell_override = """env:
+  STORAGE_IMAGE: docker.io/library/postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+jobs:
+  reviewed-storage:
+    steps:
+      - run: |
+          STORAGE_IMAGE=registry.example.invalid/secpal/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          podman run --detach --name secpal-storage "$STORAGE_IMAGE"
+"""
+        self.assertEqual(workflow_execution_indicators(harmless_shell_override), set())
+        unused_shell_assignment = """jobs:
+  reviewed-storage:
+    steps:
+      - run: |
+          STORAGE_IMAGE=docker.io/library/postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          printf 'client configuration only\\n'
+"""
+        self.assertEqual(workflow_execution_indicators(unused_shell_assignment), set())
         unused_renderer_import = RENDERER_PATH.read_text(encoding="utf-8") + """
 from integration_runtime_contract import POSTGRES_IMAGE as CLIENT_IMAGE
 CLIENT_COMMAND = (\"psql\", \"--host\", \"postgres\")
