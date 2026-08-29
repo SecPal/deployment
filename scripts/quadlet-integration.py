@@ -407,13 +407,13 @@ def validate_gh_version_line(line: str) -> None:
 def validate_postgres_version_line(line: str) -> None:
     if (
         re.fullmatch(
-            rf"postgres \(PostgreSQL\) {POSTGRES_FIXTURE.major}(?:\.[0-9]+)+(?: .*)?",
+            rf"postgres \(PostgreSQL\) {re.escape(POSTGRES_FIXTURE.version)}(?: .*)?",
             line,
         )
         is None
     ):
         raise IntegrationError(
-            f"PostgreSQL {POSTGRES_FIXTURE.major} fixture is required"
+            f"PostgreSQL {POSTGRES_FIXTURE.version} fixture is required"
         )
 
 

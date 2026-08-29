@@ -388,17 +388,17 @@ class PostgreSQLFixtureContractTests(unittest.TestCase):
                     lifecycle._expected_mounts(role),
                 )
 
-    def test_executable_version_admission_rejects_pre_18(self) -> None:
+    def test_executable_version_admission_requires_the_canonical_version(self) -> None:
         integration = load_integration()
         integration.validate_postgres_version_line(
             "postgres (PostgreSQL) 18.6 (Debian 18.6-1.pgdg12+2)"
         )
-        for major in (16, 17, 19):
-            with self.subTest(major=major), self.assertRaises(
+        for version in ("18.7", "18.99", "17.9"):
+            with self.subTest(version=version), self.assertRaises(
                 integration.IntegrationError
             ):
                 integration.validate_postgres_version_line(
-                    f"postgres (PostgreSQL) {major}.9"
+                    f"postgres (PostgreSQL) {version}"
                 )
 
 
