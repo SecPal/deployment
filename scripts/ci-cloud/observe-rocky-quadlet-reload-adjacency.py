@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
-"""Observe bounded negative facts adjacent to the exact d892 daemon reload."""
+"""Observe bounded negative facts adjacent to the exact direct-user daemon reload."""
 
 from __future__ import annotations
 
@@ -15,10 +15,16 @@ import select
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import IO, Any
+
+SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, SCRIPT_DIRECTORY)
+from runtime_user_systemd import direct_user_systemctl
 
 
 EVENT = re.compile(
@@ -840,12 +846,9 @@ def collect_observation(
         bus_available = False
         bus_state_observed = False
     control_status = command_status(
-        [
-            "systemctl",
-            f"--machine={RUNTIME_ACCOUNT}@.host",
-            "--user",
-            "show-environment",
-        ],
+        direct_user_systemctl(
+            RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir, "show-environment"
+        ),
         timeout=MANAGER_CONTINUITY_TIMEOUT_SECONDS,
     )
     control_reachable = control_status == 0

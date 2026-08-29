@@ -9,13 +9,12 @@
 
 # The root-owned hard link at /opt/secpal-control/libexec/systemctl preserves
 # the exact /usr/bin/systemctl invocation while binding the D-Bus client PID to
-# the one reviewed d892 call. exec(2) preserves this process identity.
+# the one reviewed direct runtime-user call. exec(2) preserves this process identity.
 if [[ "${0##*/}" == systemctl ]]; then
   if [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]] &&
-    [[ "$#" -eq 3 ]] &&
-    [[ "$1" == "--machine=secpal-runtime@.host" ]] &&
-    [[ "$2" == --user ]] &&
-    [[ "$3" == daemon-reload ]] &&
+    [[ "$#" -eq 2 ]] &&
+    [[ "$1" == --user ]] &&
+    [[ "$2" == daemon-reload ]] &&
     { : >&4; } 2>/dev/null; then
     if ! printf 'SECPAL_QUADLET_RELOAD_CLIENT_V1:%s\n' "$$" >&4; then
       :

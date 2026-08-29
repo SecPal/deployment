@@ -87,7 +87,8 @@ Preparation evidence that linger and `runtime.systemd_user` were true on an
 earlier boot is not current-boot readiness. Before publication, trusted startup
 waits for three independent current-boot observations: active
 `user@<runtime-uid>.service`, a socket at `/run/user/<runtime-uid>/bus`, and a
-successful non-mutating `systemctl --machine=secpal-runtime@.host --user
+successful non-mutating direct runtime-user `runuser --user secpal-runtime --
+env -u CONTAINER_HOST -u CONTAINER_CONNECTION … systemctl --user
 show-environment` query. The guest wait is limited to 60 seconds, five-second
 cadence, and 13 probes; it never runs the target-owned `daemon-reload`.
 Exhaustion publishes no successful readiness: the existing marker carries a

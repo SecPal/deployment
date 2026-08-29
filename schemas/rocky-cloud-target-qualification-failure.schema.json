@@ -477,7 +477,7 @@
       "if": {
         "properties": {
           "harness_sha256": {
-            "const": "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"
+            "const": "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
           }
         },
         "required": ["harness_sha256"]

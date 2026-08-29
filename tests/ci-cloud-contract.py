@@ -1002,6 +1002,46 @@ class CloudCIContractTests(unittest.TestCase):
                 "True",
             ),
             (publisher, '"show-environment"', '"daemon-reload"'),
+            (
+                publisher,
+                'RUNTIME_ACCOUNT = "secpal-runtime"',
+                'RUNTIME_ACCOUNT = "another-user"',
+            ),
+            (
+                publisher,
+                "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir, \"show-environment\"",
+                "RUNTIME_ACCOUNT, 1, runtime.pw_dir, \"show-environment\"",
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                '"CONTAINER_HOST"',
+                '"INHERITED_CONTAINER_HOST"',
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                '"CONTAINER_CONNECTION"',
+                '"INHERITED_CONTAINER_CONNECTION"',
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                'f"HOME={runtime_home}"',
+                '"HOME=/tmp"',
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                'f"XDG_RUNTIME_DIR={runtime_directory}"',
+                '"XDG_RUNTIME_DIR=/run/user/1"',
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                'f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_directory}/bus"',
+                '"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus"',
+            ),
+            (
+                "infra/ci-cloud/gcp-rocky/main.tf",
+                "runtime_user_systemd_base64gzip",
+                "runtime_user_systemd_unbound",
+            ),
             (publisher, "WAIT_SECONDS = 60", "WAIT_SECONDS = 0"),
             (
                 publisher,
@@ -1062,11 +1102,11 @@ class CloudCIContractTests(unittest.TestCase):
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         for old, new in (
             (
-                'EXPECTED_TARGET_SHA = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"',
+                'EXPECTED_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"',
                 'EXPECTED_TARGET_SHA = ""',
             ),
             (
-                'EXPECTED_HARNESS_SHA256 = "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"',
+                'EXPECTED_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"',
                 'EXPECTED_HARNESS_SHA256 = ""',
             ),
             ("MAX_TRACE_FRAMES = 8", "MAX_TRACE_FRAMES = 9"),
@@ -1126,7 +1166,7 @@ class CloudCIContractTests(unittest.TestCase):
             (trace, "trap - ERR", ":"),
             (
                 runner,
-                "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53",
+                "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946",
                 "",
             ),
             (runner, "mkfifo -m 0600", "install -m 0600 /dev/null"),
@@ -1374,7 +1414,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            'EXPECTED_TARGET_SHA = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"',
+            'EXPECTED_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"',
             'EXPECTED_TARGET_SHA = ""',
         )
         self.assert_mutation_rejected(
