@@ -47,7 +47,7 @@ from integration_runtime_contract import (
     GATEWAY_HEALTH_FAILURE_SPEC,
     HealthSpec,
     INTERNAL_NETWORKS,
-    POSTGRES_IMAGE,
+    POSTGRES_FIXTURE,
     PRIVATE_STORAGE_MODE,
     PROXY_ENVIRONMENT_NAMES,
     REQUIRED_CONTAINER_GIDS,
@@ -142,6 +142,7 @@ CLOUD_DIAGNOSTIC_STAGES = frozenset(
         "workload-frontend-image-alias",
         "workload-postgres-image-pull",
         "workload-postgres-image-admission",
+        "workload-postgres-major-admission",
         "workload-postgres-image-alias",
         "workload-valkey-image-pull",
         "workload-valkey-image-admission",
@@ -401,6 +402,19 @@ def required_first_line(output: str, source: str) -> str:
 def validate_gh_version_line(line: str) -> None:
     if not re.fullmatch(rf"gh version {re.escape(EXPECTED_GH_VERSION)}(?: .*)?", line):
         raise IntegrationError(f"GitHub CLI {EXPECTED_GH_VERSION} is required")
+
+
+def validate_postgres_version_line(line: str) -> None:
+    if (
+        re.fullmatch(
+            rf"postgres \(PostgreSQL\) {POSTGRES_FIXTURE.major}(?:\.[0-9]+)+(?: .*)?",
+            line,
+        )
+        is None
+    ):
+        raise IntegrationError(
+            f"PostgreSQL {POSTGRES_FIXTURE.major} fixture is required"
+        )
 
 
 def playwright_admission_command() -> tuple[str, str, str]:
@@ -2084,7 +2098,7 @@ class IntegrationLifecycle:
         for values in products:
             self.verify_and_stage_product(*values)
         for label, image in (
-            ("postgres", POSTGRES_IMAGE),
+            ("postgres", POSTGRES_FIXTURE.image),
             ("valkey", VALKEY_IMAGE),
             ("caddy", CADDY_IMAGE),
         ):
@@ -2126,6 +2140,30 @@ class IntegrationLifecycle:
         if self.cloud_mode:
             self.cloud_diagnostic_stage(f"workload-{label}-image-admission")
         self.verify_staged_image(image, digest)
+        if label == "postgres":
+            if self.cloud_mode:
+                self.cloud_diagnostic_stage("workload-postgres-major-admission")
+            version_line = required_first_line(
+                self.captured(
+                    [
+                        "podman",
+                        "run",
+                        "--rm",
+                        "--network=none",
+                        "--read-only",
+                        "--cap-drop=all",
+                        "--security-opt=no-new-privileges",
+                        "--pids-limit=32",
+                        "--pull=never",
+                        "--entrypoint=postgres",
+                        image,
+                        "--version",
+                    ],
+                    environment=self.anonymous_environment(),
+                ),
+                "PostgreSQL fixture",
+            )
+            validate_postgres_version_line(version_line)
         if self.cloud_mode and label != "caddy":
             self.cloud_diagnostic_stage(f"workload-{label}-image-alias")
             self.stage_cloud_image_alias(label, image, digest)
@@ -3472,7 +3510,7 @@ class IntegrationLifecycle:
                 volume_sizes[label] = "unavailable"
         observations["volume_bytes"] = volume_sizes
         image_sizes = {}
-        for label, image in (("api", API_IMAGE), ("frontend", FRONTEND_IMAGE), ("postgres", POSTGRES_IMAGE), ("valkey", VALKEY_IMAGE)):
+        for label, image in (("api", API_IMAGE), ("frontend", FRONTEND_IMAGE), ("postgres", POSTGRES_FIXTURE.image), ("valkey", VALKEY_IMAGE)):
             result = self.command(["podman", "image", "inspect", image, "--format", "{{.Size}}"], capture=True, check=False)
             if result.returncode == 0 and (result.stdout or "").strip().isdigit():
                 image_sizes[label] = int((result.stdout or "").strip())

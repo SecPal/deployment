@@ -21,12 +21,16 @@ if os.fspath(SCRIPT_DIRECTORY) not in sys.path:
 from integration_runtime_contract import (  # noqa: E402
     API_IMAGE,
     FRONTEND_IMAGE,
-    POSTGRES_IMAGE,
     VALKEY_IMAGE,
     role_execution_spec,
     role_spec,
     tmpfs_mounts,
 )
+
+# This preserves the superseded D.2 container renderer without making it a
+# current fixture or PostgreSQL support input. Issue #81 owns its removal and
+# the native production PostgreSQL 18 implementation.
+LEGACY_PRODUCTION_POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
 
 
 def _load_state_module():
@@ -265,7 +269,10 @@ def build_units(contract: dict) -> dict[str, str]:
     )
 
     postgres_init = common_container(
-        contract, "postgres", POSTGRES_IMAGE, instance="postgres-init"
+        contract,
+        "postgres",
+        LEGACY_PRODUCTION_POSTGRES_IMAGE,
+        instance="postgres-init",
     )
     postgres_init.extend(
         (
@@ -284,7 +291,9 @@ def build_units(contract: dict) -> dict[str, str]:
         "Initialize SecPal production PostgreSQL", ("secpal-state-ready.service",), oneshot=True
     ) + section("Container", postgres_init) + service(oneshot=True)
 
-    postgres = common_container(contract, "postgres", POSTGRES_IMAGE)
+    postgres = common_container(
+        contract, "postgres", LEGACY_PRODUCTION_POSTGRES_IMAGE
+    )
     postgres.extend(
         (
             'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-postgres-entrypoint.sh"]',

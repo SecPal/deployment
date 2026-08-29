@@ -28,7 +28,7 @@ from integration_runtime_contract import (
     FRONTEND_IMAGE,
     GATEWAY_HEALTH_FAILURE_SPEC,
     INTERNAL_NETWORKS,
-    POSTGRES_IMAGE,
+    POSTGRES_FIXTURE,
     TARGET_REQUIRED_ROLES,
     VALKEY_IMAGE,
     VOLUME_NAMES,
@@ -254,9 +254,9 @@ def build_units(
         else FRONTEND_IMAGE
     )
     postgres_image = (
-        cloud_image_reference("postgres", POSTGRES_IMAGE.rsplit("@", 1)[1])
+        cloud_image_reference("postgres", POSTGRES_FIXTURE.image.rsplit("@", 1)[1])
         if cloud
-        else POSTGRES_IMAGE
+        else POSTGRES_FIXTURE.image
     )
     valkey_image = (
         cloud_image_reference("valkey", VALKEY_IMAGE.rsplit("@", 1)[1])
@@ -301,12 +301,12 @@ def build_units(
             "Environment=SECPAL_POSTGRES_UID=999",
             "Environment=SECPAL_VALKEY_UID=10002",
             "Environment=SECPAL_SECRET_DIR=/run/secpal-secrets",
-            "Environment=SECPAL_POSTGRES_DATA_DIR=/var/lib/postgresql/data",
+            f"Environment=SECPAL_POSTGRES_DATA_DIR={POSTGRES_FIXTURE.data_directory}",
             "Environment=SECPAL_PRIVATE_STORAGE_DIR=/mnt/secpal-private-storage",
             f"Mount=type=bind,source={fixture_root}/assets/init-local-secrets.sh,target=/run/secpal/init-local-secrets.sh,ro=true",
             f"Mount=type=bind,source={fixture_root}/assets/quadlet-oneshot-entrypoint.sh,target=/run/secpal/quadlet-oneshot-entrypoint.sh,ro=true",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets",
-            f"Volume={prefix}-postgres.volume:/var/lib/postgresql/data",
+            f"Volume={prefix}-postgres.volume:{POSTGRES_FIXTURE.volume_target}",
             f"Volume={prefix}-private-storage.volume:/mnt/secpal-private-storage",
             *tmpfs_mounts("secrets-init"),
             *network_lines(instance, "secrets-init"),
@@ -331,7 +331,7 @@ def build_units(
             "Environment=POSTGRES_USER=secpal_local",
             "Environment=POSTGRES_PASSWORD_FILE=/run/secpal-secrets/postgres-password",
             f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
-            f"Volume={prefix}-postgres.volume:/var/lib/postgresql/data",
+            f"Volume={prefix}-postgres.volume:{POSTGRES_FIXTURE.volume_target}",
             *tmpfs_mounts("postgres"),
             *network_lines(instance, "postgres"),
             "NetworkAlias=postgres",

@@ -28,6 +28,18 @@ security flags, network membership, and systemd relationships are otherwise
 constants. No input accepts a registry, image, Podman argument, Quadlet
 fragment, host network, socket, auto-update policy, or security override.
 
+The disposable database authority is `POSTGRES_FIXTURE` in
+[`integration_runtime_contract.py`](../scripts/integration_runtime_contract.py).
+It identifies PostgreSQL 18.6 from the official `18/bookworm` source at OCI
+index
+`docker.io/library/postgres@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af`.
+The fixture mounts its disposable volume at `/var/lib/postgresql` and uses the
+upstream PostgreSQL 18 data directory `/var/lib/postgresql/18/docker`. After the
+immutable pull is admitted, the runner executes `postgres --version` from that
+exact image with no network and rejects every major other than 18 before any
+fixture service can start. This identity is integration-only and defines no
+production PostgreSQL implementation or compatibility promise.
+
 Each run generates ten container definitions, two internal networks, three
 disposable volumes, and one native systemd user target. Resource names and
 `org.secpal.integration.instance` labels include the validated run identifier,
@@ -74,7 +86,8 @@ The active runner is fail closed in this order:
    workflow, source ref, source commit, and GitHub-hosted publisher policy;
 4. stage the verified digest anonymously in local rootless Podman storage;
 5. repeat the complete gate for both API and frontend;
-6. stage the digest-pinned official PostgreSQL, Valkey, and Caddy inputs;
+6. stage the digest-pinned official PostgreSQL, Valkey, and Caddy inputs, then
+   execute-admit the PostgreSQL 18 major from the exact staged image;
 7. build only the integration gateway with its already-staged base and
    `--pull=never`;
 8. render, validate, root-own, install, and translate the Quadlets; and
