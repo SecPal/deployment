@@ -2060,7 +2060,7 @@ def validate_rocky_control_plane(root: Path) -> None:
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
     storage_setup_line_rules = [
-        rule for rule in target_line_rules if 249 <= rule[0] <= 253
+        rule for rule in target_line_rules if 241 <= rule[0] <= 244
     ]
     for forbidden in (
         "id-token",
@@ -2198,9 +2198,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"83d0c3720d342d0222e8dee9819e28d0c6739f84\""
+        "EXPECTED_TARGET_SHA = \"293977ae93408a7bb812619de58649ab8a92d438\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256 = \"ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946\""
+        and "EXPECTED_HARNESS_SHA256 = \"8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db\""
         in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
@@ -2223,18 +2223,23 @@ def validate_rocky_control_plane(root: Path) -> None:
             and rule[0] > 91
             for rule in target_line_rules
         )
-        and [rule for rule in target_line_rules if rule[0] <= 244 and rule[1] >= 242]
+        and [rule for rule in target_line_rules if rule[0] <= 239 and rule[1] >= 237]
         == [
-            (242, 242, "qualify-quadlet-daemon-reload"),
-            (243, 243, "qualify-quadlet-start"),
-            (244, 244, "qualify-quadlet-active-state"),
+            (237, 237, "qualify-quadlet-daemon-reload"),
+            (238, 238, "qualify-quadlet-start"),
+            (239, 239, "qualify-quadlet-active-state"),
         ]
+        and all(
+            operation not in {
+                "qualify-selinux-storage-fcontext-add",
+                "qualify-selinux-storage-restorecon",
+                "qualify-selinux-storage-matchpathcon",
+            }
+            for _, _, operation in target_line_rules
+        )
         and storage_setup_line_rules
         == [
-            (249, 249, "qualify-selinux-storage-directory-create"),
-            (250, 250, "qualify-selinux-storage-fcontext-add"),
-            (252, 252, "qualify-selinux-storage-restorecon"),
-            (253, 253, "qualify-selinux-storage-matchpathcon"),
+            (241, 244, "qualify-selinux-storage-directory-create"),
         ]
         and "qualify-quadlet-runtime" not in target_failure_classifier
         and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
@@ -2275,14 +2280,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_trace
         and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
         in target_failure_trace
-        and "10#$frame == 242" in target_failure_trace
+        and "10#$frame == 237" in target_failure_trace
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
         and "return \"$status\"" in target_failure_trace
         and "mkfifo -m 0600" in target_runner
-        and '"$target_sha" == 83d0c3720d342d0222e8dee9819e28d0c6739f84'
+        and '"$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438'
         in target_runner
-        and "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
+        and "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
         in target_runner
         and target_runner.index("observe-rocky-quadlet-reload-adjacency.py")
         < target_runner.index("bash \"$work_root/scripts/qualify-production-host.sh\"")

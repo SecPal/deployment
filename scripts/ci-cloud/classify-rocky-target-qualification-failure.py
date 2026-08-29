@@ -14,8 +14,10 @@ import stat
 import tempfile
 from pathlib import Path
 
-EXPECTED_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
-EXPECTED_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
+EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
+EXPECTED_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+HISTORICAL_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
+HISTORICAL_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
 MAX_STDOUT_BYTES = 65_536
 MAX_TRACE_BYTES = 4_096
 MAX_ARTIFACT_BYTES = 8_192
@@ -117,7 +119,7 @@ EXPLICIT_RULES = (
 # Helper
 # frames and cleanup internals are deliberately absent.  Nested ERR frames are
 # reduced only when every admitted call-site line agrees on one operation.
-LINE_RULES = (
+HISTORICAL_LINE_RULES = (
     (117, 123, "qualify-host-identity"),
     (125, 128, "qualify-administrator-execution"),
     (129, 132, "qualify-fixture-reference"),
@@ -149,6 +151,23 @@ LINE_RULES = (
     (321, 330, "qualify-selinux-policy-restoration"),
     (332, 335, "qualify-runtime-fallback-absence"),
     (337, 337, "qualification-harness"),
+)
+
+LINE_RULES = (
+    (113, 119, "qualify-host-identity"), (121, 124, "qualify-administrator-execution"),
+    (125, 128, "qualify-fixture-reference"), (129, 146, "qualify-service-account"),
+    (149, 152, "qualify-selinux-host"), (154, 158, "qualify-package-prerequisites"),
+    (160, 173, "qualify-native-architecture"), (175, 178, "qualify-cgroup"),
+    (179, 186, "qualify-rootless-runtime"), (187, 190, "qualify-fixture-presence"),
+    (192, 199, "qualify-fixture-setup"), (201, 236, "qualify-quadlet-authority"),
+    (237, 237, "qualify-quadlet-daemon-reload"), (238, 238, "qualify-quadlet-start"),
+    (239, 239, "qualify-quadlet-active-state"), (241, 244, "qualify-selinux-storage-directory-create"),
+    (245, 249, "qualify-workload-primary"), (250, 255, "qualify-seccomp"),
+    (257, 260, "qualify-workload-secondary"), (262, 268, "qualify-selinux-storage"),
+    (269, 275, "qualify-mcs-relationship"), (280, 288, "qualify-cross-mcs-denial"),
+    (289, 290, "qualify-avc-correlation"), (291, 298, "qualify-selinux-policy-restoration"),
+    (299, 307, "qualify-cross-mcs-denial"), (308, 311, "qualify-avc-correlation"),
+    (312, 320, "qualify-selinux-policy-restoration"), (323, 326, "qualify-runtime-fallback-absence"),
 )
 
 TRACE_PATTERN = re.compile(
@@ -324,14 +343,14 @@ AVC_KEYS = frozenset(
 )
 
 
-def operation_for_line(line: int) -> str | None:
-    for first, last, operation in LINE_RULES:
+def operation_for_line(line: int, line_rules: tuple[tuple[int, int, str], ...] = LINE_RULES) -> str | None:
+    for first, last, operation in line_rules:
         if first <= line <= last:
             return operation
     return None
 
 
-def trace_operations(trace_text: str, exit_status: int) -> tuple[set[str], bool]:
+def trace_operations(trace_text: str, exit_status: int, line_rules: tuple[tuple[int, int, str], ...] = LINE_RULES) -> tuple[set[str], bool]:
     operations: set[str] = set()
     if not trace_text:
         return operations, True
@@ -346,7 +365,7 @@ def trace_operations(trace_text: str, exit_status: int) -> tuple[set[str], bool]
             line = int(raw_frame)
             if not 1 <= line <= MAX_TRACE_LINE:
                 return set(), False
-            operation = operation_for_line(line)
+            operation = operation_for_line(line, line_rules)
             if operation is not None:
                 operations.add(operation)
     return operations, True
@@ -385,6 +404,7 @@ def classify_failure(
     target_bound: bool,
     trusted_marker: str | None = None,
     representation_invalid: bool = False,
+    line_rules: tuple[tuple[int, int, str], ...] = LINE_RULES,
 ) -> tuple[str, str]:
     if representation_invalid:
         return "qualification-harness", "representation-invalid"
@@ -400,7 +420,7 @@ def classify_failure(
         trace_text = trace.decode("ascii")
     except UnicodeDecodeError:
         return "qualification-harness", "representation-invalid"
-    traced_operations, trace_valid = trace_operations(trace_text, exit_status)
+    traced_operations, trace_valid = trace_operations(trace_text, exit_status, line_rules)
     if not trace_valid:
         return "qualification-harness", "representation-invalid"
     if exit_status in (124, 137):
@@ -1267,6 +1287,7 @@ def main() -> int:
         target_bound=target_bound,
         trusted_marker=marker,
         representation_invalid=options.representation_invalid,
+        line_rules=LINE_RULES,
     )
     adjacency_bytes = b""
     adjacency: dict[str, object] | None = None

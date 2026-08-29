@@ -519,7 +519,10 @@
       "if": {
         "properties": {
           "harness_sha256": {
-            "const": "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
+            "enum": [
+              "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946",
+              "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+            ]
           }
         },
         "required": ["harness_sha256"]

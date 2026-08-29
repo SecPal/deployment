@@ -36,7 +36,7 @@ secpal_reload_precall() {
   local block_size=""
   local cursor_output=""
   local timestamp=""
-  if [[ "${BASH_LINENO[0]:-}" == 242 ]] &&
+  if [[ "${BASH_LINENO[0]:-}" == 237 ]] &&
     [[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]; then
     trap - DEBUG
     export SECPAL_RELOAD_EXACT_CALL=1
@@ -79,7 +79,7 @@ secpal_target_qualification_err() {
       fi
       frames+="$frame"
       frame_count=$((frame_count + 1))
-      if ((10#$frame == 242)); then
+      if ((10#$frame == 237)); then
         daemon_reload_frame=true
       fi
     fi
