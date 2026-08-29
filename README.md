@@ -22,7 +22,8 @@ local integration subset; later phases remain targets:
 - Public and managed installations use the same product images.
 - The API and frontend remain deployment-neutral and use separate images.
 - PostgreSQL is the persistent source of truth.
-- Valkey provides queue and cache services; it does not replace PostgreSQL.
+- PostgreSQL-backed application state provides sessions, durable queues, and
+  shared cache behavior in the active disposable integration.
 - The `activity-hash-chain` role has exactly one worker.
 - The scheduler has exactly one instance.
 - The public edge remains separate from product containers.
@@ -64,10 +65,11 @@ identities before staging them in local Podman storage. The generated product
 units use the exact reviewed digest references and `Pull=never`, so systemd
 startup cannot perform an opportunistic pull.
 
-The constrained renderer creates separate PostgreSQL, Valkey, API, general
+The constrained renderer creates separate disposable PostgreSQL 18, API, general
 worker, hash-chain singleton worker, scheduler singleton, frontend, and
 integration-gateway containers plus an explicit one-shot migration. Only the
-gateway publishes one controlled loopback port. Runtime inspection, real API
+test-only gateway publishes one controlled loopback port and does not define or
+evidence the production edge. Runtime inspection, real API
 and frontend health, Playwright, failure ordering, signal handling, parallel
 fixtures, restart behavior, resource observations, and exact cleanup are part
 of the active contract.
@@ -97,9 +99,9 @@ published from `b755ca0d0ee5a85eca5ad5688d457241f070b1b4` by run
 `31247196734` (attempt `1`).
 
 The current integration runtime is exclusively rootless Podman, systemd-user,
-and native Quadlet. It preserves the relevant disposable PostgreSQL, Valkey,
-browser, worker, migration, and cleanup coverage without retaining a runnable
-Docker/Compose stack.
+and native Quadlet. It uses database-backed sessions, cache, and durable queues
+with a disposable PostgreSQL 18 fixture, while preserving browser, worker,
+migration, and cleanup coverage without a runnable Docker/Compose stack.
 
 Phase B completed in the required check context
 `Local Integration / Compose Contract`: the technical implementation head
@@ -156,9 +158,9 @@ only with the provider-neutral, contract-only
 definitions. Schema version 1 admits only Debian 13/trixie hosts and defines
 its security-update, controlled-reboot, reviewed major-upgrade, rootless
 Podman, systemd/Quadlet, subordinate-ID, and local runtime-storage boundaries.
-The D.1a integration runtime now re-proves those behaviors on native rootless
-Podman/Quadlet. The Phase B/C immutable records remain historical evidence and
-Docker/Compose is not a supported production runtime. D.1a is
+The active disposable integration now re-proves those behaviors on native
+rootless Podman/Quadlet. The Phase B/C immutable records remain historical
+evidence and Docker/Compose is not a supported production runtime. This is
 still disposable integration evidence: no production orchestration or
 infrastructure exists. Digest
 provenance, reviewed updates, and rollback are detailed in

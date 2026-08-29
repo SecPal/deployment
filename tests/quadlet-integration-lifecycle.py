@@ -484,9 +484,6 @@ class QuadletLifecycleContract(unittest.TestCase):
                     mock.call("workload-postgres-image-admission"),
                     mock.call("workload-postgres-major-admission"),
                     mock.call("workload-postgres-image-alias"),
-                    mock.call("workload-valkey-image-pull"),
-                    mock.call("workload-valkey-image-admission"),
-                    mock.call("workload-valkey-image-alias"),
                     mock.call("workload-caddy-image-pull"),
                     mock.call("workload-caddy-image-admission"),
                     mock.call("workload-gateway-build"),
@@ -1107,7 +1104,7 @@ class QuadletLifecycleContract(unittest.TestCase):
             ):
                 lifecycle.validate_cloud_cleanup_runtime()
 
-    def test_runtime_admission_accepts_only_the_d1_runtime(self) -> None:
+    def test_runtime_admission_accepts_only_the_current_runtime(self) -> None:
         self.assertEqual(
             self.module.validate_runtime_info(self.valid_info(), uid=1000, environment={}),
             (Path("/srv/podman-storage"), Path("/run/user/1000/containers")),
@@ -3095,15 +3092,15 @@ class QuadletLifecycleContract(unittest.TestCase):
             self.assertIn("unable to verify generated service unload", "\n".join(errors))
             self.assertIn("unable to verify target unload", "\n".join(errors))
 
-    def test_active_runtime_uses_the_reviewed_phase_b_probe_namespace(self) -> None:
+    def test_active_runtime_uses_the_current_probe_namespace(self) -> None:
         self.assertEqual(
             self.module.runtime_probe_contract("contract01"),
             {
-                "cache_key": "phase-b-cache-contract01",
-                "cache_value": "phase-b-cache-value-contract01",
-                "worker-general": ("phase-b-queue-general-contract01", "default"),
+                "cache_key": "integration-cache-contract01",
+                "cache_value": "integration-cache-value-contract01",
+                "worker-general": ("integration-queue-general-contract01", "default"),
                 "worker-hash-chain": (
-                    "phase-b-queue-hash-chain-contract01",
+                    "integration-queue-hash-chain-contract01",
                     "activity-hash-chain",
                 ),
             },

@@ -10,7 +10,7 @@ its reviewed OCI index digest. This is a test-only, loopback-only, disposable
 integration stack, not a production deployment.
 
 The Docker/Compose wording below is the retained Phase C completion record.
-The active D.1a runner repeats the same token-free OCI and attestation gates,
+The active disposable runner repeats the same token-free OCI and attestation gates,
 stages the reviewed digest through a new empty Podman authentication file, and
 uses the canonical digest from native Quadlet with `Pull=never`. It does not
 reinterpret the historical Compose run as Podman evidence.
@@ -84,7 +84,7 @@ For the frontend, the anonymous OCI Distribution verifier:
 At Phase C completion, the hosted workflow installed GitHub CLI `2.97.0` and
 verified the official Linux AMD64 archive checksum
 `a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112`.
-The active D.1a matrix additionally verifies the official Linux ARM64 archive
+The active matrix additionally verifies the official Linux ARM64 archive
 checksum
 `73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5`.
 The runner requires that exact version. GitHub CLI verifies the local raw index
@@ -94,8 +94,9 @@ and bundle with exact bindings to `SecPal/frontend`, the publisher workflow,
 It does not reopen the registry during cryptographic verification.
 
 Only after both published SecPal images pass these gates does the runner build
-the local test gateway, initialize disposable secrets, start PostgreSQL and
-Valkey, run the migration once, start the API roles and frontend, expose the
+the local test gateway, initialize disposable secrets, start the disposable
+PostgreSQL 18 fixture, run the migration once, start the database-backed API
+roles and frontend, expose the
 loopback gateway, and run the browser contract. The published frontend retains
 UID/GID `101:101`, a read-only root filesystem, all capabilities dropped,
 `no-new-privileges`, only `/tmp` writable, and only the private edge network.

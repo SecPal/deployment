@@ -54,7 +54,6 @@ from integration_runtime_contract import (
     REQUIRED_CONTAINER_UIDS,
     TARGET_REQUIRED_ROLES,
     TmpfsSpec,
-    VALKEY_IMAGE,
     VOLUME_NAMES,
     podman_version_supported,
     podman_versions_compatible,
@@ -102,8 +101,7 @@ GENERATED_LOGICAL_NAMES = (
 )
 ROLE_PREDECESSORS = {
     "postgres": ("secrets-init",),
-    "valkey": ("secrets-init",),
-    "migrate": ("postgres", "valkey"),
+    "migrate": ("postgres",),
     "api": ("migrate",),
     "worker-general": ("migrate",),
     "worker-hash-chain": ("migrate",),
@@ -113,7 +111,6 @@ ROLE_PREDECESSORS = {
 ROLE_VOLUME_DEPENDENCIES = {
     "secrets-init": ("secrets", "postgres", "private-storage"),
     "postgres": ("secrets", "postgres"),
-    "valkey": ("secrets",),
     "migrate": ("secrets", "private-storage"),
     "api": ("secrets", "private-storage"),
     "worker-general": ("secrets", "private-storage"),
@@ -144,9 +141,6 @@ CLOUD_DIAGNOSTIC_STAGES = frozenset(
         "workload-postgres-image-admission",
         "workload-postgres-major-admission",
         "workload-postgres-image-alias",
-        "workload-valkey-image-pull",
-        "workload-valkey-image-admission",
-        "workload-valkey-image-alias",
         "workload-caddy-image-pull",
         "workload-caddy-image-admission",
         "workload-gateway-build",
@@ -175,7 +169,6 @@ CLOUD_IMAGE_TAGS = {
     "api": "localhost/secpal-ci-api:verified",
     "frontend": "localhost/secpal-ci-frontend:verified",
     "postgres": "localhost/secpal-ci-postgres:verified",
-    "valkey": "localhost/secpal-ci-valkey:verified",
 }
 CLOUD_GH_RELEASES = {
     "x86_64": (
@@ -484,16 +477,16 @@ def has_injected_health_failure(details: Mapping) -> bool:
 
 
 def runtime_probe_contract(instance: str) -> dict[str, object]:
-    """Map a bounded instance to the immutable Phase B probe namespace."""
+    """Map a bounded instance to the current integration probe namespace."""
 
     if not INSTANCE_PATTERN.fullmatch(instance):
         raise IntegrationError("invalid integration instance for runtime probes")
     return {
-        "cache_key": f"phase-b-cache-{instance}",
-        "cache_value": f"phase-b-cache-value-{instance}",
-        "worker-general": (f"phase-b-queue-general-{instance}", "default"),
+        "cache_key": f"integration-cache-{instance}",
+        "cache_value": f"integration-cache-value-{instance}",
+        "worker-general": (f"integration-queue-general-{instance}", "default"),
         "worker-hash-chain": (
-            f"phase-b-queue-hash-chain-{instance}",
+            f"integration-queue-hash-chain-{instance}",
             "activity-hash-chain",
         ),
     }
@@ -2099,7 +2092,6 @@ class IntegrationLifecycle:
             self.verify_and_stage_product(*values)
         for label, image in (
             ("postgres", POSTGRES_FIXTURE.image),
-            ("valkey", VALKEY_IMAGE),
             ("caddy", CADDY_IMAGE),
         ):
             self.verify_and_stage_dependency(label, image)
@@ -2131,7 +2123,7 @@ class IntegrationLifecycle:
             )
 
     def verify_and_stage_dependency(self, label: str, image: str) -> None:
-        if label not in {"postgres", "valkey", "caddy"}:
+        if label not in {"postgres", "caddy"}:
             raise IntegrationError("unreviewed dependency image role")
         digest = image.rsplit("@", 1)[1]
         if self.cloud_mode:
@@ -2348,7 +2340,6 @@ class IntegrationLifecycle:
         for source, name, mode in (
             (self.root / "scripts" / "container-entrypoint.sh", "container-entrypoint.sh", 0o755),
             (self.root / "scripts" / "init-local-secrets.sh", "init-local-secrets.sh", 0o755),
-            (self.root / "scripts" / "valkey-entrypoint.sh", "valkey-entrypoint.sh", 0o755),
             (
                 self.root / "scripts" / "quadlet-oneshot-entrypoint.sh",
                 "quadlet-oneshot-entrypoint.sh",
@@ -3125,15 +3116,6 @@ class IntegrationLifecycle:
                     True,
                 ),
             }
-        if role == "valkey":
-            return {
-                "/run/secpal/valkey-entrypoint.sh": (
-                    "bind",
-                    asset("valkey-entrypoint.sh"),
-                    False,
-                ),
-                "/run/secpal-secrets": ("volume", f"{prefix}-secrets", False),
-            }
         if role == "gateway":
             return {
                 "/etc/caddy/Caddyfile": ("bind", asset("Caddyfile"), False),
@@ -3186,7 +3168,7 @@ class IntegrationLifecycle:
         )
         if resolver.returncode != 0:
             raise IntegrationError("frontend DNS isolation probe is unavailable")
-        for forbidden in ("postgres", "valkey"):
+        for forbidden in ("postgres",):
             probe = self.command(
                 [
                     "podman",
@@ -3384,7 +3366,7 @@ class IntegrationLifecycle:
         self.podman_exec("api", *entrypoint, "cache-put", cache_key, cache_value)
         observed = self.podman_exec("api", *entrypoint, "cache-get", cache_key, capture=True).stdout
         if (observed or "").strip() != cache_value:
-            raise IntegrationError("Valkey cache round trip failed")
+            raise IntegrationError("database cache round trip failed")
         for role in ("worker-general", "worker-hash-chain"):
             queue_key, queue = probes[role]
             hostname = (self.podman_exec(role, "hostname", capture=True).stdout or "").strip()
@@ -3518,7 +3500,7 @@ class IntegrationLifecycle:
                 volume_sizes[label] = "unavailable"
         observations["volume_bytes"] = volume_sizes
         image_sizes = {}
-        for label, image in (("api", API_IMAGE), ("frontend", FRONTEND_IMAGE), ("postgres", POSTGRES_FIXTURE.image), ("valkey", VALKEY_IMAGE)):
+        for label, image in (("api", API_IMAGE), ("frontend", FRONTEND_IMAGE), ("postgres", POSTGRES_FIXTURE.image)):
             result = self.command(["podman", "image", "inspect", image, "--format", "{{.Size}}"], capture=True, check=False)
             if result.returncode == 0 and (result.stdout or "").strip().isdigit():
                 image_sizes[label] = int((result.stdout or "").strip())

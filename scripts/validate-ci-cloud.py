@@ -2689,7 +2689,7 @@ def validate(root: Path) -> None:
         and "cloud_diagnostic_stage" in quadlet_harness
         and "cloud_diagnostic_failure" in quadlet_harness
         and "workload-postgres-image-pull" in quadlet_harness
-        and "workload-valkey-image-pull" in quadlet_harness
+        and "workload-valkey-image-pull" not in quadlet_harness
         and "workload-caddy-image-pull" in quadlet_harness
         and "workload-gateway-build" in quadlet_harness
         and "workload-postgres-attestation-fetch" not in quadlet_harness

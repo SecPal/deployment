@@ -10,10 +10,9 @@ PRIVATE_STORAGE_DIR="${SECPAL_PRIVATE_STORAGE_DIR:-/app/storage/app/private}"
 API_UID="${SECPAL_API_UID:-10001}"
 API_GID="${SECPAL_API_GID:-10001}"
 POSTGRES_UID="${SECPAL_POSTGRES_UID:-999}"
-VALKEY_UID="${SECPAL_VALKEY_UID:-10002}"
 TEMP_DIR=""
 INITIALIZATION_ACTIVE=0
-secret_names=(app-key postgres-password valkey-password tenant-kek)
+secret_names=(app-key postgres-password tenant-kek)
 
 fail() {
   printf 'ERROR: unable to initialize the local ephemeral secret contract.\n' >&2
@@ -117,12 +116,10 @@ fi
 if [ "$present" -eq "${#secret_names[@]}" ]; then
   require_metadata "$SECRET_DIR/app-key" "$API_UID" "$API_GID" 400
   require_metadata "$SECRET_DIR/postgres-password" "$POSTGRES_UID" "$API_GID" 440
-  require_metadata "$SECRET_DIR/valkey-password" "$VALKEY_UID" "$API_GID" 440
   require_metadata "$SECRET_DIR/tenant-kek" "$API_UID" "$API_GID" 400
 
   if [ "$(stat -c '%s' "$SECRET_DIR/app-key")" -ne 52 ] ||
     [ "$(stat -c '%s' "$SECRET_DIR/postgres-password")" -ne 65 ] ||
-    [ "$(stat -c '%s' "$SECRET_DIR/valkey-password")" -ne 65 ] ||
     [ "$(stat -c '%s' "$SECRET_DIR/tenant-kek")" -ne 32 ]; then
     fail
   fi
@@ -135,15 +132,12 @@ chmod 0700 "$TEMP_DIR"
 
 php -r 'fwrite(STDOUT, "base64:".base64_encode(random_bytes(32)).PHP_EOL);' >"$TEMP_DIR/app-key"
 php -r 'fwrite(STDOUT, bin2hex(random_bytes(32)).PHP_EOL);' >"$TEMP_DIR/postgres-password"
-php -r 'fwrite(STDOUT, bin2hex(random_bytes(32)).PHP_EOL);' >"$TEMP_DIR/valkey-password"
 php -r 'fwrite(STDOUT, random_bytes(32));' >"$TEMP_DIR/tenant-kek"
 
 chown "$API_UID:$API_GID" "$TEMP_DIR/app-key" "$TEMP_DIR/tenant-kek"
 chmod 0400 "$TEMP_DIR/app-key" "$TEMP_DIR/tenant-kek"
 chown "$POSTGRES_UID:$API_GID" "$TEMP_DIR/postgres-password"
 chmod 0440 "$TEMP_DIR/postgres-password"
-chown "$VALKEY_UID:$API_GID" "$TEMP_DIR/valkey-password"
-chmod 0440 "$TEMP_DIR/valkey-password"
 
 for name in "${secret_names[@]}"; do
   mv -- "$TEMP_DIR/$name" "$SECRET_DIR/$name"
