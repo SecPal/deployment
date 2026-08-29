@@ -42,6 +42,7 @@ required_files=(
   .editorconfig
   .pre-commit-config.yaml
   CHANGELOG.md
+  docs/architecture/capacity-capabilities.md
   docs/architecture/scope.md
   docs/architecture/production-host.md
   docs/architecture/production-inventory.md
@@ -70,6 +71,7 @@ required_files=(
   infra/ci-cloud/gcp-rocky/outputs.tf
   infra/ci-cloud/gcp-rocky/variables.tf
   infra/ci-cloud/gcp-rocky/versions.tf
+  schemas/capacity-qualification.schema.json
   schemas/ci-cloud-bootstrap-failure.schema.json
   schemas/ci-cloud-evidence.schema.json
   schemas/rocky-cloud-continuation.schema.json
@@ -131,6 +133,7 @@ required_files=(
   scripts/ci-cloud/target-conformance.sh
   scripts/ci-cloud/validate-evidence.py
   scripts/ci-cloud/write-bootstrap-failure.py
+  scripts/validate-capacity-qualification.py
   tests/ci-cloud-openssh-account.sh
   scripts/reject-sensitive-paths.sh
   scripts/validate-ci-cloud.py
@@ -138,6 +141,7 @@ required_files=(
   scripts/validate-origin.sh
   scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
+  tests/capacity-capability-contract.py
   tests/compose-prohibition-contract.sh
   tests/image-consumption-evidence-contract.py
   tests/ci-cloud-bootstrap-failure.py

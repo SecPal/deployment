@@ -9,6 +9,10 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- A provider-neutral `M` capacity envelope with independent compute-isolation,
+  CPU-architecture, persistent-storage, and ADR-022 topology dimensions, plus
+  closed current/stale qualification evidence for provider products and
+  self-hosted hardware without provider selection or managed placement policy.
 - The authoritative production persistence matrix, deterministic rootless host
   ownership mapping, fail-closed state/secret preparation, and checked native
   Quadlet bind declarations for PostgreSQL, application storage, and Valkey.
