@@ -10,7 +10,7 @@ by canonical OCI index digest. It is a test-only, loopback-only, disposable
 integration contract, not a production deployment.
 
 The Docker/Compose language below records the completed Phase C evidence. The
-active D.1a runner preserves the same OCI and attestation verifier, uses a new
+active disposable runner preserves the same OCI and attestation verifier, uses a new
 mode-`0700` empty Podman authentication file for each pull, stages the exact
 digest in rootless local storage, and starts only native Quadlet units with
 `Pull=never`. The historical evidence is not rewritten as Podman evidence.
@@ -52,7 +52,7 @@ Linux AMD64 release archive and verified its published SHA-256 checksum
 `a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112`
 before use. The integration runner requires that exact version, checks for
 `gh attestation verify`, and fails closed before the API pull if either contract
-does not match. The active D.1a hosted matrix also verifies the official ARM64
+does not match. The active hosted matrix also verifies the official ARM64
 archive checksum
 `73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5`.
 Neither path introduces a GitHub token.
@@ -132,7 +132,7 @@ Integration run `31264562902`; the final dual-image evidence is recorded in
 [`frontend-image-consumption.md`](frontend-image-consumption.md).
 
 At Phase C completion, Phase D had not started. D.1 now defines the production
-host contract and D.1a provides only disposable Podman/Quadlet integration
-parity. No production orchestration, cloud resource, DNS, TLS, production
+host contract and the active runner provides only disposable Podman/Quadlet
+integration parity. No production orchestration, cloud resource, DNS, TLS, production
 secret, persistent production data, backup, restore, or managed-hosting
 automation is implemented here.

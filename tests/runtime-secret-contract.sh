@@ -58,10 +58,9 @@ make_secret_set() {
   install -d -m 0700 "$directory"
   printf 'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n' >"$directory/app-key"
   printf '%064d\n' 0 >"$directory/postgres-password"
-  printf '%064d\n' 0 >"$directory/valkey-password"
   printf '12345678901234567890123456789012' >"$directory/tenant-kek"
   chmod 0400 "$directory/app-key" "$directory/tenant-kek"
-  chmod 0440 "$directory/postgres-password" "$directory/valkey-password"
+  chmod 0440 "$directory/postgres-password"
 }
 
 run_initializer() {
@@ -77,7 +76,6 @@ run_initializer() {
     SECPAL_POSTGRES_UID="$CURRENT_UID" \
     SECPAL_PRIVATE_STORAGE_DIR="$private_storage_directory" \
     SECPAL_SECRET_DIR="$secret_directory" \
-    SECPAL_VALKEY_UID="$CURRENT_UID" \
     bash "$ROOT_DIR/scripts/init-local-secrets.sh"
 }
 
@@ -106,7 +104,6 @@ if env \
   SECPAL_PRIVATE_STORAGE_DIR="$TEMP_DIR/layout-private-storage" \
   SECPAL_SECRET_DIR="$TEMP_DIR/layout-secrets" \
   SECPAL_TEST_INSTALL_LOG="$layout_install_log" \
-  SECPAL_VALKEY_UID="$CURRENT_UID" \
   bash "$ROOT_DIR/scripts/init-local-secrets.sh" >/dev/null 2>&1; then
   fail "the secret initializer accepted a missing PostgreSQL layout input"
 elif grep -Fq '/var/lib/postgresql/data' "$layout_install_log" 2>/dev/null; then
@@ -179,7 +176,6 @@ env \
   SECPAL_SECRET_DIR="$signal_directory" \
   SECPAL_TEST_SIGNAL_PAUSE="$signal_pause" \
   SECPAL_TEST_SIGNAL_RELEASE="$signal_release" \
-  SECPAL_VALKEY_UID="$CURRENT_UID" \
   bash "$ROOT_DIR/scripts/init-local-secrets.sh" >"$TEMP_DIR/signal.log" 2>&1 &
 signal_pid=$!
 children+=("$signal_pid")

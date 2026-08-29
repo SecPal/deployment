@@ -53,6 +53,7 @@ bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
 php -l scripts/phase-b-runtime-probe.php
 python3 tests/image-consumption-evidence-contract.py
+python3 tests/integration-current-topology.py
 python3 tests/oci-attestation-bundle-contract.py
 python3 tests/postgres-fixture-contract.py
 python3 tests/quadlet-integration-contract.py

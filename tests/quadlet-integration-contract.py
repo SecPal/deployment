@@ -26,7 +26,6 @@ from integration_runtime_contract import (
     API_IMAGE,
     FRONTEND_DIGEST,
     POSTGRES_FIXTURE,
-    VALKEY_IMAGE,
     podman_version_supported as quadlet_generator_version_supported,
 )
 
@@ -55,7 +54,6 @@ EXPECTED_FILES = {
     f"secpal-int-{INSTANCE}-secrets.volume",
     f"secpal-int-{INSTANCE}-worker-general.container",
     f"secpal-int-{INSTANCE}-worker-hash-chain.container",
-    f"secpal-int-{INSTANCE}-valkey.container",
     f"secpal-int-{INSTANCE}.target",
 }
 
@@ -192,7 +190,6 @@ class QuadletContract(unittest.TestCase):
         api_reference = f"localhost/secpal-ci-api@{API_DIGEST}"
         frontend_reference = f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}"
         postgres_digest = POSTGRES_FIXTURE.image.rsplit("@", 1)[1]
-        valkey_digest = VALKEY_IMAGE.rsplit("@", 1)[1]
         expected = {
             "api": api_reference,
             "migrate": api_reference,
@@ -202,7 +199,6 @@ class QuadletContract(unittest.TestCase):
             "scheduler": api_reference,
             "frontend": frontend_reference,
             "postgres": f"localhost/secpal-ci-postgres@{postgres_digest}",
-            "valkey": f"localhost/secpal-ci-valkey@{valkey_digest}",
             "gateway": (
                 f"localhost/secpal-ci-gateway-{INSTANCE}@{GATEWAY_DIGEST}"
             ),
@@ -379,7 +375,6 @@ class QuadletContract(unittest.TestCase):
             "postgres": "999",
             "scheduler": "10001",
             "secrets-init": "0",
-            "valkey": "10002",
             "worker-general": "10001",
             "worker-hash-chain": "10001",
         }
@@ -427,14 +422,14 @@ class QuadletContract(unittest.TestCase):
             observed.append(output)
         self.assertNotEqual(*observed)
 
-        historical_environment = dict(os.environ)
-        historical_environment.update(
+        incomplete_environment = dict(os.environ)
+        incomplete_environment.update(
             {
                 "APP_ORIGIN": "https://app.secpal.example.invalid:18443",
                 "API_ORIGIN": "https://api.secpal.example.invalid:18443",
             }
         )
-        historical_environment.pop("SECPAL_INTEGRATION_INSTANCE", None)
+        incomplete_environment.pop("SECPAL_INTEGRATION_INSTANCE", None)
         result = subprocess.run(
             [
                 "node",
@@ -443,15 +438,12 @@ class QuadletContract(unittest.TestCase):
                 "process.stdout.write(JSON.stringify(config.outputDir));",
             ],
             cwd=ROOT,
-            env=historical_environment,
+            env=incomplete_environment,
             text=True,
             capture_output=True,
-            check=True,
+            check=False,
         )
-        self.assertEqual(
-            Path(json.loads(result.stdout)),
-            ROOT / "test-results" / "secpal-int-phasebcompose",
-        )
+        self.assertNotEqual(result.returncode, 0)
 
     def test_roles_networks_dependencies_and_singletons_are_exact(self) -> None:
         units = self.render()
@@ -462,7 +454,7 @@ class QuadletContract(unittest.TestCase):
         for network in (application, edge):
             self.assertIn("Internal=true", units[network])
 
-        for role in ("postgres", "valkey", "migrate", "worker-general", "worker-hash-chain", "scheduler"):
+        for role in ("postgres", "migrate", "worker-general", "worker-hash-chain", "scheduler"):
             self.assertIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-{role}.container"])
             self.assertNotIn(f"Network={edge}", units[f"secpal-int-{INSTANCE}-{role}.container"])
         self.assertIn(f"Network={application}", units[f"secpal-int-{INSTANCE}-api.container"])
@@ -506,11 +498,6 @@ class QuadletContract(unittest.TestCase):
             "destination=/var/run/postgresql,",
             units[f"secpal-int-{INSTANCE}-postgres.container"],
         )
-        self.assertIn("Notify=healthy", units[f"secpal-int-{INSTANCE}-valkey.container"])
-        self.assertIn(
-            "HealthCmd=VALKEYCLI_AUTH=$(cat /run/secpal-secrets/valkey-password) valkey-cli ping | grep -qx PONG",
-            units[f"secpal-int-{INSTANCE}-valkey.container"],
-        )
         self.assertIn(
             "HealthCmd=curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/health/live",
             units[f"secpal-int-{INSTANCE}-frontend.container"],
@@ -527,7 +514,7 @@ class QuadletContract(unittest.TestCase):
         for line in combined.splitlines():
             if line.startswith("Mount=type=tmpfs"):
                 self.assertIn("U=true", line)
-        for role in ("postgres", "valkey", "api", "frontend", "gateway"):
+        for role in ("postgres", "api", "frontend", "gateway"):
             text = units[f"secpal-int-{INSTANCE}-{role}.container"]
             self.assertIn(
                 "HealthOnFailure=kill",
@@ -546,7 +533,7 @@ class QuadletContract(unittest.TestCase):
             migrate,
         )
         self.assertIn(
-            f"Requires=secpal-int-{INSTANCE}-postgres.service secpal-int-{INSTANCE}-valkey.service",
+            f"Requires=secpal-int-{INSTANCE}-postgres.service",
             migrate,
         )
         for role in ("api", "worker-general", "worker-hash-chain", "scheduler"):
@@ -786,7 +773,7 @@ class QuadletContract(unittest.TestCase):
             elif name.endswith(".volume"):
                 service += "-volume"
             self.assertIn(f"---{service}.service---", generated, name)
-        for role in ("postgres", "valkey", "api", "frontend", "gateway"):
+        for role in ("postgres", "api", "frontend", "gateway"):
             marker = f"---secpal-int-{INSTANCE}-{role}.service---"
             translated_service = generated.split(marker, 1)[1].split("\n---", 1)[0]
             with self.subTest(health_service=role):
@@ -802,7 +789,7 @@ class QuadletContract(unittest.TestCase):
             for line in generated.splitlines()
             if line.startswith("ExecStart=/usr/bin/podman run ")
         ]
-        self.assertEqual(len(container_starts), 10)
+        self.assertEqual(len(container_starts), 9)
         for argument in (
             "--http-proxy=false",
             "--pid=private",

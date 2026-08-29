@@ -97,7 +97,6 @@ required_files=(
   scripts/production-valkey-entrypoint.sh
   scripts/render-production-quadlets.py
   scripts/render-integration-quadlets.py
-  scripts/valkey-entrypoint.sh
   scripts/ci-cloud/bounded-target-diagnostic.py
   scripts/ci-cloud/collect-host-evidence.py
   scripts/ci-cloud/bootstrap-conformance-host.tftpl

@@ -74,7 +74,6 @@ POSTGRES_FIXTURE = PostgresFixtureIdentity(
     data_directory="/var/lib/postgresql/18/docker",
     volume_target="/var/lib/postgresql",
 )
-VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
 CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 INTERNAL_NETWORKS = ("application", "edge")
 VOLUME_NAMES = ("secrets", "private-storage", "postgres")
@@ -271,10 +270,6 @@ ROLE_EXECUTION_SPECS: Mapping[str, ExecutionSpec] = MappingProxyType(
             ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
             ("/bin/bash", "/run/secpal/init-local-secrets.sh"),
         ),
-        "valkey": ExecutionSpec(
-            ("/bin/sh", "/run/secpal/valkey-entrypoint.sh"),
-            None,
-        ),
         "migrate": ExecutionSpec(
             ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
             (
@@ -376,20 +371,6 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
                 "pg_isready -U secpal_local -d secpal_local", 5, 3, 20, 10
             ),
         ),
-        "valkey": RoleSpec(
-            10002,
-            10002,
-            ("application",),
-            _tmpfs(("/tmp", 16, 0o700, True), ("/data", 32, 0o700, True)),
-            HealthSpec(
-                "VALKEYCLI_AUTH=$(cat /run/secpal-secrets/valkey-password) "
-                "valkey-cli ping | grep -qx PONG",
-                5,
-                3,
-                20,
-                5,
-            ),
-        ),
         "migrate": RoleSpec(10001, 10001, ("application",), _api_tmpfs),
         "api": RoleSpec(
             10001,
@@ -438,7 +419,19 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
     }
 )
 
-CONTAINER_ROLES = tuple(ROLE_SPECS)
+CONTAINER_ROLES = (
+    "secrets-init",
+    "postgres",
+    "migrate",
+    "api",
+    "worker-general",
+    "worker-hash-chain",
+    "scheduler",
+    "frontend",
+    "gateway",
+)
+if tuple(ROLE_SPECS) != CONTAINER_ROLES:
+    raise ValueError("active integration role inventory differs from its closed contract")
 TARGET_REQUIRED_ROLES = (
     "gateway",
     "worker-general",

@@ -23,6 +23,7 @@ from integration_runtime_contract import (
     CONTAINER_LOG_DRIVER,
     CONTAINER_PIDS_LIMIT,
     CONTAINER_PODMAN_ARGS,
+    CONTAINER_ROLES,
     CONTAINER_STOP_TIMEOUT,
     FRONTEND_DIGEST,
     FRONTEND_IMAGE,
@@ -30,7 +31,6 @@ from integration_runtime_contract import (
     INTERNAL_NETWORKS,
     POSTGRES_FIXTURE,
     TARGET_REQUIRED_ROLES,
-    VALKEY_IMAGE,
     VOLUME_NAMES,
     health_lines,
     role_spec,
@@ -42,6 +42,18 @@ INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 FAILURE_CASES = ("migration", "dependency", "health")
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
+APPLICATION_ROLES = (
+    "migrate",
+    "api",
+    "worker-general",
+    "worker-hash-chain",
+    "scheduler",
+)
+DATABASE_STATE_ENVIRONMENT = {
+    "CACHE_STORE": "database",
+    "QUEUE_CONNECTION": "database",
+    "SESSION_DRIVER": "database",
+}
 
 
 class ContractError(ValueError):
@@ -113,7 +125,7 @@ def api_environment(port: int) -> list[str]:
         "APP_ENV": "local",
         "APP_NAME": "SecPal",
         "APP_URL": f"https://api.secpal.example.invalid:{port}",
-        "CACHE_STORE": "redis",
+        "CACHE_STORE": "database",
         "DB_CONNECTION": "pgsql",
         "DB_DATABASE": "secpal_local",
         "DB_HOST": "postgres",
@@ -122,14 +134,7 @@ def api_environment(port: int) -> list[str]:
         "FILESYSTEM_DISK": "local",
         "FRONTEND_URL": f"https://app.secpal.example.invalid:{port}",
         "LOG_CHANNEL": "stderr",
-        "QUEUE_CONNECTION": "redis",
-        "REDIS_CLIENT": "phpredis",
-        "REDIS_CACHE_DB": "1",
-        "REDIS_DB": "0",
-        "REDIS_HOST": "valkey",
-        "REDIS_PORT": "6379",
-        "REDIS_QUEUE": "default",
-        "REDIS_QUEUE_CONNECTION": "default",
+        "QUEUE_CONNECTION": "database",
         "SANCTUM_STATEFUL_DOMAINS": f"app.secpal.example.invalid:{port}",
         "CORS_ALLOWED_HEADERS": "Content-Type,Authorization,X-Requested-With,X-XSRF-TOKEN",
         "CORS_ALLOWED_METHODS": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
@@ -143,6 +148,91 @@ def api_environment(port: int) -> list[str]:
         "TRUSTED_PROXIES": "REMOTE_ADDR",
     }
     return [f"Environment={name}={value}" for name, value in values.items()]
+
+
+def validate_current_topology(instance: str, units: dict[str, str]) -> None:
+    """Reject active topology drift, including renamed Redis/Valkey services."""
+
+    prefix = f"secpal-int-{instance}"
+    expected_names = {
+        *(f"{prefix}-{role}.container" for role in CONTAINER_ROLES),
+        *(f"{prefix}-{name}.network" for name in INTERNAL_NETWORKS),
+        *(f"{prefix}-{name}.volume" for name in VOLUME_NAMES),
+        f"{prefix}.target",
+    }
+    if set(units) != expected_names:
+        raise ContractError("active integration inventory differs from its closed contract")
+
+    expected_dependencies = {
+        "secrets-init": (),
+        "postgres": ("secrets-init",),
+        "migrate": ("postgres",),
+        "api": ("migrate",),
+        "worker-general": ("migrate",),
+        "worker-hash-chain": ("migrate",),
+        "scheduler": ("migrate",),
+        "frontend": (),
+        "gateway": ("api", "frontend"),
+    }
+    for role, predecessors in expected_dependencies.items():
+        content = units[f"{prefix}-{role}.container"]
+        requires = tuple(
+            line.removeprefix("Requires=")
+            for line in content.splitlines()
+            if line.startswith("Requires=")
+        )
+        expected = (
+            " ".join(f"{prefix}-{name}.service" for name in predecessors),
+        ) if predecessors else ()
+        if requires != expected:
+            raise ContractError(f"active dependency contract differs for {role}")
+
+    target = units[f"{prefix}.target"]
+    target_requires = tuple(
+        line.removeprefix("Requires=")
+        for line in target.splitlines()
+        if line.startswith("Requires=")
+    )
+    expected_target = " ".join(
+        f"{prefix}-{role}.service" for role in TARGET_REQUIRED_ROLES
+    )
+    if target_requires != (expected_target,):
+        raise ContractError("active target cardinality differs from its closed contract")
+
+    backend_name = re.compile(r"(?:^|[-_./:@])(?:redis|valkey)(?:$|[-_./:@])", re.I)
+    for unit_name, content in units.items():
+        for line in content.splitlines():
+            field, separator, value = line.partition("=")
+            if not separator:
+                continue
+            if field in {"Image", "NetworkAlias", "HealthCmd", "Requires", "After"}:
+                if backend_name.search(value):
+                    raise ContractError(
+                        f"active integration backend path is forbidden: {unit_name}"
+                    )
+            if field == "Environment":
+                name, environment_separator, environment_value = value.partition("=")
+                if (
+                    not environment_separator
+                    or name.upper().startswith(("REDIS_", "VALKEY_"))
+                    or backend_name.search(environment_value)
+                ):
+                    raise ContractError(
+                        f"active integration backend environment is forbidden: {unit_name}"
+                    )
+
+    for role in APPLICATION_ROLES:
+        content = units[f"{prefix}-{role}.container"]
+        environment = dict(
+            line.removeprefix("Environment=").split("=", 1)
+            for line in content.splitlines()
+            if line.startswith("Environment=")
+        )
+        for name, value in DATABASE_STATE_ENVIRONMENT.items():
+            if environment.get(name) != value:
+                raise ContractError(
+                    f"{role} does not use the database-backed {name} contract"
+                )
 
 
 def cloud_image_reference(label: str, digest: str) -> str:
@@ -186,7 +276,6 @@ def api_container(
     prefix = f"secpal-int-{instance}"
     dependencies = [f"{prefix}-migrate.service"] if role != "migrate" else [
         f"{prefix}-postgres.service",
-        f"{prefix}-valkey.service",
     ]
     lines = common_container(instance, role, image)
     lines.extend(api_environment(port))
@@ -258,11 +347,6 @@ def build_units(
         if cloud
         else POSTGRES_FIXTURE.image
     )
-    valkey_image = (
-        cloud_image_reference("valkey", VALKEY_IMAGE.rsplit("@", 1)[1])
-        if cloud
-        else VALKEY_IMAGE
-    )
     labels = [
         "Label=org.secpal.integration=true",
         f"Label=org.secpal.integration.instance={instance}",
@@ -299,7 +383,6 @@ def build_units(
             "Environment=SECPAL_API_UID=10001",
             "Environment=SECPAL_API_GID=10001",
             "Environment=SECPAL_POSTGRES_UID=999",
-            "Environment=SECPAL_VALKEY_UID=10002",
             "Environment=SECPAL_SECRET_DIR=/run/secpal-secrets",
             f"Environment=SECPAL_POSTGRES_DATA_DIR={POSTGRES_FIXTURE.data_directory}",
             "Environment=SECPAL_PRIVATE_STORAGE_DIR=/mnt/secpal-private-storage",
@@ -352,32 +435,6 @@ def build_units(
         )
         + section("Container", postgres_lines)
         + service("no" if failure_case == "dependency" else "on-failure")
-    )
-
-    valkey_lines = common_container(instance, "valkey", valkey_image)
-    valkey_execution = role_execution_spec("valkey")
-    if valkey_execution is None:
-        raise ContractError("Valkey execution contract is missing")
-    valkey_lines.extend(
-        (
-            *valkey_execution.quadlet_lines(),
-            f"Mount=type=bind,source={fixture_root}/assets/valkey-entrypoint.sh,target=/run/secpal/valkey-entrypoint.sh,ro=true",
-            f"Volume={prefix}-secrets.volume:/run/secpal-secrets:ro",
-            *tmpfs_mounts("valkey"),
-            *network_lines(instance, "valkey"),
-            "NetworkAlias=valkey",
-            *health_lines("valkey"),
-        )
-    )
-    units[f"{prefix}-valkey.container"] = (
-        unit_description(
-            f"SecPal integration Valkey ({instance})",
-            [f"{prefix}-secrets-init.service"],
-            f"{prefix}.target",
-            True,
-        )
-        + section("Container", valkey_lines)
-        + service()
     )
 
     units[f"{prefix}-migrate.container"] = api_container(
@@ -487,6 +544,7 @@ def build_units(
         f"SecPal rootless Podman integration fixture ({instance})",
         target_dependencies,
     ) + section("Install", ["WantedBy=default.target"])
+    validate_current_topology(instance, units)
     return units
 
 

@@ -21,10 +21,21 @@ if os.fspath(SCRIPT_DIRECTORY) not in sys.path:
 from integration_runtime_contract import (  # noqa: E402
     API_IMAGE,
     FRONTEND_IMAGE,
-    VALKEY_IMAGE,
     role_execution_spec,
     role_spec,
     tmpfs_mounts,
+)
+
+# Production Valkey remains owned by the production state contract. The active
+# disposable integration intentionally exports no Valkey image authority.
+VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
+VALKEY_UID = 10002
+VALKEY_GID = 10002
+VALKEY_TMPFS_MOUNTS = (
+    "Mount=type=tmpfs,destination=/tmp,tmpfs-size=16m,tmpfs-mode=0700,"
+    "U=true,nosuid=true,nodev=true,noexec=true",
+    "Mount=type=tmpfs,destination=/data,tmpfs-size=32m,tmpfs-mode=0700,"
+    "U=true,nosuid=true,nodev=true,noexec=true",
 )
 
 
@@ -102,7 +113,9 @@ def unit(description: str, dependencies: tuple[str, ...] = (), *, oneshot: bool 
 def common_container(
     contract: dict, role: str, image: str, *, instance: str | None = None
 ) -> list[str]:
-    identity = role_spec(role)
+    identity = role_spec(role) if role != "valkey" else None
+    uid = VALKEY_UID if identity is None else identity.uid
+    gid = VALKEY_GID if identity is None else identity.gid
     logs = contract["log_policy"]
     effective_role = instance or role
     container_name = f"secpal-{effective_role}"
@@ -111,8 +124,8 @@ def common_container(
         f"ContainerName={container_name}",
         f"Image={image}",
         "Pull=never",
-        f"User={identity.uid}",
-        f"Group={identity.gid}",
+        f"User={uid}",
+        f"Group={gid}",
         "ReadOnly=true",
         "ReadOnlyTmpfs=false",
         "DropCapability=all",
@@ -271,7 +284,7 @@ def build_units(contract: dict) -> dict[str, str]:
             f"Mount=type=bind,source={valkey_secret}/password,"
             "target=/run/secpal-secret/password,ro=true",
             f"Mount=type=bind,source={valkey_path},target=/data,rw=true",
-            *(mount for mount in tmpfs_mounts("valkey") if "destination=/data," not in mount),
+            *(mount for mount in VALKEY_TMPFS_MOUNTS if "destination=/data," not in mount),
             "Network=secpal-application.network",
             "NetworkAlias=valkey",
             "HealthCmd=valkey-cli ping 2>&1 | grep -q 'NOAUTH Authentication required.'",
