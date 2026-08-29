@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import runpy
+import stat
 import sys
 import tempfile
 import unittest
@@ -88,28 +89,83 @@ def _module_authority_strings(content: str, path: Path) -> list[tuple[int, str]]
     return strings
 
 
+def _regular_files_beneath(directory: Path) -> list[Path]:
+    """Discover regular files without following or skipping symlink entries."""
+    try:
+        mode = directory.lstat().st_mode
+    except OSError as error:
+        raise AssertionError(
+            f"unable to inspect current PostgreSQL authority root: {directory}"
+        ) from error
+    if stat.S_ISLNK(mode):
+        raise AssertionError(f"current PostgreSQL authority is a symlink: {directory}")
+    if not stat.S_ISDIR(mode):
+        raise AssertionError(
+            f"current PostgreSQL authority root is not a directory: {directory}"
+        )
+
+    files = []
+    try:
+        with os.scandir(directory) as scanned:
+            entries = sorted(scanned, key=lambda entry: entry.name)
+    except OSError as error:
+        raise AssertionError(
+            f"unable to scan current PostgreSQL authority root: {directory}"
+        ) from error
+    for entry in entries:
+        path = Path(entry.path)
+        if entry.is_symlink():
+            raise AssertionError(f"current PostgreSQL authority is a symlink: {path}")
+        if entry.is_dir(follow_symlinks=False):
+            if entry.name != "__pycache__":
+                files.extend(_regular_files_beneath(path))
+        elif entry.is_file(follow_symlinks=False):
+            files.append(path)
+        else:
+            raise AssertionError(
+                f"unsupported current PostgreSQL authority entry: {path}"
+            )
+    return files
+
+
+def _is_regular_current_file(path: Path) -> bool:
+    """Classify an explicitly named current authority without following links."""
+    if not (path.exists() or path.is_symlink()):
+        return False
+    try:
+        mode = path.lstat().st_mode
+    except OSError as error:
+        raise AssertionError(
+            f"unable to inspect current PostgreSQL authority: {path}"
+        ) from error
+    if stat.S_ISLNK(mode):
+        raise AssertionError(f"current PostgreSQL authority is a symlink: {path}")
+    if not stat.S_ISREG(mode):
+        raise AssertionError(f"current PostgreSQL authority is not a regular file: {path}")
+    return True
+
+
 def _current_authority_values(root: Path) -> list[tuple[Path, int, str]]:
     """Discover bounded current source and module-scope test authority values."""
     candidates: set[tuple[Path, bool]] = set()
     for relative_root in CURRENT_SOURCE_ROOTS:
         source_root = root / relative_root
-        if source_root.exists():
+        if source_root.exists() or source_root.is_symlink():
             candidates.update(
                 (path, False)
-                for path in source_root.rglob("*")
-                if "__pycache__" not in path.parts and path.is_file()
+                for path in _regular_files_beneath(source_root)
             )
     candidates.update(
         (root / relative, False)
         for relative in CURRENT_FIXTURE_DOCUMENTS
-        if (root / relative).is_file()
+        if _is_regular_current_file(root / relative)
     )
     test_root = root / "tests"
-    if test_root.exists():
+    if test_root.exists() or test_root.is_symlink():
         candidates.update(
             (path, True)
-            for path in test_root.rglob("*.py")
-            if path.name != "postgres-fixture-contract.py" and path.is_file()
+            for path in _regular_files_beneath(test_root)
+            if path.name != "postgres-fixture-contract.py" and path.suffix == ".py"
         )
 
     if len(candidates) > MAX_CURRENT_FILES:
@@ -118,8 +174,6 @@ def _current_authority_values(root: Path) -> list[tuple[Path, int, str]]:
     values = []
     total_bytes = 0
     for path, module_authority_only in sorted(candidates, key=lambda item: os.fspath(item[0])):
-        if path.is_symlink():
-            raise AssertionError(f"current PostgreSQL authority is a symlink: {path}")
         size = path.stat().st_size
         if size > MAX_CURRENT_FILE_BYTES:
             raise AssertionError(f"current PostgreSQL authority exceeded its file bound: {path}")
@@ -210,6 +264,34 @@ class PostgreSQLFixtureContractTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
                 self.assertTrue(find_current_legacy_identities(root), relative)
+
+    def test_current_source_discovery_rejects_all_symlink_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            regular_target = root / "regular-target"
+            regular_target.write_text("DATABASE_BASELINE=PG17\n", encoding="utf-8")
+            broken_target = root / "missing-target"
+            directory_target = root / "directory-target"
+            directory_target.mkdir()
+            (directory_target / "current-database.conf").write_text(
+                "DATABASE_BASELINE=PG17\n", encoding="utf-8"
+            )
+
+            cases = {
+                "regular-symlink": regular_target,
+                "broken-symlink": broken_target,
+                "directory-symlink": directory_target,
+            }
+            for name, target in cases.items():
+                with self.subTest(name=name):
+                    link = root / "scripts" / name
+                    link.parent.mkdir(parents=True, exist_ok=True)
+                    link.symlink_to(
+                        target, target_is_directory=name == "directory-symlink"
+                    )
+                    with self.assertRaises(AssertionError):
+                        find_current_legacy_identities(root)
+                    link.unlink()
 
     def test_guard_preserves_nonlegacy_and_noncurrent_material(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
