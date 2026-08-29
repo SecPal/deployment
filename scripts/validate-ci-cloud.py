@@ -2059,6 +2059,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
+    storage_setup_line_rules = [
+        rule for rule in target_line_rules if 249 <= rule[0] <= 253
+    ]
     for forbidden in (
         "id-token",
         "google-github-actions/auth",
@@ -2225,6 +2228,13 @@ def validate_rocky_control_plane(root: Path) -> None:
             (242, 242, "qualify-quadlet-daemon-reload"),
             (243, 243, "qualify-quadlet-start"),
             (244, 244, "qualify-quadlet-active-state"),
+        ]
+        and storage_setup_line_rules
+        == [
+            (249, 249, "qualify-selinux-storage-directory-create"),
+            (250, 250, "qualify-selinux-storage-fcontext-add"),
+            (252, 252, "qualify-selinux-storage-restorecon"),
+            (253, 253, "qualify-selinux-storage-matchpathcon"),
         ]
         and "qualify-quadlet-runtime" not in target_failure_classifier
         and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'

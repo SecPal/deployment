@@ -43,6 +43,10 @@ OPERATIONS = frozenset(
         "qualify-quadlet-start",
         "qualify-quadlet-active-state",
         "qualify-selinux-storage",
+        "qualify-selinux-storage-directory-create",
+        "qualify-selinux-storage-fcontext-add",
+        "qualify-selinux-storage-restorecon",
+        "qualify-selinux-storage-matchpathcon",
         "qualify-workload-primary",
         "qualify-seccomp",
         "qualify-workload-secondary",
@@ -98,7 +102,7 @@ EXPLICIT_RULES = (
     ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
 )
 
-# Line ranges name semantic call sites in the immutable d892 harness.  Helper
+# Line ranges name semantic call sites in the immutable current harness.  Helper
 # frames and cleanup internals are deliberately absent.  Nested ERR frames are
 # reduced only when every admitted call-site line agrees on one operation.
 LINE_RULES = (
@@ -117,7 +121,10 @@ LINE_RULES = (
     (242, 242, "qualify-quadlet-daemon-reload"),
     (243, 243, "qualify-quadlet-start"),
     (244, 244, "qualify-quadlet-active-state"),
-    (246, 253, "qualify-selinux-storage"),
+    (249, 249, "qualify-selinux-storage-directory-create"),
+    (250, 250, "qualify-selinux-storage-fcontext-add"),
+    (252, 252, "qualify-selinux-storage-restorecon"),
+    (253, 253, "qualify-selinux-storage-matchpathcon"),
     (254, 260, "qualify-workload-primary"),
     (261, 264, "qualify-seccomp"),
     (266, 270, "qualify-workload-secondary"),

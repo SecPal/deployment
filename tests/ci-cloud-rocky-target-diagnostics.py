@@ -1312,7 +1312,11 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             ("", "SECPAL_TARGET_ERR_V2:1:242", "qualify-quadlet-daemon-reload", "command-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:243", "qualify-quadlet-start", "command-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:244", "qualify-quadlet-active-state", "command-failed"),
-            ("", "SECPAL_TARGET_ERR_V2:1:251", "qualify-selinux-storage", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:249", "qualify-selinux-storage-directory-create", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:250", "qualify-selinux-storage-fcontext-add", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:252", "qualify-selinux-storage-restorecon", "command-failed"),
+            ("", "SECPAL_TARGET_ERR_V2:1:253", "qualify-selinux-storage-matchpathcon", "command-failed"),
+            ("ERROR: representative process or storage label is not container-confined.", "", "qualify-selinux-storage", "invariant-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:257", "qualify-workload-primary", "command-failed"),
             ("ERROR: representative rootless workload is not effectively seccomp-confined.", "", "qualify-seccomp", "invariant-failed"),
             ("", "SECPAL_TARGET_ERR_V2:1:269", "qualify-workload-secondary", "command-failed"),
@@ -1476,6 +1480,28 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 self.assertEqual(
                     ("qualification-harness", "unclassified-target-failure"),
                     self.classify(trace=f"SECPAL_TARGET_ERR_V2:1:{frames}"),
+                )
+
+    def test_selinux_storage_setup_lines_have_distinct_closed_operations(self) -> None:
+        operations = (
+            (249, "qualify-selinux-storage-directory-create"),
+            (250, "qualify-selinux-storage-fcontext-add"),
+            (252, "qualify-selinux-storage-restorecon"),
+            (253, "qualify-selinux-storage-matchpathcon"),
+        )
+        for line, operation in operations:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    (operation, "command-failed"),
+                    self.classify(trace=f"SECPAL_TARGET_ERR_V2:1:{line}"),
+                )
+        for first, second in zip(operations, operations[1:]):
+            with self.subTest(lines=(first[0], second[0])):
+                self.assertEqual(
+                    ("qualification-harness", "unclassified-target-failure"),
+                    self.classify(
+                        trace=f"SECPAL_TARGET_ERR_V2:1:{first[0]},{second[0]}"
+                    ),
                 )
 
     def test_explicit_message_and_stack_must_agree(self) -> None:
