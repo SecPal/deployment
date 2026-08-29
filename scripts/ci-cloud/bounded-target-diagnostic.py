@@ -50,6 +50,7 @@ PHASE_STAGES = {
             "workload-frontend-image-alias",
             "workload-postgres-image-pull",
             "workload-postgres-image-admission",
+            "workload-postgres-major-admission",
             "workload-postgres-image-alias",
             "workload-valkey-image-pull",
             "workload-valkey-image-admission",

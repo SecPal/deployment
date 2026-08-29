@@ -289,7 +289,10 @@ ROLE_CONTRACTS = {
         networks=(),
         volumes=(
             ("secrets", "/run/secpal-secrets", True),
-            ("postgres", "/var/lib/postgresql/data", True),
+            # Independent remote admission of the canonical fixture layout in
+            # integration_runtime_contract.POSTGRES_FIXTURE. Agreement is
+            # executable-tested by tests/postgres-fixture-contract.py.
+            ("postgres", "/var/lib/postgresql", True),
             ("private-storage", "/mnt/secpal-private-storage", True),
         ),
         binds=(
@@ -310,7 +313,7 @@ ROLE_CONTRACTS = {
         networks=("application",),
         volumes=(
             ("secrets", "/run/secpal-secrets", False),
-            ("postgres", "/var/lib/postgresql/data", True),
+            ("postgres", "/var/lib/postgresql", True),
         ),
         tmpfs=(("/tmp", 32, "0700", True), ("/run/postgresql", 16, "0750", True)),
     ),

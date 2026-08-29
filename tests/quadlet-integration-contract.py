@@ -25,7 +25,7 @@ from integration_runtime_contract import (
     API_DIGEST,
     API_IMAGE,
     FRONTEND_DIGEST,
-    POSTGRES_IMAGE,
+    POSTGRES_FIXTURE,
     VALKEY_IMAGE,
     podman_version_supported as quadlet_generator_version_supported,
 )
@@ -191,7 +191,7 @@ class QuadletContract(unittest.TestCase):
         units = self.render_cloud()
         api_reference = f"localhost/secpal-ci-api@{API_DIGEST}"
         frontend_reference = f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}"
-        postgres_digest = POSTGRES_IMAGE.rsplit("@", 1)[1]
+        postgres_digest = POSTGRES_FIXTURE.image.rsplit("@", 1)[1]
         valkey_digest = VALKEY_IMAGE.rsplit("@", 1)[1]
         expected = {
             "api": api_reference,

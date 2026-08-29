@@ -224,6 +224,17 @@ def _module_constants(path: Path) -> dict[str, str]:
                 for target in targets:
                     if isinstance(target, ast.Name):
                         constants[target.id] = statement.value.value
+            elif isinstance(statement.value, ast.Call):
+                for target in targets:
+                    if not isinstance(target, ast.Name):
+                        continue
+                    for keyword in statement.value.keywords:
+                        if (
+                            keyword.arg is not None
+                            and isinstance(keyword.value, ast.Constant)
+                            and isinstance(keyword.value.value, str)
+                        ):
+                            constants[f"{target.id}.{keyword.arg}"] = keyword.value.value
     return constants
 
 
@@ -241,10 +252,19 @@ def _resolve_image_expression(
 ) -> str | None:
     if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
         return expression.value
-    if isinstance(expression, ast.Name):
-        return values.get(expression.id)
-    if isinstance(expression, ast.Attribute) and isinstance(expression.value, ast.Name):
-        return modules.get(expression.value.id, {}).get(expression.attr)
+    parts = []
+    current = expression
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name):
+        parts.append(current.id)
+        dotted = ".".join(reversed(parts))
+        if dotted in values:
+            return values[dotted]
+        module, separator, member = dotted.partition(".")
+        if separator:
+            return modules.get(module, {}).get(member)
     return None
 
 
@@ -284,6 +304,11 @@ def renderer_construction_indicators(content: str, renderer_path: Path) -> set[s
             for alias in statement.names:
                 if alias.name in constants:
                     values[alias.asname or alias.name] = constants[alias.name]
+                prefix = f"{alias.name}."
+                local = alias.asname or alias.name
+                for name, value in constants.items():
+                    if name.startswith(prefix):
+                        values[f"{local}.{name.removeprefix(prefix)}"] = value
         elif isinstance(statement, ast.Import):
             for alias in statement.names:
                 module_path = _local_module_path(renderer_path, alias.name)
@@ -619,10 +644,10 @@ jobs:
 
     def test_imported_image_cannot_hide_a_latent_renderer_branch(self) -> None:
         renderer_branch = RENDERER_PATH.read_text(encoding="utf-8") + """
-from integration_runtime_contract import POSTGRES_IMAGE
+from integration_runtime_contract import POSTGRES_FIXTURE
 if os.environ.get(\"SECPAL_DATABASE_MODE\"):
     units[\"secpal-database.container\"] = common_container(
-        contract, \"valkey\", POSTGRES_IMAGE, instance=\"database\"
+        contract, \"valkey\", POSTGRES_FIXTURE.image, instance=\"database\"
     )
 """
         self.assertNotEqual(
@@ -631,7 +656,7 @@ if os.environ.get(\"SECPAL_DATABASE_MODE\"):
         )
         qualified_branch = RENDERER_PATH.read_text(encoding="utf-8") + """
 import integration_runtime_contract as runtime_contract
-DATABASE_IMAGE = runtime_contract.POSTGRES_IMAGE
+DATABASE_IMAGE = runtime_contract.POSTGRES_FIXTURE.image
 if os.environ.get(\"SECPAL_DATABASE_MODE\"):
     units[\"secpal-database.container\"] = common_container(
         contract, \"valkey\", DATABASE_IMAGE, instance=\"database\"
@@ -709,7 +734,8 @@ jobs:
             workflow_execution_indicators(unused_exported_assignment), set()
         )
         unused_renderer_import = RENDERER_PATH.read_text(encoding="utf-8") + """
-from integration_runtime_contract import POSTGRES_IMAGE as CLIENT_IMAGE
+from integration_runtime_contract import POSTGRES_FIXTURE
+CLIENT_IMAGE = POSTGRES_FIXTURE.image
 CLIENT_COMMAND = (\"psql\", \"--host\", \"postgres\")
 """
         self.assertEqual(

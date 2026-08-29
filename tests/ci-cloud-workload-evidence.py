@@ -35,24 +35,24 @@ REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE = (
         "kind": "compressed-blob",
         "image": (
             "docker.io/library/postgres@sha256:"
-            "38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
+            "1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af"
         ),
         "architecture": "amd64",
         "layer_digest": (
-            "sha256:db8bf9a4f43b1b58570eb4a58c307cf1d954fa26134ccbc0c0b5304fb0f9a01f"
+            "sha256:8e38d8544e5392718cf637e26f8a31e2e6a58620b07711b9ad095ac153ea3a4a"
         ),
         "member_path": None,
-        "size_bytes": 111_678_527,
+        "size_bytes": 113_935_777,
     },
     {
         "kind": "unpacked-member",
         "image": (
             "docker.io/library/postgres@sha256:"
-            "38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
+            "1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af"
         ),
         "architecture": "amd64",
         "layer_digest": (
-            "sha256:db8bf9a4f43b1b58570eb4a58c307cf1d954fa26134ccbc0c0b5304fb0f9a01f"
+            "sha256:8e38d8544e5392718cf637e26f8a31e2e6a58620b07711b9ad095ac153ea3a4a"
         ),
         "member_path": "usr/lib/x86_64-linux-gnu/libLLVM.so.19.1",
         "size_bytes": 129_271_672,
@@ -135,12 +135,12 @@ def normalization_environment_read_key(show_count: int) -> str:
 ROLE_VOLUME_MOUNTS = {
     "secrets-init": (
         ("secrets", "/run/secpal-secrets", True),
-        ("postgres", "/var/lib/postgresql/data", True),
+        ("postgres", "/var/lib/postgresql", True),
         ("private-storage", "/mnt/secpal-private-storage", True),
     ),
     "postgres": (
         ("secrets", "/run/secpal-secrets", False),
-        ("postgres", "/var/lib/postgresql/data", True),
+        ("postgres", "/var/lib/postgresql", True),
     ),
     "valkey": (("secrets", "/run/secpal-secrets", False),),
     **{
@@ -6586,7 +6586,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            {runtime_contract["POSTGRES_IMAGE"]},
+            {runtime_contract["POSTGRES_FIXTURE"].image},
             {
                 item["image"]
                 for item in REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE
@@ -6597,14 +6597,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 (
                     "compressed-blob",
                     "amd64",
-                    "sha256:db8bf9a4f43b1b58570eb4a58c307cf1d954fa26134ccbc0c0b5304fb0f9a01f",
+                    "sha256:8e38d8544e5392718cf637e26f8a31e2e6a58620b07711b9ad095ac153ea3a4a",
                     None,
-                    111_678_527,
+                    113_935_777,
                 ),
                 (
                     "unpacked-member",
                     "amd64",
-                    "sha256:db8bf9a4f43b1b58570eb4a58c307cf1d954fa26134ccbc0c0b5304fb0f9a01f",
+                    "sha256:8e38d8544e5392718cf637e26f8a31e2e6a58620b07711b9ad095ac153ea3a4a",
                     "usr/lib/x86_64-linux-gnu/libLLVM.so.19.1",
                     129_271_672,
                 ),

@@ -443,7 +443,17 @@ class QuadletLifecycleContract(unittest.TestCase):
             lifecycle.validate_repository_and_runtime = mock.Mock()
             lifecycle.stage_cloud_gh_cli = mock.Mock()
             lifecycle.command = mock.Mock(
-                return_value=subprocess.CompletedProcess([], 0, "", "")
+                side_effect=lambda argv, **_kwargs: subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    (
+                        "postgres (PostgreSQL) 18.6 "
+                        "(Debian 18.6-1.pgdg12+2)\n"
+                        if argv[:3] == ["podman", "run", "--rm"]
+                        else ""
+                    ),
+                    "",
+                )
             )
             lifecycle.anonymous_pull = mock.Mock()
             lifecycle.verify_staged_image = mock.Mock()
@@ -472,6 +482,7 @@ class QuadletLifecycleContract(unittest.TestCase):
                     mock.call("workload-frontend-image-alias"),
                     mock.call("workload-postgres-image-pull"),
                     mock.call("workload-postgres-image-admission"),
+                    mock.call("workload-postgres-major-admission"),
                     mock.call("workload-postgres-image-alias"),
                     mock.call("workload-valkey-image-pull"),
                     mock.call("workload-valkey-image-admission"),
@@ -483,6 +494,74 @@ class QuadletLifecycleContract(unittest.TestCase):
                     mock.call("workload-quadlet-render-publish"),
                 ],
             )
+
+    def test_postgres_dependency_admission_executes_the_exact_staged_major(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            lifecycle = self.module.IntegrationLifecycle(
+                root=ROOT,
+                instance="0123456789ab",
+                port=18443,
+                fixture_root=fixture,
+                output=fixture / "quadlets",
+                runner=FakeRunner(),
+                cloud_mode=True,
+            )
+            lifecycle.cloud_diagnostic_stage = mock.Mock()
+            lifecycle.anonymous_environment = mock.Mock(return_value={})
+            lifecycle.anonymous_pull = mock.Mock()
+            lifecycle.verify_staged_image = mock.Mock()
+            lifecycle.stage_cloud_image_alias = mock.Mock()
+            lifecycle.command = mock.Mock(
+                return_value=subprocess.CompletedProcess(
+                    [],
+                    0,
+                    "postgres (PostgreSQL) 18.6 (Debian 18.6-1.pgdg12+2)\n",
+                    "",
+                )
+            )
+
+            lifecycle.verify_and_stage_dependency(
+                "postgres", self.module.POSTGRES_FIXTURE.image
+            )
+
+            lifecycle.command.assert_called_once_with(
+                [
+                    "podman",
+                    "run",
+                    "--rm",
+                    "--network=none",
+                    "--read-only",
+                    "--cap-drop=all",
+                    "--security-opt=no-new-privileges",
+                    "--pids-limit=32",
+                    "--pull=never",
+                    "--entrypoint=postgres",
+                    self.module.POSTGRES_FIXTURE.image,
+                    "--version",
+                ],
+                capture=True,
+                environment={},
+            )
+            self.assertEqual(
+                lifecycle.cloud_diagnostic_stage.call_args_list,
+                [
+                    mock.call("workload-postgres-image-pull"),
+                    mock.call("workload-postgres-image-admission"),
+                    mock.call("workload-postgres-major-admission"),
+                    mock.call("workload-postgres-image-alias"),
+                ],
+            )
+
+            lifecycle.command.return_value = subprocess.CompletedProcess(
+                [], 0, "postgres (PostgreSQL) 17.9\n", ""
+            )
+            lifecycle.stage_cloud_image_alias.reset_mock()
+            with self.assertRaises(self.module.IntegrationError):
+                lifecycle.verify_and_stage_dependency(
+                    "postgres", self.module.POSTGRES_FIXTURE.image
+                )
+            lifecycle.stage_cloud_image_alias.assert_not_called()
 
     def test_cloud_failure_diagnostic_is_closed_and_omits_error_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
