@@ -96,6 +96,106 @@ def assert_qualification_service_account_context() -> None:
             raise AssertionError("Quadlet write-authority probes must use service context helper")
 
 
+def admit_direct_user_manager_control(source: str) -> None:
+    """Admit one bounded direct-runtime-user manager control seam."""
+
+    required = (
+        'service_passwd_entry="$(getent passwd "$service_account" || true)"',
+        'service_uid="$(id -u "$service_account")"',
+        'service_home="$(awk -F: \'{print $6}\' <<<"$service_passwd_entry")"',
+        'runuser --user "$service_account" -- env -u CONTAINER_HOST '
+        '-u CONTAINER_CONNECTION',
+        '"HOME=${service_home}"',
+        '"XDG_RUNTIME_DIR=/run/user/${service_uid}"',
+        '"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${service_uid}/bus"',
+        'run_as_service_account systemctl --user "$@"',
+        'rootless_podman() {\n  run_as_service_account podman "$@"',
+        'install -d -o 0 -g 0 -m 0755 "$quadlet_root"',
+        'if run_as_service_account test -w "$quadlet_root"; then',
+        'chmod 0644 "$unit_path"',
+        'if run_as_service_account test -w "$unit_path"; then',
+        "user_systemctl daemon-reload",
+        'user_systemctl start "${unit_name}.service"',
+        'user_systemctl is-active --quiet "${unit_name}.service"',
+    )
+    for representation in required:
+        if representation not in source:
+            raise AssertionError(
+                f"direct runtime-user manager contract is incomplete: {representation}"
+            )
+
+    forbidden = (
+        "--machine=",
+        "@.host",
+        "sudo ",
+        "systemctl --system",
+        'systemctl --user "$@" ||',
+    )
+    for representation in forbidden:
+        if representation in source:
+            raise AssertionError(
+                f"forbidden user-manager control fallback is reachable: {representation}"
+            )
+
+
+def assert_qualification_direct_user_manager_control() -> None:
+    """Reject authority, identity, environment and fallback mutations."""
+
+    source = QUALIFICATION_HARNESS.read_text(encoding="utf-8")
+    admit_direct_user_manager_control(source)
+    mutations = {
+        "writable-quadlet-directory": source.replace(
+            'install -d -o 0 -g 0 -m 0755 "$quadlet_root"',
+            'install -d -o 0 -g 0 -m 0775 "$quadlet_root"',
+        ),
+        "writable-quadlet-file": source.replace(
+            'chmod 0644 "$unit_path"', 'chmod 0664 "$unit_path"'
+        ),
+        "wrong-home": source.replace('"HOME=${service_home}"', '"HOME=/root"'),
+        "wrong-account-uid": source.replace(
+            'service_uid="$(id -u "$service_account")"', 'service_uid=0'
+        ),
+        "wrong-runtime-directory": source.replace(
+            '"XDG_RUNTIME_DIR=/run/user/${service_uid}"',
+            '"XDG_RUNTIME_DIR=/run/user/0"',
+        ),
+        "wrong-user-bus": source.replace(
+            '"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${service_uid}/bus"',
+            '"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus"',
+        ),
+        "different-manager": source.replace(
+            'systemctl --user "$@"', 'systemctl --system "$@"'
+        ),
+        "inherited-container-host": source.replace(" -u CONTAINER_HOST", ""),
+        "inherited-container-connection": source.replace(
+            " -u CONTAINER_CONNECTION", ""
+        ),
+        "rootful-podman": source.replace(
+            'run_as_service_account podman "$@"', 'podman "$@"'
+        ),
+        "machine-bus-fallback": source.replace(
+            'run_as_service_account systemctl --user "$@"',
+            'run_as_service_account systemctl --user "$@" || '
+            'systemctl "--machine=${service_account}@.host" --user "$@"',
+        ),
+        "sudo-fallback": source.replace(
+            'run_as_service_account systemctl --user "$@"',
+            'run_as_service_account systemctl --user "$@" || '
+            'sudo systemctl --user "$@"',
+        ),
+        "ignored-manager-failure": source.replace(
+            'run_as_service_account systemctl --user "$@"',
+            'run_as_service_account systemctl --user "$@" || true',
+        ),
+    }
+    for name, candidate in mutations.items():
+        try:
+            admit_direct_user_manager_control(candidate)
+        except AssertionError:
+            continue
+        raise AssertionError(f"unsafe direct-user-manager mutation passed: {name}")
+
+
 def assert_qualification_native_evidence_cleanup() -> None:
     """Keep AVC evidence and transient-unit cleanup bounded and observable."""
 
@@ -160,6 +260,7 @@ def assert_qualification_native_evidence_cleanup() -> None:
 
 def main() -> int:
     assert_qualification_service_account_context()
+    assert_qualification_direct_user_manager_control()
     assert_qualification_native_evidence_cleanup()
     amd64 = load(VALID_AMD64)
     arm64 = load(VALID_ARM64)

@@ -38,7 +38,7 @@ read_os_release_value() {
 
 run_as_service_account() (
   cd -- "$service_home"
-  runuser --user "$service_account" -- env \
+  runuser --user "$service_account" -- env -u CONTAINER_HOST -u CONTAINER_CONNECTION \
     "HOME=${service_home}" \
     "XDG_RUNTIME_DIR=/run/user/${service_uid}" \
     "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${service_uid}/bus" \
@@ -50,7 +50,7 @@ rootless_podman() {
 }
 
 user_systemctl() {
-  systemctl "--machine=${service_account}@.host" --user "$@"
+  run_as_service_account systemctl --user "$@"
 }
 
 matching_marker_avc() {
