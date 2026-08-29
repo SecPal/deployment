@@ -1222,6 +1222,11 @@ class CloudCIContractTests(unittest.TestCase):
                 'r"avc:\\s+denied\\s+\\{\\s*reload\\s*\\}"',
                 'r"avc:.*denied"',
             ),
+            (
+                observer,
+                "reload_access_avc(audit, expected_client_pid)",
+                "reload_access_avc(audit, control_pid)",
+            ),
             (observer, 'comm="podman-system-g"', 'comm="systemd"'),
             (
                 classifier,

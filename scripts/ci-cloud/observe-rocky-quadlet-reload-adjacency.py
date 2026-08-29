@@ -768,6 +768,7 @@ def process_selinux_type(pid: int) -> str | None:
 
 def reload_access_avc(
     payload: bytes,
+    expected_client_pid: int,
 ) -> tuple[bool, dict[str, str] | None, bool]:
     observations: list[dict[str, str]] = []
     for event in payload.decode("utf-8", errors="replace").split("----"):
@@ -777,6 +778,15 @@ def reload_access_avc(
             or "tclass=system" not in event
             or re.search(r"avc:\s+denied\s+\{\s*reload\s*\}", event) is None
         ):
+            continue
+        pids = {
+            int(match)
+            for match in re.findall(r"\bpid=([1-9][0-9]{0,9})\b", event)
+            if int(match) <= 2**31 - 1
+        }
+        if len(pids) != 1:
+            return True, None, True
+        if next(iter(pids)) != expected_client_pid:
             continue
         context = re.search(
             r"scontext=([^\s]+).*tcontext=([^\s]+).*tclass=(system)",
@@ -917,7 +927,7 @@ def collect_observation(
         else (False, None, True)
     )
     reload_avc_observed, reload_avc, reload_avc_ambiguous = (
-        reload_access_avc(audit)
+        reload_access_avc(audit, expected_client_pid)
         if audit_status in (0, 1)
         else (False, None, True)
     )

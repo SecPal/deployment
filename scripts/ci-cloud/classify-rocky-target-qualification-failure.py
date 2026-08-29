@@ -521,6 +521,8 @@ def reload_client_error(payload: bytes) -> str:
 
 def reload_authorization_outcome(request_logged: bool, client_error: str) -> str:
     if request_logged:
+        if client_error in {"access-denied", "interactive-auth-required"}:
+            return "observation-unavailable"
         return "authorized"
     if client_error == "interactive-auth-required":
         return "interactive-auth-required"
@@ -582,7 +584,14 @@ def daemon_reload_classification(
     if not run_space_observed:
         return "diagnostic-unavailable", "run-space-observation-unavailable"
     if not run_space_sufficient:
-        if client_error == "run-space-rejected" and not reload_request_logged:
+        if client_error == "run-space-rejected" and not (
+            reload_request_logged
+            or reload_rate_limit_rejected
+            or reload_started
+            or reload_finished
+            or reload_internal_failure != "none"
+            or reload_reply_send_failed
+        ):
             return "reload-run-space-rejected", "none"
         return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
     if client_error == "run-space-rejected":
@@ -595,6 +604,11 @@ def daemon_reload_classification(
         return "diagnostic-unavailable", "reload-selinux-observation-ambiguous"
     if reload_access_avc_ambiguous:
         return "diagnostic-unavailable", "reload-selinux-observation-ambiguous"
+    if reload_request_logged and client_error in {
+        "access-denied",
+        "interactive-auth-required",
+    }:
+        return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
     if reload_access_avc_observed or client_error == "selinux-access-denied":
         if (
             reload_request_logged

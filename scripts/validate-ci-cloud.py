@@ -2401,6 +2401,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"tclass=system"' in reload_adjacency_observer
         and 'r"avc:\\s+denied\\s+\\{\\s*reload\\s*\\}"'
         in reload_adjacency_observer
+        and "reload_access_avc(audit, expected_client_pid)"
+        in reload_adjacency_observer
         and '"daemon-reload"' not in reload_adjacency_observer
         and 'comm="systemd"' not in reload_adjacency_observer
         and all(

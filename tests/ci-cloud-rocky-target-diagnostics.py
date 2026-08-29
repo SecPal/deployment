@@ -882,6 +882,25 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         self.assertEqual("diagnostic-unavailable", classification)
         self.assertEqual("reload-stage-evidence-contradictory", reason)
 
+        for client_error in ("access-denied", "interactive-auth-required"):
+            with self.subTest(admitted_request_client_error=client_error):
+                classification, reason = self.classifier.daemon_reload_classification(
+                    **{**baseline, "client_error": client_error}
+                )
+                self.assertEqual("diagnostic-unavailable", classification)
+                self.assertEqual("reload-stage-evidence-contradictory", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "run_space_sufficient": False,
+                "client_error": "run-space-rejected",
+                "reload_request_logged": False,
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-stage-evidence-contradictory", reason)
+
         classification, reason = self.classifier.daemon_reload_classification(
             **{
                 **baseline,
@@ -955,7 +974,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 ----
 type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:container_file_t:s0 tclass=file permissive=0
 """
-        observed, avc, ambiguous = self.observer.reload_access_avc(payload)
+        observed, avc, ambiguous = self.observer.reload_access_avc(payload, 7)
         self.assertTrue(observed)
         self.assertFalse(ambiguous)
         self.assertEqual(
@@ -967,6 +986,17 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             },
             avc,
         )
+
+        observed, avc, ambiguous = self.observer.reload_access_avc(payload, 9)
+        self.assertFalse(observed)
+        self.assertIsNone(avc)
+        self.assertFalse(ambiguous)
+
+        malformed = payload.replace(b"pid=7", b"pid=unknown")
+        observed, avc, ambiguous = self.observer.reload_access_avc(malformed, 7)
+        self.assertTrue(observed)
+        self.assertIsNone(avc)
+        self.assertTrue(ambiguous)
 
     def test_bounded_collector_distinguishes_io_failure_from_timeout(self) -> None:
         process = mock.Mock(pid=123)
