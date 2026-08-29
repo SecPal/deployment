@@ -1102,6 +1102,44 @@ class CloudCIContractTests(unittest.TestCase):
             with self.subTest(new=new):
                 self.assert_mutation_rejected(classifier, old, new)
 
+    def test_rejects_collapsed_selinux_storage_setup_diagnostics(self) -> None:
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        mutations = (
+            (
+                '(250, 250, "qualify-selinux-storage-fcontext-add"),',
+                '(250, 250, "qualify-selinux-storage-directory-create"),',
+            ),
+            (
+                '(252, 252, "qualify-selinux-storage-restorecon"),',
+                '(252, 252, "qualify-selinux-storage-fcontext-add"),',
+            ),
+            (
+                '(253, 253, "qualify-selinux-storage-matchpathcon"),',
+                '(253, 253, "qualify-selinux-storage-restorecon"),',
+            ),
+            (
+                '(249, 249, "qualify-selinux-storage-directory-create"),',
+                '(249, 249, "qualify-selinux-storage"),',
+            ),
+            (
+                '(249, 249, "qualify-selinux-storage-directory-create"),',
+                '(248, 248, "qualify-selinux-storage-directory-create"),',
+            ),
+            (
+                '''(249, 249, "qualify-selinux-storage-directory-create"),
+    (250, 250, "qualify-selinux-storage-fcontext-add"),
+    (252, 252, "qualify-selinux-storage-restorecon"),
+    (253, 253, "qualify-selinux-storage-matchpathcon"),''',
+                '''(249, 249, "qualify-selinux-storage"),
+    (250, 250, "qualify-selinux-storage"),
+    (252, 252, "qualify-selinux-storage"),
+    (253, 253, "qualify-selinux-storage"),''',
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(new=new):
+                self.assert_mutation_rejected(classifier, old, new)
+
     def test_rejects_weakened_target_trace_binding_bounds_and_ambiguity(self) -> None:
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         for old, new in (
