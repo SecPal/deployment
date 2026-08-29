@@ -114,7 +114,7 @@ class RockyCloudControlTests(unittest.TestCase):
             "reason": "command-failed",
             "exit_status": 1,
             "source_host": "github.com",
-            "target_sha": "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6",
+            "target_sha": "83d0c3720d342d0222e8dee9819e28d0c6739f84",
         }
         self.assertEqual([], list(validator.iter_errors(base)))
         for mutation in (
@@ -139,7 +139,7 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_access_request_validation_is_exact_bound_and_order_independent(self) -> None:
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
-        target_sha = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
+        target_sha = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
         run_id = "33123855032"
         run_attempt = "1"
         with tempfile.TemporaryDirectory() as directory:
@@ -223,7 +223,7 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_access_request_validation_rejects_every_closed_contract_mismatch(self) -> None:
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
-        target_sha = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
+        target_sha = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
         run_id = "33123855032"
         run_attempt = "1"
         with tempfile.TemporaryDirectory() as directory:
@@ -398,6 +398,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "prepare_script_base64gzip": ROOT / "scripts/ci-cloud/prepare-rocky-host.sh",
             "readiness_publisher_base64gzip": ROOT
             / "scripts/ci-cloud/publish-rocky-qualification-readiness.py",
+            "runtime_user_systemd_base64gzip": ROOT
+            / "scripts/ci-cloud/runtime_user_systemd.py",
             "target_runner_base64gzip": ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh",
             "target_failure_classifier_base64gzip": ROOT
             / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",

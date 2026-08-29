@@ -25,6 +25,8 @@ install -d -o root -g root -m 0755 /opt/secpal-control/scripts/ci-cloud \
 install -d -o root -g root -m 0700 /opt/secpal-control/libexec
 decode_script '${prepare_script_base64gzip}' /usr/local/sbin/secpal-prepare-rocky-host
 decode_script '${readiness_publisher_base64gzip}' /usr/local/sbin/secpal-publish-rocky-qualification-readiness
+decode_script '${runtime_user_systemd_base64gzip}' /usr/local/sbin/runtime_user_systemd.py
+decode_script '${runtime_user_systemd_base64gzip}' /opt/secpal-control/scripts/ci-cloud/runtime_user_systemd.py
 decode_script '${target_runner_base64gzip}' /usr/local/sbin/secpal-run-rocky-target-qualification
 decode_script '${target_failure_classifier_base64gzip}' /usr/local/sbin/secpal-classify-rocky-target-failure
 decode_script '${target_trace_base64gzip}' /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh
