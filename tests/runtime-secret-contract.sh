@@ -90,6 +90,7 @@ chmod 0700 "$FAKE_BIN/id"
 layout_install_log="$TEMP_DIR/layout-install.log"
 # This negative-test shim proves a missing current layout fails before the
 # initializer can attempt the obsolete PostgreSQL data path.
+# shellcheck disable=SC2016
 printf '%s\n' \
   '#!/bin/sh' \
   'printf "%s\\n" "$*" >>"$SECPAL_TEST_INSTALL_LOG"' \
