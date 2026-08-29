@@ -78,6 +78,7 @@ python3 tests/ci-cloud-ssh-port-probe.py
 python3 tests/ci-cloud-systemd-reboot.py
 python3 tests/ci-cloud-target-diagnostic.py
 python3 tests/ci-cloud-workload-evidence.py
+python3 tests/documentation-current-guidance.py
 bash tests/ci-cloud-remote-bootstrap.sh
 bash tests/ci-cloud-workload-orchestration.sh
 bash tests/ci-cloud-init-retry.sh

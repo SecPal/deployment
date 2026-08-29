@@ -5,202 +5,158 @@ SPDX-License-Identifier: CC0-1.0
 
 # SecPal Deployment
 
-SecPal Deployment is the public reference for reproducible SecPal
-integration, self-hosting, deployment contracts, container orchestration,
-edge and security integration, and operational procedures for backup,
-restore, and updates.
+SecPal Deployment is the public home for SecPal integration, self-hosting,
+deployment contracts, edge and security integration, and operational recovery
+design.
 
-> The active test-only integration stack uses rootless Podman, native Quadlet,
-> and systemd user services with reviewed API and frontend image consumption.
-> It is not a production-ready deployment.
+> This repository does not yet provide a production-ready deployment. Its one
+> runnable application topology is a disposable integration fixture.
 
-## Architecture principles
+## What is implemented now
 
-The following statements are architecture invariants. Phase B implements the
-local integration subset; later phases remain targets:
+The current local integration uses rootless Podman, native Quadlet-generated
+systemd user services, and reviewed immutable API and frontend images. It has
+no Docker or Compose fallback, no runtime socket/API dependency, no host
+networking, and no Valkey or Redis service.
 
-- Public and managed installations use the same product images.
-- The API and frontend remain deployment-neutral and use separate images.
-- PostgreSQL is the persistent source of truth.
-- PostgreSQL-backed application state provides sessions, durable queues, and
-  shared cache behavior in the active disposable integration.
-- The `activity-hash-chain` role has exactly one worker.
-- The scheduler has exactly one instance.
-- The public edge remains separate from product containers.
-- CrowdSec will be integrated at the public edge.
-- Production secrets are never stored in this repository or in images.
-- Published images are introduced only through reviewed immutable digests.
-- The public self-hosting contract forms the technical basis for private
-  managed-hosting automation.
+The renderer creates nine containers, two internal networks, three disposable
+volumes, and one systemd user target:
 
-## Roadmap status
+- secret initialization;
+- a PostgreSQL 18.6 integration fixture;
+- one explicit one-shot migration;
+- API and frontend product roles;
+- a general worker;
+- exactly one dedicated `activity-hash-chain` worker;
+- exactly one scheduler; and
+- a narrowly scoped Caddy test gateway on loopback.
 
-1. Governance bootstrap: complete.
-2. Local API/frontend integration: complete.
-3. Immutable image publishing: complete. API and frontend publication and
-   digest-only consumption are operationally verified. Deployment merge
-   commit `4fc2796409b7c37a541f515ccf29236f143fc132` passed post-merge
-   Repository Quality run `31264563173` and Local Integration run
-   `31264562902` on `main`.
-4. Public rootless Podman/Quadlet reference deployment: the D.1 host contract,
-   D.1a integration-runtime parity, and D.2 production state/secret boundary are
-   implemented; installation, public-edge, backup/restore, and later Phase-D
-   work are not.
-5. Public edge, TLS, and CrowdSec: not implemented.
-6. Backup, restore, update, and rollback: not implemented.
-7. Private managed-hosting automation: permanently outside this public
-   repository.
+The application roles use `CACHE_STORE=database`,
+`QUEUE_CONNECTION=database`, and `SESSION_DRIVER=database`. The PostgreSQL
+container, its `/var/lib/postgresql/18/docker` data directory, the test gateway,
+and integration storage are disposable test infrastructure. They are not the
+production database, edge, or durable private-file design.
 
-See [the roadmap](docs/roadmap.md) for acceptance criteria and explicit
-non-goals.
-
-## Active rootless Podman and Quadlet integration
-
-The active integration runtime is
-[`scripts/quadlet-integration.py`](scripts/quadlet-integration.py). It admits
-only rootless Podman `>=5.4.2,<6` with `crun`, `catatonit`, Netavark/Aardvark,
-`pasta`, and a systemd user manager using the D.1 root-owned Quadlet search
-path. It verifies both SecPal product OCI indexes and their fixed publisher
-identities before staging them in local Podman storage. The generated product
-units use the exact reviewed digest references and `Pull=never`, so systemd
-startup cannot perform an opportunistic pull.
-
-The constrained renderer creates separate disposable PostgreSQL 18, API, general
-worker, hash-chain singleton worker, scheduler singleton, frontend, and
-integration-gateway containers plus an explicit one-shot migration. Only the
-test-only gateway publishes one controlled loopback port and does not define or
-evidence the production edge. Runtime inspection, real API
-and frontend health, Playwright, failure ordering, signal handling, parallel
-fixtures, restart behavior, resource observations, and exact cleanup are part
-of the active contract.
-
-Run it explicitly after installing the documented runtime prerequisites and
-root-owned search-path policy:
+Run the integration only on a host that satisfies the documented test-runtime
+prerequisites and root-owned Quadlet search-path policy:
 
 ```bash
 python3 scripts/quadlet-integration.py
 ```
 
-See [the complete integration contract](docs/quadlet-integration.md) for the
-service map, supply-chain order, security invariants, lifecycle behavior,
-hosted-runner limits, and parallel-run inputs.
+See the [current integration contract](docs/quadlet-integration.md) for its
+closed topology, lifecycle, security, and cleanup rules.
 
-## Historical Phase B/C evidence
+## Current production target
 
-Phase B/C completion is preserved in immutable Git and GitHub evidence, not in
-a maintained compatibility runtime. Deployment merge commit
-`4fc2796409b7c37a541f515ccf29236f143fc132` and its push-triggered Local
-Integration run `31264562902` recorded the completed lifecycle and cleanup.
-The reviewed API OCI index was
-`ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`;
-the reviewed frontend OCI index was
-`ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`,
-published from `b755ca0d0ee5a85eca5ad5688d457241f070b1b4` by run
-`31247196734` (attempt `1`).
+The production architecture below is the current target, not an implemented
+administrator runbook. Its owning issues remain authoritative for technical
+decisions and delivery state:
 
-The current integration runtime is exclusively rootless Podman, systemd-user,
-and native Quadlet. It uses database-backed sessions, cache, and durable queues
-with a disposable PostgreSQL 18 fixture, while preserving browser, worker,
-migration, and cleanup coverage without a runnable Docker/Compose stack.
+- [#80](https://github.com/SecPal/deployment/issues/80) owns the Rocky Linux
+  10.2+ host contract, SELinux enforcing confinement, and the rootless Podman,
+  systemd, and Quadlet application boundary.
+- [#81](https://github.com/SecPal/deployment/issues/81) owns host-native
+  PostgreSQL 18 under systemd/SELinux. Production PostgreSQL is infrastructure,
+  not a SecPal product container, and the repository does not yet provide that
+  runnable production path.
+- The production application topology has no Valkey. PostgreSQL owns relational
+  state plus the initial database-backed sessions, durable queues, and shared
+  cache. API, frontend, general workers, the dedicated hash-chain worker,
+  scheduler, and one-shot migration remain distinct roles.
+- [#89](https://github.com/SecPal/deployment/issues/89) owns the host-native
+  HAProxy production edge, external Certbot ACME, trusted-client identity, and
+  layered nftables, CrowdSec, and AppSec/Coraza security seams. Caddy remains a
+  disposable integration gateway, and nginx-unprivileged remains frontend
+  product-image userspace; neither is the production public edge.
+- [#85](https://github.com/SecPal/deployment/issues/85) owns layered production
+  security, including socketless runtime detection. Product containers do not
+  receive public TLS, firewall authority, or a runtime socket/API.
+- [#91](https://github.com/SecPal/deployment/issues/91) and its descendants own
+  Barman PostgreSQL recovery, Borg private-file recovery, topology-independent
+  Recovery Sets, and isolated restore drills. Disposable integration volumes
+  are not production storage or backup evidence.
+- [#117](https://github.com/SecPal/deployment/issues/117) and its descendants
+  own current Rocky/SELinux cloud conformance. Completed Debian/AppArmor cloud
+  evidence is historical and is not a supported production or compatibility
+  path.
 
-Phase B completed in the required check context
-`Local Integration / Compose Contract`: the technical implementation head
-passed that hosted check and the check was enforced for `main`. D.1a does not
-rewrite that evidence. The active checks are `Local Integration / Quadlet
-Contract (amd64)` and `Local Integration / Quadlet Contract (arm64)`; changing
-branch protection from the historical name is an explicit governance cutover
-when this migration merges.
+No manual workaround in this repository completes these target contracts.
+Follow each owning issue and its native GitHub relationships for current
+implementation status.
 
-This stack proves integration only. It does not provision a tenant, claim
-`/health/ready`, expose a public service, persist production data, use
-production credentials, or select the future production edge.
+## Known implementation boundaries
 
-## Ephemeral Debian 13 cloud conformance
+The former containerized production database path was retired before its
+host-native replacement landed. Until #81 is delivered, there is intentionally
+no runnable production PostgreSQL procedure here; the disposable PostgreSQL 18
+fixture must not be promoted as a workaround.
 
-The repository now contains a manual, protected
-[`Debian 13 cloud conformance`](docs/ci-cloud-conformance.md) foundation. It
-can provision one short-lived official Debian 13 host using a closed
-DigitalOcean Intel/AMD or Google C4A/Axion profile, run an exact 40-character
-deployment commit SHA without exposing cloud-control credentials to that
-commit, collect bounded host/runtime evidence, and destroy the exact OpenTofu
-state. Metadata-gated TTL janitors protect billable compute fixtures.
+The local integration renderer now emits the 15-artifact, no-Valkey topology.
+The downstream cloud workload/evidence client still expects the superseded
+16-artifact interface. [#119](https://github.com/SecPal/deployment/issues/119)
+owns that migration and remains blocked by
+[#118](https://github.com/SecPal/deployment/issues/118). Local integration
+success therefore does not claim current cloud-workload conformance.
 
-The separate current
-[`Rocky 10.2 ephemeral-cloud qualification`](docs/rocky-cloud-qualification.md)
-contract fixes one GCP C4A ARM64 profile, resolves the official moving family to
-an immutable image before OpenTofu, and separates discovery, preparation,
-target-owned qualification, and exact destruction. Repository validation does
-not claim provider or native ARM success; protected WIF discovery and a real
-create→observe→destroy run remain post-merge evidence.
+## Historical evidence
 
-The exact target implements only the fixed versioned `host`, workload
-publication, and workload cleanup phases. It derives the fixture identity and
-loopback port from the admitted commit, verifies the reviewed API and frontend
-attestations before staging immutable local digest identities, and crosses the
-root-owned Quadlet boundary only through the fixed unprivileged fixture
-client. Activation and evidence collection stay in the main-controlled
-collector; target code cannot choose either operation.
+Phase B/C and the completed D.1/D.1a/D.2/D.3 records describe earlier
+pre-production contracts. They are retained as immutable design and validation
+evidence, not as administrator instructions or compatibility paths.
 
-This CI infrastructure is non-production. It contains no customer data,
-production inventory, DNS, certificate, backup, or service credential and is
-not part of the production installation path. Google authentication uses
-repository- and workflow-scoped Workload Identity Federation without a JSON
-key or useful VM identity. GitHub-hosted Ubuntu integration evidence remains
-distinct from Debian 13 host admission.
+- Phase B/C delivery is recorded by deployment merge commit
+  `4fc2796409b7c37a541f515ccf29236f143fc132`, Repository Quality run
+  `31264563173`, and Local Integration run `31264562902`.
+- [Issue #125](https://github.com/SecPal/deployment/issues/125) removed the
+  executable Compose-era stack from current `main`; Git, the closed issue, and
+  its merged delivery preserve that evidence.
+- [PR #204](https://github.com/SecPal/deployment/pull/204) delivered the current
+  PostgreSQL 18, database-backed, no-Valkey disposable integration. The current
+  required runtime checks are `Quadlet Contract (amd64)` and
+  `Quadlet Contract (arm64)`.
+- Historical Debian host, inventory, state, secret, edge, and cloud documents
+  are indexed as superseded records in the
+  [architecture scope](docs/architecture/scope.md).
 
-Phase C is complete. API and frontend publication, token-free fail-closed
-digest consumption, pre-execution attestation verification, and hosted
-post-merge integration evidence are operationally verified. This does not
-claim a production deployment or public infrastructure. Phase D has begun
-only with the provider-neutral, contract-only
-[`production host`](docs/architecture/production-host.md) and
-[`production inventory`](docs/architecture/production-inventory.md)
-definitions. Schema version 1 admits only Debian 13/trixie hosts and defines
-its security-update, controlled-reboot, reviewed major-upgrade, rootless
-Podman, systemd/Quadlet, subordinate-ID, and local runtime-storage boundaries.
-The active disposable integration now re-proves those behaviors on native
-rootless Podman/Quadlet. The Phase B/C immutable records remain historical
-evidence and Docker/Compose is not a supported production runtime. This is
-still disposable integration evidence: no production orchestration or
-infrastructure exists. Digest
-provenance, reviewed updates, and rollback are detailed in
-[`docs/api-image-consumption.md`](docs/api-image-consumption.md) and
-[`docs/frontend-image-consumption.md`](docs/frontend-image-consumption.md).
+## Documentation navigation
 
-## Security
+- [Deployment roadmap](docs/roadmap.md): implemented versus target versus
+  historical status.
+- [Architecture scope](docs/architecture/scope.md): document authority,
+  ownership, and current/historical navigation.
+- [API image consumption](docs/api-image-consumption.md) and
+  [frontend image consumption](docs/frontend-image-consumption.md): reviewed
+  immutable product-image identities and their Phase C evidence.
+- [Rocky cloud qualification](docs/rocky-cloud-qualification.md): in-progress
+  engineering evidence, not completed production or cloud-conformance support.
 
-Never commit secrets, `.env` files, private keys,
-certificates, tokens, or cloud credentials. Security reports follow the
-organization-wide [SecPal security process](https://github.com/SecPal/.github/security/policy).
-The current branch and repository contents are not approved for production
-operation.
+## Security and development
 
-## Development
+Never commit secrets, `.env` files, private keys, certificates, tokens, cloud
+credentials, or customer data. Security reports follow the organization-wide
+[SecPal security process](https://github.com/SecPal/.github/security/policy).
 
-Run deterministic repository checks without Docker or network access:
+Run deterministic repository validation without starting the integration
+fixture or accessing a container runtime:
 
 ```bash
 ./scripts/preflight.sh
 ```
 
-The preflight requires the locally installed tools documented by its error
-messages; it never installs dependencies or starts the integration stack. The
-real rootless Podman/Quadlet integration is a separate, explicit command.
+The preflight requires the locally installed tools named by its error messages;
+it does not install dependencies.
 
 ## Repository boundary
 
 Product code remains in [`SecPal/api`](https://github.com/SecPal/api) and
-[`SecPal/frontend`](https://github.com/SecPal/frontend). Their Dockerfiles and
-build logic are not copied here. The API follows the reviewed Phase C digest
-contract, and the frontend follows the equivalent reviewed Phase C digest
-contract. This repository neither fetches frontend source nor forks product
-build logic.
-
-The detailed ownership and trust boundaries are documented in
-[`docs/architecture/scope.md`](docs/architecture/scope.md).
+[`SecPal/frontend`](https://github.com/SecPal/frontend). SecPal-owned current
+build contracts use `Containerfile` terminology. Product Containerfiles and
+build logic are not copied into this repository. Technically accurate Docker
+Registry, OCI, historical Compose, and third-party terminology remains where it
+describes those exact protocols or records.
 
 ## License
 
 The repository project license is GNU AGPL 3.0 or later. File-level SPDX and
-REUSE metadata apply the current SecPal licensing matrix, including the SecPal
-attribution addendum where applicable.
+REUSE metadata apply the repository licensing matrix.

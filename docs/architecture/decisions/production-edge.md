@@ -5,11 +5,18 @@ SPDX-License-Identifier: CC0-1.0
 
 # Production edge decision
 
-## Status
+> **Status: Superseded.** This Debian/NGINX ADR is retained as the historical
+> decision record. The current HAProxy/Certbot production-edge decision and
+> trusted-client contract are owned solely by
+> [#89](https://github.com/SecPal/deployment/issues/89). The body and embedded
+> accepted-status payload below describe the decision at the time; they are not
+> current implementation guidance.
 
-Accepted for the single-host production reference. This ADR is a decision and
-contract only: it installs nothing, publishes no port, changes no firewall or
-DNS, and obtains no certificate.
+## Historical status
+
+This ADR was accepted for the former single-host production reference. It
+installed nothing, published no port, changed no firewall or DNS, and obtained
+no certificate.
 
 ## Context and requirements
 

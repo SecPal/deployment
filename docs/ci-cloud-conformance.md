@@ -5,6 +5,12 @@ SPDX-License-Identifier: CC0-1.0
 
 # Ephemeral Debian 13 cloud conformance
 
+> **Status: Historical.** This completed Debian/APT/AppArmor conformance record
+> is preserved as evidence, not as current execution guidance. Current
+> Rocky/SELinux cloud conformance is owned by
+> [#117 and its descendants](https://github.com/SecPal/deployment/issues/117).
+> Do not use the commands below as a current deployment or conformance path.
+
 ## Purpose and boundary
 
 This infrastructure creates disposable, non-production Debian 13 hosts for

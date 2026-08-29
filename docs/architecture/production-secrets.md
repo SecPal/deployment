@@ -5,6 +5,12 @@ SPDX-License-Identifier: CC0-1.0
 
 # Production secret contract
 
+> **Status: Historical.** This completed D.2 product-container and Valkey secret
+> record is retained as evidence, not as a current production procedure. Native
+> PostgreSQL and current secret-authority work are owned by
+> [#81](https://github.com/SecPal/deployment/issues/81) and dedicated security
+> descendants.
+
 ## Boundary and delivery model
 
 The canonical rows and delivery sets are in

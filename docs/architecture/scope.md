@@ -5,171 +5,132 @@ SPDX-License-Identifier: CC0-1.0
 
 # Deployment architecture scope
 
-This document defines ownership and trust boundaries for the SecPal deployment
-reference. Phase B implemented the original test-only local integration
-subset, Phase C supplied its reviewed API and frontend digests, and D.1a moves
-the active disposable runtime to native rootless Podman and Quadlet. D.3 now
-selects the [production edge](decisions/production-edge.md). These decisions do
-not implement a production deployment.
+This document is the deployment documentation index and ownership map. It
+identifies current guidance, implemented integration contracts, planned
+production authorities, and historical records. It does not restate the
+technical contracts owned by their issues, and it does not mirror GitHub graph
+or progress state.
 
-## Repository responsibilities
+## Current implemented authority
 
-This repository owns:
+The repository has one implemented application runtime:
+[the disposable rootless Podman/Quadlet integration](../quadlet-integration.md).
+It uses reviewed immutable API and frontend images, a PostgreSQL 18.6 test
+fixture, database-backed cache/queue/session behavior, one general worker, one
+dedicated hash-chain worker, one scheduler, one-shot migration, disposable
+private storage, and a narrowly scoped Caddy test gateway.
 
-- integration contracts;
-- the active D.1a rootless Podman/Quadlet integration orchestration;
-- the historical Phase B local Compose orchestration and evidence;
-- service dependencies;
-- service roles and singleton contracts;
-- local health checks;
-- ephemeral runtime-secret contracts; and
-- integration-test documentation.
+The integration is test-only. Its PostgreSQL container is not production
+PostgreSQL, its private-storage volume is not durable production storage, and
+its Caddy gateway is not a public edge. The frontend image's
+nginx-unprivileged process is product-image userspace and is likewise not
+production ingress.
 
-The reviewed immutable API and frontend images are already consumed here.
-Phase D has added production persistence and secret contracts and selected the
-production edge. Later work will implement that edge and CrowdSec,
-backup/restore, update/rollback, and production operator guidance.
+The current immutable product-image authorities are:
 
-## Out of scope
+- [API image consumption](../api-image-consumption.md); and
+- [frontend image consumption](../frontend-image-consumption.md).
 
-This repository does not own:
+Those documents retain explicitly labelled Phase C Docker Registry and Compose
+evidence where technically accurate. That historical/protocol terminology does
+not create a current Docker/Compose deployment path.
 
-- Laravel product logic;
-- React product logic;
-- Android code;
-- product Dockerfiles;
-- private customer inventories;
-- private hosting credentials;
-- DNS-provider or cloud-provider credentials;
-- internal SecPal operations automation; or
-- customer data.
+## Current production target owners
+
+Production architecture is a target, not a runnable capability on current
+`main`. Follow the owning issue for technical content and native delivery state:
+
+- [#80 — Rocky Linux 10.2+ / SELinux production
+  host](https://github.com/SecPal/deployment/issues/80);
+- [#81 — host-native PostgreSQL 18 under
+  systemd/SELinux](https://github.com/SecPal/deployment/issues/81);
+- [#85 — layered security and socketless runtime
+  detection](https://github.com/SecPal/deployment/issues/85);
+- [#89 — HAProxy, Certbot, trusted-client identity, nftables, CrowdSec, and
+  AppSec/Coraza production edge](https://github.com/SecPal/deployment/issues/89);
+- [#91 — Barman, Borg, Recovery Sets, and restore-drill
+  coordination](https://github.com/SecPal/deployment/issues/91); and
+- [#117 — current Rocky/SELinux cloud
+  conformance](https://github.com/SecPal/deployment/issues/117).
+
+Together these owners define a Rocky Linux 10.2+ host with SELinux enforcing,
+rootless Podman/systemd/Quadlet application containers, host-native PostgreSQL
+18, no Valkey, private product backends, host-native HAProxy/Certbot, layered
+nftables/CrowdSec/AppSec security, socketless runtime detection, durable private
+files, Barman/Borg recovery, Recovery Sets, and isolated restore evidence.
+
+This index does not claim those owner contracts are implemented. In particular,
+Issue #81 has not yet supplied the runnable native production PostgreSQL path. The
+disposable PostgreSQL fixture must not be promoted to fill that gap.
+
+## Current cloud boundary
+
+[Rocky cloud qualification](../rocky-cloud-qualification.md) records in-progress
+engineering evidence and explicitly outstanding real-system proof. It is not a
+production provisioning guide.
+
+The local #126 renderer emits the current 15-artifact no-Valkey integration
+topology. The downstream cloud workload/evidence client still expects the old
+16-artifact interface. [#119](https://github.com/SecPal/deployment/issues/119)
+owns that migration and is blocked by
+[#118](https://github.com/SecPal/deployment/issues/118). Until it lands, local
+integration evidence cannot be presented as migrated Rocky cloud-workload
+evidence.
+
+## Historical architecture records
+
+The following files preserve completed pre-rebaseline decisions. Their status
+banners are authoritative for navigation; their bodies remain accurate
+historical records and are not current administrator instructions:
+
+- [D.1 Debian/AppArmor host](production-host.md);
+- [D.1 inventory](production-inventory.md);
+- [D.2 state](production-state.md);
+- [D.2 secrets](production-secrets.md);
+- [superseded Debian/NGINX production-edge ADR](decisions/production-edge.md);
+  and
+- [Debian cloud conformance](../ci-cloud-conformance.md).
+
+Git history, closed issues and pull requests, and immutable workflow runs
+preserve Phase B/C and D.1/D.1a evidence. The repository intentionally keeps no
+runnable historical Compose stack or compatibility directory.
 
 ## Trust boundaries
 
-The architecture separates the following trust zones:
+### Disposable integration
 
-- **Local test client:** reaches only the loopback-bound test TLS gateway using
-  the separate `app.secpal.example.invalid` and
-  `api.secpal.example.invalid` origins on one dynamic port.
-- **Test gateway:** terminates disposable local TLS and routes over the internal
-  edge network. The API uses Laravel's immediate-peer trust token so gateway
-  HTTPS and client metadata survive dynamic bridge addressing. All Phase B
-  network peers are stack-owned services. The gateway is not the selected
-  [production NGINX edge](decisions/production-edge.md).
-- **Frontend container:** serves the frontend image and has no direct database
-  or secret-store authority.
-- **API HTTP container:** handles authenticated application requests and is
-  distinct from public-edge responsibilities.
-- **Worker containers:** execute explicitly assigned queue roles without public
-  ingress.
-- **Scheduler container:** initiates scheduled work under a singleton contract.
-- **PostgreSQL:** persistent source of truth on a private data boundary.
-- **Valkey:** private queue and cache service containing no authoritative
-  replacement for PostgreSQL data.
-- **Ephemeral secret volume:** runtime-generated, least-authority inputs that
-  never enter images, command lines, logs, or repository history.
-- **Ephemeral private application storage:** a shared named volume mounted by
-  the API, both worker roles, scheduler, and migration role. It is destroyed
-  after integration testing; durable production storage is deferred.
-- **External services:** separately authenticated dependencies outside the
-  deployment trust domain.
+- The test client reaches one loopback-only gateway using separate frontend and
+  API origins.
+- The Caddy fixture terminates disposable local TLS and routes only within the
+  test networks.
+- Frontend has no database credential or private-file authority.
+- API handles application HTTP and remains separate from public-edge duties.
+- General worker and dedicated hash-chain worker have distinct queue ownership.
+- Exactly one scheduler and one hash-chain worker exist.
+- Migration is explicit, one-shot, and never initiated by an entrypoint or
+  health check.
+- PostgreSQL 18 and private-file storage are disposable fixtures destroyed by
+  exact cleanup.
 
-The API, frontend, workers, scheduler, PostgreSQL, and Valkey publish no ports.
-In the active D.1a runtime the API, frontend, and gateway share the internal
-edge network, but only the gateway publishes the controlled loopback fixture
-port. The application and edge networks remain separate and internal. The
-retained Compose evidence used its historical host-access bridge. Production
-traffic and public exposure are not implemented.
+### Production target
 
-## Singleton invariants
+- HAProxy alone owns public ingress, TLS termination, routing, and canonical
+  client identity; product containers remain private.
+- PostgreSQL 18 is host-native infrastructure, not a product container.
+- PostgreSQL is the initial relational, session, durable-queue, and shared-cache
+  authority; there is no Valkey service.
+- Durable private files are distinct from container layers and integration
+  volumes.
+- nftables, CrowdSec host decisioning, AppSec/Coraza, and socketless detection
+  are layered host security rather than product-container authority.
+- Barman, Borg, independent recovery copies, Recovery Sets, and isolated drills
+  own recoverability rather than runtime volumes or replication alone.
 
-Both the historical Phase B and active D.1a contracts enforce:
+## Repository responsibilities
 
-```text
-activity-hash-chain worker: exactly one
-scheduler: exactly one
-```
-
-The historical Compose contract allowed deliberate general-worker scaling and
-used explicit container names to reject singleton scaling. The active closed
-Quadlet set generates one instance of each role with run-scoped names so
-parallel canonical runs remain isolated. The
-`worker-hash-chain` singleton consumes only `activity-hash-chain`.
-`worker-general` consumes `merkle`, `opentimestamp`, and `default` and has no
-singleton label. In D.1a migration is an explicit one-shot systemd dependency
-and runs exactly once. Only that unit selects the migration command; the shared
-runtime-preparation wrapper and every health check never initiate migration.
-
-## Step A bootstrap contract
-
-Step A established governance, documentation, local validation, and quality CI.
-Phase B deliberately revised its temporary absence contract through a regular
-feature branch while keeping production settings, committed secrets,
-certificates, infrastructure-as-code, and deployment automation forbidden.
-
-## Phase B local integration contract
-
-This section is the historical completion record. Phase B:
-
-- consumes the API from one reviewed GHCR OCI index digest;
-- consumes the frontend only from its reviewed public OCI index digest after
-  anonymous pull and fixed-identity attestation verification;
-- uses a local test-only TLS gateway and disposable internal CA;
-- exposes separate local frontend and API HTTPS origins;
-- avoids a final edge-technology decision;
-- exposes only a loopback host port; and
-- generates disposable runtime secrets inside an isolated volume;
-- uses Valkey for both queues and cache; and
-- shares disposable private files between API-based roles.
-
-Before any API-based role or frontend container runs, the real integration
-runner validates both resolved Compose images, anonymously pulls each exact
-digest with a separate empty Docker configuration, retrieves and validates
-each digest-bound OCI Sigstore bundle, raw index, and registry digest header,
-and verifies each local digest-matching index against its bundle and fixed
-repository, workflow, source ref, source commit, and signer without reopening
-the registry. It then exercises
-liveness, the frontend document, runtime API origin, CORS, Sanctum CSRF and
-cookie behavior, Valkey cache and queue round trips, worker ownership, shared
-private storage, explicit migration, browser CSP and service-worker behavior,
-singleton cardinalities, and cleanup. The same runner executes on
-GitHub-hosted Ubuntu in
-`Local Integration / Compose Contract`. Tenant provisioning, API readiness,
-public TLS, CrowdSec, durable storage, backups, updates, and rollback remain
-outside Phase B.
-
-## Active D.1a integration contract
-
-The active runner retains the Phase B/C behavioral proof while replacing the
-execution layer with rootless Podman, native Quadlet-generated user services,
-and a native systemd user target. Both product images pass the same exact OCI
-index and fixed-publisher attestation gates before either image can execute;
-then their Quadlets use `Pull=never`.
-
-PostgreSQL and Valkey readiness gates the one-shot migration, successful
-migration gates API-based application roles, and healthy API/frontend gates
-the integration gateway. Runtime inspection proves `crun`, exact non-root
-identities, read-only roots, bounded writable paths, dropped capabilities,
-`no-new-privileges`, AppArmor when available, exact network membership, and
-the absence of unintended host ports or sockets. Cleanup addresses only the
-run's deterministic names and labels and verifies unrelated resources survive.
-The full service, security, lifecycle, and hosted-evidence contract is in
-[`../quadlet-integration.md`](../quadlet-integration.md).
-
-## Configuration classes
-
-- **Active integration definitions:** constrained generated Quadlets, a native
-  systemd user target, the test Caddyfile, and validation scripts.
-- **Historical evidence:** completed Phase B/C commits, pull requests, and
-  immutable run records remain the evidence; no compatibility runtime is kept.
-- **Local user configuration:** none is required by the canonical test; no
-  `.env` file is read.
-- **Secrets:** generated at runtime in the `local-secrets` volume, rolled back
-  as a set if publication is interrupted, and mounted read-only into
-  long-running services.
-- **Runtime state:** the temporary PostgreSQL and shared private-storage
-  volumes plus per-container tmpfs mounts.
-- **Generated artifacts:** the run-scoped locally built gateway image and
-  disposable internal CA, both outside Git history and removed by the explicit
-  integration test. The published API and frontend digests are never treated
-  as local cleanup artifacts.
+This repository owns portable deployment contracts, the disposable integration
+runtime, current/historical navigation, provider-neutral conformance, and public
+self-hosting evidence. It does not own Laravel, React, or Android product logic;
+product Containerfiles; customer inventories or data; production credentials;
+private keys; provider-specific managed fleet orchestration; or internal SecPal
+operations policy.

@@ -56,9 +56,8 @@ def validate_evidence(root: Path) -> None:
         (
             readme,
             (
-                runtime["API_IMAGE"],
-                runtime["FRONTEND_IMAGE"],
-                runtime["FRONTEND_SOURCE_COMMIT"],
+                "docs/api-image-consumption.md",
+                "docs/frontend-image-consumption.md",
                 "4fc2796409b7c37a541f515ccf29236f143fc132",
                 "31264563173",
                 "31264562902",

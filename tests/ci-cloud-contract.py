@@ -2973,11 +2973,16 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn('output "image_id"', gcp_outputs)
         self.assertIn('output "machine_type"', gcp_outputs)
 
-    def test_governance_exception_is_bounded_to_nonproduction_conformance(self) -> None:
+    def test_governance_binds_current_nonproduction_conformance(self) -> None:
         instructions = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("non-production conformance", instructions)
-        self.assertIn("resolved provider image ID", instructions)
-        self.assertIn("exact installed package versions", instructions)
+        self.assertIn("Current non-production cloud conformance", instructions)
+        self.assertIn("Rocky Linux 10.2+", instructions)
+        self.assertIn("SELinux contracts owned by #117-#123", instructions)
+        self.assertIn("closed schema-validated", instructions)
+        self.assertIn(
+            "never treats a disposable integration fixture as production",
+            instructions,
+        )
 
     def test_rejects_non_full_target_sha_validation(self) -> None:
         self.assert_mutation_rejected(

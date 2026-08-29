@@ -118,9 +118,13 @@ class WorkGraphGovernanceTests(unittest.TestCase):
                 "Never print secret values to logs",
                 "using `latest` tags or unpinned production images",
                 "API and frontend remain separate images",
+                "Product Containerfiles are never duplicated here",
                 "Migrations are explicit and run exactly once",
-                "CrowdSec belongs at the public edge",
-                "Valkey never replaces PostgreSQL as the source of truth",
+                "Production PostgreSQL 18 is host-native systemd/SELinux infrastructure",
+                "current production and integration topology has no Valkey",
+                "Host-native HAProxy owns public TLS and routing with external Certbot",
+                "Security is layered across SELinux/rootless confinement, nftables, "
+                "CrowdSec host decisioning, AppSec/Coraza, and socketless runtime detection",
             )
         )
 

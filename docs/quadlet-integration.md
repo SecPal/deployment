@@ -5,11 +5,12 @@ SPDX-License-Identifier: CC0-1.0
 
 # Rootless Podman and Quadlet integration
 
-This is the active disposable integration runtime. It transfers the completed
-Phase B/C behavior to native rootless Podman 5, Quadlet-generated systemd user
-services, `crun`, Netavark/Aardvark, and `pasta`. It is not a production
-deployment and does not implement persistence, production secrets, public
-edge, TLS lifecycle, CrowdSec, backup, update, or rollback operations.
+This is the active disposable integration runtime delivered by
+[#126](https://github.com/SecPal/deployment/issues/126). It uses native rootless
+Podman 5, Quadlet-generated systemd user services, `crun`,
+Netavark/Aardvark, and `pasta`. It is not a production deployment and does not
+implement persistence, production secrets, public edge, TLS lifecycle,
+CrowdSec, backup, update, or rollback operations.
 
 Phase B/C completion remains evidenced by its immutable Git and GitHub
 history. The current repository intentionally has no runnable Docker/Compose
@@ -78,7 +79,10 @@ mode, and no runtime socket. Secret initialization alone receives `CHOWN` and
 `FOWNER` inside the rootless user namespace. Runtime inspection rechecks these
 properties, exact identities, `crun`, both networks' effective internal state,
 network membership, the gateway's exact `127.0.0.1:<port>:8443` publication,
-and the effective AppArmor profile when AppArmor is available.
+and the effective AppArmor profile when AppArmor is available on a test host.
+That conditional hosted-test observation does not define production AppArmor
+support; [#80](https://github.com/SecPal/deployment/issues/80) owns the Rocky
+Linux 10.2+/SELinux enforcing production-host contract.
 The retained Caddy container is only the narrow loopback browser/origin fixture.
 It is not the production edge and cannot satisfy production HAProxy or TLS
 evidence.
@@ -164,57 +168,29 @@ The runner emits bounded non-secret container statistics, systemd memory
 current/peak and CPU observations, unpacked image sizes, disposable volume
 sizes collected inside the rootless user namespace, and fixture disk use as
 evidence. An unavailable volume observation is reported explicitly rather than
-as a false zero. Those observations do not change the D.1 production resource
-floors.
+as a false zero. Those observations do not define production resource floors.
 
-## Exact-target Debian 13 fixture
+## Downstream cloud-evidence migration boundary
 
-The manual cloud-conformance protocol invokes only two workload operations in
-target code. `workload-prepare-start` derives the fixture identifier and port
-from the already admitted commit, installs a checksum-pinned GitHub CLI in the
-private fixture, repeats both product attestation gates, stages immutable
-`localhost/secpal-ci-…@sha256:…` identities, renders the closed unit set, and
-publishes it through `/usr/local/bin/secpal-ci-quadlet-fixture`. It does not
-start a service. The main-controlled collector admits the closed root-owned
-user environment generator, clears the mutable manager client environment for
-every observed name, and installs the fixed trusted assignments, including the
-service account's inherited login identity. It requires the prepared combined
-manager environment to equal that exact reviewed set without exposing values.
-The trusted client makes exact `CONTAINERS_CONF`, override, modules, and
-`PODMAN_USERNS` execution-time pins part of every published non-target source,
-and the root-owned installer independently ensures that exact suffix is
-present and last without duplicating it. The post-publication byte comparison
-therefore covers the complete installed contract. Generated container
-services must expose those pins plus the deterministic service name produced
-when systemd expands the generator-owned `PODMAN_SYSTEMD_UNIT=%n`; generated
-network and volume services must expose only the pins, and the unexpanded `%n`,
-another unit name, and every other assignment are rejected. The pins
-make activation immune to a detached target process temporarily changing the
-user-manager environment. Normalization still rejects manager drift before
-reload and after reload or activation, admits the generated unit provenance,
-starts the target, and independently observes the result.
+The local renderer emits the current 15-artifact PostgreSQL 18, database-backed,
+no-Valkey topology. The downstream cloud fixture client and evidence admission
+path still expect the superseded 16-artifact interface. That older interface is
+not part of the current local integration contract and cannot admit this
+topology correctly.
 
-For that evidence boundary only, the secret initializer and migration use
-their direct reviewed entrypoint and command. Quadlet's generated `--rm` is
-overridden by the fixed `--rm=false` argument so the completed one-shot
-containers remain inspectable while their systemd services are active/exited.
-The separate `workload-cleanup` phase removes only the deterministic fixture
-resources and submits the fixed root-owned removal request. Rejection of that
-request is a cleanup failure. The published product images are deliberately
-not removed.
-
-This disposable provider evidence is separate from the Ubuntu browser matrix
-and from D.1 production-host admission. A cloud artifact is evidence only
-after the independent collector and closed schema both admit it; provisioning
-a Debian host or publishing Quadlets is not itself a passing claim.
+[#119](https://github.com/SecPal/deployment/issues/119) owns the downstream
+workload/evidence migration and is currently blocked by #118. This document
+does not claim that migration is complete, and #127 does not modify the cloud
+client or installer. Until #119 lands, a successful local run is local
+integration evidence only, not current Rocky cloud-workload evidence.
 
 ## Running the integration
 
 The runtime requires a non-root user, Podman `>=5.4.2,<6`, `crun`, `catatonit`,
 Netavark, Aardvark, `pasta`, subordinate-ID helpers, an active systemd user
-manager, Debian's native Quadlet user generator at
-`/usr/lib/systemd/user-generators/podman-user-generator`, and the D.1
-root-owned Quadlet search-path policy. GitHub CLI 2.97.0, Node.js, npm,
+manager, the reviewed Quadlet user generator at
+`/usr/lib/systemd/user-generators/podman-user-generator`, and the root-owned
+Quadlet search-path policy. GitHub CLI 2.97.0, Node.js, npm,
 Playwright Chromium, Python 3, `curl`, and GNU `du` are also required.
 Podman prereleases sort below their corresponding stable release. The runtime
 and generator compatibility check compares the normalized release and
@@ -270,10 +246,10 @@ The identifier also scopes Playwright output and last-run state beneath
 worker artifacts or trace paths. Browser execution fails closed unless the
 current integration instance is supplied by the lifecycle runner.
 
-## Hosted evidence and production admission
+## Hosted integration evidence
 
 As inspected on 2026-08-09, `ubuntu-latest`/Ubuntu 24.04 provides Podman 4.9.3
-and cannot satisfy the D.1 version floor. The active workflow therefore names
+and cannot satisfy this integration contract's version floor. The active workflow therefore names
 the Ubuntu 26.04 public-preview x64 and arm64 images, whose published
 inventories report Podman 5.7.0, and then admits every required effective
 runtime property before integration. It intentionally fails if either preview
@@ -282,11 +258,6 @@ usable systemd user manager. Both supported product architectures run the same
 real lifecycle, browser, failure, parallel-isolation, and cleanup evidence.
 
 Ubuntu-hosted execution proves integration behavior only. It does not prove
-the separate D.1 Debian 13 production-host admission contract, which remains
-covered by the production inventory and synthetic host-fact validators.
-
-The required check changes from `Local Integration / Compose Contract` to the
-`Local Integration / Quadlet Contract (amd64)` and `Local Integration / Quadlet
-Contract (arm64)` matrix checks. Branch protection must make that an explicit
-atomic governance cutover when this change is merged; the repository does not
-silently mutate branch protection.
+Rocky Linux 10.2+/SELinux production-host admission or native production
+PostgreSQL. The required checks are `Local Integration / Quadlet Contract
+(amd64)` and `Local Integration / Quadlet Contract (arm64)`.

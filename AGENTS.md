@@ -78,10 +78,11 @@ Never print secret values to logs.
 - Never evaluate untrusted input with `eval` or `source`.
 - Never expose secrets in logs.
 - Pin versions and image digests exactly in production deployment paths.
-- A non-production conformance workflow may resolve one closed official OS slug
-  and current Debian packages only when it is isolated from production, records
-  the resolved provider image ID and exact installed package versions in closed
-  schema-validated evidence, and re-admits their expected Debian provenance.
+- Current non-production cloud conformance follows the Rocky Linux 10.2+ and
+  SELinux contracts owned by #117-#123. It remains isolated from production,
+  records resolved provider and package identities in closed schema-validated
+  evidence, and never treats a disposable integration fixture as production
+  infrastructure.
 
 ## Validator and evidence design
 
@@ -128,16 +129,22 @@ Never print secret values to logs.
 ## Future deployment invariants
 
 - API and frontend remain separate images.
-- Product Dockerfiles are never duplicated here.
+- Product Containerfiles are never duplicated here.
 - `activity-hash-chain worker: exactly one`.
 - `scheduler: exactly one`.
 - Migrations are explicit and run exactly once, never from an entrypoint or
   health check.
-- The edge owns TLS and public routing; product containers do not expose public
-  TLS.
-- CrowdSec belongs at the public edge.
-- PostgreSQL and private file storage require explicit backup contracts.
-- Valkey never replaces PostgreSQL as the source of truth.
+- Production PostgreSQL 18 is host-native systemd/SELinux infrastructure, not a
+  SecPal product container; integration PostgreSQL remains disposable test data.
+- PostgreSQL provides relational state, sessions, durable queues, and shared
+  cache; the current production and integration topology has no Valkey.
+- Host-native HAProxy owns public TLS and routing with external Certbot;
+  product containers remain private and do not expose public TLS.
+- Security is layered across SELinux/rootless confinement, nftables, CrowdSec
+  host decisioning, AppSec/Coraza, and socketless runtime detection.
+- PostgreSQL recovery uses Barman, `single` private-file recovery uses Borg, and
+  Recovery Sets bind database, file/object, crypto-generation, and provenance
+  evidence. Disposable integration storage is never backup evidence.
 
 ## Communication
 

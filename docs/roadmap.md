@@ -5,185 +5,138 @@ SPDX-License-Identifier: CC0-1.0
 
 # Deployment roadmap
 
-The phases below are acceptance-driven. They do not imply dates or releases.
+This roadmap distinguishes implementation on current `main`, current target
+architecture, and historical completion evidence. It is navigation, not a
+second work graph: native GitHub parent, dependency, issue, and pull-request
+state is authoritative.
 
-## Phase A — Governance bootstrap (complete)
+## Implemented foundation on current main
 
-**Goal:** Establish a trustworthy public repository without deployment code.
+The repository currently provides:
 
-**Expected artifacts:** Governance instructions, licensing and REUSE metadata,
-scope and roadmap documentation, a local repository contract, deterministic
-preflight checks, minimal quality CI, a signed initial commit, and protected
-`main` governance.
+- reviewed immutable API and frontend image-consumption contracts;
+- one disposable rootless Podman, systemd-user, and native Quadlet integration
+  runtime;
+- a canonical PostgreSQL 18.6 test fixture using
+  `/var/lib/postgresql/18/docker`;
+- database-backed cache, durable queue, and session behavior with no Valkey;
+- distinct API, frontend, general-worker, dedicated hash-chain-worker,
+  scheduler, and one-shot migration roles;
+- a loopback-only disposable Caddy browser/origin gateway that is not the
+  production edge; and
+- static, hosted amd64, and hosted arm64 integration evidence with exact
+  cleanup.
 
-**Entry criteria:** An empty public `SecPal/deployment` repository exists and
-the maintainer has signing and repository-administration capability.
+This is integration infrastructure, not a production deployment. It provides
+no current production host installer, native PostgreSQL service, public edge,
+durable private-file system, backup/recovery implementation, DNS, or
+certificate procedure.
 
-**Completion criteria:** Local checks pass; the single signed bootstrap commit
-is on `main`; repository settings and branch protection are verified; no
-deployment implementation exists.
+## Current production target
 
-**Deferred:** Every runnable stack, image, edge, secret, data-service, backup,
-update, rollback, and production concern.
+The following links identify the technical owners. Their presence here states
+the target and ownership only; it does not claim their open work is implemented.
 
-## Phase B — Local container integration stack (complete)
+- [Rocky Linux 10.2+ and SELinux host contract
+  (#80)](https://github.com/SecPal/deployment/issues/80): rootless Podman,
+  systemd/Quadlet application runtime, no Docker/Compose path, no host
+  networking, and no runtime socket/API dependency.
+- [Host-native PostgreSQL 18
+  (#81)](https://github.com/SecPal/deployment/issues/81): production database
+  under systemd/SELinux, outside the SecPal product-container layer. The
+  disposable integration database is not a temporary production alternative.
+- [HAProxy production edge
+  (#89)](https://github.com/SecPal/deployment/issues/89): external Certbot,
+  trusted-client identity, private product backends, and layered nftables,
+  CrowdSec, and AppSec/Coraza security. The old Debian/NGINX edge ADR is a
+  superseded historical record.
+- [Layered security
+  (#85)](https://github.com/SecPal/deployment/issues/85): SELinux, seccomp,
+  capabilities, rootless confinement, nftables, CrowdSec/AppSec, and
+  socketless runtime detection.
+- [Production state and private files
+  (#87)](https://github.com/SecPal/deployment/issues/87): no Valkey, explicit
+  durable private-file authority, and topology-specific state contracts.
+- [Backup and recovery
+  (#91)](https://github.com/SecPal/deployment/issues/91): Barman for PostgreSQL,
+  Borg for `single` private files, independent HA object recovery copies,
+  Recovery Sets, and isolated restore drills.
+- [Rocky cloud conformance
+  (#117)](https://github.com/SecPal/deployment/issues/117): current
+  Rocky/SELinux host and application-workload evidence, replacing the completed
+  Debian/AppArmor track.
 
-**Goal:** Prove local API/frontend integration from pinned source revisions.
+## Delivery boundaries
 
-**Expected artifacts:** A test-only local orchestration contract, pinned build
-inputs, health checks, distinct app/API HTTPS origins, explicit worker roles,
-shared disposable private storage, browser tests, and a hosted real-Compose
-integration check.
+### Production PostgreSQL
 
-**Entry criteria:** Phase A is complete and the Step A absence contract is
-deliberately updated through a regular pull request.
+The executable production PostgreSQL product-container path has been retired.
+The approved target is host-native PostgreSQL 18, but #81 still owns its
+implementation. Administrator-facing production PostgreSQL steps do not exist
+yet, and this roadmap does not invent a manual substitute.
 
-**Completion criteria:** Static contracts and the real Compose lifecycle prove
-Valkey queue/cache use, correct worker ownership, singleton cardinality, shared
-private storage, separate frontend/API HTTPS origins, exact credentialed CORS,
-Sanctum CSRF and secure-cookie behavior in Chromium, one migration, and full
-project cleanup without public exposure or production secrets. The hosted
-`Local Integration / Compose Contract` check must pass on the current pull
-request head.
+### Cloud workload evidence
 
-**Completion evidence:** Static repository and Phase B contracts passed. The
-real Compose lifecycle passed with Valkey queue and cache probes, correct
-general and hash-chain worker ownership, singleton cardinality, shared private
-storage, separate app/API HTTPS origins, exact credentialed CORS, Sanctum CSRF
-and secure-cookie behavior, Chromium CSP and service-worker checks, one
-explicit migration, and complete project-scoped cleanup. The technical
-implementation head passed `Local Integration / Compose Contract`, and that
-check is enforced for `main`; every subsequent pull-request head must pass it
-again.
+The current local renderer emits the 15-artifact PostgreSQL 18, no-Valkey
+integration topology. The downstream cloud fixture/evidence client still
+expects the older 16-artifact interface. #119 owns that migration and is
+blocked by #118; this roadmap does not claim the downstream path has migrated
+or modify its client.
 
-**Deferred:** Frontend publication, a production edge, public exposure, tenant
-provisioning, durable storage, and production operations.
+### Production edge and recovery
 
-## Phase C — Immutable image publishing (complete)
+The Caddy integration gateway cannot satisfy production-edge evidence.
+HAProxy/Certbot implementation belongs to #89/#90 descendants. Likewise,
+disposable integration storage cannot satisfy production durability or
+recovery; Barman, Borg, independent object recovery, Recovery Sets, and drills
+belong to #91 descendants.
 
-**Goal:** Define reproducible publication and consumption of product images.
+## Historical milestones
 
-**Implemented:** API and frontend publication and their fail-closed digest
-consumption contracts are complete. The public local integration contract
-pins both verified SecPal images by canonical OCI index digest, anonymously
-pulls each digest with separate empty Docker configuration, validates each raw
-OCI index and registry digest header, and verifies each private
-digest-matching index and Sigstore bundle with the pinned GitHub CLI before
-container execution. No GitHub or registry account credentials are used, and
-the verifier does not reopen the registry.
+### Phase A — Governance bootstrap (completed history)
 
-**Expected artifacts:** Completed API and frontend version and digest
-contracts, provenance policy, image signing policy, publication verification,
-and merge-commit integration evidence.
+Phase A established repository governance, licensing/REUSE metadata,
+deterministic preflight, and protected `main`. It intentionally contained no
+deployment implementation.
 
-**Entry criteria:** Phase B proves the product integration contract.
+### Phase B — Compose integration (completed history)
 
-**Completion criteria:** Published API and frontend artifacts are immutable,
-verifiable, and bound by digest with no `latest` dependency. The API half does
-not complete the whole phase.
+Phase B proved the first API/frontend browser, worker, migration, and cleanup
+contract with Compose, PostgreSQL 16, Valkey, and a disposable Caddy gateway.
+Those technologies describe the completed evidence only. Issue
+[#125](https://github.com/SecPal/deployment/issues/125) removed the executable
+stack; no current command or compatibility path reproduces it. Immutable Git,
+the merged delivery, and Local Integration run `31264562902` retain the
+evidence.
 
-**Completion evidence:** Deployment PR `SecPal/deployment#6` merged as
-`4fc2796409b7c37a541f515ccf29236f143fc132`. Its push-triggered Repository
-Quality run `31264563173` and Local Integration run `31264562902`, Compose
-Contract job `93120504279`, passed on `main`. The integration gate verified
-the frontend OCI index digest
-`sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
-and API OCI index digest
-`sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
-before runtime, then passed the gateway build, real Compose lifecycle,
-Playwright browser contract, and complete project cleanup.
+### Phase C — Immutable image publishing (completed history)
 
-**Deferred at Phase C completion:** Phase D had not started. Public reference
-deployment, production host automation, and managed-hosting automation remain
-outside Phase C.
+Phase C established digest-only API/frontend consumption and fixed publisher
+attestation. Deployment merge commit
+`4fc2796409b7c37a541f515ccf29236f143fc132`, Repository Quality run
+`31264563173`, and Local Integration run `31264562902` preserve the completion
+record. Historical Docker Registry/configuration and Compose terms in those
+records are accurate protocol and evidence language, not deployment support.
 
-## Phase D — Public rootless Podman/Quadlet reference deployment
+### D.1, D.1a, D.2, and D.3 (completed historical contracts)
 
-**Goal:** Provide a reproducible public self-hosting reference.
+D.1 recorded the Debian/AppArmor host and inventory contract. D.1a moved the
+disposable integration to rootless Podman/Quadlet. D.2 recorded the old
+container-state and secret model. D.3 selected Debian NGINX as the then-current
+edge. These completed contracts remain historical evidence, but they do not
+define current production support.
 
-**Implemented:** D.1 defines only the provider-neutral production host and
-versioned non-secret inventory admission contract for Debian 13/trixie,
-including its OS lifecycle, rootless Podman, systemd/Quadlet, subordinate-ID,
-and local runtime-storage boundaries. D.1a transfers the active disposable
-integration runtime to native rootless Podman and Quadlet, retaining the
-original Phase B/C Docker/Compose artifacts as historical evidence. It
-re-proves closed rendering, pre-execution image verification, service
-dependencies, security, health, browser behavior, signals, restart,
-parallel-run isolation, and exact cleanup. It provisions no host and
-implements no production orchestration. See
-[`production-host.md`](architecture/production-host.md) and
-[`production-inventory.md`](architecture/production-inventory.md) for D.1 and
-[`quadlet-integration.md`](quadlet-integration.md) for D.1a. D.2 defines the
-production state and secret contract. D.3 selects a pinned Debian NGINX host
-service and its trust boundary in
-[`production-edge.md`](architecture/decisions/production-edge.md); neither
-decision performs a deployment.
+The current integration semantics were subsequently rebaselined by
+[#126](https://github.com/SecPal/deployment/issues/126) and merged in
+[PR #204](https://github.com/SecPal/deployment/pull/204). Current production
+replacement contracts are #80, #81, #89, #91 descendants, and #117 descendants.
+The [architecture scope](architecture/scope.md) indexes the retained historical
+documents without presenting them as active runbooks.
 
-**Expected artifacts:** D.1a supplies integration-only native Quadlet
-orchestration, service dependencies, disposable secret mounts, and health
-checks. Production edge implementation and operator contracts remain later
-Phase-D work.
+## Private managed operations
 
-**Entry criteria:** Immutable image contracts exist.
-
-**Completion criteria:** The reference deployment is reproducible and validates
-all service-role, persistence, and secret-handling invariants.
-
-**Deferred:** Final public-edge security and operational lifecycle automation.
-
-### Independent Debian 13 conformance infrastructure
-
-A non-production CI foundation can provision one disposable official Debian
-13 host on DigitalOcean Intel/AMD or Google C4A/Axion for an exact deployment
-commit SHA, preserve the cloud-credential/target-code boundary, collect
-D.1-oriented evidence, perform exact OpenTofu cleanup, and delete expired
-owned billable compute fixtures through bounded TTL janitors. GCP uses
-repository-, workflow-, branch-, and environment-scoped Workload Identity
-Federation without a JSON key or VM service account. This is test
-infrastructure for Phase D evidence, not production host provisioning. Its
-target workload phases can exercise D.1a, but only independently admitted
-artifacts from the exact tested SHA count as evidence; the infrastructure or
-fixture publication alone does not complete D.1a or a later phase.
-
-## Phase E — Public edge, TLS, and CrowdSec
-
-**Goal:** Define secure public ingress separate from product containers.
-
-**Expected artifacts:** Selected edge configuration, TLS lifecycle, routing,
-CrowdSec integration, and public-exposure tests.
-
-**Entry criteria:** Phase D is stable and an edge technology has been selected
-through a documented decision.
-
-**Completion criteria:** Only the edge is public; TLS and CrowdSec contracts are
-verified; product and data containers remain private.
-
-**Deferred:** Full backup and update lifecycle automation.
-
-## Phase F — Backup, restore, update, and rollback
-
-**Goal:** Make public operations recoverable and safely maintainable.
-
-**Expected artifacts:** Backup scope, restore drills, update sequencing,
-migration procedure, rollback boundaries, and operator runbooks.
-
-**Entry criteria:** The public reference deployment and edge are validated.
-
-**Completion criteria:** Recovery and lifecycle procedures are repeatable,
-tested, and preserve PostgreSQL and private-storage integrity.
-
-**Deferred:** Customer-specific and private managed-hosting automation.
-
-## Phase G — Private managed-hosting automation
-
-**Goal:** Build private automation from the public technical contract.
-
-**Expected artifacts:** Private inventory, credential, provider, and operations
-automation outside this repository.
-
-**Entry criteria:** The public contract is stable and operationally verified.
-
-**Completion criteria:** Defined only in the authorized private repository.
-
-**Deferred:** All private artifacts remain permanently outside this public
-repository.
+Public `SecPal/deployment` owns portable self-hosting contracts and conformance.
+Customer inventory, credentials, fleet policy, provider-specific managed
+orchestration, economics, escalation, and customer lifecycle remain outside
+this repository. Secrets, customer data, private keys, and production
+credentials belong in neither Git repository.

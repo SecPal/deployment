@@ -5,6 +5,11 @@ SPDX-License-Identifier: CC0-1.0
 
 # Production inventory contract
 
+> **Status: Historical.** This D.1 Debian-era inventory and schema record is not
+> current administrator guidance. The Rocky Linux 10.2+/SELinux replacement is
+> owned by [#80](https://github.com/SecPal/deployment/issues/80); no current
+> production inventory or installer should be inferred from the examples below.
+
 ## Purpose
 
 The production inventory records provider-neutral operator inputs for one

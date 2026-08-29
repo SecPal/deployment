@@ -5,15 +5,21 @@ SPDX-License-Identifier: CC0-1.0
 
 # Production state contract
 
+> **Status: Historical.** This completed D.2 state record retains superseded
+> Valkey and product-container-era details for review evidence. It is not a
+> production runbook. Host-native PostgreSQL 18 is owned by
+> [#81](https://github.com/SecPal/deployment/issues/81), and current recovery is
+> owned by [#91 and its descendants](https://github.com/SecPal/deployment/issues/91).
+
 ## Status and authority
 
-This document describes the retained D.2 persistence and product-role contracts.
+This document describes the historical D.2 persistence and product-role contracts.
 The superseded PostgreSQL product container and initializer are no longer an
 implemented production path. Until the separately owned host-native PostgreSQL
 work lands, this tree deliberately has no completed production PostgreSQL
-implementation. The retained product roles use rootless Podman, the systemd user
-manager, and native Quadlet. This is not a live-host installation or a backup
-implementation.
+implementation. The recorded product roles used rootless Podman, the systemd
+user manager, and native Quadlet. This is not a live-host installation or a
+backup implementation.
 
 [`config/production/state-contract.json`](../../config/production/state-contract.json)
 is the one authoritative persistence matrix. The checked Quadlets are generated

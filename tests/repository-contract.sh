@@ -137,6 +137,7 @@ required_files=(
   scripts/validate-workflow-action-pins.py
   tests/repository-contract.sh
   tests/compose-prohibition-contract.sh
+  tests/documentation-current-guidance.py
   tests/image-consumption-evidence-contract.py
   tests/ci-cloud-bootstrap-failure.py
   tests/ci-cloud-config.py
@@ -196,27 +197,23 @@ if [ -e LICENSES/LicenseRef-SecPal-Attribution.txt ] \
   fail "obsolete SecPal attribution license must not be restored after the AI-instruction rollout"
 fi
 
-require_text README.md "It is not a production-ready deployment."
+require_text README.md "does not yet provide a production-ready deployment"
 require_text README.md "./scripts/preflight.sh"
-require_text README.md "Local API/frontend integration: complete."
-require_text README.md "Phase B completed in the required check context"
-require_text README.md "Phase C is complete."
-require_text README.md "Ephemeral Debian 13 cloud conformance"
-require_text docs/architecture/scope.md "activity-hash-chain worker: exactly one"
-require_text docs/architecture/scope.md "scheduler: exactly one"
-require_text docs/architecture/scope.md "Step A bootstrap contract"
-require_text docs/architecture/scope.md \
-  "The reviewed immutable API and frontend images are already consumed here."
+require_text README.md "PostgreSQL 18 under systemd/SELinux"
+require_text README.md "https://github.com/SecPal/deployment/issues/119"
+require_text docs/architecture/scope.md "Current implemented authority"
+require_text docs/architecture/scope.md "Current production target owners"
+require_text docs/architecture/scope.md "Historical architecture records"
 if grep -Fq 'Later phases will add immutable publication' docs/architecture/scope.md; then
   fail "architecture scope must not defer immutable publication that is already consumed"
 fi
-require_text docs/roadmap.md "Local container integration stack"
-require_text docs/roadmap.md "Phase B — Local container integration stack (complete)"
-require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
-require_text docs/ci-cloud-conformance.md "The workflow never checks out"
-# The Markdown backticks must remain literal.
-# shellcheck disable=SC2016
-require_text docs/roadmap.md 'is enforced for `main`'
+require_text docs/roadmap.md "Implemented foundation on current main"
+require_text docs/roadmap.md "Phase B — Compose integration (completed history)"
+require_text docs/roadmap.md \
+  "Phase C — Immutable image publishing (completed history)"
+require_text docs/ci-cloud-conformance.md "> **Status: Historical.**"
+require_text docs/architecture/decisions/production-edge.md \
+  "> **Status: Superseded.**"
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04"
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04-arm"
 require_text .github/workflows/local-integration.yml \

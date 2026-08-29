@@ -5,6 +5,12 @@ SPDX-License-Identifier: CC0-1.0
 
 # Production host contract
 
+> **Status: Historical.** This is the completed D.1 Debian/AppArmor decision
+> record, not current production-host guidance. The Rocky Linux 10.2+/SELinux
+> replacement is owned by
+> [#80](https://github.com/SecPal/deployment/issues/80); its implementation state
+> must not be inferred from this historical body.
+
 ## Purpose and status
 
 This document defines the provider-neutral admission contract for the first
