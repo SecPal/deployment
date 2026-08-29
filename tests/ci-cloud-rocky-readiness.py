@@ -35,7 +35,7 @@ def load_waiter():
 
 
 class RockyQualificationReadinessTests(unittest.TestCase):
-    target = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
+    target = "293977ae93408a7bb812619de58649ab8a92d438"
     control = "5" * 40
     boot = "22222222-2222-4222-8222-222222222222"
     key_digest = "a" * 64

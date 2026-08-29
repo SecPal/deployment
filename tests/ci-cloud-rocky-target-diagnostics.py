@@ -111,7 +111,24 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             status,
             target_bound=target_bound,
             trusted_marker=marker,
+            line_rules=self.classifier.HISTORICAL_LINE_RULES,
         )
+
+    def classify_current(self, trace: str) -> tuple[str, str]:
+        return self.classifier.classify_failure(
+            b"", trace.encode(), 1, target_bound=True,
+            line_rules=self.classifier.LINE_RULES,
+        )
+
+    def test_current_target_line_map_is_private_relabel_only(self) -> None:
+        cases = ((237, "qualify-quadlet-daemon-reload"), (238, "qualify-quadlet-start"),
+                 (239, "qualify-quadlet-active-state"), (245, "qualify-workload-primary"),
+                 (250, "qualify-seccomp"), (262, "qualify-selinux-storage"))
+        for line, operation in cases:
+            with self.subTest(line=line):
+                self.assertEqual((operation, "command-failed"), self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}"))
+        for line in (250, 252, 253):
+            self.assertNotEqual("qualify-selinux-storage-fcontext-add", self.classifier.operation_for_line(line))
 
     def run_traced_bash(
         self, script: str
@@ -210,7 +227,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 executable = fake_bin / name
                 executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
                 executable.chmod(0o700)
-            lines = ["set -euo pipefail"] + [""] * 241
+            lines = ["set -euo pipefail"] + [""] * 236
             definitions = {
                 52: "user_systemctl() {",
                 53: "  false",
@@ -222,7 +239,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 66: "}",
                 204: "trap cleanup EXIT",
                 216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
-                242: "user_systemctl daemon-reload",
+                237: "user_systemctl daemon-reload",
             }
             for line_number, source in definitions.items():
                 lines[line_number - 1] = source
@@ -1377,7 +1394,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         for prefix, operation, reason in self.classifier.EXPLICIT_RULES:
             with self.subTest(prefix=prefix):
                 self.assertEqual((operation, reason), self.classify(prefix))
-        for first, last, operation in self.classifier.LINE_RULES:
+        for first, last, operation in self.classifier.HISTORICAL_LINE_RULES:
             with self.subTest(line=first):
                 self.assertEqual(
                     (operation, "command-failed"),
@@ -1573,7 +1590,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         for line in (249, 252, 253):
             with self.subTest(line=line):
                 self.assertEqual(
-                    (self.classifier.operation_for_line(line), "command-failed"),
+                    (self.classifier.operation_for_line(line, self.classifier.HISTORICAL_LINE_RULES), "command-failed"),
                     self.classify(exact, f"SECPAL_TARGET_ERR_V2:1:{line}"),
                 )
 
@@ -1638,7 +1655,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         document = {
             "schema_version": 1,
             "phase": "target-qualification",
-            "target_sha": "d" * 40,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
             "trusted_control_sha": "c" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
@@ -1658,16 +1675,38 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             dict(document, diagnostic_input_bytes=135_425),
         ):
             self.assertTrue(list(validator.iter_errors(mutation)))
-        semanage_document = dict(
+        historical_semanage_document = dict(
             document,
+            target_sha=self.classifier.HISTORICAL_TARGET_SHA,
+            harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256,
             operation="qualify-selinux-storage-fcontext-add",
             reason="semanage-fcontext-local-add-failed",
         )
-        self.assertEqual([], list(validator.iter_errors(semanage_document)))
+        self.assertEqual([], list(validator.iter_errors(historical_semanage_document)))
         self.assertTrue(
             list(
                 validator.iter_errors(
-                    dict(semanage_document, operation="qualify-selinux-storage-restorecon")
+                    dict(
+                        historical_semanage_document,
+                        operation="qualify-selinux-storage-restorecon",
+                    )
+                )
+            )
+        )
+        for mixed_authority in (
+            dict(document, harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256),
+            dict(historical_semanage_document, harness_sha256=self.classifier.EXPECTED_HARNESS_SHA256),
+        ):
+            with self.subTest(mixed_authority=mixed_authority):
+                self.assertTrue(list(validator.iter_errors(mixed_authority)))
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    dict(
+                        document,
+                        operation="qualify-selinux-storage-fcontext-add",
+                        reason="semanage-fcontext-local-add-failed",
+                    )
                 )
             )
         )
@@ -1700,7 +1739,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         document = {
             "schema_version": 1,
             "phase": "target-qualification",
-            "target_sha": "d" * 40,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
             "trusted_control_sha": "c" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
@@ -1719,7 +1758,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 "validate-target-qualification-failure",
                 path,
                 "--target-sha",
-                "d" * 40,
+                self.classifier.EXPECTED_TARGET_SHA,
                 "--control-sha",
                 "c" * 40,
                 "--run-id",
@@ -1732,6 +1771,13 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 subprocess.run(command, check=False, capture_output=True).returncode,
             )
             command[-1] = "2"
+            self.assertNotEqual(
+                0,
+                subprocess.run(command, check=False, capture_output=True).returncode,
+            )
+            document["harness_sha256"] = self.classifier.HISTORICAL_HARNESS_SHA256
+            path.write_text(json.dumps(document), encoding="utf-8")
+            command[-1] = "1"
             self.assertNotEqual(
                 0,
                 subprocess.run(command, check=False, capture_output=True).returncode,

@@ -1087,68 +1087,47 @@ class CloudCIContractTests(unittest.TestCase):
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         for old, new in (
             (
-                '(242, 242, "qualify-quadlet-daemon-reload"),',
-                '(242, 242, "qualify-quadlet-runtime"),',
+                '(237, 237, "qualify-quadlet-daemon-reload"),',
+                '(237, 237, "qualify-quadlet-runtime"),',
             ),
             (
-                '(243, 243, "qualify-quadlet-start"),',
-                '(243, 243, "qualify-quadlet-daemon-reload"),',
+                '(238, 238, "qualify-quadlet-start"),',
+                '(238, 238, "qualify-quadlet-daemon-reload"),',
             ),
             (
-                '(244, 244, "qualify-quadlet-active-state"),',
-                '(244, 244, "qualify-quadlet-start"),',
+                '(239, 239, "qualify-quadlet-active-state"),',
+                '(239, 239, "qualify-quadlet-start"),',
             ),
         ):
             with self.subTest(new=new):
                 self.assert_mutation_rejected(classifier, old, new)
 
-    def test_rejects_collapsed_selinux_storage_setup_diagnostics(self) -> None:
+    def test_rejects_reintroduced_unreachable_fcontext_diagnostic(self) -> None:
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
-        mutations = (
-            (
-                '(250, 250, "qualify-selinux-storage-fcontext-add"),',
-                '(250, 250, "qualify-selinux-storage-directory-create"),',
-            ),
-            (
-                '(252, 252, "qualify-selinux-storage-restorecon"),',
-                '(252, 252, "qualify-selinux-storage-fcontext-add"),',
-            ),
-            (
-                '(253, 253, "qualify-selinux-storage-matchpathcon"),',
-                '(253, 253, "qualify-selinux-storage-restorecon"),',
-            ),
-            (
-                '(249, 249, "qualify-selinux-storage-directory-create"),',
-                '(249, 249, "qualify-selinux-storage"),',
-            ),
-            (
-                '(249, 249, "qualify-selinux-storage-directory-create"),',
-                '(248, 248, "qualify-selinux-storage-directory-create"),',
-            ),
-            (
-                '''(249, 249, "qualify-selinux-storage-directory-create"),
-    (250, 250, "qualify-selinux-storage-fcontext-add"),
-    (252, 252, "qualify-selinux-storage-restorecon"),
-    (253, 253, "qualify-selinux-storage-matchpathcon"),''',
-                '''(249, 249, "qualify-selinux-storage"),
-    (250, 250, "qualify-selinux-storage"),
-    (252, 252, "qualify-selinux-storage"),
-    (253, 253, "qualify-selinux-storage"),''',
-            ),
+        self.assert_mutation_rejected(
+            classifier,
+            '(241, 244, "qualify-selinux-storage-directory-create"),',
+            '(241, 244, "qualify-selinux-storage-fcontext-add"),',
         )
-        for old, new in mutations:
-            with self.subTest(new=new):
-                self.assert_mutation_rejected(classifier, old, new)
 
     def test_rejects_weakened_target_trace_binding_bounds_and_ambiguity(self) -> None:
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        classifier_source = (ROOT / classifier).read_text(encoding="utf-8")
+        self.assertIn(
+            'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
+            classifier_source,
+        )
+        self.assertIn(
+            'EXPECTED_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"',
+            classifier_source,
+        )
         for old, new in (
             (
-                'EXPECTED_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"',
+                'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
                 'EXPECTED_TARGET_SHA = ""',
             ),
             (
-                'EXPECTED_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"',
+                'EXPECTED_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"',
                 'EXPECTED_HARNESS_SHA256 = ""',
             ),
             ("MAX_TRACE_FRAMES = 8", "MAX_TRACE_FRAMES = 9"),
@@ -1203,12 +1182,12 @@ class CloudCIContractTests(unittest.TestCase):
                 "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd",
                 "stat --file-system --format='%a %S' -- /run",
             ),
-            (trace, "10#$frame == 242", "10#$frame == 243"),
+            (trace, "10#$frame == 237", "10#$frame == 238"),
             (trace, "read -r -t 25 -u 5", "read -r -u 5"),
             (trace, "trap - ERR", ":"),
             (
                 runner,
-                "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946",
+                "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db",
                 "",
             ),
             (runner, "mkfifo -m 0600", "install -m 0600 /dev/null"),
@@ -1449,9 +1428,9 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            'LINE_RULES = (\n    (117, 123, "qualify-host-identity"),',
+            'LINE_RULES = (\n    (113, 119, "qualify-host-identity"),',
             'LINE_RULES = (\n    (48, 50, "qualify-rootless-runtime"),\n'
-            '    (117, 123, "qualify-host-identity"),',
+            '    (113, 119, "qualify-host-identity"),',
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
@@ -1460,7 +1439,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            'EXPECTED_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"',
+            'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
             'EXPECTED_TARGET_SHA = ""',
         )
         self.assert_mutation_rejected(

@@ -114,7 +114,7 @@ class RockyCloudControlTests(unittest.TestCase):
             "reason": "command-failed",
             "exit_status": 1,
             "source_host": "github.com",
-            "target_sha": "83d0c3720d342d0222e8dee9819e28d0c6739f84",
+            "target_sha": "293977ae93408a7bb812619de58649ab8a92d438",
         }
         self.assertEqual([], list(validator.iter_errors(base)))
         for mutation in (
@@ -139,7 +139,7 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_access_request_validation_is_exact_bound_and_order_independent(self) -> None:
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
-        target_sha = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
+        target_sha = "293977ae93408a7bb812619de58649ab8a92d438"
         run_id = "33123855032"
         run_attempt = "1"
         with tempfile.TemporaryDirectory() as directory:
@@ -223,7 +223,7 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_access_request_validation_rejects_every_closed_contract_mismatch(self) -> None:
         control = ROOT / "scripts/ci-cloud/rocky-control.py"
-        target_sha = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
+        target_sha = "293977ae93408a7bb812619de58649ab8a92d438"
         run_id = "33123855032"
         run_attempt = "1"
         with tempfile.TemporaryDirectory() as directory:

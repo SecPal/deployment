@@ -93,9 +93,9 @@ boot_id="$(cat /proc/sys/kernel/random/boot_id)"
 reload_event="$work_root/quadlet-reload.event"
 reload_ack="$work_root/quadlet-reload.ack"
 observer_pid=""
-if [[ "$target_sha" == 83d0c3720d342d0222e8dee9819e28d0c6739f84 ]] &&
+if [[ "$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438 ]] &&
   [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" == \
-    ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946 ]]; then
+    8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db ]]; then
   mkfifo -m 0600 "$reload_event" "$reload_ack"
   /opt/secpal-control/scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py \
     --event "$reload_event" --ack "$reload_ack" --output "$reload_adjacency" \
