@@ -175,6 +175,26 @@ class PostgreSQLFixtureContractTests(unittest.TestCase):
             contracts["postgres"].volumes,
         )
 
+    def test_runtime_mount_admission_agrees_with_fixture_layout(self) -> None:
+        fixture = runtime_contract.POSTGRES_FIXTURE
+        integration = load_integration()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lifecycle = integration.IntegrationLifecycle(
+                root=ROOT,
+                instance="contract01",
+                port=18443,
+                fixture_root=root / "fixture",
+                output=root / "output.json",
+            )
+
+        for role in ("secrets-init", "postgres"):
+            with self.subTest(role=role):
+                self.assertIn(
+                    fixture.volume_target,
+                    lifecycle._expected_mounts(role),
+                )
+
     def test_executable_version_admission_rejects_pre_18(self) -> None:
         integration = load_integration()
         integration.validate_postgres_version_line(

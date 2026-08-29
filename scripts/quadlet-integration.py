@@ -3105,7 +3105,11 @@ class IntegrationLifecycle:
                     False,
                 ),
                 "/run/secpal-secrets": ("volume", f"{prefix}-secrets", True),
-                "/var/lib/postgresql/data": ("volume", f"{prefix}-postgres", True),
+                POSTGRES_FIXTURE.volume_target: (
+                    "volume",
+                    f"{prefix}-postgres",
+                    True,
+                ),
                 "/mnt/secpal-private-storage": (
                     "volume",
                     f"{prefix}-private-storage",
@@ -3115,7 +3119,11 @@ class IntegrationLifecycle:
         if role == "postgres":
             return {
                 "/run/secpal-secrets": ("volume", f"{prefix}-secrets", False),
-                "/var/lib/postgresql/data": ("volume", f"{prefix}-postgres", True),
+                POSTGRES_FIXTURE.volume_target: (
+                    "volume",
+                    f"{prefix}-postgres",
+                    True,
+                ),
             }
         if role == "valkey":
             return {
