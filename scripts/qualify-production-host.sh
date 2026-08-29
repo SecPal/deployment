@@ -16,8 +16,6 @@ unit_path=""
 container_a=""
 container_b=""
 unit_name=""
-fcontext_expression=""
-fcontext_added=false
 dontaudit_disabled=false
 
 usage() {
@@ -82,9 +80,6 @@ cleanup() {
   fi
   if [[ -n "$unit_name" ]]; then
     user_systemctl reset-failed "${unit_name}.service" >/dev/null 2>&1
-  fi
-  if [[ "$fcontext_added" == true ]]; then
-    semanage fcontext --delete "$fcontext_expression" >/dev/null 2>&1
   fi
   if [[ -n "$fixture_root" && -d "$fixture_root" ]]; then
     rm -rf -- "$fixture_root"
@@ -201,7 +196,6 @@ container_a="${UNIT_PREFIX}-${fixture_id}-a"
 container_b="${UNIT_PREFIX}-${fixture_id}-b"
 unit_name="${UNIT_PREFIX}-${fixture_id}"
 unit_path="${quadlet_root}/${unit_name}.container"
-fcontext_expression="${fixture_root}(/.*)?"
 trap cleanup EXIT HUP INT TERM
 
 install -d -o 0 -g 0 -m 0755 "$quadlet_root"
@@ -247,10 +241,6 @@ user_systemctl is-active --quiet "${unit_name}.service"
 state_a="${fixture_root}/state-a"
 state_b="${fixture_root}/state-b"
 install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a" "$state_b"
-semanage fcontext --add --type container_file_t "$fcontext_expression"
-fcontext_added=true
-restorecon -RF "$fixture_root"
-matchpathcon -V "$state_a"
 
 rootless_podman run --detach --name "$container_a" \
   --security-opt no-new-privileges --cap-drop all \

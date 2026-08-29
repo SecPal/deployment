@@ -243,11 +243,13 @@ On Rocky 10.2 the harness performs bounded checks of packages, architecture,
 x86-64-v3 where applicable, cgroup v2, crun, Netavark, administrator-owned
 Quadlet lifecycle, seccomp/no-new-privileges, SELinux process and storage
 labels, intended access, and a distinct-MCS negative access with a matching
-AVC. It creates uniquely named fixture containers, one exact Quadlet file, one
-`mktemp` fixture tree, and one exact temporary fcontext rule. Signal and normal
-cleanup remove only those resources. It never prunes Podman, touches production
-data, loads broad policy, changes enforcing mode, provisions a provider, or
-uses real SecPal secrets.
+AVC. It creates uniquely named fixture containers, one exact Quadlet file, and
+one `mktemp` fixture tree. The representative writable mount uses Podman private relabel
+(`:Z`) to establish the effective workload-specific storage MCS label;
+the harness does not create a persistent fixture `semanage fcontext` rule or
+apply `restorecon` for the fixture. Signal and normal cleanup remove only those
+resources. It never prunes Podman, touches production data, loads broad policy,
+changes enforcing mode, provisions a provider, or uses real SecPal secrets.
 
 The native run remains required separately on x86_64 and aarch64. Repository
 preflight on another distribution proves repository behavior only.

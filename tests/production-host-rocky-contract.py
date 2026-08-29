@@ -110,6 +110,7 @@ def admit_direct_user_manager_control(source: str) -> None:
         '"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${service_uid}/bus"',
         'run_as_service_account systemctl --user "$@"',
         'rootless_podman() {\n  run_as_service_account podman "$@"',
+        "runuser --user \"$service_account\" -- env -u CONTAINER_HOST -u CONTAINER_CONNECTION",
         'install -d -o 0 -g 0 -m 0755 "$quadlet_root"',
         'if run_as_service_account test -w "$quadlet_root"; then',
         'chmod 0644 "$unit_path"',
@@ -256,8 +257,17 @@ def assert_qualification_native_evidence_cleanup() -> None:
         'user_systemctl reset-failed "${unit_name}.service"'
     ):
         raise AssertionError("cleanup must reload before resetting its generated unit state")
-    if 'semanage fcontext --delete "$fcontext_expression"' not in cleanup:
-        raise AssertionError("cleanup must retain bounded fcontext restoration")
+    forbidden_fixture_policy_state = (
+        "fcontext_expression",
+        "fcontext_added",
+        "semanage fcontext --delete",
+    )
+    for representation in forbidden_fixture_policy_state:
+        if representation in cleanup:
+            raise AssertionError(
+                "qualification cleanup must not retain fixture fcontext state: "
+                f"{representation}"
+            )
     if "trap cleanup EXIT HUP INT TERM" not in source:
         raise AssertionError("cleanup must restore dontaudit policy on abnormal exits")
     if re.search(r"(?<!user_)systemctl\\s+reset-failed(?:\\s|$)", source):
@@ -277,10 +287,143 @@ def assert_qualification_native_evidence_cleanup() -> None:
         raise AssertionError("captured label and seccomp evidence must precede AVC collection")
 
 
+def admit_private_relabel_qualification(source: str) -> None:
+    """Admit effective, private Podman SELinux labeling without policy-store mutation."""
+
+    forbidden_fixture_mechanism = (
+        "fcontext_expression",
+        "fcontext_added",
+        "semanage fcontext --add",
+        'restorecon -RF "$fixture_root"',
+        'matchpathcon -V "$state_a"',
+        "semanage fcontext --delete",
+    )
+    for representation in forbidden_fixture_mechanism:
+        if representation in source:
+            raise AssertionError(
+                "qualification must not mutate persistent fixture fcontext state: "
+                f"{representation}"
+            )
+
+    required = (
+        '-v "${state_a}:/state:Z"',
+        'rootless_podman() {\n  run_as_service_account podman "$@"',
+        'rootless_podman exec "$container_a" sh -ceu '
+        "'printf native-selinux > /state/marker; chmod 0666 /state/marker; cat /state/marker'",
+        '-v "${state_a}:/foreign:ro"',
+        'rootless_podman top "$container_a" label',
+        'rootless_podman top "$container_b" label',
+        "storage_a=\"$(stat --printf='%C' \"$state_a\")\"",
+        "*:container_t:*",
+        "*:container_file_t:*",
+        'if [[ "$process_a_mcs" != "$storage_a_mcs" || "$process_a_mcs" == "$process_b_mcs" ]]; then',
+        'if rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1; then',
+        'if ! matching_marker_avc "$audit_date" "$audit_time"; then',
+        'if [[ "$(getenforce)" != Enforcing ]]; then',
+        "--security-opt no-new-privileges --cap-drop all",
+        "--user 65532:65532 --network pasta",
+        "grep -Eq 'label=disable|\"Privileged\": true|\"NetworkMode\": \"host\"'",
+    )
+    for representation in required:
+        if representation not in source:
+            raise AssertionError(
+                f"private relabel SELinux/MCS contract is incomplete: {representation}"
+            )
+
+    forbidden_runtime_fallbacks = (
+        "--privileged",
+        "--network host",
+        "CONTAINER_HOST=",
+        "CONTAINER_CONNECTION=",
+        "podman system service",
+        '|| podman "$@"',
+        "setenforce 0",
+    )
+    for representation in forbidden_runtime_fallbacks:
+        if representation in source:
+            raise AssertionError(
+                f"private relabel contract permits forbidden fallback: {representation}"
+            )
+
+
+def assert_qualification_private_relabel_security() -> None:
+    """Reject fixture-policy regressions and weakening of effective MCS evidence."""
+
+    source = QUALIFICATION_HARNESS.read_text(encoding="utf-8")
+    admit_private_relabel_qualification(source)
+    mutations = {
+        "dynamic-fcontext-add": source.replace(
+            'install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a" "$state_b"',
+            'install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a" "$state_b"\n'
+            'semanage fcontext --add --type container_file_t "${fixture_root}(/.*)?"',
+        ),
+        "fixture-restorecon": source.replace(
+            '-v "${state_a}:/state:Z"',
+            'restorecon -RF "$fixture_root"\n  -v "${state_a}:/state:Z"',
+        ),
+        "fixture-matchpathcon": source.replace(
+            '-v "${state_a}:/state:Z"',
+            'matchpathcon -V "$state_a"\n  -v "${state_a}:/state:Z"',
+        ),
+        "fixture-fcontext-cleanup": source.replace(
+            'if [[ -n "$fixture_root" && -d "$fixture_root" ]]; then',
+            'semanage fcontext --delete "${fixture_root}(/.*)?"\n  '
+            'if [[ -n "$fixture_root" && -d "$fixture_root" ]]; then',
+        ),
+        "shared-relabel": source.replace(":/state:Z", ":/state:z"),
+        "no-private-relabel": source.replace(":/state:Z", ":/state"),
+        "label-disabled": source.replace(
+            "grep -Eq 'label=disable|\"Privileged\": true|\"NetworkMode\": \"host\"'",
+            "grep -Eq '\"Privileged\": true|\"NetworkMode\": \"host\"'",
+        ),
+        "wrong-storage-type": source.replace("*:container_file_t:*", "*:default_t:*"),
+        "process-storage-mismatch": source.replace(
+            '"$process_a_mcs" != "$storage_a_mcs"',
+            '"$process_a_mcs" == "$storage_a_mcs"',
+        ),
+        "equal-workload-mcs": source.replace(
+            '"$process_a_mcs" == "$process_b_mcs"',
+            '"$process_a_mcs" != "$process_b_mcs"',
+        ),
+        "same-boundary-bypass": source.replace(
+            "cat /state/marker'", "true'", 1
+        ),
+        "cross-boundary-bypass": source.replace(
+            'if rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1; then',
+            "if false; then",
+        ),
+        "avc-bypass": source.replace(
+            'if ! matching_marker_avc "$audit_date" "$audit_time"; then', "if false; then"
+        ),
+        "permissive-selinux": source.replace("semodule -DB", "setenforce 0"),
+        "rootful-podman": source.replace(
+            'run_as_service_account podman "$@"', 'podman "$@"'
+        ),
+        "socket-api": source.replace(
+            '-u CONTAINER_HOST -u CONTAINER_CONNECTION',
+            "CONTAINER_HOST=unix:///run/user/1000/podman/podman.sock",
+        ),
+        "host-network": source.replace("--network pasta", "--network host"),
+        "runtime-fallback": source.replace(
+            'run_as_service_account podman "$@"',
+            'run_as_service_account podman "$@" || podman "$@"',
+        ),
+    }
+    for name, candidate in mutations.items():
+        if candidate == source:
+            raise AssertionError(f"private relabel mutation did not apply: {name}")
+        try:
+            admit_private_relabel_qualification(candidate)
+        except AssertionError:
+            continue
+        raise AssertionError(f"unsafe private relabel mutation passed: {name}")
+
+
 def main() -> int:
     assert_qualification_service_account_context()
     assert_qualification_direct_user_manager_control()
     assert_qualification_native_evidence_cleanup()
+    assert_qualification_private_relabel_security()
     amd64 = load(VALID_AMD64)
     arm64 = load(VALID_ARM64)
     for name, facts, inventory in (
