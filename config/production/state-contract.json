@@ -64,19 +64,6 @@
         }
       }
     },
-    "postgres": {
-      "consumers": ["postgres"],
-      "container_uid": 999,
-      "container_gid": 999,
-      "directory": "/run/secpal/secrets/postgres",
-      "directory_mode": "0710",
-      "files": {
-        "password": {
-          "mode": "0400",
-          "type": "password"
-        }
-      }
-    },
     "valkey": {
       "consumers": ["valkey"],
       "container_uid": 10002,
@@ -264,7 +251,7 @@
       "confidentiality": "secret",
       "integrity": "authentication-critical",
       "location": "external-authority://data/postgresql-password",
-      "consumers": ["api-roles", "postgres"],
+      "consumers": ["api-roles"],
       "container_identity": "per-consumer-copy",
       "host_ownership": "mapped-exact-consumer",
       "type": "password-file",

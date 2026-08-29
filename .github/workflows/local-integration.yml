@@ -119,7 +119,7 @@ jobs:
       - name: Run real rootless Podman and Quadlet integration
         run: python3 scripts/quadlet-integration.py
 
-      - name: Prove D.2 native persistence lifecycle
+      - name: Prove production private-storage native lifecycle
         env:
           SECPAL_REQUIRE_NATIVE_LIFECYCLE: "1"
         run: bash tests/production-state-native-lifecycle.sh
