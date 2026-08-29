@@ -517,20 +517,84 @@
     },
     {
       "if": {
-        "properties": {
-          "harness_sha256": {
-            "enum": [
-              "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946",
-              "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
-            ]
+        "anyOf": [
+          {
+            "properties": {
+              "target_sha": {
+                "const": "83d0c3720d342d0222e8dee9819e28d0c6739f84"
+              },
+              "harness_sha256": {
+                "const": "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "293977ae93408a7bb812619de58649ab8a92d438"
+              },
+              "harness_sha256": {
+                "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
           }
-        },
-        "required": ["harness_sha256"]
+        ]
       },
       "else": {
         "properties": {
           "operation": { "const": "qualification-harness" },
           "reason": { "const": "representation-invalid" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
+          "harness_sha256": {
+            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+          }
+        },
+        "required": ["target_sha", "harness_sha256"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "qualify-selinux-storage-fcontext-add",
+                    "qualify-selinux-storage-restorecon",
+                    "qualify-selinux-storage-matchpathcon"
+                  ]
+                }
+              },
+              "required": ["operation"]
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "semanage-store-access-failed",
+                    "semanage-transaction-begin-failed",
+                    "semanage-fcontext-equivalency-conflict",
+                    "semanage-fcontext-key-create-failed",
+                    "semanage-fcontext-existence-check-failed",
+                    "semanage-fcontext-record-create-failed",
+                    "semanage-fcontext-context-create-failed",
+                    "semanage-fcontext-type-set-failed",
+                    "semanage-fcontext-context-attach-failed",
+                    "semanage-fcontext-local-add-failed",
+                    "semanage-transaction-commit-failed"
+                  ]
+                }
+              },
+              "required": ["reason"]
+            }
+          ]
         }
       }
     }

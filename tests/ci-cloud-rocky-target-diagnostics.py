@@ -1655,7 +1655,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         document = {
             "schema_version": 1,
             "phase": "target-qualification",
-            "target_sha": "d" * 40,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
             "trusted_control_sha": "c" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
@@ -1675,16 +1675,38 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             dict(document, diagnostic_input_bytes=135_425),
         ):
             self.assertTrue(list(validator.iter_errors(mutation)))
-        semanage_document = dict(
+        historical_semanage_document = dict(
             document,
+            target_sha=self.classifier.HISTORICAL_TARGET_SHA,
+            harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256,
             operation="qualify-selinux-storage-fcontext-add",
             reason="semanage-fcontext-local-add-failed",
         )
-        self.assertEqual([], list(validator.iter_errors(semanage_document)))
+        self.assertEqual([], list(validator.iter_errors(historical_semanage_document)))
         self.assertTrue(
             list(
                 validator.iter_errors(
-                    dict(semanage_document, operation="qualify-selinux-storage-restorecon")
+                    dict(
+                        historical_semanage_document,
+                        operation="qualify-selinux-storage-restorecon",
+                    )
+                )
+            )
+        )
+        for mixed_authority in (
+            dict(document, harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256),
+            dict(historical_semanage_document, harness_sha256=self.classifier.EXPECTED_HARNESS_SHA256),
+        ):
+            with self.subTest(mixed_authority=mixed_authority):
+                self.assertTrue(list(validator.iter_errors(mixed_authority)))
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    dict(
+                        document,
+                        operation="qualify-selinux-storage-fcontext-add",
+                        reason="semanage-fcontext-local-add-failed",
+                    )
                 )
             )
         )
@@ -1717,7 +1739,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         document = {
             "schema_version": 1,
             "phase": "target-qualification",
-            "target_sha": "d" * 40,
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
             "trusted_control_sha": "c" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
@@ -1736,7 +1758,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 "validate-target-qualification-failure",
                 path,
                 "--target-sha",
-                "d" * 40,
+                self.classifier.EXPECTED_TARGET_SHA,
                 "--control-sha",
                 "c" * 40,
                 "--run-id",
@@ -1749,6 +1771,13 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 subprocess.run(command, check=False, capture_output=True).returncode,
             )
             command[-1] = "2"
+            self.assertNotEqual(
+                0,
+                subprocess.run(command, check=False, capture_output=True).returncode,
+            )
+            document["harness_sha256"] = self.classifier.HISTORICAL_HARNESS_SHA256
+            path.write_text(json.dumps(document), encoding="utf-8")
+            command[-1] = "1"
             self.assertNotEqual(
                 0,
                 subprocess.run(command, check=False, capture_output=True).returncode,
