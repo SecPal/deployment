@@ -87,6 +87,32 @@ printf '%s\n' '#!/bin/sh' \
   >"$FAKE_BIN/id"
 chmod 0700 "$FAKE_BIN/id"
 
+layout_install_log="$TEMP_DIR/layout-install.log"
+# This negative-test shim proves a missing current layout fails before the
+# initializer can attempt the obsolete PostgreSQL data path.
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "%s\\n" "$*" >>"$SECPAL_TEST_INSTALL_LOG"' \
+  'case " $* " in *" /var/lib/postgresql/data "*) exit 73 ;; esac' \
+  'exec /usr/bin/install "$@"' \
+  >"$FAKE_BIN/install"
+chmod 0700 "$FAKE_BIN/install"
+if env \
+  PATH="$FAKE_BIN:$PATH" \
+  SECPAL_API_GID="$CURRENT_GID" \
+  SECPAL_API_UID="$CURRENT_UID" \
+  SECPAL_POSTGRES_UID="$CURRENT_UID" \
+  SECPAL_PRIVATE_STORAGE_DIR="$TEMP_DIR/layout-private-storage" \
+  SECPAL_SECRET_DIR="$TEMP_DIR/layout-secrets" \
+  SECPAL_TEST_INSTALL_LOG="$layout_install_log" \
+  SECPAL_VALKEY_UID="$CURRENT_UID" \
+  bash "$ROOT_DIR/scripts/init-local-secrets.sh" >/dev/null 2>&1; then
+  fail "the secret initializer accepted a missing PostgreSQL layout input"
+elif grep -Fq '/var/lib/postgresql/data' "$layout_install_log"; then
+  fail "the secret initializer fell back to the obsolete PostgreSQL data layout"
+fi
+rm "$FAKE_BIN/install"
+
 expect_failure "a relative private-storage directory" \
   run_initializer "$TEMP_DIR/relative-private-secrets" "$CURRENT_UID" "relative-private-root"
 

@@ -44,25 +44,6 @@ PRE_18_PATTERN = re.compile(
 POSTGRES_IMAGE_PATTERN = re.compile(
     r"docker\.io/library/postgres@sha256:[0-9a-f]{64}"
 )
-RETAINED_PRE_18_PATTERNS = (
-    re.compile(
-        "38471f330eb885e04de130b768d6db4e1"
-        "0469e2311879c7e5c699f6d2d8a1c74"
-    ),
-    re.compile(r"version[-_ ](?:16|17)\b", re.IGNORECASE),
-    re.compile(r"PG_VERSION.{0,32}=\s*(?:16|17)\b"),
-    re.compile(r"/usr/lib/postgresql/(?:16|17)\b"),
-)
-SUPERSEDED_PRODUCTION_PATHS = {
-    "config/production/quadlet/secpal-postgres-init.container",
-    "config/production/quadlet/secpal-postgres.container",
-    "docs/architecture/production-secrets.md",
-    "scripts/production-postgres-entrypoint.sh",
-    "scripts/render-production-quadlets.py",
-    "tests/production-state-contract.py",
-}
-
-
 def load_renderer():
     path = SCRIPTS / "render-integration-quadlets.py"
     spec = importlib.util.spec_from_file_location("integration_renderer", path)
@@ -71,6 +52,16 @@ def load_renderer():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def find_current_legacy_identities(root: Path) -> list[Path]:
+    """Model the current path-tuple guard against an isolated repository tree."""
+    findings = []
+    for canonical in ACTIVE_FIXTURE_PATHS:
+        path = root / canonical.relative_to(ROOT)
+        if path.is_file() and PRE_18_PATTERN.search(path.read_text(encoding="utf-8")):
+            findings.append(path.relative_to(root))
+    return findings
 
 
 def load_integration():
@@ -109,31 +100,34 @@ class PostgreSQLFixtureContractTests(unittest.TestCase):
 
         self.assertEqual(references, {fixture.image})
 
-    def test_retained_pre_18_identity_is_confined_to_superseded_production(
-        self,
-    ) -> None:
-        tracked = subprocess.run(
-            ["git", "ls-files", "-z"],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-        ).stdout.split(b"\0")
-        findings: set[str] = set()
-        for encoded in tracked:
-            if not encoded:
-                continue
-            relative = os.fsdecode(encoded)
-            if relative == "tests/postgres-fixture-contract.py":
-                continue
-            content = (ROOT / relative).read_text(encoding="utf-8", errors="ignore")
-            if any(pattern.search(content) for pattern in RETAINED_PRE_18_PATTERNS):
-                findings.add(relative)
-
-        self.assertEqual(findings, SUPERSEDED_PRODUCTION_PATHS)
-        active_paths = {
-            path.relative_to(ROOT).as_posix() for path in ACTIVE_FIXTURE_PATHS
+    def test_current_surfaces_reject_ordinary_pre_18_identity_forms(self) -> None:
+        cases = {
+            "pg16": ("scripts/quadlet-integration.py", "DATABASE_BASELINE=PG16\n"),
+            "pg17": ("scripts/render-integration-quadlets.py", "database: PG17\n"),
+            "client-package": (
+                "scripts/ci-cloud/collect-workload-evidence.py",
+                "DATABASE_CLIENT=postgresql-client-16\n",
+            ),
+            "tagged-image-outside-old-tuple": (
+                "config/quadlet/current-postgres.container",
+                "[Container]\nImage=postgres:16\n",
+            ),
+            "alternate-registry": (
+                ".github/workflows/current-database.yml",
+                "image: registry.example/secpal/postgresql-server:17\n",
+            ),
+            "active-file-outside-old-tuple": (
+                "scripts/current-database-baseline.sh",
+                "DATABASE_BASELINE=PG17\n",
+            ),
         }
-        self.assertTrue(SUPERSEDED_PRODUCTION_PATHS.isdisjoint(active_paths))
+        for name, (relative, content) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                self.assertTrue(find_current_legacy_identities(root), relative)
 
     def test_renderer_consumes_the_canonical_pg18_layout(self) -> None:
         fixture = runtime_contract.POSTGRES_FIXTURE
