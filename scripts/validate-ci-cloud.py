@@ -2242,12 +2242,15 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "if len(explicit) == 1 and len(traced_operations) == 1:" in target_failure_classifier
         and "if len(explicit) == 1 and len(traced_operations) > 1:" in target_failure_classifier
         and "if len(traced_operations) == 1:" in target_failure_classifier
+        and 'if len(traced_operations) == 1:\n        return traced_operations.pop(), "command-failed"\n    return "qualification-harness", "unclassified-target-failure"'
+        in target_failure_classifier
         and 'return "qualification-harness", "unclassified-target-failure"'
         in target_failure_classifier.split(
             'if len(traced_operations) == 1:', 1
         )[1]
         and "validate-target-qualification-failure" in target_runner
         and target_runner.count("exit 91") == 2
+        and 'rm -f -- "$stdout"' in target_runner
         and "qualification_failure_expected" in target_text
         and "head -c 4097" in target_text
         and "target-qualification-failure.json" in target_text,

@@ -131,6 +131,7 @@ if [[ "$stdout_size" -gt 65536 || "$trace_size" -gt 4096 ]]; then
 fi
 
 if [[ "$status" -ne 0 ]]; then
+  set +e
   /usr/local/sbin/secpal-classify-rocky-target-failure \
     --target-sha "$target_sha" --control-sha "$control_sha" \
     --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
@@ -139,6 +140,10 @@ if [[ "$status" -ne 0 ]]; then
     --reload-adjacency "$reload_adjacency" --exit-status "$status" \
     "${representation_option[@]}" \
     --output "$qualification_failure"
+  classifier_status=$?
+  rm -f -- "$stdout"
+  set -e
+  [[ "$classifier_status" -eq 0 ]]
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
     validate-target-qualification-failure "$qualification_failure" \
     --target-sha "$target_sha" --control-sha "$control_sha" \

@@ -66,6 +66,17 @@ REASONS = frozenset(
         "cleanup-failed",
         "timeout",
         "unclassified-target-failure",
+        "semanage-store-access-failed",
+        "semanage-transaction-begin-failed",
+        "semanage-fcontext-equivalency-conflict",
+        "semanage-fcontext-key-create-failed",
+        "semanage-fcontext-existence-check-failed",
+        "semanage-fcontext-record-create-failed",
+        "semanage-fcontext-context-create-failed",
+        "semanage-fcontext-type-set-failed",
+        "semanage-fcontext-context-attach-failed",
+        "semanage-fcontext-local-add-failed",
+        "semanage-transaction-commit-failed",
     }
 )
 
@@ -155,6 +166,40 @@ BOOT_ID = re.compile(
 )
 SAFE_BASENAME = re.compile(r"^[A-Za-z0-9_.@+-]{1,128}$")
 SELINUX_TYPE = re.compile(r"^[a-zA-Z0-9_]{1,64}$")
+SEMANAGE_FCONTEXT_EXPRESSION = (
+    r"/var/tmp/secpal-host-qualification-[A-Za-z0-9]{6}\(/\.\*\)\?"
+)
+SEMANAGE_FCONTEXT_PATH_FAILURES = (
+    ("Could not create key for", "", "semanage-fcontext-key-create-failed"),
+    (
+        "Could not check if file context for",
+        "is defined",
+        "semanage-fcontext-existence-check-failed",
+    ),
+    ("Could not create file context for", "", "semanage-fcontext-record-create-failed"),
+    ("Could not create context for", "", "semanage-fcontext-context-create-failed"),
+    ("Could not set type in file context for", "", "semanage-fcontext-type-set-failed"),
+    (
+        "Could not set file context for",
+        "",
+        "semanage-fcontext-context-attach-failed",
+    ),
+    ("Could not add file context for", "", "semanage-fcontext-local-add-failed"),
+)
+SEMANAGE_FCONTEXT_STATIC_FAILURES = {
+    "SELinux policy is not managed or store cannot be accessed.": "semanage-store-access-failed",
+    "Cannot read policy store.": "semanage-store-access-failed",
+    "Could not establish semanage connection": "semanage-store-access-failed",
+    "Could not test MLS enabled status": "semanage-store-access-failed",
+    "Could not start semanage transaction": "semanage-transaction-begin-failed",
+    "Could not commit semanage transaction": "semanage-transaction-commit-failed",
+}
+SEMANAGE_FCONTEXT_EQUIVALENCY_FAILURE = re.compile(
+    r"^ValueError: File spec "
+    + SEMANAGE_FCONTEXT_EXPRESSION
+    + r" conflicts with equivalency rule '/[^'\r\n ]+ /[^'\r\n ]+'; "
+    r"Try adding '/[^'\r\n ]+' instead$"
+)
 GENERATOR_OBSERVATION_REASONS = frozenset(
     {
         "none",
@@ -307,6 +352,29 @@ def trace_operations(trace_text: str, exit_status: int) -> tuple[set[str], bool]
     return operations, True
 
 
+def semanage_fcontext_add_reason(text: str) -> str | None:
+    """Admit only exact Rocky 10.2 fcontext-add ValueError grammar.
+
+    This function receives transient target output.  It never returns a source
+    string, path, expression, command, or arbitrary exception text.
+    """
+    if not text.startswith("ValueError: ") or "\n" in text or "\r" in text:
+        return None
+    message = text.removeprefix("ValueError: ")
+    static_reason = SEMANAGE_FCONTEXT_STATIC_FAILURES.get(message)
+    if static_reason is not None:
+        return static_reason
+    for prefix, suffix, reason in SEMANAGE_FCONTEXT_PATH_FAILURES:
+        if re.fullmatch(
+            prefix + r" " + SEMANAGE_FCONTEXT_EXPRESSION + (r" " + suffix if suffix else ""),
+            message,
+        ):
+            return reason
+    if SEMANAGE_FCONTEXT_EQUIVALENCY_FAILURE.fullmatch(text):
+        return "semanage-fcontext-equivalency-conflict"
+    return None
+
+
 def classify_failure(
     stdout: bytes,
     trace: bytes,
@@ -354,6 +422,12 @@ def classify_failure(
         return "qualification-harness", "unclassified-target-failure"
     if len(explicit) == 1:
         return next(iter(explicit))
+    if len(traced_operations) == 1:
+        traced_operation = next(iter(traced_operations))
+        if traced_operation == "qualify-selinux-storage-fcontext-add":
+            semanage_reason = semanage_fcontext_add_reason(text)
+            if semanage_reason is not None:
+                return traced_operation, semanage_reason
     if len(traced_operations) == 1:
         return traced_operations.pop(), "command-failed"
     return "qualification-harness", "unclassified-target-failure"
@@ -1227,12 +1301,17 @@ def main() -> int:
         "reason": reason,
         "exit_status": options.exit_status,
         "diagnostic_input_sha256": hashlib.sha256(
-            stdout + b"\0" + trace + b"\0" + marker_bytes + b"\0" + adjacency_bytes
+            (
+                b"semanage-fcontext-add-v1\0" + trace + b"\0" + reason.encode("ascii")
+                if operation == "qualify-selinux-storage-fcontext-add"
+                else stdout + b"\0" + trace + b"\0" + marker_bytes + b"\0" + adjacency_bytes
+            )
         ).hexdigest(),
-        "diagnostic_input_bytes": len(stdout)
-        + len(trace)
-        + len(marker_bytes)
-        + len(adjacency_bytes),
+        "diagnostic_input_bytes": (
+            len(trace) + len(reason)
+            if operation == "qualify-selinux-storage-fcontext-add"
+            else len(stdout) + len(trace) + len(marker_bytes) + len(adjacency_bytes)
+        ),
     }
     if adjacency is not None:
         document["daemon_reload_adjacency"] = adjacency

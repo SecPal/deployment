@@ -111,6 +111,18 @@ failures remain `qualification-harness/unclassified-target-failure`. The
 transport retains only the operation, closed reason, exit status, run bindings,
 and bounded diagnostic-input hash and length—not target stdout or stderr.
 
+For the one immutable `qualify-selinux-storage-fcontext-add` call site (line
+250), trusted control recognizes only the Rocky 10.2 `semanage` CLI's exact
+single-line `ValueError` grammar. It publishes the smallest actionable closed
+families: managed-store access, transaction begin, fcontext equivalency, key or
+existence check, record or context creation, type assignment, context
+attachment, local-record add, and transaction commit. Any generated
+qualification path and the full fcontext expression are transient classifier
+inputs only. A near match, another operation, an unbound target/harness, or an
+unrecognized representation retains the existing closed `command-failed` or
+`unclassified-target-failure` diagnostic rather than being guessed as a
+semanage family.
+
 The trusted Bash trace uses `SECPAL_TARGET_ERR_V2`: one numeric exit status and
 at most eight numeric `BASH_LINENO` frames. The classifier ignores generic
 helper implementation frames and resolves only immutable reviewed outer call
