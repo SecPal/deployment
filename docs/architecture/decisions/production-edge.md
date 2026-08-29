@@ -280,8 +280,6 @@ must implement rather than redefine them.
       "api",
       "frontend",
       "migrate",
-      "postgres",
-      "postgres-init",
       "scheduler",
       "valkey",
       "worker-general",

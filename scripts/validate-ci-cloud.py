@@ -2053,11 +2053,15 @@ def validate_rocky_control_plane(root: Path) -> None:
     readiness_publisher = read(
         root, "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
     )
+    direct_user_systemd = read(root, "scripts/ci-cloud/runtime_user_systemd.py")
     readiness_waiter = read(
         root, "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
     )
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
+    storage_setup_line_rules = [
+        rule for rule in target_line_rules if 249 <= rule[0] <= 253
+    ]
     for forbidden in (
         "id-token",
         "google-github-actions/auth",
@@ -2138,8 +2142,20 @@ def validate_rocky_control_plane(root: Path) -> None:
         in readiness_publisher
         and 'stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)'
         in readiness_publisher
-        and 'f"--machine={RUNTIME_ACCOUNT}@.host"' in readiness_publisher
-        and '"show-environment"' in readiness_publisher
+        and "direct_user_show_environment" in readiness_publisher
+        and 'RUNTIME_ACCOUNT = "secpal-runtime"' in readiness_publisher
+        and "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir"
+        in readiness_publisher
+        and "--machine=" not in readiness_publisher
+        and '"runuser"' in direct_user_systemd
+        and '"--user"' in direct_user_systemd
+        and '"CONTAINER_HOST"' in direct_user_systemd
+        and '"CONTAINER_CONNECTION"' in direct_user_systemd
+        and 'f"HOME={runtime_home}"' in direct_user_systemd
+        and 'f"XDG_RUNTIME_DIR={runtime_directory}"' in direct_user_systemd
+        and 'f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_directory}/bus"'
+        in direct_user_systemd
+        and '"show-environment"' in direct_user_systemd
         and all(readiness_publisher.count(f'"{fact}"') == 1 for fact in readiness_facts)
         and '"runtime_user_manager_active": result.observation.manager_active'
         in readiness_publisher
@@ -2168,7 +2184,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     require(
         "readiness_publisher_base64gzip" in main
+        and "runtime_user_systemd_base64gzip" in main
         and "secpal-publish-rocky-qualification-readiness" in bootstrap
+        and "runtime_user_systemd.py" in bootstrap
         and '--boot-id "$boot_id"' in bootstrap
         and readiness_publisher.count("current_boot_id() != arguments.boot_id") == 2
         and "secpal-publish-rocky-qualification-readiness" not in target_runner
@@ -2180,9 +2198,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6\""
+        "EXPECTED_TARGET_SHA = \"83d0c3720d342d0222e8dee9819e28d0c6739f84\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256 = \"ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53\""
+        and "EXPECTED_HARNESS_SHA256 = \"ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946\""
         in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
@@ -2210,6 +2228,13 @@ def validate_rocky_control_plane(root: Path) -> None:
             (242, 242, "qualify-quadlet-daemon-reload"),
             (243, 243, "qualify-quadlet-start"),
             (244, 244, "qualify-quadlet-active-state"),
+        ]
+        and storage_setup_line_rules
+        == [
+            (249, 249, "qualify-selinux-storage-directory-create"),
+            (250, 250, "qualify-selinux-storage-fcontext-add"),
+            (252, 252, "qualify-selinux-storage-restorecon"),
+            (253, 253, "qualify-selinux-storage-matchpathcon"),
         ]
         and "qualify-quadlet-runtime" not in target_failure_classifier
         and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
@@ -2252,9 +2277,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "read -r -t 25 -u 5" in target_failure_trace
         and "return \"$status\"" in target_failure_trace
         and "mkfifo -m 0600" in target_runner
-        and '"$target_sha" == d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6'
+        and '"$target_sha" == 83d0c3720d342d0222e8dee9819e28d0c6739f84'
         in target_runner
-        and "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"
+        and "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
         in target_runner
         and target_runner.index("observe-rocky-quadlet-reload-adjacency.py")
         < target_runner.index("bash \"$work_root/scripts/qualify-production-host.sh\"")
@@ -2350,8 +2375,11 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "hashlib.sha256(payload).hexdigest()" in reload_adjacency_observer
         and 'f"QUADLET_UNIT_DIRS={input_path.parent}"' in reload_adjacency_observer
         and '"--user",\n                "--dryrun"' in reload_adjacency_observer
-        and 'f"--machine={RUNTIME_ACCOUNT}@.host"' in reload_adjacency_observer
-        and '"show-environment"' in reload_adjacency_observer
+        and "direct_user_show_environment" in reload_adjacency_observer
+        and "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir"
+        in reload_adjacency_observer
+        and "--machine=" not in reload_adjacency_observer
+        and '"show-environment"' in direct_user_systemd
         and "manager_state_observed and bus_state_observed and control_status != 125"
         in reload_adjacency_observer
         and 'GENERATOR_CODE_FUNC = "do_execute"' in reload_adjacency_observer

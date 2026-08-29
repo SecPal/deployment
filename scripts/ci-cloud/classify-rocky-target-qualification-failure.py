@@ -14,8 +14,8 @@ import stat
 import tempfile
 from pathlib import Path
 
-EXPECTED_TARGET_SHA = "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6"
-EXPECTED_HARNESS_SHA256 = "ad6d2518aa3f72054e6fa373b05345e7c37c21ac65feb6075eb69f3c434fea53"
+EXPECTED_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
+EXPECTED_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
 MAX_STDOUT_BYTES = 65_536
 MAX_TRACE_BYTES = 4_096
 MAX_ARTIFACT_BYTES = 8_192
@@ -43,6 +43,10 @@ OPERATIONS = frozenset(
         "qualify-quadlet-start",
         "qualify-quadlet-active-state",
         "qualify-selinux-storage",
+        "qualify-selinux-storage-directory-create",
+        "qualify-selinux-storage-fcontext-add",
+        "qualify-selinux-storage-restorecon",
+        "qualify-selinux-storage-matchpathcon",
         "qualify-workload-primary",
         "qualify-seccomp",
         "qualify-workload-secondary",
@@ -98,7 +102,8 @@ EXPLICIT_RULES = (
     ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
 )
 
-# Line ranges name semantic call sites in the immutable d892 harness.  Helper
+# Line ranges name semantic call sites in the immutable expected target harness.
+# Helper
 # frames and cleanup internals are deliberately absent.  Nested ERR frames are
 # reduced only when every admitted call-site line agrees on one operation.
 LINE_RULES = (
@@ -117,7 +122,10 @@ LINE_RULES = (
     (242, 242, "qualify-quadlet-daemon-reload"),
     (243, 243, "qualify-quadlet-start"),
     (244, 244, "qualify-quadlet-active-state"),
-    (246, 253, "qualify-selinux-storage"),
+    (249, 249, "qualify-selinux-storage-directory-create"),
+    (250, 250, "qualify-selinux-storage-fcontext-add"),
+    (252, 252, "qualify-selinux-storage-restorecon"),
+    (253, 253, "qualify-selinux-storage-matchpathcon"),
     (254, 260, "qualify-workload-primary"),
     (261, 264, "qualify-seccomp"),
     (266, 270, "qualify-workload-secondary"),

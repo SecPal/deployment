@@ -37,30 +37,25 @@ files, not the host secret root:
 | `/run/secpal/secrets/api/app-previous-keys` | `110000:210000`, `0400`  | Same API roles                        |
 | `/run/secpal/secrets/api/tenant-kek`        | `110000:210000`, `0600`  | Same API roles                        |
 | `/run/secpal/secrets/api/postgres-password` | `110000:210000`, `0400`  | Same API roles                        |
-| `/run/secpal/secrets/postgres/password`     | `100998:200998`, `0400`  | PostgreSQL only                       |
 | `/run/secpal/secrets/api/valkey-password`   | `110000:210000`, `0400`  | API roles only                        |
 | `/run/secpal/secrets/valkey/password`       | `110001:210001`, `0400`  | Valkey only                           |
 
-The PostgreSQL copies must be byte-identical; the Valkey copies must be
-byte-identical. Copies exist solely to avoid a shared group or broad secret
-directory. Frontend and unrelated data/product roles receive no secret mount.
+The Valkey copies must be byte-identical. Copies exist solely to avoid a shared
+group or broad secret directory. Frontend and unrelated data/product roles
+receive no secret mount.
 Feature-gated external credentials have no delivery or consumer while their
 inventory gates remain disabled.
 
 ## Application delivery without OS-environment secrets
 
-PostgreSQL's explicit one-shot initializer is the only PostgreSQL container that
-receives its credential file. It passes that file path to the pinned image's
-`initdb --pwfile` seam, creates the `secpal` database over a private Unix socket,
-then proves the credential through TCP SCRAM before it admits a new, existing,
-or recovered cluster, and stops. The steady-state PostgreSQL container mounts no credential and execs
-`postgres` only after `pg_controldata` validates the existing version-16 cluster,
-so the official image entrypoint cannot convert the file into an exported
-`POSTGRES_PASSWORD` process environment value. Valkey's fixed launcher validates
-the raw file's length and LF count before command substitution, reads only its
-individual file, and writes a mode-`0600` configuration in container
-tmpfs before exec. Its health probe tests the expected unauthenticated `NOAUTH`
-response and never reads the password.
+The production PostgreSQL container and its initializer have been retired. The
+current tree therefore has no PostgreSQL server credential-delivery directory
+or executable database launcher. The API credential file remains an application
+input; the future host-native PostgreSQL work owns its server-side delivery and
+rotation seam. Valkey's fixed launcher validates the raw file's length and LF
+count before command substitution, reads only its individual file, and writes a
+mode-`0600` configuration in container tmpfs before exec. Its health probe tests
+the expected unauthenticated `NOAUTH` response and never reads the password.
 
 The API image currently names application settings through Laravel's PHP
 configuration interface. Production mounts a root-owned `auto_prepend_file`
@@ -134,11 +129,9 @@ PostgreSQL and Valkey passwords are externally generated 24–128-character
 values from the closed file grammar. They never appear in a URL, command line,
 unit text, image, Git object, log, snapshot, or issue evidence.
 
-PostgreSQL rotation updates the server credential through a reviewed local
-database administration operation, stages matching API and PostgreSQL delivery
-copies, stops dependent API roles, exchanges and validates the full tree, then
-restarts PostgreSQL and the dependent roles in order. Rollback retains the old
-credential only for the bounded cutover window.
+The future host-native PostgreSQL work owns server-side credential delivery,
+rotation, and rollback. The current tree does not retain the removed container
+launcher or a dormant server credential copy.
 
 Valkey rotation stages matching API and Valkey copies, stops queue producers and
 workers, performs the reviewed Valkey credential change, exchanges the complete
