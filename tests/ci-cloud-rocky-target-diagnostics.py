@@ -810,6 +810,18 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         self.assertEqual("diagnostic-unavailable", classification)
         self.assertEqual("reload-stage-evidence-contradictory", reason)
 
+        for client_error in ("access-denied", "interactive-auth-required"):
+            with self.subTest(client_error=client_error):
+                classification, reason = self.classifier.daemon_reload_classification(
+                    **{
+                        **baseline,
+                        "client_error": client_error,
+                        "reload_request_logged": False,
+                    }
+                )
+                self.assertEqual("diagnostic-unavailable", classification)
+                self.assertEqual("reload-stage-evidence-contradictory", reason)
+
         classification, reason = self.classifier.daemon_reload_classification(
             **{**baseline, "reload_selinux_contexts_admitted": False}
         )
