@@ -142,8 +142,10 @@ if [[ "$status" -ne 0 ]]; then
     --output "$qualification_failure"
   classifier_status=$?
   rm -f -- "$stdout"
+  stdout_remove_status=$?
   set -e
   [[ "$classifier_status" -eq 0 ]]
+  [[ "$stdout_remove_status" -eq 0 ]]
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
     validate-target-qualification-failure "$qualification_failure" \
     --target-sha "$target_sha" --control-sha "$control_sha" \

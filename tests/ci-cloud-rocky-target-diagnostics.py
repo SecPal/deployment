@@ -1538,6 +1538,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                     self.assertEqual(reason, actual_reason)
                     self.assertNotIn(root, actual_reason)
                     self.assertNotIn(expression, actual_reason)
+                    self.assertEqual(
+                        reason,
+                        self.classify(output + "\n", "SECPAL_TARGET_ERR_V2:1:250")[1],
+                    )
 
     def test_semanage_fcontext_add_equivalency_is_closed_and_path_free(self) -> None:
         expression = "/var/tmp/secpal-host-qualification-a1B2c3(/.*)?"

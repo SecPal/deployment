@@ -358,6 +358,8 @@ def semanage_fcontext_add_reason(text: str) -> str | None:
     This function receives transient target output.  It never returns a source
     string, path, expression, command, or arbitrary exception text.
     """
+    if text.endswith("\n"):
+        text = text[:-1]
     if not text.startswith("ValueError: ") or "\n" in text or "\r" in text:
         return None
     message = text.removeprefix("ValueError: ")
