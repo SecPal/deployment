@@ -610,6 +610,10 @@ def reload_stage_markers(
         or facts["reload_reply_send_failed"]
     ):
         reasons.add("candidate-representation-invalid")
+    if facts["reload_internal_failure"] != "none" and (
+        facts["reload_finished"] or facts["reload_reply_send_failed"]
+    ):
+        reasons.add("candidate-representation-invalid")
     if not reasons:
         return facts, "none"
     if len(reasons) == 1:

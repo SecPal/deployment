@@ -596,6 +596,15 @@ def daemon_reload_classification(
     if reload_access_avc_ambiguous:
         return "diagnostic-unavailable", "reload-selinux-observation-ambiguous"
     if reload_access_avc_observed or client_error == "selinux-access-denied":
+        if (
+            reload_request_logged
+            or reload_rate_limit_rejected
+            or reload_started
+            or reload_finished
+            or reload_internal_failure != "none"
+            or reload_reply_send_failed
+        ):
+            return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
         return "reload-selinux-access-denied", "none"
     if not reload_request_logged:
         if (
@@ -613,7 +622,7 @@ def daemon_reload_classification(
         if client_error in {"timeout", "connection-reset", "transport-unavailable"}:
             return "reload-reply-transport-failed", "none"
         return "diagnostic-unavailable", "reload-authorization-observation-unavailable"
-    if reload_rate_limit_rejected and (
+    if (reload_rate_limit_rejected or client_error == "rate-limited") and (
         reload_started
         or reload_finished
         or reload_internal_failure != "none"
@@ -622,6 +631,10 @@ def daemon_reload_classification(
         return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
     if reload_rate_limit_rejected or client_error == "rate-limited":
         return "reload-rate-limited", "none"
+    if reload_internal_failure != "none" and (
+        reload_finished or reload_reply_send_failed
+    ):
+        return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
     if reload_reply_send_failed:
         return "reload-reply-transport-failed", "none"
     if not reload_started:

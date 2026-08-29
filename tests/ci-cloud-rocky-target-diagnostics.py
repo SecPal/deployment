@@ -721,6 +721,29 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         )
         self.assertEqual("candidate-representation-invalid", reason)
 
+    def test_reload_stage_rejects_completion_after_serialization_failure(self) -> None:
+        boot_id = "12345678-1234-1234-1234-123456789abc"
+        entries = (
+            ("../src/core/dbus-manager.c", "log_caller", "Reload requested from client PID 42 ('systemctl')..."),
+            ("../src/core/main.c", "invoke_main_loop", "Reloading..."),
+            ("../src/core/manager.c", "manager_reload", "Failed to create serialization file: No space left on device"),
+            ("../src/core/main.c", "invoke_main_loop", "Reloading finished in 12 ms."),
+        )
+        payload = b"".join(
+            (json.dumps({
+                "_PID": "1087",
+                "_BOOT_ID": boot_id.replace("-", ""),
+                "CODE_FILE": code_file,
+                "CODE_FUNC": code_func,
+                "MESSAGE": message,
+            }) + "\n").encode()
+            for code_file, code_func, message in entries
+        )
+        _, reason = self.observer.reload_stage_markers(
+            payload, 1087, boot_id, 42
+        )
+        self.assertEqual("candidate-representation-invalid", reason)
+
     def test_reload_client_error_is_normalized_without_raw_output(self) -> None:
         cases = (
             (b"Reload daemon failed: Reload() request rejected due to rate limit.\n", "rate-limited"),
@@ -777,7 +800,15 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                     "reload_finished": False,
                 },
             ),
-            ("reload-selinux-access-denied", {"reload_access_avc_observed": True}),
+            (
+                "reload-selinux-access-denied",
+                {
+                    "reload_access_avc_observed": True,
+                    "reload_request_logged": False,
+                    "reload_started": False,
+                    "reload_finished": False,
+                },
+            ),
             (
                 "reload-authorization-denied",
                 {
@@ -846,6 +877,34 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "reload_request_logged": False,
                 "reload_started": False,
                 "reload_finished": False,
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-stage-evidence-contradictory", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "client_error": "selinux-access-denied",
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-stage-evidence-contradictory", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "client_error": "rate-limited",
+                "reload_rate_limit_rejected": False,
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-stage-evidence-contradictory", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "reload_internal_failure": "serialization-file-failed",
             }
         )
         self.assertEqual("diagnostic-unavailable", classification)
