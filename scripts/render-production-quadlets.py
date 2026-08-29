@@ -27,6 +27,7 @@ from integration_runtime_contract import (  # noqa: E402
     tmpfs_mounts,
 )
 
+
 def _load_state_module():
     path = SCRIPT_DIRECTORY / "production-state.py"
     spec = importlib.util.spec_from_file_location("production_state", path)

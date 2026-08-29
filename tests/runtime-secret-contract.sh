@@ -108,7 +108,7 @@ if env \
   SECPAL_VALKEY_UID="$CURRENT_UID" \
   bash "$ROOT_DIR/scripts/init-local-secrets.sh" >/dev/null 2>&1; then
   fail "the secret initializer accepted a missing PostgreSQL layout input"
-elif grep -Fq '/var/lib/postgresql/data' "$layout_install_log"; then
+elif grep -Fq '/var/lib/postgresql/data' "$layout_install_log" 2>/dev/null; then
   fail "the secret initializer fell back to the obsolete PostgreSQL data layout"
 fi
 rm "$FAKE_BIN/install"

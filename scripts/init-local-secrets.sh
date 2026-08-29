@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SECRET_DIR="${SECPAL_SECRET_DIR:-/run/secpal-secrets}"
-POSTGRES_DATA_DIR="${SECPAL_POSTGRES_DATA_DIR:-/var/lib/postgresql/data}"
+POSTGRES_DATA_DIR="${SECPAL_POSTGRES_DATA_DIR:-}"
 PRIVATE_STORAGE_DIR="${SECPAL_PRIVATE_STORAGE_DIR:-/app/storage/app/private}"
 API_UID="${SECPAL_API_UID:-10001}"
 API_GID="${SECPAL_API_GID:-10001}"
@@ -71,6 +71,11 @@ case "$SECRET_DIR" in
 esac
 
 case "$PRIVATE_STORAGE_DIR" in
+  /*) ;;
+  *) fail ;;
+esac
+
+case "$POSTGRES_DATA_DIR" in
   /*) ;;
   *) fail ;;
 esac

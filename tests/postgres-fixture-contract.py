@@ -6,12 +6,12 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 from pathlib import Path
 import re
 import runpy
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,21 +25,34 @@ if os.fspath(SCRIPTS) not in sys.path:
 import integration_runtime_contract as runtime_contract  # noqa: E402
 
 
-ACTIVE_FIXTURE_PATHS = (
-    ROOT / ".github" / "workflows" / "local-integration.yml",
-    ROOT / "docs" / "quadlet-integration.md",
-    ROOT / "scripts" / "ci-cloud" / "collect-workload-evidence.py",
-    ROOT / "scripts" / "integration_runtime_contract.py",
-    ROOT / "scripts" / "quadlet-integration.py",
-    ROOT / "scripts" / "render-integration-quadlets.py",
-    ROOT / "tests" / "ci-cloud-workload-evidence.py",
-    ROOT / "tests" / "quadlet-integration-contract.py",
-    ROOT / "tests" / "quadlet-integration-lifecycle.py",
+CURRENT_SOURCE_ROOTS = (
+    Path(".github/workflows"),
+    Path("config"),
+    Path("containers"),
+    Path("schemas"),
+    Path("scripts"),
 )
-PRE_18_PATTERN = re.compile(
-    r"(?:postgres(?:ql)?(?:[_ ./@:-]*(?:major|version|image))?[_ ./@:=\"'-]*"
-    r"|PG_(?:MAJOR|VERSION)[=: ]+|/usr/lib/postgresql/)(?:16|17)(?:\D|$)",
-    re.IGNORECASE,
+CURRENT_FIXTURE_DOCUMENTS = (Path("docs/quadlet-integration.md"),)
+MAX_CURRENT_FILES = 512
+MAX_CURRENT_FILE_BYTES = 1_000_000
+MAX_CURRENT_TOTAL_BYTES = 8_000_000
+LEGACY_IDENTITY_PATTERNS = (
+    re.compile(r"\bpostgres(?:ql)?[\t _-]*(?:major|version)[\t :=\"'-]*(?:16|17)(?:\.[0-9]+)?\b", re.IGNORECASE),
+    re.compile(r"\bpostgres(?:ql)?[\t _-]+(?:16|17)(?:\.[0-9]+)?\b", re.IGNORECASE),
+    re.compile(r"\bpg[ _-]?(?:16|17)(?:\.[0-9]+)?\b", re.IGNORECASE),
+    re.compile(r"\bpostgresql(?:-client|-server)?-(?:16|17)\b", re.IGNORECASE),
+    re.compile(r"\bPG_(?:MAJOR|VERSION)\s*[:=]\s*[\"']?(?:16|17)(?:\.[0-9]+)?\b", re.IGNORECASE),
+    re.compile(r"/usr/lib/postgresql/(?:16|17)\b", re.IGNORECASE),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"
+        r"(?:postgres|postgresql|postgresql-server):(?:16|17)"
+        r"(?:[.-][A-Za-z0-9._-]+)?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"docker-library/postgres[^\r\n]{0,160}(?:[:/])(?:16|17)(?:/|\b)",
+        re.IGNORECASE,
+    ),
 )
 POSTGRES_IMAGE_PATTERN = re.compile(
     r"docker\.io/library/postgres@sha256:[0-9a-f]{64}"
@@ -54,14 +67,82 @@ def load_renderer():
     return module
 
 
-def find_current_legacy_identities(root: Path) -> list[Path]:
-    """Model the current path-tuple guard against an isolated repository tree."""
-    findings = []
-    for canonical in ACTIVE_FIXTURE_PATHS:
-        path = root / canonical.relative_to(ROOT)
-        if path.is_file() and PRE_18_PATTERN.search(path.read_text(encoding="utf-8")):
-            findings.append(path.relative_to(root))
-    return findings
+def _contains_legacy_identity(value: str) -> bool:
+    return any(pattern.search(value) for pattern in LEGACY_IDENTITY_PATTERNS)
+
+
+def _module_authority_strings(content: str, path: Path) -> list[tuple[int, str]]:
+    tree = ast.parse(content, filename=os.fspath(path))
+    strings = []
+    for statement in tree.body:
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = statement.value
+        if value is None:
+            continue
+        strings.extend(
+            (node.lineno, node.value)
+            for node in ast.walk(value)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
+    return strings
+
+
+def _current_authority_values(root: Path) -> list[tuple[Path, int, str]]:
+    """Discover bounded current source and module-scope test authority values."""
+    candidates: set[tuple[Path, bool]] = set()
+    for relative_root in CURRENT_SOURCE_ROOTS:
+        source_root = root / relative_root
+        if source_root.exists():
+            candidates.update(
+                (path, False)
+                for path in source_root.rglob("*")
+                if "__pycache__" not in path.parts and path.is_file()
+            )
+    candidates.update(
+        (root / relative, False)
+        for relative in CURRENT_FIXTURE_DOCUMENTS
+        if (root / relative).is_file()
+    )
+    test_root = root / "tests"
+    if test_root.exists():
+        candidates.update(
+            (path, True)
+            for path in test_root.rglob("*.py")
+            if path.name != "postgres-fixture-contract.py" and path.is_file()
+        )
+
+    if len(candidates) > MAX_CURRENT_FILES:
+        raise AssertionError("current PostgreSQL authority discovery exceeded its file bound")
+
+    values = []
+    total_bytes = 0
+    for path, module_authority_only in sorted(candidates, key=lambda item: os.fspath(item[0])):
+        if path.is_symlink():
+            raise AssertionError(f"current PostgreSQL authority is a symlink: {path}")
+        size = path.stat().st_size
+        if size > MAX_CURRENT_FILE_BYTES:
+            raise AssertionError(f"current PostgreSQL authority exceeded its file bound: {path}")
+        total_bytes += size
+        if total_bytes > MAX_CURRENT_TOTAL_BYTES:
+            raise AssertionError("current PostgreSQL authority discovery exceeded its byte bound")
+        content = path.read_text(encoding="utf-8")
+        current_values = (
+            _module_authority_strings(content, path)
+            if module_authority_only
+            else list(enumerate(content.splitlines(), start=1))
+        )
+        values.extend((path, line, value) for line, value in current_values)
+    return values
+
+
+def find_current_legacy_identities(root: Path) -> list[str]:
+    """Report explicit PG16/17 identities in discovered current authorities."""
+    return [
+        f"{path.relative_to(root).as_posix()}:{line}"
+        for path, line, value in _current_authority_values(root)
+        if _contains_legacy_identity(value)
+    ]
 
 
 def load_integration():
@@ -89,16 +170,17 @@ class PostgreSQLFixtureContractTests(unittest.TestCase):
         self.assertEqual(fixture.data_directory, "/var/lib/postgresql/18/docker")
         self.assertEqual(fixture.volume_target, "/var/lib/postgresql")
 
-    def test_active_fixture_paths_have_no_independent_or_pre_18_identity(self) -> None:
+    def test_current_surfaces_share_the_canonical_immutable_image(self) -> None:
         fixture = runtime_contract.POSTGRES_FIXTURE
         references: set[str] = set()
 
-        for path in ACTIVE_FIXTURE_PATHS:
-            content = path.read_text(encoding="utf-8")
-            self.assertIsNone(PRE_18_PATTERN.search(content), path)
-            references.update(POSTGRES_IMAGE_PATTERN.findall(content))
+        for _, _, value in _current_authority_values(ROOT):
+            references.update(POSTGRES_IMAGE_PATTERN.findall(value))
 
         self.assertEqual(references, {fixture.image})
+
+    def test_discovered_current_surfaces_have_no_pre_18_identity(self) -> None:
+        self.assertEqual(find_current_legacy_identities(ROOT), [])
 
     def test_current_surfaces_reject_ordinary_pre_18_identity_forms(self) -> None:
         cases = {
@@ -128,6 +210,41 @@ class PostgreSQLFixtureContractTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
                 self.assertTrue(find_current_legacy_identities(root), relative)
+
+    def test_guard_preserves_nonlegacy_and_noncurrent_material(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            controls = {
+                "scripts/current-database.sh": (
+                    "DATABASE=postgresql\nDATABASE_MAJOR=18\n"
+                    "DATABASE_PACKAGE=postgresql-client-18\nPORT=1617\n"
+                ),
+                "config/quadlet/current-postgres.container": (
+                    "[Container]\nImage=postgres:18\nEnvironment=DB_HOST=postgres\n"
+                ),
+                "docs/quadlet-integration.md": (
+                    "PostgreSQL 18.6 uses /var/lib/postgresql/18/docker.\n"
+                ),
+                "tests/current-database-authority.py": (
+                    'CURRENT_PACKAGE = "postgresql-client-18"\n'
+                    "def test_rejects_legacy_data():\n"
+                    '    rejected = ("PG16", "PG17", "postgres:16")\n'
+                ),
+                "tests/fixtures/immutable-history/postgres-16.txt": (
+                    "immutable historical PostgreSQL 16 evidence\n"
+                ),
+                "docs/architecture/historical-postgres.md": (
+                    "immutable historical PostgreSQL 17 evidence\n"
+                ),
+            }
+            for relative, content in controls.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            self.assertEqual(find_current_legacy_identities(root), [])
+        retirement = ROOT / "tests/production-postgres-retirement.py"
+        self.assertIn("postgres:16", retirement.read_text(encoding="utf-8"))
 
     def test_renderer_consumes_the_canonical_pg18_layout(self) -> None:
         fixture = runtime_contract.POSTGRES_FIXTURE
