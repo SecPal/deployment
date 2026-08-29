@@ -90,6 +90,7 @@
         "capture_complete",
         "captured_before_cleanup",
         "boot_id",
+        "manager_continuity_observed",
         "manager_active_after_reload_failure",
         "bus_available_after_reload_failure",
         "control_reachable_after_reload_failure",
@@ -153,6 +154,7 @@
           "type": ["string", "null"],
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         },
+        "manager_continuity_observed": { "type": "boolean" },
         "manager_active_after_reload_failure": {
           "type": ["boolean", "null"]
         },
@@ -384,6 +386,7 @@
             "podman-generator-not-executed",
             "generator-observation-unavailable",
             "quadlet-selinux-observation-unavailable",
+            "manager-continuity-observation-unavailable",
             "run-space-observation-unavailable",
             "systemd-source-contract-mismatch",
             "reload-journal-command-failed",

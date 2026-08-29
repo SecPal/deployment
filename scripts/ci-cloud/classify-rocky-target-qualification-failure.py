@@ -217,6 +217,7 @@ ADJACENCY_KEYS = frozenset(
         "failure_event_sha256",
         "captured_before_cleanup",
         "capture_monotonic_ns",
+        "manager_continuity_observed",
         "manager_active_after_reload_failure",
         "bus_available_after_reload_failure",
         "control_reachable_after_reload_failure",
@@ -356,6 +357,7 @@ def unavailable_daemon_reload_adjacency() -> dict[str, object]:
         "capture_complete": False,
         "captured_before_cleanup": False,
         "boot_id": None,
+        "manager_continuity_observed": False,
         "manager_active_after_reload_failure": None,
         "bus_available_after_reload_failure": None,
         "control_reachable_after_reload_failure": None,
@@ -535,6 +537,7 @@ def reload_authorization_outcome(request_logged: bool, client_error: str) -> str
 
 def daemon_reload_classification(
     *,
+    manager_continuity_observed: bool,
     manager_active: bool,
     bus_available: bool,
     control_reachable: bool,
@@ -561,6 +564,8 @@ def daemon_reload_classification(
     reload_access_avc_matches_contexts: bool,
     systemd_source_contract_admitted: bool,
 ) -> tuple[str, str]:
+    if not manager_continuity_observed:
+        return "diagnostic-unavailable", "manager-continuity-observation-unavailable"
     if not (manager_active and bus_available and control_reachable):
         return "manager-continuity-lost", "none"
     if not input_admitted:
@@ -581,6 +586,8 @@ def daemon_reload_classification(
         return "selinux-reload-denied", "none"
     if not systemd_source_contract_admitted:
         return "diagnostic-unavailable", "systemd-source-contract-mismatch"
+    if reload_journal_reason != "none":
+        return "diagnostic-unavailable", f"reload-{reload_journal_reason}"
     if not run_space_observed:
         return "diagnostic-unavailable", "run-space-observation-unavailable"
     if not run_space_sufficient:
@@ -596,8 +603,6 @@ def daemon_reload_classification(
         return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
     if client_error == "run-space-rejected":
         return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
-    if reload_journal_reason != "none":
-        return "diagnostic-unavailable", f"reload-{reload_journal_reason}"
     if not reload_selinux_contexts_admitted:
         return "diagnostic-unavailable", "reload-selinux-context-observation-unavailable"
     if not reload_access_avc_matches_contexts:
@@ -617,6 +622,13 @@ def daemon_reload_classification(
             or reload_finished
             or reload_internal_failure != "none"
             or reload_reply_send_failed
+            or client_error
+            in {
+                "run-space-rejected",
+                "access-denied",
+                "interactive-auth-required",
+                "rate-limited",
+            }
         ):
             return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
         return "reload-selinux-access-denied", "none"
@@ -691,6 +703,9 @@ def admit_daemon_reload_adjacency(
             or not _closed_boolean(observation, "captured_before_cleanup")
         ):
             raise ValueError("daemon-reload capture is not failure-time bound")
+        manager_continuity_observed = _closed_boolean(
+            observation, "manager_continuity_observed"
+        )
         manager_active = _closed_boolean(
             observation, "manager_active_after_reload_failure"
         )
@@ -824,6 +839,7 @@ def admit_daemon_reload_adjacency(
         )
 
         classification, diagnostic_reason = daemon_reload_classification(
+            manager_continuity_observed=manager_continuity_observed,
             manager_active=manager_active,
             bus_available=bus_available,
             control_reachable=control_reachable,
@@ -856,6 +872,7 @@ def admit_daemon_reload_adjacency(
             "capture_complete": True,
             "captured_before_cleanup": True,
             "boot_id": observation["boot_id"],
+            "manager_continuity_observed": manager_continuity_observed,
             "manager_active_after_reload_failure": manager_active,
             "bus_available_after_reload_failure": bus_available,
             "control_reachable_after_reload_failure": control_reachable,
@@ -919,6 +936,9 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
             raise ValueError("admitted daemon-reload capture is incomplete")
         if BOOT_ID.fullmatch(str(document["boot_id"])) is None:
             raise ValueError("admitted daemon-reload boot identity is malformed")
+        manager_continuity_observed = _closed_boolean(
+            document, "manager_continuity_observed"
+        )
         manager_active = _closed_boolean(
             document, "manager_active_after_reload_failure"
         )
@@ -1050,6 +1070,7 @@ def validate_admitted_daemon_reload_adjacency(document: object) -> None:
             )
         )
         expected, diagnostic_reason = daemon_reload_classification(
+            manager_continuity_observed=manager_continuity_observed,
             manager_active=manager_active,
             bus_available=bus_available,
             control_reachable=control_reachable,

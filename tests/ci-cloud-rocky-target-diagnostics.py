@@ -309,6 +309,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "failure_event_sha256": "e" * 64,
             "captured_before_cleanup": True,
             "capture_monotonic_ns": 123456789,
+            "manager_continuity_observed": True,
             "manager_active_after_reload_failure": True,
             "bus_available_after_reload_failure": True,
             "control_reachable_after_reload_failure": True,
@@ -763,6 +764,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 
     def test_reload_stage_decision_matrix_is_finite(self) -> None:
         baseline = {
+            "manager_continuity_observed": True,
             "manager_active": True,
             "bus_available": True,
             "control_reachable": True,
@@ -860,6 +862,26 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         self.assertEqual("reload-journal-timeout", reason)
 
         classification, reason = self.classifier.daemon_reload_classification(
+            **{**baseline, "manager_continuity_observed": False}
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("manager-continuity-observation-unavailable", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "run_space_sufficient": False,
+                "client_error": "run-space-rejected",
+                "reload_request_logged": False,
+                "reload_started": False,
+                "reload_finished": False,
+                "reload_journal_reason": "journal-timeout",
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-journal-timeout", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
             **{
                 **baseline,
                 "reload_finished": False,
@@ -905,6 +927,19 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             **{
                 **baseline,
                 "client_error": "selinux-access-denied",
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-stage-evidence-contradictory", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "client_error": "rate-limited",
+                "reload_request_logged": False,
+                "reload_started": False,
+                "reload_finished": False,
+                "reload_access_avc_observed": True,
             }
         )
         self.assertEqual("diagnostic-unavailable", classification)
@@ -1022,6 +1057,20 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                     ["journalctl"], timeout=3
                 )
             self.assertEqual(expected, result)
+
+    def test_manager_state_distinguishes_probe_failure_from_inactivity(self) -> None:
+        cases = (
+            ((125, b"", "command-failed"), (False, False, None)),
+            ((0, b"ActiveState=inactive\nMainPID=0\n", None), (True, False, None)),
+            ((0, b"ActiveState=active\nMainPID=1087\n", None), (True, True, 1087)),
+        )
+        for command_result, expected in cases:
+            with self.subTest(expected=expected), mock.patch.object(
+                self.observer,
+                "bounded_command_output",
+                return_value=command_result,
+            ):
+                self.assertEqual(expected, self.observer.manager_state(994))
 
     def test_observer_execution_failure_is_not_a_generator_rejection(self) -> None:
         with mock.patch.object(
@@ -1588,6 +1637,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             "failure_event_sha256": "e" * 64,
             "captured_before_cleanup": True,
             "capture_monotonic_ns": 123456789,
+            "manager_continuity_observed": True,
             "manager_active_after_reload_failure": True,
             "bus_available_after_reload_failure": True,
             "control_reachable_after_reload_failure": True,
@@ -1685,6 +1735,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             "failure_event_sha256": "e" * 64,
             "captured_before_cleanup": True,
             "capture_monotonic_ns": 123456789,
+            "manager_continuity_observed": True,
             "manager_active_after_reload_failure": True,
             "bus_available_after_reload_failure": True,
             "control_reachable_after_reload_failure": True,

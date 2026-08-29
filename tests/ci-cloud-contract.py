@@ -1171,6 +1171,11 @@ class CloudCIContractTests(unittest.TestCase):
             (observer, '"show-environment"', '"daemon-reload"'),
             (
                 observer,
+                "manager_state_observed and bus_state_observed and control_status != 125",
+                "manager_active and bus_available and control_reachable",
+            ),
+            (
+                observer,
                 'f"CODE_FUNC={GENERATOR_CODE_FUNC}"',
                 'f"IGNORED_CODE_FUNC={GENERATOR_CODE_FUNC}"',
             ),
@@ -1232,6 +1237,11 @@ class CloudCIContractTests(unittest.TestCase):
                 classifier,
                 '_closed_boolean(observation, "captured_before_cleanup")',
                 "True",
+            ),
+            (
+                classifier,
+                'observation, "manager_continuity_observed"',
+                'observation, "manager_active_after_reload_failure"',
             ),
             (
                 classifier,

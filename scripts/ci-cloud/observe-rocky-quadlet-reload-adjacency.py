@@ -720,7 +720,7 @@ def systemd_package_identity() -> str | None:
     return value if value in ADMITTED_SYSTEMD_NEVRAS else None
 
 
-def manager_state(runtime_uid: int) -> tuple[bool, int | None]:
+def manager_state(runtime_uid: int) -> tuple[bool, bool, int | None]:
     status, payload, failure = bounded_command_output(
         [
             "systemctl",
@@ -733,7 +733,7 @@ def manager_state(runtime_uid: int) -> tuple[bool, int | None]:
         max_bytes=128,
     )
     if status != 0 or failure is not None:
-        return False, None
+        return False, False, None
     try:
         values = dict(
             line.split("=", 1)
@@ -741,13 +741,17 @@ def manager_state(runtime_uid: int) -> tuple[bool, int | None]:
             if "=" in line
         )
     except UnicodeDecodeError:
-        return False, None
-    if set(values) != {"ActiveState", "MainPID"} or values["ActiveState"] != "active":
-        return False, None
+        return False, False, None
+    if set(values) != {"ActiveState", "MainPID"}:
+        return False, False, None
+    if values["ActiveState"] != "active":
+        return True, False, None
     if re.fullmatch(r"[1-9][0-9]{0,9}", values["MainPID"]) is None:
-        return True, None
+        return False, False, None
     value = int(values["MainPID"])
-    return True, value if value <= 2**31 - 1 else None
+    if value > 2**31 - 1:
+        return False, False, None
+    return True, True, value
 
 
 def process_selinux_type(pid: int) -> str | None:
@@ -825,12 +829,17 @@ def collect_observation(
     runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
     runtime_uid = runtime.pw_uid
     bus_path = Path(f"/run/user/{runtime_uid}/bus")
-    manager_active, manager_pid = manager_state(runtime_uid)
+    manager_state_observed, manager_active, manager_pid = manager_state(runtime_uid)
     try:
         bus_available = stat.S_ISSOCK(bus_path.stat().st_mode)
+        bus_state_observed = True
+    except FileNotFoundError:
+        bus_available = False
+        bus_state_observed = True
     except OSError:
         bus_available = False
-    control_reachable = command_status(
+        bus_state_observed = False
+    control_status = command_status(
         [
             "systemctl",
             f"--machine={RUNTIME_ACCOUNT}@.host",
@@ -838,7 +847,11 @@ def collect_observation(
             "show-environment",
         ],
         timeout=MANAGER_CONTINUITY_TIMEOUT_SECONDS,
-    ) == 0
+    )
+    control_reachable = control_status == 0
+    manager_continuity_observed = (
+        manager_state_observed and bus_state_observed and control_status != 125
+    )
     manager_selinux_type = (
         process_selinux_type(manager_pid) if manager_pid is not None else None
     )
@@ -950,6 +963,7 @@ def collect_observation(
         "failure_event_sha256": hashlib.sha256(event).hexdigest(),
         "captured_before_cleanup": True,
         "capture_monotonic_ns": time.monotonic_ns(),
+        "manager_continuity_observed": manager_continuity_observed,
         "manager_active_after_reload_failure": manager_active,
         "bus_available_after_reload_failure": bus_available,
         "control_reachable_after_reload_failure": control_reachable,

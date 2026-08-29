@@ -2352,6 +2352,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"--user",\n                "--dryrun"' in reload_adjacency_observer
         and 'f"--machine={RUNTIME_ACCOUNT}@.host"' in reload_adjacency_observer
         and '"show-environment"' in reload_adjacency_observer
+        and "manager_state_observed and bus_state_observed and control_status != 125"
+        in reload_adjacency_observer
         and 'GENERATOR_CODE_FUNC = "do_execute"' in reload_adjacency_observer
         and 'GENERATOR_CODE_FILE = "../src/shared/exec-util.c"'
         in reload_adjacency_observer
@@ -2426,6 +2428,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"reload-manager-serialization-failed"' in target_failure_classifier
         and '"reload-reply-transport-failed"' in target_failure_classifier
         and '"reload-stage-evidence-contradictory"'
+        in target_failure_classifier
+        and '"manager-continuity-observation-unavailable"'
+        in target_failure_classifier
+        and 'observation, "manager_continuity_observed"'
         in target_failure_classifier
         and '"reload-completion-not-observed"' in target_failure_classifier
         and '"diagnostic-unavailable"' in target_failure_classifier
