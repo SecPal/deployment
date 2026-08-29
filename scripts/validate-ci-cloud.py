@@ -2139,9 +2139,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         in readiness_publisher
         and 'stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)'
         in readiness_publisher
-        and "direct_user_systemctl" in readiness_publisher
+        and "direct_user_show_environment" in readiness_publisher
         and 'RUNTIME_ACCOUNT = "secpal-runtime"' in readiness_publisher
-        and "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir, \"show-environment\""
+        and "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir"
         in readiness_publisher
         and "--machine=" not in readiness_publisher
         and '"runuser"' in direct_user_systemd
@@ -2152,7 +2152,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'f"XDG_RUNTIME_DIR={runtime_directory}"' in direct_user_systemd
         and 'f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_directory}/bus"'
         in direct_user_systemd
-        and '"show-environment"' in readiness_publisher
+        and '"show-environment"' in direct_user_systemd
         and all(readiness_publisher.count(f'"{fact}"') == 1 for fact in readiness_facts)
         and '"runtime_user_manager_active": result.observation.manager_active'
         in readiness_publisher
@@ -2365,11 +2365,11 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "hashlib.sha256(payload).hexdigest()" in reload_adjacency_observer
         and 'f"QUADLET_UNIT_DIRS={input_path.parent}"' in reload_adjacency_observer
         and '"--user",\n                "--dryrun"' in reload_adjacency_observer
-        and "direct_user_systemctl" in reload_adjacency_observer
-        and "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir, \"show-environment\""
+        and "direct_user_show_environment" in reload_adjacency_observer
+        and "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir"
         in reload_adjacency_observer
         and "--machine=" not in reload_adjacency_observer
-        and '"show-environment"' in reload_adjacency_observer
+        and '"show-environment"' in direct_user_systemd
         and "manager_state_observed and bus_state_observed and control_status != 125"
         in reload_adjacency_observer
         and 'GENERATOR_CODE_FUNC = "do_execute"' in reload_adjacency_observer

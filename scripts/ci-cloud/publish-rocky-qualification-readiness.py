@@ -22,7 +22,7 @@ from typing import Callable, NamedTuple
 SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
 if SCRIPT_DIRECTORY not in sys.path:
     sys.path.insert(0, SCRIPT_DIRECTORY)
-from runtime_user_systemd import direct_user_systemctl
+from runtime_user_systemd import direct_user_show_environment
 
 
 RUNTIME_ACCOUNT = "secpal-runtime"
@@ -91,9 +91,7 @@ def observe_runtime_user(
     control_reachable = False
     if manager_active and bus_available:
         control_reachable = quiet_run(
-            direct_user_systemctl(
-                RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir, "show-environment"
-            ),
+            direct_user_show_environment(RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir),
             deadline=deadline,
             monotonic=monotonic,
         )

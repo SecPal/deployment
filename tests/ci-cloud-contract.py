@@ -1001,7 +1001,11 @@ class CloudCIContractTests(unittest.TestCase):
                 'stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)',
                 "True",
             ),
-            (publisher, '"show-environment"', '"daemon-reload"'),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                '"show-environment"',
+                '"daemon-reload"',
+            ),
             (
                 publisher,
                 'RUNTIME_ACCOUNT = "secpal-runtime"',
@@ -1009,8 +1013,8 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 publisher,
-                "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir, \"show-environment\"",
-                "RUNTIME_ACCOUNT, 1, runtime.pw_dir, \"show-environment\"",
+                "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir",
+                "RUNTIME_ACCOUNT, 1, runtime.pw_dir",
             ),
             (
                 "scripts/ci-cloud/runtime_user_systemd.py",
@@ -1208,7 +1212,11 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (observer, 'f"QUADLET_UNIT_DIRS={input_path.parent}"', '"QUADLET_UNIT_DIRS=/"'),
             (observer, '"--dryrun"', '"daemon-reload"'),
-            (observer, '"show-environment"', '"daemon-reload"'),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                '"show-environment"',
+                '"daemon-reload"',
+            ),
             (
                 observer,
                 "manager_state_observed and bus_state_observed and control_status != 125",

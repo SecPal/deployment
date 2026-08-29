@@ -24,7 +24,7 @@ from typing import IO, Any
 SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
 if SCRIPT_DIRECTORY not in sys.path:
     sys.path.insert(0, SCRIPT_DIRECTORY)
-from runtime_user_systemd import direct_user_systemctl
+from runtime_user_systemd import direct_user_show_environment
 
 
 EVENT = re.compile(
@@ -846,9 +846,7 @@ def collect_observation(
         bus_available = False
         bus_state_observed = False
     control_status = command_status(
-        direct_user_systemctl(
-            RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir, "show-environment"
-        ),
+        direct_user_show_environment(RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir),
         timeout=MANAGER_CONTINUITY_TIMEOUT_SECONDS,
     )
     control_reachable = control_status == 0
