@@ -1505,6 +1505,78 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                         ),
                     )
 
+    def test_semanage_fcontext_add_reasons_are_closed_and_path_free(self) -> None:
+        roots = (
+            "/var/tmp/secpal-host-qualification-a1B2c3",
+            "/var/tmp/secpal-host-qualification-Z9y8X7",
+        )
+        cases = (
+            ("SELinux policy is not managed or store cannot be accessed.", "semanage-store-access-failed"),
+            ("Cannot read policy store.", "semanage-store-access-failed"),
+            ("Could not establish semanage connection", "semanage-store-access-failed"),
+            ("Could not test MLS enabled status", "semanage-store-access-failed"),
+            ("Could not start semanage transaction", "semanage-transaction-begin-failed"),
+            ("Could not create key for {expression}", "semanage-fcontext-key-create-failed"),
+            ("Could not check if file context for {expression} is defined", "semanage-fcontext-existence-check-failed"),
+            ("Could not create file context for {expression}", "semanage-fcontext-record-create-failed"),
+            ("Could not create context for {expression}", "semanage-fcontext-context-create-failed"),
+            ("Could not set type in file context for {expression}", "semanage-fcontext-type-set-failed"),
+            ("Could not set file context for {expression}", "semanage-fcontext-context-attach-failed"),
+            ("Could not add file context for {expression}", "semanage-fcontext-local-add-failed"),
+            ("Could not commit semanage transaction", "semanage-transaction-commit-failed"),
+        )
+        for root in roots:
+            expression = root + "(/.*)?"
+            for shape, reason in cases:
+                with self.subTest(root=root, reason=reason):
+                    output = "ValueError: " + shape.format(expression=expression)
+                    operation, actual_reason = self.classify(
+                        output,
+                        "SECPAL_TARGET_ERR_V2:1:250",
+                    )
+                    self.assertEqual("qualify-selinux-storage-fcontext-add", operation)
+                    self.assertEqual(reason, actual_reason)
+                    self.assertNotIn(root, actual_reason)
+                    self.assertNotIn(expression, actual_reason)
+                    self.assertEqual(
+                        reason,
+                        self.classify(output + "\n", "SECPAL_TARGET_ERR_V2:1:250")[1],
+                    )
+
+    def test_semanage_fcontext_add_equivalency_is_closed_and_path_free(self) -> None:
+        expression = "/var/tmp/secpal-host-qualification-a1B2c3(/.*)?"
+        output = (
+            "ValueError: File spec " + expression
+            + " conflicts with equivalency rule '/var/tmp /home'; Try adding '/home(/.*)?' instead"
+        )
+        self.assertEqual(
+            ("qualify-selinux-storage-fcontext-add", "semanage-fcontext-equivalency-conflict"),
+            self.classify(output, "SECPAL_TARGET_ERR_V2:1:250"),
+        )
+
+    def test_semanage_fcontext_add_rejects_near_matches_wrong_operations_and_unknowns(self) -> None:
+        expression = "/var/tmp/secpal-host-qualification-a1B2c3(/.*)?"
+        exact = "ValueError: Could not add file context for " + expression
+        rejected = (
+            "prefix " + exact,
+            exact + " suffix",
+            "ValueError: Could not add file context for /var/tmp/unrelated(/.*)?",
+            "ValueError: arbitrary failure for " + expression,
+            "RuntimeError: Could not add file context for " + expression,
+        )
+        for output in rejected:
+            with self.subTest(output=output):
+                self.assertEqual(
+                    ("qualify-selinux-storage-fcontext-add", "command-failed"),
+                    self.classify(output, "SECPAL_TARGET_ERR_V2:1:250"),
+                )
+        for line in (249, 252, 253):
+            with self.subTest(line=line):
+                self.assertEqual(
+                    (self.classifier.operation_for_line(line), "command-failed"),
+                    self.classify(exact, f"SECPAL_TARGET_ERR_V2:1:{line}"),
+                )
+
     def test_explicit_message_and_stack_must_agree(self) -> None:
         self.assertEqual(
             ("qualify-selinux-host", "invariant-failed"),
@@ -1586,6 +1658,19 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             dict(document, diagnostic_input_bytes=135_425),
         ):
             self.assertTrue(list(validator.iter_errors(mutation)))
+        semanage_document = dict(
+            document,
+            operation="qualify-selinux-storage-fcontext-add",
+            reason="semanage-fcontext-local-add-failed",
+        )
+        self.assertEqual([], list(validator.iter_errors(semanage_document)))
+        self.assertTrue(
+            list(
+                validator.iter_errors(
+                    dict(semanage_document, operation="qualify-selinux-storage-restorecon")
+                )
+            )
+        )
         unbound = dict(
             document,
             harness_sha256="a" * 64,

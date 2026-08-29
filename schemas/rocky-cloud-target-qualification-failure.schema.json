@@ -73,7 +73,18 @@
         "representation-invalid",
         "cleanup-failed",
         "timeout",
-        "unclassified-target-failure"
+        "unclassified-target-failure",
+        "semanage-store-access-failed",
+        "semanage-transaction-begin-failed",
+        "semanage-fcontext-equivalency-conflict",
+        "semanage-fcontext-key-create-failed",
+        "semanage-fcontext-existence-check-failed",
+        "semanage-fcontext-record-create-failed",
+        "semanage-fcontext-context-create-failed",
+        "semanage-fcontext-type-set-failed",
+        "semanage-fcontext-context-attach-failed",
+        "semanage-fcontext-local-add-failed",
+        "semanage-transaction-commit-failed"
       ]
     },
     "exit_status": { "type": "integer", "minimum": 1, "maximum": 255 },
@@ -475,6 +486,33 @@
       "if": { "properties": { "reason": { "const": "cleanup-failed" } } },
       "then": {
         "properties": { "operation": { "const": "qualify-fixture-cleanup" } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "semanage-store-access-failed",
+              "semanage-transaction-begin-failed",
+              "semanage-fcontext-equivalency-conflict",
+              "semanage-fcontext-key-create-failed",
+              "semanage-fcontext-existence-check-failed",
+              "semanage-fcontext-record-create-failed",
+              "semanage-fcontext-context-create-failed",
+              "semanage-fcontext-type-set-failed",
+              "semanage-fcontext-context-attach-failed",
+              "semanage-fcontext-local-add-failed",
+              "semanage-transaction-commit-failed"
+            ]
+          }
+        },
+        "required": ["reason"]
+      },
+      "then": {
+        "properties": {
+          "operation": { "const": "qualify-selinux-storage-fcontext-add" }
+        }
       }
     },
     {
