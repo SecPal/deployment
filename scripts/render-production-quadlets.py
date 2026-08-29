@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Render the production rootless-Podman Quadlet declarations from D.2."""
+"""Render the retained production rootless-Podman product-role Quadlets."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ if os.fspath(SCRIPT_DIRECTORY) not in sys.path:
 from integration_runtime_contract import (  # noqa: E402
     API_IMAGE,
     FRONTEND_IMAGE,
-    POSTGRES_IMAGE,
     VALKEY_IMAGE,
     role_execution_spec,
     role_spec,
@@ -194,9 +193,10 @@ def api_container(contract: dict, role: str) -> str:
     execution = role_execution_spec(role)
     if execution is None or execution.command is None:
         raise ValueError(f"production role {role} has no reviewed execution contract")
-    dependencies = ("secpal-migrate.service",) if role != "migrate" else (
-        "secpal-postgres.service",
-        "secpal-valkey.service",
+    dependencies = (
+        ("secpal-migrate.service",)
+        if role != "migrate"
+        else ("secpal-valkey.service",)
     )
     lines = common_container(contract, role, API_IMAGE)
     lines.extend(APPLICATION_ENVIRONMENT)
@@ -237,9 +237,7 @@ def api_container(contract: dict, role: str) -> str:
 
 
 def build_units(contract: dict) -> dict[str, str]:
-    postgres_path = contract["objects"]["postgresql_data"]["location"]
     valkey_path = contract["objects"]["valkey_state"]["location"]
-    postgres_secret = contract["secret_delivery"]["postgres"]["directory"]
     valkey_secret = contract["secret_delivery"]["valkey"]["directory"]
     units: dict[str, str] = {}
 
@@ -263,50 +261,6 @@ def build_units(contract: dict) -> dict[str, str]:
             "Label=org.secpal.production=true",
         ],
     )
-
-    postgres_init = common_container(
-        contract, "postgres", POSTGRES_IMAGE, instance="postgres-init"
-    )
-    postgres_init.extend(
-        (
-            'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-postgres-entrypoint.sh"]',
-            "Exec=initialize",
-            "Mount=type=bind,source=/srv/secpal/config/runtime/production-postgres-entrypoint.sh,"
-            "target=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true",
-            f"Mount=type=bind,source={postgres_secret}/password,"
-            "target=/run/secpal-secret/password,ro=true",
-            f"Mount=type=bind,source={postgres_path},target=/var/lib/postgresql/data,rw=true",
-            *tmpfs_mounts("postgres"),
-            "Network=none",
-        )
-    )
-    units["secpal-postgres-init.container"] = unit(
-        "Initialize SecPal production PostgreSQL", ("secpal-state-ready.service",), oneshot=True
-    ) + section("Container", postgres_init) + service(oneshot=True)
-
-    postgres = common_container(contract, "postgres", POSTGRES_IMAGE)
-    postgres.extend(
-        (
-            'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-postgres-entrypoint.sh"]',
-            "Exec=run",
-            "Mount=type=bind,source=/srv/secpal/config/runtime/production-postgres-entrypoint.sh,"
-            "target=/run/secpal/bootstrap/production-postgres-entrypoint.sh,ro=true",
-            f"Mount=type=bind,source={postgres_path},target=/var/lib/postgresql/data,rw=true",
-            *tmpfs_mounts("postgres"),
-            "Network=secpal-application.network",
-            "NetworkAlias=postgres",
-            "HealthCmd=pg_isready -U secpal -d secpal",
-            "HealthInterval=5s",
-            "HealthTimeout=3s",
-            "HealthRetries=20",
-            "HealthStartPeriod=10s",
-            "HealthOnFailure=kill",
-            "Notify=healthy",
-        )
-    )
-    units["secpal-postgres.container"] = unit(
-        "SecPal production PostgreSQL", ("secpal-postgres-init.service",)
-    ) + section("Container", postgres) + service()
 
     valkey = common_container(contract, "valkey", VALKEY_IMAGE)
     valkey.extend(
@@ -352,8 +306,7 @@ def build_units(contract: dict) -> dict[str, str]:
         "Unit",
         [
             "Description=Validate SecPal production state before product startup",
-            "Before=secpal-postgres-init.service secpal-postgres.service "
-            "secpal-valkey.service secpal-migrate.service",
+            "Before=secpal-valkey.service secpal-migrate.service",
             "PartOf=secpal.target",
         ],
     ) + section(

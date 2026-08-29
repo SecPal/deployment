@@ -93,7 +93,6 @@ required_files=(
   scripts/quadlet-integration.py
   scripts/quadlet-oneshot-entrypoint.sh
   scripts/production-secret-bootstrap.php
-  scripts/production-postgres-entrypoint.sh
   scripts/production-state.py
   scripts/production-valkey-entrypoint.sh
   scripts/render-production-quadlets.py
@@ -162,6 +161,7 @@ required_files=(
   tests/production-host-contract.sh
   tests/production-inventory-contract.py
   tests/production-state-contract.py
+  tests/production-postgres-retirement.py
   tests/production-edge-decision-contract.py
   tests/production-state-native-lifecycle-gate.sh
   tests/production-state-native-lifecycle.sh
