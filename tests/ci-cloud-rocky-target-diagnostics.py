@@ -593,7 +593,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             "MESSAGE": "Reloading...",
         }
         facts, reason = self.observer.reload_stage_markers(
-            (json.dumps(irrelevant) + "\n").encode(), 1087, boot_id
+            (json.dumps(irrelevant) + "\n").encode(), 1087, boot_id, 42
         )
         self.assertEqual("candidate-representation-invalid", reason)
         self.assertFalse(facts["reload_request_logged"])
@@ -620,7 +620,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             }) + "\n").encode()
             for code_file, code_func, message in entries
         )
-        facts, reason = self.observer.reload_stage_markers(payload, 1087, boot_id)
+        facts, reason = self.observer.reload_stage_markers(
+            payload, 1087, boot_id, 42
+        )
         self.assertEqual("none", reason)
         self.assertEqual(
             {
@@ -654,7 +656,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             }
             with self.subTest(expected=expected):
                 facts, reason = self.observer.reload_stage_markers(
-                    (json.dumps(entry) + "\n").encode(), 1087, boot_id
+                    (json.dumps(entry) + "\n").encode(), 1087, boot_id, 42
                 )
                 self.assertEqual("none", reason)
                 self.assertEqual(expected, facts["reload_internal_failure"])
@@ -676,9 +678,48 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             ).encode()
             for pid in (42, 43)
         )
-        facts, reason = self.observer.reload_stage_markers(payload, 1087, boot_id)
+        facts, reason = self.observer.reload_stage_markers(
+            payload, 1087, boot_id, 42
+        )
         self.assertEqual("multiple-causes", reason)
         self.assertIsNone(facts["reload_request_client_pid"])
+
+    def test_reload_stage_rejects_a_request_from_another_client(self) -> None:
+        boot_id = "12345678-1234-1234-1234-123456789abc"
+        entry = {
+            "_PID": "1087",
+            "_BOOT_ID": boot_id.replace("-", ""),
+            "CODE_FILE": "../src/core/dbus-manager.c",
+            "CODE_FUNC": "log_caller",
+            "MESSAGE": "Reload requested from client PID 43 ('systemctl')...",
+        }
+        facts, reason = self.observer.reload_stage_markers(
+            (json.dumps(entry) + "\n").encode(), 1087, boot_id, 42
+        )
+        self.assertEqual("request-client-unbound", reason)
+        self.assertEqual(43, facts["reload_request_client_pid"])
+
+    def test_reload_stage_rejects_execution_after_rate_limit_rejection(self) -> None:
+        boot_id = "12345678-1234-1234-1234-123456789abc"
+        entries = (
+            ("../src/core/dbus-manager.c", "log_caller", "Reload requested from client PID 42 ('systemctl')..."),
+            ("../src/core/dbus-manager.c", "method_reload", "Reloading request rejected due to rate limit."),
+            ("../src/core/main.c", "invoke_main_loop", "Reloading..."),
+        )
+        payload = b"".join(
+            (json.dumps({
+                "_PID": "1087",
+                "_BOOT_ID": boot_id.replace("-", ""),
+                "CODE_FILE": code_file,
+                "CODE_FUNC": code_func,
+                "MESSAGE": message,
+            }) + "\n").encode()
+            for code_file, code_func, message in entries
+        )
+        _, reason = self.observer.reload_stage_markers(
+            payload, 1087, boot_id, 42
+        )
+        self.assertEqual("candidate-representation-invalid", reason)
 
     def test_reload_client_error_is_normalized_without_raw_output(self) -> None:
         cases = (
@@ -805,6 +846,16 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "reload_request_logged": False,
                 "reload_started": False,
                 "reload_finished": False,
+            }
+        )
+        self.assertEqual("diagnostic-unavailable", classification)
+        self.assertEqual("reload-stage-evidence-contradictory", reason)
+
+        classification, reason = self.classifier.daemon_reload_classification(
+            **{
+                **baseline,
+                "client_error": "rate-limited",
+                "reload_rate_limit_rejected": True,
             }
         )
         self.assertEqual("diagnostic-unavailable", classification)

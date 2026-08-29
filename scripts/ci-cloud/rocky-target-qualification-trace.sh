@@ -6,7 +6,27 @@
 # not alter target predicates or success.  It records only bounded numeric
 # failure call stacks for negative diagnostic classification.  The closed V2
 # record contains only one status and at most eight numeric source lines.
+
+# The root-owned hard link at /opt/secpal-control/libexec/systemctl preserves
+# the exact /usr/bin/systemctl invocation while binding the D-Bus client PID to
+# the one reviewed d892 call. exec(2) preserves this process identity.
+if [[ "${0##*/}" == systemctl ]]; then
+  if [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]] &&
+    [[ "$#" -eq 3 ]] &&
+    [[ "$1" == "--machine=secpal-runtime@.host" ]] &&
+    [[ "$2" == --user ]] &&
+    [[ "$3" == daemon-reload ]] &&
+    { : >&4; } 2>/dev/null; then
+    if ! printf 'SECPAL_QUADLET_RELOAD_CLIENT_V1:%s\n' "$$" >&4; then
+      :
+    fi
+  fi
+  exec /usr/bin/systemctl "$@"
+fi
+
 set -E
+
+export PATH="/opt/secpal-control/libexec:$PATH"
 
 secpal_reload_journal_cursor=unavailable
 secpal_reload_run_space_bytes=unavailable
@@ -20,6 +40,7 @@ secpal_reload_precall() {
   if [[ "${BASH_LINENO[0]:-}" == 242 ]] &&
     [[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]; then
     trap - DEBUG
+    export SECPAL_RELOAD_EXACT_CALL=1
     if cursor_output="$(timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0 2>/dev/null)" &&
       [[ "$cursor_output" =~ ^--\ cursor:\ ([A-Za-z0-9=\;._-]{1,384})$ ]]; then
       secpal_reload_journal_cursor="${BASH_REMATCH[1]}"
@@ -48,6 +69,7 @@ secpal_target_qualification_err() {
   local frames=""
   local frame_count=0
   trap - ERR
+  unset SECPAL_RELOAD_EXACT_CALL
   for frame in "${BASH_LINENO[@]}"; do
     if ((frame_count >= 8)); then
       break

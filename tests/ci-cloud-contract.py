@@ -1084,6 +1084,7 @@ class CloudCIContractTests(unittest.TestCase):
         runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
         observer = "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        bootstrap = "scripts/ci-cloud/bootstrap-rocky-host.tftpl"
         mutations = (
             (
                 trace,
@@ -1094,6 +1095,21 @@ class CloudCIContractTests(unittest.TestCase):
                 trace,
                 '"$status" "$$" "$secpal_reload_run_space_bytes"',
                 '"$status" "1" "$secpal_reload_run_space_bytes"',
+            ),
+            (
+                trace,
+                "SECPAL_QUADLET_RELOAD_CLIENT_V1:%s",
+                "SECPAL_UNBOUND_RELOAD_CLIENT:%s",
+            ),
+            (
+                trace,
+                'exec /usr/bin/systemctl "$@"',
+                'systemctl "$@"',
+            ),
+            (
+                bootstrap,
+                "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh",
+                "ln -f /tmp/unreviewed-systemctl",
             ),
             (
                 trace,
@@ -1116,6 +1132,11 @@ class CloudCIContractTests(unittest.TestCase):
             (runner, "mkfifo -m 0600", "install -m 0600 /dev/null"),
             (runner, '--reload-adjacency "$reload_adjacency"', ""),
             (observer, "MAX_INPUT_BYTES = 4_096", "MAX_INPUT_BYTES = 65_536"),
+            (
+                observer,
+                'reasons.add("request-client-unbound")',
+                'facts["reload_request_client_pid"] = expected_client_pid',
+            ),
             (observer, "CAPTURE_DEADLINE_SECONDS = 22", "CAPTURE_DEADLINE_SECONDS = 26"),
             (
                 observer,

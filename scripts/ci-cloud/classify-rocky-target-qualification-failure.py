@@ -170,6 +170,7 @@ RELOAD_OBSERVATION_REASONS = frozenset(
         "candidate-count-exceeded",
         "manager-pid-unavailable",
         "journal-cursor-unavailable",
+        "request-client-unbound",
         "multiple-causes",
         "observation-unavailable",
     }
@@ -612,6 +613,13 @@ def daemon_reload_classification(
         if client_error in {"timeout", "connection-reset", "transport-unavailable"}:
             return "reload-reply-transport-failed", "none"
         return "diagnostic-unavailable", "reload-authorization-observation-unavailable"
+    if reload_rate_limit_rejected and (
+        reload_started
+        or reload_finished
+        or reload_internal_failure != "none"
+        or reload_reply_send_failed
+    ):
+        return "diagnostic-unavailable", "reload-stage-evidence-contradictory"
     if reload_rate_limit_rejected or client_error == "rate-limited":
         return "reload-rate-limited", "none"
     if reload_reply_send_failed:

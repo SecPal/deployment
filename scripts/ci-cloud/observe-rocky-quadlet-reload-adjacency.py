@@ -29,6 +29,9 @@ EVENT = re.compile(
     rb"(unavailable|[A-Za-z0-9=;._-]{1,384}):"
     rb"([1-9][0-9]{0,3}(?:,[1-9][0-9]{0,3}){0,7})\n$"
 )
+CLIENT_EVENT = re.compile(
+    rb"^SECPAL_QUADLET_RELOAD_CLIENT_V1:([1-9][0-9]{0,9})\n$"
+)
 SHA = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
 RUN_ATTEMPT = re.compile(r"^[1-9][0-9]{0,2}$")
@@ -107,6 +110,7 @@ RELOAD_OBSERVATION_REASONS = frozenset(
         "candidate-count-exceeded",
         "manager-pid-unavailable",
         "journal-cursor-unavailable",
+        "request-client-unbound",
         "multiple-causes",
     }
 )
@@ -463,7 +467,7 @@ def reload_journal_command(
 
 
 def reload_stage_markers(
-    payload: bytes, manager_pid: int, boot_id: str
+    payload: bytes, manager_pid: int, boot_id: str, expected_client_pid: int
 ) -> tuple[dict[str, Any], str]:
     facts = empty_reload_stage_markers()
     reasons: set[str] = set()
@@ -595,8 +599,17 @@ def reload_stage_markers(
         reasons.add("multiple-causes")
     if len(request_client_pids) == 1:
         facts["reload_request_client_pid"] = next(iter(request_client_pids))
+        if facts["reload_request_client_pid"] != expected_client_pid:
+            reasons.add("request-client-unbound")
     elif len(request_client_pids) > 1:
         reasons.add("multiple-causes")
+    if facts["reload_rate_limit_rejected"] and (
+        facts["reload_started"]
+        or facts["reload_finished"]
+        or facts["reload_internal_failure"] != "none"
+        or facts["reload_reply_send_failed"]
+    ):
+        reasons.add("candidate-representation-invalid")
     if not reasons:
         return facts, "none"
     if len(reasons) == 1:
@@ -610,9 +623,12 @@ def reload_stage_observation(
     command_failure: str | None,
     manager_pid: int,
     boot_id: str,
+    expected_client_pid: int,
 ) -> tuple[dict[str, Any], str]:
     if status == 0 and command_failure is None:
-        return reload_stage_markers(payload, manager_pid, boot_id)
+        return reload_stage_markers(
+            payload, manager_pid, boot_id, expected_client_pid
+        )
     reason = {
         "timeout": "journal-timeout",
         "output-bound-exceeded": "journal-output-bound-exceeded",
@@ -790,6 +806,7 @@ def collect_observation(
     control_pid: int,
     journal_cursor: str | None,
     audit_baseline: str | None,
+    expected_client_pid: int,
 ) -> dict[str, Any]:
     runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
     runtime_uid = runtime.pw_uid
@@ -871,6 +888,7 @@ def collect_observation(
             reload_failure,
             manager_pid,
             arguments.boot_id,
+            expected_client_pid,
         )
     if audit_baseline is None:
         audit_status, audit = 125, b""
@@ -994,7 +1012,12 @@ def observe(arguments: argparse.Namespace) -> int:
         event_channel = admitted_fifo(arguments.event, os.O_RDONLY)
         acknowledgement = admitted_fifo(arguments.ack, os.O_WRONLY)
         with event_channel:
+            client_event = event_channel.readline(65)
             event = event_channel.readline(513)
+        client_match = CLIENT_EVENT.fullmatch(client_event)
+        if client_match is None or len(client_event) > 64:
+            raise ObservationError("daemon-reload client identity is malformed")
+        expected_client_pid = int(client_match.group(1))
         match = EVENT.fullmatch(event)
         if match is None or len(event) > 512:
             raise ObservationError("daemon-reload event is malformed")
@@ -1004,7 +1027,12 @@ def observe(arguments: argparse.Namespace) -> int:
         audit_raw = match.group(4).decode("ascii")
         cursor_raw = match.group(5).decode("ascii")
         frames = {int(frame) for frame in match.group(6).split(b",")}
-        if failure_status > 255 or control_pid > 2**31 - 1 or 242 not in frames:
+        if (
+            failure_status > 255
+            or control_pid > 2**31 - 1
+            or expected_client_pid > 2**31 - 1
+            or 242 not in frames
+        ):
             raise ObservationError("daemon-reload event is outside the exact call site")
         run_space_before = (
             (True, int(run_space_raw))
@@ -1017,11 +1045,12 @@ def observe(arguments: argparse.Namespace) -> int:
         document = collect_observation(
             arguments,
             failure_status,
-            event,
+            client_event + event,
             run_space_before,
             control_pid,
             cursor_raw if cursor_raw != "unavailable" else None,
             audit_raw if audit_raw != "unavailable" else None,
+            expected_client_pid,
         )
         write_document(arguments.output, document, deadline)
         acknowledgement.write(b"SECPAL_RELOAD_ADJACENCY_CAPTURED_V1\n")

@@ -344,6 +344,7 @@
             "candidate-count-exceeded",
             "manager-pid-unavailable",
             "journal-cursor-unavailable",
+            "request-client-unbound",
             "multiple-causes",
             "observation-unavailable"
           ]
@@ -392,6 +393,7 @@
             "reload-candidate-count-exceeded",
             "reload-manager-pid-unavailable",
             "reload-journal-cursor-unavailable",
+            "reload-request-client-unbound",
             "reload-multiple-causes",
             "reload-selinux-context-observation-unavailable",
             "reload-selinux-observation-ambiguous",

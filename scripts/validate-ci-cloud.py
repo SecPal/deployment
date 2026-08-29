@@ -2231,6 +2231,10 @@ def validate_rocky_control_plane(root: Path) -> None:
     require(
         "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s"
         in target_failure_trace
+        and "SECPAL_QUADLET_RELOAD_CLIENT_V1:%s" in target_failure_trace
+        and 'exec /usr/bin/systemctl "$@"' in target_failure_trace
+        and 'export PATH="/opt/secpal-control/libexec:$PATH"'
+        in target_failure_trace
         and '"$status" "$$" "$secpal_reload_run_space_bytes"'
         in target_failure_trace
         and '"$secpal_reload_audit_baseline" "$secpal_reload_journal_cursor"'
@@ -2261,7 +2265,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         < target_runner.index("wait \"$observer_pid\"")
         and "--reload-adjacency \"$reload_adjacency\"" in target_runner
         and "reload_observer_base64gzip" in main
-        and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap,
+        and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap
+        and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        in bootstrap
+        and "/opt/secpal-control/libexec/systemctl" in bootstrap,
         "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
     )
     require(
@@ -2377,6 +2384,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         in reload_adjacency_observer
         and 'f"_PID={manager_pid}"' in reload_adjacency_observer
         and 'f"--after-cursor={journal_cursor}"' in reload_adjacency_observer
+        and 'reasons.add("request-client-unbound")' in reload_adjacency_observer
         and '"rpm",\n            "-q",' in reload_adjacency_observer
         and '("../src/core/dbus-manager.c", "log_caller")'
         in reload_adjacency_observer
