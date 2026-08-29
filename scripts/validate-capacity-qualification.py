@@ -175,6 +175,11 @@ def load_probe_contract(path: Path = PROBE_PATH) -> tuple[dict[str, Any], str, s
     )
     for key in set(cycle) - {"description"}:
         positive_integer(cycle[key], f"storage cycle {key}")
+    if (
+        workload["storage_cycles_per_iteration"]
+        != cycle["minimum_cycles_per_workload_iteration"]
+    ):
+        raise QualificationError("workload and storage probe cycle counts disagree")
     raw = exact_keys(
         storage["raw_performance_observations"],
         {"required", "named_performance_tier", "same_persistent_filesystem"},
@@ -347,6 +352,7 @@ def admit(
     require_equal(performance["probe_revision_sha256"], storage_revision, "storage probe")
 
     collected_workload = source["collection"]["workload"]
+    workload_contract = probes["workload"]["iteration"]
     for observation, collected in (
         ("duration_seconds", "controller_observed_duration_seconds"),
         ("completed_iterations", "controller_observed_completed_iterations"),
@@ -361,6 +367,12 @@ def admit(
         )
     if collected_workload["controller_observed_deadline_misses"] != 0:
         raise QualificationError("trusted workload observation contains a deadline miss")
+    if (
+        workload["duration_seconds"] < workload_contract["minimum_duration_seconds"]
+        or collected_workload["maximum_iteration_duration_seconds"]
+        > workload_contract["deadline_seconds"]
+    ):
+        raise QualificationError("trusted workload did not satisfy its reviewed duration")
     required_cpu_reservation = (
         resources["usable_cpu_millicores"] * HEADROOM_PERCENT + 99
     ) // 100

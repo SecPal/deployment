@@ -110,6 +110,8 @@
           "properties": {
             "provider": {
               "type": "string",
+              "maxLength": 64,
+              "not": { "pattern": "[^a-z0-9-]" },
               "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
             },
             "product_id": {
@@ -510,6 +512,7 @@
               "required": [
                 "observer",
                 "controller_observed_duration_seconds",
+                "maximum_iteration_duration_seconds",
                 "controller_observed_completed_iterations",
                 "controller_observed_failed_iterations",
                 "controller_observed_deadline_misses",
@@ -524,6 +527,11 @@
               "properties": {
                 "observer": { "const": "trusted-controller" },
                 "controller_observed_duration_seconds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400
+                },
+                "maximum_iteration_duration_seconds": {
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 86400

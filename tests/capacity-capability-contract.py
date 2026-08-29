@@ -179,6 +179,7 @@ def source_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
             "workload": {
                 "observer": "trusted-controller",
                 "controller_observed_duration_seconds": workload["duration_seconds"],
+                "maximum_iteration_duration_seconds": 600,
                 "controller_observed_completed_iterations": workload[
                     "completed_iterations"
                 ],
@@ -379,6 +380,11 @@ class CapacityCapabilityContractTests(unittest.TestCase):
         source = source_evidence(evidence)
         source["collection"]["workload"]["controller_observed_deadline_misses"] = 1
         self.assert_not_qualified(self.run_validator(evidence, source=source), "deadline")
+        source = source_evidence(evidence)
+        source["collection"]["workload"]["maximum_iteration_duration_seconds"] = 631
+        self.assert_not_qualified(
+            self.run_validator(evidence, source=source), "reviewed duration"
+        )
 
     def test_pathological_storage_cannot_pass_reviewed_probe(self) -> None:
         evidence = provider_evidence()
@@ -525,6 +531,9 @@ class CapacityCapabilityContractTests(unittest.TestCase):
             self.run_validator(evidence, expected_target_identity=HASH_A),
             "schema validation",
         )
+        evidence = provider_evidence()
+        evidence["subject"]["provider_product"]["provider"] = "example-cloud\n"
+        self.assert_not_qualified(self.run_validator(evidence), "schema validation")
 
     def test_rfc3339_and_malformed_schema_are_bounded(self) -> None:
         evidence = provider_evidence()
