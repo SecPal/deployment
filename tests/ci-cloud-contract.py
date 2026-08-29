@@ -1084,11 +1084,42 @@ class CloudCIContractTests(unittest.TestCase):
         runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
         observer = "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        bootstrap = "scripts/ci-cloud/bootstrap-rocky-host.tftpl"
         mutations = (
             (
                 trace,
-                "SECPAL_QUADLET_RELOAD_FAILURE_V1:%s:%s",
+                "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s",
                 "SECPAL_UNBOUNDED_RELOAD_FAILURE:%s:%s",
+            ),
+            (
+                trace,
+                '"$status" "$$" "$secpal_reload_run_space_bytes"',
+                '"$status" "1" "$secpal_reload_run_space_bytes"',
+            ),
+            (
+                trace,
+                "SECPAL_QUADLET_RELOAD_CLIENT_V1:%s",
+                "SECPAL_UNBOUND_RELOAD_CLIENT:%s",
+            ),
+            (
+                trace,
+                'exec /usr/bin/systemctl "$@"',
+                'systemctl "$@"',
+            ),
+            (
+                bootstrap,
+                "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh",
+                "ln -f /tmp/unreviewed-systemctl",
+            ),
+            (
+                trace,
+                "timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0",
+                "journalctl --no-pager --lines=1000",
+            ),
+            (
+                trace,
+                "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd",
+                "stat --file-system --format='%a %S' -- /run",
             ),
             (trace, "10#$frame == 242", "10#$frame == 243"),
             (trace, "read -r -t 25 -u 5", "read -r -u 5"),
@@ -1101,7 +1132,22 @@ class CloudCIContractTests(unittest.TestCase):
             (runner, "mkfifo -m 0600", "install -m 0600 /dev/null"),
             (runner, '--reload-adjacency "$reload_adjacency"', ""),
             (observer, "MAX_INPUT_BYTES = 4_096", "MAX_INPUT_BYTES = 65_536"),
+            (
+                observer,
+                'reasons.add("request-client-unbound")',
+                'facts["reload_request_client_pid"] = expected_client_pid',
+            ),
             (observer, "CAPTURE_DEADLINE_SECONDS = 22", "CAPTURE_DEADLINE_SECONDS = 26"),
+            (
+                observer,
+                "MANAGER_CONTINUITY_TIMEOUT_SECONDS = 2",
+                "MANAGER_CONTINUITY_TIMEOUT_SECONDS = 4",
+            ),
+            (
+                observer,
+                "PACKAGE_QUERY_TIMEOUT_SECONDS = 1",
+                "PACKAGE_QUERY_TIMEOUT_SECONDS = 4",
+            ),
             (observer, "time.monotonic() > deadline", "False"),
             (
                 observer,
@@ -1123,6 +1169,11 @@ class CloudCIContractTests(unittest.TestCase):
             (observer, 'f"QUADLET_UNIT_DIRS={input_path.parent}"', '"QUADLET_UNIT_DIRS=/"'),
             (observer, '"--dryrun"', '"daemon-reload"'),
             (observer, '"show-environment"', '"daemon-reload"'),
+            (
+                observer,
+                "manager_state_observed and bus_state_observed and control_status != 125",
+                "manager_active and bus_available and control_reachable",
+            ),
             (
                 observer,
                 'f"CODE_FUNC={GENERATOR_CODE_FUNC}"',
@@ -1148,11 +1199,49 @@ class CloudCIContractTests(unittest.TestCase):
                 "max_bytes=MAX_GENERATOR_JOURNAL_BYTES",
                 "max_bytes=MAX_COMMAND_BYTES",
             ),
+            (
+                observer,
+                'ROCKY_SYSTEMD_SOURCE_RPM = "systemd-257-23.el10_2.2.rocky.0.1.src.rpm"',
+                'ROCKY_SYSTEMD_SOURCE_RPM = "upstream-main"',
+            ),
+            (
+                observer,
+                'f"--output-fields={RELOAD_OUTPUT_FIELDS}"',
+                '"--output=json-pretty"',
+            ),
+            (observer, 'f"_PID={manager_pid}"', '"_UID=0"'),
+            (
+                observer,
+                'f"--after-cursor={journal_cursor}"',
+                'f"--since={arguments.journal_baseline}"',
+            ),
+            (
+                observer,
+                '"systemd-257-23.el10_2.2.rocky.0.1.aarch64"',
+                '"systemd-257-99.el10.aarch64"',
+            ),
+            (observer, 'os.statvfs("/run/systemd")', 'os.statvfs("/run")'),
+            (observer, '"tclass=system"', '"tclass=file"'),
+            (
+                observer,
+                'r"avc:\\s+denied\\s+\\{\\s*reload\\s*\\}"',
+                'r"avc:.*denied"',
+            ),
+            (
+                observer,
+                "reload_access_avc(audit, expected_client_pid)",
+                "reload_access_avc(audit, control_pid)",
+            ),
             (observer, 'comm="podman-system-g"', 'comm="systemd"'),
             (
                 classifier,
                 '_closed_boolean(observation, "captured_before_cleanup")',
                 "True",
+            ),
+            (
+                classifier,
+                'observation, "manager_continuity_observed"',
+                'observation, "manager_active_after_reload_failure"',
             ),
             (
                 classifier,
@@ -1168,6 +1257,26 @@ class CloudCIContractTests(unittest.TestCase):
                 classifier,
                 're.fullmatch(r"[0-9a-f]{64}", str(observation["failure_event_sha256"]))',
                 "None",
+            ),
+            (
+                classifier,
+                'reload_access_avc["source_type"]',
+                'observation["control_process_selinux_type"]',
+            ),
+            (
+                classifier,
+                'return "reload-authorization-denied", "none"',
+                'return "reload-reply-transport-failed", "none"',
+            ),
+            (
+                classifier,
+                'return "reload-rate-limited", "none"',
+                'return "manager-reload-transaction-failed", "none"',
+            ),
+            (
+                classifier,
+                'return "reload-reply-transport-failed", "none"\n',
+                'return "manager-reload-transaction-failed", "none"\n',
             ),
         )
         for relative, old, new in mutations:

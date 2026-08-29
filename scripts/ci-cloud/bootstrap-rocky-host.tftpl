@@ -22,11 +22,14 @@ readonly qualification_readiness=/var/lib/secpal-rocky/qualification-readiness.j
 rm -f -- "$qualification_readiness"
 install -d -o root -g root -m 0755 /opt/secpal-control/scripts/ci-cloud \
   /opt/secpal-control/config/ci-cloud /opt/secpal-control/schemas
+install -d -o root -g root -m 0700 /opt/secpal-control/libexec
 decode_script '${prepare_script_base64gzip}' /usr/local/sbin/secpal-prepare-rocky-host
 decode_script '${readiness_publisher_base64gzip}' /usr/local/sbin/secpal-publish-rocky-qualification-readiness
 decode_script '${target_runner_base64gzip}' /usr/local/sbin/secpal-run-rocky-target-qualification
 decode_script '${target_failure_classifier_base64gzip}' /usr/local/sbin/secpal-classify-rocky-target-failure
 decode_script '${target_trace_base64gzip}' /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh
+ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
+  /opt/secpal-control/libexec/systemctl
 decode_script '${reload_observer_base64gzip}' /opt/secpal-control/scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py
 decode_script '${allocator_base64gzip}' /usr/local/sbin/secpal-allocate-rocky-subids
 decode_script '${collector_base64gzip}' /usr/local/sbin/secpal-collect-rocky-preparation

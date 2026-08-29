@@ -2192,8 +2192,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "frame_count >= 8" in target_failure_trace
         and all(
             forbidden not in target_failure_trace
-            for forbidden in ("BASH_COMMAND", "BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
+            for forbidden in ("BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
         )
+        and target_failure_trace.count("BASH_COMMAND") == 1
         and literal_constant(target_failure_classifier, "MAX_TRACE_FRAMES") == 8
         and literal_constant(target_failure_classifier, "MAX_TRACE_LINE") == 9_999
         and all(
@@ -2228,7 +2229,24 @@ def validate_rocky_control_plane(root: Path) -> None:
         "target harness failures must retain one bounded negative-only semantic identity",
     )
     require(
-        "SECPAL_QUADLET_RELOAD_FAILURE_V1:%s:%s" in target_failure_trace
+        "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s"
+        in target_failure_trace
+        and "SECPAL_QUADLET_RELOAD_CLIENT_V1:%s" in target_failure_trace
+        and 'exec /usr/bin/systemctl "$@"' in target_failure_trace
+        and 'export PATH="/opt/secpal-control/libexec:$PATH"'
+        in target_failure_trace
+        and '"$status" "$$" "$secpal_reload_run_space_bytes"'
+        in target_failure_trace
+        and '"$secpal_reload_audit_baseline" "$secpal_reload_journal_cursor"'
+        in target_failure_trace
+        and '[[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]'
+        in target_failure_trace
+        and "timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0"
+        in target_failure_trace
+        and "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd"
+        in target_failure_trace
+        and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
+        in target_failure_trace
         and "10#$frame == 242" in target_failure_trace
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
@@ -2247,7 +2265,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         < target_runner.index("wait \"$observer_pid\"")
         and "--reload-adjacency \"$reload_adjacency\"" in target_runner
         and "reload_observer_base64gzip" in main
-        and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap,
+        and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap
+        and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        in bootstrap
+        and "/opt/secpal-control/libexec/systemctl" in bootstrap,
         "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
     )
     require(
@@ -2259,15 +2280,44 @@ def validate_rocky_control_plane(root: Path) -> None:
             reload_adjacency_observer, "MAX_GENERATOR_CANDIDATE_RECORDS"
         )
         == 3
-        and literal_constant(reload_adjacency_observer, "MAX_OBSERVATION_BYTES") == 4_096
+        and literal_constant(reload_adjacency_observer, "MAX_RELOAD_RECORD_BYTES")
+        == 2_048
+        and literal_constant(
+            reload_adjacency_observer, "MAX_RELOAD_CANDIDATE_RECORDS"
+        )
+        == 8
+        and literal_constant(reload_adjacency_observer, "MAX_OBSERVATION_BYTES")
+        == 8_192
         and literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS") == 3
+        and literal_constant(
+            reload_adjacency_observer, "MANAGER_CONTINUITY_TIMEOUT_SECONDS"
+        )
+        == 2
+        and literal_constant(
+            reload_adjacency_observer, "PACKAGE_QUERY_TIMEOUT_SECONDS"
+        )
+        == 1
+        and literal_constant(
+            reload_adjacency_observer, "RELOAD_JOURNAL_TIMEOUT_SECONDS"
+        )
+        == 1
         and literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS") == 8
         and literal_constant(reload_adjacency_observer, "CAPTURE_DEADLINE_SECONDS")
         == 22
-        and 4
+        and 2
         * literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS")
+        + 2
+        * literal_constant(
+            reload_adjacency_observer, "MANAGER_CONTINUITY_TIMEOUT_SECONDS"
+        )
+        + literal_constant(
+            reload_adjacency_observer, "PACKAGE_QUERY_TIMEOUT_SECONDS"
+        )
+        + literal_constant(
+            reload_adjacency_observer, "RELOAD_JOURNAL_TIMEOUT_SECONDS"
+        )
         + literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS")
-        < 25
+        < literal_constant(reload_adjacency_observer, "CAPTURE_DEADLINE_SECONDS")
         and "time.monotonic() > deadline" in reload_adjacency_observer
         and "write_document(arguments.output, document, deadline)"
         in reload_adjacency_observer
@@ -2302,6 +2352,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"--user",\n                "--dryrun"' in reload_adjacency_observer
         and 'f"--machine={RUNTIME_ACCOUNT}@.host"' in reload_adjacency_observer
         and '"show-environment"' in reload_adjacency_observer
+        and "manager_state_observed and bus_state_observed and control_status != 125"
+        in reload_adjacency_observer
         and 'GENERATOR_CODE_FUNC = "do_execute"' in reload_adjacency_observer
         and 'GENERATOR_CODE_FILE = "../src/shared/exec-util.c"'
         in reload_adjacency_observer
@@ -2309,8 +2361,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         in reload_adjacency_observer
         and 'f"CODE_FUNC={GENERATOR_CODE_FUNC}"' in reload_adjacency_observer
         and 'f"CODE_FILE={GENERATOR_CODE_FILE}"' in reload_adjacency_observer
-        and 'f"--boot={boot_id.replace(\'-\', \'\')}"'
-        in reload_adjacency_observer
+        and reload_adjacency_observer.count(
+            'f"--boot={boot_id.replace(\'-\', \'\')}"'
+        )
+        == 2
         and 'f"--output-fields={GENERATOR_OUTPUT_FIELDS}"'
         in reload_adjacency_observer
         and "max_bytes=MAX_GENERATOR_JOURNAL_BYTES"
@@ -2318,6 +2372,39 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"journal-output-bound-exceeded"' in reload_adjacency_observer
         and '"candidate-generator-unadmitted"' in reload_adjacency_observer
         and '"candidate-count-exceeded"' in reload_adjacency_observer
+        and 'ROCKY_SYSTEMD_SOURCE_RPM = "systemd-257-23.el10_2.2.rocky.0.1.src.rpm"'
+        in reload_adjacency_observer
+        and '"systemd-257-23.el10_2.2.rocky.0.1.aarch64"'
+        in reload_adjacency_observer
+        and '"systemd-257-23.el10_2.2.rocky.0.1.x86_64"'
+        in reload_adjacency_observer
+        and "RELOAD_SPACE_MINIMUM_BYTES = 16 * 1024 * 1024"
+        in reload_adjacency_observer
+        and 'RELOAD_OUTPUT_FIELDS = "_PID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"'
+        in reload_adjacency_observer
+        and 'f"--output-fields={RELOAD_OUTPUT_FIELDS}"'
+        in reload_adjacency_observer
+        and 'f"_PID={manager_pid}"' in reload_adjacency_observer
+        and 'f"--after-cursor={journal_cursor}"' in reload_adjacency_observer
+        and 'reasons.add("request-client-unbound")' in reload_adjacency_observer
+        and '"rpm",\n            "-q",' in reload_adjacency_observer
+        and '("../src/core/dbus-manager.c", "log_caller")'
+        in reload_adjacency_observer
+        and '("../src/core/dbus-manager.c", "method_reload")'
+        in reload_adjacency_observer
+        and '("../src/core/main.c", "invoke_main_loop")'
+        in reload_adjacency_observer
+        and '("../src/core/manager.c", "manager_reload")'
+        in reload_adjacency_observer
+        and '("../src/core/dbus.c", "bus_send_pending_reload_message")'
+        in reload_adjacency_observer
+        and "max_bytes=MAX_RELOAD_JOURNAL_BYTES" in reload_adjacency_observer
+        and 'os.statvfs("/run/systemd")' in reload_adjacency_observer
+        and '"tclass=system"' in reload_adjacency_observer
+        and 'r"avc:\\s+denied\\s+\\{\\s*reload\\s*\\}"'
+        in reload_adjacency_observer
+        and "reload_access_avc(audit, expected_client_pid)"
+        in reload_adjacency_observer
         and '"daemon-reload"' not in reload_adjacency_observer
         and 'comm="systemd"' not in reload_adjacency_observer
         and all(
@@ -2333,7 +2420,20 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"podman-generator-rejected"' in target_failure_classifier
         and '"other-generator-failed"' in target_failure_classifier
         and '"selinux-reload-denied"' in target_failure_classifier
-        and '"manager-reload-transaction-failed"' in target_failure_classifier
+        and '"manager-reload-transaction-failed"' not in target_failure_classifier
+        and '"reload-run-space-rejected"' in target_failure_classifier
+        and '"reload-selinux-access-denied"' in target_failure_classifier
+        and '"reload-authorization-denied"' in target_failure_classifier
+        and '"reload-rate-limited"' in target_failure_classifier
+        and '"reload-manager-serialization-failed"' in target_failure_classifier
+        and '"reload-reply-transport-failed"' in target_failure_classifier
+        and '"reload-stage-evidence-contradictory"'
+        in target_failure_classifier
+        and '"manager-continuity-observation-unavailable"'
+        in target_failure_classifier
+        and 'observation, "manager_continuity_observed"'
+        in target_failure_classifier
+        and '"reload-completion-not-observed"' in target_failure_classifier
         and '"diagnostic-unavailable"' in target_failure_classifier
         and "captured_before_cleanup" in target_failure_classifier
         and '_closed_boolean(observation, "captured_before_cleanup")'
@@ -2349,6 +2449,16 @@ def validate_rocky_control_plane(root: Path) -> None:
             'generator_ambiguous != (generator_reason != "none")'
         )
         == 2
+        and target_failure_classifier.count(
+            'reload_access_avc["source_type"]'
+        )
+        == 2
+        and target_failure_classifier.count(
+            'reload_access_avc["target_type"]'
+        )
+        == 2
+        and 'reload-selinux-context-observation-unavailable'
+        in target_failure_classifier
         and "selinux_avc_ambiguous" in target_failure_classifier,
         "daemon-reload adjacency admission must preserve the closed fail-safe decision tree",
     )
