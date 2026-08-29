@@ -1495,14 +1495,15 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                     (operation, "command-failed"),
                     self.classify(trace=f"SECPAL_TARGET_ERR_V2:1:{line}"),
                 )
-        for first, second in zip(operations, operations[1:]):
-            with self.subTest(lines=(first[0], second[0])):
-                self.assertEqual(
-                    ("qualification-harness", "unclassified-target-failure"),
-                    self.classify(
-                        trace=f"SECPAL_TARGET_ERR_V2:1:{first[0]},{second[0]}"
-                    ),
-                )
+        for index, first in enumerate(operations):
+            for second in operations[index + 1 :]:
+                with self.subTest(lines=(first[0], second[0])):
+                    self.assertEqual(
+                        ("qualification-harness", "unclassified-target-failure"),
+                        self.classify(
+                            trace=f"SECPAL_TARGET_ERR_V2:1:{first[0]},{second[0]}"
+                        ),
+                    )
 
     def test_explicit_message_and_stack_must_agree(self) -> None:
         self.assertEqual(

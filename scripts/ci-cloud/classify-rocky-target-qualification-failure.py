@@ -102,7 +102,8 @@ EXPLICIT_RULES = (
     ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
 )
 
-# Line ranges name semantic call sites in the immutable current harness.  Helper
+# Line ranges name semantic call sites in the immutable expected target harness.
+# Helper
 # frames and cleanup internals are deliberately absent.  Nested ERR frames are
 # reduced only when every admitted call-site line agrees on one operation.
 LINE_RULES = (
