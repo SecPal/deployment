@@ -56,7 +56,8 @@ user_systemctl() {
 matching_marker_avc() {
   local audit_date="$1"
   local audit_time="$2"
-  LC_ALL=C ausearch -m AVC -ts "$audit_date" "$audit_time" -i | grep -Fq 'marker'
+  LC_ALL=C ausearch --input-logs -m AVC -ts "$audit_date" "$audit_time" -i |
+    grep -F 'marker' >/dev/null
 }
 
 cleanup() {

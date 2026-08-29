@@ -202,8 +202,27 @@ def assert_qualification_native_evidence_cleanup() -> None:
     source = QUALIFICATION_HARNESS.read_text(encoding="utf-8")
     if "read -r audit_date audit_time < <(LC_ALL=C date '+%x %T')" not in source:
         raise AssertionError("qualification harness must collect locale-stable AVC date/time")
-    if 'LC_ALL=C ausearch -m AVC -ts "$audit_date" "$audit_time" -i' not in source:
-        raise AssertionError("ausearch AVC start date and time must be separate arguments")
+    if 'LC_ALL=C ausearch --input-logs -m AVC -ts "$audit_date" "$audit_time" -i' not in source:
+        raise AssertionError("ausearch AVC must use separate start date/time with auditd log input")
+
+    avc_pipeline = (
+        'LC_ALL=C ausearch --input-logs -m AVC -ts "$audit_date" "$audit_time" -i |\n'
+        "    grep -F 'marker' >/dev/null"
+    )
+    if avc_pipeline not in source:
+        raise AssertionError(
+            "ausearch AVC evidence must force auditd log input and consume its full stream"
+        )
+    avc_pipeline_mutations = {
+        "default-ausearch-input": source.replace(" --input-logs", "", 1),
+        "quiet-grep": source.replace("grep -F 'marker' >/dev/null", "grep -Fq 'marker'", 1),
+    }
+    for name, candidate in avc_pipeline_mutations.items():
+        if candidate == source:
+            raise AssertionError(f"AVC evidence mutation did not apply: {name}")
+        if avc_pipeline in candidate:
+            raise AssertionError(f"unsafe AVC evidence mutation passed: {name}")
+
     if 'ausearch -m AVC -ts "$audit_start" -i' in source:
         raise AssertionError("qualification harness must not pass combined AVC date/time")
 
