@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 import re
 import sys
 import tempfile
 import unittest
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +56,7 @@ DIRECT_CONTAINER = re.compile(
     r"(?i)\b(?:podman|docker)(?:\s+|['\"]\s*,\s*['\"])(?:run|create)\b"
 )
 CLIENT_ONLY = re.compile(r"(?<![a-z0-9_])(?:psql|pg_isready|pg_dump|pg_restore)(?![a-z0-9_-])")
+WORKFLOW_VARIABLE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
 
 
 def _code_lines(content: str) -> list[str]:
@@ -127,6 +131,155 @@ def production_execution_indicators(
     return indicators
 
 
+def _workflow_environment(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        name: item
+        for name, item in value.items()
+        if isinstance(name, str) and isinstance(item, str)
+    }
+
+
+def _resolve_workflow_variables(command: str, environment: dict[str, str]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        return environment.get(name, match.group(0))
+
+    return WORKFLOW_VARIABLE.sub(replace, command)
+
+
+def workflow_execution_indicators(content: str) -> set[str]:
+    """Resolve simple workflow environment use inside direct execution steps."""
+    loaded = yaml.safe_load(content)
+    if not isinstance(loaded, dict) or not isinstance(loaded.get("jobs"), dict):
+        return set()
+    indicators: set[str] = set()
+    for job in loaded["jobs"].values():
+        if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+            continue
+        job_environment = _workflow_environment(job.get("env"))
+        for step in job["steps"]:
+            if not isinstance(step, dict) or not isinstance(step.get("run"), str):
+                continue
+            environment = {**job_environment, **_workflow_environment(step.get("env"))}
+            resolved = _resolve_workflow_variables(step["run"], environment)
+            indicators.update(production_execution_indicators(resolved))
+    return indicators
+
+
+def _module_constants(path: Path) -> dict[str, str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    constants: dict[str, str] = {}
+    for statement in tree.body:
+        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            if isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        constants[target.id] = statement.value.value
+    return constants
+
+
+def _local_module_path(renderer_path: Path, module: str | None) -> Path | None:
+    if not module or "." in module:
+        return None
+    candidate = renderer_path.parent / f"{module}.py"
+    return candidate if candidate.is_file() else None
+
+
+def _resolve_image_expression(
+    expression: ast.expr,
+    values: dict[str, str],
+    modules: dict[str, dict[str, str]],
+) -> str | None:
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return expression.value
+    if isinstance(expression, ast.Name):
+        return values.get(expression.id)
+    if isinstance(expression, ast.Attribute) and isinstance(expression.value, ast.Name):
+        return modules.get(expression.value.id, {}).get(expression.attr)
+    return None
+
+
+def _container_constructors(tree: ast.Module) -> dict[str, int]:
+    constructors: dict[str, int] = {}
+    for statement in tree.body:
+        if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        arguments = [argument.arg for argument in statement.args.args]
+        if "image" not in arguments:
+            continue
+        fragments = {
+            node.value
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        if any("ContainerName=" in fragment for fragment in fragments) and any(
+            "Image=" in fragment for fragment in fragments
+        ):
+            constructors[statement.name] = arguments.index("image")
+    return constructors
+
+
+def renderer_construction_indicators(content: str, renderer_path: Path) -> set[str]:
+    """Find PostgreSQL image values flowing into direct renderer constructors."""
+    tree = ast.parse(content, filename=str(renderer_path))
+    constructors = _container_constructors(tree)
+    values: dict[str, str] = {}
+    modules: dict[str, dict[str, str]] = {}
+
+    for statement in tree.body:
+        if isinstance(statement, ast.ImportFrom):
+            module_path = _local_module_path(renderer_path, statement.module)
+            if module_path is None:
+                continue
+            constants = _module_constants(module_path)
+            for alias in statement.names:
+                if alias.name in constants:
+                    values[alias.asname or alias.name] = constants[alias.name]
+        elif isinstance(statement, ast.Import):
+            for alias in statement.names:
+                module_path = _local_module_path(renderer_path, alias.name)
+                if module_path is not None:
+                    modules[alias.asname or alias.name] = _module_constants(module_path)
+
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+    ]
+    for _ in range(len(assignments) + 1):
+        changed = False
+        for statement in assignments:
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            resolved = _resolve_image_expression(statement.value, values, modules)
+            if resolved is None:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and values.get(target.id) != resolved:
+                    values[target.id] = resolved
+                    changed = True
+        if not changed:
+            break
+
+    indicators: set[str] = set()
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        if not isinstance(call.func, ast.Name) or call.func.id not in constructors:
+            continue
+        image_position = constructors[call.func.id]
+        image_expression = next(
+            (keyword.value for keyword in call.keywords if keyword.arg == "image"),
+            call.args[image_position] if len(call.args) > image_position else None,
+        )
+        if image_expression is None:
+            continue
+        image = _resolve_image_expression(image_expression, values, modules)
+        if image is not None and POSTGRES_IMAGE.search(image):
+            indicators.add("latent PostgreSQL server image construction")
+    return indicators
+
+
 def production_helper_paths(root: Path, authority_content: str) -> list[Path]:
     """Select production helpers without depending on a database filename."""
     scripts = root / "scripts"
@@ -169,6 +322,12 @@ class ProductionPostgresRetirementTest(unittest.TestCase):
             ),
             set(),
         )
+        self.assertEqual(
+            renderer_construction_indicators(
+                RENDERER_PATH.read_text(encoding="utf-8"), RENDERER_PATH
+            ),
+            set(),
+        )
 
     def test_checked_production_quadlets_have_no_postgres_units(self) -> None:
         checked = {
@@ -186,7 +345,10 @@ class ProductionPostgresRetirementTest(unittest.TestCase):
         for path in CURRENT_EXECUTION_PATHS:
             content = path.read_text(encoding="utf-8")
             with self.subTest(path=path.relative_to(ROOT)):
-                self.assertEqual(production_execution_indicators(content), set())
+                indicators = production_execution_indicators(content)
+                if path.suffix in {".yaml", ".yml"}:
+                    indicators.update(workflow_execution_indicators(content))
+                self.assertEqual(indicators, set())
 
     def test_no_legacy_launcher_or_reactivation_switch_exists(self) -> None:
         for path in DELETED_PATHS:
@@ -214,6 +376,16 @@ Label=org.secpal.role=database
 Entrypoint=[\"/usr/bin/postgres\"]
 """
         self.assertNotEqual(postgres_server_container_indicators(renamed), set())
+        server_signals = (
+            "[Container]\nImage=docker.io/library/postgres:16\n",
+            "[Container]\nExec=initdb --pgdata /state\n",
+            "[Container]\nExec=pg_ctl start --pgdata /state\n",
+            "[Container]\nEnvironment=PGDATA=/state\n",
+            "[Container]\nMount=type=bind,source=/state,target=/var/lib/postgresql/data\n",
+        )
+        for content in server_signals:
+            with self.subTest(server_signal=content.splitlines()[1]):
+                self.assertNotEqual(postgres_server_container_indicators(content), set())
 
     def test_indirect_workflow_cannot_start_the_server(self) -> None:
         workflow = """- name: Start production database container
@@ -246,6 +418,51 @@ exec /usr/bin/postgres -D /var/lib/postgresql/data
 """
         self.assertNotEqual(production_execution_indicators(renderer_branch), set())
 
+    def test_workflow_step_environment_cannot_hide_the_server_image(self) -> None:
+        workflow = """jobs:
+  contract:
+    steps:
+      - name: Start production database container from reviewed variable
+        env:
+          DATABASE_IMAGE: docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+        run: |
+          podman run --detach --name secpal-db \"${DATABASE_IMAGE}\"
+"""
+        self.assertNotEqual(workflow_execution_indicators(workflow), set())
+        job_environment = """jobs:
+  contract:
+    env:
+      DATABASE_IMAGE: docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74
+    steps:
+      - run: podman run --detach --name secpal-db "$DATABASE_IMAGE"
+"""
+        self.assertNotEqual(workflow_execution_indicators(job_environment), set())
+
+    def test_imported_image_cannot_hide_a_latent_renderer_branch(self) -> None:
+        renderer_branch = RENDERER_PATH.read_text(encoding="utf-8") + """
+from integration_runtime_contract import POSTGRES_IMAGE
+if os.environ.get(\"SECPAL_DATABASE_MODE\"):
+    units[\"secpal-database.container\"] = common_container(
+        contract, \"valkey\", POSTGRES_IMAGE, instance=\"database\"
+    )
+"""
+        self.assertNotEqual(
+            renderer_construction_indicators(renderer_branch, RENDERER_PATH),
+            set(),
+        )
+        qualified_branch = RENDERER_PATH.read_text(encoding="utf-8") + """
+import integration_runtime_contract as runtime_contract
+DATABASE_IMAGE = runtime_contract.POSTGRES_IMAGE
+if os.environ.get(\"SECPAL_DATABASE_MODE\"):
+    units[\"secpal-database.container\"] = common_container(
+        contract, \"valkey\", DATABASE_IMAGE, instance=\"database\"
+    )
+"""
+        self.assertNotEqual(
+            renderer_construction_indicators(qualified_branch, RENDERER_PATH),
+            set(),
+        )
+
     def test_client_and_application_postgres_references_remain_valid(self) -> None:
         application = """[Container]
 Image=ghcr.io/secpal/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -266,6 +483,21 @@ Exec=--host postgres --command SELECT-1
         self.assertEqual(postgres_server_container_indicators(application), set())
         self.assertEqual(production_execution_indicators(client), set())
         self.assertEqual(postgres_server_container_indicators(client_container), set())
+        unused_workflow_image = """jobs:
+  contract:
+    steps:
+      - env:
+          DATABASE_IMAGE: docker.io/library/postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        run: printf 'client configuration only\\n'
+"""
+        self.assertEqual(workflow_execution_indicators(unused_workflow_image), set())
+        unused_renderer_import = RENDERER_PATH.read_text(encoding="utf-8") + """
+from integration_runtime_contract import POSTGRES_IMAGE as CLIENT_IMAGE
+CLIENT_COMMAND = (\"psql\", \"--host\", \"postgres\")
+"""
+        self.assertEqual(
+            renderer_construction_indicators(unused_renderer_import, RENDERER_PATH), set()
+        )
         helpers = production_helper_paths(ROOT, RENDERER_PATH.read_text(encoding="utf-8"))
         self.assertNotIn(ROOT / "scripts" / "quadlet-integration.py", helpers)
         self.assertNotIn(ROOT / "scripts" / "integration_runtime_contract.py", helpers)
