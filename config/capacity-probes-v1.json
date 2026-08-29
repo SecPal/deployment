@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "workload": {
+    "probe_id": "secpal-capacity-workload-v1",
+    "collector_authority": "trusted-controller",
+    "target_result_authority": "non-authoritative",
+    "iteration": {
+      "description": "One continuously observed 600-second SecPal acceptance scenario with controller-timed CPU, memory, PostgreSQL, and private-file operations.",
+      "minimum_duration_seconds": 600,
+      "deadline_seconds": 630,
+      "minimum_completed_iterations": 1,
+      "failed_iterations_allowed": 0,
+      "deadline_misses_allowed": 0,
+      "oom_events_allowed": 0
+    },
+    "cpu": {
+      "entitlement_observation": "trusted effective affinity and cgroup quota ceiling",
+      "peak_observation": "trusted controller sampling of target cgroup CPU usage",
+      "headroom_reservation_percent": 30,
+      "reservation_observation": "trusted controller CPU-bound sibling cgroup usage over the complete iteration"
+    },
+    "memory": {
+      "usable_observation": "trusted effective host and target cgroup limit",
+      "peak_observation": "trusted target cgroup memory peak and OOM event counters",
+      "headroom_reservation_percent": 30,
+      "reservation_observation": "trusted controller allocation touched and held for the complete iteration"
+    },
+    "storage_cycles_per_iteration": 5
+  },
+  "storage": {
+    "probe_id": "secpal-capacity-storage-v1",
+    "collector_authority": "trusted-controller",
+    "cycle": {
+      "description": "A controller-timed PostgreSQL series whose transactions write a payload, synchronously commit, read it back, and verify it, plus a POSIX private-file write/fsync/atomic-rename/directory-fsync/read/hash round trip on the qualified filesystem.",
+      "deadline_seconds": 120,
+      "postgresql_synchronous_transactions": 256,
+      "postgresql_payload_bytes_per_transaction": 4096,
+      "private_file_bytes": 67108864,
+      "minimum_cycles_per_workload_iteration": 5
+    },
+    "raw_performance_observations": {
+      "required": true,
+      "named_performance_tier": false,
+      "same_persistent_filesystem": true
+    }
+  }
+}

@@ -35,10 +35,14 @@
   "$defs": {
     "sha": {
       "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
       "pattern": "^[0-9a-f]{40}$"
     },
     "sha256": {
       "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
       "pattern": "^[0-9a-f]{64}$"
     },
     "timestamp": {
@@ -215,7 +219,11 @@
         "free_inodes"
       ],
       "properties": {
-        "usable_cpu_millicores": { "type": "integer", "minimum": 1 },
+        "usable_cpu_millicores": {
+          "description": "Trusted effective affinity/quota scheduling ceiling. This is not by itself proof of sustained compute delivery; the reviewed workload reservation supplies that evidence.",
+          "type": "integer",
+          "minimum": 1
+        },
         "online_logical_cpus": { "type": "integer", "minimum": 1 },
         "usable_memory_bytes": { "type": "integer", "minimum": 1 },
         "total_storage_bytes": { "type": "integer", "minimum": 1 },
@@ -229,7 +237,7 @@
       "additionalProperties": false,
       "required": [
         "probe_id",
-        "probe_revision",
+        "probe_revision_sha256",
         "duration_seconds",
         "completed_iterations",
         "failed_iterations",
@@ -240,7 +248,7 @@
       ],
       "properties": {
         "probe_id": { "const": "secpal-capacity-workload-v1" },
-        "probe_revision": { "$ref": "#/$defs/sha" },
+        "probe_revision_sha256": { "$ref": "#/$defs/sha256" },
         "duration_seconds": {
           "type": "integer",
           "minimum": 1,
@@ -286,7 +294,7 @@
           "additionalProperties": false,
           "required": [
             "probe_id",
-            "probe_revision",
+            "probe_revision_sha256",
             "duration_seconds",
             "random_read_iops",
             "random_write_iops",
@@ -296,7 +304,7 @@
           ],
           "properties": {
             "probe_id": { "const": "secpal-capacity-storage-v1" },
-            "probe_revision": { "$ref": "#/$defs/sha" },
+            "probe_revision_sha256": { "$ref": "#/$defs/sha256" },
             "duration_seconds": {
               "type": "integer",
               "minimum": 1,
@@ -386,6 +394,8 @@
       "required": [
         "target_sha",
         "trusted_control_sha",
+        "workload_probe_revision_sha256",
+        "storage_probe_revision_sha256",
         "observed_at",
         "valid_until",
         "freshness_seconds",
@@ -396,6 +406,8 @@
       "properties": {
         "target_sha": { "$ref": "#/$defs/sha" },
         "trusted_control_sha": { "$ref": "#/$defs/sha" },
+        "workload_probe_revision_sha256": { "$ref": "#/$defs/sha256" },
+        "storage_probe_revision_sha256": { "$ref": "#/$defs/sha256" },
         "observed_at": { "$ref": "#/$defs/timestamp" },
         "valid_until": { "$ref": "#/$defs/timestamp" },
         "freshness_seconds": { "const": 2592000 },
@@ -422,6 +434,175 @@
               }
             }
           ]
+        }
+      }
+    },
+    "capacitySourceEvidence": {
+      "description": "Trusted-controller source observations from which one PASS artifact is independently admitted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "authority",
+        "capability",
+        "subject",
+        "observations",
+        "collection",
+        "cleanup"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "collector",
+            "target_sha",
+            "trusted_control_sha",
+            "target_identity_sha256",
+            "workload_probe_revision_sha256",
+            "storage_probe_revision_sha256",
+            "observed_at"
+          ],
+          "properties": {
+            "collector": { "const": "trusted-controller" },
+            "target_sha": { "$ref": "#/$defs/sha" },
+            "trusted_control_sha": { "$ref": "#/$defs/sha" },
+            "target_identity_sha256": { "$ref": "#/$defs/sha256" },
+            "workload_probe_revision_sha256": { "$ref": "#/$defs/sha256" },
+            "storage_probe_revision_sha256": { "$ref": "#/$defs/sha256" },
+            "observed_at": { "$ref": "#/$defs/timestamp" }
+          }
+        },
+        "capability": { "$ref": "#/$defs/capability" },
+        "subject": { "$ref": "#/$defs/subject" },
+        "observations": { "$ref": "#/$defs/passingObservations" },
+        "cleanup": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["required", "status"],
+              "properties": {
+                "required": { "const": true },
+                "status": { "enum": ["complete", "incomplete", "unknown"] }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["required", "status"],
+              "properties": {
+                "required": { "const": false },
+                "status": { "const": "not-required" }
+              }
+            }
+          ]
+        },
+        "collection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workload", "storage"],
+          "properties": {
+            "workload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "controller_observed_duration_seconds",
+                "controller_observed_completed_iterations",
+                "controller_observed_failed_iterations",
+                "controller_observed_deadline_misses",
+                "controller_observed_oom_events",
+                "cpu_reservation_requested_millicores",
+                "cpu_reservation_delivered_millicores",
+                "cpu_reservation_observed_seconds",
+                "memory_reservation_bytes",
+                "memory_reservation_held_seconds",
+                "target_results_authoritative"
+              ],
+              "properties": {
+                "observer": { "const": "trusted-controller" },
+                "controller_observed_duration_seconds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400
+                },
+                "controller_observed_completed_iterations": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "controller_observed_failed_iterations": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "controller_observed_deadline_misses": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "controller_observed_oom_events": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "cpu_reservation_requested_millicores": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cpu_reservation_delivered_millicores": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cpu_reservation_observed_seconds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400
+                },
+                "memory_reservation_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "memory_reservation_held_seconds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400
+                },
+                "target_results_authoritative": { "const": false }
+              }
+            },
+            "storage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "controller_observed_cycles_completed",
+                "controller_observed_deadline_misses",
+                "maximum_cycle_duration_microseconds",
+                "same_persistent_filesystem_observed"
+              ],
+              "properties": {
+                "observer": { "const": "trusted-controller" },
+                "controller_observed_cycles_completed": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "controller_observed_deadline_misses": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "maximum_cycle_duration_microseconds": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "same_persistent_filesystem_observed": { "type": "boolean" }
+              }
+            }
+          }
         }
       }
     }

@@ -11,9 +11,14 @@ This document defines the public provider-neutral capability vocabulary used
 to admit self-hosted hardware and to qualify current provider products. The
 canonical machine-readable contract is
 [`schemas/capacity-qualification.schema.json`](../../schemas/capacity-qualification.schema.json).
-The schema owns the closed vocabulary, profile floors, evidence shape, and PASS
-requirements. This document explains those semantics without creating a second
-definition.
+The capacity qualification contract consists of that versioned schema, the
+strict admission validator, and the reviewed probe manifest at
+[`config/capacity-probes-v1.json`](../../config/capacity-probes-v1.json). The
+schema owns structural vocabulary, evidence shape, and directly expressible
+floors. The validator owns cross-field, trust-binding, freshness, and admission
+invariants. The probe manifest owns the exercised workload and storage demand.
+Schema validation alone never establishes PASS. This document explains those
+semantics without creating a second definition.
 
 The model keeps five infrastructure truths independent:
 
@@ -38,26 +43,67 @@ or larger envelope. `S`, `L`, and `XL` are not accepted placeholders. Adding
 one requires measured workload evidence and a reviewed schema revision; a
 provider product cannot introduce one implicitly.
 
-For PASS, `M` requires the schema-owned floors below:
+For PASS, `M` requires the contract-owned floors below:
 
-| Dimension                      |                                                                                 `M` requirement |
-| ------------------------------ | ----------------------------------------------------------------------------------------------: |
-| Effective usable CPU capacity  |                                                   4,000 millicores after effective quota limits |
-| Online logical CPUs            |                                                                                               4 |
-| Guest/host-usable memory       |                                                                                           8 GiB |
-| Persistent storage capacity    |                                                                                         100 GiB |
-| Free persistent storage        |                                                                         20 GiB and at least 20% |
-| Total/free inodes              |                                                       1,000,000 / 200,000 and at least 20% free |
-| Sustained workload observation | At least 600 seconds, one completed iteration, no failed iteration, deadline miss, or OOM event |
-| Workload headroom              |                          At least 30% of usable CPU and memory remains above the observed peaks |
+| Dimension                        |                                                                                          `M` requirement |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------: |
+| Effective CPU scheduling ceiling |                                               4,000 millicores after affinity and effective quota limits |
+| Online logical CPUs              |                                                                                                        4 |
+| Guest/host-usable memory         |                                                                                                    8 GiB |
+| Persistent storage capacity      |                                                                                                  100 GiB |
+| Free persistent storage          |                                                                                  20 GiB and at least 20% |
+| Total/free inodes                |                                                                1,000,000 / 200,000 and at least 20% free |
+| Sustained workload observation   |          At least 600 seconds, one completed iteration, no failed iteration, deadline miss, or OOM event |
+| Workload headroom                | At least 30% CPU is concurrently delivered and 30% memory is concurrently held while the workload passes |
 
-Usable CPU and memory are effective target observations after hypervisor,
-kernel, cgroup, and provider reservations; advertised values alone cannot fill
-them. The workload probe is revision-bound so a later evidence owner cannot
-silently change the exercised workload. These are conservative admission
-floors derived from the current four-CPU, 8-GiB, 100-GiB, and one-million-inode
-planning envelope. They are not customer sizing or an assertion that every
-workload will fit `M`.
+The CPU value is the trusted effective scheduling ceiling after affinity and
+cgroup quota limits, not a claim that a shared hypervisor continuously delivers
+that nominal entitlement. Sustained delivery is proved separately by the
+reviewed workload below. Usable memory is the effective host/guest/cgroup
+limit after reservations. Advertised provider values alone cannot fill either
+field. These are conservative admission floors derived from the current
+four-CPU, 8-GiB, 100-GiB, and one-million-inode planning envelope. They are not
+empirically proven universal workload minima, customer sizing, or an assertion
+that every workload fits `M`.
+
+## Reviewed workload and storage probes
+
+The checked-in probe manifest is the authoritative v1 instrument. Each probe
+revision is the SHA-256 of its probe object serialized as UTF-8 JSON with sorted
+keys and compact separators. The workload and storage objects are hashed
+independently, so an unrelated target or controller commit cannot silently
+change either instrument.
+
+One `secpal-capacity-workload-v1` iteration is a controller-timed continuous
+600-second SecPal acceptance scenario with a 630-second outer deadline. During
+it, the trusted controller, rather than target output:
+
+- samples target-cgroup CPU usage and memory peak;
+- reads target-cgroup OOM event counters;
+- counts completed/failed iterations and deadline misses from process status
+  and controller monotonic deadlines;
+- runs a CPU-bound sibling cgroup requesting 30% of the effective CPU ceiling
+  and proves that the requested CPU time was actually delivered throughout the
+  iteration; and
+- touches and holds a 30% memory reservation throughout the iteration.
+
+The target executes reviewed operations and may return operation results, but
+those results are explicitly non-authoritative. PASS requires the observed
+target peak plus the concurrently delivered/held reservation to fit within the
+effective CPU or memory value. A contended shared guest therefore fails when
+the controller cannot deliver the reservation or the target misses its
+deadline; low target CPU use cannot masquerade as headroom.
+
+Each workload iteration includes five controller-timed
+`secpal-capacity-storage-v1` cycles on the same qualified persistent
+filesystem. A cycle has a 120-second deadline and comprises 256 PostgreSQL
+synchronous-commit transactions with 4-KiB payloads plus a 64-MiB private-file
+write, file `fsync`, atomic rename, directory `fsync`, read, and digest check.
+The controller counts cycles and deadlines and verifies the returned data. Raw
+IOPS, throughput, and p95 `fsync` observations remain unclassified facts, but
+they must be arithmetically capable of the reviewed cycle. Thus v1 creates no
+named performance tier while a 1-byte/second or one-day-`fsync` device cannot
+qualify.
 
 ## Compute isolation
 
@@ -94,12 +140,12 @@ storage through the same contract while keeping the backing semantics visible.
 It does not treat equal disk capacity as equal storage quality.
 
 Qualification records random read/write IOPS, sequential read/write
-throughput, and p95 `fsync` latency from a revision-bound probe. Version 1
-requires real positive observations but deliberately defines no IOPS,
-throughput, or latency class: current evidence does not justify a universal
-performance floor. PostgreSQL and private-file storage consumers can retain
-those facts for later reviewed profiles. Provider marketing tiers cannot stand
-in for the observations.
+throughput, and p95 `fsync` latency from the independently revision-bound
+storage probe. Version 1 deliberately defines no IOPS, throughput, latency
+class, or provider tier: current evidence does not justify one. Admission only
+checks those measurements against the concrete reviewed cycle above.
+PostgreSQL and private-file storage consumers can retain the raw facts for
+later reviewed profiles. Provider marketing tiers cannot stand in for them.
 
 Backup, replication, and HA durability remain separately owned contracts.
 `persistent-posix` does not claim that one device survives host loss or that a
@@ -129,11 +175,29 @@ without Edge Policy changing the meaning of any capability field.
 
 ## Qualification evidence and provider mapping
 
-The schema is an admission artifact within the existing cloud-conformance
-evidence architecture, not a second orchestration or collection system. Its
-observations must be produced, normalized, admitted, and assembled under the
-canonical evidence-architecture contract. The trusted controller remains the
-authority that can publish PASS; tested target code cannot self-qualify.
+The schema and validator consume the existing cloud-conformance evidence
+architecture rather than creating a second orchestration system. The trusted
+controller supplies one separately schema-validated source-evidence file. It
+owns effective observations, target process status, monotonic deadlines,
+cgroup measurements, provider catalog observation, and cleanup status. The
+qualification artifact must reproduce its capability, subject, and
+observations exactly and bind the SHA-256 of the supplied source bytes.
+
+Admission also requires trusted expected target SHA, controller SHA, hashed
+target identity, workload-probe revision, and storage-probe revision. Those
+values must agree independently across trusted inputs, source evidence, the
+qualification artifact, and the checked-in probe manifest. A tested target can
+execute operations but cannot omit these trusted inputs, author authoritative
+observations, refresh their observation time, or publish its own PASS.
+
+These identities are deliberately independent:
+
+```text
+tested target SHA
+!= trusted controller SHA
+!= workload probe SHA-256
+!= storage probe SHA-256
+```
 
 A provider-backed subject records a bounded provider name, the current catalog
 product ID, catalog observation time, a digest of the catalog record, and a
@@ -153,9 +217,9 @@ retiring a product changes catalog mappings and qualification evidence, not the
 SecPal architecture.
 
 A self-host subject omits provider data entirely. It binds the same capability,
-effective observations, workload and storage probes, target/source revisions,
-source-evidence digest, freshness window, and cleanup applicability to a hashed
-hardware identity. No commercial SKU is needed.
+trusted source evidence, workload and storage probes, identities, freshness,
+and cleanup applicability to a hashed hardware identity. No commercial SKU is
+needed and no trust requirement is relaxed.
 
 PASS requires complete observations, exact agreement between claimed and
 observed isolation/architecture, a current evidence window of no more than 30
@@ -164,17 +228,25 @@ observations, unknown status, stale evidence, a future catalog observation, or
 incomplete cleanup cannot be admitted as PASS. `FAIL`, `UNAVAILABLE`, and
 `UNKNOWN` remain valid evidence outcomes but do not qualify a subject.
 
-Run the pure validator with an explicit decision time:
+Run strict independent admission with trusted expected identities and an
+explicit decision time:
 
 ```bash
 python3 scripts/validate-capacity-qualification.py \
   --evidence path/to/non-secret-evidence.json \
+  --source-evidence path/to/trusted-source-evidence.json \
+  --expected-target-sha '<40 lowercase hex>' \
+  --expected-control-sha '<40 lowercase hex>' \
+  --expected-target-identity-sha256 '<64 lowercase hex>' \
+  --expected-workload-probe-revision '<64 lowercase hex>' \
+  --expected-storage-probe-revision '<64 lowercase hex>' \
   --evaluation-time 2026-08-29T00:00:00Z
 ```
 
-The validator reads only the supplied document and repository schema. It does
-not read the system clock, query a provider, inspect a host, dispatch
-qualification, or perform cleanup.
+The validator strictly parses bounded UTF-8 JSON, rejects duplicate keys,
+validates the repository schema and probe contract, recomputes the source
+digest, and applies cross-field admission. It does not read the system clock,
+query a provider, inspect a host, dispatch qualification, or perform cleanup.
 
 ## Current provider qualification boundary
 

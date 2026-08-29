@@ -16,6 +16,7 @@ SPDX-License-Identifier = "MIT"
 
 [[annotations]]
 path = [
+  "config/capacity-probes-v1.json",
   "config/production/state-contract.json",
   "config/ci-cloud/gcp-rocky-10-2-arm64.json",
   "infra/ci-cloud/digitalocean/.terraform.lock.hcl",

@@ -42,6 +42,7 @@ required_files=(
   .editorconfig
   .pre-commit-config.yaml
   CHANGELOG.md
+  config/capacity-probes-v1.json
   docs/architecture/capacity-capabilities.md
   docs/architecture/scope.md
   docs/architecture/production-host.md
