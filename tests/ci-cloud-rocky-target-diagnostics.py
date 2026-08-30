@@ -319,6 +319,21 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         ):
             with self.assertRaises(self.observer.ObservationError):
                 self.observer.validate_client_identity(4242)
+
+    def test_observer_distinguishes_malformed_identity_from_mismatch(self) -> None:
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994)
+        incomplete_identity = b"Name:\tsystemctl\nUid:\t994\t994\t994\t994\n"
+        with (
+            mock.patch.object(
+                self.observer.Path, "read_bytes", return_value=incomplete_identity
+            ),
+            mock.patch.object(self.observer.pwd, "getpwnam", return_value=runtime),
+        ):
+            with self.assertRaisesRegex(
+                self.observer.ObservationError,
+                "daemon-reload client identity is malformed",
+            ):
+                self.observer.validate_client_identity(4242)
         with mock.patch.object(
             self.observer.Path, "read_bytes", side_effect=FileNotFoundError
         ):

@@ -792,10 +792,11 @@ def validate_client_identity(pid: int) -> None:
         match = re.fullmatch(r"(Uid|Gid):\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)", line)
         if match is not None:
             values[match.group(1)] = tuple(int(value) for value in match.groups()[1:])
+    if set(values) != {"Uid", "Gid"}:
+        raise ObservationError("daemon-reload client identity is malformed")
     runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
     if (
-        set(values) != {"Uid", "Gid"}
-        or values["Uid"] != (runtime.pw_uid,) * 4
+        values["Uid"] != (runtime.pw_uid,) * 4
         or values["Gid"] != (runtime.pw_gid,) * 4
     ):
         raise ObservationError("daemon-reload client identity does not match runtime account")
