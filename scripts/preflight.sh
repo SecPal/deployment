@@ -88,6 +88,7 @@ python3 tests/production-postgres-retirement.py
 python3 tests/production-edge-decision-contract.py
 python3 tests/cloudfront-origin-prefix-lkg.py
 python3 tests/provider-capability-contract.py
+python3 tests/cloudfront-viewer-edge.py
 bash tests/production-state-native-lifecycle-gate.sh
 bash tests/production-state-native-lifecycle.sh
 python3 tests/work-graph-governance.py

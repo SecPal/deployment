@@ -1,0 +1,238 @@
+<!--
+SPDX-FileCopyrightText: 2026 SecPal Contributors
+SPDX-License-Identifier: CC0-1.0
+-->
+
+# PROTECTED CloudFront Viewer Edge lifecycle
+
+This contract implements the CloudFront Multi-Tenant Viewer Edge portion of
+[ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md).
+ADR-019 remains the sole architecture authority. This contract does not define
+another Edge mode or make the retired Sandbox PoC an implementation dependency.
+
+The executable surface is the pure
+[`cloudfront-viewer-edge.py`](../scripts/cloudfront-viewer-edge.py) module. It
+constructs typed lifecycle requests, normalizes reviewed AWS response shapes,
+admits exact observations, and plans exact AWS SDK operations. It performs no
+network access, credential loading, provider selection, DNS mutation, or AWS
+mutation.
+
+## Current AWS capability seam
+
+The contract follows the current official CloudFront APIs and terminology:
+
+- [`CreateDistribution`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_CreateDistribution.html)
+  creates a distribution with `ConnectionMode=tenant-only`, one required
+  `OriginDomain` tenant parameter, and one reviewed default behavior.
+- [`CreateDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_CreateDistributionTenant.html)
+  creates one disabled tenant with a Viewer domain and the tenant-specific
+  `OriginDomain` parameter. It intentionally makes no managed certificate
+  request.
+- [`GetManagedCertificateDetails`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_GetManagedCertificateDetails.html)
+  reports `pending-validation`, `issued`, `inactive`, `expired`,
+  `validation-timed-out`, `revoked`, or `failed`. A certificate inspection can
+  update the tenant, so a later mutation always obtains a fresh tenant ETag.
+- [`UpdateDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_UpdateDistributionTenant.html)
+  requires the current ETag for certificate request, certificate attachment,
+  activation, OriginDomain update, and disable operations.
+- [`DeleteDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_DeleteDistributionTenant.html)
+  requires a disabled tenant and its current ETag. The parent distribution can
+  be disabled and deleted only after its tenants are gone.
+
+These current provider semantics do not contradict ADR-019. They confirm that
+tenant creation, certificate request, validation, issuance, attachment, and
+domain activation are separate observations or mutations.
+
+## Parent and tenant baseline
+
+The reviewed parent is one CloudFront Multi-Tenant Distribution with:
+
+```text
+ConnectionMode = tenant-only
+Origin DomainName = {{OriginDomain}}
+OriginDomain = required tenant parameter
+ViewerProtocolPolicy = https-only
+CachePolicyId = 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+OriginRequestPolicyId = b689b0a8-53d0-40ab-baf2-68738e2966ac
+OriginProtocolPolicy = https-only
+additional cache behaviors = none
+```
+
+The cache policy ID is AWS-managed `CachingDisabled`. The Origin Request Policy
+ID is AWS-managed `AllViewerExceptHostHeader`: it transports Viewer headers,
+cookies, and query strings while replacing Viewer `Host` with the configured
+Origin host. Using immutable managed-policy IDs avoids mutable-name lookup and a
+custom policy lifecycle.
+
+Policy transport grants no trust. Viewer-supplied forwarding headers and
+`X-SecPal-*` values remain untrusted input. #211 owns Function/KVS validation
+and overwrite, and #217 owns HAProxy validation and canonical reconstruction.
+The absence of caching ensures authenticated or session-specific responses
+cannot cross Viewer or Tenant boundaries through a CloudFront cache hit.
+
+One SecPal deployment maps to one Distribution Tenant. The caller supplies a
+deployment-scoped technical key, Viewer domain, explicit `OriginDomain`, and
+exact parent ID. Viewer Host and Origin Host are separate inputs and must differ.
+The portable implementation contains no customer identity, fleet inventory,
+placement, account-selection, rollout, SLA, pricing, or commercial policy.
+
+## Lifecycle and certificate states
+
+The resource-specific operations are closed and CloudFront-specific:
+
+```text
+create/inspect/update/disable/delete distribution
+create/inspect/update/disable/delete tenant
+request/inspect managed certificate
+attach issued certificate
+activate tenant
+```
+
+They are not translated into #169's generic create/inspect/rebuild/delete
+vocabulary. #169's separately supplied authority, provider context, exact
+target, source revision, parameter digest, credential mechanism, request/result
+correlation, and bounded diagnostic patterns are reused at this boundary.
+
+The one managed Viewer-certificate state model is:
+
+```text
+absent
+→ requested
+→ validation-required (AWS pending-validation)
+→ issued
+→ attached
+→ active
+
+AWS inactive → inactive
+AWS expired / validation-timed-out / revoked / failed → failed
+disabled + deployed + exact attachment + teardown intent → teardown-safe
+```
+
+`active` requires all of the following read back together:
+
+- AWS certificate status `issued`;
+- the exact issued certificate ARN attached to the exact tenant;
+- the exact Viewer domain status `active`;
+- tenant `Enabled=true`; and
+- tenant deployment status `Deployed`.
+
+A tenant ID, accepted certificate request, validation token, issued-but-unattached
+certificate, or attached-but-disabled tenant cannot satisfy `active`.
+
+CloudFront managed certificates expose no private key to this contract. Current
+managed-certificate details may contain bounded HTTP validation redirects for a
+`self-hosted` request. The typed observation surfaces only domain,
+`RedirectFrom`, and `RedirectTo`. DNS, registrar, web-server, Route 53, and other
+validation orchestration remain caller-owned and outside this leaf.
+
+## Authority, identity, and concurrency
+
+Every invocation binds:
+
+```text
+authorization identity
+adapter identity and exact source revision
+AWS partition, exact account ID, global CloudFront scope, and ACM certificate region
+exact distribution and tenant IDs when assigned
+exact CloudFront-specific operation
+SHA-256 parameter digest
+non-secret credential mechanism
+```
+
+The credential value never enters the contract. Create may begin with a
+caller-supplied technical key; after AWS returns native IDs, all reads and
+mutations require those IDs. Names, prefixes, tags, account-wide listing, and
+guessed discovery do not authorize mutation or cleanup.
+
+Every ETag-bound mutation takes the exact ETag from its admitted current
+observation. Missing, stale, or mismatched ETags fail before dispatch. Each
+mutation is followed by inspection, and the newly observed ETag replaces the old
+one. There is no retry loop, last-write-wins fallback, or interchange with a KVS
+Data Plane ETag. A parent update carries the complete admitted current
+distribution configuration, as the AWS API requires.
+
+## Safe teardown
+
+Teardown is exact and ordered:
+
+```text
+inspect exact tenant
+→ disable tenant with current tenant ETag
+→ inspect until Deployed and obtain new ETag
+→ delete exact tenant with that ETag
+→ inspect exact parent
+→ disable parent with complete current config and current parent ETag
+→ inspect until Deployed and obtain new ETag
+→ delete exact parent with that ETag
+```
+
+The implementation never lists an account and deletes by name or tag prefix.
+Cleanup failure remains an explicit bounded failure associated with the exact
+created IDs; it does not authorize broader cleanup. Managed-certificate cleanup
+must be inspected by exact ARN after tenant removal. An adapter may request ACM
+deletion only when the current provider permits it and the certificate is no
+longer associated. Provider-retained non-billable managed certificate state is
+reported explicitly and is never misrepresented as a retained billable Edge
+resource.
+
+## Later real-provider qualification
+
+Repository tests use deterministic synthetic representations. They prove this
+repository contract only. They are not AWS evidence.
+
+The closed `qualification_operations()` sequence is the interface for one later
+explicitly authorized ephemeral run. Before dispatch, the caller must supply
+separate mutation authority, an exact AWS account context, an ephemeral technical
+key and domains, an adapter/source SHA, a parameter digest, and an approved
+credential mechanism. The run must prove:
+
+1. create and inspect one exact `tenant-only` parent and its connection-group
+   prerequisite;
+2. read back mandatory Viewer `https-only`, `CachingDisabled`, the reviewed
+   Origin Request Policy, required `OriginDomain`, and Origin `https-only`;
+3. create one disabled tenant and prove tenant existence is not activation;
+4. request a managed certificate, surface validation-required details, and
+   observe issuance without changing DNS through this contract;
+5. re-read the tenant ETag, attach the issued ARN, inspect, then use the new ETag
+   to activate and observe the exact domain `active`;
+6. update `OriginDomain` with the latest ETag and verify the exact read-back;
+7. exercise a deliberately stale synthetic/admission ETag without dispatching a
+   conflicting provider mutation, while provider qualification records the
+   bounded precondition behavior available to the authorized adapter;
+8. disable and delete the exact tenant, then disable and delete the exact parent
+   in the required order; and
+9. verify no retained billable CloudFront, connection-group, tenant, or other
+   qualification resource remains. Any cleanup failure records exact non-secret
+   resource identities for bounded manual cleanup.
+
+That run requires explicit authorization to create and mutate AWS and DNS or
+validation infrastructure. No such authority is granted by this repository
+contract or by its tests.
+
+Current status:
+
+```text
+REAL_PROVIDER_QUALIFICATION: NOT YET AUTHORIZED / NOT RUN
+AWS_RESOURCES_CREATED: 0
+AWS_RESOURCES_MUTATED: 0
+```
+
+## Scope and complexity
+
+Function/KVS trust transport, WAF/AMR, Origin certificate issuance, provider or
+host firewalling, HAProxy Origin authentication, and end-to-end conformance stay
+with #211, #212, #213, #215/#216, #217, and #218 respectively.
+
+```text
+NEW_PERMANENT_CONCEPT: one bounded CloudFront Viewer Edge lifecycle contract with one managed-certificate state model
+REPLACES: nothing; it implements deployment #210
+WHY_EXISTING_CONTRACT_CANNOT_ABSORB_IT: #169 intentionally excludes CloudFront resource semantics, and AWS requires certificate-specific validation, issuance, ETag-bound attachment, activation, and teardown transitions
+
+NEW_PERMANENT_CONCEPTS: 1
+EXISTING_CONCEPTS_REUSED: ADR-019 invariants and #169 authority/exact-target/correlation/diagnostic patterns
+NEW_SCHEMAS: 0
+NEW_STATE_MACHINES: 1
+NEW_PROVIDER_REGISTRIES: 0
+NEW_EVIDENCE_TYPES: 0
+NEW_RUNTIME_DEPENDENCIES: 0
+```
