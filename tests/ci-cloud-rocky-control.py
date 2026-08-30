@@ -409,6 +409,11 @@ class RockyCloudControlTests(unittest.TestCase):
             / "scripts/ci-cloud/rocky-reload-runuser.py",
             "reload_systemctl_base64gzip": ROOT
             / "scripts/ci-cloud/rocky-reload-systemctl.py",
+            "start_runuser_base64gzip": ROOT
+            / "scripts/ci-cloud/rocky-start-runuser.py",
+            "start_env_base64gzip": ROOT / "scripts/ci-cloud/rocky-start-env.py",
+            "start_systemctl_base64gzip": ROOT
+            / "scripts/ci-cloud/rocky-start-systemctl.py",
             "reload_observer_base64gzip": ROOT
             / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py",
             "allocator_base64gzip": ROOT / "scripts/ci-cloud/allocate-rocky-subids.py",

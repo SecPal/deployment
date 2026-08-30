@@ -35,6 +35,7 @@ CLASSIFIER_TRUSTED_UID = 0
 CLASSIFIER_TRUSTED_GID = 0
 MAX_TARGET_FAILURE_CLASSIFIER_BYTES = 131_072
 TARGET_FAILURE_CLASSIFIER_SYMBOL = "validate_admitted_daemon_reload_adjacency"
+TARGET_START_CLASSIFIER_SYMBOL = "validate_admitted_quadlet_start_diagnostic"
 PROFILE_PATH = ROOT / "config/ci-cloud/gcp-rocky-10-2-arm64.json"
 SCHEMAS = {
     "discovery": ROOT / "schemas/rocky-cloud-discovery-evidence.schema.json",
@@ -321,6 +322,8 @@ def load_target_failure_classifier() -> Any:
         sys.dont_write_bytecode = write_bytecode
     if not callable(getattr(classifier, TARGET_FAILURE_CLASSIFIER_SYMBOL, None)):
         raise ControlError("target qualification classifier cannot be loaded")
+    if not callable(getattr(classifier, TARGET_START_CLASSIFIER_SYMBOL, None)):
+        raise ControlError("target qualification classifier cannot be loaded")
     return classifier
 
 
@@ -352,6 +355,38 @@ def validate_target_qualification_failure(
         except (AttributeError, ValueError) as error:
             raise ControlError(
                 "target qualification daemon-reload adjacency contradicts its facts"
+            ) from error
+    start_diagnostic = document.get("quadlet_start_diagnostic")
+    start_operations = {
+        "qualify-quadlet-start",
+        "qualify-quadlet-start-runuser",
+        "qualify-quadlet-start-env",
+        "qualify-quadlet-start-systemctl",
+        "qualify-quadlet-start-service-job",
+    }
+    current_start_diagnostic = (
+        document["operation"] in start_operations - {"qualify-quadlet-start"}
+        or (
+            document["operation"] == "qualify-quadlet-start"
+            and document["reason"] == "diagnostic-unavailable"
+        )
+    )
+    if start_diagnostic is None and current_start_diagnostic:
+        raise ControlError("target qualification Quadlet start diagnostic is missing")
+    if start_diagnostic is not None:
+        if document["operation"] not in start_operations:
+            raise ControlError("target qualification start diagnostic is inappropriate")
+        classifier = load_target_failure_classifier()
+        try:
+            getattr(classifier, TARGET_START_CLASSIFIER_SYMBOL)(
+                start_diagnostic,
+                document["operation"],
+                document["reason"],
+                document["exit_status"],
+            )
+        except (AttributeError, ValueError) as error:
+            raise ControlError(
+                "target qualification Quadlet start diagnostic contradicts its facts"
             ) from error
 
 

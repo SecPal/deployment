@@ -11,7 +11,24 @@ set -E
 
 runuser() {
   local status
-  if [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]]; then
+  if [[ "${SECPAL_START_EXACT_CALL:-}" == 1 ]]; then
+    if [[ -z "${SECPAL_START_OBSERVATION_PATH:-}" ]] ||
+      ! exec 6>"${SECPAL_START_OBSERVATION_PATH}"; then
+      if /usr/sbin/runuser "$@"; then
+        status=0
+      else
+        status=$?
+      fi
+    elif /opt/secpal-control/libexec/rocky-start-runuser "$@" 6>&6; then
+      status=0
+    else
+      status=$?
+    fi
+    exec 6>&- 2>/dev/null || :
+    unset SECPAL_START_EXACT_CALL
+    unset SECPAL_START_OBSERVATION_PATH
+    return "$status"
+  elif [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]]; then
     if /opt/secpal-control/libexec/rocky-reload-runuser "$@"; then
       status=0
     else
@@ -33,7 +50,10 @@ secpal_reload_precall() {
   local block_size=""
   local cursor_output=""
   local timestamp=""
-  if [[ "${BASH_LINENO[0]:-}" == 237 ]] &&
+  if [[ "${BASH_LINENO[0]:-}" == 238 ]] &&
+    [[ "$BASH_COMMAND" == "user_systemctl start \"\${unit_name}.service\"" ]]; then
+    export SECPAL_START_EXACT_CALL=1
+  elif [[ "${BASH_LINENO[0]:-}" == 237 ]] &&
     [[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]; then
     trap - DEBUG
     export SECPAL_RELOAD_EXACT_CALL=1
@@ -66,6 +86,7 @@ secpal_target_qualification_err() {
   local frame_count=0
   trap - ERR
   unset SECPAL_RELOAD_EXACT_CALL
+  unset SECPAL_START_EXACT_CALL
   for frame in "${BASH_LINENO[@]}"; do
     if ((frame_count >= 8)); then
       break

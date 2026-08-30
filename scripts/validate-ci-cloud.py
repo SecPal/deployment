@@ -2051,6 +2051,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     reload_runuser = read(root, "scripts/ci-cloud/rocky-reload-runuser.py")
     reload_systemctl = read(root, "scripts/ci-cloud/rocky-reload-systemctl.py")
+    start_runuser = read(root, "scripts/ci-cloud/rocky-start-runuser.py")
+    start_env = read(root, "scripts/ci-cloud/rocky-start-env.py")
+    start_systemctl = read(root, "scripts/ci-cloud/rocky-start-systemctl.py")
     bootstrap = read(root, "scripts/ci-cloud/bootstrap-rocky-host.tftpl")
     readiness_publisher = read(
         root, "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
@@ -2214,7 +2217,7 @@ def validate_rocky_control_plane(root: Path) -> None:
             forbidden not in target_failure_trace
             for forbidden in ("BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
         )
-        and target_failure_trace.count("BASH_COMMAND") == 1
+        and target_failure_trace.count("BASH_COMMAND") == 2
         and literal_constant(target_failure_classifier, "MAX_TRACE_FRAMES") == 8
         and literal_constant(target_failure_classifier, "MAX_TRACE_LINE") == 9_999
         and all(
@@ -2262,6 +2265,46 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "head -c 4097" in target_text
         and "target-qualification-failure.json" in target_text,
         "target harness failures must retain one bounded negative-only semantic identity",
+    )
+    require(
+        "/opt/secpal-control/libexec/rocky-start-runuser" in target_failure_trace
+        and "SECPAL_START_EXACT_CALL" in target_failure_trace
+        and "10#$frame == 237" in target_failure_trace
+        and '[[ "${BASH_LINENO[0]:-}" == 238 ]]' in target_failure_trace
+        and 'user_systemctl start \\"\\${unit_name}.service\\"'
+        in target_failure_trace
+        and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in start_runuser
+        and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")'
+        in start_runuser
+        and 'REAL_ENV = Path("/usr/bin/env")' in start_env
+        and 'TRUSTED_SYSTEMCTL = Path(' in start_env
+        and '"/usr/local/libexec/secpal-control/rocky-start-systemctl"'
+        in start_env
+        and 'REAL_SYSTEMCTL = Path("/usr/bin/systemctl")' in start_systemctl
+        and all(
+            source.startswith("#!/usr/bin/python3 -I\n")
+            for source in (start_runuser, start_env, start_systemctl)
+        )
+        and "shell=True" not in start_runuser + start_env + start_systemctl
+        and "MAX_PROTOCOL_BYTES = 2_048" in start_runuser
+        and "MAX_PROTOCOL_BYTES = 2_048" in start_env
+        and "MAX_PROPERTY_BYTES = 1_024" in start_systemctl
+        and "START_STAGE_DECISIONS" in target_failure_classifier
+        and "validate_admitted_quadlet_start_diagnostic" in target_failure_classifier
+        and "validate_admitted_quadlet_start_diagnostic" in rocky_control
+        and '--start-observation "$start_observation"' in target_runner
+        and '6>"$start_observation"' not in target_runner
+        and 'SECPAL_START_OBSERVATION_PATH="$start_observation"' in target_runner
+        and 'exec 6>"${SECPAL_START_OBSERVATION_PATH}"' in target_failure_trace
+        and "start_runuser_base64gzip" in main
+        and "start_env_base64gzip" in main
+        and "start_systemctl_base64gzip" in main
+        and "rocky-start-runuser" in bootstrap
+        and "rocky-start-env" in bootstrap
+        and "rocky-start-systemctl" in bootstrap
+        and "0:0:700" in bootstrap
+        and "0:0:555" in bootstrap,
+        "Quadlet start must retain one closed absolute-executable diagnostic boundary",
     )
     require(
         "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s"

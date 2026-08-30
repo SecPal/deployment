@@ -49,6 +49,10 @@
         "qualify-quadlet-authority",
         "qualify-quadlet-daemon-reload",
         "qualify-quadlet-start",
+        "qualify-quadlet-start-runuser",
+        "qualify-quadlet-start-env",
+        "qualify-quadlet-start-systemctl",
+        "qualify-quadlet-start-service-job",
         "qualify-quadlet-active-state",
         "qualify-selinux-storage",
         "qualify-selinux-storage-directory-create",
@@ -74,6 +78,12 @@
         "cleanup-failed",
         "timeout",
         "unclassified-target-failure",
+        "exec-failed",
+        "invocation-failed",
+        "command-exec-failed",
+        "request-failed",
+        "job-failed",
+        "diagnostic-unavailable",
         "semanage-store-access-failed",
         "semanage-transaction-begin-failed",
         "semanage-fcontext-equivalency-conflict",
@@ -95,7 +105,71 @@
     "diagnostic_input_bytes": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 135424
+      "maximum": 137472
+    },
+    "quadlet_start_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "observation_complete",
+        "runuser_status",
+        "systemctl_client_status",
+        "service_result",
+        "exec_main_code",
+        "exec_main_status"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "runuser-exec-failed",
+            "runuser-invocation-failed",
+            "env-exec-failed",
+            "env-command-exec-failed",
+            "systemctl-exec-failed",
+            "systemctl-request-failed",
+            "service-job-failed",
+            "diagnostic-unavailable"
+          ]
+        },
+        "observation_complete": { "type": "boolean" },
+        "runuser_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "systemctl_client_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "service_result": {
+          "enum": [
+            "success",
+            "resources",
+            "protocol",
+            "timeout",
+            "exit-code",
+            "signal",
+            "core-dump",
+            "watchdog",
+            "start-limit-hit",
+            "oom-kill",
+            "exec-condition",
+            null
+          ]
+        },
+        "exec_main_code": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 6
+        },
+        "exec_main_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        }
+      }
     },
     "daemon_reload_adjacency": {
       "type": "object",
@@ -463,6 +537,86 @@
   "allOf": [
     {
       "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "qualify-quadlet-start-runuser",
+                  "qualify-quadlet-start-env",
+                  "qualify-quadlet-start-systemctl",
+                  "qualify-quadlet-start-service-job"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-quadlet-start" },
+              "reason": { "const": "diagnostic-unavailable" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      },
+      "then": { "required": ["quadlet_start_diagnostic"] },
+      "else": { "not": { "required": ["quadlet_start_diagnostic"] } }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "invocation-failed" } } },
+      "then": {
+        "properties": {
+          "operation": { "const": "qualify-quadlet-start-runuser" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "command-exec-failed" } } },
+      "then": {
+        "properties": { "operation": { "const": "qualify-quadlet-start-env" } }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "request-failed" } } },
+      "then": {
+        "properties": {
+          "operation": { "const": "qualify-quadlet-start-systemctl" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "job-failed" } } },
+      "then": {
+        "properties": {
+          "operation": { "const": "qualify-quadlet-start-service-job" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "reason": { "const": "diagnostic-unavailable" } }
+      },
+      "then": {
+        "properties": { "operation": { "const": "qualify-quadlet-start" } }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "exec-failed" } } },
+      "then": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start-runuser",
+              "qualify-quadlet-start-env",
+              "qualify-quadlet-start-systemctl"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": {
           "operation": { "const": "qualify-quadlet-daemon-reload" },
           "reason": { "const": "command-failed" }
@@ -546,6 +700,52 @@
         "properties": {
           "operation": { "const": "qualification-harness" },
           "reason": { "const": "representation-invalid" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
+          "harness_sha256": {
+            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+          }
+        },
+        "required": ["target_sha", "harness_sha256"]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["quadlet_start_diagnostic"] },
+            {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "qualify-quadlet-start-runuser",
+                    "qualify-quadlet-start-env",
+                    "qualify-quadlet-start-systemctl",
+                    "qualify-quadlet-start-service-job"
+                  ]
+                }
+              },
+              "required": ["operation"]
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "exec-failed",
+                    "invocation-failed",
+                    "command-exec-failed",
+                    "request-failed",
+                    "job-failed",
+                    "diagnostic-unavailable"
+                  ]
+                }
+              },
+              "required": ["reason"]
+            }
+          ]
         }
       }
     },
