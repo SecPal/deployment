@@ -7,25 +7,22 @@
 # failure call stacks for negative diagnostic classification.  The closed V2
 # record contains only one status and at most eight numeric source lines.
 
-# The root-owned hard link at /opt/secpal-control/libexec/systemctl preserves
-# the exact /usr/bin/systemctl invocation while binding the D-Bus client PID to
-# the one reviewed direct runtime-user call. exec(2) preserves this process identity.
-if [[ "${0##*/}" == systemctl ]]; then
-  if [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]] &&
-    [[ "$#" -eq 2 ]] &&
-    [[ "$1" == --user ]] &&
-    [[ "$2" == daemon-reload ]] &&
-    { : >&4; } 2>/dev/null; then
-    if ! printf 'SECPAL_QUADLET_RELOAD_CLIENT_V1:%s\n' "$$" >&4; then
-      :
-    fi
-  fi
-  exec /usr/bin/systemctl "$@"
-fi
-
 set -E
 
-export PATH="/opt/secpal-control/libexec:$PATH"
+runuser() {
+  local status
+  if [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]]; then
+    if /opt/secpal-control/libexec/rocky-reload-runuser "$@"; then
+      status=0
+    else
+      status=$?
+    fi
+    unset SECPAL_RELOAD_EXACT_CALL
+    return "$status"
+  else
+    /usr/sbin/runuser "$@"
+  fi
+}
 
 secpal_reload_journal_cursor=unavailable
 secpal_reload_run_space_bytes=unavailable

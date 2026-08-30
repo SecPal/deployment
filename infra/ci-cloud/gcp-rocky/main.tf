@@ -152,6 +152,8 @@ resource "google_compute_instance" "qualification" {
       target_runner_base64gzip                       = base64gzip(file("${path.module}/../../../scripts/ci-cloud/run-rocky-target-qualification.sh"))
       target_failure_classifier_base64gzip           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/classify-rocky-target-qualification-failure.py"))
       target_trace_base64gzip                        = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-target-qualification-trace.sh"))
+      reload_runuser_base64gzip                      = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-reload-runuser.py"))
+      reload_systemctl_base64gzip                    = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-reload-systemctl.py"))
       reload_observer_base64gzip                     = base64gzip(file("${path.module}/../../../scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"))
       allocator_base64gzip                           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/allocate-rocky-subids.py"))
       collector_base64gzip                           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/collect-rocky-preparation.py"))

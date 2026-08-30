@@ -1146,6 +1146,8 @@ class CloudCIContractTests(unittest.TestCase):
         observer = "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         bootstrap = "scripts/ci-cloud/bootstrap-rocky-host.tftpl"
+        reload_runuser = "scripts/ci-cloud/rocky-reload-runuser.py"
+        reload_systemctl = "scripts/ci-cloud/rocky-reload-systemctl.py"
         mutations = (
             (
                 trace,
@@ -1158,19 +1160,29 @@ class CloudCIContractTests(unittest.TestCase):
                 '"$status" "1" "$secpal_reload_run_space_bytes"',
             ),
             (
-                trace,
-                "SECPAL_QUADLET_RELOAD_CLIENT_V1:%s",
-                "SECPAL_UNBOUND_RELOAD_CLIENT:%s",
+                reload_systemctl,
+                "SECPAL_QUADLET_RELOAD_CLIENT_V1:",
+                "SECPAL_UNBOUND_RELOAD_CLIENT:",
             ),
             (
-                trace,
-                'exec /usr/bin/systemctl "$@"',
-                'systemctl "$@"',
+                reload_systemctl,
+                'REAL_SYSTEMCTL = "/usr/bin/systemctl"',
+                'REAL_SYSTEMCTL = "systemctl"',
             ),
             (
                 bootstrap,
-                "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh",
-                "ln -f /tmp/unreviewed-systemctl",
+                "chmod 0555 /usr/local/libexec/secpal-control/rocky-reload-systemctl",
+                "chmod 0777 /usr/local/libexec/secpal-control/rocky-reload-systemctl",
+            ),
+            (
+                bootstrap,
+                "(( (8#$trusted_mode & 8#022) == 0 ))",
+                ":",
+            ),
+            (
+                reload_runuser,
+                '"/usr/local/libexec/secpal-control/rocky-reload-systemctl"',
+                '"/usr/bin/systemctl"',
             ),
             (
                 trace,
@@ -1183,6 +1195,27 @@ class CloudCIContractTests(unittest.TestCase):
                 "stat --file-system --format='%a %S' -- /run",
             ),
             (trace, "10#$frame == 237", "10#$frame == 238"),
+            (observer, "or 237 not in frames", "or 242 not in frames"),
+            (
+                observer,
+                "except (OSError, ObservationError, KeyError, ValueError):",
+                "except (OSError, ObservationError, KeyError, pwd.error, ValueError):",
+            ),
+            (
+                reload_runuser,
+                "os.dup2(RECORD_FD, 1, inheritable=True)",
+                "os.dup2(RECORD_FD, 4, inheritable=True)",
+            ),
+            (
+                reload_runuser,
+                "os.closerange(3, int(os.sysconf(\"SC_OPEN_MAX\")))",
+                "pass",
+            ),
+            (
+                reload_systemctl,
+                "os.getresuid() == (runtime.pw_uid,) * 3",
+                "os.geteuid() == runtime.pw_uid",
+            ),
             (trace, "read -r -t 25 -u 5", "read -r -u 5"),
             (trace, "trap - ERR", ":"),
             (

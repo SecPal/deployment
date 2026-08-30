@@ -776,6 +776,31 @@ def process_selinux_type(pid: int) -> str | None:
     return fields[2]
 
 
+def validate_client_identity(pid: int) -> None:
+    try:
+        payload = Path(f"/proc/{pid}/status").read_bytes()
+    except OSError as error:
+        raise ObservationError("daemon-reload client identity is unavailable") from error
+    if len(payload) > 4_096:
+        raise ObservationError("daemon-reload client identity is malformed")
+    try:
+        lines = payload.decode("ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise ObservationError("daemon-reload client identity is malformed") from error
+    values: dict[str, tuple[int, ...]] = {}
+    for line in lines:
+        match = re.fullmatch(r"(Uid|Gid):\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)", line)
+        if match is not None:
+            values[match.group(1)] = tuple(int(value) for value in match.groups()[1:])
+    runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
+    if (
+        set(values) != {"Uid", "Gid"}
+        or values["Uid"] != (runtime.pw_uid,) * 4
+        or values["Gid"] != (runtime.pw_gid,) * 4
+    ):
+        raise ObservationError("daemon-reload client identity does not match runtime account")
+
+
 def reload_access_avc(
     payload: bytes,
     expected_client_pid: int,
@@ -1036,17 +1061,25 @@ def admitted_fifo(path: Path, flags: int) -> IO[bytes]:
 
 
 def observe(arguments: argparse.Namespace) -> int:
+    event_channel: IO[bytes] | None = None
     acknowledgement: IO[bytes] | None = None
+    client_admitted = False
     try:
         event_channel = admitted_fifo(arguments.event, os.O_RDONLY)
         acknowledgement = admitted_fifo(arguments.ack, os.O_WRONLY)
-        with event_channel:
-            client_event = event_channel.readline(65)
-            event = event_channel.readline(513)
+        client_event = event_channel.readline(65)
         client_match = CLIENT_EVENT.fullmatch(client_event)
         if client_match is None or len(client_event) > 64:
             raise ObservationError("daemon-reload client identity is malformed")
         expected_client_pid = int(client_match.group(1))
+        if expected_client_pid > 2**31 - 1:
+            raise ObservationError("daemon-reload client identity is malformed")
+        validate_client_identity(expected_client_pid)
+        acknowledgement.write(b"SECPAL_RELOAD_CLIENT_ADMITTED_V1\n")
+        client_admitted = True
+        event = event_channel.readline(513)
+        event_channel.close()
+        event_channel = None
         match = EVENT.fullmatch(event)
         if match is None or len(event) > 512:
             raise ObservationError("daemon-reload event is malformed")
@@ -1059,8 +1092,7 @@ def observe(arguments: argparse.Namespace) -> int:
         if (
             failure_status > 255
             or control_pid > 2**31 - 1
-            or expected_client_pid > 2**31 - 1
-            or 242 not in frames
+            or 237 not in frames
         ):
             raise ObservationError("daemon-reload event is outside the exact call site")
         run_space_before = (
@@ -1084,14 +1116,18 @@ def observe(arguments: argparse.Namespace) -> int:
         write_document(arguments.output, document, deadline)
         acknowledgement.write(b"SECPAL_RELOAD_ADJACENCY_CAPTURED_V1\n")
         return 0
-    except (OSError, ObservationError, KeyError, pwd.error, ValueError):
+    except (OSError, ObservationError, KeyError, ValueError):
         if acknowledgement is not None:
             try:
+                if not client_admitted:
+                    acknowledgement.write(b"SECPAL_RELOAD_CLIENT_REJECTED_V1\n")
                 acknowledgement.write(b"SECPAL_RELOAD_ADJACENCY_FAILED_V1\n")
             except OSError:
                 pass
         return 1
     finally:
+        if event_channel is not None:
+            event_channel.close()
         if acknowledgement is not None:
             acknowledgement.close()
 
