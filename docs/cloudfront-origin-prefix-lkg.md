@@ -59,7 +59,7 @@ rename succeeds but directory durability confirmation fails, the target has
 committed in the running system but crash durability is unconfirmed: the command
 returns `2`, emits `COMMITTED_DURABILITY_UNCONFIRMED`, and requires authoritative
 readback with `candidate` or `accepted`. This outcome is never reported as a
-definite pre-commit failure.
+definite pre-commit failure, even if the diagnostic stream is unavailable.
 
 ```bash
 scripts/cloudfront-origin-prefix-lkg.py --state-dir /private/runtime/state fetch

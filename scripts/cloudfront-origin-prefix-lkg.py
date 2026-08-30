@@ -525,6 +525,15 @@ def _print_document(document: dict[str, Any]) -> None:
         raise ContractError("state output failed") from error
 
 
+def _report_error(message: str) -> None:
+    try:
+        print(message, file=sys.stderr)
+    except (OSError, ValueError):
+        # The transaction result remains authoritative even when its diagnostic
+        # transport is closed or unavailable.
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", type=Path, required=True)
@@ -549,10 +558,10 @@ def main() -> int:
         else:
             accept_candidate(arguments.state_dir, arguments.candidate_sha256)
     except CommitStateUncertain as error:
-        print(str(error), file=sys.stderr)
+        _report_error(str(error))
         return 2
     except ContractError as error:
-        print(f"ERROR: {error}", file=sys.stderr)
+        _report_error(f"ERROR: {error}")
         return 1
     return 0
 

@@ -295,6 +295,39 @@ class CloudFrontOriginPrefixLkgTests(unittest.TestCase):
             self.assertEqual(result, 2)
             self.assertIn("COMMITTED_DURABILITY_UNCONFIRMED", errors.getvalue())
 
+            later_source = self.versioned_source(
+                datetime(2026, 8, 30, 2, 0, 0, tzinfo=UTC)
+            )
+            later_source["prefixes"][0]["ip_prefix"] = "198.51.102.0/24"
+            later = self.candidate(later_source)
+            self.lkg.write_candidate(state, later)
+            directory_fsyncs = 0
+            failing_diagnostic = mock.Mock()
+            failing_diagnostic.write.side_effect = BrokenPipeError(
+                "injected diagnostic output failure"
+            )
+            with (
+                mock.patch.object(
+                    self.lkg.sys,
+                    "argv",
+                    [
+                        str(TOOL_PATH),
+                        "--state-dir",
+                        str(state),
+                        "accept",
+                        "--candidate-sha256",
+                        later["candidate_sha256"],
+                    ],
+                ),
+                mock.patch.object(self.lkg.os, "fsync", side_effect=fail_directory_fsync),
+                mock.patch.object(self.lkg.sys, "stderr", failing_diagnostic),
+            ):
+                result = self.lkg.main()
+
+            stored = json.loads((state / self.lkg.LKG_FILE).read_text(encoding="utf-8"))
+            self.assertEqual(stored, later)
+            self.assertEqual(result, 2)
+
     def test_pre_commit_write_failure_definitely_preserves_lkg(self) -> None:
         accepted = self.candidate()
         changed = self.versioned_source(
