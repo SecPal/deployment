@@ -201,7 +201,6 @@ fi
 
 require_text README.md "It is not a production-ready deployment."
 require_text README.md "./scripts/preflight.sh"
-require_text README.md "Local API/frontend integration: complete."
 require_text README.md "Phase B completed in the required check context"
 require_text README.md "Phase C is complete."
 require_text README.md "Ephemeral Debian 13 cloud conformance"
@@ -219,7 +218,7 @@ require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
 require_text docs/ci-cloud-conformance.md "The workflow never checks out"
 # The Markdown backticks must remain literal.
 # shellcheck disable=SC2016
-require_text docs/roadmap.md 'is enforced for `main`'
+require_text docs/roadmap.md 'was enforced for `main` at that time'
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04"
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04-arm"
 require_text .github/workflows/local-integration.yml \

@@ -78,10 +78,11 @@ Never print secret values to logs.
 - Never evaluate untrusted input with `eval` or `source`.
 - Never expose secrets in logs.
 - Pin versions and image digests exactly in production deployment paths.
-- A non-production conformance workflow may resolve one closed official OS slug
-  and current Debian packages only when it is isolated from production, records
-  the resolved provider image ID and exact installed package versions in closed
-  schema-validated evidence, and re-admits their expected Debian provenance.
+- A non-production conformance workflow may resolve one closed official OS image
+  slug and current distribution packages only when isolated from production. It
+  records the resolved provider image ID and exact installed package versions in
+  closed schema-validated evidence, then re-admits the expected distribution
+  provenance.
 
 ## Validator and evidence design
 
@@ -128,16 +129,18 @@ Never print secret values to logs.
 ## Future deployment invariants
 
 - API and frontend remain separate images.
-- Product Dockerfiles are never duplicated here.
+- SecPal-owned product Containerfiles are never duplicated here.
 - `activity-hash-chain worker: exactly one`.
 - `scheduler: exactly one`.
 - Migrations are explicit and run exactly once, never from an entrypoint or
   health check.
-- The edge owns TLS and public routing; product containers do not expose public
-  TLS.
-- CrowdSec belongs at the public edge.
+- The selected Edge mode owns Viewer TLS and public routing; product containers
+  do not expose public TLS.
+- CrowdSec integration follows ADR-019's mode-specific boundaries and remains
+  outside product containers.
 - PostgreSQL and private file storage require explicit backup contracts.
-- Valkey never replaces PostgreSQL as the source of truth.
+- Valkey is absent from the current production baseline; PostgreSQL-backed state
+  remains authoritative unless a later evidence-backed decision changes it.
 
 ## Communication
 

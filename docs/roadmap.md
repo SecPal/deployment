@@ -5,185 +5,106 @@ SPDX-License-Identifier: CC0-1.0
 
 # Deployment roadmap
 
-The phases below are acceptance-driven. They do not imply dates or releases.
+This roadmap points to current owners and preserves completed phase evidence.
+Native GitHub relationships and issue state are authoritative for delivery
+progress; this summary is not a second work graph.
 
-## Phase A — Governance bootstrap (complete)
+## Current production direction
 
-**Goal:** Establish a trustworthy public repository without deployment code.
+The accepted production baseline is Rocky Linux 10.2+ with SELinux enforcing,
+rootless Podman/Quadlet application workloads, and host-native PostgreSQL 18.
+Application sessions, durable queues, and shared cache are initially
+PostgreSQL-backed; Valkey is not part of this baseline.
 
-**Expected artifacts:** Governance instructions, licensing and REUSE metadata,
-scope and roadmap documentation, a local repository contract, deterministic
-preflight checks, minimal quality CI, a signed initial commit, and protected
-`main` governance.
+Production Edge mode is exactly **DIRECT** or **PROTECTED**.
+[ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
+owns the normative Edge architecture and trust boundaries.
 
-**Entry criteria:** An empty public `SecPal/deployment` repository exists and
-the maintainer has signing and repository-administration capability.
+- **DIRECT:** HAProxy is the Viewer Edge. ADR-019 and
+  [#89](https://github.com/SecPal/deployment/issues/89) own the decision;
+  [#90](https://github.com/SecPal/deployment/issues/90) and its descendants own
+  delivery.
+- **PROTECTED:** CloudFront Multi-Tenant is the Viewer Edge; HAProxy is the
+  authenticated Origin/backend boundary. The
+  [#209 subtree](https://github.com/SecPal/deployment/issues/209) owns portable
+  implementation.
 
-**Completion criteria:** Local checks pass; the single signed bootstrap commit
-is on `main`; repository settings and branch protection are verified; no
-deployment implementation exists.
+The general PROTECTED Sandbox PoC is complete and retired. Its architecture is
+accepted. Portable PROTECTED implementation is separately owned by #209; its
+native graph is authoritative for delivery state.
 
-**Deferred:** Every runnable stack, image, edge, secret, data-service, backup,
-update, rollback, and production concern.
+## Active delivery areas
 
-## Phase B — Local container integration stack (complete)
+- **Rocky host and SELinux:** current host qualification and production-host work
+  are owned by the Rocky/platform delivery graph rooted at
+  [#134](https://github.com/SecPal/deployment/issues/134).
+- **Native PostgreSQL 18:** the production database contract is owned by
+  [#81](https://github.com/SecPal/deployment/issues/81). The containerized
+  PostgreSQL 18 used by integration remains disposable test infrastructure.
+- **Rootless integration:** the current PostgreSQL 18/no-Valkey fixture is
+  implemented in `scripts/quadlet-integration.py`; it is not production
+  orchestration.
+- **DIRECT:** implementation belongs to the #90 delivery subtree and remains
+  distinct from PROTECTED.
+- **PROTECTED:** portable implementation belongs to #209 descendants; this
+  roadmap does not duplicate their contracts or progress state.
+- **Recovery:** backup, restore, Recovery Set, and drill work remains with the
+  recovery delivery graph rooted at
+  [#91](https://github.com/SecPal/deployment/issues/91).
+- **Acceptance and runbooks:** production acceptance and operator lifecycle are
+  owned by [#115](https://github.com/SecPal/deployment/issues/115) and
+  [#116](https://github.com/SecPal/deployment/issues/116).
 
-**Goal:** Prove local API/frontend integration from pinned source revisions.
+Architecture acceptance is not an implementation claim. A capability is
+implemented only when its owning delivery contract and evidence say so; native
+GitHub relationships and issue state remain authoritative for delivery progress.
 
-**Expected artifacts:** A test-only local orchestration contract, pinned build
-inputs, health checks, distinct app/API HTTPS origins, explicit worker roles,
-shared disposable private storage, browser tests, and a hosted real-Compose
-integration check.
+## Historical phase evidence
 
-**Entry criteria:** Phase A is complete and the Step A absence contract is
-deliberately updated through a regular pull request.
+The phase descriptions below record what was proven at the time. They do not
+define the current production architecture.
 
-**Completion criteria:** Static contracts and the real Compose lifecycle prove
-Valkey queue/cache use, correct worker ownership, singleton cardinality, shared
-private storage, separate frontend/API HTTPS origins, exact credentialed CORS,
-Sanctum CSRF and secure-cookie behavior in Chromium, one migration, and full
-project cleanup without public exposure or production secrets. The hosted
-`Local Integration / Compose Contract` check must pass on the current pull
-request head.
+### Phase A — Governance bootstrap (complete)
 
-**Completion evidence:** Static repository and Phase B contracts passed. The
-real Compose lifecycle passed with Valkey queue and cache probes, correct
-general and hash-chain worker ownership, singleton cardinality, shared private
-storage, separate app/API HTTPS origins, exact credentialed CORS, Sanctum CSRF
-and secure-cookie behavior, Chromium CSP and service-worker checks, one
-explicit migration, and complete project-scoped cleanup. The technical
-implementation head passed `Local Integration / Compose Contract`, and that
-check is enforced for `main`; every subsequent pull-request head must pass it
-again.
+Phase A established repository governance, licensing, deterministic preflight,
+and protected `main`. No deployment implementation existed at completion.
 
-**Deferred:** Frontend publication, a production edge, public exposure, tenant
-provisioning, durable storage, and production operations.
+### Phase B — Local container integration stack (complete)
 
-## Phase C — Immutable image publishing (complete)
+Phase B proved the former test-only Docker Compose integration, including its
+PostgreSQL/Valkey behavior, Caddy test gateway, browser flow, worker roles,
+singleton cardinality, migration, and cleanup. The preserved Phase-B completion
+record names `Local Integration / Compose Contract` and shows the historical
+check was enforced for `main` at that time. The executable Compose stack has
+since been retired; these names remain accurate historical evidence.
 
-**Goal:** Define reproducible publication and consumption of product images.
+### Phase C — Immutable image publishing (complete)
 
-**Implemented:** API and frontend publication and their fail-closed digest
-consumption contracts are complete. The public local integration contract
-pins both verified SecPal images by canonical OCI index digest, anonymously
-pulls each digest with separate empty Docker configuration, validates each raw
-OCI index and registry digest header, and verifies each private
-digest-matching index and Sigstore bundle with the pinned GitHub CLI before
-container execution. No GitHub or registry account credentials are used, and
-the verifier does not reopen the registry.
+Phase C proved reviewed API and frontend image publication and fail-closed,
+digest-only consumption. Phase C is complete, and its GitHub runs and immutable
+Git history retain the detailed evidence.
 
-**Expected artifacts:** Completed API and frontend version and digest
-contracts, provenance policy, image signing policy, publication verification,
-and merge-commit integration evidence.
+### Former Phase D.1/D.2/D.3 sequence (historical / superseded)
 
-**Entry criteria:** Phase B proves the product integration contract.
+The former sequence recorded a Debian 13/AppArmor production host, D.1a
+integration parity, production state/secrets, and a Debian NGINX production
+Edge. Those documents and runs remain historical evidence. They are not the
+current Rocky/SELinux, PostgreSQL 18, or ADR-019 Edge authority.
 
-**Completion criteria:** Published API and frontend artifacts are immutable,
-verifiable, and bound by digest with no `latest` dependency. The API half does
-not complete the whole phase.
+The retained non-production Debian cloud-conformance work likewise records its
+original environment and evidence honestly. Current Rocky qualification has a
+separate owner; history is not rewritten as though Rocky had always been the
+decision.
 
-**Completion evidence:** Deployment PR `SecPal/deployment#6` merged as
-`4fc2796409b7c37a541f515ccf29236f143fc132`. Its push-triggered Repository
-Quality run `31264563173` and Local Integration run `31264562902`, Compose
-Contract job `93120504279`, passed on `main`. The integration gate verified
-the frontend OCI index digest
-`sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077`
-and API OCI index digest
-`sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e`
-before runtime, then passed the gateway build, real Compose lifecycle,
-Playwright browser contract, and complete project cleanup.
+### Former Phase E edge selection (historical / superseded)
 
-**Deferred at Phase C completion:** Phase D had not started. Public reference
-deployment, production host automation, and managed-hosting automation remain
-outside Phase C.
+The old plan deferred selection of one production Edge until a later phase.
+ADR-019 supersedes that planning assumption by accepting DIRECT and PROTECTED.
+Implementation now follows the separate owner graphs above.
 
-## Phase D — Public rootless Podman/Quadlet reference deployment
+### Recovery and operations history
 
-**Goal:** Provide a reproducible public self-hosting reference.
-
-**Implemented:** D.1 defines only the provider-neutral production host and
-versioned non-secret inventory admission contract for Debian 13/trixie,
-including its OS lifecycle, rootless Podman, systemd/Quadlet, subordinate-ID,
-and local runtime-storage boundaries. D.1a transfers the active disposable
-integration runtime to native rootless Podman and Quadlet, retaining the
-original Phase B/C Docker/Compose artifacts as historical evidence. It
-re-proves closed rendering, pre-execution image verification, service
-dependencies, security, health, browser behavior, signals, restart,
-parallel-run isolation, and exact cleanup. It provisions no host and
-implements no production orchestration. See
-[`production-host.md`](architecture/production-host.md) and
-[`production-inventory.md`](architecture/production-inventory.md) for D.1 and
-[`quadlet-integration.md`](quadlet-integration.md) for D.1a. D.2 defines the
-production state and secret contract. D.3 selects a pinned Debian NGINX host
-service and its trust boundary in
-[`production-edge.md`](architecture/decisions/production-edge.md); neither
-decision performs a deployment.
-
-**Expected artifacts:** D.1a supplies integration-only native Quadlet
-orchestration, service dependencies, disposable secret mounts, and health
-checks. Production edge implementation and operator contracts remain later
-Phase-D work.
-
-**Entry criteria:** Immutable image contracts exist.
-
-**Completion criteria:** The reference deployment is reproducible and validates
-all service-role, persistence, and secret-handling invariants.
-
-**Deferred:** Final public-edge security and operational lifecycle automation.
-
-### Independent Debian 13 conformance infrastructure
-
-A non-production CI foundation can provision one disposable official Debian
-13 host on DigitalOcean Intel/AMD or Google C4A/Axion for an exact deployment
-commit SHA, preserve the cloud-credential/target-code boundary, collect
-D.1-oriented evidence, perform exact OpenTofu cleanup, and delete expired
-owned billable compute fixtures through bounded TTL janitors. GCP uses
-repository-, workflow-, branch-, and environment-scoped Workload Identity
-Federation without a JSON key or VM service account. This is test
-infrastructure for Phase D evidence, not production host provisioning. Its
-target workload phases can exercise D.1a, but only independently admitted
-artifacts from the exact tested SHA count as evidence; the infrastructure or
-fixture publication alone does not complete D.1a or a later phase.
-
-## Phase E — Public edge, TLS, and CrowdSec
-
-**Goal:** Define secure public ingress separate from product containers.
-
-**Expected artifacts:** Selected edge configuration, TLS lifecycle, routing,
-CrowdSec integration, and public-exposure tests.
-
-**Entry criteria:** Phase D is stable and an edge technology has been selected
-through a documented decision.
-
-**Completion criteria:** Only the edge is public; TLS and CrowdSec contracts are
-verified; product and data containers remain private.
-
-**Deferred:** Full backup and update lifecycle automation.
-
-## Phase F — Backup, restore, update, and rollback
-
-**Goal:** Make public operations recoverable and safely maintainable.
-
-**Expected artifacts:** Backup scope, restore drills, update sequencing,
-migration procedure, rollback boundaries, and operator runbooks.
-
-**Entry criteria:** The public reference deployment and edge are validated.
-
-**Completion criteria:** Recovery and lifecycle procedures are repeatable,
-tested, and preserve PostgreSQL and private-storage integrity.
-
-**Deferred:** Customer-specific and private managed-hosting automation.
-
-## Phase G — Private managed-hosting automation
-
-**Goal:** Build private automation from the public technical contract.
-
-**Expected artifacts:** Private inventory, credential, provider, and operations
-automation outside this repository.
-
-**Entry criteria:** The public contract is stable and operationally verified.
-
-**Completion criteria:** Defined only in the authorized private repository.
-
-**Deferred:** All private artifacts remain permanently outside this public
-repository.
+Earlier Phase F/G headings described future backup, restore, update, rollback,
+and private managed automation. Current recovery, acceptance, and runbook work
+uses the owner links above. Private customer inventory, credentials, placement,
+rollout, and commercial policy remain outside this public repository.
