@@ -79,11 +79,10 @@ Never print secret values to logs.
 - Never expose secrets in logs.
 - Pin versions and image digests exactly in production deployment paths.
 - A non-production conformance workflow may resolve one closed official OS image
-  slug and current distribution packages only when it is isolated from
-  production. It records the resolved provider image ID and records the
-  exact installed package versions in closed schema-validated evidence, and
-  re-admits their
-  expected distribution provenance.
+  slug and current distribution packages only when isolated from production. It
+  records the resolved provider image ID and exact installed package versions in
+  closed schema-validated evidence, then re-admits the expected distribution
+  provenance.
 
 ## Validator and evidence design
 

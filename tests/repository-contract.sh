@@ -219,7 +219,7 @@ require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
 require_text docs/ci-cloud-conformance.md "The workflow never checks out"
 # The Markdown backticks must remain literal.
 # shellcheck disable=SC2016
-require_text docs/roadmap.md 'is enforced for `main`'
+require_text docs/roadmap.md 'was enforced for `main` at that time'
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04"
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04-arm"
 require_text .github/workflows/local-integration.yml \

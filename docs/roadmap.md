@@ -73,10 +73,10 @@ and protected `main`. No deployment implementation existed at completion.
 
 Phase B proved the former test-only Docker Compose integration, including its
 PostgreSQL/Valkey behavior, Caddy test gateway, browser flow, worker roles,
-singleton cardinality, migration, and cleanup. The historical hosted check
-`Local Integration / Compose Contract` is enforced for `main` in the preserved
-completion record. The executable Compose stack has since been retired; these
-names remain accurate historical evidence.
+singleton cardinality, migration, and cleanup. The preserved Phase-B completion
+record names `Local Integration / Compose Contract` and shows the historical
+check was enforced for `main` at that time. The executable Compose stack has
+since been retired; these names remain accurate historical evidence.
 
 ### Phase C — Immutable image publishing (complete)
 
