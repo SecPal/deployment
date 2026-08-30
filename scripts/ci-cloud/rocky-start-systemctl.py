@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 """Observe one exact runtime-user systemctl start without copying its output."""
@@ -35,6 +35,10 @@ SERVICE_RESULTS = frozenset(
         "exec-condition",
     }
 )
+
+
+class DiagnosticUnavailable(Exception):
+    """The observer failed before it could attribute the target operation."""
 
 
 def process_status(returncode: int) -> int:
@@ -120,8 +124,12 @@ def execute_systemctl(
             stderr=sys.stderr,
             env=dict(os.environ),
         )
-    except OSError:
-        return 126, empty_facts("systemctl-exec-failed")
+    except OSError as error:
+        if error.filename == os.fspath(systemctl_path):
+            return (127 if error.errno == 2 else 126), empty_facts(
+                "systemctl-exec-failed"
+            )
+        raise DiagnosticUnavailable from error
     client_status = process_status(result.returncode)
     if client_status == 0:
         facts = empty_facts("success")
@@ -129,6 +137,7 @@ def execute_systemctl(
         return 0, facts
 
     properties: dict[str, object] | None = None
+    observation_complete = False
     try:
         with tempfile.TemporaryFile() as output:
             observation = subprocess.run(
@@ -151,6 +160,7 @@ def execute_systemctl(
             payload = output.read(MAX_PROPERTY_BYTES + 1)
         if observation.returncode == 0:
             properties = parse_service_properties(payload)
+            observation_complete = properties is not None
     except OSError:
         properties = None
 
@@ -160,31 +170,51 @@ def execute_systemctl(
             "systemctl_client_status": client_status,
             **properties,
         }
+    if not observation_complete:
+        facts = empty_facts("diagnostic-unavailable")
+        facts["systemctl_client_status"] = client_status
+        return client_status, facts
     facts = empty_facts("systemctl-request-failed")
     facts["systemctl_client_status"] = client_status
     return client_status, facts
 
 
+def write_record(facts: dict[str, object]) -> None:
+    record = {
+        "schema_version": 1,
+        "kind": "systemctl",
+        **facts,
+    }
+    encoded = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "ascii"
+    )
+    os.write(1, encoded)
+
+
+def fallback(arguments: list[str]) -> int:
+    try:
+        write_record(empty_facts("diagnostic-unavailable"))
+    except OSError:
+        pass
+    try:
+        os.execv(os.fspath(REAL_SYSTEMCTL), [os.fspath(REAL_SYSTEMCTL), *arguments])
+    except OSError as error:
+        return 127 if error.errno == 2 else 126
+
+
 def main() -> int:
+    arguments = sys.argv[1:]
     try:
         runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
-        arguments = sys.argv[1:]
         if not exact_runtime_identity(runtime):
-            return 126
+            return fallback(arguments)
         status, facts = execute_systemctl(arguments, runtime=runtime)
-        record = {
-            "schema_version": 1,
-            "kind": "systemctl",
-            **facts,
-        }
-        encoded = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode(
-            "ascii"
-        )
-        if os.write(1, encoded) != len(encoded):
-            return status
+        write_record(facts)
         return status
+    except DiagnosticUnavailable:
+        return fallback(arguments)
     except (KeyError, OSError, ValueError):
-        return 126
+        return fallback(arguments)
 
 
 if __name__ == "__main__":

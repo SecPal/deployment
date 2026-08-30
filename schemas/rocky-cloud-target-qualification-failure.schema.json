@@ -713,6 +713,52 @@
         },
         "required": ["target_sha", "harness_sha256"]
       },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["quadlet_start_diagnostic"] },
+            {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "qualify-quadlet-start-runuser",
+                    "qualify-quadlet-start-env",
+                    "qualify-quadlet-start-systemctl",
+                    "qualify-quadlet-start-service-job"
+                  ]
+                }
+              },
+              "required": ["operation"]
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "exec-failed",
+                    "invocation-failed",
+                    "command-exec-failed",
+                    "request-failed",
+                    "job-failed",
+                    "diagnostic-unavailable"
+                  ]
+                }
+              },
+              "required": ["reason"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
+          "harness_sha256": {
+            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+          }
+        },
+        "required": ["target_sha", "harness_sha256"]
+      },
       "then": {
         "not": {
           "anyOf": [

@@ -405,6 +405,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             cannot_execute = root / "cannot-execute"
             cannot_execute.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             cannot_execute.chmod(0o600)
+            missing_executable = root / "missing-executable"
             fake_runuser = executable(
                 "runuser",
                 'while [ "$1" != -- ]; do shift; done; shift; exec "$@"',
@@ -413,7 +414,15 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             env_succeeds = Path("/usr/bin/env")
             client_fails = executable(
                 "systemctl-request-fails",
-                'case " $* " in *" --property=Result "*) exit 1;; *) exit 1;; esac',
+                'case " $* " in\n'
+                '  *" --property=Result "*)\n'
+                "    printf '%s\\n' 'Result=success' 'ExecMainCode=0' "
+                "'ExecMainStatus=0'; exit 0;;\n"
+                '  *) exit 1;;\n'
+                "esac",
+            )
+            property_observation_fails = executable(
+                "systemctl-show-fails", "exit 1"
             )
             service_exits_126 = executable(
                 "systemctl-service-fails",
@@ -433,6 +442,15 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 env_helper_path=START_ENV,
             )
             self.assertEqual(126, status)
+            self.assertEqual("runuser-exec-failed", facts["stage"])
+
+            status, facts = runuser.execute_start(
+                target_arguments,
+                runtime=runtime,
+                runuser_path=missing_executable,
+                env_helper_path=START_ENV,
+            )
+            self.assertEqual(127, status)
             self.assertEqual("runuser-exec-failed", facts["stage"])
 
             status, facts = runuser.execute_start(
@@ -464,10 +482,27 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             status, facts = systemctl.execute_systemctl(
                 systemctl_arguments,
                 runtime=runtime,
+                systemctl_path=missing_executable,
+            )
+            self.assertEqual(127, status)
+            self.assertEqual("systemctl-exec-failed", facts["stage"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
                 systemctl_path=client_fails,
             )
             self.assertEqual(1, status)
             self.assertEqual("systemctl-request-failed", facts["stage"])
+            self.assertIsNone(facts["service_result"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=property_observation_fails,
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("diagnostic-unavailable", facts["stage"])
             self.assertIsNone(facts["service_result"])
 
             status, facts = systemctl.execute_systemctl(
@@ -502,6 +537,94 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             self.assertEqual(("env-entered",), records)
 
             self.assertTrue(fake_runuser.is_file())
+
+    def test_start_protocol_setup_failure_never_claims_an_exec_failure(self) -> None:
+        runuser = load_script(START_RUNUSER, "rocky_start_runuser_setup_failure")
+        env_helper = load_script(START_ENV, "rocky_start_env_setup_failure")
+        runtime = types.SimpleNamespace(
+            pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(Path.home())
+        )
+        unit = "secpal-host-qualification-abc123.service"
+        target_arguments = runuser.target_arguments(runtime, unit)
+
+        with mock.patch.object(
+            runuser.tempfile, "TemporaryFile", side_effect=OSError("full")
+        ):
+            with self.assertRaises(runuser.DiagnosticUnavailable):
+                runuser.execute_start(target_arguments, runtime=runtime)
+
+        with mock.patch.object(
+            env_helper.tempfile, "TemporaryFile", side_effect=OSError("full")
+        ):
+            with self.assertRaises(env_helper.DiagnosticUnavailable):
+                env_helper.execute_env(target_arguments[4:], runtime=runtime)
+
+    def test_start_protocol_explicitly_frames_diagnostic_unavailability(self) -> None:
+        runuser = load_script(START_RUNUSER, "rocky_start_runuser_unavailable")
+        unavailable = (
+            b'{"kind":"env","schema_version":1,'
+            b'"stage":"diagnostic-unavailable"}\n'
+        )
+        facts = runuser.parse_protocol(unavailable, 1)
+        self.assertEqual("diagnostic-unavailable", facts["stage"])
+        self.assertEqual(1, facts["runuser_status"])
+        self.assertIsNone(facts["systemctl_client_status"])
+
+    def test_runtime_start_helpers_use_isolated_python_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "sitecustomize-loaded"
+            (root / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('loaded', encoding='ascii')\n",
+                encoding="utf-8",
+            )
+            for helper in (START_RUNUSER, START_ENV, START_SYSTEMCTL):
+                with self.subTest(helper=helper.name):
+                    self.assertTrue(
+                        helper.read_bytes().startswith(b"#!/usr/bin/python3 -I\n")
+                    )
+                    result = subprocess.run(
+                        [helper, "--help"],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env={**os.environ, "PYTHONPATH": str(root)},
+                        timeout=10,
+                    )
+                    self.assertIn(result.returncode, range(128))
+                    self.assertFalse(marker.exists())
+
+    def test_start_observation_fd_exists_only_for_the_exact_helper(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        trace = TRACE.read_text(encoding="utf-8")
+        self.assertNotIn('6>"$start_observation"', runner)
+        self.assertIn(
+            'exec 6>"${SECPAL_START_OBSERVATION_PATH}"',
+            trace,
+        )
+        self.assertIn('/usr/sbin/runuser "$@"', trace)
+        self.assertIn(
+            'SECPAL_START_OBSERVATION_PATH="$start_observation"',
+            runner,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            observation = Path(directory) / "observation.json"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "if { : >&6; } 2>/dev/null; then exit 99; fi",
+                ],
+                check=False,
+                env={
+                    **os.environ,
+                    "BASH_ENV": str(TRACE),
+                    "SECPAL_START_OBSERVATION_PATH": str(observation),
+                },
+            )
+            self.assertEqual(0, result.returncode)
+            self.assertFalse(observation.exists())
 
     def run_traced_bash(
         self, script: str
@@ -2106,6 +2229,23 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             reason="semanage-fcontext-local-add-failed",
         )
         self.assertEqual([], list(validator.iter_errors(historical_semanage_document)))
+        historical_current_start = dict(
+            document,
+            target_sha=self.classifier.HISTORICAL_TARGET_SHA,
+            harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256,
+            operation="qualify-quadlet-start-service-job",
+            reason="job-failed",
+            quadlet_start_diagnostic={
+                "classification": "service-job-failed",
+                "observation_complete": True,
+                "runuser_status": 1,
+                "systemctl_client_status": 1,
+                "service_result": "exit-code",
+                "exec_main_code": 1,
+                "exec_main_status": 126,
+            },
+        )
+        self.assertTrue(list(validator.iter_errors(historical_current_start)))
         self.assertTrue(
             list(
                 validator.iter_errors(

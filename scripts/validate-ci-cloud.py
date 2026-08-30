@@ -2282,7 +2282,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         in start_env
         and 'REAL_SYSTEMCTL = Path("/usr/bin/systemctl")' in start_systemctl
         and all(
-            source.startswith("#!/usr/bin/python3\n")
+            source.startswith("#!/usr/bin/python3 -I\n")
             for source in (start_runuser, start_env, start_systemctl)
         )
         and "shell=True" not in start_runuser + start_env + start_systemctl
@@ -2293,7 +2293,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "validate_admitted_quadlet_start_diagnostic" in target_failure_classifier
         and "validate_admitted_quadlet_start_diagnostic" in rocky_control
         and '--start-observation "$start_observation"' in target_runner
-        and '6>"$start_observation"' in target_runner
+        and '6>"$start_observation"' not in target_runner
+        and 'SECPAL_START_OBSERVATION_PATH="$start_observation"' in target_runner
+        and 'exec 6>"${SECPAL_START_OBSERVATION_PATH}"' in target_failure_trace
         and "start_runuser_base64gzip" in main
         and "start_env_base64gzip" in main
         and "start_systemctl_base64gzip" in main

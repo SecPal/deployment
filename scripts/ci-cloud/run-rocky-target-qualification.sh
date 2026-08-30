@@ -113,9 +113,10 @@ set +e
   ulimit -f 128
   timeout --signal=TERM --kill-after=30s 45m \
     env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
+    SECPAL_START_OBSERVATION_PATH="$start_observation" \
     bash "$work_root/scripts/qualify-production-host.sh" \
     --image "$fixture" --service-account secpal-runtime >"$stdout" 2>&1 \
-    3>"$qualification_trace" 6>"$start_observation"
+    3>"$qualification_trace"
 )
 status=$?
 if [[ -n "$observer_pid" ]]; then

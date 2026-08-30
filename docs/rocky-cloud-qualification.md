@@ -116,19 +116,27 @@ opaque `runuser -> env -> systemctl --user start` boundary without modifying
 the target harness. The trace redirects only that exact call through
 root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
 steps use root-owned absolute `/usr/bin/env` and `/usr/bin/systemctl` helpers.
-The root helper writes one at-most-2,048-byte closed JSON observation through a
-pre-opened root-owned mode-0600 descriptor. A helper precondition or
-representation failure falls back to the original `runuser` call, so
-diagnostic code cannot replace the operation it observes.
+The exact-call trace opens root-owned FD 6 only for the root helper; the target
+harness and its earlier children never inherit the descriptor. The helper
+writes one at-most-2,048-byte closed JSON observation to its root-owned
+mode-0600 file and closes the descriptor before any fallback. Runtime-user
+Python starts in isolated mode, so user site packages and Python environment
+settings cannot become protocol writers. A helper precondition or pre-dispatch
+representation failure records only diagnostic unavailability and falls back
+to the original operation, so diagnostic code cannot replace the operation it
+observes. A post-dispatch diagnostic failure retains the completed operation's
+original status without repeating it.
 
 The admitted start operations distinguish `runuser` exec and invocation,
 `env` exec and command exec, `systemctl` exec and user-manager request, and a
 service job failure. Facts are limited to the outer `runuser` status, the
 `systemctl` client status and, only after a nonzero client result and a
 successful bounded `systemctl show`, `Result`, `ExecMainCode`, and
-`ExecMainStatus`. Service `ExecMainStatus` is never represented as an
-executable or client status. Missing, malformed, oversized, or contradictory
-observations retain the target status as
+`ExecMainStatus`. A request failure is admitted only when that bounded property
+observation succeeds without a failed service result; an unavailable property
+observation creates no request/job precision. Service `ExecMainStatus` is never
+represented as an executable or client status. Missing, malformed, oversized,
+or contradictory observations retain the target status as
 `qualify-quadlet-start/diagnostic-unavailable`; no stdout, stderr, environment,
 or journal text enters evidence.
 

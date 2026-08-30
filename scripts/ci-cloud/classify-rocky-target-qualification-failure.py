@@ -625,7 +625,7 @@ def admit_quadlet_start_observation(
     )
     if stage == "runuser-exec-failed":
         consistent = (
-            failure_status == 126
+            failure_status in {126, 127}
             and runuser_status is None
             and client_status is None
             and empty_service
@@ -643,7 +643,7 @@ def admit_quadlet_start_observation(
     elif stage == "systemctl-exec-failed":
         consistent = (
             runuser_status == failure_status
-            and failure_status == 126
+            and failure_status in {126, 127}
             and client_status is None
             and empty_service
         )

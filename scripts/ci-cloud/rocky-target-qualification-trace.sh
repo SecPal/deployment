@@ -12,12 +12,21 @@ set -E
 runuser() {
   local status
   if [[ "${SECPAL_START_EXACT_CALL:-}" == 1 ]]; then
-    if /opt/secpal-control/libexec/rocky-start-runuser "$@"; then
+    if [[ -z "${SECPAL_START_OBSERVATION_PATH:-}" ]] ||
+      ! exec 6>"${SECPAL_START_OBSERVATION_PATH}"; then
+      if /usr/sbin/runuser "$@"; then
+        status=0
+      else
+        status=$?
+      fi
+    elif /opt/secpal-control/libexec/rocky-start-runuser "$@" 6>&6; then
       status=0
     else
       status=$?
     fi
+    exec 6>&- 2>/dev/null || :
     unset SECPAL_START_EXACT_CALL
+    unset SECPAL_START_OBSERVATION_PATH
     return "$status"
   elif [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]]; then
     if /opt/secpal-control/libexec/rocky-reload-runuser "$@"; then
