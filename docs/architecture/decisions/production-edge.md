@@ -5,11 +5,24 @@ SPDX-License-Identifier: CC0-1.0
 
 # Production edge decision
 
-## Status
+> **HISTORICAL / SUPERSEDED**
+>
+> This document records the former Debian/NGINX production-edge decision. It is
+> no longer current architecture authority. Accepted
+> [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
+> supersedes its universal Edge decision with the DIRECT and PROTECTED modes.
+> [Deployment #89](https://github.com/SecPal/deployment/issues/89) owns the
+> DIRECT HAProxy Viewer-Edge decision, and
+> [#209](https://github.com/SecPal/deployment/issues/209) coordinates portable
+> PROTECTED implementation. The historical contract below is preserved as it
+> was accepted at the time.
 
-Accepted for the single-host production reference. This ADR is a decision and
-contract only: it installs nothing, publishes no port, changes no firewall or
-DNS, and obtains no certificate.
+## Historical status
+
+The following decision was accepted for the former single-host production
+reference. Its embedded `"status": "accepted"` records that historical state;
+it is not the document's current status. This ADR installed nothing, published
+no port, changed no firewall or DNS, and obtained no certificate.
 
 ## Context and requirements
 

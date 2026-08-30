@@ -119,8 +119,6 @@ class WorkGraphGovernanceTests(unittest.TestCase):
                 "using `latest` tags or unpinned production images",
                 "API and frontend remain separate images",
                 "Migrations are explicit and run exactly once",
-                "CrowdSec belongs at the public edge",
-                "Valkey never replaces PostgreSQL as the source of truth",
             )
         )
 
