@@ -54,19 +54,19 @@ trust boundaries:
   [#209 descendants](https://github.com/SecPal/deployment/issues/209) own the
   portable implementation.
 
-The production architecture is not yet fully implemented. DIRECT and PROTECTED
-have separate implementation owners. Portable PROTECTED work is in progress,
-with some capabilities already delivered; the #209 native graph is the current
-implementation record.
+Architecture acceptance does not establish implementation. DIRECT and
+PROTECTED have separate implementation owners: the #90 and #209 native graphs
+are authoritative for their current delivery state.
 
-The general PROTECTED Sandbox PoC is complete and retired. The PROTECTED
-architecture is accepted, while portable PROTECTED implementation remains in
-progress. ADR-019 and Git history retain the durable PoC evidence; temporary
-cloud resources and test credentials are not repository documentation.
+The general PROTECTED Sandbox PoC is complete and retired. Portable production
+implementation is separately owned by #209; its native graph is authoritative
+for current delivery state. ADR-019 and Git history retain the durable PoC
+evidence; temporary cloud resources and test credentials are not repository
+documentation.
 
 See the [roadmap](docs/roadmap.md) for delivery ownership and
 [architecture scope](docs/architecture/scope.md) for navigation. Those documents
-summarize status; they do not replace ADR-019 or the owning delivery contracts.
+do not replace ADR-019, the owning delivery contracts, or their native graphs.
 
 ## Architecture principles
 
@@ -79,18 +79,6 @@ summarize status; they do not replace ADR-019 or the owning delivery contracts.
 - Published images are admitted only through reviewed immutable digests.
 - Private managed-hosting inventory, policy, credentials, and automation remain
   outside this public repository.
-
-## Current roadmap status
-
-1. Governance bootstrap: complete.
-2. Local API/frontend integration: complete.
-3. Immutable image publishing: complete.
-4. Current disposable PostgreSQL 18/no-Valkey Quadlet integration: implemented.
-5. Rocky/SELinux production host and native PostgreSQL 18: in progress under
-   their owning delivery contracts.
-6. DIRECT implementation: owned by the DIRECT delivery subtree.
-7. Portable PROTECTED implementation: in progress under #209.
-8. Recovery, acceptance, and operator runbooks: pending their owning contracts.
 
 ## Historical evidence
 

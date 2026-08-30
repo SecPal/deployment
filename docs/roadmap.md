@@ -30,8 +30,8 @@ owns the normative Edge architecture and trust boundaries.
   implementation.
 
 The general PROTECTED Sandbox PoC is complete and retired. Its architecture is
-accepted. Portable PROTECTED implementation is in progress, with current status
-owned by the #209 native graph.
+accepted. Portable PROTECTED implementation is separately owned by #209; its
+native graph is authoritative for delivery state.
 
 ## Active delivery areas
 
@@ -46,8 +46,8 @@ owned by the #209 native graph.
   orchestration.
 - **DIRECT:** implementation belongs to the #90 delivery subtree and remains
   distinct from PROTECTED.
-- **PROTECTED:** portable capabilities are being delivered by #209 descendants;
-  this roadmap does not duplicate their contracts.
+- **PROTECTED:** portable implementation belongs to #209 descendants; this
+  roadmap does not duplicate their contracts or progress state.
 - **Recovery:** backup, restore, Recovery Set, and drill work remains with the
   recovery delivery graph rooted at
   [#91](https://github.com/SecPal/deployment/issues/91).
@@ -55,9 +55,9 @@ owned by the #209 native graph.
   owned by [#115](https://github.com/SecPal/deployment/issues/115) and
   [#116](https://github.com/SecPal/deployment/issues/116).
 
-Production architecture is therefore accepted but not fully implemented. A
-capability is current only when its owning delivery contract and evidence say
-so; acceptance of the architecture is not an implementation claim.
+Architecture acceptance is not an implementation claim. A capability is
+implemented only when its owning delivery contract and evidence say so; native
+GitHub relationships and issue state remain authoritative for delivery progress.
 
 ## Historical phase evidence
 

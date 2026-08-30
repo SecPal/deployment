@@ -201,7 +201,6 @@ fi
 
 require_text README.md "It is not a production-ready deployment."
 require_text README.md "./scripts/preflight.sh"
-require_text README.md "Local API/frontend integration: complete."
 require_text README.md "Phase B completed in the required check context"
 require_text README.md "Phase C is complete."
 require_text README.md "Ephemeral Debian 13 cloud conformance"

@@ -28,9 +28,10 @@ owns the normative DIRECT/PROTECTED Edge architecture.
   descendants own portable implementation.
 
 The general PROTECTED Sandbox PoC is complete and retired. PROTECTED architecture
-is accepted; portable implementation is in progress. The old
-[Debian/NGINX decision](decisions/production-edge.md) is retained only as a
-historical, superseded record.
+is accepted; #209 descendants own portable implementation, and their native
+graph is authoritative for delivery state. The old [Debian/NGINX
+decision](decisions/production-edge.md) is retained only as a historical,
+superseded record.
 
 ## Repository responsibilities
 
