@@ -2049,6 +2049,8 @@ def validate_rocky_control_plane(root: Path) -> None:
     reload_adjacency_observer = read(
         root, "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
     )
+    reload_runuser = read(root, "scripts/ci-cloud/rocky-reload-runuser.py")
+    reload_systemctl = read(root, "scripts/ci-cloud/rocky-reload-systemctl.py")
     bootstrap = read(root, "scripts/ci-cloud/bootstrap-rocky-host.tftpl")
     readiness_publisher = read(
         root, "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
@@ -2264,10 +2266,22 @@ def validate_rocky_control_plane(root: Path) -> None:
     require(
         "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s"
         in target_failure_trace
-        and "SECPAL_QUADLET_RELOAD_CLIENT_V1:%s" in target_failure_trace
-        and 'exec /usr/bin/systemctl "$@"' in target_failure_trace
-        and 'export PATH="/opt/secpal-control/libexec:$PATH"'
+        and "/opt/secpal-control/libexec/rocky-reload-runuser"
         in target_failure_trace
+        and "/usr/sbin/runuser" in target_failure_trace
+        and 'export PATH="/opt/secpal-control/libexec:$PATH"'
+        not in target_failure_trace
+        and 'TRUSTED_SYSTEMCTL = (\n    "/usr/local/libexec/secpal-control/rocky-reload-systemctl"'
+        in reload_runuser
+        and 'REAL_RUNUSER = "/usr/sbin/runuser"' in reload_runuser
+        and "os.dup2(ACK_FD, 0, inheritable=True)" in reload_runuser
+        and "os.dup2(RECORD_FD, 1, inheritable=True)" in reload_runuser
+        and "os.closerange(3" in reload_runuser
+        and "SECPAL_QUADLET_RELOAD_CLIENT_V1" in reload_systemctl
+        and 'REAL_SYSTEMCTL = "/usr/bin/systemctl"' in reload_systemctl
+        and "os.getresuid() == (runtime.pw_uid,) * 3" in reload_systemctl
+        and "os.getresgid() == (runtime.pw_gid,) * 3" in reload_systemctl
+        and "os.execv(REAL_SYSTEMCTL" in reload_systemctl
         and '"$status" "$$" "$secpal_reload_run_space_bytes"'
         in target_failure_trace
         and '"$secpal_reload_audit_baseline" "$secpal_reload_journal_cursor"'
@@ -2298,10 +2312,25 @@ def validate_rocky_control_plane(root: Path) -> None:
         < target_runner.index("wait \"$observer_pid\"")
         and "--reload-adjacency \"$reload_adjacency\"" in target_runner
         and "reload_observer_base64gzip" in main
+        and "reload_runuser_base64gzip" in main
+        and "reload_systemctl_base64gzip" in main
         and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap
-        and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        and "rocky-reload-runuser" in bootstrap
+        and "/usr/local/libexec/secpal-control/rocky-reload-systemctl" in bootstrap
+        and "chmod 0555 /usr/local/libexec/secpal-control/rocky-reload-systemctl"
         in bootstrap
-        and "/opt/secpal-control/libexec/systemctl" in bootstrap,
+        and "for trusted_directory in / /usr /usr/local /usr/local/libexec"
+        in bootstrap
+        and '[[ -d "$trusted_directory" && ! -L "$trusted_directory" ]]'
+        in bootstrap
+        and "(( (8#$trusted_mode & 8#022) == 0 ))" in bootstrap
+        and "0:0:700" in bootstrap
+        and "0:0:555" in bootstrap
+        and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        not in bootstrap
+        and "pwd.error" not in reload_adjacency_observer
+        and "or 237 not in frames" in reload_adjacency_observer
+        and "or 242 not in frames" not in reload_adjacency_observer,
         "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
     )
     require(

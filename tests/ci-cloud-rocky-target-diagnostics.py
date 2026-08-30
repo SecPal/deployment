@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -30,6 +33,15 @@ CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
 RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
 TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
 OBSERVER = ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+RELOAD_RUNUSER = ROOT / "scripts/ci-cloud/rocky-reload-runuser.py"
+RELOAD_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-reload-systemctl.py"
+
+
+class RetainedBytesIO(io.BytesIO):
+    """Retain protocol output after production closes its admitted channel."""
+
+    def close(self) -> None:
+        pass
 
 
 def load_classifier():
@@ -60,6 +72,15 @@ def load_rocky_control():
     )
     if specification is None or specification.loader is None:
         raise RuntimeError("cannot load Rocky control validator")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def load_script(path: Path, name: str):
+    specification = importlib.util.spec_from_file_location(name, path)
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"cannot load {path.name}")
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
@@ -119,6 +140,205 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             b"", trace.encode(), 1, target_bound=True,
             line_rules=self.classifier.LINE_RULES,
         )
+
+    def observer_arguments(self, directory: str) -> types.SimpleNamespace:
+        return types.SimpleNamespace(
+            event=Path(directory) / "event",
+            ack=Path(directory) / "ack",
+            output=Path(directory) / "observation.json",
+            target_sha=self.classifier.EXPECTED_TARGET_SHA,
+            control_sha="c" * 40,
+            run_id="12345",
+            run_attempt="1",
+            boot_id="12345678-1234-1234-1234-123456789abc",
+            journal_baseline="2026-08-30 00:00:00.000000 UTC",
+        )
+
+    @staticmethod
+    def reload_event(frame: int | str) -> bytes:
+        return (
+            b"SECPAL_QUADLET_RELOAD_CLIENT_V1:4242\n"
+            + b"SECPAL_QUADLET_RELOAD_FAILURE_V3:1:31337:40960:"
+            + b"20260830000000:s=abc;i=1;b=def;m=2;t=3;x=4:"
+            + str(frame).encode("ascii")
+            + b"\n"
+        )
+
+    def test_missing_nss_account_preserves_bounded_failure_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            acknowledgement = RetainedBytesIO()
+            with (
+                mock.patch.object(
+                    self.observer,
+                    "admitted_fifo",
+                    side_effect=[io.BytesIO(self.reload_event("237,242")), acknowledgement],
+                ),
+                mock.patch.object(
+                    self.observer, "validate_client_identity", create=True
+                ),
+                mock.patch.object(
+                    self.observer, "collect_observation", side_effect=KeyError("secpal-runtime")
+                ),
+            ):
+                self.assertEqual(
+                    1, self.observer.observe(self.observer_arguments(directory))
+                )
+            self.assertEqual(
+                b"SECPAL_RELOAD_CLIENT_ADMITTED_V1\n"
+                b"SECPAL_RELOAD_ADJACENCY_FAILED_V1\n",
+                acknowledgement.getvalue(),
+            )
+
+    def test_historical_reload_frame_cannot_satisfy_current_observer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            acknowledgement = RetainedBytesIO()
+            with (
+                mock.patch.object(
+                    self.observer,
+                    "admitted_fifo",
+                    side_effect=[io.BytesIO(self.reload_event(242)), acknowledgement],
+                ),
+                mock.patch.object(
+                    self.observer, "validate_client_identity", create=True
+                ),
+                mock.patch.object(self.observer, "collect_observation", return_value={}),
+                mock.patch.object(self.observer, "write_document"),
+            ):
+                self.assertEqual(
+                    1, self.observer.observe(self.observer_arguments(directory))
+                )
+            self.assertEqual(
+                b"SECPAL_RELOAD_CLIENT_ADMITTED_V1\n"
+                b"SECPAL_RELOAD_ADJACENCY_FAILED_V1\n",
+                acknowledgement.getvalue(),
+            )
+
+    def test_direct_user_record_transport_has_exact_trusted_helpers(self) -> None:
+        self.assertTrue(RELOAD_RUNUSER.is_file())
+        self.assertTrue(RELOAD_SYSTEMCTL.is_file())
+        trace = TRACE.read_text(encoding="utf-8")
+        runner = RELOAD_RUNUSER.read_text(encoding="utf-8")
+        client = RELOAD_SYSTEMCTL.read_text(encoding="utf-8")
+        self.assertIn("/opt/secpal-control/libexec/rocky-reload-runuser", trace)
+        self.assertNotIn('export PATH="/opt/secpal-control/libexec:$PATH"', trace)
+        self.assertIn("os.dup2(RECORD_FD, 1", runner)
+        self.assertIn("os.dup2(ACK_FD, 0", runner)
+        self.assertIn("/usr/local/libexec/secpal-control/rocky-reload-systemctl", runner)
+        self.assertNotIn("os.environ", runner.split("RECORD_FD", 1)[0])
+        self.assertIn('REAL_SYSTEMCTL = "/usr/bin/systemctl"', client)
+        self.assertIn("os.execv(REAL_SYSTEMCTL", client)
+
+    def test_runuser_proxy_maps_only_admitted_channels_and_uses_absolute_helper(
+        self,
+    ) -> None:
+        proxy = load_script(RELOAD_RUNUSER, "rocky_reload_runuser")
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994, pw_dir="/var/lib/secpal-runtime")
+        expected = [
+            "--user", "secpal-runtime", "--", "env",
+            "-u", "CONTAINER_HOST", "-u", "CONTAINER_CONNECTION",
+            "HOME=/var/lib/secpal-runtime",
+            "XDG_RUNTIME_DIR=/run/user/994",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/994/bus",
+            "systemctl", "--user", "daemon-reload",
+        ]
+        fifo = types.SimpleNamespace(
+            st_mode=stat.S_IFIFO | 0o600, st_uid=0, st_gid=0
+        )
+        execution = RuntimeError("exec")
+        with (
+            mock.patch.object(proxy.sys, "argv", [str(RELOAD_RUNUSER), *expected]),
+            mock.patch.object(proxy.os, "geteuid", return_value=0),
+            mock.patch.dict(proxy.os.environ, {"SECPAL_RELOAD_EXACT_CALL": "1"}),
+            mock.patch.object(proxy.pwd, "getpwnam", return_value=runtime),
+            mock.patch.object(proxy.os, "fstat", return_value=fifo),
+            mock.patch.object(proxy.fcntl, "fcntl", return_value=os.O_RDWR),
+            mock.patch.object(proxy.os, "dup2") as duplicate,
+            mock.patch.object(proxy.os, "closerange") as close_range,
+            mock.patch.object(proxy.os, "sysconf", return_value=64),
+            mock.patch.object(proxy.os, "execv", side_effect=execution) as execute,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "exec"):
+                proxy.main()
+        duplicate.assert_has_calls(
+            [mock.call(proxy.ACK_FD, 0, inheritable=True),
+             mock.call(proxy.RECORD_FD, 1, inheritable=True)]
+        )
+        close_range.assert_called_once_with(3, 64)
+        executed = execute.call_args.args[1]
+        self.assertEqual(proxy.REAL_RUNUSER, executed[0])
+        self.assertEqual(proxy.TRUSTED_SYSTEMCTL, executed[-3])
+        self.assertNotIn("systemctl", executed)
+
+    def test_runtime_helper_keeps_pid_and_rejects_wrong_semantic_actor(self) -> None:
+        client = load_script(RELOAD_SYSTEMCTL, "rocky_reload_systemctl")
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994)
+        execution = RuntimeError("exec")
+        with (
+            mock.patch.object(client.sys, "argv", [str(RELOAD_SYSTEMCTL), "--user", "daemon-reload"]),
+            mock.patch.dict(client.os.environ, {"SECPAL_RELOAD_EXACT_CALL": "1"}),
+            mock.patch.object(client.pwd, "getpwnam", return_value=runtime),
+            mock.patch.object(client.os, "getresuid", return_value=(994, 994, 994)),
+            mock.patch.object(client.os, "getresgid", return_value=(994, 994, 994)),
+            mock.patch.object(client, "admitted_fifo"),
+            mock.patch.object(client.os, "getpid", return_value=4242),
+            mock.patch.object(client.os, "write", return_value=40) as write,
+            mock.patch.object(client, "read_acknowledgement", return_value=client.ACK),
+            mock.patch.object(client.os, "close"),
+            mock.patch.object(client.os, "execv", side_effect=execution) as execute,
+        ):
+            record = b"SECPAL_QUADLET_RELOAD_CLIENT_V1:4242\n"
+            write.return_value = len(record)
+            with self.assertRaisesRegex(RuntimeError, "exec"):
+                client.main()
+            write.assert_called_once_with(1, record)
+            execute.assert_called_once_with(
+                client.REAL_SYSTEMCTL,
+                [client.REAL_SYSTEMCTL, "--user", "daemon-reload"],
+            )
+
+        with (
+            mock.patch.object(client.sys, "argv", [str(RELOAD_SYSTEMCTL), "--user", "daemon-reload"]),
+            mock.patch.dict(client.os.environ, {"SECPAL_RELOAD_EXACT_CALL": "1"}),
+            mock.patch.object(client.pwd, "getpwnam", return_value=runtime),
+            mock.patch.object(client.os, "getresuid", return_value=(0, 0, 0)),
+            mock.patch.object(client.os, "getresgid", return_value=(0, 0, 0)),
+            mock.patch.object(client.os, "execv") as execute,
+        ):
+            self.assertEqual(126, client.main())
+            execute.assert_not_called()
+
+    def test_observer_rejects_forged_or_wrong_pid_actor(self) -> None:
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994)
+        wrong_actor = (
+            b"Name:\tsystemctl\nUid:\t0\t0\t0\t0\n"
+            b"Gid:\t0\t0\t0\t0\n"
+        )
+        with (
+            mock.patch.object(self.observer.Path, "read_bytes", return_value=wrong_actor),
+            mock.patch.object(self.observer.pwd, "getpwnam", return_value=runtime),
+        ):
+            with self.assertRaises(self.observer.ObservationError):
+                self.observer.validate_client_identity(4242)
+
+    def test_observer_distinguishes_malformed_identity_from_mismatch(self) -> None:
+        runtime = types.SimpleNamespace(pw_uid=994, pw_gid=994)
+        incomplete_identity = b"Name:\tsystemctl\nUid:\t994\t994\t994\t994\n"
+        with (
+            mock.patch.object(
+                self.observer.Path, "read_bytes", return_value=incomplete_identity
+            ),
+            mock.patch.object(self.observer.pwd, "getpwnam", return_value=runtime),
+        ):
+            with self.assertRaisesRegex(
+                self.observer.ObservationError,
+                "daemon-reload client identity is malformed",
+            ):
+                self.observer.validate_client_identity(4242)
+        with mock.patch.object(
+            self.observer.Path, "read_bytes", side_effect=FileNotFoundError
+        ):
+            with self.assertRaises(self.observer.ObservationError):
+                self.observer.validate_client_identity(4242)
 
     def test_current_target_line_map_is_private_relabel_only(self) -> None:
         cases = ((237, "qualify-quadlet-daemon-reload"), (238, "qualify-quadlet-start"),
