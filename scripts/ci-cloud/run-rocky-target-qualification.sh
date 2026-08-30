@@ -92,6 +92,8 @@ boot_id="$(cat /proc/sys/kernel/random/boot_id)"
 [[ "$boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
 reload_event="$work_root/quadlet-reload.event"
 reload_ack="$work_root/quadlet-reload.ack"
+start_observation="$work_root/quadlet-start-observation.json"
+install -o root -g root -m 0600 /dev/null "$start_observation"
 observer_pid=""
 if [[ "$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438 ]] &&
   [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" == \
@@ -113,7 +115,7 @@ set +e
     env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
     bash "$work_root/scripts/qualify-production-host.sh" \
     --image "$fixture" --service-account secpal-runtime >"$stdout" 2>&1 \
-    3>"$qualification_trace"
+    3>"$qualification_trace" 6>"$start_observation"
 )
 status=$?
 if [[ -n "$observer_pid" ]]; then
@@ -138,6 +140,7 @@ if [[ "$status" -ne 0 ]]; then
     --harness "$work_root/scripts/qualify-production-host.sh" \
     --stdout "$stdout" --trace "$qualification_trace" \
     --reload-adjacency "$reload_adjacency" --exit-status "$status" \
+    --start-observation "$start_observation" \
     "${representation_option[@]}" \
     --output "$qualification_failure"
   classifier_status=$?
@@ -267,6 +270,7 @@ if [[ "$admission_status" -ne 0 ]]; then
     --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
     --harness "$work_root/scripts/qualify-production-host.sh" \
     --stdout "$stdout" --trace "$qualification_trace" \
+    --start-observation "$start_observation" \
     --exit-status "$admission_status" --trusted-marker "$qualification_marker" \
     --output "$qualification_failure"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \

@@ -1381,6 +1381,58 @@ class CloudCIContractTests(unittest.TestCase):
             with self.subTest(relative=relative, old=old):
                 self.assert_mutation_rejected(relative, old, new)
 
+    def test_rejects_weakened_quadlet_start_execution_diagnostics(self) -> None:
+        trace = "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        start_runuser = "scripts/ci-cloud/rocky-start-runuser.py"
+        start_env = "scripts/ci-cloud/rocky-start-env.py"
+        start_systemctl = "scripts/ci-cloud/rocky-start-systemctl.py"
+        mutations = (
+            (
+                trace,
+                "/opt/secpal-control/libexec/rocky-start-runuser",
+                "/usr/sbin/runuser",
+            ),
+            (trace, '[[ "${BASH_LINENO[0]:-}" == 238 ]]', "[[ true ]]"),
+            (
+                start_runuser,
+                'REAL_RUNUSER = Path("/usr/sbin/runuser")',
+                'REAL_RUNUSER = Path("runuser")',
+            ),
+            (
+                start_runuser,
+                'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")',
+                'TRUSTED_ENV = Path("/usr/bin/env")',
+            ),
+            (
+                start_env,
+                'REAL_ENV = Path("/usr/bin/env")',
+                'REAL_ENV = Path("env")',
+            ),
+            (
+                start_systemctl,
+                'REAL_SYSTEMCTL = Path("/usr/bin/systemctl")',
+                'REAL_SYSTEMCTL = Path("systemctl")',
+            ),
+            (start_runuser, "#!/usr/bin/python3", "#!/usr/bin/env python3"),
+            (start_env, "#!/usr/bin/python3", "#!/usr/bin/env python3"),
+            (start_systemctl, "#!/usr/bin/python3", "#!/usr/bin/env python3"),
+            (start_runuser, "MAX_PROTOCOL_BYTES = 2_048", "MAX_PROTOCOL_BYTES = 65_536"),
+            (start_env, "MAX_PROTOCOL_BYTES = 2_048", "MAX_PROTOCOL_BYTES = 65_536"),
+            (start_systemctl, "MAX_PROPERTY_BYTES = 1_024", "MAX_PROPERTY_BYTES = 65_536"),
+            (start_runuser, "check=False,", "check=False,\n                shell=True,"),
+            (runner, '6>"$start_observation"', '7>"$start_observation"'),
+            (
+                classifier,
+                "validate_admitted_quadlet_start_diagnostic",
+                "accept_unchecked_quadlet_start_diagnostic",
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
     def test_preflight_prunes_generated_opentofu_cache(self) -> None:
         preflight = (ROOT / "scripts" / "preflight.sh").read_text(encoding="utf-8")
         self.assertEqual(
@@ -1414,6 +1466,9 @@ class CloudCIContractTests(unittest.TestCase):
             "infra/ci-cloud/gcp-rocky/versions.tf",
             "scripts/ci-cloud/gcp-rocky-janitor.py",
             "scripts/ci-cloud/rocky-control.py",
+            "scripts/ci-cloud/rocky-start-runuser.py",
+            "scripts/ci-cloud/rocky-start-env.py",
+            "scripts/ci-cloud/rocky-start-systemctl.py",
             "tests/ci-cloud-gcp-rocky-janitor.py",
             "tests/ci-cloud-rocky-control.py",
             "tests/ci-cloud-rocky-target-diagnostics.py",

@@ -35,6 +35,9 @@ TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
 OBSERVER = ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
 RELOAD_RUNUSER = ROOT / "scripts/ci-cloud/rocky-reload-runuser.py"
 RELOAD_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-reload-systemctl.py"
+START_RUNUSER = ROOT / "scripts/ci-cloud/rocky-start-runuser.py"
+START_ENV = ROOT / "scripts/ci-cloud/rocky-start-env.py"
+START_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-start-systemctl.py"
 
 
 class RetainedBytesIO(io.BytesIO):
@@ -349,6 +352,156 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 self.assertEqual((operation, "command-failed"), self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}"))
         for line in (250, 252, 253):
             self.assertNotEqual("qualify-selinux-storage-fcontext-add", self.classifier.operation_for_line(line))
+
+    def test_old_start_boundary_collapses_independent_process_failures(self) -> None:
+        executable_failures = {
+            self.classifier.classify_failure(
+                b"", b"SECPAL_TARGET_ERR_V2:126:51,238\n", 126,
+                target_bound=True, line_rules=self.classifier.LINE_RULES,
+            )
+            for _producer in ("runuser", "env", "systemctl")
+        }
+        completed_client_failures = {
+            self.classifier.classify_failure(
+                b"", b"SECPAL_TARGET_ERR_V2:1:51,238\n", 1,
+                target_bound=True, line_rules=self.classifier.LINE_RULES,
+            )
+            for _producer in ("manager-request", "service-exec-main-status-126")
+        }
+        self.assertEqual(
+            {("qualify-quadlet-start", "command-failed")}, executable_failures
+        )
+        self.assertEqual(
+            {("qualify-quadlet-start", "command-failed")},
+            completed_client_failures,
+        )
+
+    def test_start_observers_distinguish_real_exec_boundaries_and_job_status(
+        self,
+    ) -> None:
+        self.assertTrue(START_RUNUSER.is_file())
+        self.assertTrue(START_ENV.is_file())
+        self.assertTrue(START_SYSTEMCTL.is_file())
+        runuser = load_script(START_RUNUSER, "rocky_start_runuser")
+        env_helper = load_script(START_ENV, "rocky_start_env")
+        systemctl = load_script(START_SYSTEMCTL, "rocky_start_systemctl")
+        runtime = types.SimpleNamespace(
+            pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(Path.home())
+        )
+        unit = "secpal-host-qualification-abc123.service"
+        target_arguments = runuser.target_arguments(runtime, unit)
+        env_arguments = target_arguments[4:]
+        systemctl_arguments = ["--user", "start", unit]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def executable(name: str, body: str) -> Path:
+                path = root / name
+                path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+                path.chmod(0o700)
+                return path
+
+            cannot_execute = root / "cannot-execute"
+            cannot_execute.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            cannot_execute.chmod(0o600)
+            fake_runuser = executable(
+                "runuser",
+                'while [ "$1" != -- ]; do shift; done; shift; exec "$@"',
+            )
+            runuser_rejects = executable("runuser-rejects", "exit 1")
+            env_succeeds = Path("/usr/bin/env")
+            client_fails = executable(
+                "systemctl-request-fails",
+                'case " $* " in *" --property=Result "*) exit 1;; *) exit 1;; esac',
+            )
+            service_exits_126 = executable(
+                "systemctl-service-fails",
+                'case " $* " in\n'
+                '  *" --property=Result "*)\n'
+                "    printf '%s\\n' 'Result=exit-code' 'ExecMainCode=1' "
+                "'ExecMainStatus=126'; exit 0;;\n"
+                '  *) exit 1;;\n'
+                "esac",
+            )
+            client_succeeds = executable("systemctl-success", "exit 0")
+
+            status, facts = runuser.execute_start(
+                target_arguments,
+                runtime=runtime,
+                runuser_path=cannot_execute,
+                env_helper_path=START_ENV,
+            )
+            self.assertEqual(126, status)
+            self.assertEqual("runuser-exec-failed", facts["stage"])
+
+            status, facts = runuser.execute_start(
+                target_arguments,
+                runtime=runtime,
+                runuser_path=runuser_rejects,
+                env_helper_path=START_ENV,
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("runuser-invocation-failed", facts["stage"])
+
+            status, records = env_helper.execute_env(
+                env_arguments,
+                runtime=runtime,
+                env_path=cannot_execute,
+                systemctl_helper_path=START_SYSTEMCTL,
+            )
+            self.assertEqual(126, status)
+            self.assertEqual(("env-entered", "env-exec-failed"), records)
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=cannot_execute,
+            )
+            self.assertEqual(126, status)
+            self.assertEqual("systemctl-exec-failed", facts["stage"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=client_fails,
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("systemctl-request-failed", facts["stage"])
+            self.assertIsNone(facts["service_result"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=service_exits_126,
+            )
+            self.assertEqual(1, status)
+            self.assertEqual("service-job-failed", facts["stage"])
+            self.assertEqual("exit-code", facts["service_result"])
+            self.assertEqual(1, facts["exec_main_code"])
+            self.assertEqual(126, facts["exec_main_status"])
+
+            status, facts = systemctl.execute_systemctl(
+                systemctl_arguments,
+                runtime=runtime,
+                systemctl_path=client_succeeds,
+            )
+            self.assertEqual(0, status)
+            self.assertEqual("success", facts["stage"])
+
+            with open(os.devnull, "w", encoding="ascii") as devnull, mock.patch.object(
+                env_helper.sys, "stderr", devnull
+            ):
+                status, records = env_helper.execute_env(
+                    env_arguments,
+                    runtime=runtime,
+                    env_path=env_succeeds,
+                    systemctl_helper_path=cannot_execute,
+                )
+            self.assertEqual(126, status)
+            self.assertEqual(("env-entered",), records)
+
+            self.assertTrue(fake_runuser.is_file())
 
     def run_traced_bash(
         self, script: str
@@ -1575,6 +1728,56 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 )
                 self.assertEqual((operation, reason), result)
                 observed.add(operation)
+        start_cases = (
+            (
+                {
+                    "schema_version": 1, "stage": "runuser-exec-failed",
+                    "runuser_status": None, "systemctl_client_status": None,
+                    "service_result": None, "exec_main_code": None,
+                    "exec_main_status": None,
+                },
+                126, "qualify-quadlet-start-runuser", "exec-failed",
+            ),
+            (
+                {
+                    "schema_version": 1, "stage": "env-exec-failed",
+                    "runuser_status": 126, "systemctl_client_status": None,
+                    "service_result": None, "exec_main_code": None,
+                    "exec_main_status": None,
+                },
+                126, "qualify-quadlet-start-env", "exec-failed",
+            ),
+            (
+                {
+                    "schema_version": 1, "stage": "systemctl-request-failed",
+                    "runuser_status": 1, "systemctl_client_status": 1,
+                    "service_result": None, "exec_main_code": None,
+                    "exec_main_status": None,
+                },
+                1, "qualify-quadlet-start-systemctl", "request-failed",
+            ),
+            (
+                {
+                    "schema_version": 1, "stage": "service-job-failed",
+                    "runuser_status": 1, "systemctl_client_status": 1,
+                    "service_result": "exit-code", "exec_main_code": 1,
+                    "exec_main_status": 126,
+                },
+                1, "qualify-quadlet-start-service-job", "job-failed",
+            ),
+        )
+        for observation, status, operation, reason in start_cases:
+            with self.subTest(operation=operation):
+                actual_operation, actual_reason, diagnostic = (
+                    self.classifier.admit_quadlet_start_observation(
+                        observation, status
+                    )
+                )
+                self.assertEqual((operation, reason), (actual_operation, actual_reason))
+                self.classifier.validate_admitted_quadlet_start_diagnostic(
+                    diagnostic, operation, reason, status
+                )
+                observed.add(operation)
         self.assertEqual(self.classifier.OPERATIONS - {"qualification-harness"}, observed)
 
     def test_unknown_ambiguous_and_unbound_failures_are_never_guessed(self) -> None:
@@ -1892,7 +2095,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             dict(document, operation="arbitrary-command"),
             dict(document, reason="some-error-text"),
             dict(document, qualification_run_id="0"),
-            dict(document, diagnostic_input_bytes=135_425),
+            dict(document, diagnostic_input_bytes=137_473),
         ):
             self.assertTrue(list(validator.iter_errors(mutation)))
         historical_semanage_document = dict(
@@ -2003,6 +2206,67 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 subprocess.run(command, check=False, capture_output=True).returncode,
             )
 
+    def test_trusted_validator_recomputes_quadlet_start_classification(self) -> None:
+        operation, reason, diagnostic = (
+            self.classifier.admit_quadlet_start_observation(
+                {
+                    "schema_version": 1,
+                    "stage": "service-job-failed",
+                    "runuser_status": 1,
+                    "systemctl_client_status": 1,
+                    "service_result": "exit-code",
+                    "exec_main_code": 1,
+                    "exec_main_status": 126,
+                },
+                1,
+            )
+        )
+        valid_diagnostic = dict(diagnostic)
+        document = {
+            "schema_version": 1,
+            "phase": "target-qualification",
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "c" * 40,
+            "qualification_run_id": "12345",
+            "qualification_run_attempt": "1",
+            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
+            "operation": operation,
+            "reason": reason,
+            "exit_status": 1,
+            "diagnostic_input_sha256": "b" * 64,
+            "diagnostic_input_bytes": 100,
+            "quadlet_start_diagnostic": diagnostic,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "failure.json"
+            command = [
+                CONTROL,
+                "validate-target-qualification-failure",
+                path,
+                "--target-sha",
+                self.classifier.EXPECTED_TARGET_SHA,
+                "--control-sha",
+                "c" * 40,
+                "--run-id",
+                "12345",
+                "--run-attempt",
+                "1",
+            ]
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+            document["quadlet_start_diagnostic"]["service_result"] = "success"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
+            document["quadlet_start_diagnostic"] = valid_diagnostic
+            document["operation"] = "qualify-quadlet-start-systemctl"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertNotEqual(
+                0, subprocess.run(command, check=False, capture_output=True).returncode
+            )
     def test_trusted_validator_recomputes_daemon_reload_classification(self) -> None:
         observation = {
             "schema_version": 1,

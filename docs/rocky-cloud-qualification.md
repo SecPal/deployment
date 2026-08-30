@@ -111,6 +111,36 @@ failures remain `qualification-harness/unclassified-target-failure`. The
 transport retains only the operation, closed reason, exit status, run bindings,
 and bounded diagnostic-input hash and length—not target stdout or stderr.
 
+For the immutable line-238 Quadlet start, trusted control closes the formerly
+opaque `runuser -> env -> systemctl --user start` boundary without modifying
+the target harness. The trace redirects only that exact call through
+root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
+steps use root-owned absolute `/usr/bin/env` and `/usr/bin/systemctl` helpers.
+The root helper writes one at-most-2,048-byte closed JSON observation through a
+pre-opened root-owned mode-0600 descriptor. A helper precondition or
+representation failure falls back to the original `runuser` call, so
+diagnostic code cannot replace the operation it observes.
+
+The admitted start operations distinguish `runuser` exec and invocation,
+`env` exec and command exec, `systemctl` exec and user-manager request, and a
+service job failure. Facts are limited to the outer `runuser` status, the
+`systemctl` client status and, only after a nonzero client result and a
+successful bounded `systemctl show`, `Result`, `ExecMainCode`, and
+`ExecMainStatus`. Service `ExecMainStatus` is never represented as an
+executable or client status. Missing, malformed, oversized, or contradictory
+observations retain the target status as
+`qualify-quadlet-start/diagnostic-unavailable`; no stdout, stderr, environment,
+or journal text enters evidence.
+
+The destroyed #118 guest retained only outer target status 126 at line 238.
+That proves neither a service `ExecMainStatus` nor which process produced 126.
+Later native ARM64 and GCP controls passed, and deterministic real-process
+probes cover each reachable producer without reproducing a current functional
+defect. Because the original guest retained none of the new adjacent facts,
+its machine-local cause is `HISTORICAL_INSTANCE_ROOT_CAUSE_UNRECOVERABLE`, not
+a presumed transient failure. A future occurrence identifies the remediable
+owner in one bounded failure artifact.
+
 For the one immutable `qualify-selinux-storage-fcontext-add` call site (line
 250), trusted control recognizes only the Rocky 10.2 `semanage` CLI's exact
 single-line `ValueError` grammar. It publishes the smallest actionable closed

@@ -23,6 +23,7 @@ MAX_TRACE_BYTES = 4_096
 MAX_ARTIFACT_BYTES = 8_192
 MAX_CAPTURE_FILE_BYTES = 65_536
 MAX_ADJACENCY_BYTES = 8_192
+MAX_START_OBSERVATION_BYTES = 2_048
 MAX_TRACE_FRAMES = 8
 MAX_TRACE_LINE = 9_999
 
@@ -43,6 +44,10 @@ OPERATIONS = frozenset(
         "qualify-quadlet-authority",
         "qualify-quadlet-daemon-reload",
         "qualify-quadlet-start",
+        "qualify-quadlet-start-runuser",
+        "qualify-quadlet-start-env",
+        "qualify-quadlet-start-systemctl",
+        "qualify-quadlet-start-service-job",
         "qualify-quadlet-active-state",
         "qualify-selinux-storage",
         "qualify-selinux-storage-directory-create",
@@ -68,6 +73,12 @@ REASONS = frozenset(
         "cleanup-failed",
         "timeout",
         "unclassified-target-failure",
+        "exec-failed",
+        "invocation-failed",
+        "command-exec-failed",
+        "request-failed",
+        "job-failed",
+        "diagnostic-unavailable",
         "semanage-store-access-failed",
         "semanage-transaction-begin-failed",
         "semanage-fcontext-equivalency-conflict",
@@ -274,6 +285,67 @@ CLIENT_RELOAD_ERRORS = frozenset(
         "transport-unavailable",
         "other-admitted-bus-error",
         "unavailable",
+    }
+)
+
+START_OBSERVATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "stage",
+        "runuser_status",
+        "systemctl_client_status",
+        "service_result",
+        "exec_main_code",
+        "exec_main_status",
+    }
+)
+START_STAGES = frozenset(
+    {
+        "runuser-exec-failed",
+        "runuser-invocation-failed",
+        "env-exec-failed",
+        "env-command-exec-failed",
+        "systemctl-exec-failed",
+        "systemctl-request-failed",
+        "service-job-failed",
+        "diagnostic-unavailable",
+        "success",
+    }
+)
+START_STAGE_DECISIONS = {
+    "runuser-exec-failed": ("qualify-quadlet-start-runuser", "exec-failed"),
+    "runuser-invocation-failed": (
+        "qualify-quadlet-start-runuser",
+        "invocation-failed",
+    ),
+    "env-exec-failed": ("qualify-quadlet-start-env", "exec-failed"),
+    "env-command-exec-failed": (
+        "qualify-quadlet-start-env",
+        "command-exec-failed",
+    ),
+    "systemctl-exec-failed": (
+        "qualify-quadlet-start-systemctl",
+        "exec-failed",
+    ),
+    "systemctl-request-failed": (
+        "qualify-quadlet-start-systemctl",
+        "request-failed",
+    ),
+    "service-job-failed": ("qualify-quadlet-start-service-job", "job-failed"),
+}
+SERVICE_RESULTS = frozenset(
+    {
+        "success",
+        "resources",
+        "protocol",
+        "timeout",
+        "exit-code",
+        "signal",
+        "core-dump",
+        "watchdog",
+        "start-limit-hit",
+        "oom-kill",
+        "exec-condition",
     }
 )
 
@@ -501,6 +573,135 @@ def unavailable_daemon_reload_adjacency() -> dict[str, object]:
         "selinux_avc": None,
         "selinux_avc_ambiguous": True,
     }
+
+
+def unavailable_quadlet_start_diagnostic() -> dict[str, object]:
+    return {
+        "classification": "diagnostic-unavailable",
+        "observation_complete": False,
+        "runuser_status": None,
+        "systemctl_client_status": None,
+        "service_result": None,
+        "exec_main_code": None,
+        "exec_main_status": None,
+    }
+
+
+def admit_quadlet_start_observation(
+    document: object, failure_status: int
+) -> tuple[str, str, dict[str, object]]:
+    unavailable = unavailable_quadlet_start_diagnostic()
+    fallback = ("qualify-quadlet-start", "diagnostic-unavailable", unavailable)
+    if not isinstance(document, dict) or set(document) != START_OBSERVATION_KEYS:
+        return fallback
+    if document.get("schema_version") != 1 or document.get("stage") not in START_STAGES:
+        return fallback
+    stage = str(document["stage"])
+    runuser_status = document.get("runuser_status")
+    client_status = document.get("systemctl_client_status")
+    service_result = document.get("service_result")
+    exec_main_code = document.get("exec_main_code")
+    exec_main_status = document.get("exec_main_status")
+    if runuser_status is not None and (
+        type(runuser_status) is not int or not 0 <= runuser_status <= 255
+    ):
+        return fallback
+    if client_status is not None and (
+        type(client_status) is not int or not 0 <= client_status <= 255
+    ):
+        return fallback
+    if service_result is not None and service_result not in SERVICE_RESULTS:
+        return fallback
+    if exec_main_code is not None and (
+        type(exec_main_code) is not int or not 0 <= exec_main_code <= 6
+    ):
+        return fallback
+    if exec_main_status is not None and (
+        type(exec_main_status) is not int or not 0 <= exec_main_status <= 255
+    ):
+        return fallback
+    empty_service = (
+        service_result is None and exec_main_code is None and exec_main_status is None
+    )
+    if stage == "runuser-exec-failed":
+        consistent = (
+            failure_status == 126
+            and runuser_status is None
+            and client_status is None
+            and empty_service
+        )
+    elif stage in {
+        "runuser-invocation-failed",
+        "env-exec-failed",
+        "env-command-exec-failed",
+    }:
+        consistent = (
+            runuser_status == failure_status
+            and client_status is None
+            and empty_service
+        )
+    elif stage == "systemctl-exec-failed":
+        consistent = (
+            runuser_status == failure_status
+            and failure_status == 126
+            and client_status is None
+            and empty_service
+        )
+    elif stage == "systemctl-request-failed":
+        consistent = (
+            runuser_status == failure_status
+            and client_status == failure_status
+            and failure_status != 0
+            and empty_service
+        )
+    elif stage == "service-job-failed":
+        consistent = (
+            runuser_status == failure_status
+            and client_status == failure_status
+            and failure_status != 0
+            and service_result in SERVICE_RESULTS - {"success"}
+            and exec_main_code is not None
+            and exec_main_status is not None
+        )
+    else:
+        consistent = False
+    if not consistent or stage not in START_STAGE_DECISIONS:
+        return fallback
+    operation, reason = START_STAGE_DECISIONS[stage]
+    return operation, reason, {
+        "classification": stage,
+        "observation_complete": True,
+        "runuser_status": runuser_status,
+        "systemctl_client_status": client_status,
+        "service_result": service_result,
+        "exec_main_code": exec_main_code,
+        "exec_main_status": exec_main_status,
+    }
+
+
+def validate_admitted_quadlet_start_diagnostic(
+    diagnostic: object, operation: str, reason: str, failure_status: int
+) -> None:
+    if not isinstance(diagnostic, dict):
+        raise ValueError("Quadlet start diagnostic is not closed")
+    raw = {"schema_version": 1, "stage": diagnostic.get("classification")}
+    for name in (
+        "runuser_status",
+        "systemctl_client_status",
+        "service_result",
+        "exec_main_code",
+        "exec_main_status",
+    ):
+        raw[name] = diagnostic.get(name)
+    expected_operation, expected_reason, expected = admit_quadlet_start_observation(
+        raw, failure_status
+    )
+    if (
+        diagnostic != expected
+        or operation != expected_operation
+        or reason != expected_reason
+    ):
+        raise ValueError("Quadlet start classification contradicts its facts")
 
 
 def _closed_boolean(document: dict[str, object], name: str) -> bool:
@@ -1258,6 +1459,7 @@ def main() -> int:
     parser.add_argument("--stdout", required=True, type=Path)
     parser.add_argument("--trace", required=True, type=Path)
     parser.add_argument("--reload-adjacency", type=Path)
+    parser.add_argument("--start-observation", type=Path)
     parser.add_argument("--exit-status", required=True, type=int)
     parser.add_argument("--trusted-marker", type=Path)
     parser.add_argument("--representation-invalid", action="store_true")
@@ -1291,6 +1493,21 @@ def main() -> int:
     )
     adjacency_bytes = b""
     adjacency: dict[str, object] | None = None
+    start_bytes = b""
+    start_diagnostic: dict[str, object] | None = None
+    if operation == "qualify-quadlet-start" and reason == "command-failed":
+        raw_start: object = None
+        if options.start_observation is not None and options.start_observation.exists():
+            try:
+                start_bytes = bounded_bytes(
+                    options.start_observation, MAX_START_OBSERVATION_BYTES
+                )
+                raw_start = json.loads(start_bytes)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                raw_start = None
+        operation, reason, start_diagnostic = admit_quadlet_start_observation(
+            raw_start, options.exit_status
+        )
     if operation == "qualify-quadlet-daemon-reload" and reason == "command-failed":
         raw_adjacency: object = None
         if options.reload_adjacency is not None and options.reload_adjacency.exists():
@@ -1327,17 +1544,19 @@ def main() -> int:
             (
                 b"semanage-fcontext-add-v1\0" + trace + b"\0" + reason.encode("ascii")
                 if operation == "qualify-selinux-storage-fcontext-add"
-                else stdout + b"\0" + trace + b"\0" + marker_bytes + b"\0" + adjacency_bytes
+                else stdout + b"\0" + trace + b"\0" + marker_bytes + b"\0" + adjacency_bytes + b"\0" + start_bytes
             )
         ).hexdigest(),
         "diagnostic_input_bytes": (
             len(trace) + len(reason)
             if operation == "qualify-selinux-storage-fcontext-add"
-            else len(stdout) + len(trace) + len(marker_bytes) + len(adjacency_bytes)
+            else len(stdout) + len(trace) + len(marker_bytes) + len(adjacency_bytes) + len(start_bytes)
         ),
     }
     if adjacency is not None:
         document["daemon_reload_adjacency"] = adjacency
+    if start_diagnostic is not None:
+        document["quadlet_start_diagnostic"] = start_diagnostic
     write_document(options.output, document)
     return 0
 

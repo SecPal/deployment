@@ -117,6 +117,9 @@ required_files=(
   scripts/ci-cloud/run-rocky-target-qualification.sh
   scripts/ci-cloud/classify-rocky-target-qualification-failure.py
   scripts/ci-cloud/rocky-target-qualification-trace.sh
+  scripts/ci-cloud/rocky-start-runuser.py
+  scripts/ci-cloud/rocky-start-env.py
+  scripts/ci-cloud/rocky-start-systemctl.py
   scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py
   scripts/ci-cloud/wait-github-artifact.sh
   scripts/ci-cloud/detach-gcp-vm-identity.sh
