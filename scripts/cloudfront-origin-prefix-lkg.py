@@ -20,6 +20,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import tempfile
@@ -39,7 +40,11 @@ LOCK_FILE = ".cloudfront-origin-prefix-lkg.lock"
 
 
 class ContractError(RuntimeError):
-    """A bounded failure that must not alter accepted state."""
+    """A definite pre-commit failure that leaves accepted state unchanged."""
+
+
+class CommitStateUncertain(RuntimeError):
+    """The rename committed, but directory durability was not confirmed."""
 
 
 def _closed_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -71,15 +76,17 @@ def _require_string(document: dict[str, Any], field: str) -> str:
 
 
 def _validate_provenance(sync_token: str, create_date: str, retrieved_at: str) -> None:
-    if not sync_token.isdecimal():
+    if re.fullmatch(r"[1-9][0-9]*", sync_token) is None:
         raise ContractError("source sync token is invalid")
+    if re.fullmatch(r"[0-9]{4}(?:-[0-9]{2}){5}", create_date) is None:
+        raise ContractError("source creation date is invalid")
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", retrieved_at) is None:
+        raise ContractError("retrieval timestamp is not canonical UTC")
     try:
         datetime.strptime(create_date, "%Y-%m-%d-%H-%M-%S")
-        parsed_retrieval = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
+        datetime.strptime(retrieved_at, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError as error:
         raise ContractError("source freshness metadata is invalid") from error
-    if parsed_retrieval.tzinfo != UTC:
-        raise ContractError("retrieval timestamp must be UTC")
 
 
 def _parse_network(value: Any, version: int) -> str:
@@ -102,18 +109,19 @@ def _select_prefixes(document: dict[str, Any], collection: str, key: str, versio
         raise ContractError(f"source collection {collection} is missing or invalid")
     selected: set[str] = set()
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != {
+        required = {
             key,
             "region",
             "service",
             "network_border_group",
-        }:
+        }
+        if not isinstance(entry, dict) or not required <= set(entry):
             raise ContractError(f"source {collection} entry has an invalid schema")
-        if not all(isinstance(entry[name], str) and entry[name] for name in entry):
+        if not all(isinstance(entry[name], str) and entry[name] for name in required):
             raise ContractError(f"source {collection} entry contains an invalid value")
+        prefix = _parse_network(entry[key], version)
         if entry["service"] != SERVICE:
             continue
-        prefix = _parse_network(entry[key], version)
         if prefix in selected:
             raise ContractError("source contains duplicate selected CIDRs")
         selected.add(prefix)
@@ -124,7 +132,8 @@ def _select_prefixes(document: dict[str, Any], collection: str, key: str, versio
 
 def build_candidate(source: dict[str, Any], *, retrieved_at: str) -> dict[str, Any]:
     """Normalize and admit an AWS document without filesystem or network I/O."""
-    if not isinstance(source, dict) or set(source) != {"syncToken", "createDate", "prefixes", "ipv6_prefixes"}:
+    required = {"syncToken", "createDate", "prefixes", "ipv6_prefixes"}
+    if not isinstance(source, dict) or not required <= set(source):
         raise ContractError("source document has an invalid schema")
     if not isinstance(retrieved_at, str) or not retrieved_at.endswith("Z"):
         raise ContractError("retrieval timestamp is invalid")
@@ -262,35 +271,76 @@ def _state_lock(directory: Path) -> Iterator[None]:
     except OSError as error:
         raise ContractError("state lock is unsafe or unavailable") from error
     try:
-        os.fchmod(descriptor, 0o600)
-        _state_file(directory, LOCK_FILE, required=True)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        try:
+            opened = os.fstat(descriptor)
+            linked = (directory / LOCK_FILE).lstat()
+        except OSError as error:
+            raise ContractError("state lock is unsafe or unavailable") from error
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino)
+        ):
+            raise ContractError("state lock is unsafe")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except OSError as error:
+            raise ContractError("state lock is unavailable") from error
         yield
     finally:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError:
+            # Closing a lock descriptor cannot change an already published
+            # document and must not obscure its explicit commit outcome.
+            pass
 
 
 def _atomic_write(directory: Path, name: str, content: bytes) -> None:
     if len(content) > MAX_STATE_BYTES:
         raise ContractError("state document exceeds the maximum size")
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{name}.", dir=directory)
+    temporary: str | None = None
+    descriptor: int | None = None
+    committed = False
     try:
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{name}.", dir=directory)
         os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "wb") as output:
+        output = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with output:
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, directory / name)
+        committed = True
         directory_descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory_descriptor)
         finally:
             os.close(directory_descriptor)
     except OSError as error:
+        if committed:
+            raise CommitStateUncertain(
+                f"COMMITTED_DURABILITY_UNCONFIRMED:{name}:authoritative readback required"
+            ) from error
         raise ContractError("atomic state publication failed") from error
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if temporary is not None and not committed:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # The target was not replaced. Retaining a private temporary file
+                # is safer than masking the definite pre-commit publication result.
+                pass
 
 
 def _read_document(directory: Path, name: str, *, required: bool) -> dict[str, Any] | None:
@@ -373,6 +423,9 @@ def main() -> int:
             _print_document(accepted)
         else:
             accept_candidate(arguments.state_dir, arguments.candidate_sha256)
+    except CommitStateUncertain as error:
+        print(str(error), file=sys.stderr)
+        return 2
     except ContractError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

@@ -31,9 +31,19 @@ AWS observation → source validation → service normalization → candidate
 Consumers read and independently validate the candidate with `candidate`, then
 acknowledge exactly its `candidate_sha256` using `accept`. A replacement candidate
 therefore invalidates an acknowledgement for an older digest. Only `accept`
-atomically publishes the accepted LKG. Failed fetches, parsing, validation, and
-acceptance leave an existing accepted LKG untouched; when none exists they do
-not manufacture an empty or permissive allowlist.
+atomically publishes the accepted LKG. Every fetch, parsing, validation, or
+acceptance failure before the publication commit point leaves an existing
+accepted LKG untouched; when none exists such a failure does not manufacture an
+empty or permissive allowlist.
+
+Atomic rename is the publication commit point. Every failure before that rename
+returns exit status `1` and leaves the previous target unchanged. Successful
+rename followed by successful directory synchronization returns `0`. If the
+rename succeeds but directory durability confirmation fails, the target has
+committed in the running system but crash durability is unconfirmed: the command
+returns `2`, emits `COMMITTED_DURABILITY_UNCONFIRMED`, and requires authoritative
+readback with `candidate` or `accepted`. This outcome is never reported as a
+definite pre-commit failure.
 
 ```bash
 scripts/cloudfront-origin-prefix-lkg.py --state-dir /private/runtime/state fetch
