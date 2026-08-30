@@ -9,7 +9,9 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 
@@ -64,6 +66,23 @@ OBSOLETE_CURRENT_SUPPORT = {
     "Valkey future topology": re.compile(
         r"\bValkey never replaces PostgreSQL as the source of truth\b", re.I
     ),
+    "Valkey current requirement": re.compile(
+        r"\b(?:Valkey|Redis)\s+(?:is|are)\s+(?:required|current)\b", re.I
+    ),
+    "Redis or Valkey current state backing": re.compile(
+        r"\b(?:Valkey|Redis)\s+(?:backs?|provides?)\s+"
+        r"(?:the\s+)?(?:current\s+)?(?:cache|queues?|sessions?)(?:\s+and\s+"
+        r"(?:cache|queues?|sessions?))?\b",
+        re.I,
+    ),
+    "Caddy production edge": re.compile(
+        r"\bCaddy\s+is\s+(?:the\s+)?production(?:\s+public)?\s+edge\b", re.I
+    ),
+    "D.1 current production-host contract": re.compile(
+        r"\bD\.1\s+(?:now\s+)?(?:defines|is)\s+(?:the\s+)?"
+        r"(?:current\s+)?production[- ]host contract\b",
+        re.I,
+    ),
     "old implementation status": re.compile(
         r"\bD\.1 host contract,\s+D\.1a integration-runtime parity, and D\.2"
         r"[^.]{0,100}\bare implemented\b",
@@ -85,41 +104,159 @@ def read(relative: Path) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def discover_markdown_documents(root: Path) -> set[Path]:
+    result = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "*.md",
+        ],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    return {
+        Path(value.decode("utf-8"))
+        for value in result.stdout.split(b"\0")
+        if value
+    }
+
+
+def obsolete_current_support_violations(root: Path) -> list[str]:
+    violations = []
+    for path, authority in DOCUMENT_AUTHORITY.items():
+        if authority not in {Authority.CURRENT_GUIDANCE, Authority.CURRENT_TECHNICAL}:
+            continue
+        content = (root / path).read_text(encoding="utf-8")
+        for claim, pattern in OBSOLETE_CURRENT_SUPPORT.items():
+            if match := pattern.search(content):
+                line = content.count("\n", 0, match.start()) + 1
+                violations.append(f"{path}:{line}: {claim}")
+    return violations
+
+
 class DocumentationCurrentGuidance(unittest.TestCase):
+    def authority_fixture(
+        self, mutations: dict[Path, tuple[str, str]]
+    ) -> tempfile.TemporaryDirectory[str]:
+        temporary = tempfile.TemporaryDirectory(prefix="secpal-documentation-authority.")
+        root = Path(temporary.name)
+        for path in DOCUMENT_AUTHORITY:
+            destination = root / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / path, destination)
+        for path, (old, new) in mutations.items():
+            destination = root / path
+            content = destination.read_text(encoding="utf-8")
+            self.assertIn(old, content)
+            destination.write_text(content.replace(old, new, 1), encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        return temporary
+
     def test_classifier_covers_every_repository_markdown_document(self) -> None:
-        result = subprocess.run(
-            [
-                "git",
-                "ls-files",
-                "--cached",
-                "--others",
-                "--exclude-standard",
-                "-z",
-                "--",
-                "*.md",
-            ],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-        )
-        discovered = {
-            Path(value.decode("utf-8"))
-            for value in result.stdout.split(b"\0")
-            if value
-        }
+        discovered = discover_markdown_documents(ROOT)
         self.assertEqual(discovered, set(DOCUMENT_AUTHORITY))
 
     def test_obsolete_support_wording_is_absent_from_current_guidance(self) -> None:
-        violations = []
-        for path, authority in DOCUMENT_AUTHORITY.items():
-            if authority is not Authority.CURRENT_GUIDANCE:
-                continue
-            content = read(path)
-            for claim, pattern in OBSOLETE_CURRENT_SUPPORT.items():
-                if match := pattern.search(content):
-                    line = content.count("\n", 0, match.start()) + 1
-                    violations.append(f"{path}:{line}: {claim}")
-        self.assertEqual(violations, [])
+        self.assertEqual(obsolete_current_support_violations(ROOT), [])
+
+    def test_current_authority_claim_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "Compose execution",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\nRun docker compose for the current deployment.",
+                ),
+            ),
+            (
+                "pre-18 production baseline",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\nPostgreSQL 16 is the production baseline.",
+                ),
+            ),
+            (
+                "production PostgreSQL container",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\nRun the production PostgreSQL container for the database.",
+                ),
+            ),
+            (
+                "Valkey current integration",
+                Path("docs/quadlet-integration.md"),
+                (
+                    "This is the active disposable integration runtime delivered by",
+                    "Valkey is required for the current integration.\n\n"
+                    "This is the active disposable integration runtime delivered by",
+                ),
+            ),
+            (
+                "Redis current integration",
+                Path("docs/quadlet-integration.md"),
+                (
+                    "This is the active disposable integration runtime delivered by",
+                    "Redis backs queues and sessions in the current integration.\n\n"
+                    "This is the active disposable integration runtime delivered by",
+                ),
+            ),
+            (
+                "Caddy production edge",
+                Path("docs/architecture/scope.md"),
+                (
+                    "This document is the deployment documentation index and ownership map.",
+                    "Caddy is the production edge for current deployments.\n\n"
+                    "This document is the deployment documentation index and ownership map.",
+                ),
+            ),
+            (
+                "D.1 current production host",
+                Path("docs/api-image-consumption.md"),
+                (
+                    "At Phase C completion, Phase D had not started. D.1 subsequently defined an\n"
+                    "earlier production-host contract that is now historical.",
+                    "D.1 is the current production-host contract",
+                ),
+            ),
+        )
+        for name, path, mutation in mutations:
+            with self.subTest(name=name), self.authority_fixture({path: mutation}) as temporary:
+                root = Path(temporary)
+                self.assertEqual(discover_markdown_documents(root), set(DOCUMENT_AUTHORITY))
+                self.assertNotEqual(obsolete_current_support_violations(root), [])
+
+    def test_historical_and_current_explanatory_controls_remain_permitted(self) -> None:
+        mutations = {
+            Path("docs/architecture/production-state.md"): (
+                "This document describes the historical D.2 persistence and product-role contracts.",
+                "Historical evidence records that Valkey is required for the current integration.\n\n"
+                "This document describes the historical D.2 persistence and product-role contracts.",
+            ),
+            Path("docs/architecture/decisions/production-edge.md"): (
+                "This ADR was accepted for the former single-host production reference.",
+                "The superseded record states Caddy is the production edge.\n\n"
+                "This ADR was accepted for the former single-host production reference.",
+            ),
+            Path("docs/architecture/production-host.md"): (
+                "This document defines the provider-neutral admission contract",
+                "D.1 previously defined the production-host contract.\n\n"
+                "This document defines the provider-neutral admission contract",
+            ),
+        }
+        with self.authority_fixture(mutations) as temporary:
+            root = Path(temporary)
+            self.assertEqual(obsolete_current_support_violations(root), [])
+        self.assertEqual(obsolete_current_support_violations(ROOT), [])
 
     def test_current_guidance_names_the_complete_target_vocabulary(self) -> None:
         current = "\n".join(

@@ -131,8 +131,11 @@ merge commit `4fc2796409b7c37a541f515ccf29236f143fc132` passed post-merge Local
 Integration run `31264562902`; the final dual-image evidence is recorded in
 [`frontend-image-consumption.md`](frontend-image-consumption.md).
 
-At Phase C completion, Phase D had not started. D.1 now defines the production
-host contract and the active runner provides only disposable Podman/Quadlet
-integration parity. No production orchestration, cloud resource, DNS, TLS, production
-secret, persistent production data, backup, restore, or managed-hosting
-automation is implemented here.
+At Phase C completion, Phase D had not started. D.1 subsequently defined an
+earlier production-host contract that is now historical. The current Rocky Linux
+10.2+/SELinux production-host replacement is owned by
+[#80](https://github.com/SecPal/deployment/issues/80), whose implementation is
+not claimed complete here. The active runner provides only disposable
+Podman/Quadlet integration parity. No production orchestration, cloud resource,
+DNS, TLS, production secret, persistent production data, backup, restore, or
+managed-hosting automation is implemented here.
