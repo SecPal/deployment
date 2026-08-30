@@ -19,7 +19,7 @@ from typing import FrozenSet
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 DIAGNOSTIC = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
-MAX_IDENTITY_BYTES = 512
+MAX_IDENTITY_BYTES = 4096
 
 
 class ContractError(ValueError):
@@ -93,6 +93,7 @@ class ExecutionAuthority:
     source_revision: str
     target: ResourceTarget
     operations: FrozenSet[Operation]
+    parameters_sha256: str
     credential_mechanism: str
 
     def __post_init__(self) -> None:
@@ -104,6 +105,8 @@ class ExecutionAuthority:
             _identity(label, value)
         if SHA1.fullmatch(self.source_revision) is None:
             raise ContractError("authority requires one lowercase full source SHA")
+        if SHA256.fullmatch(self.parameters_sha256) is None:
+            raise ContractError("authority requires one SHA-256 parameter binding")
         if not isinstance(self.target, ResourceTarget):
             raise ContractError("authority requires one exact target")
         if not isinstance(self.operations, frozenset) or not self.operations or any(
@@ -192,6 +195,7 @@ def admit_request(
         request.adapter_id != authority.adapter_id
         or request.source_revision != authority.source_revision
         or request.target != authority.target
+        or request.parameters_sha256 != authority.parameters_sha256
     ):
         raise ContractError("request does not match the exact authorized target")
     if request.operation not in authority.operations:

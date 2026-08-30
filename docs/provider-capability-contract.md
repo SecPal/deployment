@@ -58,17 +58,17 @@ the generic contract.
 
 `ExecutionAuthority` is a separate runtime input. It binds one authorization
 identity, adapter, exact public source revision, provider context, exact target,
-allowed operation set, and credential mechanism. The mechanism is a non-secret
-description such as an OIDC workload-identity path; the credential, token,
-private key, account secret, and payment authority remain outside Git and outside
-this contract. Possession of adapter code or a valid request does not grant
-execution authority.
+allowed operation set, adapter-specific parameter digest, and credential
+mechanism. The mechanism is a non-secret description such as an OIDC
+workload-identity path; the credential, token, private key, account secret, and
+payment authority remain outside Git and outside this contract. Possession of
+adapter code or a valid request does not grant execution authority.
 
 Request admission requires exact equality between the request and authority for
-adapter, source revision, provider context, and target. It has no lookup path for
-customer, fleet, preferred provider, SKU, production target, or placement policy.
-The caller must select and authorize those technical inputs before invoking an
-adapter.
+adapter, source revision, provider context, target, and adapter-specific parameter
+digest. It has no lookup path for customer, fleet, preferred provider, SKU,
+production target, or placement policy. The caller must select and authorize
+those technical inputs before invoking an adapter.
 
 `CapabilityResult` is correlated back to the exact request. It reports only a
 closed outcome, provider-native read-back where applicable, exact cleanup state,
@@ -82,6 +82,11 @@ provider-native scope, such as an account/project plus region or zone. Provider
 identifiers are structurally bounded but open-ended: there is no provider
 registry and reviewed GCP, DigitalOcean, Hetzner, AWS, or future adapters do not
 require a central enum.
+
+Provider-native identities remain opaque and structurally bounded to 4,096 UTF-8
+bytes. This single generic bound admits currently documented AWS identity lengths
+of up to 2,048 ASCII bytes while leaving headroom for other providers. It does not
+parse, classify, or otherwise make AWS identifiers an architectural type.
 
 `ResourceTarget.requested_key` identifies the one desired object within that
 scope. It is sufficient to bound `create`, where no provider resource identity
@@ -175,6 +180,18 @@ Private managed orchestration may choose a provider and concrete parameters,
 obtain separate authority, and invoke a reviewed public adapter. It consumes this
 technical boundary; it does not duplicate provider mechanics or make its policy
 available to the adapter.
+
+## Provider representation compatibility
+
+`AWS_COMPATIBLE_WITHOUT_CORE_CONTRACT_CHANGE: YES`
+
+`HETZNER_COMPATIBLE_WITHOUT_CORE_CONTRACT_CHANGE: YES`
+
+These statements cover representation and the common execution boundary only. A
+later adapter can supply either provider's opaque context and resource identity,
+then receive separate authority bound to its exact parameter digest. They do not
+implement AWS or Hetzner resources, select a provider, or change the separate
+CloudFront Viewer Edge, certificate, WAF, DNS, or firewall operation contracts.
 
 ## Simplification accounting
 

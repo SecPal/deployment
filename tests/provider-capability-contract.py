@@ -49,6 +49,7 @@ class ProviderCapabilityContractTests(unittest.TestCase):
             source_revision="a" * 40,
             target=cls.create_target,
             operations=frozenset(cls.contract.Operation),
+            parameters_sha256="b" * 64,
             credential_mechanism="oidc-workload-identity",
         )
 
@@ -182,6 +183,36 @@ class ProviderCapabilityContractTests(unittest.TestCase):
                 self.authority_for(ambiguous.target),
                 frozenset(self.contract.Operation),
             )
+
+    def test_parameter_digest_mismatch_fails_closed(self) -> None:
+        request = replace(
+            self.request(self.contract.Operation.CREATE),
+            parameters_sha256="c" * 64,
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_request(
+                request,
+                self.authority_for(),
+                frozenset(self.contract.Operation),
+            )
+
+    def test_portable_provider_native_identity_shapes_are_admitted(self) -> None:
+        aws_prefix = "arn:aws:cloudformation:eu-central-1:123456789012:stack/"
+        aws_target = self.contract.ResourceTarget(
+            provider="aws",
+            scope="123456789012/eu-central-1",
+            requested_key="qualification-run-17",
+            provider_resource_id=aws_prefix + "a" * (2048 - len(aws_prefix)),
+        )
+        self.assertEqual(len(aws_target.provider_resource_id.encode("ascii")), 2048)
+
+        hetzner_target = self.contract.ResourceTarget(
+            provider="hetzner",
+            scope="project-42/fsn1",
+            requested_key="qualification-run-17",
+            provider_resource_id="987654321",
+        )
+        self.assertEqual(hetzner_target.provider_resource_id, "987654321")
 
     def test_unsupported_and_already_satisfied_are_explicit(self) -> None:
         rebuild = self.request(self.contract.Operation.REBUILD, self.existing_target)
