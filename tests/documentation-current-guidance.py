@@ -52,31 +52,6 @@ DOCUMENT_AUTHORITY = {
 OBSOLETE_CURRENT_SUPPORT = {
     "Compose execution": re.compile(r"\b(?:run|start|deploy with)\s+docker compose\b", re.I),
     "Valkey startup": re.compile(r"\b(?:run|start|deploy)\s+Valkey\b", re.I),
-    "production PostgreSQL container": re.compile(
-        r"\b(?:"
-        r"(?:run|start|deploy|use)\s+(?:PostgreSQL|Postgres)\s+as\s+"
-        r"(?:a\s+)?(?:SecPal\s+)?production(?:\s+database)?\s+container"
-        r"|(?:production|SecPal\s+production)\s+(?:PostgreSQL|Postgres)"
-        r"(?:\s+database)?\s+container"
-        r"|(?:PostgreSQL|Postgres)\s+(?:container|containerized)"
-        r"(?:\s+database)?\s+(?:for|as)\s+(?:a\s+)?(?:SecPal\s+)?production"
-        r"|(?:SecPal|current\s+deployments?)\s+(?:runs?|uses?|hosts?)\s+"
-        r"(?:a\s+)?containerized\s+(?:PostgreSQL|Postgres)(?:\s+database)?\s+"
-        r"(?:in|for)\s+production"
-        r")\b",
-        re.I,
-    ),
-    "pre-18 PostgreSQL baseline": re.compile(
-        r"\b(?:"
-        r"(?:PostgreSQL|Postgres)\s+(?:16|17)\s+is\s+the\s+"
-        r"(?:(?:current|production)\s+)?(?:SecPal\s+)?(?:database\s+)?"
-        r"(?:baseline|supported\s+baseline)"
-        r"|(?:the\s+)?(?:current|production)\s+(?:SecPal\s+)?"
-        r"(?:database\s+)?(?:baseline|supported\s+baseline)\s+is\s+"
-        r"(?:PostgreSQL|Postgres)\s+(?:16|17)"
-        r")\b",
-        re.I,
-    ),
     "Debian current admission": re.compile(
         r"\bSchema version 1 admits only Debian 13/trixie hosts\b", re.I
     ),
@@ -89,30 +64,6 @@ OBSOLETE_CURRENT_SUPPORT = {
     "Valkey future topology": re.compile(
         r"\bValkey never replaces PostgreSQL as the source of truth\b", re.I
     ),
-    "Valkey current requirement": re.compile(
-        r"\b(?:"
-        r"(?:Valkey|Redis)\s+(?:is|are)\s+(?:required|current|mandatory)"
-        r"|(?:current\s+)?(?:deployments?|integration|runtime)\s+require(?:s)?\s+"
-        r"(?:Valkey|Redis)"
-        r")\b",
-        re.I,
-    ),
-    "Redis or Valkey current state backing": re.compile(
-        r"\b(?:Valkey|Redis)\s+(?:"
-        r"(?:backs?|provides?)\s+(?:the\s+)?(?:current\s+)?"
-        r"(?:application\s+state|cache|queues?|sessions?)(?:\s+and\s+"
-        r"(?:the\s+)?(?:current\s+)?(?:application\s+state|cache|queues?|sessions?))?"
-        r"(?:\s+stores?)?"
-        r"|is\s+(?:the\s+)?(?:current\s+)?(?:backend|backing\s+store)\s+for\s+"
-        r"(?:the\s+)?(?:current\s+)?(?:application\s+state|cache|queues?|sessions?)"
-        r"(?:\s+and\s+(?:the\s+)?(?:current\s+)?"
-        r"(?:application\s+state|cache|queues?|sessions?))?(?:\s+stores?)?"
-        r")\b|\b(?:current\s+)?(?:application\s+state|cache|queues?|sessions?)"
-        r"(?:\s+and\s+(?:the\s+)?(?:current\s+)?"
-        r"(?:application\s+state|cache|queues?|sessions?))?\s+"
-        r"(?:uses?|use)\s+(?:Valkey|Redis)\s+as\s+(?:the|their)\s+backend\b",
-        re.I,
-    ),
     "Caddy production edge": re.compile(
         r"\b(?:"
         r"Caddy\s+(?:is|serves\s+as)\s+(?:the\s+)?(?:current\s+)?"
@@ -124,33 +75,167 @@ OBSOLETE_CURRENT_SUPPORT = {
         r")\b",
         re.I,
     ),
-    "D.1 current production-host contract": re.compile(
-        r"\b(?:"
-        r"D\.1\s+(?:now\s+)?(?:defines|is)\s+(?:the\s+)?"
-        r"(?:current\s+)?production[- ]host\s+"
-        r"(?:contract|specification|authority|baseline)"
-        r"|(?:the\s+)?current\s+production[- ]host\s+"
-        r"(?:contract|specification|authority|baseline)\s+is\s+"
-        r"(?:defined|owned)\s+by\s+D\.1"
-        r")\b",
-        re.I,
-    ),
-    "universal production-edge authority": re.compile(
-        r"(?:"
-        r"#89\s+owns\s+(?:all|every)\s+production[- ]edge\s+modes?"
-        r"|HAProxy\s+is\s+the\s+public\s+Viewer\s+Edge\s+for\s+"
-        r"(?:all|every)\s+deployments?"
-        r"|PROTECTED\s+deployments?\s+(?:terminate|route|handle)\s+"
-        r"public\s+Viewer\s+traffic\s+at\s+HAProxy"
-        r")",
-        re.I,
-    ),
     "old implementation status": re.compile(
         r"\bD\.1 host contract,\s+D\.1a integration-runtime parity, and D\.2"
         r"[^.]{0,100}\bare implemented\b",
         re.I | re.S,
     ),
 }
+
+TOKEN_CANONICAL = {
+    "#89": "issue89",
+    "backed": "back",
+    "backs": "back",
+    "defined": "define",
+    "defines": "define",
+    "deployments": "deployment",
+    "enters": "enter",
+    "exposes": "expose",
+    "handled": "handle",
+    "handles": "handle",
+    "hosts": "host",
+    "installations": "installation",
+    "modes": "mode",
+    "needed": "need",
+    "needs": "need",
+    "owns": "own",
+    "postgresql": "postgres",
+    "provided": "provide",
+    "provides": "provide",
+    "queues": "queue",
+    "required": "require",
+    "requires": "require",
+    "routed": "route",
+    "routes": "route",
+    "runs": "run",
+    "served": "serve",
+    "serves": "serve",
+    "sessions": "session",
+    "stores": "store",
+    "supported": "support",
+    "terminated": "terminate",
+    "terminates": "terminate",
+    "used": "use",
+    "uses": "use",
+}
+
+NEGATION_TOKENS = {"no", "not", "never", "neither", "without"}
+NON_CURRENT_ASSERTION_TOKENS = {
+    "forbidden",
+    "former",
+    "historical",
+    "rejected",
+    "removed",
+    "retired",
+    "superseded",
+}
+CURRENT_TOKENS = {"active", "current"}
+
+
+def normalized_clauses(content: str) -> list[tuple[int, frozenset[str]]]:
+    """Return sentence-sized, order-insensitive token sets with source offsets."""
+
+    prepared = re.sub(r"\bD\.1\b", "D_1", content, flags=re.I)
+    clauses = []
+    for match in re.finditer(r"[^.!?;]+", prepared):
+        raw_tokens = re.findall(r"d_1|#[0-9]+|[a-z0-9]+", match.group().casefold())
+        tokens = frozenset(
+            "d1" if token == "d_1" else TOKEN_CANONICAL.get(token, token)
+            for token in raw_tokens
+        )
+        if tokens:
+            clauses.append((match.start(), tokens))
+    return clauses
+
+
+def is_positive_current_assertion(tokens: frozenset[str]) -> bool:
+    if tokens & (NEGATION_TOKENS | NON_CURRENT_ASSERTION_TOKENS):
+        return False
+    return not ({"rather", "than"}.issubset(tokens) or {"instead", "of"}.issubset(tokens))
+
+
+def is_pre_18_postgres_baseline(tokens: frozenset[str]) -> bool:
+    current_baseline = bool(tokens & CURRENT_TOKENS) and "baseline" in tokens
+    supported_database = "support" in tokens and "database" in tokens
+    return (
+        "postgres" in tokens
+        and bool(tokens & {"16", "17"})
+        and (current_baseline or supported_database)
+    )
+
+
+def is_production_postgres_container(tokens: frozenset[str]) -> bool:
+    return (
+        "postgres" in tokens
+        and "production" in tokens
+        and bool(tokens & {"container", "containerized"})
+    )
+
+
+def is_valkey_current_requirement(tokens: frozenset[str]) -> bool:
+    current_scope = bool(tokens & CURRENT_TOKENS) and bool(
+        tokens & {"deployment", "installation", "integration", "runtime"}
+    )
+    return (
+        "valkey" in tokens
+        and current_scope
+        and bool(tokens & {"mandatory", "need", "require"})
+    )
+
+
+def is_current_redis_or_valkey_state(tokens: frozenset[str]) -> bool:
+    state_role = bool(tokens & {"cache", "queue", "session"}) or {
+        "application",
+        "state",
+    }.issubset(tokens)
+    return (
+        bool(tokens & {"redis", "valkey"})
+        and bool(tokens & CURRENT_TOKENS)
+        and state_role
+        and bool(tokens & {"back", "backend", "provide", "serve", "use"})
+    )
+
+
+def is_d1_current_host_authority(tokens: frozenset[str]) -> bool:
+    return (
+        "d1" in tokens
+        and bool(tokens & CURRENT_TOKENS)
+        and {"production", "host"}.issubset(tokens)
+        and bool(tokens & {"authority", "baseline", "contract", "define", "specification"})
+    )
+
+
+def is_universal_production_edge(tokens: frozenset[str]) -> bool:
+    universal = bool(tokens & {"all", "any", "every"})
+    if (
+        "issue89" in tokens
+        and "own" in tokens
+        and universal
+        and {"production", "edge", "mode"}.issubset(tokens)
+    ):
+        return True
+    if "haproxy" not in tokens or "direct" in tokens:
+        return False
+    public_surface = "public" in tokens and (
+        "ingress" in tokens
+        or "traffic" in tokens
+        or {"viewer", "edge"}.issubset(tokens)
+    )
+    public_relation = bool(
+        tokens & {"at", "edge", "enter", "expose", "handle", "route", "terminate", "through"}
+    )
+    protected_publication = "protected" in tokens and public_surface and public_relation
+    return protected_publication or (universal and public_surface and public_relation)
+
+
+SEMANTIC_CURRENT_SUPPORT = (
+    ("production PostgreSQL container", is_production_postgres_container),
+    ("pre-18 PostgreSQL baseline", is_pre_18_postgres_baseline),
+    ("Valkey current requirement", is_valkey_current_requirement),
+    ("Redis or Valkey current state backing", is_current_redis_or_valkey_state),
+    ("D.1 current production-host contract", is_d1_current_host_authority),
+    ("universal production-edge authority", is_universal_production_edge),
+)
 
 HISTORICAL_STATUS = {
     Path("docs/ci-cloud-conformance.md"): "> **Status: Historical.**",
@@ -199,6 +284,14 @@ def obsolete_current_support_violations(root: Path) -> list[str]:
             if match := pattern.search(content):
                 line = content.count("\n", 0, match.start()) + 1
                 violations.append(f"{path}:{line}: {claim}")
+        for claim, predicate in SEMANTIC_CURRENT_SUPPORT:
+            for start, tokens in normalized_clauses(content):
+                if not is_positive_current_assertion(tokens):
+                    continue
+                if predicate(tokens):
+                    line = content.count("\n", 0, start) + 1
+                    violations.append(f"{path}:{line}: {claim}")
+                    break
     return violations
 
 
@@ -232,6 +325,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
         mutations = (
             (
                 "Compose execution",
+                "Compose execution",
                 Path("README.md"),
                 (
                     "# SecPal Deployment",
@@ -240,6 +334,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "pre-18 production baseline",
+                "pre-18 PostgreSQL baseline",
                 Path("README.md"),
                 (
                     "# SecPal Deployment",
@@ -249,6 +344,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "PostgreSQL 17 current baseline",
+                "pre-18 PostgreSQL baseline",
                 Path("README.md"),
                 (
                     "# SecPal Deployment",
@@ -257,6 +353,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
                 ),
             ),
             (
+                "production PostgreSQL container",
                 "production PostgreSQL container",
                 Path("README.md"),
                 (
@@ -267,6 +364,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "Valkey current integration",
+                "Valkey current requirement",
                 Path("docs/quadlet-integration.md"),
                 (
                     "This is the active disposable integration runtime delivered by",
@@ -276,6 +374,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "Redis current integration",
+                "Redis or Valkey current state backing",
                 Path("docs/quadlet-integration.md"),
                 (
                     "This is the active disposable integration runtime delivered by",
@@ -284,6 +383,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
                 ),
             ),
             (
+                "Caddy production edge",
                 "Caddy production edge",
                 Path("docs/architecture/scope.md"),
                 (
@@ -294,6 +394,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "D.1 current production host",
+                "D.1 current production-host contract",
                 Path("docs/api-image-consumption.md"),
                 (
                     "At Phase C completion, Phase D had not started. D.1 subsequently defined an\n"
@@ -303,6 +404,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "Valkey current deployment requirement",
+                "Valkey current requirement",
                 Path("docs/quadlet-integration.md"),
                 (
                     "This is the active disposable integration runtime delivered by",
@@ -312,6 +414,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "Redis current backend",
+                "Redis or Valkey current state backing",
                 Path("docs/quadlet-integration.md"),
                 (
                     "This is the active disposable integration runtime delivered by",
@@ -321,6 +424,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "Caddy production termination",
+                "Caddy production edge",
                 Path("docs/architecture/scope.md"),
                 (
                     "This document is the deployment documentation index and ownership map.",
@@ -330,6 +434,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "D.1 current production host specification",
+                "D.1 current production-host contract",
                 Path("docs/api-image-consumption.md"),
                 (
                     "At Phase C completion, Phase D had not started. D.1 subsequently defined an\n"
@@ -339,6 +444,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "inverse pre-18 production baseline",
+                "pre-18 PostgreSQL baseline",
                 Path("README.md"),
                 (
                     "# SecPal Deployment",
@@ -348,6 +454,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "inverse production PostgreSQL container",
+                "production PostgreSQL container",
                 Path("README.md"),
                 (
                     "# SecPal Deployment",
@@ -357,6 +464,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "Valkey mandatory current deployment",
+                "Valkey current requirement",
                 Path("docs/quadlet-integration.md"),
                 (
                     "This is the active disposable integration runtime delivered by",
@@ -366,6 +474,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "inverse Redis current backend",
+                "Redis or Valkey current state backing",
                 Path("docs/quadlet-integration.md"),
                 (
                     "This is the active disposable integration runtime delivered by",
@@ -375,6 +484,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "inverse D.1 current production host baseline",
+                "D.1 current production-host contract",
                 Path("docs/api-image-consumption.md"),
                 (
                     "At Phase C completion, Phase D had not started. D.1 subsequently defined an\n"
@@ -384,6 +494,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "universal issue 89 edge ownership",
+                "universal production-edge authority",
                 Path("README.md"),
                 (
                     "# SecPal Deployment",
@@ -392,6 +503,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "universal HAProxy Viewer Edge",
+                "universal production-edge authority",
                 Path("docs/architecture/scope.md"),
                 (
                     "This document is the deployment documentation index and ownership map.",
@@ -401,6 +513,7 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             ),
             (
                 "protected viewer traffic at HAProxy",
+                "universal production-edge authority",
                 Path("docs/roadmap.md"),
                 (
                     "This roadmap distinguishes implementation on current `main`",
@@ -408,55 +521,182 @@ class DocumentationCurrentGuidance(unittest.TestCase):
                     "This roadmap distinguishes implementation on current `main`",
                 ),
             ),
+            (
+                "universal HAProxy Viewer Edge with SecPal qualifier",
+                "universal production-edge authority",
+                Path("docs/architecture/scope.md"),
+                (
+                    "This document is the deployment documentation index and ownership map.",
+                    "HAProxy is the public Viewer Edge for every SecPal deployment.\n\n"
+                    "This document is the deployment documentation index and ownership map.",
+                ),
+            ),
+            (
+                "universal public traffic through HAProxy",
+                "universal production-edge authority",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\nAll public SecPal traffic enters through HAProxy.",
+                ),
+            ),
+            (
+                "active pre-18 production baseline",
+                "pre-18 PostgreSQL baseline",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\n"
+                    "SecPal's active database baseline is Postgres 16.",
+                ),
+            ),
+            (
+                "production PostgreSQL container inverse phrase",
+                "production PostgreSQL container",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\n"
+                    "Production SecPal runs its PostgreSQL database in a container.",
+                ),
+            ),
+            (
+                "Valkey needed by current installations",
+                "Valkey current requirement",
+                Path("docs/quadlet-integration.md"),
+                (
+                    "This is the active disposable integration runtime delivered by",
+                    "Current SecPal installations need Valkey.\n\n"
+                    "This is the active disposable integration runtime delivered by",
+                ),
+            ),
+            (
+                "active Redis state backend",
+                "Redis or Valkey current state backing",
+                Path("docs/quadlet-integration.md"),
+                (
+                    "This is the active disposable integration runtime delivered by",
+                    "The active session and queue backend is Redis.\n\n"
+                    "This is the active disposable integration runtime delivered by",
+                ),
+            ),
+            (
+                "D.1 current authority comes from",
+                "D.1 current production-host contract",
+                Path("docs/api-image-consumption.md"),
+                (
+                    "At Phase C completion, Phase D had not started. D.1 subsequently defined an\n"
+                    "earlier production-host contract that is now historical.",
+                    "Current production-host authority comes from D.1.",
+                ),
+            ),
         )
-        for name, path, mutation in mutations:
+        for name, expected_claim, path, mutation in mutations:
             with self.subTest(name=name), self.authority_fixture({path: mutation}) as temporary:
                 root = Path(temporary)
                 self.assertEqual(discover_markdown_documents(root), set(DOCUMENT_AUTHORITY))
-                self.assertNotEqual(obsolete_current_support_violations(root), [])
+                violations = obsolete_current_support_violations(root)
+                self.assertTrue(
+                    any(violation.endswith(f": {expected_claim}") for violation in violations),
+                    violations,
+                )
+
+    def test_independent_order_variations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "PostgreSQL 17 active baseline",
+                "pre-18 PostgreSQL baseline",
+                Path("README.md"),
+                "Postgres 17 remains SecPal's active database baseline.",
+            ),
+            (
+                "PostgreSQL production container",
+                "production PostgreSQL container",
+                Path("README.md"),
+                "In production, SecPal hosts PostgreSQL inside a container.",
+            ),
+            (
+                "Valkey active installation requirement",
+                "Valkey current requirement",
+                Path("docs/quadlet-integration.md"),
+                "Valkey is needed by active SecPal installations.",
+            ),
+            (
+                "Redis active queue backend",
+                "Redis or Valkey current state backing",
+                Path("docs/quadlet-integration.md"),
+                "Redis serves as the backend for active queues.",
+            ),
+            (
+                "D.1 current host authority",
+                "D.1 current production-host contract",
+                Path("docs/api-image-consumption.md"),
+                "D.1 remains the authority for the current production host.",
+            ),
+            (
+                "universal public HAProxy exposure",
+                "universal production-edge authority",
+                Path("docs/architecture/scope.md"),
+                "Every deployment exposes public traffic through HAProxy.",
+            ),
+        )
+        for name, expected_claim, path, claim in mutations:
+            marker = read(path).splitlines()[0]
+            mutation = (marker, f"{marker}\n\n{claim}")
+            with self.subTest(name=name), self.authority_fixture({path: mutation}) as temporary:
+                root = Path(temporary)
+                self.assertEqual(discover_markdown_documents(root), set(DOCUMENT_AUTHORITY))
+                violations = obsolete_current_support_violations(root)
+                self.assertTrue(
+                    any(violation.endswith(f": {expected_claim}") for violation in violations),
+                    violations,
+                )
 
     def test_historical_and_current_explanatory_controls_remain_permitted(self) -> None:
-        mutations = {
-            Path("README.md"): (
-                "# SecPal Deployment",
-                "# SecPal Deployment\n\n"
-                "PostgreSQL 18 is the current SecPal database baseline.\n"
-                "Production PostgreSQL is not a SecPal container.\n"
-                "In DIRECT, HAProxy is the public Viewer Edge and Certbot owns Viewer TLS.\n"
-                "In PROTECTED, HAProxy is the authenticated Origin/backend, not the public "
-                "Viewer Edge.\n"
-                "#89 owns DIRECT and #209 owns PROTECTED.",
-            ),
-            Path("docs/quadlet-integration.md"): (
-                "This is the active disposable integration runtime delivered by",
-                "Current deployments do not require Valkey.\n"
-                "Redis is not used for current queues or sessions.\n"
-                "The disposable integration PostgreSQL container is test-only.\n"
-                "The cache is database-backed, queues use the database connection, and sessions "
-                "use the database.\n"
-                "Caddy is a disposable integration/test gateway.\n\n"
-                "This is the active disposable integration runtime delivered by",
-            ),
-            Path("docs/architecture/production-state.md"): (
-                "This document describes the historical D.2 persistence and product-role contracts.",
-                "Historical evidence records that Valkey was required, Redis backed queues and "
-                "sessions, and PostgreSQL 16 was the production baseline.\n\n"
-                "This document describes the historical D.2 persistence and product-role contracts.",
-            ),
-            Path("docs/architecture/decisions/production-edge.md"): (
-                "This ADR was accepted for the former single-host production reference.",
-                "The superseded record states Caddy is the production edge.\n\n"
-                "This ADR was accepted for the former single-host production reference.",
-            ),
-            Path("docs/architecture/production-host.md"): (
-                "This document defines the provider-neutral admission contract",
-                "D.1 previously defined the production-host contract.\n\n"
-                "This document defines the provider-neutral admission contract",
-            ),
-        }
-        with self.authority_fixture(mutations) as temporary:
-            root = Path(temporary)
-            self.assertEqual(obsolete_current_support_violations(root), [])
+        controls = (
+            ("PostgreSQL 18 baseline", Path("README.md"),
+             "PostgreSQL 18 is the current SecPal database baseline."),
+            ("production PostgreSQL negation", Path("README.md"),
+             "Production PostgreSQL is not a SecPal product container."),
+            ("DIRECT Viewer Edge", Path("README.md"),
+             "In DIRECT, HAProxy is the public Viewer Edge and Certbot owns Viewer TLS."),
+            ("PROTECTED Origin", Path("README.md"),
+             "In PROTECTED, HAProxy is the authenticated Origin/backend."),
+            ("PROTECTED Viewer Edge negation", Path("README.md"),
+             "In PROTECTED, HAProxy is not the public Viewer Edge."),
+            ("universal HAProxy negation", Path("README.md"),
+             "HAProxy is not the public Viewer Edge for every deployment."),
+            ("mode ownership", Path("README.md"),
+             "#89 owns DIRECT and #209 owns PROTECTED."),
+            ("Valkey negation", Path("docs/quadlet-integration.md"),
+             "Current deployments do not require Valkey."),
+            ("Redis negation", Path("docs/quadlet-integration.md"),
+             "Redis is not used for current queues or sessions."),
+            ("integration PostgreSQL container", Path("docs/quadlet-integration.md"),
+             "The disposable integration PostgreSQL 18 container is test-only."),
+            ("database-backed state", Path("docs/quadlet-integration.md"),
+             "The active cache, queues, and sessions are database-backed."),
+            ("integration Caddy", Path("docs/quadlet-integration.md"),
+             "Caddy is a disposable integration/test gateway."),
+            ("Caddy edge negation", Path("docs/architecture/scope.md"),
+             "Caddy is not the production edge; it is an integration-only gateway."),
+            ("historical state", Path("docs/architecture/production-state.md"),
+             "Historical evidence records that Valkey was required, Redis backed queues and "
+             "sessions, and PostgreSQL 16 was the production baseline."),
+            ("historical PostgreSQL container", Path("docs/architecture/production-state.md"),
+             "The historical production PostgreSQL database ran in a container."),
+            ("historical Caddy edge", Path("docs/architecture/decisions/production-edge.md"),
+             "The superseded record states Caddy is the production edge."),
+            ("historical D.1 authority", Path("docs/architecture/production-host.md"),
+             "D.1 previously defined the production-host contract."),
+        )
+        for name, path, claim in controls:
+            marker = read(path).splitlines()[0]
+            mutation = (marker, f"{marker}\n\n{claim}")
+            with self.subTest(name=name), self.authority_fixture({path: mutation}) as temporary:
+                root = Path(temporary)
+                self.assertEqual(discover_markdown_documents(root), set(DOCUMENT_AUTHORITY))
+                self.assertEqual(obsolete_current_support_violations(root), [])
         self.assertEqual(obsolete_current_support_violations(ROOT), [])
 
     def test_current_guidance_names_the_complete_target_vocabulary(self) -> None:
