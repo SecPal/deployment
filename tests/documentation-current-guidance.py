@@ -49,10 +49,21 @@ OBSOLETE_CURRENT_SUPPORT = {
     "Compose execution": re.compile(r"\b(?:run|start|deploy with)\s+docker compose\b", re.I),
     "Valkey startup": re.compile(r"\b(?:run|start|deploy)\s+Valkey\b", re.I),
     "production PostgreSQL container": re.compile(
-        r"\bproduction PostgreSQL (?:product )?container\b", re.I
+        r"\b(?:"
+        r"(?:run|start|deploy|use)\s+(?:PostgreSQL|Postgres)\s+as\s+"
+        r"(?:a\s+)?(?:SecPal\s+)?production(?:\s+database)?\s+container"
+        r"|(?:production|SecPal\s+production)\s+(?:PostgreSQL|Postgres)"
+        r"(?:\s+database)?\s+container"
+        r"|(?:PostgreSQL|Postgres)\s+(?:container|containerized)"
+        r"(?:\s+database)?\s+(?:for|as)\s+(?:a\s+)?(?:SecPal\s+)?production"
+        r")\b",
+        re.I,
     ),
     "pre-18 PostgreSQL baseline": re.compile(
-        r"\bPostgreSQL (?:16|17) is the (?:current|production) baseline\b", re.I
+        r"\b(?:PostgreSQL|Postgres)\s+(?:16|17)\s+is\s+the\s+"
+        r"(?:(?:current|production)\s+)?(?:SecPal\s+)?(?:database\s+)?"
+        r"(?:baseline|supported\s+baseline)\b",
+        re.I,
     ),
     "Debian current admission": re.compile(
         r"\bSchema version 1 admits only Debian 13/trixie hosts\b", re.I
@@ -67,20 +78,40 @@ OBSOLETE_CURRENT_SUPPORT = {
         r"\bValkey never replaces PostgreSQL as the source of truth\b", re.I
     ),
     "Valkey current requirement": re.compile(
-        r"\b(?:Valkey|Redis)\s+(?:is|are)\s+(?:required|current)\b", re.I
+        r"\b(?:"
+        r"(?:Valkey|Redis)\s+(?:is|are)\s+(?:required|current)"
+        r"|(?:current\s+)?(?:deployments?|integration|runtime)\s+require(?:s)?\s+"
+        r"(?:Valkey|Redis)"
+        r")\b",
+        re.I,
     ),
     "Redis or Valkey current state backing": re.compile(
-        r"\b(?:Valkey|Redis)\s+(?:backs?|provides?)\s+"
-        r"(?:the\s+)?(?:current\s+)?(?:cache|queues?|sessions?)(?:\s+and\s+"
-        r"(?:cache|queues?|sessions?))?\b",
+        r"\b(?:Valkey|Redis)\s+(?:"
+        r"(?:backs?|provides?)\s+(?:the\s+)?(?:current\s+)?"
+        r"(?:application\s+state|cache|queues?|sessions?)(?:\s+and\s+"
+        r"(?:the\s+)?(?:current\s+)?(?:application\s+state|cache|queues?|sessions?))?"
+        r"(?:\s+stores?)?"
+        r"|is\s+(?:the\s+)?(?:current\s+)?(?:backend|backing\s+store)\s+for\s+"
+        r"(?:the\s+)?(?:current\s+)?(?:application\s+state|cache|queues?|sessions?)"
+        r"(?:\s+and\s+(?:the\s+)?(?:current\s+)?"
+        r"(?:application\s+state|cache|queues?|sessions?))?(?:\s+stores?)?"
+        r")\b",
         re.I,
     ),
     "Caddy production edge": re.compile(
-        r"\bCaddy\s+is\s+(?:the\s+)?production(?:\s+public)?\s+edge\b", re.I
+        r"\b(?:"
+        r"Caddy\s+(?:is|serves\s+as)\s+(?:the\s+)?(?:current\s+)?"
+        r"production(?:\s+public)?\s+(?:edge|gateway)"
+        r"|production(?:\s+current)?\s+(?:traffic|requests?)\s+(?:is|are)\s+"
+        r"(?:terminated|routed|handled)\s+by\s+Caddy"
+        r"|Caddy\s+(?:terminates|routes|handles)\s+(?:current\s+)?"
+        r"production\s+(?:traffic|requests?)"
+        r")\b",
+        re.I,
     ),
     "D.1 current production-host contract": re.compile(
         r"\bD\.1\s+(?:now\s+)?(?:defines|is)\s+(?:the\s+)?"
-        r"(?:current\s+)?production[- ]host contract\b",
+        r"(?:current\s+)?production[- ]host\s+(?:contract|specification|authority|baseline)\b",
         re.I,
     ),
     "old implementation status": re.compile(
@@ -181,7 +212,17 @@ class DocumentationCurrentGuidance(unittest.TestCase):
                 Path("README.md"),
                 (
                     "# SecPal Deployment",
-                    "# SecPal Deployment\n\nPostgreSQL 16 is the production baseline.",
+                    "# SecPal Deployment\n\n"
+                    "PostgreSQL 16 is the current SecPal database baseline.",
+                ),
+            ),
+            (
+                "PostgreSQL 17 current baseline",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\n"
+                    "PostgreSQL 17 is the current SecPal database baseline.",
                 ),
             ),
             (
@@ -189,7 +230,8 @@ class DocumentationCurrentGuidance(unittest.TestCase):
                 Path("README.md"),
                 (
                     "# SecPal Deployment",
-                    "# SecPal Deployment\n\nRun the production PostgreSQL container for the database.",
+                    "# SecPal Deployment\n\n"
+                    "Run PostgreSQL as a SecPal production container.",
                 ),
             ),
             (
@@ -228,6 +270,42 @@ class DocumentationCurrentGuidance(unittest.TestCase):
                     "D.1 is the current production-host contract",
                 ),
             ),
+            (
+                "Valkey current deployment requirement",
+                Path("docs/quadlet-integration.md"),
+                (
+                    "This is the active disposable integration runtime delivered by",
+                    "Current deployments require Valkey.\n\n"
+                    "This is the active disposable integration runtime delivered by",
+                ),
+            ),
+            (
+                "Redis current backend",
+                Path("docs/quadlet-integration.md"),
+                (
+                    "This is the active disposable integration runtime delivered by",
+                    "Redis is the backend for the current queue and session stores.\n\n"
+                    "This is the active disposable integration runtime delivered by",
+                ),
+            ),
+            (
+                "Caddy production termination",
+                Path("docs/architecture/scope.md"),
+                (
+                    "This document is the deployment documentation index and ownership map.",
+                    "Production traffic is terminated by Caddy.\n\n"
+                    "This document is the deployment documentation index and ownership map.",
+                ),
+            ),
+            (
+                "D.1 current production host specification",
+                Path("docs/api-image-consumption.md"),
+                (
+                    "At Phase C completion, Phase D had not started. D.1 subsequently defined an\n"
+                    "earlier production-host contract that is now historical.",
+                    "D.1 is the current production host specification",
+                ),
+            ),
         )
         for name, path, mutation in mutations:
             with self.subTest(name=name), self.authority_fixture({path: mutation}) as temporary:
@@ -237,9 +315,25 @@ class DocumentationCurrentGuidance(unittest.TestCase):
 
     def test_historical_and_current_explanatory_controls_remain_permitted(self) -> None:
         mutations = {
+            Path("README.md"): (
+                "# SecPal Deployment",
+                "# SecPal Deployment\n\n"
+                "PostgreSQL 18 is the current SecPal database baseline.\n"
+                "Production PostgreSQL is not a SecPal container.",
+            ),
+            Path("docs/quadlet-integration.md"): (
+                "This is the active disposable integration runtime delivered by",
+                "Current deployments do not require Valkey.\n"
+                "The disposable integration PostgreSQL container is test-only.\n"
+                "The cache is database-backed, queues use the database connection, and sessions "
+                "use the database.\n"
+                "Caddy is a disposable integration/test gateway.\n\n"
+                "This is the active disposable integration runtime delivered by",
+            ),
             Path("docs/architecture/production-state.md"): (
                 "This document describes the historical D.2 persistence and product-role contracts.",
-                "Historical evidence records that Valkey is required for the current integration.\n\n"
+                "Historical evidence records that Valkey was required, Redis backed queues and "
+                "sessions, and PostgreSQL 16 was the production baseline.\n\n"
                 "This document describes the historical D.2 persistence and product-role contracts.",
             ),
             Path("docs/architecture/decisions/production-edge.md"): (
