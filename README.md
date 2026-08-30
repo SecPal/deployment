@@ -58,6 +58,10 @@ Architecture acceptance does not establish implementation. DIRECT and
 PROTECTED have separate implementation owners: the #90 and #209 native graphs
 are authoritative for their current delivery state.
 
+The public [portable provider capability contract](docs/provider-capability-contract.md)
+defines bounded create, inspect, rebuild, and delete adapter mechanics without
+embedding provider selection, customer/fleet state, or commercial policy.
+
 The general PROTECTED Sandbox PoC is complete and retired. Portable production
 implementation is separately owned by #209; its native graph is authoritative
 for current delivery state. ADR-019 and Git history retain the durable PoC
