@@ -1,0 +1,44 @@
+{
+  "syncToken": "1700000000",
+  "createDate": "2026-08-30-00-00-00",
+  "prefixes": [
+    {
+      "ip_prefix": "198.51.100.0/24",
+      "region": "GLOBAL",
+      "service": "CLOUDFRONT_ORIGIN_FACING",
+      "network_border_group": "GLOBAL"
+    },
+    {
+      "ip_prefix": "203.0.113.0/24",
+      "region": "GLOBAL",
+      "service": "AMAZON",
+      "network_border_group": "GLOBAL"
+    },
+    {
+      "ip_prefix": "192.0.2.0/24",
+      "region": "GLOBAL",
+      "service": "CLOUDFRONT_ORIGIN_FACING",
+      "network_border_group": "GLOBAL"
+    }
+  ],
+  "ipv6_prefixes": [
+    {
+      "ipv6_prefix": "2001:db8:2::/48",
+      "region": "GLOBAL",
+      "service": "CLOUDFRONT_ORIGIN_FACING",
+      "network_border_group": "GLOBAL"
+    },
+    {
+      "ipv6_prefix": "2001:db8:1::/48",
+      "region": "GLOBAL",
+      "service": "AMAZON",
+      "network_border_group": "GLOBAL"
+    },
+    {
+      "ipv6_prefix": "2001:db8:1::/48",
+      "region": "GLOBAL",
+      "service": "CLOUDFRONT_ORIGIN_FACING",
+      "network_border_group": "GLOBAL"
+    }
+  ]
+}
