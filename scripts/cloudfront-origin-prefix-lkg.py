@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import fcntl
 import hashlib
 import ipaddress
@@ -24,6 +24,7 @@ import re
 import stat
 import sys
 import tempfile
+import time
 from typing import Any, Iterator
 import urllib.error
 import urllib.request
@@ -37,6 +38,9 @@ MAX_STATE_BYTES = 1024 * 1024
 CANDIDATE_FILE = "candidate.json"
 LKG_FILE = "accepted-lkg.json"
 LOCK_FILE = ".cloudfront-origin-prefix-lkg.lock"
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_RETRY_SECONDS = 0.05
+MAX_PROVIDER_FUTURE_SKEW_SECONDS = 300
 
 
 class ContractError(RuntimeError):
@@ -54,6 +58,18 @@ def _closed_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError("duplicate JSON key")
         document[key] = value
     return document
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+def _decode_json(content: bytes) -> Any:
+    return json.loads(
+        content.decode("utf-8"),
+        object_pairs_hook=_closed_object,
+        parse_constant=_reject_json_constant,
+    )
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
@@ -75,7 +91,9 @@ def _require_string(document: dict[str, Any], field: str) -> str:
     return value
 
 
-def _validate_provenance(sync_token: str, create_date: str, retrieved_at: str) -> None:
+def _validate_provenance(
+    sync_token: str, create_date: str, retrieved_at: str
+) -> datetime:
     if re.fullmatch(r"[1-9][0-9]*", sync_token) is None:
         raise ContractError("source sync token is invalid")
     if re.fullmatch(r"[0-9]{4}(?:-[0-9]{2}){5}", create_date) is None:
@@ -83,10 +101,22 @@ def _validate_provenance(sync_token: str, create_date: str, retrieved_at: str) -
     if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", retrieved_at) is None:
         raise ContractError("retrieval timestamp is not canonical UTC")
     try:
-        datetime.strptime(create_date, "%Y-%m-%d-%H-%M-%S")
-        datetime.strptime(retrieved_at, "%Y-%m-%dT%H:%M:%SZ")
-    except ValueError as error:
+        publication_from_token = datetime.fromtimestamp(int(sync_token), UTC)
+        publication_from_date = datetime.strptime(
+            create_date, "%Y-%m-%d-%H-%M-%S"
+        ).replace(tzinfo=UTC)
+        retrieval = datetime.strptime(
+            retrieved_at, "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=UTC)
+    except (OSError, OverflowError, ValueError) as error:
         raise ContractError("source freshness metadata is invalid") from error
+    if publication_from_token != publication_from_date:
+        raise ContractError("source publication metadata is inconsistent")
+    if publication_from_token > retrieval + timedelta(
+        seconds=MAX_PROVIDER_FUTURE_SKEW_SECONDS
+    ):
+        raise ContractError("source publication time is materially in the future")
+    return publication_from_token
 
 
 def _parse_network(value: Any, version: int) -> str:
@@ -168,7 +198,12 @@ def validate_candidate(candidate: dict[str, Any]) -> None:
     }
     if not isinstance(candidate, dict) or set(candidate) != expected:
         raise ContractError("candidate has an invalid schema")
-    if candidate["schema_version"] != SCHEMA_VERSION or candidate["source_url"] != SOURCE_URL or candidate["service"] != SERVICE:
+    if (
+        type(candidate["schema_version"]) is not int
+        or candidate["schema_version"] != SCHEMA_VERSION
+        or candidate["source_url"] != SOURCE_URL
+        or candidate["service"] != SERVICE
+    ):
         raise ContractError("candidate identity is invalid")
     for field in ("source_sync_token", "source_create_date", "retrieved_at", "candidate_sha256"):
         if not isinstance(candidate[field], str) or not candidate[field]:
@@ -216,7 +251,7 @@ def read_https_document() -> bytes:
 
 def observe_source() -> dict[str, Any]:
     try:
-        source = json.loads(read_https_document().decode("utf-8"), object_pairs_hook=_closed_object)
+        source = _decode_json(read_https_document())
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise ContractError("source JSON is malformed") from error
     if not isinstance(source, dict):
@@ -227,6 +262,21 @@ def observe_source() -> dict[str, Any]:
 def acquire_candidate_bytes() -> bytes:
     candidate = build_candidate(observe_source(), retrieved_at=datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"))
     return _canonical_bytes(candidate)
+
+
+def _fsync_directory(path: Path, label: str) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        os.fsync(descriptor)
+    except OSError as error:
+        raise ContractError(f"{label} durability synchronization failed") from error
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _assert_safe_directory(path: Path, *, create: bool) -> Path:
@@ -241,8 +291,13 @@ def _assert_safe_directory(path: Path, *, create: bool) -> Path:
         except FileNotFoundError:
             if current != path or not create:
                 raise ContractError("state directory ancestor is missing")
-            current.mkdir(mode=0o700)
-            metadata = current.lstat()
+            try:
+                current.mkdir(mode=0o700)
+                metadata = current.lstat()
+            except OSError as error:
+                raise ContractError("state directory creation failed") from error
+        except OSError as error:
+            raise ContractError("state directory inspection failed") from error
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
             raise ContractError("state directory contains an unsafe component")
         mode = stat.S_IMODE(metadata.st_mode)
@@ -251,6 +306,10 @@ def _assert_safe_directory(path: Path, *, create: bool) -> Path:
             raise ContractError("state directory has a mutable trusted ancestor")
     if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
         raise ContractError("state directory ownership or mode is unsafe")
+    if create:
+        # Synchronize on every mutating entry, including retries after an
+        # earlier creation whose parent durability could not be confirmed.
+        _fsync_directory(path.parent, "state directory entry")
     return path
 
 
@@ -262,6 +321,8 @@ def _state_file(directory: Path, name: str, *, required: bool) -> Path | None:
         if required:
             raise ContractError("required state file is missing") from None
         return None
+    except OSError as error:
+        raise ContractError("state file inspection failed") from error
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600:
         raise ContractError("state file is unsafe")
     return path
@@ -288,10 +349,18 @@ def _state_lock(directory: Path) -> Iterator[None]:
             or (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino)
         ):
             raise ContractError("state lock is unsafe")
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-        except OSError as error:
-            raise ContractError("state lock is unavailable") from error
+        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ContractError("state lock acquisition timed out") from error
+                time.sleep(min(LOCK_RETRY_SECONDS, remaining))
+            except OSError as error:
+                raise ContractError("state lock is unavailable") from error
         yield
     finally:
         try:
@@ -370,7 +439,7 @@ def _read_document(directory: Path, name: str, *, required: bool) -> dict[str, A
             content = source.read(MAX_STATE_BYTES + 1)
         if len(content) > MAX_STATE_BYTES:
             raise ContractError("state document exceeds the maximum size")
-        document = json.loads(content.decode("utf-8"), object_pairs_hook=_closed_object)
+        document = _decode_json(content)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise ContractError("state document is invalid") from error
     finally:
@@ -406,9 +475,38 @@ def accept_candidate(state_directory: Path, acknowledged_digest: str) -> None:
     if not isinstance(acknowledged_digest, str) or len(acknowledged_digest) != 64:
         raise ContractError("acknowledged candidate digest is invalid")
     directory = _assert_safe_directory(state_directory, create=False)
+    _fsync_directory(directory.parent, "state directory entry")
     with _state_lock(directory):
         candidate = _read_document(directory, CANDIDATE_FILE, required=True)
         assert candidate is not None
+        accepted = _read_document(directory, LKG_FILE, required=False)
+        if accepted is not None:
+            candidate_version = _validate_provenance(
+                candidate["source_sync_token"],
+                candidate["source_create_date"],
+                candidate["retrieved_at"],
+            )
+            accepted_version = _validate_provenance(
+                accepted["source_sync_token"],
+                accepted["source_create_date"],
+                accepted["retrieved_at"],
+            )
+            if candidate_version < accepted_version:
+                raise ContractError("candidate would roll back the provider publication")
+            if candidate_version == accepted_version and (
+                candidate["source_url"],
+                candidate["service"],
+                candidate["ipv4_prefixes"],
+                candidate["ipv6_prefixes"],
+            ) != (
+                accepted["source_url"],
+                accepted["service"],
+                accepted["ipv4_prefixes"],
+                accepted["ipv6_prefixes"],
+            ):
+                raise ContractError(
+                    "same provider publication has conflicting normalized content"
+                )
         if candidate["candidate_sha256"] != acknowledged_digest:
             raise ContractError("acknowledgement does not match the current candidate")
         _atomic_write(directory, LKG_FILE, _canonical_bytes(candidate))
@@ -421,7 +519,10 @@ def read_lkg(state_directory: Path) -> dict[str, Any] | None:
 
 
 def _print_document(document: dict[str, Any]) -> None:
-    sys.stdout.buffer.write(_canonical_bytes(document))
+    try:
+        sys.stdout.buffer.write(_canonical_bytes(document))
+    except OSError as error:
+        raise ContractError("state output failed") from error
 
 
 def main() -> int:
@@ -436,9 +537,8 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         if arguments.command == "fetch":
-            candidate = json.loads(acquire_candidate_bytes().decode("utf-8"))
+            candidate = _decode_json(acquire_candidate_bytes())
             write_candidate(arguments.state_dir, candidate)
-            _print_document(candidate)
         elif arguments.command == "candidate":
             _print_document(read_candidate(arguments.state_dir))
         elif arguments.command == "accepted":

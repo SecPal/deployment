@@ -13,6 +13,12 @@ standard library's normal HTTPS certificate and hostname verification. Redirects
 and oversized, malformed, incomplete, ambiguous, default-route, or empty-family
 documents are rejected.
 
+AWS `syncToken` is admitted as a positive Unix publication time and must name
+the same UTC instant as `createDate`. A publication up to five minutes ahead of
+the local retrieval clock is tolerated; a greater contradiction is rejected.
+No maximum source age is imposed. JSON decoding rejects duplicate keys and the
+non-standard `NaN` and infinity constants.
+
 The runtime state directory is deliberately outside Git and must be an absolute,
 private directory owned by the invoking operator. It contains only non-secret
 candidate and accepted prefix documents plus a lock; it contains no provider
@@ -28,6 +34,8 @@ AWS observation → source validation → service normalization → candidate
 ```
 
 `fetch` can replace `candidate.json`, but cannot alter `accepted-lkg.json`.
+It is deliberately silent after publication so stdout failure cannot obscure
+the persistent commit result; `candidate` is the separate validated readback.
 Consumers read and independently validate the candidate with `candidate`, then
 acknowledge exactly its `candidate_sha256` using `accept`. A replacement candidate
 therefore invalidates an acknowledgement for an older digest. Only `accept`
@@ -35,6 +43,14 @@ atomically publishes the accepted LKG. Every fetch, parsing, validation, or
 acceptance failure before the publication commit point leaves an existing
 accepted LKG untouched; when none exists such a failure does not manufacture an
 empty or permissive allowlist.
+
+State operations use an exclusive lock with a two-second monotonic deadline.
+State-directory creation is limited to the final component, whose parent entry
+is synchronized before publication. An older AWS publication cannot replace an
+accepted LKG. The same publication and normalized provider content may be
+accepted again (for example after a later retrieval); conflicting content under
+the same publication identity is rejected. These version checks and the exact
+digest acknowledgement occur inside the same lock.
 
 Atomic rename is the publication commit point. Every failure before that rename
 returns exit status `1` and leaves the previous target unchanged. Successful
