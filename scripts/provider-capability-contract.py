@@ -52,13 +52,14 @@ class CleanupOutcome(str, Enum):
 
 
 def _identity(label: str, value: object) -> None:
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ContractError(f"{label} must be one explicit non-empty identity")
-    encoded = value.encode("utf-8")
-    if len(encoded) > MAX_IDENTITY_BYTES or any(
-        character == "\x7f" or ord(character) < 0x20 for character in value
-    ):
+    if not value.isprintable() or len(value.encode("utf-8")) > MAX_IDENTITY_BYTES:
         raise ContractError(f"{label} is outside the bounded identity format")
+
+
+def _matches(pattern: re.Pattern[str], value: object) -> bool:
+    return type(value) is str and pattern.fullmatch(value) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,14 +104,14 @@ class ExecutionAuthority:
             ("credential mechanism", self.credential_mechanism),
         ):
             _identity(label, value)
-        if SHA1.fullmatch(self.source_revision) is None:
+        if not _matches(SHA1, self.source_revision):
             raise ContractError("authority requires one lowercase full source SHA")
-        if SHA256.fullmatch(self.parameters_sha256) is None:
+        if not _matches(SHA256, self.parameters_sha256):
             raise ContractError("authority requires one SHA-256 parameter binding")
-        if not isinstance(self.target, ResourceTarget):
+        if type(self.target) is not ResourceTarget:
             raise ContractError("authority requires one exact target")
-        if not isinstance(self.operations, frozenset) or not self.operations or any(
-            not isinstance(operation, Operation) for operation in self.operations
+        if type(self.operations) is not frozenset or not self.operations or any(
+            type(operation) is not Operation for operation in self.operations
         ):
             raise ContractError("authority requires a closed allowed operation set")
 
@@ -129,13 +130,11 @@ class CapabilityRequest:
     def __post_init__(self) -> None:
         _identity("request identity", self.request_id)
         _identity("adapter identity", self.adapter_id)
-        if SHA1.fullmatch(self.source_revision) is None:
+        if not _matches(SHA1, self.source_revision):
             raise ContractError("request requires one lowercase full source SHA")
-        if not isinstance(self.operation, Operation) or not isinstance(
-            self.target, ResourceTarget
-        ):
+        if type(self.operation) is not Operation or type(self.target) is not ResourceTarget:
             raise ContractError("request operation or target is invalid")
-        if SHA256.fullmatch(self.parameters_sha256) is None:
+        if not _matches(SHA256, self.parameters_sha256):
             raise ContractError("adapter parameters require one SHA-256 binding")
 
 
@@ -145,8 +144,10 @@ class CapabilityResult:
 
     request_id: str
     adapter_id: str
+    source_revision: str
     operation: Operation
     target: ResourceTarget
+    parameters_sha256: str
     outcome: Outcome
     cleanup: CleanupOutcome
     provider_resource_id: str | None = None
@@ -157,12 +158,16 @@ class CapabilityResult:
     def __post_init__(self) -> None:
         _identity("result request identity", self.request_id)
         _identity("result adapter identity", self.adapter_id)
+        if not _matches(SHA1, self.source_revision):
+            raise ContractError("result requires one lowercase full source SHA")
+        if not _matches(SHA256, self.parameters_sha256):
+            raise ContractError("result requires one SHA-256 parameter binding")
         if not all(
             (
-                isinstance(self.operation, Operation),
-                isinstance(self.target, ResourceTarget),
-                isinstance(self.outcome, Outcome),
-                isinstance(self.cleanup, CleanupOutcome),
+                type(self.operation) is Operation,
+                type(self.target) is ResourceTarget,
+                type(self.outcome) is Outcome,
+                type(self.cleanup) is CleanupOutcome,
             )
         ):
             raise ContractError("result is outside the closed contract")
@@ -174,8 +179,8 @@ class CapabilityResult:
             if value is not None:
                 _identity(label, value)
         if self.diagnostic_code is not None and (
-            len(self.diagnostic_code) > 128
-            or DIAGNOSTIC.fullmatch(self.diagnostic_code) is None
+            not _matches(DIAGNOSTIC, self.diagnostic_code)
+            or len(self.diagnostic_code) > 128
         ):
             raise ContractError("diagnostic code is outside the bounded format")
 
@@ -187,10 +192,12 @@ def admit_request(
 ) -> None:
     """Admit one request without selecting or invoking an adapter."""
 
-    if not isinstance(request, CapabilityRequest) or not isinstance(
-        authority, ExecutionAuthority
-    ):
+    if type(request) is not CapabilityRequest or type(authority) is not ExecutionAuthority:
         raise ContractError("request and authority are required")
+    if type(supported_operations) not in {frozenset, set} or any(
+        type(operation) is not Operation for operation in supported_operations
+    ):
+        raise ContractError("adapter requires a closed supported operation set")
     if (
         request.adapter_id != authority.adapter_id
         or request.source_revision != authority.source_revision
@@ -212,15 +219,15 @@ def admit_request(
 def admit_result(request: CapabilityRequest, result: CapabilityResult) -> None:
     """Admit one correlated result and its bounded failure semantics."""
 
-    if not isinstance(request, CapabilityRequest) or not isinstance(
-        result, CapabilityResult
-    ):
+    if type(request) is not CapabilityRequest or type(result) is not CapabilityResult:
         raise ContractError("request and result are required")
     if (
         result.request_id != request.request_id
         or result.adapter_id != request.adapter_id
+        or result.source_revision != request.source_revision
         or result.operation is not request.operation
         or result.target != request.target
+        or result.parameters_sha256 != request.parameters_sha256
     ):
         raise ContractError("result is not bound to the exact request")
 

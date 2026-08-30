@@ -78,8 +78,10 @@ class ProviderCapabilityContractTests(unittest.TestCase):
         return self.contract.CapabilityResult(
             request_id=request.request_id,
             adapter_id=request.adapter_id,
+            source_revision=request.source_revision,
             operation=request.operation,
             target=request.target,
+            parameters_sha256=request.parameters_sha256,
             outcome=outcome,
             cleanup=(
                 self.contract.CleanupOutcome.NOT_APPLICABLE
@@ -214,6 +216,16 @@ class ProviderCapabilityContractTests(unittest.TestCase):
         )
         self.assertEqual(hetzner_target.provider_resource_id, "987654321")
 
+    def test_non_printing_provider_identities_fail_closed(self) -> None:
+        for identity in (
+            "resource\u2028other",
+            "resource\u0085other",
+            "resource\u200bother",
+        ):
+            with self.subTest(identity=ascii(identity)):
+                with self.assertRaises(self.contract.ContractError):
+                    replace(self.existing_target, provider_resource_id=identity)
+
     def test_unsupported_and_already_satisfied_are_explicit(self) -> None:
         rebuild = self.request(self.contract.Operation.REBUILD, self.existing_target)
         with self.assertRaises(self.contract.UnsupportedCapability):
@@ -244,6 +256,13 @@ class ProviderCapabilityContractTests(unittest.TestCase):
                         **readback,
                     ),
                 )
+
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_request(
+                self.request(self.contract.Operation.CREATE),
+                self.authority_for(),
+                {"create", "delete"},
+            )
 
     def test_mismatch_staleness_and_incomplete_cleanup_are_closed(self) -> None:
         rebuild = self.request(self.contract.Operation.REBUILD, self.existing_target)
@@ -297,6 +316,59 @@ class ProviderCapabilityContractTests(unittest.TestCase):
                 diagnostic_code="provider-timeout",
             ),
         )
+
+    def test_result_is_bound_to_source_and_parameter_digest(self) -> None:
+        original = self.request(self.contract.Operation.CREATE)
+        stale_result = self.result(
+            original,
+            self.contract.Outcome.APPLIED,
+            **self.observation(),
+        )
+        changed = replace(
+            original,
+            source_revision="c" * 40,
+            parameters_sha256="d" * 64,
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_result(changed, stale_result)
+
+    def test_dynamic_non_string_fields_fail_through_contract_error(self) -> None:
+        request = self.request(self.contract.Operation.CREATE)
+        cases = {
+            "source revision": lambda: replace(self.authority, source_revision=None),
+            "parameter digest": lambda: replace(self.authority, parameters_sha256=123),
+            "diagnostic code": lambda: self.result(
+                request,
+                self.contract.Outcome.FAILED,
+                cleanup=self.contract.CleanupOutcome.INCOMPLETE,
+                diagnostic_code=123,
+            ),
+        }
+        for label, construct in cases.items():
+            with self.subTest(label=label):
+                with self.assertRaises(self.contract.ContractError):
+                    construct()
+
+    def test_closed_result_record_rejects_subclass_bypass(self) -> None:
+        request = self.request(self.contract.Operation.CREATE)
+
+        class UnvalidatedResult(self.contract.CapabilityResult):
+            def __post_init__(self) -> None:
+                pass
+
+        result = UnvalidatedResult(
+            request_id=request.request_id,
+            adapter_id=request.adapter_id,
+            source_revision=request.source_revision,
+            operation=request.operation,
+            target=request.target,
+            parameters_sha256=request.parameters_sha256,
+            outcome=self.contract.Outcome.FAILED,
+            cleanup=self.contract.CleanupOutcome.INCOMPLETE,
+            diagnostic_code="secret\ncontent",
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_result(request, result)
 
     def test_contract_has_no_customer_fleet_or_commercial_policy_fields(self) -> None:
         public_fields = {

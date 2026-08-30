@@ -70,10 +70,19 @@ digest. It has no lookup path for customer, fleet, preferred provider, SKU,
 production target, or placement policy. The caller must select and authorize
 those technical inputs before invoking an adapter.
 
-`CapabilityResult` is correlated back to the exact request. It reports only a
-closed outcome, provider-native read-back where applicable, exact cleanup state,
-and an adapter-owned bounded diagnostic code. It contains no arbitrary provider
-output, stdout/stderr, environment dump, or secret-bearing diagnostic text.
+`CapabilityResult` repeats the request identity, adapter, source revision,
+operation, target, and adapter-parameter digest. Admission requires exact
+equality for all six values, so a result from an earlier source revision or
+parameter set cannot satisfy a later invocation that reuses a request identity.
+The result reports only a closed outcome, provider-native read-back where
+applicable, exact cleanup state, and an adapter-owned bounded diagnostic code. It
+contains no arbitrary provider output, stdout/stderr, environment dump, or
+secret-bearing diagnostic text.
+
+The four immutable records are closed runtime types. Admission does not accept
+subclasses that could bypass their constructor checks, string-equivalent enum
+values, or wrongly typed supported-operation sets. Malformed dynamic values fail
+through `ContractError` rather than leaking incidental runtime exceptions.
 
 ## Target and mutation rules
 
@@ -83,10 +92,13 @@ identifiers are structurally bounded but open-ended: there is no provider
 registry and reviewed GCP, DigitalOcean, Hetzner, AWS, or future adapters do not
 require a central enum.
 
-Provider-native identities remain opaque and structurally bounded to 4,096 UTF-8
-bytes. This single generic bound admits currently documented AWS identity lengths
-of up to 2,048 ASCII bytes while leaving headroom for other providers. It does not
-parse, classify, or otherwise make AWS identifiers an architectural type.
+Provider-native identities remain opaque, printable Unicode and structurally
+bounded to 4,096 UTF-8 bytes. Non-printing control, format, and separator
+characters are rejected without normalizing, case-folding, or otherwise changing
+provider-native identity semantics. This single generic bound admits currently
+documented AWS identity lengths of up to 2,048 ASCII bytes while leaving headroom
+for other providers. It does not parse, classify, or otherwise make AWS
+identifiers an architectural type.
 
 `ResourceTarget.requested_key` identifies the one desired object within that
 scope. It is sufficient to bound `create`, where no provider resource identity
