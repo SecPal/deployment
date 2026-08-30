@@ -122,7 +122,11 @@ class WorkGraphGovernanceTests(unittest.TestCase):
                 "Migrations are explicit and run exactly once",
                 "Production PostgreSQL 18 is host-native systemd/SELinux infrastructure",
                 "current production and integration topology has no Valkey",
-                "Host-native HAProxy owns public TLS and routing with external Certbot",
+                "ADR-019",
+                "select `DIRECT` or `PROTECTED` independently of deployment topology",
+                "In `DIRECT`, #89 owns the host-native HAProxy public Viewer Edge",
+                "In `PROTECTED`, #209 owns the portable public Viewer Edge path",
+                "HAProxy is the authenticated Origin/backend, not the public Viewer Edge",
                 "Security is layered across SELinux/rootless confinement, nftables, "
                 "CrowdSec host decisioning, AppSec/Coraza, and socketless runtime detection",
             )

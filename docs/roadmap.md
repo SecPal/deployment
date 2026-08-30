@@ -45,11 +45,15 @@ the target and ownership only; it does not claim their open work is implemented.
   (#81)](https://github.com/SecPal/deployment/issues/81): production database
   under systemd/SELinux, outside the SecPal product-container layer. The
   disposable integration database is not a temporary production alternative.
-- [HAProxy production edge
-  (#89)](https://github.com/SecPal/deployment/issues/89): external Certbot,
-  trusted-client identity, private product backends, and layered nftables,
-  CrowdSec, and AppSec/Coraza security. The old Debian/NGINX edge ADR is a
-  superseded historical record.
+- Accepted
+  [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
+  defines `DIRECT` and `PROTECTED` production-edge modes independently of
+  deployment topology. [#89](https://github.com/SecPal/deployment/issues/89)
+  owns the `DIRECT` host-native HAProxy Viewer Edge and external Certbot;
+  [#209](https://github.com/SecPal/deployment/issues/209) owns coordination of
+  the portable `PROTECTED` public Viewer Edge, where HAProxy is the
+  authenticated Origin/backend rather than the public Viewer Edge. The old
+  Debian/NGINX edge ADR is a superseded historical record.
 - [Layered security
   (#85)](https://github.com/SecPal/deployment/issues/85): SELinux, seccomp,
   capabilities, rootless confinement, nftables, CrowdSec/AppSec, and
@@ -86,10 +90,11 @@ or modify its client.
 ### Production edge and recovery
 
 The Caddy integration gateway cannot satisfy production-edge evidence.
-HAProxy/Certbot implementation belongs to #89/#90 descendants. Likewise,
-disposable integration storage cannot satisfy production durability or
-recovery; Barman, Borg, independent object recovery, Recovery Sets, and drills
-belong to #91 descendants.
+`DIRECT` HAProxy/Certbot implementation belongs to #89/#90 descendants;
+portable `PROTECTED` implementation belongs to #209 descendants. Neither path
+is claimed complete here. Likewise, disposable integration storage cannot
+satisfy production durability or recovery; Barman, Borg, independent object
+recovery, Recovery Sets, and drills belong to #91 descendants.
 
 ## Historical milestones
 
@@ -129,7 +134,8 @@ define current production support.
 The current integration semantics were subsequently rebaselined by
 [#126](https://github.com/SecPal/deployment/issues/126) and merged in
 [PR #204](https://github.com/SecPal/deployment/pull/204). Current production
-replacement contracts are #80, #81, #89, #91 descendants, and #117 descendants.
+replacement contracts are #80, #81, ADR-019 with #89 for `DIRECT` and #209 for
+`PROTECTED`, #91 descendants, and #117 descendants.
 The [architecture scope](architecture/scope.md) indexes the retained historical
 documents without presenting them as active runbooks.
 

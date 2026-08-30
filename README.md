@@ -64,11 +64,17 @@ decisions and delivery state:
   state plus the initial database-backed sessions, durable queues, and shared
   cache. API, frontend, general workers, the dedicated hash-chain worker,
   scheduler, and one-shot migration remain distinct roles.
-- [#89](https://github.com/SecPal/deployment/issues/89) owns the host-native
-  HAProxy production edge, external Certbot ACME, trusted-client identity, and
-  layered nftables, CrowdSec, and AppSec/Coraza security seams. Caddy remains a
-  disposable integration gateway, and nginx-unprivileged remains frontend
-  product-image userspace; neither is the production public edge.
+- Accepted
+  [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
+  defines orthogonal `DIRECT` and `PROTECTED` production-edge modes. In
+  `DIRECT`, [#89](https://github.com/SecPal/deployment/issues/89) owns the
+  host-native HAProxy public Viewer Edge and external Certbot. In `PROTECTED`,
+  [#209](https://github.com/SecPal/deployment/issues/209) owns the portable
+  public Viewer Edge path; HAProxy is its authenticated Origin/backend, not the
+  public Viewer Edge. These are target authorities, not completed runbooks.
+  Caddy remains a disposable integration gateway, and nginx-unprivileged
+  remains frontend product-image userspace; neither is a production public
+  edge.
 - [#85](https://github.com/SecPal/deployment/issues/85) owns layered production
   security, including socketless runtime detection. Product containers do not
   receive public TLS, firewall authority, or a runtime socket/API.

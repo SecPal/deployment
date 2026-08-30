@@ -46,8 +46,13 @@ Production architecture is a target, not a runnable capability on current
   systemd/SELinux](https://github.com/SecPal/deployment/issues/81);
 - [#85 — layered security and socketless runtime
   detection](https://github.com/SecPal/deployment/issues/85);
-- [#89 — HAProxy, Certbot, trusted-client identity, nftables, CrowdSec, and
-  AppSec/Coraza production edge](https://github.com/SecPal/deployment/issues/89);
+- accepted [ADR-019 — production-edge mode
+  authority](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md),
+  which makes `DIRECT` and `PROTECTED` orthogonal to deployment topology;
+- [#89 — `DIRECT` host-native HAProxy Viewer Edge, external Certbot, and
+  trusted-client boundary](https://github.com/SecPal/deployment/issues/89);
+- [#209 — portable `PROTECTED` public Viewer Edge and authenticated Origin
+  coordination](https://github.com/SecPal/deployment/issues/209);
 - [#91 — Barman, Borg, Recovery Sets, and restore-drill
   coordination](https://github.com/SecPal/deployment/issues/91); and
 - [#117 — current Rocky/SELinux cloud
@@ -55,9 +60,10 @@ Production architecture is a target, not a runnable capability on current
 
 Together these owners define a Rocky Linux 10.2+ host with SELinux enforcing,
 rootless Podman/systemd/Quadlet application containers, host-native PostgreSQL
-18, no Valkey, private product backends, host-native HAProxy/Certbot, layered
-nftables/CrowdSec/AppSec security, socketless runtime detection, durable private
-files, Barman/Borg recovery, Recovery Sets, and isolated restore evidence.
+18, no Valkey, private product backends, an ADR-019-selected production-edge
+mode, layered nftables/CrowdSec/AppSec security, socketless runtime detection,
+durable private files, Barman/Borg recovery, Recovery Sets, and isolated
+restore evidence.
 
 This index does not claim those owner contracts are implemented. In particular,
 Issue #81 has not yet supplied the runnable native production PostgreSQL path. The
@@ -114,8 +120,12 @@ runnable historical Compose stack or compatibility directory.
 
 ### Production target
 
-- HAProxy alone owns public ingress, TLS termination, routing, and canonical
-  client identity; product containers remain private.
+- In `DIRECT`, host-native HAProxy is the public Viewer Edge and external
+  Certbot owns Viewer TLS under #89.
+- In `PROTECTED`, the portable edge under #209 is the public Viewer Edge;
+  HAProxy is the authenticated Origin/backend and does not terminate public
+  Viewer traffic.
+- Product containers remain private in both modes.
 - PostgreSQL 18 is host-native infrastructure, not a product container.
 - PostgreSQL is the initial relational, session, durable-queue, and shared-cache
   authority; there is no Valkey service.

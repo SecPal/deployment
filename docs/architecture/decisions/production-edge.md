@@ -6,9 +6,12 @@ SPDX-License-Identifier: CC0-1.0
 # Production edge decision
 
 > **Status: Superseded.** This Debian/NGINX ADR is retained as the historical
-> decision record. The current HAProxy/Certbot production-edge decision and
-> trusted-client contract are owned solely by
-> [#89](https://github.com/SecPal/deployment/issues/89). The body and embedded
+> decision record. Accepted
+> [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
+> now owns the `DIRECT` / `PROTECTED` mode decision. The `DIRECT` contract is
+> owned by [#89](https://github.com/SecPal/deployment/issues/89); portable
+> `PROTECTED` coordination is owned by
+> [#209](https://github.com/SecPal/deployment/issues/209). The body and embedded
 > accepted-status payload below describe the decision at the time; they are not
 > current implementation guidance.
 

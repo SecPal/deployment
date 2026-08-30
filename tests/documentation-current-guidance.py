@@ -16,6 +16,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ADR_019 = (
+    "https://github.com/SecPal/.github/blob/main/docs/adr/"
+    "20260824-production-edge-layered-security-adr019.md"
+)
 
 
 class Authority(Enum):
@@ -56,13 +60,21 @@ OBSOLETE_CURRENT_SUPPORT = {
         r"(?:\s+database)?\s+container"
         r"|(?:PostgreSQL|Postgres)\s+(?:container|containerized)"
         r"(?:\s+database)?\s+(?:for|as)\s+(?:a\s+)?(?:SecPal\s+)?production"
+        r"|(?:SecPal|current\s+deployments?)\s+(?:runs?|uses?|hosts?)\s+"
+        r"(?:a\s+)?containerized\s+(?:PostgreSQL|Postgres)(?:\s+database)?\s+"
+        r"(?:in|for)\s+production"
         r")\b",
         re.I,
     ),
     "pre-18 PostgreSQL baseline": re.compile(
-        r"\b(?:PostgreSQL|Postgres)\s+(?:16|17)\s+is\s+the\s+"
+        r"\b(?:"
+        r"(?:PostgreSQL|Postgres)\s+(?:16|17)\s+is\s+the\s+"
         r"(?:(?:current|production)\s+)?(?:SecPal\s+)?(?:database\s+)?"
-        r"(?:baseline|supported\s+baseline)\b",
+        r"(?:baseline|supported\s+baseline)"
+        r"|(?:the\s+)?(?:current|production)\s+(?:SecPal\s+)?"
+        r"(?:database\s+)?(?:baseline|supported\s+baseline)\s+is\s+"
+        r"(?:PostgreSQL|Postgres)\s+(?:16|17)"
+        r")\b",
         re.I,
     ),
     "Debian current admission": re.compile(
@@ -79,7 +91,7 @@ OBSOLETE_CURRENT_SUPPORT = {
     ),
     "Valkey current requirement": re.compile(
         r"\b(?:"
-        r"(?:Valkey|Redis)\s+(?:is|are)\s+(?:required|current)"
+        r"(?:Valkey|Redis)\s+(?:is|are)\s+(?:required|current|mandatory)"
         r"|(?:current\s+)?(?:deployments?|integration|runtime)\s+require(?:s)?\s+"
         r"(?:Valkey|Redis)"
         r")\b",
@@ -95,7 +107,10 @@ OBSOLETE_CURRENT_SUPPORT = {
         r"(?:the\s+)?(?:current\s+)?(?:application\s+state|cache|queues?|sessions?)"
         r"(?:\s+and\s+(?:the\s+)?(?:current\s+)?"
         r"(?:application\s+state|cache|queues?|sessions?))?(?:\s+stores?)?"
-        r")\b",
+        r")\b|\b(?:current\s+)?(?:application\s+state|cache|queues?|sessions?)"
+        r"(?:\s+and\s+(?:the\s+)?(?:current\s+)?"
+        r"(?:application\s+state|cache|queues?|sessions?))?\s+"
+        r"(?:uses?|use)\s+(?:Valkey|Redis)\s+as\s+(?:the|their)\s+backend\b",
         re.I,
     ),
     "Caddy production edge": re.compile(
@@ -110,8 +125,24 @@ OBSOLETE_CURRENT_SUPPORT = {
         re.I,
     ),
     "D.1 current production-host contract": re.compile(
-        r"\bD\.1\s+(?:now\s+)?(?:defines|is)\s+(?:the\s+)?"
-        r"(?:current\s+)?production[- ]host\s+(?:contract|specification|authority|baseline)\b",
+        r"\b(?:"
+        r"D\.1\s+(?:now\s+)?(?:defines|is)\s+(?:the\s+)?"
+        r"(?:current\s+)?production[- ]host\s+"
+        r"(?:contract|specification|authority|baseline)"
+        r"|(?:the\s+)?current\s+production[- ]host\s+"
+        r"(?:contract|specification|authority|baseline)\s+is\s+"
+        r"(?:defined|owned)\s+by\s+D\.1"
+        r")\b",
+        re.I,
+    ),
+    "universal production-edge authority": re.compile(
+        r"(?:"
+        r"#89\s+owns\s+(?:all|every)\s+production[- ]edge\s+modes?"
+        r"|HAProxy\s+is\s+the\s+public\s+Viewer\s+Edge\s+for\s+"
+        r"(?:all|every)\s+deployments?"
+        r"|PROTECTED\s+deployments?\s+(?:terminate|route|handle)\s+"
+        r"public\s+Viewer\s+traffic\s+at\s+HAProxy"
+        r")",
         re.I,
     ),
     "old implementation status": re.compile(
@@ -306,6 +337,77 @@ class DocumentationCurrentGuidance(unittest.TestCase):
                     "D.1 is the current production host specification",
                 ),
             ),
+            (
+                "inverse pre-18 production baseline",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\n"
+                    "The current database baseline is PostgreSQL 16.",
+                ),
+            ),
+            (
+                "inverse production PostgreSQL container",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\n"
+                    "SecPal uses a containerized PostgreSQL database in production.",
+                ),
+            ),
+            (
+                "Valkey mandatory current deployment",
+                Path("docs/quadlet-integration.md"),
+                (
+                    "This is the active disposable integration runtime delivered by",
+                    "Valkey is mandatory for current deployments.\n\n"
+                    "This is the active disposable integration runtime delivered by",
+                ),
+            ),
+            (
+                "inverse Redis current backend",
+                Path("docs/quadlet-integration.md"),
+                (
+                    "This is the active disposable integration runtime delivered by",
+                    "Current queues and sessions use Redis as their backend.\n\n"
+                    "This is the active disposable integration runtime delivered by",
+                ),
+            ),
+            (
+                "inverse D.1 current production host baseline",
+                Path("docs/api-image-consumption.md"),
+                (
+                    "At Phase C completion, Phase D had not started. D.1 subsequently defined an\n"
+                    "earlier production-host contract that is now historical.",
+                    "The current production-host baseline is defined by D.1.",
+                ),
+            ),
+            (
+                "universal issue 89 edge ownership",
+                Path("README.md"),
+                (
+                    "# SecPal Deployment",
+                    "# SecPal Deployment\n\n#89 owns all production edge modes.",
+                ),
+            ),
+            (
+                "universal HAProxy Viewer Edge",
+                Path("docs/architecture/scope.md"),
+                (
+                    "This document is the deployment documentation index and ownership map.",
+                    "HAProxy is the public Viewer Edge for every deployment.\n\n"
+                    "This document is the deployment documentation index and ownership map.",
+                ),
+            ),
+            (
+                "protected viewer traffic at HAProxy",
+                Path("docs/roadmap.md"),
+                (
+                    "This roadmap distinguishes implementation on current `main`",
+                    "Protected deployments terminate public viewer traffic at HAProxy.\n\n"
+                    "This roadmap distinguishes implementation on current `main`",
+                ),
+            ),
         )
         for name, path, mutation in mutations:
             with self.subTest(name=name), self.authority_fixture({path: mutation}) as temporary:
@@ -319,11 +421,16 @@ class DocumentationCurrentGuidance(unittest.TestCase):
                 "# SecPal Deployment",
                 "# SecPal Deployment\n\n"
                 "PostgreSQL 18 is the current SecPal database baseline.\n"
-                "Production PostgreSQL is not a SecPal container.",
+                "Production PostgreSQL is not a SecPal container.\n"
+                "In DIRECT, HAProxy is the public Viewer Edge and Certbot owns Viewer TLS.\n"
+                "In PROTECTED, HAProxy is the authenticated Origin/backend, not the public "
+                "Viewer Edge.\n"
+                "#89 owns DIRECT and #209 owns PROTECTED.",
             ),
             Path("docs/quadlet-integration.md"): (
                 "This is the active disposable integration runtime delivered by",
                 "Current deployments do not require Valkey.\n"
+                "Redis is not used for current queues or sessions.\n"
                 "The disposable integration PostgreSQL container is test-only.\n"
                 "The cache is database-backed, queues use the database connection, and sessions "
                 "use the database.\n"
@@ -379,13 +486,68 @@ class DocumentationCurrentGuidance(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, current)
 
+    def test_current_edge_navigation_follows_accepted_adr_019_modes(self) -> None:
+        navigation = {
+            path: read(path)
+            for path in (
+                Path("README.md"),
+                Path("AGENTS.md"),
+                Path("docs/architecture/scope.md"),
+                Path("docs/roadmap.md"),
+                Path("docs/architecture/decisions/production-edge.md"),
+            )
+        }
+        combined = "\n".join(navigation.values())
+        for required in (
+            ADR_019,
+            "DIRECT",
+            "PROTECTED",
+            "https://github.com/SecPal/deployment/issues/89",
+            "https://github.com/SecPal/deployment/issues/209",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+
+        readme = navigation[Path("README.md")]
+        self.assertRegex(readme, r"(?s)DIRECT.{0,500}issues/89")
+        self.assertRegex(readme, r"(?s)PROTECTED.{0,500}issues/209")
+        self.assertRegex(readme, r"(?is)PROTECTED.{0,500}authenticated Origin/backend")
+        self.assertRegex(
+            readme,
+            r"(?is)PROTECTED.{0,500}not\s+(?:the\s+)?public\s+Viewer\s+Edge",
+        )
+
+        agents = navigation[Path("AGENTS.md")]
+        self.assertIn(ADR_019, agents)
+        self.assertRegex(agents, r"(?s)DIRECT.{0,500}#89")
+        self.assertRegex(agents, r"(?s)PROTECTED.{0,500}#209")
+
+        old_edge = navigation[Path("docs/architecture/decisions/production-edge.md")][
+            :1_500
+        ]
+        self.assertIn(ADR_019, old_edge)
+        self.assertIn("DIRECT", old_edge)
+        self.assertIn("PROTECTED", old_edge)
+        self.assertNotIn("owned solely by", old_edge)
+
+        for stale in (
+            "HAProxy alone owns public ingress",
+            "#89 owns all production edge modes",
+            "HAProxy is the public Viewer Edge for every deployment",
+            "Protected deployments terminate public viewer traffic at HAProxy",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, combined)
+
     def test_superseded_records_have_bounded_status_markers(self) -> None:
         for path, marker in HISTORICAL_STATUS.items():
             with self.subTest(path=path):
                 self.assertIn(marker, read(path)[:1_000])
 
         old_edge = read(Path("docs/architecture/decisions/production-edge.md"))[:1_000]
+        self.assertIn(ADR_019, old_edge)
         self.assertIn("https://github.com/SecPal/deployment/issues/89", old_edge)
+        self.assertIn("https://github.com/SecPal/deployment/issues/209", old_edge)
 
     def test_current_integration_states_its_two_implementation_boundaries(self) -> None:
         integration = read(Path("docs/quadlet-integration.md"))

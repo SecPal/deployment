@@ -138,8 +138,13 @@ Never print secret values to logs.
   SecPal product container; integration PostgreSQL remains disposable test data.
 - PostgreSQL provides relational state, sessions, durable queues, and shared
   cache; the current production and integration topology has no Valkey.
-- Host-native HAProxy owns public TLS and routing with external Certbot;
-  product containers remain private and do not expose public TLS.
+- For production-edge work, consult accepted
+  [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
+  and select `DIRECT` or `PROTECTED` independently of deployment topology.
+- In `DIRECT`, #89 owns the host-native HAProxy public Viewer Edge and external
+  Certbot. In `PROTECTED`, #209 owns the portable public Viewer Edge path;
+  HAProxy is the authenticated Origin/backend, not the public Viewer Edge.
+  Product containers remain private and do not expose public TLS.
 - Security is layered across SELinux/rootless confinement, nftables, CrowdSec
   host decisioning, AppSec/Coraza, and socketless runtime detection.
 - PostgreSQL recovery uses Barman, `single` private-file recovery uses Borg, and
