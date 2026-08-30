@@ -206,6 +206,14 @@ class CloudFrontOriginPrefixLkgTests(unittest.TestCase):
             with self.assertRaises(self.lkg.ContractError):
                 self.lkg.write_candidate(unsafe_mode, candidate)
 
+            mutable_ancestor = root / "mutable-ancestor"
+            mutable_ancestor.mkdir(mode=0o777)
+            mutable_ancestor.chmod(0o777)
+            nested_state = mutable_ancestor / "state"
+            nested_state.mkdir(mode=0o700)
+            with self.assertRaises(self.lkg.ContractError):
+                self.lkg.read_lkg(nested_state)
+
             state = root / "state"
             self.lkg.write_candidate(state, candidate)
             candidate_path = state / self.lkg.CANDIDATE_FILE
@@ -223,6 +231,14 @@ class CloudFrontOriginPrefixLkgTests(unittest.TestCase):
             (shape_state / self.lkg.CANDIDATE_FILE).mkdir(mode=0o700)
             with self.assertRaises(self.lkg.ContractError):
                 self.lkg.read_candidate(shape_state)
+
+            oversized_state = root / "oversized-state"
+            oversized_state.mkdir(mode=0o700)
+            oversized_candidate = oversized_state / self.lkg.CANDIDATE_FILE
+            oversized_candidate.write_bytes(b"x" * (self.lkg.MAX_STATE_BYTES + 1))
+            oversized_candidate.chmod(0o600)
+            with self.assertRaises(self.lkg.ContractError):
+                self.lkg.read_candidate(oversized_state)
 
     def test_post_commit_durability_failure_requires_authoritative_readback(self) -> None:
         accepted = self.candidate()

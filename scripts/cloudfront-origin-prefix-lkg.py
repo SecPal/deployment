@@ -245,6 +245,10 @@ def _assert_safe_directory(path: Path, *, create: bool) -> Path:
             metadata = current.lstat()
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
             raise ContractError("state directory contains an unsafe component")
+        mode = stat.S_IMODE(metadata.st_mode)
+        safe_sticky_root = metadata.st_uid == 0 and bool(mode & stat.S_ISVTX)
+        if current != path and mode & 0o022 and not safe_sticky_root:
+            raise ContractError("state directory has a mutable trusted ancestor")
     if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
         raise ContractError("state directory ownership or mode is unsafe")
     return path
@@ -347,13 +351,34 @@ def _read_document(directory: Path, name: str, *, required: bool) -> dict[str, A
     path = _state_file(directory, name, required=required)
     if path is None:
         return None
+    descriptor: int | None = None
     try:
-        content = path.read_bytes()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        opened = os.fstat(descriptor)
+        linked = path.lstat()
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino)
+        ):
+            raise ContractError("state file changed during validation")
+        source = os.fdopen(descriptor, "rb")
+        descriptor = None
+        with source:
+            content = source.read(MAX_STATE_BYTES + 1)
         if len(content) > MAX_STATE_BYTES:
             raise ContractError("state document exceeds the maximum size")
         document = json.loads(content.decode("utf-8"), object_pairs_hook=_closed_object)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise ContractError("state document is invalid") from error
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
     if not isinstance(document, dict):
         raise ContractError("state document root is invalid")
     validate_candidate(document)
