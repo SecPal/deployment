@@ -2146,11 +2146,12 @@ def validate_rocky_control_plane(root: Path) -> None:
         "target output and trace must be bounded without limiting target filesystem writes",
     )
     require(
-        'audit_checkpoint = re.fullmatch(' in target_runner
-        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{4}) ([0-9]{2}:[0-9]{2}:[0-9]{2})"'
+        'audit_baseline="$(date -u \'+%m/%d/%y %H:%M:%S\')"' in target_runner
+        and 'audit_checkpoint = re.fullmatch(' in target_runner
+        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})"'
         in target_runner
         and "audit_date, audit_time = audit_checkpoint.groups()" in target_runner
-        and 'datetime.strptime(audit_baseline, "%m/%d/%Y %H:%M:%S")'
+        and 'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")'
         in target_runner
         and '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",'
         in target_runner

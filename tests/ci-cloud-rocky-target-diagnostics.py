@@ -3928,6 +3928,11 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         self,
     ) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("date -u '+%m/%d/%y %H:%M:%S'", runner)
+        self.assertIn(
+            'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")',
+            runner,
+        )
         function = re.search(
             r"\ndef audit_event_id\(.*?(?=\n\navc_events =)",
             runner,

@@ -181,7 +181,8 @@ trusted admission code can emit; schema and classifier reject every other
 zero-status identity. The runner's own negative exit remains a separate truth.
 
 Success admission invokes absolute `/usr/sbin/ausearch --input-logs ... -i`
-with a strictly parsed date and time in separate argv fields. Its concurrent
+with a strictly parsed C-locale two-digit-year date and time in separate argv
+fields; interpreted audit records retain their distinct four-digit-year grammar. Its concurrent
 stdout and stderr drainers retain only 65,536 and 4,096 bytes. A bounded retry
 admits only the tool's exact normal no-match representation while auditd makes
 the just-completed event visible; status-1 output or any other warning remains

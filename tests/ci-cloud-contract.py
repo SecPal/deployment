@@ -1162,6 +1162,11 @@ class CloudCIContractTests(unittest.TestCase):
     def test_rejects_cross_record_or_unbound_avc_admission(self) -> None:
         runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
         for old, new in (
+            ("date -u '+%m/%d/%y %H:%M:%S'", "date -u '+%m/%d/%Y %H:%M:%S'"),
+            (
+                'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")',
+                'datetime.strptime(audit_baseline, "%m/%d/%Y %H:%M:%S")',
+            ),
             (
                 "audit_date, audit_time = audit_checkpoint.groups()",
                 'audit_date, audit_time = audit_baseline.split(" ", 1)',

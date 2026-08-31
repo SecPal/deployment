@@ -107,7 +107,7 @@ fi
 [[ -x "$work_root/scripts/qualify-production-host.sh" ]]
 
 stdout="$evidence_root/qualification.stdout"
-audit_baseline="$(date -u '+%m/%d/%Y %H:%M:%S')"
+audit_baseline="$(date -u '+%m/%d/%y %H:%M:%S')"
 journal_baseline="$(date -u '+%Y-%m-%d %H:%M:%S.%6N UTC')"
 boot_id="$(cat /proc/sys/kernel/random/boot_id)"
 [[ "$boot_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
@@ -396,14 +396,14 @@ if parsed["process_a"][3] != parsed["storage_a"][3] or parsed["process_b"][3] ==
 if facts["seccomp_mode"] != "2":
     reject("qualify-seccomp", "invariant-failed", "qualification seccomp mode is not enforcing")
 audit_checkpoint = re.fullmatch(
-    r"([0-9]{2}/[0-9]{2}/[0-9]{4}) ([0-9]{2}:[0-9]{2}:[0-9]{2})",
+    r"([0-9]{2}/[0-9]{2}/[0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})",
     audit_baseline,
 )
 if audit_checkpoint is None:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
 audit_date, audit_time = audit_checkpoint.groups()
 try:
-    datetime.strptime(audit_baseline, "%m/%d/%Y %H:%M:%S")
+    datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")
 except ValueError:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
 audit_stdout = acquire_audit_events(
