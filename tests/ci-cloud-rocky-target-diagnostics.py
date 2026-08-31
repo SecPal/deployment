@@ -126,7 +126,10 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             ancestor = root / "etc"
             leaf = ancestor / "containers" / "systemd" / "users" / "20000"
             leaf.mkdir(parents=True)
-            for component in (root, ancestor, *ancestor.parents[:0], leaf):
+            component = root
+            component.chmod(0o755)
+            for name in leaf.relative_to(root).parts:
+                component /= name
                 component.chmod(0o755)
             uid = str(os.getuid())
             gid = str(os.getgid())
@@ -177,6 +180,70 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
             )
             self.assertNotEqual(0, ancestor_redirected.returncode)
+
+    def test_effective_quadlet_service_admission_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            properties = Path(directory) / "service.properties"
+            expected_fragment = (
+                "/run/user/20000/systemd/generator/"
+                "secpal-host-qualification-fixture.service"
+            )
+            expected_source = (
+                "/etc/containers/systemd/users/20000/"
+                "secpal-host-qualification-fixture.container"
+            )
+            baseline = {
+                "FragmentPath": expected_fragment,
+                "SourcePath": expected_source,
+                "DropInPaths": "",
+                "ExecStart": (
+                    "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run "
+                    "--name=secpal-host-qualification-fixture ; }"
+                ),
+            }
+
+            def admitted(values: dict[str, str]) -> subprocess.CompletedProcess[str]:
+                properties.write_text(
+                    "".join(f"{name}={value}\n" for name, value in values.items()),
+                    encoding="utf-8",
+                )
+                return self.run_authority_contract(
+                    "effective_quadlet_service_admitted",
+                    properties.as_posix(),
+                    expected_fragment,
+                    expected_source,
+                )
+
+            valid = admitted(baseline)
+            self.assertEqual(0, valid.returncode, valid.stderr)
+
+            mutations = {
+                "shadowed fragment": {
+                    "FragmentPath": (
+                        "/home/secpal-deploy/.config/systemd/user/"
+                        "secpal-host-qualification-fixture.service"
+                    )
+                },
+                "substituted source": {
+                    "SourcePath": "/home/secpal-deploy/fixture.container"
+                },
+                "runtime drop-in": {
+                    "DropInPaths": (
+                        "/home/secpal-deploy/.config/systemd/user/"
+                        "secpal-host-qualification-fixture.service.d/override.conf"
+                    )
+                },
+                "substituted execution": {
+                    "ExecStart": "{ path=/usr/bin/sh ; argv[]=/usr/bin/sh -c true ; }"
+                },
+            }
+            for name, mutation in mutations.items():
+                with self.subTest(name=name):
+                    self.assertNotEqual(0, admitted({**baseline, **mutation}).returncode)
+
+            duplicate = dict(baseline)
+            duplicate["FragmentPath"] += f"\nFragmentPath={expected_fragment}"
+            self.assertNotEqual(0, admitted(duplicate).returncode)
 
     def test_quadlet_authority_rejects_effective_service_account_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -151,6 +151,24 @@ runtime_identity_admitted() {
   return 0
 }
 
+effective_quadlet_service_admitted() {
+  local properties_path="$1" expected_fragment="$2" expected_source="$3"
+  local fragment source drop_ins exec_start direct_podman_prefix
+  [[ -f "$properties_path" ]] || return 1
+  [[ "$(awk 'END { print NR }' "$properties_path")" == 4 ]] || return 1
+  fragment="$(awk -F= '$1 == "FragmentPath" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
+  source="$(awk -F= '$1 == "SourcePath" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
+  drop_ins="$(awk -F= '$1 == "DropInPaths" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
+  exec_start="$(awk -F= '$1 == "ExecStart" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
+  [[ "$fragment" == "$expected_fragment" ]] || return 1
+  [[ "$source" == "$expected_source" ]] || return 1
+  [[ -z "$drop_ins" ]] || return 1
+  direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '
+  [[ "$exec_start" == "$direct_podman_prefix"* && "$exec_start" == *' ; }' ]] || return 1
+  [[ "${exec_start#*\{ path=}" != *'{ path='* ]] || return 1
+  return 0
+}
+
 least_authority_process_admitted() {
   local status_path="$1" expected_uid="$2" expected_gid="$3" identities field value
   identities="$(effective_process_ids "$status_path")" || return 1
@@ -377,6 +395,21 @@ if grep -En 'AutoUpdate=|Network=host|label=disable|Privileged=true' "$unit_path
   exit 1
 fi
 user_systemctl daemon-reload
+unit_properties="${fixture_root}/quadlet-service.properties"
+if ! user_systemctl show "${unit_name}.service" \
+  --property=FragmentPath --property=SourcePath \
+  --property=DropInPaths --property=ExecStart >"$unit_properties"; then
+  printf 'ERROR: effective Quadlet service authority is unavailable.\n' >&2
+  exit 1
+fi
+chmod 0600 "$unit_properties"
+if ! effective_quadlet_service_admitted \
+  "$unit_properties" \
+  "/run/user/${service_uid}/systemd/generator/${unit_name}.service" \
+  "$unit_path"; then
+  printf 'ERROR: effective Quadlet service contradicts the admitted administrator configuration.\n' >&2
+  exit 1
+fi
 user_systemctl start "${unit_name}.service"
 user_systemctl is-active --quiet "${unit_name}.service"
 

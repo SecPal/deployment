@@ -1013,6 +1013,19 @@ class CloudCIContractTests(unittest.TestCase):
                 '[[ "$effective_quadlet_dirs" != "$quadlet_root" ]]',
                 '[[ -z "$effective_quadlet_dirs" ]]',
             ),
+            (
+                '[[ "$fragment" == "$expected_fragment" ]]',
+                '[[ -n "$fragment" ]]',
+            ),
+            (
+                '[[ "$source" == "$expected_source" ]]',
+                '[[ -n "$source" ]]',
+            ),
+            ('[[ -z "$drop_ins" ]]', '[[ -n "$drop_ins" ]]'),
+            (
+                "direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '",
+                "direct_podman_prefix='{ path=/usr/bin/sh ; argv[]=/usr/bin/sh -c '",
+            ),
         )
         for old, new in mutations:
             with self.subTest(old=old):

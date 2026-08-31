@@ -278,7 +278,10 @@ fixture definition without following symlinks, admits root ownership and the
 absence of group/other write permission, and independently proves that the
 runtime account cannot write any component. It applies the same check to the
 search-path drop-in and observes the effective manager environment, so default
-user-writable Quadlet locations cannot replace the admitted input.
+user-writable Quadlet locations cannot replace the admitted input. After reload
+and before activation, it also admits the generated service's exact fragment
+and source paths, absence of drop-ins, and direct Podman execution; a shadowing
+user unit or user-owned override therefore fails closed.
 
 The account UID/GID must be nonzero before preparation changes it. Qualification
 then admits Podman's effective rootless report and binds both the invoking

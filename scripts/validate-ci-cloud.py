@@ -2164,7 +2164,7 @@ def validate_rocky_control_plane(root: Path) -> None:
             'administrator_path_admitted "$unit_path" / 0 0 file 644'
         )
         < qualification_harness.index(
-            "\nuser_systemctl daemon-reload\nuser_systemctl start"
+            "\nuser_systemctl daemon-reload\n"
         ),
         "qualification must admit immutable administrator ownership across the exact Quadlet ancestry before reload",
     )
@@ -2188,6 +2188,26 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '[[ "$effective_quadlet_dirs" != "$quadlet_root" ]]'
         in qualification_harness,
         "administrator preparation and effective generator discovery must agree on the one immutable UID-scoped Quadlet path",
+    )
+    require(
+        "effective_quadlet_service_admitted() {" in qualification_harness
+        and '[[ "$fragment" == "$expected_fragment" ]]'
+        in qualification_harness
+        and '[[ "$source" == "$expected_source" ]]'
+        in qualification_harness
+        and '[[ -z "$drop_ins" ]]' in qualification_harness
+        and "direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '"
+        in qualification_harness
+        and '--property=FragmentPath --property=SourcePath' in qualification_harness
+        and '--property=DropInPaths --property=ExecStart' in qualification_harness
+        and qualification_harness.index("\nuser_systemctl daemon-reload\n")
+        < qualification_harness.index(
+            "\nif ! effective_quadlet_service_admitted \\\n"
+        )
+        < qualification_harness.index(
+            '\nuser_systemctl start "${unit_name}.service"\n'
+        ),
+        "qualification must admit the effective generated service before activation",
     )
     require(
         "least_authority_process_admitted() {" in qualification_harness
