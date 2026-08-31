@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Structural regression evidence for deployment work-graph governance."""
+"""Structural regression evidence for deployment agent governance."""
 
 from __future__ import annotations
 
@@ -120,6 +120,76 @@ class WorkGraphGovernanceTests(unittest.TestCase):
                 "API and frontend remain separate images",
                 "Migrations are explicit and run exactly once",
             )
+        )
+
+
+class ReviewLifecycleGovernanceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        baseline = AGENT_BASELINE.read_text(encoding="utf-8")
+        matches = tuple(
+            re.finditer(
+                r"^## PR review lifecycle\n(?P<body>.*?)(?=^## |\Z)",
+                baseline,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+        )
+        if len(matches) != 1:
+            raise AssertionError(
+                "expected exactly one PR review lifecycle section, "
+                f"found {len(matches)}"
+            )
+        cls.section_raw = matches[0].group("body")
+        cls.section = " ".join(cls.section_raw.split())
+
+    def require_semantics(self, *terms: str) -> None:
+        for term in terms:
+            with self.subTest(term=term):
+                self.assertRegex(self.section, term)
+
+    def test_canonical_review_contract_is_reachable_without_duplication(self) -> None:
+        self.require_semantics(
+            r"SecPal/\.github/\.agents/skills/secpal-pr-review/references/contract\.md",
+            r"canonical.*authority",
+            r"subordinate.*safety",
+        )
+        self.assertRegex(
+            self.section_raw,
+            r"\[SecPal/\.github/\.agents/skills/secpal-pr-review/references/"
+            r"contract\.md\]\(https://github\.com/SecPal/\.github/blob/main/"
+            r"\.agents/skills/secpal-pr-review/references/contract\.md\)",
+        )
+
+    def test_review_processing_is_finite_and_operator_authorized(self) -> None:
+        self.require_semantics(
+            r"finite",
+            r"new commit.*does not.*authoriz.*another review",
+            r"remediat.*does not.*authoriz.*another review",
+            r"must not[^.]*request[^.]*another review",
+            r"must not[^.]*trigger[^.]*another review",
+            r"must not[^.]*recommend[^.]*another review",
+            r"must not[^.]*wait for[^.]*another review",
+            r"explicit operator.*additional.*review",
+            r"review.*remediat.*review.*prohibited",
+        )
+
+    def test_ready_is_monotonic_without_separate_operator_authority(self) -> None:
+        self.require_semantics(
+            r"Ready.*monotonic",
+            r"remediat.*push.*CI.*finding.*metadata.*recover",
+            r"must not cause.*Ready -> Draft",
+            r"explicit operator.*separate.*reason",
+        )
+
+    def test_new_operator_limits_supersede_unfinished_work(self) -> None:
+        self.require_semantics(
+            r"operator.*stop",
+            r"operator.*narrow",
+            r"operator.*prohibit",
+            r"operator.*pause",
+            r"supersede.*unfinished agent",
+            r"supersede.*delegated work",
+            r"stop.*delegated work.*cannot.*propagat",
         )
 
 
