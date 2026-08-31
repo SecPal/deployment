@@ -154,6 +154,7 @@ if [[ -n "$observer_pid" ]]; then
   exec 4>&-
   exec 5<&-
   wait "$observer_pid" >/dev/null 2>&1
+  observer_pid=""
 fi
 set -e
 stdout_size="$(stat -c %s "$stdout")"
@@ -305,7 +306,9 @@ def run_bounded(
     return status, stdout, stderr, invalid or stdout_invalid or stderr_invalid
 
 
-def acquire_audit_events(command: list[str]) -> bytes | None:
+def acquire_audit_events(
+    command: list[str], source_context: str, target_context: str
+) -> tuple[bytes | None, set[tuple[str, str]] | None]:
     for attempt in range(12):
         status, stdout, stderr, invalid = run_bounded(
             command,
@@ -313,19 +316,31 @@ def acquire_audit_events(command: list[str]) -> bytes | None:
             stderr_limit=4096,
             timeout=5,
         )
-        if status == 0 and not invalid and not stderr.strip():
-            return stdout
-        no_finding = (
-            status == 1
-            and not invalid
-            and not stdout
-            and stderr in {b"", b"<no matches>\n"}
-        )
+        if status == 0 and not invalid and not stderr:
+            try:
+                audit_text = stdout.decode("utf-8")
+            except UnicodeDecodeError:
+                return None, None
+            events = correlated_avc_events(
+                audit_text, source_context, target_context
+            )
+            if events is None:
+                return None, None
+            if events:
+                return stdout, events
+            no_finding = True
+        else:
+            no_finding = (
+                status == 1
+                and not invalid
+                and not stdout
+                and stderr in {b"", b"<no matches>\n"}
+            )
         if not no_finding:
-            return None
+            return None, None
         if attempt < 11:
             time.sleep(0.5)
-    return b""
+    return b"", set()
 
 
 def runtime_home_admitted(
@@ -406,20 +421,6 @@ try:
     datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")
 except ValueError:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-audit_stdout = acquire_audit_events(
-    [
-        "/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",
-        audit_date, audit_time, "-i",
-    ]
-)
-if audit_stdout is None:
-    reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-try:
-    audit_text = audit_stdout.decode("utf-8")
-except UnicodeDecodeError:
-    reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-
-
 def audit_event_id(line: str) -> tuple[str, str] | None:
     interpreted = re.search(
         r"\bmsg=audit\("
@@ -443,9 +444,11 @@ def correlated_avc_events(
 ) -> set[tuple[str, str]] | None:
     events = {}
     for line in audit_text.splitlines():
+        if line in {"", "----"}:
+            continue
         record = re.match(r"^type=([A-Z][A-Z0-9_]*)\s", line)
         if record is None:
-            continue
+            return None
         event_id = audit_event_id(line)
         if event_id is None:
             return None
@@ -472,6 +475,11 @@ def correlated_avc_events(
             and tclass.group(1) == "dir"
             and re.search(r"(?:^|\s)permissive=0(?:\s|$)", line) is not None
         )
+    if any(
+        event["avc"] > 1 or event["marker"] > 1
+        for event in events.values()
+    ):
+        return None
     return {
         event_id
         for event_id, event in events.items()
@@ -479,10 +487,15 @@ def correlated_avc_events(
     }
 
 
-avc_events = correlated_avc_events(
-    audit_text, facts["process_b"], facts["storage_a"]
+audit_stdout, avc_events = acquire_audit_events(
+    [
+        "/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",
+        audit_date, audit_time, "-i",
+    ],
+    facts["process_b"],
+    facts["storage_a"],
 )
-if avc_events is None:
+if audit_stdout is None or avc_events is None:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
 if not avc_events:
     reject(

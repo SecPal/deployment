@@ -2139,6 +2139,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and 'pipeline_statuses=("${PIPESTATUS[@]}")' in target_runner
         and 'wait "$trace_capture_pid"' in target_runner
+        and 'wait "$observer_pid" >/dev/null 2>&1\n  observer_pid=""'
+        in target_runner
         and '"$stdout_capture_status" -ne 0'
         in target_runner
         and '"$trace_capture_status" -ne 0'
@@ -2159,20 +2161,25 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "def run_bounded(" in target_runner
         and "def acquire_audit_events(" in target_runner
         and 'stderr in {b"", b"<no matches>\\n"}' in target_runner
-        and 'and not stdout\n            and stderr in {b"", b"<no matches>\\n"}'
+        and 'and not stdout\n                and stderr in {b"", b"<no matches>\\n"}'
         in target_runner
         and "for attempt in range(12):" in target_runner
         and "time.sleep(0.5)" in target_runner
+        and "if events is None:\n                return None, None" in target_runner
+        and "if events:\n                return stdout, events" in target_runner
         and "def audit_event_id(" in target_runner
         and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "' in target_runner
         and 'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")'
         in target_runner
         and "def correlated_avc_events(" in target_runner
         and "for line in audit_text.splitlines():" in target_runner
+        and 'if line in {"", "----"}:\n            continue' in target_runner
+        and "if record is None:\n            return None" in target_runner
         and "event_id = audit_event_id(line)" in target_runner
         and "if event_id is None:\n            return None" in target_runner
         and 'events.setdefault(event_id, {"avc": 0, "marker": 0})'
         in target_runner
+        and 'event["avc"] > 1 or event["marker"] > 1' in target_runner
         and 'r"avc:\\s+denied\\s+\\{"' in target_runner
         and 'record_type == "PROCTITLE"' in target_runner
         and "r'(?:^|\\s)proctitle=[^\\r\\n]*'" in target_runner
@@ -2180,7 +2187,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'tclass.group(1) == "dir"' in target_runner
         and 'r"(?:^|\\s)permissive=0(?:\\s|$)"' in target_runner
         and 'if event["avc"] == 1 and event["marker"] == 1' in target_runner
-        and 'audit_text, facts["process_b"], facts["storage_a"]'
+        and 'facts["process_b"],\n    facts["storage_a"],'
         in target_runner
         and "if not avc_events:" in target_runner
         and "if len(avc_events) != 1:" in target_runner

@@ -3762,6 +3762,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         )
         self.assertIn('pipeline_statuses=("${PIPESTATUS[@]}")', runner)
         self.assertIn('wait "$trace_capture_pid"', runner)
+        self.assertIn(
+            'wait "$observer_pid" >/dev/null 2>&1\n  observer_pid=""',
+            runner,
+        )
         self.assertNotIn("\n  status=1\n", runner)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -3903,24 +3907,61 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         self.assertTrue(invalid)
         self.assertLess(__import__("time").monotonic() - started, 4)
         acquire = namespace["acquire_audit_events"]
+        event = {("08/31/26 00:43:39.673", "41")}
+        namespace["correlated_avc_events"] = mock.Mock(return_value=event)
         no_match = (1, b"", b"<no matches>\n", False)
         namespace["run_bounded"] = mock.Mock(
             side_effect=(no_match, (0, b"event", b"", False))
         )
         with mock.patch.object(namespace["time"], "sleep") as pause:
-            self.assertEqual(b"event", acquire(["/usr/sbin/ausearch"]))
+            self.assertEqual(
+                (b"event", event),
+                acquire(["/usr/sbin/ausearch"], "source", "target"),
+            )
+        pause.assert_called_once_with(0.5)
+        namespace["run_bounded"] = mock.Mock(
+            side_effect=(
+                (0, b"unrelated", b"", False),
+                (0, b"event", b"", False),
+            )
+        )
+        namespace["correlated_avc_events"] = mock.Mock(
+            side_effect=(set(), event)
+        )
+        with mock.patch.object(namespace["time"], "sleep") as pause:
+            self.assertEqual(
+                (b"event", event),
+                acquire(["/usr/sbin/ausearch"], "source", "target"),
+            )
         pause.assert_called_once_with(0.5)
         namespace["run_bounded"] = mock.Mock(
             return_value=(1, b"unexpected", b"", False)
         )
-        self.assertIsNone(acquire(["/usr/sbin/ausearch"]))
+        self.assertEqual(
+            (None, None),
+            acquire(["/usr/sbin/ausearch"], "source", "target"),
+        )
         namespace["run_bounded"] = mock.Mock(
             return_value=(1, b"", b"warning\n", False)
         )
-        self.assertIsNone(acquire(["/usr/sbin/ausearch"]))
+        self.assertEqual(
+            (None, None),
+            acquire(["/usr/sbin/ausearch"], "source", "target"),
+        )
+        namespace["run_bounded"] = mock.Mock(
+            return_value=(0, b"malformed", b"", False)
+        )
+        namespace["correlated_avc_events"] = mock.Mock(return_value=None)
+        self.assertEqual(
+            (None, None),
+            acquire(["/usr/sbin/ausearch"], "source", "target"),
+        )
         namespace["run_bounded"] = mock.Mock(return_value=no_match)
         with mock.patch.object(namespace["time"], "sleep") as pause:
-            self.assertEqual(b"", acquire(["/usr/sbin/ausearch"]))
+            self.assertEqual(
+                (b"", set()),
+                acquire(["/usr/sbin/ausearch"], "source", "target"),
+            )
         self.assertEqual(11, pause.call_count)
         self.assertIn('timeout=10,\n        cwd=str(runtime_home)', runner)
 
@@ -3934,7 +3975,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             runner,
         )
         function = re.search(
-            r"\ndef audit_event_id\(.*?(?=\n\navc_events =)",
+            r"\ndef audit_event_id\(.*?(?=\n\naudit_stdout, avc_events =)",
             runner,
             re.DOTALL,
         )
@@ -3967,7 +4008,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         self.assertEqual(set(), correlate(
             "\n".join((unrelated, relevant, trailing)), process, storage
         ))
-        self.assertEqual(set(), correlate(
+        self.assertIsNone(correlate(
             "\n".join((relevant, relevant)), process, storage
         ))
         second = relevant.replace(":41) :", ":43) :")
@@ -3989,12 +4030,19 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         )
         interpreted_event = "\n".join((interpreted_avc, interpreted_proctitle))
         self.assertEqual({event_41}, correlate(interpreted_event, process, storage))
-        self.assertEqual(set(), correlate(
+        self.assertEqual(
+            {event_41},
+            correlate(f"----\n\n{interpreted_event}\n----", process, storage),
+        )
+        self.assertIsNone(
+            correlate(f"MALFORMED EVENT\n{interpreted_event}", process, storage)
+        )
+        self.assertIsNone(correlate(
             "\n".join((interpreted_event, interpreted_proctitle)),
             process,
             storage,
         ))
-        self.assertEqual(set(), correlate(
+        self.assertIsNone(correlate(
             "\n".join((interpreted_event, interpreted_avc)),
             process,
             storage,
@@ -4005,6 +4053,23 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             process,
             storage,
         ))
+        valid_second_event = "\n".join((second, second_proctitle))
+        self.assertIsNone(
+            correlate(
+                "\n".join((interpreted_event, interpreted_avc, valid_second_event)),
+                process,
+                storage,
+            )
+        )
+        self.assertIsNone(
+            correlate(
+                "\n".join(
+                    (interpreted_event, interpreted_proctitle, valid_second_event)
+                ),
+                process,
+                storage,
+            )
+        )
         self.assertEqual(set(), correlate(
             "\n".join((
                 interpreted_avc,

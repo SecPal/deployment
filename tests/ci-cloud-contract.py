@@ -1155,6 +1155,10 @@ class CloudCIContractTests(unittest.TestCase):
                 'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"',
                 'ulimit -f 128\ncapture_bounded 4097 "$qualification_trace" <"$trace_fifo"',
             ),
+            (
+                'wait "$observer_pid" >/dev/null 2>&1\n  observer_pid=""',
+                'wait "$observer_pid" >/dev/null 2>&1',
+            ),
         ):
             with self.subTest(new=new):
                 self.assert_mutation_rejected(runner, old, new)
@@ -1189,12 +1193,21 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             ("for attempt in range(12):", "for attempt in range(1):"),
             (
-                'and not stdout\n            and stderr in {b"", b"<no matches>\\n"}',
-                'and True\n            and stderr in {b"", b"<no matches>\\n"}',
+                'and not stdout\n                and stderr in {b"", b"<no matches>\\n"}',
+                'and True\n                and stderr in {b"", b"<no matches>\\n"}',
             ),
             (
                 'stderr in {b"", b"<no matches>\\n"}',
                 "len(stderr) <= 4096",
+            ),
+            (
+                'if line in {"", "----"}:',
+                'if not line or line == "ignored":',
+            ),
+            ("if events:", "if True:"),
+            (
+                'event["avc"] > 1 or event["marker"] > 1',
+                'event["avc"] > 99 or event["marker"] > 99',
             ),
             ("for line in audit_text.splitlines():", "for line in [audit_text]:"),
             (

@@ -186,8 +186,10 @@ fields. Interpreted audit records must match that exact selected locale and
 mode rather than a raw or different-locale grammar. Its concurrent
 stdout and stderr drainers retain only 65,536 and 4,096 bytes. A bounded retry
 admits only the tool's exact normal no-match representation while auditd makes
-the just-completed event visible; status-1 output or any other warning remains
-a transport failure. Admission accepts
+the just-completed event visible. A well-formed status-0 snapshot with no exact
+candidate also retries; malformed, overfull, ambiguous, warning-bearing, or
+other status-1 output fails closed. Only blank lines and the interpreted
+format's `----` separator may appear outside typed records. Admission accepts
 only the interpreted audit timestamp grammar, correlates by the full timestamp
 and serial, and requires one unique event containing exactly one matching AVC
 and one decoded PROCTITLE marker. The marker must name the frozen harness's
