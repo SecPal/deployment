@@ -29,7 +29,7 @@ The contract follows the current official CloudFront APIs and terminology:
   self-contained first-tenant bootstrap. Its exact `RoutingEndpoint` is
   inspected before tenant creation.
 - [`CreateDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_CreateDistributionTenant.html)
-  creates one disabled tenant with the exact custom connection group, Viewer
+  creates one enabled tenant with the exact custom connection group, Viewer
   domain, tenant-specific `OriginDomain`, and CloudFront-hosted managed
   certificate request. Current AWS rejects this path when neither a certificate
   nor `ManagedCertificateRequest` is present.
@@ -38,8 +38,8 @@ The contract follows the current official CloudFront APIs and terminology:
   `validation-timed-out`, `revoked`, or `failed`. A certificate inspection can
   update the tenant, so a later mutation always obtains a fresh tenant ETag.
 - [`UpdateDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_UpdateDistributionTenant.html)
-  requires the current ETag for certificate attachment, activation,
-  OriginDomain update, and disable operations.
+  requires the current ETag for certificate attachment, OriginDomain update,
+  and disable operations.
 - [`DeleteDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_DeleteDistributionTenant.html)
   requires a disabled tenant and its current ETag. The parent distribution can
   be disabled and deleted only after its tenants are gone.
@@ -53,8 +53,9 @@ this contract never plans their mutation or deletion.
 
 These provider semantics preserve ADR-019's distinction between accepting a
 tenant create plus certificate request, validation, issuance, attachment, and
-domain activation. They do not require tenant creation and certificate request
-to be separate API mutations.
+observed domain activation. They do not require tenant creation and certificate
+request to be separate API mutations or domain activation to have a dedicated
+mutation.
 
 ## Parent and tenant baseline
 
@@ -108,7 +109,6 @@ create/inspect/disable/delete custom connection group
 create/inspect/update/disable/delete tenant
 inspect managed certificate
 attach issued certificate
-activate tenant
 ```
 
 They are not translated into #169's generic create/inspect/rebuild/delete
@@ -120,7 +120,7 @@ The one managed Viewer-certificate state model is:
 
 ```text
 no tenant
-→ requested (disabled tenant create + managed certificate request accepted)
+→ requested (enabled tenant create + managed certificate request accepted)
 → validation-required (AWS pending-validation)
 → issued
 → attached
@@ -140,8 +140,14 @@ disabled + deployed + exact attachment + teardown intent → teardown-safe
 - tenant deployment status `Deployed`.
 
 A tenant ID, accepted create-time certificate request, validation token,
-issued-but-unattached certificate, or attached-but-disabled tenant cannot
-satisfy `active`.
+issued-but-unattached certificate, or attached certificate with an inactive
+Viewer domain cannot satisfy `active`.
+
+`DistributionTenant.Enabled=true` means the tenant can serve traffic; it does
+not mean its Viewer domain is active. During CloudFront-hosted validation, the
+tenant is enabled while the Viewer domain can remain `inactive` and the managed
+certificate remains `pending-validation`. CloudFront's well-known validation
+exception belongs to that inactive domain state, not to a disabled tenant.
 
 CloudFront managed certificates expose no private key to this contract. Current
 managed-certificate details may contain bounded HTTP validation redirects for a
@@ -225,13 +231,13 @@ credential mechanism. The run must prove:
    that endpoint; DNS mutation is not a CloudFront lifecycle operation;
 4. read back mandatory Viewer `https-only`, `CachingDisabled`, the reviewed
    Origin Request Policy, required `OriginDomain`, and Origin `https-only`;
-5. create one disabled tenant with the exact connection-group ID and
+5. create one enabled tenant with the exact connection-group ID and
    `ManagedCertificateRequest(ValidationTokenHost=cloudfront)`, then prove
-   accepted creation/request is not activation;
+   accepted creation/request and `Enabled=true` are not domain activation;
 6. surface validation-required details and observe issuance without changing
    DNS through this contract;
-7. re-read the tenant ETag, attach the issued ARN, inspect, then use the new ETag
-   to activate and observe the exact domain `active`;
+7. re-read the tenant ETag, attach the issued ARN, then inspect until the exact
+   domain is `active` while the tenant remains enabled and deployed;
 8. update `OriginDomain` with the latest ETag and verify the exact read-back;
 9. exercise a deliberately stale synthetic/admission ETag without dispatching a
    conflicting provider mutation, while provider qualification records the
@@ -247,21 +253,43 @@ That run requires explicit authorization to create and mutate AWS and DNS or
 validation infrastructure. No such authority is granted by this repository
 contract or by its tests.
 
-The first authorized qualification accepted and deployed the reviewed parent,
-then found and cleaned an in-contract provider mismatch before a tenant or DNS
-record was created:
+Authorized qualification established two related create-time defects and
+cleaned every exact ephemeral resource:
 
 ```text
-FIRST_REAL_PROVIDER_QUALIFICATION: CONTRACT_DEFECT_FOUND_AND_CLEANED
-PROVIDER_FINDING: certificate-absent CreateDistributionTenant rejected
+FIRST_REAL_PROVIDER_QUALIFICATION:
+certificate-absent CreateDistributionTenant rejected
+
+ACTION:
+ManagedCertificateRequest moved into CreateDistributionTenant
+
+SECOND_REAL_PROVIDER_QUALIFICATION:
+disabled tenant remained pending-validation
+
+PREVIOUS_DISPOSITION: INVALID_FINDING
+CORRECTED_DISPOSITION: IN_CONTRACT_DEFECT
+technically_blocking: true
+mechanically_blocking: true
+
+THIRD_REAL_PROVIDER_QUALIFICATION:
+disabled tenant validation path returned CloudFront 403
+
+FOURTH_REAL_PROVIDER_QUALIFICATION:
+persistent CloudFront 403 reproduced; run interrupted by SSO expiry;
+exact cleanup subsequently completed
+
+ROOT_CAUSE:
+DistributionTenant.Enabled=false was incorrectly conflated with
+Domain.Status=inactive
+
 RETAINED_BILLABLE_QUALIFICATION_RESOURCES: 0
 REAL_PROVIDER_QUALIFICATION: REQUALIFICATION_PENDING
 ```
 
-The corrected contract requires a routing-ready connection group and managed
-certificate request at tenant creation. A later separately authorized run must
-requalify the complete corrected lifecycle with a new nonce and parameter
-digest.
+The corrected contract requires a routing-ready connection group, an enabled
+tenant, and a managed certificate request at tenant creation. A later
+separately authorized run must requalify the complete corrected lifecycle with
+a new nonce and parameter digest.
 
 ## Scope and complexity
 
@@ -272,7 +300,7 @@ with #211, #212, #213, #215/#216, #217, and #218 respectively.
 ```text
 NEW_PERMANENT_CONCEPT: one bounded CloudFront Viewer Edge lifecycle contract with one managed-certificate state model
 REPLACES: nothing; it implements deployment #210
-WHY_EXISTING_CONTRACT_CANNOT_ABSORB_IT: #169 intentionally excludes CloudFront resource semantics, and AWS requires certificate-specific validation, issuance, ETag-bound attachment, activation, and teardown transitions
+WHY_EXISTING_CONTRACT_CANNOT_ABSORB_IT: #169 intentionally excludes CloudFront resource semantics, and AWS requires certificate-specific validation, issuance, ETag-bound attachment, observed domain activation, and teardown transitions
 
 NEW_PERMANENT_CONCEPTS: 1
 EXISTING_CONCEPTS_REUSED: ADR-019 invariants and #169 authority/exact-target/correlation/diagnostic patterns

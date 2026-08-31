@@ -229,7 +229,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
             [{"Name": "OriginDomain", "Value": "origin.example.test"}],
             request["Parameters"],
         )
-        self.assertFalse(request["Enabled"])
+        self.assertTrue(request["Enabled"])
         self.assertEqual("cg_example17", request["ConnectionGroupId"])
         self.assertEqual(
             {
@@ -339,10 +339,13 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         self.assertNotIn(
             "request-certificate", [operation.value for operation in operations]
         )
+        self.assertNotIn(
+            "activate-tenant", [operation.value for operation in operations]
+        )
 
     def test_tenant_existence_is_not_certificate_activation(self) -> None:
         tenant = self.tenant(
-            enabled=False,
+            enabled=True,
             domain_status="inactive",
             certificate_arn=None,
         )
@@ -369,7 +372,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         pending = self.certificate("pending-validation", tokens=(token,))
         issued = self.certificate("issued")
         unattached = self.tenant(domain_status="inactive", certificate_arn=None)
-        attached = self.tenant(enabled=False, domain_status="inactive")
+        attached = self.tenant(enabled=True, domain_status="inactive")
         active = self.tenant()
 
         cases = (
@@ -399,7 +402,6 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         tenant = self.tenant(domain_status="inactive", certificate_arn=None)
         operations = (
             self.contract.Operation.ATTACH_CERTIFICATE,
-            self.contract.Operation.ACTIVATE_TENANT,
             self.contract.Operation.UPDATE_TENANT,
             self.contract.Operation.DISABLE_TENANT,
             self.contract.Operation.DELETE_TENANT,
@@ -427,7 +429,9 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                 certificate=self.certificate(),
             )
 
-    def test_certificate_issue_attachment_and_activation_are_separate(self) -> None:
+    def test_certificate_issue_attachment_and_active_observation_are_separate(
+        self,
+    ) -> None:
         tenant = self.tenant(domain_status="inactive", certificate_arn=None)
         attachment = self.contract.plan_tenant_mutation(
             self.contract.Operation.ATTACH_CERTIFICATE,
@@ -443,16 +447,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         )
         self.assertNotIn("Enabled", attachment.parameters)
 
-        attached = self.tenant(enabled=False, domain_status="inactive")
-        activation = self.contract.plan_tenant_mutation(
-            self.contract.Operation.ACTIVATE_TENANT,
-            self.target,
-            attached,
-            self.inputs,
-            admitted_etag=attached.etag,
-            certificate=self.certificate("issued"),
-        )
-        self.assertEqual({"Enabled": True}, activation.parameters)
+        self.assertFalse(hasattr(self.contract.Operation, "ACTIVATE_TENANT"))
 
         with self.assertRaises(self.contract.ContractError):
             self.contract.plan_tenant_mutation(
@@ -478,7 +473,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                     {"Name": "OriginDomain", "Value": "origin.example.test"}
                 ],
                 "ConnectionGroupId": "cg_example17",
-                "Enabled": False,
+                "Enabled": True,
                 "Status": "Deployed",
             },
         }

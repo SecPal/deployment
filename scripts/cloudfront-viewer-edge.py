@@ -48,7 +48,6 @@ class Operation(str, Enum):
     INSPECT_TENANT = "inspect-tenant"
     INSPECT_CERTIFICATE = "inspect-certificate"
     ATTACH_CERTIFICATE = "attach-certificate"
-    ACTIVATE_TENANT = "activate-tenant"
     UPDATE_TENANT = "update-tenant"
     DISABLE_TENANT = "disable-tenant"
     DELETE_TENANT = "delete-tenant"
@@ -548,7 +547,7 @@ def validate_distribution_config(config: object) -> None:
 
 
 def build_create_tenant_request(inputs: TenantInputs) -> dict[str, object]:
-    """Create one disabled tenant and request, but never imply, activation."""
+    """Create one enabled tenant and request, but never imply, domain activation."""
 
     if type(inputs) is not TenantInputs:
         raise ContractError("typed tenant inputs are required")
@@ -563,7 +562,7 @@ def build_create_tenant_request(inputs: TenantInputs) -> dict[str, object]:
             "PrimaryDomainName": inputs.viewer_domain,
             "CertificateTransparencyLoggingPreference": "enabled",
         },
-        "Enabled": False,
+        "Enabled": True,
     }
 
 
@@ -816,7 +815,6 @@ def plan_tenant_mutation(
 
     if type(operation) is not Operation or operation not in {
         Operation.ATTACH_CERTIFICATE,
-        Operation.ACTIVATE_TENANT,
         Operation.UPDATE_TENANT,
         Operation.DISABLE_TENANT,
         Operation.DELETE_TENANT,
@@ -833,14 +831,6 @@ def plan_tenant_mutation(
         parameters = {
             "Customizations": {"Certificate": {"Arn": certificate.certificate_arn}},
         }
-    elif operation is Operation.ACTIVATE_TENANT:
-        if (
-            certificate is None
-            or certificate.status != "issued"
-            or tenant.certificate_arn != certificate.certificate_arn
-        ):
-            raise ContractError("activation requires the issued certificate read back as attached")
-        parameters = {"Enabled": True}
     elif operation is Operation.UPDATE_TENANT:
         parameters = {
             "Parameters": [{"Name": ORIGIN_PARAMETER, "Value": inputs.origin_domain}]
@@ -1001,7 +991,6 @@ def admit_request(request: LifecycleRequest, authority: ExecutionAuthority) -> N
         Operation.INSPECT_TENANT,
         Operation.INSPECT_CERTIFICATE,
         Operation.ATTACH_CERTIFICATE,
-        Operation.ACTIVATE_TENANT,
         Operation.UPDATE_TENANT,
         Operation.DISABLE_TENANT,
         Operation.DELETE_TENANT,
@@ -1011,7 +1000,6 @@ def admit_request(request: LifecycleRequest, authority: ExecutionAuthority) -> N
         Operation.INSPECT_TENANT,
         Operation.INSPECT_CERTIFICATE,
         Operation.ATTACH_CERTIFICATE,
-        Operation.ACTIVATE_TENANT,
         Operation.UPDATE_TENANT,
         Operation.DISABLE_TENANT,
         Operation.DELETE_TENANT,
@@ -1043,7 +1031,6 @@ def admit_result(request: LifecycleRequest, result: LifecycleResult) -> None:
         Operation.INSPECT_TENANT,
         Operation.INSPECT_CERTIFICATE,
         Operation.ATTACH_CERTIFICATE,
-        Operation.ACTIVATE_TENANT,
         Operation.UPDATE_TENANT,
         Operation.DISABLE_TENANT,
         Operation.DELETE_TENANT,
@@ -1079,8 +1066,7 @@ def qualification_operations() -> tuple[Operation, ...]:
         Operation.INSPECT_CERTIFICATE,
         Operation.ATTACH_CERTIFICATE,
         Operation.INSPECT_TENANT,
-        Operation.ACTIVATE_TENANT,
-        Operation.INSPECT_TENANT,
+        Operation.INSPECT_CERTIFICATE,
         Operation.UPDATE_TENANT,
         Operation.INSPECT_TENANT,
         Operation.DISABLE_TENANT,
