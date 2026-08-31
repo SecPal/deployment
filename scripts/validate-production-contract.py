@@ -28,27 +28,34 @@ INVENTORY_SCHEMA_PATH = ROOT / "schemas/production-inventory.schema.json"
 HOST_FACTS_SCHEMA_PATH = ROOT / "schemas/production-host-facts.schema.json"
 MAX_INPUT_BYTES = 1024 * 1024
 REQUIRED_TOOLS = {
+    "ausearch",
     "bash",
     "curl",
     "df",
     "findmnt",
     "getfacl",
     "getent",
+    "getenforce",
     "gh",
     "id",
     "install",
     "loginctl",
+    "matchpathcon",
     "mktemp",
     "newgidmap",
     "newuidmap",
     "podman",
     "python3",
     "realpath",
+    "restorecon",
+    "rpm",
+    "semanage",
     "sha256sum",
     "stat",
     "systemctl",
     "timedatectl",
 }
+QUALIFIED_ROCKY_MINORS = frozenset({"10.2"})
 MANAGED_PATH_ROOTS = {
     "runtime_secrets": PurePosixPath("/run/secpal"),
 }
@@ -864,6 +871,28 @@ def validate_platform_facts(inventory: dict[str, Any], facts: dict[str, Any]) ->
         raise ContractViolation("host-facts hostname does not match the inventory")
     if facts["architecture"] != inventory["host"]["architecture"]:
         raise ContractViolation("host architecture does not match the inventory")
+    version_id = facts["os"]["version_id"]
+    if version_id not in QUALIFIED_ROCKY_MINORS:
+        raise ContractViolation(
+            "Rocky Linux minor is not in the reviewed qualification allowlist"
+        )
+
+    cpu = facts["cpu"]
+    if facts["architecture"] == "amd64":
+        if (
+            cpu["admission_method"] != "glibc-loader-hwcaps"
+            or cpu["x86_64_level"] != "x86-64-v3"
+        ):
+            raise ContractViolation(
+                "amd64 admission requires Rocky's glibc-loader x86-64-v3 result"
+            )
+    elif (
+        cpu["admission_method"] != "rocky-aarch64-native"
+        or cpu["x86_64_level"] is not None
+    ):
+        raise ContractViolation(
+            "arm64 admission requires independent Rocky aarch64 qualification"
+        )
 
 
 def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:
@@ -874,7 +903,7 @@ def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:
     )
     if kernel_match is None:
         raise ContractViolation(
-            "host kernel must be the Debian 13 stable Linux 6.12 series"
+            "host kernel must be the Rocky Linux 10 stable Linux 6.12 series"
         )
     kernel_version = tuple(int(kernel_match.group(index)) for index in (1, 2, 3))
     kernel_suffix = kernel_match.group("suffix") or ""
@@ -884,16 +913,23 @@ def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:
         or KERNEL_RELEASE_CANDIDATE_PATTERN.search(kernel_suffix)
     ):
         raise ContractViolation(
-            "host kernel must be the Debian 13 stable Linux 6.12 series"
+            "host kernel must be the Rocky Linux 10 stable Linux 6.12 series"
         )
     if kernel["package_architecture"] != architecture:
         raise ContractViolation(
             "kernel package architecture does not match the admitted host architecture"
         )
-    apparmor = kernel["apparmor"]
-    if apparmor["profiles_in_enforce_mode"] > apparmor["profiles_loaded"]:
+
+
+def validate_selinux_facts(selinux: dict[str, Any]) -> None:
+    workload = selinux["workload"]
+    if workload["process_mcs"] != workload["storage_mcs"]:
         raise ContractViolation(
-            "AppArmor enforcing-profile count exceeds the loaded-profile count"
+            "representative workload process and storage MCS ranges do not match"
+        )
+    if workload["cross_boundary_process_mcs"] == workload["storage_mcs"]:
+        raise ContractViolation(
+            "SELinux negative boundary does not use a distinct MCS range"
         )
 
 
@@ -903,8 +939,8 @@ def validate_runtime_facts(
     runtime = facts["runtime"]
     service_account = inventory["service_account"]
     podman_version = parse_version(runtime["version"], "host facts.runtime.version")
-    if podman_version < (5, 4, 2) or podman_version >= (6, 0, 0):
-        raise ContractViolation("Podman must be supported 5.x at or above 5.4.2")
+    if podman_version < (5, 8, 2) or podman_version >= (6, 0, 0):
+        raise ContractViolation("Podman must be qualified Rocky 5.x at or above 5.8.2")
     if (
         runtime["owner_uid"] != service_account["uid"]
         or runtime["owner_gid"] != service_account["gid"]
@@ -1201,10 +1237,18 @@ def validate_resource_facts(
         )
 
 
-def validate_host_facts(inventory: dict[str, Any], facts: dict[str, Any]) -> None:
+def validate_host_facts(
+    inventory: dict[str, Any], facts: dict[str, Any], *, synthetic: bool = True
+) -> None:
     validate_host_facts_schema(facts)
+    expected_evidence_class = "synthetic" if synthetic else "rocky-native"
+    if facts["evidence_class"] != expected_evidence_class:
+        raise ContractViolation(
+            f"host facts evidence_class must be {expected_evidence_class} in this mode"
+        )
     validate_platform_facts(inventory, facts)
     validate_kernel_facts(facts["kernel"], facts["architecture"])
+    validate_selinux_facts(facts["selinux"])
     validate_runtime_facts(inventory, facts)
     validate_service_account_facts(inventory, facts)
     validate_network_facts(inventory, facts["network"])
@@ -1239,10 +1283,10 @@ def main() -> int:
         inventory = read_document(arguments.inventory, "inventory")
         validate_inventory(inventory, synthetic=arguments.synthetic)
         host_facts = read_document(arguments.host_facts, "host facts")
-        validate_host_facts(inventory, host_facts)
+        validate_host_facts(inventory, host_facts, synthetic=arguments.synthetic)
     except ContractViolation as exc:
         abort(str(exc))
-    print("Production inventory and supplied host facts satisfy schema version 1.")
+    print("Production inventory v1 and supplied Rocky host facts v2 satisfy admission.")
     return 0
 
 
