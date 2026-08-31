@@ -104,6 +104,7 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn("checkout-exact-target", runner)
         self.assertIn("verify-target-sha", runner)
         self.assertIn("verify-target-harness", runner)
+        self.assertIn("verify-native-observation", runner)
         schema = json.loads(
             (ROOT / "schemas/rocky-cloud-target-source-failure.schema.json").read_text(
                 encoding="utf-8"
@@ -118,6 +119,9 @@ class RockyCloudControlTests(unittest.TestCase):
             "exit_status": 1,
             "source_host": "github.com",
             "target_sha": "293977ae93408a7bb812619de58649ab8a92d438",
+            "trusted_control_sha": "a36abbfc07104ba2e31ae3c15be1f684faff207c",
+            "qualification_run_id": "33123855032",
+            "qualification_run_attempt": "1",
         }
         self.assertEqual([], list(validator.iter_errors(base)))
         harness_mismatch = dict(
@@ -126,6 +130,12 @@ class RockyCloudControlTests(unittest.TestCase):
             reason="postcondition-failed",
         )
         self.assertEqual([], list(validator.iter_errors(harness_mismatch)))
+        native_handoff = dict(
+            base,
+            operation="verify-native-observation",
+            reason="postcondition-failed",
+        )
+        self.assertEqual([], list(validator.iter_errors(native_handoff)))
         for mutation in (
             dict(base, source_host="example.com"),
             dict(base, operation="arbitrary-command"),
@@ -141,9 +151,15 @@ class RockyCloudControlTests(unittest.TestCase):
                 str(path),
                 "--target-sha",
                 base["target_sha"],
+                "--control-sha",
+                base["trusted_control_sha"],
+                "--run-id",
+                base["qualification_run_id"],
+                "--run-attempt",
+                base["qualification_run_attempt"],
             ]
             self.assertEqual(0, subprocess.run(command, check=False).returncode)
-            command[-1] = "a" * 40
+            command[-1] = "2"
             self.assertNotEqual(0, subprocess.run(command, check=False).returncode)
 
     def test_access_request_validation_is_exact_bound_and_order_independent(self) -> None:
@@ -592,7 +608,7 @@ class RockyCloudControlTests(unittest.TestCase):
         publication = steps["Publish bounded target-source failure"]
         execution_run = execution["run"]
         retrieval_run = retrieval["run"]
-        self.assertIn("81|82|83|84|85)", execution_run)
+        self.assertIn("81|82|83|84|85|86)", execution_run)
         self.assertIn("source_failure_expected=true", execution_run)
         self.assertIn("91)", execution_run)
         self.assertIn("qualification_failure_expected=true", execution_run)
@@ -612,8 +628,16 @@ class RockyCloudControlTests(unittest.TestCase):
         runner = (
             ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
         ).read_text(encoding="utf-8")
-        for status in (81, 82, 83, 84, 85):
+        for status in (81, 82, 83, 84, 85, 86):
             self.assertIn(f"exit {status}", runner)
+        self.assertIn(
+            'validate-target-source-failure \\\n    "$source_failure" --target-sha "$target_sha" \\\n    --control-sha "$control_sha"',
+            runner,
+        )
+        self.assertIn(
+            '--control-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"',
+            retrieval_run,
+        )
         self.assertIn(
             'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
             runner,

@@ -417,12 +417,28 @@ def validate_native_qualification(
         raise ControlError("native qualification stdout binding is invalid")
 
 
-def validate_target_source_failure(path: Path, target_sha: str) -> None:
-    if SHA.fullmatch(target_sha) is None:
-        raise ControlError("target SHA must be one exact lowercase commit")
+def validate_target_source_failure(
+    path: Path,
+    target_sha: str,
+    control_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> None:
+    if (
+        SHA.fullmatch(target_sha) is None
+        or SHA.fullmatch(control_sha) is None
+        or RUN_ID.fullmatch(run_id) is None
+        or RUN_ATTEMPT.fullmatch(run_attempt) is None
+    ):
+        raise ControlError("target source failure bindings are outside the closed format")
     document = validate_evidence("target-source-failure", path)
-    if document["target_sha"] != target_sha:
-        raise ControlError("target source failure is not bound to the exact target SHA")
+    if (
+        document["target_sha"] != target_sha
+        or document["trusted_control_sha"] != control_sha
+        or document["qualification_run_id"] != run_id
+        or document["qualification_run_attempt"] != run_attempt
+    ):
+        raise ControlError("target source failure is not bound to this qualification run")
 
 
 def load_target_failure_classifier() -> Any:
@@ -981,6 +997,9 @@ def parser() -> argparse.ArgumentParser:
     target_source_failure = subparsers.add_parser("validate-target-source-failure")
     target_source_failure.add_argument("path", type=Path)
     target_source_failure.add_argument("--target-sha", required=True)
+    target_source_failure.add_argument("--control-sha", required=True)
+    target_source_failure.add_argument("--run-id", required=True)
+    target_source_failure.add_argument("--run-attempt", required=True)
     target_qualification_failure = subparsers.add_parser(
         "validate-target-qualification-failure"
     )
@@ -1068,7 +1087,13 @@ def main(arguments: list[str]) -> int:
                 options.exit_status,
             )
         elif options.command == "validate-target-source-failure":
-            validate_target_source_failure(options.path, options.target_sha)
+            validate_target_source_failure(
+                options.path,
+                options.target_sha,
+                options.control_sha,
+                options.run_id,
+                options.run_attempt,
+            )
         elif options.command == "validate-target-qualification-failure":
             validate_target_qualification_failure(
                 options.path,

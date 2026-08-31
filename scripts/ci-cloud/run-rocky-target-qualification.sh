@@ -64,17 +64,21 @@ capture_bounded() {
 
 write_source_failure() {
   local operation="$1" reason="$2" exit_status="$3" temporary
-  [[ "$operation" =~ ^(resolve-target-source|fetch-exact-target|checkout-exact-target|verify-target-sha|verify-target-harness)$ ]]
+  [[ "$operation" =~ ^(resolve-target-source|fetch-exact-target|checkout-exact-target|verify-target-sha|verify-target-harness|verify-native-observation)$ ]]
   [[ "$reason" =~ ^(command-failed|postcondition-failed)$ ]]
   [[ "$exit_status" =~ ^[1-9][0-9]{0,2}$ && "$exit_status" -le 255 ]]
   temporary="$(mktemp "$evidence_root/.target-source-failure.XXXXXX")"
-  printf '{"schema_version":1,"phase":"qualify-target","operation":"%s","reason":"%s","exit_status":%s,"source_host":"github.com","target_sha":"%s"}\n' \
-    "$operation" "$reason" "$exit_status" "$target_sha" >"$temporary"
+  printf '{"schema_version":1,"phase":"qualify-target","operation":"%s","reason":"%s","exit_status":%s,"source_host":"github.com","target_sha":"%s","trusted_control_sha":"%s","qualification_run_id":"%s","qualification_run_attempt":"%s"}\n' \
+    "$operation" "$reason" "$exit_status" "$target_sha" "$control_sha" \
+    "$qualification_run_id" "$qualification_run_attempt" >"$temporary"
   chown secpal-cloud:secpal-cloud "$temporary"
   chmod 0400 "$temporary"
   mv -T -- "$temporary" "$source_failure"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
-    validate-target-source-failure "$source_failure" --target-sha "$target_sha"
+    validate-target-source-failure \
+    "$source_failure" --target-sha "$target_sha" \
+    --control-sha "$control_sha" --run-id "$qualification_run_id" \
+    --run-attempt "$qualification_run_attempt"
 }
 
 rm -f -- "$source_failure" "$qualification_failure" "$qualification_trace" \
@@ -118,11 +122,22 @@ fi
 
 # The workflow-owned controller collected and retained this binding before
 # candidate checkout. Refuse to run a workload without that exact run binding.
-[[ -f "$native_observation" && ! -L "$native_observation" ]]
+if ! [[ -f "$native_observation" && ! -L "$native_observation" ]]; then
+  write_source_failure verify-native-observation postcondition-failed 1
+  exit 86
+fi
+set +e
 /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
   validate-native-observation "$native_observation" \
   --target-sha "$target_sha" --control-sha "$control_sha" \
   --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
+native_observation_status=$?
+set -e
+if [[ "$native_observation_status" -ne 0 ]]; then
+  write_source_failure verify-native-observation postcondition-failed \
+    "$native_observation_status"
+  exit 86
+fi
 
 stdout="$evidence_root/qualification.stdout"
 audit_baseline="$(date -u '+%m/%d/%y %H:%M:%S')"

@@ -754,7 +754,7 @@ jobs:
           status=$?
           set -e
           case "$status" in
-            81|82|83|84|85)
+            81|82|83|84|85|86)
               source_failure_expected=true
               qualification_failure_expected=false
               ;;
@@ -790,7 +790,9 @@ jobs:
           test "$(stat -c %s "$RUNNER_TEMP/rocky-target/target-source-failure.json")" -le 1024
           scripts/ci-cloud/rocky-control.py validate-target-source-failure \
             "$RUNNER_TEMP/rocky-target/target-source-failure.json" \
-            --target-sha "${{ needs.validate.outputs.target_sha }}"
+            --target-sha "${{ needs.validate.outputs.target_sha }}" \
+            --control-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       - name: Publish bounded target-source failure
         if: >-
