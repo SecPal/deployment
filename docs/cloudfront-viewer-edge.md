@@ -62,13 +62,17 @@ mutation.
 The reviewed parent is one CloudFront Multi-Tenant Distribution with:
 
 ```text
+AWS partition = aws
 ConnectionMode = tenant-only
 Origin DomainName = {{OriginDomain}}
 OriginDomain = required tenant parameter
 ViewerProtocolPolicy = https-only
+AllowedMethods = GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE
+CachedMethods = GET, HEAD, OPTIONS
 CachePolicyId = 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
 OriginRequestPolicyId = b689b0a8-53d0-40ab-baf2-68738e2966ac
 OriginProtocolPolicy = https-only
+OriginSslProtocols = TLSv1.2
 additional cache behaviors = none
 ```
 
@@ -205,12 +209,12 @@ The implementation never lists an account and deletes by name or tag prefix.
 It never deletes a default connection group. An externally admitted existing
 group remains caller-owned and outside qualification-owned cleanup.
 Cleanup failure remains an explicit bounded failure associated with the exact
-created IDs; it does not authorize broader cleanup. Managed-certificate cleanup
-must be inspected by exact ARN after tenant removal. An adapter may request ACM
-deletion only when the current provider permits it and the certificate is no
-longer associated. Provider-retained non-billable managed certificate state is
-reported explicitly and is never misrepresented as a retained billable Edge
-resource.
+created IDs; it does not authorize broader cleanup. CloudFront managed-certificate
+inspection is bound to the exact distribution-tenant identifier and therefore
+ends when exact tenant deletion is proven. The certificate ARN is not a valid
+post-deletion identifier for that CloudFront operation. A separate direct ACM
+lifecycle is outside #210; provider-retained non-billable certificate state is
+not misrepresented as a retained billable Viewer Edge resource.
 
 ## Real-provider qualification
 

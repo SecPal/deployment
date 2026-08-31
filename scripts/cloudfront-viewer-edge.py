@@ -27,7 +27,6 @@ SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 DIAGNOSTIC = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 AWS_ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
-AWS_PARTITION = re.compile(r"^aws(?:-us-gov|-cn)?$")
 ETAG = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 MAX_IDENTITY_BYTES = 4096
 
@@ -87,7 +86,8 @@ def _domain(label: str, value: object) -> None:
     except UnicodeError as error:
         raise ContractError(f"{label} is not a valid DNS identity") from error
     if (
-        len(ascii_value) > 253
+        value != ascii_value.lower()
+        or len(ascii_value) > 253
         or ascii_value.endswith(".")
         or "." not in ascii_value
         or any(
@@ -121,8 +121,8 @@ class AwsProviderContext:
     certificate_region: str
 
     def __post_init__(self) -> None:
-        if type(self.partition) is not str or AWS_PARTITION.fullmatch(self.partition) is None:
-            raise ContractError("AWS partition is outside the closed supported set")
+        if type(self.partition) is not str or self.partition != "aws":
+            raise ContractError("CloudFront SaaS Manager requires the commercial AWS partition")
         if type(self.account_id) is not str or AWS_ACCOUNT_ID.fullmatch(self.account_id) is None:
             raise ContractError("AWS provider context requires one exact account ID")
         if self.cloudfront_scope != "global":
@@ -315,12 +315,14 @@ class ValidationToken:
 
 @dataclass(frozen=True, slots=True)
 class ManagedCertificateObservation:
+    tenant_id: str
     status: str
     certificate_arn: str | None
     validation_token_host: str | None
     validation_tokens: tuple[ValidationToken, ...] = ()
 
     def __post_init__(self) -> None:
+        _identity("inspected distribution tenant ID", self.tenant_id)
         statuses = {
             "pending-validation",
             "issued",
@@ -513,10 +515,24 @@ def validate_distribution_config(config: object) -> None:
     try:
         behavior = config["DefaultCacheBehavior"]
         origins = config["Origins"]
-        origin = origins["Items"][0]
-        definitions = config["TenantConfig"]["ParameterDefinitions"]
+        tenant_config = config["TenantConfig"]
     except (KeyError, IndexError, TypeError) as error:
         raise ContractError("distribution configuration is incomplete") from error
+    if not all(
+        type(value) is dict for value in (behavior, origins, tenant_config)
+    ):
+        raise ContractError("distribution configuration contains malformed mappings")
+    origin_items = origins.get("Items")
+    if type(origin_items) is not list or len(origin_items) != 1:
+        raise ContractError("the bounded baseline requires exactly one parameterized origin")
+    origin = origin_items[0]
+    definitions = tenant_config.get("ParameterDefinitions")
+    if type(origin) is not dict or type(definitions) is not list:
+        raise ContractError("distribution configuration contains malformed nested values")
+    custom_origin = origin.get("CustomOriginConfig")
+    allowed_methods = behavior.get("AllowedMethods")
+    if type(custom_origin) is not dict or type(allowed_methods) is not dict:
+        raise ContractError("distribution behavior contains malformed nested mappings")
     if config.get("ConnectionMode") != "tenant-only":
         raise ContractError("parent must be a CloudFront multi-tenant distribution")
     if behavior.get("ViewerProtocolPolicy") != "https-only":
@@ -527,14 +543,29 @@ def validate_distribution_config(config: object) -> None:
         raise ContractError("the reviewed Origin Request Policy is mandatory")
     if behavior.get("TargetOriginId") != ORIGIN_ID:
         raise ContractError("default behavior targets an unknown origin")
+    expected_methods = {
+        "Quantity": 7,
+        "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
+        "CachedMethods": {
+            "Quantity": 3,
+            "Items": ["GET", "HEAD", "OPTIONS"],
+        },
+    }
+    if allowed_methods != expected_methods:
+        raise ContractError("the complete Viewer method baseline is mandatory")
     if config.get("CacheBehaviors") != {"Quantity": 0}:
         raise ContractError("unqualified route-specific cache behaviors are forbidden")
-    if origins.get("Quantity") != 1 or len(origins.get("Items", [])) != 1:
+    if origins.get("Quantity") != 1:
         raise ContractError("the bounded baseline requires exactly one parameterized origin")
     if origin.get("Id") != ORIGIN_ID or origin.get("DomainName") != ORIGIN_TEMPLATE:
         raise ContractError("OriginDomain must be a required tenant parameter")
-    if origin.get("CustomOriginConfig", {}).get("OriginProtocolPolicy") != "https-only":
+    if custom_origin.get("OriginProtocolPolicy") != "https-only":
         raise ContractError("the PROTECTED Origin seam requires https-only")
+    if custom_origin.get("OriginSslProtocols") != {
+        "Quantity": 1,
+        "Items": ["TLSv1.2"],
+    }:
+        raise ContractError("the PROTECTED Origin seam requires only TLSv1.2")
     expected_definition = [
         {
             "Name": ORIGIN_PARAMETER,
@@ -565,7 +596,32 @@ def build_create_tenant_request(inputs: TenantInputs) -> dict[str, object]:
     }
 
 
-def plan_create_tenant(inputs: TenantInputs) -> AwsOperationPlan:
+def plan_create_tenant(
+    inputs: TenantInputs,
+    target: CloudFrontTarget,
+    connection_group: ConnectionGroupObservation,
+) -> AwsOperationPlan:
+    """Plan Tenant bootstrap only after exact routing admission."""
+
+    if not all(
+        type(value) is expected
+        for value, expected in (
+            (inputs, TenantInputs),
+            (target, CloudFrontTarget),
+            (connection_group, ConnectionGroupObservation),
+        )
+    ):
+        raise ContractError("typed Tenant bootstrap inputs are required")
+    if (
+        target.distribution_id != inputs.distribution_id
+        or target.connection_group_id != inputs.connection_group_id
+    ):
+        raise ContractError("Tenant bootstrap mismatches the exact CloudFront target")
+    validate_connection_group_observation(
+        connection_group, target, qualification_owned=False
+    )
+    if not connection_group.enabled or connection_group.deployment_status != "Deployed":
+        raise ContractError("Tenant bootstrap requires a deployed enabled routing prerequisite")
     request = build_create_tenant_request(inputs)
     return AwsOperationPlan(
         operation=Operation.CREATE_TENANT,
@@ -579,6 +635,8 @@ def plan_create_tenant(inputs: TenantInputs) -> AwsOperationPlan:
 def plan_inspection(operation: Operation, target: CloudFrontTarget) -> AwsOperationPlan:
     """Plan an exact-ID read; names and account-wide discovery are excluded."""
 
+    if type(operation) is not Operation or type(target) is not CloudFrontTarget:
+        raise ContractError("typed CloudFront inspection inputs are required")
     if operation is Operation.INSPECT_DISTRIBUTION:
         resource_id = target.distribution_id
         api_operation = "GetDistributionConfig"
@@ -662,12 +720,19 @@ def normalize_tenant_response(response: object) -> TenantObservation:
     ]
     if len(origin_values) != 1:
         raise ContractError("tenant response has missing or ambiguous OriginDomain")
-    customizations = tenant.get("Customizations", {})
-    certificate = (
-        customizations.get("Certificate", {}).get("Arn")
-        if type(customizations) is dict
-        else None
-    )
+    customizations = tenant.get("Customizations")
+    if customizations is None:
+        certificate = None
+    elif type(customizations) is not dict:
+        raise ContractError("tenant customizations are outside the reviewed shape")
+    else:
+        certificate_customization = customizations.get("Certificate")
+        if certificate_customization is None:
+            certificate = None
+        elif type(certificate_customization) is not dict:
+            raise ContractError("tenant certificate customization is malformed")
+        else:
+            certificate = certificate_customization.get("Arn")
     try:
         return TenantObservation(
             tenant_id=tenant["Id"],
@@ -685,9 +750,12 @@ def normalize_tenant_response(response: object) -> TenantObservation:
         raise ContractError("CloudFront tenant response is incomplete") from error
 
 
-def normalize_certificate_response(response: object) -> ManagedCertificateObservation:
+def normalize_certificate_response(
+    response: object, *, tenant_id: str
+) -> ManagedCertificateObservation:
     """Normalize GetManagedCertificateDetails without retaining arbitrary output."""
 
+    _identity("inspected distribution tenant ID", tenant_id)
     if type(response) is not dict or type(response.get("ManagedCertificateDetails")) is not dict:
         raise ContractError("managed certificate response is outside the reviewed shape")
     details = response["ManagedCertificateDetails"]
@@ -704,6 +772,7 @@ def normalize_certificate_response(response: object) -> ManagedCertificateObserv
             for token in raw_tokens
         )
         return ManagedCertificateObservation(
+            tenant_id=tenant_id,
             status=details["CertificateStatus"],
             certificate_arn=details.get("CertificateArn"),
             validation_token_host=details.get("ValidationTokenHost"),
@@ -761,6 +830,8 @@ def classify_certificate_state(
     if certificate is None:
         return CertificateState.REQUESTED
     _admit_cloudfront_certificate_observation(certificate)
+    if certificate.tenant_id != tenant.tenant_id:
+        raise ContractError("managed certificate observation mismatches the exact tenant")
     if certificate.status == "pending-validation":
         return CertificateState.VALIDATION_REQUIRED
     if certificate.status == "inactive":
@@ -829,6 +900,8 @@ def plan_tenant_mutation(
         if certificate is None:
             raise ContractError("only an issued managed certificate may be attached")
         _admit_cloudfront_certificate_observation(certificate)
+        if certificate.tenant_id != target.tenant_id:
+            raise ContractError("managed certificate observation mismatches the exact target")
         if certificate.status != "issued":
             raise ContractError("only an issued managed certificate may be attached")
         assert certificate.certificate_arn is not None
@@ -864,7 +937,7 @@ def plan_connection_group_mutation(
 ) -> AwsOperationPlan:
     """Plan exact custom-group disable/delete with current ETag semantics."""
 
-    if operation not in {
+    if type(operation) is not Operation or operation not in {
         Operation.DISABLE_CONNECTION_GROUP,
         Operation.DELETE_CONNECTION_GROUP,
     }:
@@ -877,6 +950,8 @@ def plan_connection_group_mutation(
         raise ContractError("admitted connection group ETag is stale or mismatched")
     if observation.is_default:
         raise ContractError("default connection groups are never mutated by this lifecycle")
+    if observation.tenant_association_present:
+        raise ContractError("connection group mutation requires cleared tenant associations")
     if operation is Operation.DISABLE_CONNECTION_GROUP:
         api_operation = "UpdateConnectionGroup"
         parameters: dict[str, object] = {"Enabled": False}
@@ -910,6 +985,8 @@ def plan_distribution_mutation(
 ) -> AwsOperationPlan:
     """Plan parent update/disable/delete against its exact latest ETag."""
 
+    if type(operation) is not Operation:
+        raise ContractError("operation is not a parent teardown mutation")
     if target.distribution_id is None or target.distribution_id != distribution.distribution_id:
         raise ContractError("distribution observation mismatches the exact target")
     _etag(admitted_etag)
@@ -1026,6 +1103,26 @@ def admit_result(request: LifecycleRequest, result: LifecycleResult) -> None:
         or result.parameters_sha256 != request.parameters_sha256
     ):
         raise ContractError("result is not bound to the exact request")
+    inspections = {
+        Operation.INSPECT_DISTRIBUTION,
+        Operation.INSPECT_CONNECTION_GROUP,
+        Operation.INSPECT_TENANT,
+        Operation.INSPECT_CERTIFICATE,
+    }
+    deletions = {
+        Operation.DELETE_DISTRIBUTION,
+        Operation.DELETE_CONNECTION_GROUP,
+        Operation.DELETE_TENANT,
+    }
+    expected_outcome = (
+        Outcome.OBSERVED
+        if request.operation in inspections
+        else Outcome.DELETED
+        if request.operation in deletions
+        else Outcome.APPLIED
+    )
+    if result.outcome not in {expected_outcome, Outcome.FAILED}:
+        raise ContractError("result outcome is incompatible with the requested operation")
     if request.operation in {
         Operation.CREATE_CONNECTION_GROUP,
         Operation.CREATE_TENANT,

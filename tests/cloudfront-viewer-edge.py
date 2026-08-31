@@ -91,8 +91,10 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         arn=None,
         tokens=(),
         validation_token_host="cloudfront",
+        tenant_id="dt_example17",
     ):
         return self.contract.ManagedCertificateObservation(
+            tenant_id=tenant_id,
             status=status,
             certificate_arn=(
                 "arn:aws:acm:us-east-1:123456789012:certificate/example"
@@ -164,6 +166,43 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
             with self.subTest(key=key, value=value):
                 changed = self.contract.deep_copy(config)
                 changed["DefaultCacheBehavior"][key] = value
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.validate_distribution_config(changed)
+
+        malformed_shapes = (
+            ("DefaultCacheBehavior", None),
+            ("DefaultCacheBehavior", []),
+        )
+        for key, value in malformed_shapes:
+            with self.subTest(malformed_shape=key, value=value):
+                changed = self.contract.deep_copy(config)
+                changed[key] = value
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.validate_distribution_config(changed)
+
+        malformed_origin = self.contract.deep_copy(config)
+        malformed_origin["Origins"]["Items"][0]["CustomOriginConfig"] = []
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.validate_distribution_config(malformed_origin)
+
+        baseline_downgrades = (
+            ("allowed-methods", lambda value: value["DefaultCacheBehavior"].update({
+                "AllowedMethods": {
+                    "Quantity": 2,
+                    "Items": ["GET", "HEAD"],
+                    "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
+                }
+            })),
+            ("origin-tls", lambda value: value["Origins"]["Items"][0][
+                "CustomOriginConfig"
+            ].update({
+                "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1"]}
+            })),
+        )
+        for label, mutate in baseline_downgrades:
+            with self.subTest(baseline_downgrade=label):
+                changed = self.contract.deep_copy(config)
+                mutate(changed)
                 with self.assertRaises(self.contract.ContractError):
                     self.contract.validate_distribution_config(changed)
 
@@ -246,6 +285,20 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
             request["ManagedCertificateRequest"],
         )
 
+        group = self.connection_group()
+        plan = self.contract.plan_create_tenant(self.inputs, self.target, group)
+        self.assertEqual(request, plan.parameters)
+        for invalid_group in (
+            replace(group, enabled=False),
+            replace(group, deployment_status="InProgress"),
+            replace(group, connection_group_id="cg_other"),
+        ):
+            with self.subTest(routing_prerequisite=invalid_group):
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.plan_create_tenant(
+                        self.inputs, self.target, invalid_group
+                    )
+
         for origin_domain in ("", self.inputs.viewer_domain):
             with self.assertRaises(self.contract.ContractError):
                 self.contract.build_create_tenant_request(
@@ -320,6 +373,13 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                 group_target,
                 observation,
                 admitted_etag="GROUP-STALE",
+            )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_connection_group_mutation(
+                self.contract.Operation.DISABLE_CONNECTION_GROUP,
+                group_target,
+                replace(observation, tenant_association_present=True),
+                admitted_etag=observation.etag,
             )
         with self.assertRaises(self.contract.ContractError):
             self.contract.plan_connection_group_mutation(
@@ -487,6 +547,15 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                     validation_token_host="self-hosted",
                 ),
             )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_tenant_mutation(
+                self.contract.Operation.ATTACH_CERTIFICATE,
+                self.target,
+                tenant,
+                self.inputs,
+                admitted_etag=tenant.etag,
+                certificate=self.certificate("issued", tenant_id="dt_other"),
+            )
 
     def test_realistic_aws_representations_normalize_before_admission(self) -> None:
         tenant_response = {
@@ -531,9 +600,18 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                 ],
             }
         }
-        certificate = self.contract.normalize_certificate_response(certificate_response)
+        certificate = self.contract.normalize_certificate_response(
+            certificate_response, tenant_id="dt_example17"
+        )
         self.assertEqual("pending-validation", certificate.status)
         self.assertEqual(1, len(certificate.validation_tokens))
+
+        malformed_tenant = self.contract.deep_copy(tenant_response)
+        malformed_tenant["DistributionTenant"]["Customizations"] = {
+            "Certificate": []
+        }
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.normalize_tenant_response(malformed_tenant)
 
         wrong_target = replace(self.target, tenant_id="dt_other")
         with self.assertRaises(self.contract.ContractError):
@@ -585,6 +663,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(self.contract.CertificateState, "TEARDOWN_SAFE"))
         pending_without_arn = self.contract.ManagedCertificateObservation(
+            tenant_id="dt_example17",
             status="pending-validation",
             certificate_arn=None,
             validation_token_host="cloudfront",
@@ -658,7 +737,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
 
         result = self.contract.LifecycleResult.from_request(
             request,
-            outcome=self.contract.Outcome.OBSERVED,
+            outcome=self.contract.Outcome.APPLIED,
             resource_id=self.target.tenant_id,
             resource_etag="ETAG-NEW",
         )
@@ -670,6 +749,59 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         with self.assertRaises(self.contract.ContractError):
             self.contract.admit_result(
                 request, replace(result, resource_id="dt_other")
+            )
+
+        incompatible = (
+            (self.contract.Operation.CREATE_TENANT, self.contract.Outcome.OBSERVED),
+            (self.contract.Operation.INSPECT_TENANT, self.contract.Outcome.APPLIED),
+            (self.contract.Operation.DELETE_TENANT, self.contract.Outcome.OBSERVED),
+        )
+        for operation, outcome in incompatible:
+            with self.subTest(operation=operation.value, outcome=outcome.value):
+                incompatible_request = self.request(operation)
+                incompatible_result = self.contract.LifecycleResult.from_request(
+                    incompatible_request,
+                    outcome=outcome,
+                )
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.admit_result(
+                        incompatible_request, incompatible_result
+                    )
+
+    def test_provider_context_domain_and_operations_are_exact(self) -> None:
+        for partition in ("aws-cn", "aws-us-gov"):
+            with self.subTest(partition=partition):
+                with self.assertRaises(self.contract.ContractError):
+                    replace(self.authority.provider_context, partition=partition)
+
+        for viewer_domain in ("TAST.example.test", "täst.example.test"):
+            with self.subTest(viewer_domain=viewer_domain):
+                with self.assertRaises(self.contract.ContractError):
+                    replace(self.inputs, viewer_domain=viewer_domain)
+
+        group = self.connection_group(enabled=False)
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_connection_group_mutation(
+                self.contract.Operation.DISABLE_CONNECTION_GROUP.value,
+                self.target,
+                group,
+                admitted_etag=group.etag,
+            )
+        parent = self.contract.DistributionObservation(
+            distribution_id="E1EXAMPLEPARENT",
+            etag="PARENT-ETAG",
+            enabled=True,
+            deployment_status="Deployed",
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_distribution_mutation(
+                self.contract.Operation.DISABLE_DISTRIBUTION.value,
+                self.target,
+                parent,
+                admitted_etag=parent.etag,
+                current_config=self.contract.build_distribution_config(
+                    "qualification-17"
+                ),
             )
 
     def test_public_types_exclude_customer_fleet_commercial_and_secrets(self) -> None:
