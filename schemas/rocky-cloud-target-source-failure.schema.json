@@ -21,7 +21,8 @@
         "resolve-target-source",
         "fetch-exact-target",
         "checkout-exact-target",
-        "verify-target-sha"
+        "verify-target-sha",
+        "verify-target-harness"
       ]
     },
     "reason": { "enum": ["command-failed", "postcondition-failed"] },
@@ -45,7 +46,13 @@
       "then": { "properties": { "reason": { "const": "command-failed" } } }
     },
     {
-      "if": { "properties": { "operation": { "const": "verify-target-sha" } } },
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": ["verify-target-sha", "verify-target-harness"]
+          }
+        }
+      },
       "then": {
         "properties": { "reason": { "const": "postcondition-failed" } }
       }

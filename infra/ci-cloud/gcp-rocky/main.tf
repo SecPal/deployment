@@ -151,6 +151,7 @@ resource "google_compute_instance" "qualification" {
       runtime_user_systemd_base64gzip                = base64gzip(file("${path.module}/../../../scripts/ci-cloud/runtime_user_systemd.py"))
       target_runner_base64gzip                       = base64gzip(file("${path.module}/../../../scripts/ci-cloud/run-rocky-target-qualification.sh"))
       native_admission_runner_base64gzip             = base64gzip(file("${path.module}/../../../scripts/ci-cloud/collect-rocky-native-admission.sh"))
+      qualification_harness_base64gzip              = base64gzip(file("${path.module}/../../../scripts/qualify-production-host.sh"))
       target_failure_classifier_base64gzip           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/classify-rocky-target-qualification-failure.py"))
       target_trace_base64gzip                        = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-target-qualification-trace.sh"))
       reload_runuser_base64gzip                      = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-reload-runuser.py"))

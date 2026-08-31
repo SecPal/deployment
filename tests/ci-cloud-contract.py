@@ -1078,6 +1078,11 @@ class CloudCIContractTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "/usr/local/sbin/secpal-publish-rocky-qualification-readiness\n",
             ),
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                'bash "$trusted_qualification_harness"',
+                'bash "$work_root/scripts/qualify-production-host.sh"',
+            ),
         )
         for relative, old, new in mutations:
             with self.subTest(relative=relative, old=old):

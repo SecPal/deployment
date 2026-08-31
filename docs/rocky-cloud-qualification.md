@@ -67,8 +67,9 @@ The workflow exposes exactly four operations:
   and reboots the guest, admits preparation evidence, and retains the run for no
   more than three hours.
 - `qualify` accepts only the exact, unexpired continuation, rotates access, runs
-  the target-owned harness on the identity-free guest, admits its bounded
-  evidence, and then destroys the exact saved state.
+  the trusted-control copy of the byte-identical target harness on the
+  identity-free guest, admits its bounded evidence, and then destroys the exact
+  saved state.
 - `destroy` accepts the exact continuation, including after expiry, solely to
   destroy its saved state.
 
@@ -96,15 +97,17 @@ bound negative state that the canonical waiter classifies as
 `runtime-user-manager`, `runtime-user-bus`, or `runtime-user-control` with
 `not-ready-timeout`.
 The uncredentialed target job uses that exact key in a bounded authenticated
-probe cadence. Target revision code executes exactly once only after the
-current-boot record and all three exact-true runtime-user facts are admitted;
-transport, authentication, missing/stale state, and binding failure remain
-separate closed outcomes.
+probe cadence. Trusted control fetches the target revision but executes only its
+root-owned harness copy, after byte-for-byte agreement with the target harness
+and after the current-boot record and all three exact-true runtime-user facts are
+admitted. Transport, authentication, missing/stale state, target-harness
+disagreement, and binding failure remain separate closed outcomes.
 
-The exact target harness remains the owner of workload qualification, while
-trusted control remains the sole authority for PASS. For the reviewed target
-commit, trusted control binds the fetched harness to its immutable SHA-256 and
-maps only its finite reviewed error messages and Bash failure call sites to a
+The exact target harness remains the reviewed workload definition, while
+trusted control owns invocation and remains the sole authority for PASS. For
+the reviewed target commit, trusted control requires the fetched harness to be
+byte-identical to its root-owned frozen copy and binds it to its immutable
+SHA-256. It maps only its finite reviewed error messages and Bash failure call sites to a
 closed negative diagnostic. That diagnostic can only stop qualification; it
 cannot supply or replace success evidence. Unknown, ambiguous, or unbound
 failures remain `qualification-harness/unclassified-target-failure`. The
@@ -118,7 +121,7 @@ root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
 steps use root-owned absolute `/usr/bin/env` and `/usr/bin/systemctl` helpers.
 The trace matches the immutable argv directly and opens root-owned FD 6 only
 for the root helper from a fixed root-owned evidence path; no observation path
-is exported into the target environment. The target harness and its earlier
+is exported into the harness environment. The trusted-control harness and its earlier
 children never inherit the descriptor. The helper writes one at-most-2,048-byte
 closed JSON observation to its root-owned mode-0600 file and closes the
 descriptor before any fallback. Runtime-user
@@ -275,7 +278,8 @@ Discovery, preparation, continuation, and qualification use separate closed
 JSON schemas with `additionalProperties: false`. Preparation is not native
 qualification: SELinux process/storage contexts, MCS separation, negative
 cross-MCS access, AVC, seccomp workload behavior, and cleanup PASS are populated
-only by the exact target revision's harness.
+only by the trusted-control copy after byte agreement with the exact target
+revision's harness.
 
 ### Host-evidence responsibility and ownership map
 
@@ -408,7 +412,10 @@ trusted controller re-observes this package/RPMDB contract and binds it to the
 exact target SHA, trusted-control SHA, qualification run and attempt, Rocky
 10.2 identity, and host architecture. The workflow retrieves and independently
 validates that observation into controller-local storage before target checkout
-or execution. The target-owned harness reports only target-workload success.
+or execution. The controller then requires the fetched target harness to match
+its root-owned frozen copy and executes only that trusted copy; candidate code
+cannot obtain root execution to replace the admitted runtime. The harness
+reports only target-workload success.
 Only the controller combines that result with the exact externally retained
 observation; a candidate-modified guest copy cannot match the authenticated
 binding. Generic schema validation confirms representation only and cannot

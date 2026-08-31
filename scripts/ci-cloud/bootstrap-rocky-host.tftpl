@@ -30,6 +30,7 @@ decode_script '${runtime_user_systemd_base64gzip}' /usr/local/sbin/runtime_user_
 decode_script '${runtime_user_systemd_base64gzip}' /opt/secpal-control/scripts/ci-cloud/runtime_user_systemd.py
 decode_script '${target_runner_base64gzip}' /usr/local/sbin/secpal-run-rocky-target-qualification
 decode_script '${native_admission_runner_base64gzip}' /usr/local/sbin/secpal-collect-rocky-native-admission
+decode_script '${qualification_harness_base64gzip}' /opt/secpal-control/scripts/qualify-production-host.sh
 decode_script '${target_failure_classifier_base64gzip}' /usr/local/sbin/secpal-classify-rocky-target-failure
 decode_script '${target_trace_base64gzip}' /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh
 decode_script '${reload_runuser_base64gzip}' /opt/secpal-control/libexec/rocky-reload-runuser

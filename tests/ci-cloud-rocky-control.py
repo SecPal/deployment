@@ -102,6 +102,7 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn("fetch-exact-target", runner)
         self.assertIn("checkout-exact-target", runner)
         self.assertIn("verify-target-sha", runner)
+        self.assertIn("verify-target-harness", runner)
         schema = json.loads(
             (ROOT / "schemas/rocky-cloud-target-source-failure.schema.json").read_text(
                 encoding="utf-8"
@@ -118,6 +119,12 @@ class RockyCloudControlTests(unittest.TestCase):
             "target_sha": "293977ae93408a7bb812619de58649ab8a92d438",
         }
         self.assertEqual([], list(validator.iter_errors(base)))
+        harness_mismatch = dict(
+            base,
+            operation="verify-target-harness",
+            reason="postcondition-failed",
+        )
+        self.assertEqual([], list(validator.iter_errors(harness_mismatch)))
         for mutation in (
             dict(base, source_host="example.com"),
             dict(base, operation="arbitrary-command"),
@@ -439,6 +446,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "target_runner_base64gzip": ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh",
             "native_admission_runner_base64gzip": ROOT
             / "scripts/ci-cloud/collect-rocky-native-admission.sh",
+            "qualification_harness_base64gzip": ROOT
+            / "scripts/qualify-production-host.sh",
             "target_failure_classifier_base64gzip": ROOT
             / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
             "target_trace_base64gzip": ROOT
@@ -580,7 +589,7 @@ class RockyCloudControlTests(unittest.TestCase):
         publication = steps["Publish bounded target-source failure"]
         execution_run = execution["run"]
         retrieval_run = retrieval["run"]
-        self.assertIn("81|82|83|84)", execution_run)
+        self.assertIn("81|82|83|84|85)", execution_run)
         self.assertIn("source_failure_expected=true", execution_run)
         self.assertIn("91)", execution_run)
         self.assertIn("qualification_failure_expected=true", execution_run)
@@ -600,7 +609,7 @@ class RockyCloudControlTests(unittest.TestCase):
         runner = (
             ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
         ).read_text(encoding="utf-8")
-        for status in (81, 82, 83, 84):
+        for status in (81, 82, 83, 84, 85):
             self.assertIn(f"exit {status}", runner)
         self.assertIn(
             'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
@@ -2293,6 +2302,21 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotIn(
             "/usr/local/sbin/secpal-collect-rocky-preparation", runner
         )
+        self.assertIn(
+            'readonly trusted_qualification_harness="/opt/secpal-control/'
+            'scripts/qualify-production-host.sh"',
+            runner,
+        )
+        self.assertRegex(
+            runner,
+            r'cmp --silent "\$work_root/scripts/qualify-production-host\.sh" '
+            r'\\\n  "\$trusted_qualification_harness"',
+        )
+        self.assertIn('bash "$trusted_qualification_harness"', runner)
+        self.assertNotIn(
+            'bash "$work_root/scripts/qualify-production-host.sh"', runner
+        )
+        self.assertIn("verify-target-harness", runner)
         self.assertNotIn("sudo bash -s", workflow)
         self.assertIn(
             "sudo /usr/local/sbin/secpal-collect-rocky-native-admission",
@@ -2301,6 +2325,11 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn(
             "decode_script '${native_admission_runner_base64gzip}' "
             "/usr/local/sbin/secpal-collect-rocky-native-admission",
+            bootstrap,
+        )
+        self.assertIn(
+            "decode_script '${qualification_harness_base64gzip}' "
+            "/opt/secpal-control/scripts/qualify-production-host.sh",
             bootstrap,
         )
         self.assertIn(

@@ -750,7 +750,7 @@ jobs:
           status=$?
           set -e
           case "$status" in
-            81|82|83|84)
+            81|82|83|84|85)
               source_failure_expected=true
               qualification_failure_expected=false
               ;;
