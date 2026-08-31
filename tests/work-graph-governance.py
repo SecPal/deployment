@@ -165,7 +165,10 @@ class ReviewLifecycleGovernanceTests(unittest.TestCase):
             r"finite",
             r"new commit.*does not.*authoriz.*another review",
             r"remediat.*does not.*authoriz.*another review",
-            r"must not.*(?:request|trigger|recommend|wait for).*another review",
+            r"must not[^.]*request[^.]*another review",
+            r"must not[^.]*trigger[^.]*another review",
+            r"must not[^.]*recommend[^.]*another review",
+            r"must not[^.]*wait for[^.]*another review",
             r"explicit operator.*additional.*review",
             r"review.*remediat.*review.*prohibited",
         )
@@ -174,14 +177,18 @@ class ReviewLifecycleGovernanceTests(unittest.TestCase):
         self.require_semantics(
             r"Ready.*monotonic",
             r"remediat.*push.*CI.*finding.*metadata.*recover",
-            r"must not.*Ready.*Draft",
+            r"must not cause.*Ready -> Draft",
             r"explicit operator.*separate.*reason",
         )
 
     def test_new_operator_limits_supersede_unfinished_work(self) -> None:
         self.require_semantics(
-            r"operator.*(?:stop|narrow|prohibit|pause)",
-            r"supersede.*unfinished.*(?:agent|delegated)",
+            r"operator.*stop",
+            r"operator.*narrow",
+            r"operator.*prohibit",
+            r"operator.*pause",
+            r"supersede.*unfinished agent",
+            r"supersede.*delegated work",
             r"stop.*delegated work.*cannot.*propagat",
         )
 
