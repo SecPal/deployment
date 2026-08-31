@@ -399,9 +399,9 @@ normalization, admission, schema, or trusted-controller agreement boundary.
 
 Podman runtime version has one source of truth: the VERSION field of the exact
 admitted installed `podman` RPM. Native admission accepts `>= 5.8.2` and
-`< 6.0.0`; it rejects a nonzero epoch, malformed version, a lower version, or
-6.0.0 and newer. `podman --version` text and fixture input are not admission
-authority.
+`< 6.0.0`; the separately bound RPM epoch remains part of the exact NEVRA. It
+rejects a malformed version, a lower version, or 6.0.0 and newer. `podman
+--version` text and fixture input are not admission authority.
 
 Immediately before any target qualification workload executes, the existing
 trusted controller re-observes this package/RPMDB contract and binds it to the

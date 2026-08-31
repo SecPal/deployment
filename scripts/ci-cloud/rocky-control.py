@@ -296,7 +296,7 @@ def validate_authenticated_package_semantics(
             )
     podman = packages[0]
     match = PODMAN_VERSION.fullmatch(podman["version"])
-    if match is None or podman["epoch"] != "0":
+    if match is None:
         raise ControlError("Podman package version representation is malformed")
     version = tuple(int(part) for part in match.groups())
     if (

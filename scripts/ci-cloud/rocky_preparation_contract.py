@@ -624,7 +624,6 @@ def admit_runtime_podman_version(facts: dict[str, Any]) -> None:
     version = tuple(int(part) for part in match.groups()) if match else None
     if (
         package.get("name") != "podman"
-        or package.get("epoch") != "0"
         or version is None
         or not MINIMUM_PODMAN_VERSION <= version < MAXIMUM_PODMAN_VERSION
     ):

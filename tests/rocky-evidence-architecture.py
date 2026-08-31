@@ -159,11 +159,16 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_package_identity_and_podman_range_are_one_authenticated_contract(self) -> None:
         contract = load_contract()
 
-        def package(version: str = "5.8.2", architecture: str = "aarch64"):
-            nevra = f"podman-{version}-1.el10_2.{architecture}"
+        def package(
+            version: str = "5.8.2",
+            architecture: str = "aarch64",
+            epoch: str = "7",
+        ):
+            epoch_prefix = "" if epoch == "0" else f"{epoch}:"
+            nevra = f"podman-{epoch_prefix}{version}-1.el10_2.{architecture}"
             return {
                 "name": "podman",
-                "epoch": "0",
+                "epoch": epoch,
                 "version": version,
                 "release": "1.el10_2",
                 "architecture": architecture,
@@ -172,7 +177,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 "signed_header": "\n".join(
                     (
                         "podman",
-                        "0",
+                        epoch,
                         version,
                         "1.el10_2",
                         architecture,
