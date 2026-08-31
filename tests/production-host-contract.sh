@@ -27,6 +27,11 @@ require_text() {
   grep -Fq -- "$text" "$path" || fail "$path must contain: $text"
 }
 
+if ! command -v rg >/dev/null 2>&1; then
+  printf 'FAIL: production host contract requires ripgrep (rg).\n' >&2
+  exit 1
+fi
+
 required_paths=(
   docs/architecture/production-host.md
   schemas/production-host-facts.schema.json
