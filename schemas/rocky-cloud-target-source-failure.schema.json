@@ -25,7 +25,6 @@
         "fetch-exact-target",
         "checkout-exact-target",
         "verify-target-sha",
-        "verify-target-harness",
         "verify-native-observation"
       ]
     },
@@ -65,11 +64,7 @@
       "if": {
         "properties": {
           "operation": {
-            "enum": [
-              "verify-target-sha",
-              "verify-target-harness",
-              "verify-native-observation"
-            ]
+            "enum": ["verify-target-sha", "verify-native-observation"]
           }
         }
       },

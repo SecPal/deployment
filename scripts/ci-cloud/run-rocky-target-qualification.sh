@@ -12,17 +12,19 @@ readonly qualification_trace="$evidence_root/target-qualification.trace"
 readonly qualification_marker="$evidence_root/target-qualification.marker"
 readonly reload_adjacency="$evidence_root/quadlet-reload-adjacency.json"
 readonly native_observation="$evidence_root/native-package-observation.json"
-readonly trusted_qualification_harness="/opt/secpal-control/scripts/qualify-production-host.sh"
+readonly native_diagnostic="$evidence_root/native-package-collection-diagnostic.json"
 
-if [[ "$#" -ne 4 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
-  ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ]]; then
-  printf 'usage: run-rocky-target-qualification.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT\n' >&2
+if [[ "$#" -ne 5 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
+  ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ||
+  ! "$5" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'usage: run-rocky-target-qualification.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT HARNESS_SHA256\n' >&2
   exit 64
 fi
 readonly target_sha="$1"
 readonly control_sha="$2"
 readonly qualification_run_id="$3"
 readonly qualification_run_attempt="$4"
+readonly qualification_harness_sha256="$5"
 [[ -f /var/lib/secpal-rocky/prepared ]]
 [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]
 [[ -z "${GOOGLE_OAUTH_ACCESS_TOKEN:-}" ]]
@@ -64,7 +66,7 @@ capture_bounded() {
 
 write_source_failure() {
   local operation="$1" reason="$2" exit_status="$3" temporary
-  [[ "$operation" =~ ^(resolve-target-source|fetch-exact-target|checkout-exact-target|verify-target-sha|verify-target-harness|verify-native-observation)$ ]]
+  [[ "$operation" =~ ^(resolve-target-source|fetch-exact-target|checkout-exact-target|verify-target-sha|verify-native-observation)$ ]]
   [[ "$reason" =~ ^(command-failed|postcondition-failed)$ ]]
   [[ "$exit_status" =~ ^[1-9][0-9]{0,2}$ && "$exit_status" -le 255 ]]
   temporary="$(mktemp "$evidence_root/.target-source-failure.XXXXXX")"
@@ -82,7 +84,40 @@ write_source_failure() {
 }
 
 rm -f -- "$source_failure" "$qualification_failure" "$qualification_trace" \
-  "$qualification_marker" "$reload_adjacency"
+  "$qualification_marker" "$reload_adjacency" "$native_observation" \
+  "$native_diagnostic"
+
+# This controller-owned runner observes and admits the installed RPMDB before
+# fetching or executing candidate target bytes.
+set +e
+/usr/local/sbin/secpal-collect-rocky-preparation \
+  --native-package-admission --target-sha "$target_sha" \
+  --control-sha "$control_sha" --run-id "$qualification_run_id" \
+  --run-attempt "$qualification_run_attempt" --output "$native_observation" \
+  --diagnostic-output "$native_diagnostic"
+native_observation_status=$?
+set -e
+if [[ "$native_observation_status" -ne 0 ]]; then
+  /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+    validate-collection-diagnostic "$native_diagnostic" || :
+  write_source_failure verify-native-observation postcondition-failed \
+    "$native_observation_status"
+  exit 86
+fi
+rm -f -- "$native_diagnostic"
+set +e
+/opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+  validate-native-observation "$native_observation" \
+  --target-sha "$target_sha" --control-sha "$control_sha" \
+  --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
+native_observation_status=$?
+set -e
+if [[ "$native_observation_status" -ne 0 ]]; then
+  write_source_failure verify-native-observation postcondition-failed \
+    "$native_observation_status"
+  exit 86
+fi
+
 if ! getent ahostsv4 github.com >/dev/null 2>&1; then
   write_source_failure resolve-target-source command-failed 1
   exit 81
@@ -110,33 +145,10 @@ if [[ "$(git -C "$work_root" rev-parse HEAD)" != "$target_sha" ]]; then
   write_source_failure verify-target-sha postcondition-failed 1
   exit 84
 fi
-if ! [[ -f "$work_root/scripts/qualify-production-host.sh" && ! -L "$work_root/scripts/qualify-production-host.sh" && -x "$work_root/scripts/qualify-production-host.sh" ]]; then
-  write_source_failure verify-target-harness postcondition-failed 1
-  exit 85
-fi
-if ! cmp --silent "$work_root/scripts/qualify-production-host.sh" \
-  "$trusted_qualification_harness"; then
-  write_source_failure verify-target-harness postcondition-failed 1
-  exit 85
-fi
-
-# The workflow-owned controller collected and retained this binding before
-# candidate checkout. Refuse to run a workload without that exact run binding.
-if ! [[ -f "$native_observation" && ! -L "$native_observation" ]]; then
-  write_source_failure verify-native-observation postcondition-failed 1
-  exit 86
-fi
-set +e
-/opt/secpal-control/scripts/ci-cloud/rocky-control.py \
-  validate-native-observation "$native_observation" \
-  --target-sha "$target_sha" --control-sha "$control_sha" \
-  --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
-native_observation_status=$?
-set -e
-if [[ "$native_observation_status" -ne 0 ]]; then
-  write_source_failure verify-native-observation postcondition-failed \
-    "$native_observation_status"
-  exit 86
+if ! [[ -f "$work_root/scripts/qualify-production-host.sh" && ! -L "$work_root/scripts/qualify-production-host.sh" && -x "$work_root/scripts/qualify-production-host.sh" ]] ||
+  [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" != "$qualification_harness_sha256" ]]; then
+  write_source_failure verify-target-sha postcondition-failed 1
+  exit 84
 fi
 
 stdout="$evidence_root/qualification.stdout"
@@ -157,7 +169,7 @@ mkfifo -m 0600 "$trace_fifo"
 observer_pid=""
 trace_capture_pid=""
 if [[ "$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438 ]] &&
-  [[ "$(sha256sum "$trusted_qualification_harness" | awk '{print $1}')" == \
+  [[ "$qualification_harness_sha256" == \
     8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db ]]; then
   mkfifo -m 0600 "$reload_event" "$reload_ack"
   /opt/secpal-control/scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py \
@@ -174,7 +186,7 @@ trace_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=30s 45m \
   env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
-  bash "$trusted_qualification_harness" \
+  bash "$work_root/scripts/qualify-production-host.sh" \
   --image "$fixture" --service-account secpal-runtime \
   3>"$trace_fifo" 2>&1 | capture_bounded 65537 "$stdout"
 pipeline_statuses=("${PIPESTATUS[@]}")
@@ -203,7 +215,7 @@ if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then
   /usr/local/sbin/secpal-classify-rocky-target-failure \
     --target-sha "$target_sha" --control-sha "$control_sha" \
     --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
-    --harness "$trusted_qualification_harness" \
+    --harness "$work_root/scripts/qualify-production-host.sh" \
     --stdout "$stdout" --trace "$qualification_trace" \
     --reload-adjacency "$reload_adjacency" --exit-status "$status" \
     --start-observation "$start_observation" \
@@ -611,7 +623,7 @@ if [[ "$admission_status" -ne 0 ]]; then
   /usr/local/sbin/secpal-classify-rocky-target-failure \
     --target-sha "$target_sha" --control-sha "$control_sha" \
     --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt" \
-    --harness "$trusted_qualification_harness" \
+    --harness "$work_root/scripts/qualify-production-host.sh" \
     --stdout "$stdout" --trace "$qualification_trace" \
     --start-observation "$start_observation" \
     --active-observation "$active_observation" \

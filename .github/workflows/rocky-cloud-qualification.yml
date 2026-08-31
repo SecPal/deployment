@@ -676,67 +676,6 @@ jobs:
           READINESS_OUTCOME: ${{ steps.guest_readiness.outcome }}
         run: test "$READINESS_OUTCOME" = success
 
-      - name: Collect authenticated native package binding before target execution
-        id: native_admission
-        continue-on-error: true
-        env:
-          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
-        run: |
-          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
-            -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
-            "secpal-cloud@$ip" \
-            sudo /usr/local/sbin/secpal-collect-rocky-native-admission \
-            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
-
-      - name: Retrieve and validate authenticated native package binding
-        if: ${{ steps.native_admission.outcome == 'success' }}
-        env:
-          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
-        run: |
-          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
-          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
-            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
-            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/native-package-observation.json" \
-            "$RUNNER_TEMP/rocky-target/native-package-observation.json"
-          scripts/ci-cloud/rocky-control.py validate-native-observation \
-            "$RUNNER_TEMP/rocky-target/native-package-observation.json" \
-            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
-            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
-
-      - name: Retrieve and validate bounded native-package failure
-        if: ${{ steps.native_admission.outcome == 'failure' }}
-        env:
-          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
-        run: |
-          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
-          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
-            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
-            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/native-package-observation-failure.json" \
-            "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
-          scripts/ci-cloud/rocky-control.py validate-native-package-failure \
-            "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json" \
-            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
-            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
-
-      - name: Publish bounded native-package failure
-        if: ${{ steps.native_admission.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: rocky-cloud-native-package-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/rocky-target/native-package-observation-failure.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Enforce authenticated native package admission
-        if: ${{ always() }}
-        env:
-          NATIVE_ADMISSION_OUTCOME: ${{ steps.native_admission.outcome }}
-        run: test "$NATIVE_ADMISSION_OUTCOME" = success
-
       - name: Execute exact target SHA once on the ready identity-free guest
         id: target_execution
         continue-on-error: true
@@ -744,17 +683,19 @@ jobs:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
         run: |
           ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          harness_sha256="$(sha256sum scripts/qualify-production-host.sh | awk '{print $1}')"
           set +e
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip" \
             sudo /usr/local/sbin/secpal-run-rocky-target-qualification \
-            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$harness_sha256"
           status=$?
           set -e
           case "$status" in
-            81|82|83|84|85|86)
+            81|82|83|84|86)
               source_failure_expected=true
               qualification_failure_expected=false
               ;;
@@ -861,6 +802,11 @@ jobs:
             -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/qualification.stdout" \
             "$RUNNER_TEMP/rocky-target/qualification.stdout"
+          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/native-package-observation.json" \
+            "$RUNNER_TEMP/rocky-target/native-package-observation.json"
           scripts/ci-cloud/rocky-control.py validate-native-qualification \
             "$RUNNER_TEMP/rocky-target/qualification.json" \
             --stdout "$RUNNER_TEMP/rocky-target/qualification.stdout" \

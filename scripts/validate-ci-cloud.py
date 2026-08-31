@@ -2118,28 +2118,21 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "fetch-exact-target" in target_runner
         and "checkout-exact-target" in target_runner
         and "verify-target-sha" in target_runner
-        and "verify-target-harness" in target_runner
         and "exit 81" in target_runner
         and "exit 82" in target_runner
         and "exit 83" in target_runner
         and "exit 84" in target_runner
-        and "exit 85" in target_runner
+        and "exit 86" in target_runner
         and "https://github.com/SecPal/deployment.git" in target_runner
         and "validate-target-source-failure" in target_runner,
         "target source acquisition must be exact and emit only closed guest-owned failures",
     )
     require(
-        'readonly trusted_qualification_harness="/opt/secpal-control/scripts/qualify-production-host.sh"'
+        '"$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk \'{print $1}\')" != "$qualification_harness_sha256"'
         in target_runner
-        and 'cmp --silent "$work_root/scripts/qualify-production-host.sh" \\\n  "$trusted_qualification_harness"'
-        in target_runner
-        and 'bash "$trusted_qualification_harness"' in target_runner
-        and 'bash "$work_root/scripts/qualify-production-host.sh"'
-        not in target_runner
-        and "decode_script '${qualification_harness_base64gzip}' /opt/secpal-control/scripts/qualify-production-host.sh"
-        in bootstrap
-        and "qualification_harness_base64gzip" in main,
-        "trusted control must own the byte-identical target qualification workload",
+        and 'bash "$work_root/scripts/qualify-production-host.sh"' in target_runner
+        and "qualification_harness_base64gzip" not in bootstrap + main,
+        "trusted control must bind the exact target qualification workload bytes",
     )
     require(
         "ulimit -f" not in target_runner
@@ -2559,7 +2552,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
         in target_runner
         and target_runner.index("observe-rocky-quadlet-reload-adjacency.py")
-        < target_runner.index("bash \"$trusted_qualification_harness\"")
+        < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
         < target_runner.index(
             '\npipeline_statuses=("${PIPESTATUS[@]}")\n',
             target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
@@ -2844,7 +2837,6 @@ def validate_rocky_control_plane(root: Path) -> None:
         "rocky-cloud-qualification-evidence.schema.json",
         "rocky-cloud-qualification-readiness.schema.json",
         "rocky-cloud-qualification-readiness-failure.schema.json",
-        "rocky-cloud-native-package-failure.schema.json",
         "rocky-cloud-target-source-failure.schema.json",
         "rocky-cloud-target-qualification-failure.schema.json",
     ):

@@ -67,7 +67,7 @@ The workflow exposes exactly four operations:
   and reboots the guest, admits preparation evidence, and retains the run for no
   more than three hours.
 - `qualify` accepts only the exact, unexpired continuation, rotates access, runs
-  the trusted-control copy of the byte-identical target harness on the
+  the target harness only after its digest matches trusted control on the
   identity-free guest, admits its bounded evidence, and then destroys the exact
   saved state.
 - `destroy` accepts the exact continuation, including after expiry, solely to
@@ -97,17 +97,19 @@ bound negative state that the canonical waiter classifies as
 `runtime-user-manager`, `runtime-user-bus`, or `runtime-user-control` with
 `not-ready-timeout`.
 The uncredentialed target job uses that exact key in a bounded authenticated
-probe cadence. Trusted control fetches the target revision but executes only its
-root-owned harness copy, after byte-for-byte agreement with the target harness
-and after the current-boot record and all three exact-true runtime-user facts are
-admitted. Transport, authentication, missing/stale state, target-harness
-disagreement, and binding failure remain separate closed outcomes.
+probe cadence. Trusted control admits the current-boot record and all three
+exact-true runtime-user facts, observes installed packages, and only then
+fetches the target revision. The fetched harness executes only when its digest
+matches the harness in trusted control. Transport, authentication, missing or
+stale state, target disagreement, and binding failure remain separate closed
+outcomes.
 
 The exact target harness remains the reviewed workload definition, while
-trusted control owns invocation and remains the sole authority for PASS. For
-the reviewed target commit, trusted control requires the fetched harness to be
-byte-identical to its root-owned frozen copy and binds it to its immutable
-SHA-256. It maps only its finite reviewed error messages and Bash failure call sites to a
+trusted control owns invocation and remains the sole authority for PASS. The
+trusted workflow supplies its harness SHA-256 to the root-owned runner, which
+requires the fetched target harness to match before invocation. No second
+installed harness copy is needed. Trusted control maps only finite reviewed
+error messages and Bash failure call sites to a
 closed negative diagnostic. That diagnostic can only stop qualification; it
 cannot supply or replace success evidence. Unknown, ambiguous, or unbound
 failures remain `qualification-harness/unclassified-target-failure`. The
@@ -121,7 +123,7 @@ root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
 steps use root-owned absolute `/usr/bin/env` and `/usr/bin/systemctl` helpers.
 The trace matches the immutable argv directly and opens root-owned FD 6 only
 for the root helper from a fixed root-owned evidence path; no observation path
-is exported into the harness environment. The trusted-control harness and its earlier
+is exported into the harness environment. The target harness and its earlier
 children never inherit the descriptor. The helper writes one at-most-2,048-byte
 closed JSON observation to its root-owned mode-0600 file and closes the
 descriptor before any fallback. Runtime-user
@@ -195,7 +197,7 @@ other status-1 output fails closed. Only blank lines and the interpreted
 format's `----` separator may appear outside typed records. Admission accepts
 only the interpreted audit timestamp grammar, correlates by the full timestamp
 and serial, and requires one unique event containing exactly one matching AVC
-and one decoded PROCTITLE marker. The marker must name the frozen harness's
+and one decoded PROCTITLE marker. The marker must name the digest-bound harness's
 exact in-container `/foreign/marker` path; the AVC must carry the exact source context,
 target context, `permissive=0`, and `tclass=dir`. Duplicate, malformed,
 oversized, unavailable, or ambiguous audit observations fail closed without
@@ -407,18 +409,16 @@ admitted installed `podman` RPM. Native admission accepts `>= 5.8.2` and
 rejects a malformed version, a lower version, or 6.0.0 and newer. `podman
 --version` text and fixture input are not admission authority.
 
-Immediately before any target qualification workload executes, the existing
-trusted controller re-observes this package/RPMDB contract and binds it to the
-exact target SHA, trusted-control SHA, qualification run and attempt, Rocky
-10.2 identity, and host architecture. The workflow retrieves and independently
-validates that observation into controller-local storage before target checkout
-or execution. The controller then requires the fetched target harness to match
-its root-owned frozen copy and executes only that trusted copy; candidate code
-cannot obtain root execution to replace the admitted runtime. The harness
-reports only target-workload success.
-Only the controller combines that result with the exact externally retained
-observation; a candidate-modified guest copy cannot match the authenticated
-binding. Generic schema validation confirms representation only and cannot
+Immediately before target checkout or workload execution, the existing
+root-owned controller runner re-observes this package/RPMDB contract and binds
+it to the exact target SHA, trusted-control SHA, qualification run and attempt,
+Rocky 10.2 identity, and host architecture. Collection failures use the
+existing closed collection diagnostic contract. The controller then fetches
+the target and requires its harness digest to match the trusted workflow copy
+before execution. The harness reports only target-workload success. Only the
+controller combines that result with its retained observation and independently
+validates exact equality; candidate-authored evidence cannot match the
+authenticated binding. Generic schema validation confirms representation only and cannot
 promote a caller-authored document, `classification` label, or equivalent field
 into native evidence.
 

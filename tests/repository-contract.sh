@@ -78,7 +78,6 @@ required_files=(
   schemas/rocky-cloud-qualification-evidence.schema.json
   schemas/rocky-cloud-qualification-readiness-failure.schema.json
   schemas/rocky-cloud-qualification-readiness.schema.json
-  schemas/rocky-cloud-native-package-failure.schema.json
   schemas/rocky-cloud-target-qualification-failure.schema.json
   config/ci-cloud/gcp-rocky-10-2-arm64.json
   config/production/inventory.example.yaml
@@ -109,7 +108,6 @@ required_files=(
   scripts/ci-cloud/gcp-rocky-janitor.py
   scripts/ci-cloud/allocate-rocky-subids.py
   scripts/ci-cloud/bootstrap-rocky-host.tftpl
-  scripts/ci-cloud/collect-rocky-native-admission.sh
   scripts/ci-cloud/collect-rocky-preparation.py
   scripts/ci-cloud/prepare-rocky-host.sh
   scripts/ci-cloud/publish-rocky-qualification-readiness.py

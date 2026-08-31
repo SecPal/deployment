@@ -489,8 +489,7 @@ install_policy() {
   current_phase="pre-reboot"
 
   cat >/etc/sudoers.d/secpal-cloud-rocky <<'SECPAL_CLOUD_SUDO'
-secpal-cloud ALL=(root) NOPASSWD: /usr/local/sbin/secpal-run-rocky-target-qualification [0-9a-f]* [0-9a-f]* [1-9]* [1-9]*
-secpal-cloud ALL=(root) NOPASSWD: /usr/local/sbin/secpal-collect-rocky-native-admission [0-9a-f]* [0-9a-f]* [1-9]* [1-9]*
+secpal-cloud ALL=(root) NOPASSWD: /usr/local/sbin/secpal-run-rocky-target-qualification [0-9a-f]* [0-9a-f]* [1-9]* [1-9]* [0-9a-f]*
 SECPAL_CLOUD_SUDO
   chown root:root /etc/sudoers.d/secpal-cloud-rocky
   chmod 0440 /etc/sudoers.d/secpal-cloud-rocky
