@@ -18,23 +18,33 @@ readonly target_sha="$1" control_sha="$2" run_id="$3" run_attempt="$4"
 readonly root=/var/lib/secpal-rocky/evidence
 readonly output="$root/native-package-observation.json"
 readonly diagnostic="$root/native-package-observation-failure.json"
-rm -f -- "$output" "$diagnostic"
+readonly collection_diagnostic="$root/native-package-collection-diagnostic.json"
+rm -f -- "$output" "$diagnostic" "$collection_diagnostic"
 set +e
 /usr/local/sbin/secpal-collect-rocky-preparation \
   --native-package-admission --target-sha "$target_sha" \
   --control-sha "$control_sha" --run-id "$run_id" \
   --run-attempt "$run_attempt" --output "$output" \
-  --diagnostic-output "$diagnostic"
+  --diagnostic-output "$collection_diagnostic"
 status=$?
 set -e
 if [[ "$status" -ne 0 ]]; then
-  [[ -f "$diagnostic" && ! -L "$diagnostic" ]]
+  [[ -f "$collection_diagnostic" && ! -L "$collection_diagnostic" ]]
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
-    validate-collection-diagnostic "$diagnostic"
+    create-native-package-failure "$collection_diagnostic" \
+    --target-sha "$target_sha" --control-sha "$control_sha" \
+    --run-id "$run_id" --run-attempt "$run_attempt" \
+    --exit-status "$status" --output "$diagnostic"
+  /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+    validate-native-package-failure "$diagnostic" \
+    --target-sha "$target_sha" --control-sha "$control_sha" \
+    --run-id "$run_id" --run-attempt "$run_attempt"
+  rm -f -- "$collection_diagnostic"
   chown secpal-cloud:secpal-cloud "$diagnostic"
   chmod 0400 "$diagnostic"
   exit 92
 fi
+rm -f -- "$collection_diagnostic"
 /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
   validate-native-observation "$output" \
   --target-sha "$target_sha" --control-sha "$control_sha" \

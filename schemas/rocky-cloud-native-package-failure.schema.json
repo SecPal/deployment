@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secpal.example/schemas/rocky-cloud-native-package-failure.schema.json",
+  "title": "Rocky authenticated native package admission failure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase",
+    "target_sha",
+    "trusted_control_sha",
+    "run_id",
+    "run_attempt",
+    "exit_status",
+    "diagnostic"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "phase": { "const": "native-package-admission" },
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "trusted_control_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+    "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
+    "exit_status": { "type": "integer", "minimum": 1, "maximum": 255 },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "operation", "reason"],
+      "properties": {
+        "layer": {
+          "enum": ["observation", "normalization", "admission", "assembly"]
+        },
+        "operation": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "subject": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9+_.@:-]{0,127}$"
+        }
+      }
+    }
+  }
+}

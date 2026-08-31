@@ -174,6 +174,7 @@ resource "google_compute_instance" "qualification" {
       preparation_schema_base64gzip                  = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-preparation-evidence.schema.json"))
       preparation_failure_schema_base64gzip          = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-preparation-failure-evidence.schema.json"))
       qualification_schema_base64gzip                = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-qualification-evidence.schema.json"))
+      native_package_failure_schema_base64gzip       = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-native-package-failure.schema.json"))
       target_source_failure_schema_base64gzip        = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-target-source-failure.schema.json"))
       target_qualification_failure_schema_base64gzip = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-target-qualification-failure.schema.json"))
       profile_base64gzip                             = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-arm64.json"))

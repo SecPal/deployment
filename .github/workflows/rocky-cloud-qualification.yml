@@ -708,6 +708,8 @@ jobs:
 
       - name: Retrieve and validate bounded native-package failure
         if: ${{ steps.native_admission.outcome == 'failure' }}
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
         run: |
           ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
           scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
@@ -715,8 +717,10 @@ jobs:
             -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/native-package-observation-failure.json" \
             "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
-          scripts/ci-cloud/rocky-control.py validate-collection-diagnostic \
-            "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
+          scripts/ci-cloud/rocky-control.py validate-native-package-failure \
+            "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json" \
+            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       - name: Publish bounded native-package failure
         if: ${{ steps.native_admission.outcome == 'failure' }}

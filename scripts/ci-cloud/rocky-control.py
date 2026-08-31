@@ -49,6 +49,8 @@ SCHEMAS = {
     "qualification": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
     "qualification-readiness-failure": ROOT
     / "schemas/rocky-cloud-qualification-readiness-failure.schema.json",
+    "native-package-failure": ROOT
+    / "schemas/rocky-cloud-native-package-failure.schema.json",
     "target-source-failure": ROOT
     / "schemas/rocky-cloud-target-source-failure.schema.json",
     "target-qualification-failure": ROOT
@@ -744,6 +746,63 @@ def validate_collection_diagnostic_semantics(diagnostic: dict[str, Any]) -> None
         raise ControlError("collection diagnostic has an inappropriate subject")
 
 
+def validate_native_package_failure(
+    path: Path,
+    target_sha: str,
+    control_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> None:
+    if (
+        SHA.fullmatch(target_sha) is None
+        or SHA.fullmatch(control_sha) is None
+        or RUN_ID.fullmatch(run_id) is None
+        or RUN_ATTEMPT.fullmatch(run_attempt) is None
+    ):
+        raise ControlError("native package failure bindings are outside the closed format")
+    document = load_bounded_object(path, 8192)
+    schema = load_object(SCHEMAS["native-package-failure"])
+    errors = list(Draft202012Validator(schema).iter_errors(document))
+    if errors:
+        raise ControlError("native package failure is outside the closed schema")
+    if (
+        document["target_sha"] != target_sha
+        or document["trusted_control_sha"] != control_sha
+        or document["run_id"] != run_id
+        or document["run_attempt"] != run_attempt
+    ):
+        raise ControlError("native package failure does not match this qualification run")
+    validate_collection_diagnostic_semantics(document["diagnostic"])
+
+
+def create_native_package_failure(
+    diagnostic_path: Path,
+    output: Path,
+    target_sha: str,
+    control_sha: str,
+    run_id: str,
+    run_attempt: str,
+    exit_status: int,
+) -> None:
+    validate_collection_diagnostic(diagnostic_path)
+    if exit_status < 1 or exit_status > 255:
+        raise ControlError("native package failure exit status is outside the closed range")
+    document = {
+        "schema_version": 1,
+        "phase": "native-package-admission",
+        "target_sha": target_sha,
+        "trusted_control_sha": control_sha,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "exit_status": exit_status,
+        "diagnostic": load_bounded_object(diagnostic_path, 4096),
+    }
+    write_object(output, document)
+    validate_native_package_failure(
+        output, target_sha, control_sha, run_id, run_attempt
+    )
+
+
 def discover_image(control_sha: str, output: Path) -> None:
     if SHA.fullmatch(control_sha) is None:
         raise ControlError("trusted control SHA must be a lowercase full commit SHA")
@@ -903,6 +962,22 @@ def parser() -> argparse.ArgumentParser:
     native_observation.add_argument("--control-sha", required=True)
     native_observation.add_argument("--run-id", required=True)
     native_observation.add_argument("--run-attempt", required=True)
+    native_package_failure = subparsers.add_parser(
+        "validate-native-package-failure"
+    )
+    native_package_failure.add_argument("path", type=Path)
+    native_package_failure.add_argument("--target-sha", required=True)
+    native_package_failure.add_argument("--control-sha", required=True)
+    native_package_failure.add_argument("--run-id", required=True)
+    native_package_failure.add_argument("--run-attempt", required=True)
+    create_native_failure = subparsers.add_parser("create-native-package-failure")
+    create_native_failure.add_argument("path", type=Path)
+    create_native_failure.add_argument("--target-sha", required=True)
+    create_native_failure.add_argument("--control-sha", required=True)
+    create_native_failure.add_argument("--run-id", required=True)
+    create_native_failure.add_argument("--run-attempt", required=True)
+    create_native_failure.add_argument("--exit-status", required=True, type=int)
+    create_native_failure.add_argument("--output", required=True, type=Path)
     target_source_failure = subparsers.add_parser("validate-target-source-failure")
     target_source_failure.add_argument("path", type=Path)
     target_source_failure.add_argument("--target-sha", required=True)
@@ -973,6 +1048,24 @@ def main(arguments: list[str]) -> int:
                 options.control_sha,
                 options.run_id,
                 options.run_attempt,
+            )
+        elif options.command == "validate-native-package-failure":
+            validate_native_package_failure(
+                options.path,
+                options.target_sha,
+                options.control_sha,
+                options.run_id,
+                options.run_attempt,
+            )
+        elif options.command == "create-native-package-failure":
+            create_native_package_failure(
+                options.path,
+                options.output,
+                options.target_sha,
+                options.control_sha,
+                options.run_id,
+                options.run_attempt,
+                options.exit_status,
             )
         elif options.command == "validate-target-source-failure":
             validate_target_source_failure(options.path, options.target_sha)

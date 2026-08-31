@@ -2844,6 +2844,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         "rocky-cloud-qualification-evidence.schema.json",
         "rocky-cloud-qualification-readiness.schema.json",
         "rocky-cloud-qualification-readiness-failure.schema.json",
+        "rocky-cloud-native-package-failure.schema.json",
         "rocky-cloud-target-source-failure.schema.json",
         "rocky-cloud-target-qualification-failure.schema.json",
     ):

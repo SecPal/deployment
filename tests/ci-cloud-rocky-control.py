@@ -36,6 +36,7 @@ SCHEMA_NAMES = (
     "rocky-cloud-preparation-failure-evidence.schema.json",
     "rocky-cloud-qualification-evidence.schema.json",
     "rocky-cloud-qualification-readiness-failure.schema.json",
+    "rocky-cloud-native-package-failure.schema.json",
     "rocky-cloud-target-source-failure.schema.json",
     "rocky-cloud-target-qualification-failure.schema.json",
 )
@@ -481,6 +482,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "preparation_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json",
             "preparation_failure_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json",
             "qualification_schema_base64gzip": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
+            "native_package_failure_schema_base64gzip": ROOT
+            / "schemas/rocky-cloud-native-package-failure.schema.json",
             "target_source_failure_schema_base64gzip": ROOT
             / "schemas/rocky-cloud-target-source-failure.schema.json",
             "target_qualification_failure_schema_base64gzip": ROOT
@@ -2312,6 +2315,12 @@ class RockyCloudControlTests(unittest.TestCase):
             r'cmp --silent "\$work_root/scripts/qualify-production-host\.sh" '
             r'\\\n  "\$trusted_qualification_harness"',
         )
+        self.assertIn(
+            '[[ -f "$work_root/scripts/qualify-production-host.sh" && '
+            '! -L "$work_root/scripts/qualify-production-host.sh" && '
+            '-x "$work_root/scripts/qualify-production-host.sh" ]]',
+            runner,
+        )
         self.assertIn('bash "$trusted_qualification_harness"', runner)
         self.assertNotIn(
             'bash "$work_root/scripts/qualify-production-host.sh"', runner
@@ -2361,8 +2370,10 @@ class RockyCloudControlTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("exit 92", native_admission_runner)
+        self.assertIn("create-native-package-failure", native_admission_runner)
+        self.assertIn("validate-native-package-failure", workflow)
         self.assertIn(
-            'validate-collection-diagnostic "$diagnostic"',
+            'validate-native-package-failure "$diagnostic"',
             native_admission_runner,
         )
         self.assertIn("rocky-cloud-native-package-failure-", workflow)
@@ -2374,6 +2385,74 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn("native admission requires trusted control", target)
         self.assertNotIn("PASS: Rocky Linux %s native", target)
         self.assertNotIn("rpm -q --qf '%{NEVRA}", target)
+
+    def test_native_package_failure_is_bound_to_the_qualification_run(self) -> None:
+        target_sha = "a" * 40
+        control_sha = "b" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "raw.json"
+            bound = Path(directory) / "bound.json"
+            raw.write_text(
+                json.dumps(
+                    {
+                        "layer": "observation",
+                        "operation": "query-architecture",
+                        "reason": "command-failed",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            command = [
+                ROOT / "scripts/ci-cloud/rocky-control.py",
+                "create-native-package-failure",
+                raw,
+                "--target-sha",
+                target_sha,
+                "--control-sha",
+                control_sha,
+                "--run-id",
+                "123",
+                "--run-attempt",
+                "2",
+                "--exit-status",
+                "17",
+                "--output",
+                bound,
+            ]
+            created = subprocess.run(
+                command, check=False, capture_output=True, text=True
+            )
+            self.assertEqual(0, created.returncode, created.stderr)
+            document = json.loads(bound.read_text(encoding="utf-8"))
+            self.assertEqual(target_sha, document["target_sha"])
+            self.assertEqual(control_sha, document["trusted_control_sha"])
+            self.assertEqual(17, document["exit_status"])
+            validated = subprocess.run(
+                [
+                    ROOT / "scripts/ci-cloud/rocky-control.py",
+                    "validate-native-package-failure",
+                    bound,
+                    "--target-sha",
+                    target_sha,
+                    "--control-sha",
+                    control_sha,
+                    "--run-id",
+                    "123",
+                    "--run-attempt",
+                    "2",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, validated.returncode, validated.stderr)
+            wrong_run = subprocess.run(
+                [*validated.args[:-1], "3"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, wrong_run.returncode)
 
     def test_schema_only_qualification_cannot_self_assert_native_success(self) -> None:
         candidate = {

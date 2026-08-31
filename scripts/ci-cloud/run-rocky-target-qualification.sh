@@ -106,7 +106,10 @@ if [[ "$(git -C "$work_root" rev-parse HEAD)" != "$target_sha" ]]; then
   write_source_failure verify-target-sha postcondition-failed 1
   exit 84
 fi
-[[ -x "$work_root/scripts/qualify-production-host.sh" ]]
+if ! [[ -f "$work_root/scripts/qualify-production-host.sh" && ! -L "$work_root/scripts/qualify-production-host.sh" && -x "$work_root/scripts/qualify-production-host.sh" ]]; then
+  write_source_failure verify-target-harness postcondition-failed 1
+  exit 85
+fi
 if ! cmp --silent "$work_root/scripts/qualify-production-host.sh" \
   "$trusted_qualification_harness"; then
   write_source_failure verify-target-harness postcondition-failed 1
