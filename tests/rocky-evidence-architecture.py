@@ -218,6 +218,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
 
         mutations = {
             "below-minimum": package("5.8.1"),
+            "leading-zero": package("5.8.02"),
             "next-major": package("6.0.0"),
             "malformed-version": package("5.8"),
             "wrong-architecture": package(architecture="x86_64"),

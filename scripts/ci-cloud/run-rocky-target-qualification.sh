@@ -12,8 +12,6 @@ readonly qualification_trace="$evidence_root/target-qualification.trace"
 readonly qualification_marker="$evidence_root/target-qualification.marker"
 readonly reload_adjacency="$evidence_root/quadlet-reload-adjacency.json"
 readonly native_observation="$evidence_root/native-package-observation.json"
-readonly native_observation_before="$evidence_root/native-package-observation-before.json"
-readonly native_diagnostic="$evidence_root/native-package-observation-failure.json"
 
 if [[ "$#" -ne 4 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
   ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ]]; then
@@ -51,7 +49,7 @@ cleanup() {
     /var/lib/secpal-rocky/evidence/quadlet-active-observation.json \
     /var/lib/secpal-rocky/evidence/primary-workload-observation.json \
     /var/lib/secpal-rocky/evidence/quadlet-reload-adjacency.json \
-    "$qualification_trace" "$qualification_marker" "$native_observation_before"
+    "$qualification_trace" "$qualification_marker"
   rm -rf -- "$work_root"
 }
 trap cleanup EXIT HUP INT TERM
@@ -79,8 +77,7 @@ write_source_failure() {
 }
 
 rm -f -- "$source_failure" "$qualification_failure" "$qualification_trace" \
-  "$qualification_marker" "$reload_adjacency" "$native_observation" \
-  "$native_observation_before" "$native_diagnostic"
+  "$qualification_marker" "$reload_adjacency"
 if ! getent ahostsv4 github.com >/dev/null 2>&1; then
   write_source_failure resolve-target-source command-failed 1
   exit 81
@@ -110,26 +107,13 @@ if [[ "$(git -C "$work_root" rev-parse HEAD)" != "$target_sha" ]]; then
 fi
 [[ -x "$work_root/scripts/qualify-production-host.sh" ]]
 
-# The trusted controller, not the candidate target, owns native provenance.
-# Re-observe the installed RPMDB immediately before any target workload runs.
-set +e
-/usr/local/sbin/secpal-collect-rocky-preparation \
-  --native-package-admission --target-sha "$target_sha" \
-  --control-sha "$control_sha" --run-id "$qualification_run_id" \
-  --run-attempt "$qualification_run_attempt" \
-  --output "$native_observation_before" \
-  --diagnostic-output "$native_diagnostic"
-native_observation_status=$?
-set -e
-if [[ "$native_observation_status" -ne 0 ]]; then
-  [[ -f "$native_diagnostic" && ! -L "$native_diagnostic" ]]
-  /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
-    validate-collection-diagnostic "$native_diagnostic"
-  chown secpal-cloud:secpal-cloud "$native_diagnostic"
-  chmod 0400 "$native_diagnostic"
-  exit 92
-fi
-chmod 0600 "$native_observation_before"
+# The workflow-owned controller collected and retained this binding before
+# candidate checkout. Refuse to run a workload without that exact run binding.
+[[ -f "$native_observation" && ! -L "$native_observation" ]]
+/opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+  validate-native-observation "$native_observation" \
+  --target-sha "$target_sha" --control-sha "$control_sha" \
+  --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
 
 stdout="$evidence_root/qualification.stdout"
 audit_baseline="$(date -u '+%m/%d/%y %H:%M:%S')"
@@ -182,28 +166,6 @@ if [[ -n "$observer_pid" ]]; then
   observer_pid=""
 fi
 set -e
-
-# Re-observe after candidate execution. Only this fresh controller-owned
-# observation is assembled into native success evidence.
-rm -f -- "$native_observation" "$native_diagnostic"
-set +e
-/usr/local/sbin/secpal-collect-rocky-preparation \
-  --native-package-admission --target-sha "$target_sha" \
-  --control-sha "$control_sha" --run-id "$qualification_run_id" \
-  --run-attempt "$qualification_run_attempt" --output "$native_observation" \
-  --diagnostic-output "$native_diagnostic"
-native_observation_status=$?
-set -e
-if [[ "$native_observation_status" -ne 0 ]]; then
-  [[ -f "$native_diagnostic" && ! -L "$native_diagnostic" ]]
-  /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
-    validate-collection-diagnostic "$native_diagnostic"
-  chown secpal-cloud:secpal-cloud "$native_diagnostic"
-  chmod 0400 "$native_diagnostic"
-  exit 92
-fi
-chmod 0600 "$native_observation"
-
 stdout_size="$(stat -c %s "$stdout")"
 trace_size="$(stat -c %s "$qualification_trace")"
 representation_option=()
@@ -646,6 +608,7 @@ fi
 chmod 0600 "$evidence_root/qualification.json" "$stdout"
 /opt/secpal-control/scripts/ci-cloud/rocky-control.py validate-native-qualification \
   "$evidence_root/qualification.json" --stdout "$stdout" \
+  --native-observation "$native_observation" \
   --target-sha "$target_sha" --control-sha "$control_sha" \
   --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
 chown secpal-cloud:secpal-cloud "$evidence_root/qualification.json" "$stdout"

@@ -676,6 +676,92 @@ jobs:
           READINESS_OUTCOME: ${{ steps.guest_readiness.outcome }}
         run: test "$READINESS_OUTCOME" = success
 
+      - name: Collect authenticated native package binding before target execution
+        id: native_admission
+        continue-on-error: true
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip" sudo bash -s -- \
+            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" \
+            "$GITHUB_RUN_ATTEMPT" <<'REMOTE'
+          set -euo pipefail
+          readonly target_sha="$1" control_sha="$2" run_id="$3" run_attempt="$4"
+          readonly root=/var/lib/secpal-rocky/evidence
+          readonly output="$root/native-package-observation.json"
+          readonly diagnostic="$root/native-package-observation-failure.json"
+          rm -f -- "$output" "$diagnostic"
+          set +e
+          /usr/local/sbin/secpal-collect-rocky-preparation \
+            --native-package-admission --target-sha "$target_sha" \
+            --control-sha "$control_sha" --run-id "$run_id" \
+            --run-attempt "$run_attempt" --output "$output" \
+            --diagnostic-output "$diagnostic"
+          status=$?
+          set -e
+          if [[ "$status" -ne 0 ]]; then
+            [[ -f "$diagnostic" && ! -L "$diagnostic" ]]
+            /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+              validate-collection-diagnostic "$diagnostic"
+            chown secpal-cloud:secpal-cloud "$diagnostic"
+            chmod 0400 "$diagnostic"
+            exit 92
+          fi
+          /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+            validate-native-observation "$output" \
+            --target-sha "$target_sha" --control-sha "$control_sha" \
+            --run-id "$run_id" --run-attempt "$run_attempt"
+          chown secpal-cloud:secpal-cloud "$output"
+          chmod 0400 "$output"
+          REMOTE
+
+      - name: Retrieve and validate authenticated native package binding
+        if: ${{ steps.native_admission.outcome == 'success' }}
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/native-package-observation.json" \
+            "$RUNNER_TEMP/rocky-target/native-package-observation.json"
+          scripts/ci-cloud/rocky-control.py validate-native-observation \
+            "$RUNNER_TEMP/rocky-target/native-package-observation.json" \
+            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Retrieve and validate bounded native-package failure
+        if: ${{ steps.native_admission.outcome == 'failure' }}
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/native-package-observation-failure.json" \
+            "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
+          scripts/ci-cloud/rocky-control.py validate-collection-diagnostic \
+            "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
+
+      - name: Publish bounded native-package failure
+        if: ${{ steps.native_admission.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-native-package-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-target/native-package-observation-failure.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce authenticated native package admission
+        if: ${{ always() }}
+        env:
+          NATIVE_ADMISSION_OUTCOME: ${{ steps.native_admission.outcome }}
+        run: test "$NATIVE_ADMISSION_OUTCOME" = success
+
       - name: Execute exact target SHA once on the ready identity-free guest
         id: target_execution
         continue-on-error: true
@@ -696,28 +782,19 @@ jobs:
             81|82|83|84)
               source_failure_expected=true
               qualification_failure_expected=false
-              native_package_failure_expected=false
               ;;
             91)
               source_failure_expected=false
               qualification_failure_expected=true
-              native_package_failure_expected=false
-              ;;
-            92)
-              source_failure_expected=false
-              qualification_failure_expected=false
-              native_package_failure_expected=true
               ;;
             *)
               source_failure_expected=false
               qualification_failure_expected=false
-              native_package_failure_expected=false
               ;;
           esac
           {
             printf 'source_failure_expected=%s\n' "$source_failure_expected"
             printf 'qualification_failure_expected=%s\n' "$qualification_failure_expected"
-            printf 'native_package_failure_expected=%s\n' "$native_package_failure_expected"
           } >>"$GITHUB_OUTPUT"
           exit "$status"
 
@@ -785,36 +862,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Retrieve and validate bounded native-package failure
-        id: native_package_failure
-        if: >-
-          ${{ steps.target_execution.outcome == 'failure' &&
-          steps.target_execution.outputs.native_package_failure_expected == 'true' }}
-        continue-on-error: true
-        run: |
-          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
-            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
-            "secpal-cloud@$ip" \
-            'test -f /var/lib/secpal-rocky/evidence/native-package-observation-failure.json && test ! -L /var/lib/secpal-rocky/evidence/native-package-observation-failure.json && head -c 4097 /var/lib/secpal-rocky/evidence/native-package-observation-failure.json' \
-            >"$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
-          test "$(stat -c %s "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json")" -le 4096
-          scripts/ci-cloud/rocky-control.py validate-collection-diagnostic \
-            "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
-
-      - name: Publish bounded native-package failure
-        if: >-
-          ${{ always() && steps.target_execution.outcome == 'failure' &&
-          steps.target_execution.outputs.native_package_failure_expected == 'true' &&
-          steps.native_package_failure.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: rocky-cloud-native-package-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/rocky-target/native-package-observation-failure.json
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Enforce exact target execution
         if: ${{ always() }}
         env:
@@ -840,6 +887,8 @@ jobs:
           scripts/ci-cloud/rocky-control.py validate-native-qualification \
             "$RUNNER_TEMP/rocky-target/qualification.json" \
             --stdout "$RUNNER_TEMP/rocky-target/qualification.stdout" \
+            --native-observation \
+            "$RUNNER_TEMP/rocky-target/native-package-observation.json" \
             --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
 

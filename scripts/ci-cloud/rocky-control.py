@@ -67,7 +67,7 @@ ROCKY_PACKAGES = (
     "selinux-policy-targeted", "curl", "dnf", "git", "jq", "nftables",
     "openssh-server", "sudo", "python3-jsonschema", "dnf-plugins-core",
 )
-PODMAN_VERSION = re.compile(r"^([0-9]+)\.([0-9]+)\.([0-9]+)$")
+PODMAN_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 ACCESS_REQUEST_FIELDS = {
     "runner_ipv4",
     "run_attempt",
@@ -336,40 +336,74 @@ def validate_evidence(
     return document
 
 
-def validate_native_qualification(
+def validate_native_observation(
     path: Path,
-    stdout_path: Path,
     target_sha: str,
     control_sha: str,
     run_id: str,
     run_attempt: str,
-) -> None:
+) -> dict[str, Any]:
     if (
         SHA.fullmatch(target_sha) is None
         or SHA.fullmatch(control_sha) is None
         or RUN_ID.fullmatch(run_id) is None
         or RUN_ATTEMPT.fullmatch(run_attempt) is None
     ):
-        raise ControlError("native qualification bindings are outside the closed format")
-    document = validate_evidence(
-        "qualification", path, authenticated_native=True
+        raise ControlError("native observation bindings are outside the closed format")
+    schema = load_object(SCHEMAS["qualification"])
+    observation_schema = {
+        **schema["properties"]["native_observation"],
+        "$defs": schema["$defs"],
+    }
+    observation = load_object(path)
+    errors = sorted(
+        Draft202012Validator(observation_schema).iter_errors(observation),
+        key=lambda item: list(item.path),
     )
-    observation = document["native_observation"]
+    if errors:
+        first = errors[0]
+        location = ".".join(str(part) for part in first.path) or "<root>"
+        raise ControlError(
+            f"native observation rejected at {location}: {first.message}"
+        )
     expected = {
         "target_sha": target_sha,
         "trusted_control_sha": control_sha,
         "qualification_run_id": run_id,
         "qualification_run_attempt": run_attempt,
     }
-    if document["target_sha"] != target_sha or any(
-        observation[key] != value for key, value in expected.items()
-    ):
-        raise ControlError("native qualification is not bound to this exact run")
+    if any(observation[key] != value for key, value in expected.items()):
+        raise ControlError("native observation is not bound to this exact run")
     validate_authenticated_package_semantics(
         observation["packages"],
         observation["host"]["architecture"],
         observation["podman_version"],
     )
+    return observation
+
+
+def validate_native_qualification(
+    path: Path,
+    stdout_path: Path,
+    native_observation_path: Path,
+    target_sha: str,
+    control_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> None:
+    authenticated_observation = validate_native_observation(
+        native_observation_path, target_sha, control_sha, run_id, run_attempt
+    )
+    document = validate_evidence(
+        "qualification", path, authenticated_native=True
+    )
+    if (
+        document["target_sha"] != target_sha
+        or document["native_observation"] != authenticated_observation
+    ):
+        raise ControlError(
+            "native qualification differs from its authenticated controller binding"
+        )
     try:
         stdout = stdout_path.read_bytes()
     except OSError as error:
@@ -856,10 +890,19 @@ def parser() -> argparse.ArgumentParser:
     native_qualification = subparsers.add_parser("validate-native-qualification")
     native_qualification.add_argument("path", type=Path)
     native_qualification.add_argument("--stdout", required=True, type=Path)
+    native_qualification.add_argument(
+        "--native-observation", required=True, type=Path
+    )
     native_qualification.add_argument("--target-sha", required=True)
     native_qualification.add_argument("--control-sha", required=True)
     native_qualification.add_argument("--run-id", required=True)
     native_qualification.add_argument("--run-attempt", required=True)
+    native_observation = subparsers.add_parser("validate-native-observation")
+    native_observation.add_argument("path", type=Path)
+    native_observation.add_argument("--target-sha", required=True)
+    native_observation.add_argument("--control-sha", required=True)
+    native_observation.add_argument("--run-id", required=True)
+    native_observation.add_argument("--run-attempt", required=True)
     target_source_failure = subparsers.add_parser("validate-target-source-failure")
     target_source_failure.add_argument("path", type=Path)
     target_source_failure.add_argument("--target-sha", required=True)
@@ -917,6 +960,15 @@ def main(arguments: list[str]) -> int:
             validate_native_qualification(
                 options.path,
                 options.stdout,
+                options.native_observation,
+                options.target_sha,
+                options.control_sha,
+                options.run_id,
+                options.run_attempt,
+            )
+        elif options.command == "validate-native-observation":
+            validate_native_observation(
+                options.path,
                 options.target_sha,
                 options.control_sha,
                 options.run_id,

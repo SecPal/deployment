@@ -2261,28 +2261,37 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotIn('"mcs_distinct": passed', runner)
         self.assertNotIn('"classification": "PASS" if passed', runner)
         self.assertLess(
-            runner.index("--native-package-admission"),
-            runner.index("timeout --signal=TERM"),
+            workflow.index(
+                "Collect authenticated native package binding before target execution"
+            ),
+            workflow.index("Execute exact target SHA once"),
         )
-        self.assertEqual(
-            2,
-            runner.count("/usr/local/sbin/secpal-collect-rocky-preparation"),
+        self.assertLess(
+            workflow.index(
+                "Retrieve and validate authenticated native package binding"
+            ),
+            workflow.index("Execute exact target SHA once"),
+        )
+        self.assertLess(
+            runner.index("validate-native-observation"),
+            runner.index("timeout --signal=TERM"),
         )
         self.assertNotIn(
-            "/opt/secpal-control/scripts/ci-cloud/collect-rocky-preparation.py",
-            runner,
+            "/usr/local/sbin/secpal-collect-rocky-preparation", runner
         )
-        self.assertLess(
-            runner.index("timeout --signal=TERM"),
-            runner.index("# Re-observe after candidate execution"),
+        self.assertEqual(
+            1,
+            workflow.count("/usr/local/sbin/secpal-collect-rocky-preparation"),
         )
-        self.assertLess(
-            runner.index("# Re-observe after candidate execution"),
-            runner.index('stdout_size="$(stat -c %s "$stdout")"'),
+        self.assertIn(
+            '--native-observation "$native_observation"', runner
         )
-        self.assertIn("exit 92", runner)
-        self.assertIn('validate-collection-diagnostic "$native_diagnostic"', runner)
-        self.assertIn("native_package_failure_expected=true", workflow)
+        self.assertIn(
+            '"$RUNNER_TEMP/rocky-target/native-package-observation.json"',
+            workflow,
+        )
+        self.assertIn("exit 92", workflow)
+        self.assertIn('validate-collection-diagnostic "$diagnostic"', workflow)
         self.assertIn("rocky-cloud-native-package-failure-", workflow)
         cleanup = target.split("cleanup() {", 1)[1].split("\n}\n", 1)[0]
         self.assertLess(
@@ -2403,8 +2412,12 @@ class RockyCloudControlTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 evidence = Path(directory) / "qualification.json"
                 output = Path(directory) / "qualification.stdout"
+                binding = Path(directory) / "native-observation.json"
                 evidence.write_text(json.dumps(document), encoding="utf-8")
                 output.write_bytes(stdout)
+                binding.write_text(
+                    json.dumps(candidate["native_observation"]), encoding="utf-8"
+                )
                 return subprocess.run(
                     [
                         ROOT / "scripts/ci-cloud/rocky-control.py",
@@ -2412,6 +2425,8 @@ class RockyCloudControlTests(unittest.TestCase):
                         evidence,
                         "--stdout",
                         output,
+                        "--native-observation",
+                        binding,
                         "--target-sha",
                         "b" * 40,
                         "--control-sha",
@@ -2428,7 +2443,7 @@ class RockyCloudControlTests(unittest.TestCase):
 
         self.assertEqual(0, validate(candidate).returncode)
         mutations = {}
-        for version in ("5.8.1", "6.0.0", "not-a-version"):
+        for version in ("5.8.1", "5.8.02", "6.0.0", "not-a-version"):
             mutated = deepcopy(candidate)
             mutated["native_observation"]["podman_version"] = version
             mutated["native_observation"]["packages"][0]["version"] = version
