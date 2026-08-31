@@ -67,6 +67,7 @@ cleanup() {
   fi
   if [[ -n "$unit_name" ]]; then
     user_systemctl stop "${unit_name}.service" >/dev/null 2>&1
+    rootless_podman rm --force --ignore "$unit_name" >/dev/null 2>&1
   fi
   if [[ -n "$container_a" ]]; then
     rootless_podman rm --force "$container_a" >/dev/null 2>&1

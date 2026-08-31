@@ -396,6 +396,36 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertEqual(nevra, run.call_args_list[1].args[1][-1])
         self.assertEqual(nevra, run.call_args_list[2].args[1][-1])
 
+    def test_full_preparation_collection_requires_its_mode_specific_inputs(self) -> None:
+        collector = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [
+                    collector,
+                    "--target-sha",
+                    "a" * 40,
+                    "--control-sha",
+                    "b" * 40,
+                    "--run-id",
+                    "1",
+                    "--run-attempt",
+                    "1",
+                    "--output",
+                    str(Path(directory) / "evidence.json"),
+                    "--diagnostic-output",
+                    str(Path(directory) / "diagnostic.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(2, completed.returncode)
+        self.assertIn(
+            "required without --native-package-admission: "
+            "--expires-at, --image, --first-boot-id",
+            completed.stderr,
+        )
+
     def test_rendered_rocky_startup_script_is_bounded_valid_bash(self) -> None:
         template = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
             encoding="utf-8"
@@ -2219,6 +2249,11 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn('validate-collection-diagnostic "$native_diagnostic"', runner)
         self.assertIn("native_package_failure_expected=true", workflow)
         self.assertIn("rocky-cloud-native-package-failure-", workflow)
+        cleanup = target.split("cleanup() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertLess(
+            cleanup.index('user_systemctl stop "${unit_name}.service"'),
+            cleanup.index('rootless_podman rm --force --ignore "$unit_name"'),
+        )
         self.assertIn("native admission requires trusted control", target)
         self.assertNotIn("PASS: Rocky Linux %s native", target)
         self.assertNotIn("rpm -q --qf '%{NEVRA}", target)

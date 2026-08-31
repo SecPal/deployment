@@ -450,7 +450,23 @@ def main() -> int:
         except contract.ContractError:
             return 1
         return 0
-    options = parser().parse_args()
+    argument_parser = parser()
+    options = argument_parser.parse_args()
+    if not options.native_package_admission:
+        missing = [
+            flag
+            for flag, value in (
+                ("--expires-at", options.expires_at),
+                ("--image", options.image),
+                ("--first-boot-id", options.first_boot_id),
+            )
+            if value is None
+        ]
+        if missing:
+            argument_parser.error(
+                "the following arguments are required without "
+                f"--native-package-admission: {', '.join(missing)}"
+            )
     observer = Observer()
     try:
         document = (
