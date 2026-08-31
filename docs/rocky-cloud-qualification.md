@@ -286,18 +286,18 @@ closed evidence assembly. The latter imports no process, filesystem, network,
 environment, or clock capability. A single transported script would not permit
 these responsibilities to collapse.
 
-| Evidence concept                          | External representation / observation owner                                    | Normalization and authoritative admission owner                                | Assembly / schema / independent validation                                                                 | Diagnostic operation family                                                                   |
-| ----------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Immutable run, target, and image identity | workflow inputs and exact image self-link                                      | pure Rocky preparation contract                                                | pure assembly; preparation schema; `rocky-control.py`                                                      | `admit-immutable-shas`, `admit-provider-image`                                                |
-| Guest OS and architecture                 | `/etc/os-release`, `uname` through the collector observer                      | pure OS parser and `admit-guest-identity`                                      | pure assembly; preparation schema; trusted controller                                                      | `read-os-release`, `query-architecture`                                                       |
-| DNF and enabled repositories              | bounded `dnf4`/RPM observations                                                | pure repository parser and update/repository admission                         | pure assembly; preparation schema; trusted controller                                                      | `query-dnf-version`, `query-releasever`, `query-enabled-repositories`                         |
-| Installed package provenance              | bounded RPM/DNF/rpmkeys observations, one reviewed package subject at a time   | pure package normalization and repository/signature/payload admission          | pure assembly; preparation schema; trusted controller                                                      | closed `query-`, `resolve-`, `download-`, `inspect-`, and `verify-package-*` operations       |
-| SELinux and container labeling            | `getenforce`, `selinuxenabled`, `sestatus`, and bounded container config reads | pure SELinux and label-configuration admission                                 | pure assembly; preparation schema; trusted controller                                                      | `query-selinux-*`, `read-container-config`                                                    |
-| Service account and subordinate IDs       | passwd/group databases plus bounded subuid/subgid reads                        | pure account, range, cardinality, and overlap admission                        | pure assembly; preparation schema; trusted controller                                                      | `resolve-service-account`, `read-subuid`, `read-subgid`, identity operations                  |
-| Rootless Podman/runtime boundary          | bounded Podman JSON, systemd, cgroup, socket, and environment observations     | pure Podman normalization and runtime admission                                | pure assembly; preparation schema; trusted controller                                                      | `query-podman-*`, `query-systemd-user`, `query-cgroup-filesystem`                             |
-| Immutable ARM64 fixture identity          | Podman's complete bounded `.RepoDigests` representation                        | `rocky_preparation_contract.admit_fixture_identity` is the sole semantic owner | preparation delegates through the same contract CLI; pure assembly; preparation schema; trusted controller | `inspect-fixture-repo-digests`, `normalize-fixture-repo-digests`, `admit-fixture-arm64-child` |
-| Reboot and hardware persistence           | boot ID, CPU, memory, and root filesystem observations                         | pure representation normalization and persistence admission                    | pure assembly; preparation schema; trusted controller                                                      | `read-boot-id`, `query-cpu-count`, `read-memory-info`, `query-root-filesystem`                |
-| Cloud-identity absence                    | identity-transition marker and closed environment facts                        | pure cloud-boundary admission                                                  | pure assembly; preparation schema; trusted controller                                                      | `query-cloud-identity-marker`, `query-environment-authority`                                  |
+| Evidence concept                          | External representation / observation owner                                    | Normalization and authoritative admission owner                                                                            | Assembly / schema / independent validation                                                                 | Diagnostic operation family                                                                   |
+| ----------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Immutable run, target, and image identity | workflow inputs and exact image self-link                                      | pure Rocky preparation contract                                                                                            | pure assembly; preparation schema; `rocky-control.py`                                                      | `admit-immutable-shas`, `admit-provider-image`                                                |
+| Guest OS and architecture                 | `/etc/os-release`, `uname` through the collector observer                      | pure OS parser and `admit-guest-identity`                                                                                  | pure assembly; preparation schema; trusted controller                                                      | `read-os-release`, `query-architecture`                                                       |
+| DNF and enabled repositories              | bounded `dnf4`/RPM observations                                                | pure repository parser and update/repository admission                                                                     | pure assembly; preparation schema; trusted controller                                                      | `query-dnf-version`, `query-releasever`, `query-enabled-repositories`                         |
+| Installed package provenance              | bounded RPMDB/DNF observations, one reviewed package key at a time             | pure exact NAME/EPOCH/VERSION/RELEASE/ARCH/NEVRA, repository, signature, payload, architecture, and Podman-range admission | pure assembly; preparation schema; trusted-controller agreement validator                                  | closed `query-`, `resolve-`, `inspect-`, `normalize-`, and `admit-package-*` operations       |
+| SELinux and container labeling            | `getenforce`, `selinuxenabled`, `sestatus`, and bounded container config reads | pure SELinux and label-configuration admission                                                                             | pure assembly; preparation schema; trusted controller                                                      | `query-selinux-*`, `read-container-config`                                                    |
+| Service account and subordinate IDs       | passwd/group databases plus bounded subuid/subgid reads                        | pure account, range, cardinality, and overlap admission                                                                    | pure assembly; preparation schema; trusted controller                                                      | `resolve-service-account`, `read-subuid`, `read-subgid`, identity operations                  |
+| Rootless Podman/runtime boundary          | bounded Podman JSON, systemd, cgroup, socket, and environment observations     | pure Podman normalization and runtime admission                                                                            | pure assembly; preparation schema; trusted controller                                                      | `query-podman-*`, `query-systemd-user`, `query-cgroup-filesystem`                             |
+| Immutable ARM64 fixture identity          | Podman's complete bounded `.RepoDigests` representation                        | `rocky_preparation_contract.admit_fixture_identity` is the sole semantic owner                                             | preparation delegates through the same contract CLI; pure assembly; preparation schema; trusted controller | `inspect-fixture-repo-digests`, `normalize-fixture-repo-digests`, `admit-fixture-arm64-child` |
+| Reboot and hardware persistence           | boot ID, CPU, memory, and root filesystem observations                         | pure representation normalization and persistence admission                                                                | pure assembly; preparation schema; trusted controller                                                      | `read-boot-id`, `query-cpu-count`, `read-memory-info`, `query-root-filesystem`                |
+| Cloud-identity absence                    | identity-transition marker and closed environment facts                        | pure cloud-boundary admission                                                                                              | pure assembly; preparation schema; trusted controller                                                      | `query-cloud-identity-marker`, `query-environment-authority`                                  |
 
 Every fallible collector operation is selected from `ObservationOperation` and
 emits only a closed layer, operation, reason, and, where applicable, a reviewed
@@ -381,12 +381,37 @@ The admitted invariant is about the installed artifact, not current mirror
 payload availability. For every reviewed package, evidence proves:
 
 - its exact installed NEVRA;
+- its RPMDB-observed NAME, EPOCHNUM, VERSION, RELEASE, and ARCH fields, with a
+  canonical NEVRA reconstructed from those fields and bound to the requested
+  package key;
 - successful RPM verification of the preserved immutable installed header,
   including its RSA signature and SHA-256/SHA-1 header digests;
 - the SHA-256 payload digest and algorithm stored in that signed header;
 - the exact reviewed Rocky 10 signing-key packet and fingerprint; and
 - exact current NEVRA membership in one of `baseos`, `appstream`, or `extras`,
   using repository metadata without transferring the RPM payload.
+
+The admitted package architecture must equal the observed host architecture;
+an exact `noarch` package is also valid on either admitted host architecture.
+`x86_64` and `aarch64` are never interchangeable. Duplicate, missing,
+wrong-key, malformed, or contradictory package observations fail at the named
+normalization, admission, schema, or trusted-controller agreement boundary.
+
+Podman runtime version has one source of truth: the VERSION field of the exact
+admitted installed `podman` RPM. Native admission accepts `>= 5.8.2` and
+`< 6.0.0`; it rejects a nonzero epoch, malformed version, a lower version, or
+6.0.0 and newer. `podman --version` text and fixture input are not admission
+authority.
+
+Immediately before any target qualification workload executes, the existing
+trusted controller re-observes this package/RPMDB contract and binds it to the
+exact target SHA, trusted-control SHA, qualification run and attempt, Rocky
+10.2 identity, and host architecture. The target-owned harness reports only
+target-workload success. Only the controller combines that result with its
+authenticated current observation to assemble native PASS evidence. Generic
+schema validation confirms representation only and cannot promote a
+caller-authored document, `classification` label, or equivalent field into
+native evidence.
 
 RPM v4 immutable regions preserve the original signed header when
 installation-specific fields are added, specifically so installed metadata can

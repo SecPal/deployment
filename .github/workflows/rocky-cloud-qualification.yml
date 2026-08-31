@@ -696,18 +696,29 @@ jobs:
             81|82|83|84)
               source_failure_expected=true
               qualification_failure_expected=false
+              native_package_failure_expected=false
               ;;
             91)
               source_failure_expected=false
               qualification_failure_expected=true
+              native_package_failure_expected=false
+              ;;
+            92)
+              source_failure_expected=false
+              qualification_failure_expected=false
+              native_package_failure_expected=true
               ;;
             *)
               source_failure_expected=false
               qualification_failure_expected=false
+              native_package_failure_expected=false
               ;;
           esac
-          printf 'source_failure_expected=%s\n' "$source_failure_expected" >>"$GITHUB_OUTPUT"
-          printf 'qualification_failure_expected=%s\n' "$qualification_failure_expected" >>"$GITHUB_OUTPUT"
+          {
+            printf 'source_failure_expected=%s\n' "$source_failure_expected"
+            printf 'qualification_failure_expected=%s\n' "$qualification_failure_expected"
+            printf 'native_package_failure_expected=%s\n' "$native_package_failure_expected"
+          } >>"$GITHUB_OUTPUT"
           exit "$status"
 
       - name: Retrieve and validate bounded target-source failure
@@ -774,6 +785,36 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Retrieve and validate bounded native-package failure
+        id: native_package_failure
+        if: >-
+          ${{ steps.target_execution.outcome == 'failure' &&
+          steps.target_execution.outputs.native_package_failure_expected == 'true' }}
+        continue-on-error: true
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip" \
+            'test -f /var/lib/secpal-rocky/evidence/native-package-observation-failure.json && test ! -L /var/lib/secpal-rocky/evidence/native-package-observation-failure.json && head -c 4097 /var/lib/secpal-rocky/evidence/native-package-observation-failure.json' \
+            >"$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
+          test "$(stat -c %s "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json")" -le 4096
+          scripts/ci-cloud/rocky-control.py validate-collection-diagnostic \
+            "$RUNNER_TEMP/rocky-target/native-package-observation-failure.json"
+
+      - name: Publish bounded native-package failure
+        if: >-
+          ${{ always() && steps.target_execution.outcome == 'failure' &&
+          steps.target_execution.outputs.native_package_failure_expected == 'true' &&
+          steps.native_package_failure.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-cloud-native-package-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-target/native-package-observation-failure.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Enforce exact target execution
         if: ${{ always() }}
         env:
@@ -796,26 +837,11 @@ jobs:
             -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/qualification.stdout" \
             "$RUNNER_TEMP/rocky-target/qualification.stdout"
-          scripts/ci-cloud/rocky-control.py validate-evidence qualification \
-            "$RUNNER_TEMP/rocky-target/qualification.json"
-          python3 - "$TARGET_SHA" \
+          scripts/ci-cloud/rocky-control.py validate-native-qualification \
             "$RUNNER_TEMP/rocky-target/qualification.json" \
-            "$RUNNER_TEMP/rocky-target/qualification.stdout" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          target_sha, evidence_path, stdout_path = sys.argv[1:]
-          evidence = json.loads(Path(evidence_path).read_text(encoding="utf-8"))
-          stdout = Path(stdout_path).read_bytes()
-          if (
-              evidence["target_sha"] != target_sha
-              or evidence["stdout_bytes"] != len(stdout)
-              or evidence["stdout_sha256"] != hashlib.sha256(stdout).hexdigest()
-          ):
-              raise SystemExit("qualification evidence is not bound to target stdout")
-          PY
+            --stdout "$RUNNER_TEMP/rocky-target/qualification.stdout" \
+            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       - name: Publish bounded target-owned qualification evidence
         if: ${{ steps.target_execution.outcome == 'success' }}

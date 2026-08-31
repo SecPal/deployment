@@ -184,6 +184,10 @@
         "additionalProperties": false,
         "required": [
           "name",
+          "epoch",
+          "version",
+          "release",
+          "architecture",
           "nevra",
           "resolved_repository",
           "signature_verified",
@@ -192,7 +196,23 @@
         ],
         "properties": {
           "name": { "type": "string", "pattern": "^[a-zA-Z0-9+_.-]{1,64}$" },
-          "nevra": { "type": "string", "minLength": 3, "maxLength": 256 },
+          "epoch": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,9})$" },
+          "version": {
+            "type": "string",
+            "pattern": "^[0-9][a-zA-Z0-9+_.~^]*$",
+            "maxLength": 128
+          },
+          "release": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9+_.~^]*$",
+            "maxLength": 128
+          },
+          "architecture": { "enum": ["aarch64", "x86_64", "noarch"] },
+          "nevra": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9+_.-]+-(?:[1-9][0-9]*:)?[0-9][a-zA-Z0-9+_.~^]*-[a-zA-Z0-9][a-zA-Z0-9+_.~^]*\\.(?:aarch64|x86_64|noarch)$",
+            "maxLength": 256
+          },
           "resolved_repository": { "enum": ["baseos", "appstream", "extras"] },
           "signature_verified": { "const": true },
           "signer_fingerprint": {
@@ -236,7 +256,11 @@
         "api_dependency_absent"
       ],
       "properties": {
-        "podman": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "podman": {
+          "type": "string",
+          "pattern": "^5\\.(?:8\\.(?:[2-9]|[1-9][0-9]+)|(?:9|[1-9][0-9]+)\\.[0-9]+)$",
+          "maxLength": 64
+        },
         "rootless": { "const": true },
         "graphroot": {
           "type": "string",

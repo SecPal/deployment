@@ -59,14 +59,27 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         header = "b" * 64
         key_packet = b"reviewed Rocky 10 signing key packet"
         contract.ROCKY_KEY_PACKET_SHA256 = hashlib.sha256(key_packet).hexdigest()
-        packages = [
-            {
+        packages = []
+        for name in contract.PACKAGES:
+            version = "5.8.2" if name == "podman" else "1.0"
+            nevra = f"{name}-{version}-1.el10_2.aarch64"
+            packages.append(
+                {
                 "name": name,
-                "nevra": f"{name}-1-1.aarch64",
+                "epoch": "0",
+                "version": version,
+                "release": "1.el10_2",
+                "architecture": "aarch64",
+                "nevra": nevra,
                 "repositories": ["appstream"],
                 "signed_header": "\n".join(
                     (
-                        f"{name}-1-1.aarch64",
+                        name,
+                        "0",
+                        version,
+                        "1.el10_2",
+                        "aarch64",
+                        nevra,
                         payload,
                         "8",
                         header,
@@ -80,9 +93,8 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                         "Header SHA1 digest: OK",
                     )
                 ),
-            }
-            for name in contract.PACKAGES
-        ]
+                }
+            )
         expected = f"{contract.FIXTURE_REPOSITORY}@{contract.ARM_CHILD}"
         return {
             "os_release": 'NAME="Rocky Linux"\nID="rocky"\nVERSION_ID="10.2"',
@@ -111,7 +123,6 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             "rocky_signing_key": "6fedfc85\n"
             + base64.b64encode(key_packet).decode("ascii"),
             "container_configs": ["[engine]\nlabel=true"],
-            "podman_version": "podman version 5.8.2",
             "cgroup_filesystem": "cgroup2fs",
             "systemd_user": "active",
             "socket_exists": False,
@@ -145,6 +156,87 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         collector = COLLECTOR.read_text(encoding="utf-8")
         self.assertNotIn("contract.normalize_podman", collector)
 
+    def test_package_identity_and_podman_range_are_one_authenticated_contract(self) -> None:
+        contract = load_contract()
+
+        def package(version: str = "5.8.2", architecture: str = "aarch64"):
+            nevra = f"podman-{version}-1.el10_2.{architecture}"
+            return {
+                "name": "podman",
+                "epoch": "0",
+                "version": version,
+                "release": "1.el10_2",
+                "architecture": architecture,
+                "nevra": nevra,
+                "repositories": ["appstream"],
+                "signed_header": "\n".join(
+                    (
+                        "podman",
+                        "0",
+                        version,
+                        "1.el10_2",
+                        architecture,
+                        nevra,
+                        "a" * 64,
+                        "8",
+                        "b" * 64,
+                        "RSA/SHA256, Wed May 21 13:19:52 2025, Key ID 5b106c736fedfc85",
+                    )
+                ),
+                "verification": "\n".join(
+                    (
+                        "Header V4 RSA/SHA256 Signature, key ID 6fedfc85: OK",
+                        "Header SHA256 digest: OK",
+                        "Header SHA1 digest: OK",
+                    )
+                ),
+            }
+
+        for host_architecture, version in (
+            ("aarch64", "5.8.2"),
+            ("x86_64", "5.9.7"),
+        ):
+            with self.subTest(
+                admitted_version=version, host_architecture=host_architecture
+            ):
+                fact = contract.normalize_package(
+                    "podman",
+                    package(version, host_architecture),
+                    host_architecture,
+                )
+                admitted = contract.admit_package(
+                    fact, contract.ROCKY_FINGERPRINT, host_architecture
+                )
+                facts = {"packages_admitted": [admitted]}
+                contract.admit_runtime_podman_version(facts)
+                self.assertEqual(version, facts["podman_version_admitted"])
+
+        mutations = {
+            "below-minimum": package("5.8.1"),
+            "next-major": package("6.0.0"),
+            "malformed-version": package("5.8"),
+            "wrong-architecture": package(architecture="x86_64"),
+            "inverse-wrong-architecture": package(architecture="aarch64"),
+            "wrong-package": {**package(), "name": "conmon"},
+            "malformed-nevra": {**package(), "nevra": "xxx"},
+        }
+        for name, raw in mutations.items():
+            with self.subTest(rejected=name), self.assertRaises(
+                contract.ContractError
+            ):
+                host_architecture = (
+                    "x86_64" if name == "inverse-wrong-architecture" else "aarch64"
+                )
+                fact = contract.normalize_package(
+                    "podman", raw, host_architecture
+                )
+                admitted = contract.admit_package(
+                    fact, contract.ROCKY_FINGERPRINT, host_architecture
+                )
+                contract.admit_runtime_podman_version(
+                    {"packages_admitted": [admitted]}
+                )
+
     def test_architecture_gate_rejects_collapsed_runtime_admission(self) -> None:
         source = CONTRACT.read_text(encoding="utf-8")
         for operation in self.RUNTIME_ADMISSION_OPERATIONS:
@@ -160,6 +252,24 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             )
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("runtime admission", completed.stderr)
+
+    def test_architecture_gate_pins_authenticated_package_owner(self) -> None:
+        source = CONTRACT.read_text(encoding="utf-8").replace(
+            '"authenticated-native-packages": "rocky_preparation_contract.admit_package"',
+            '"authenticated-native-packages": "collector.admit_package"',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / CONTRACT.name
+            path.write_text(source, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--contract", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("authenticated-package invariant owner", completed.stderr)
 
     def test_architecture_gate_rejects_disconnected_runtime_owner(self) -> None:
         source = CONTRACT.read_text(encoding="utf-8")
@@ -203,7 +313,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 socket_unit_disabled,
                 container_host_absent,
                 service_local,
-                podman_version_present,
+                podman_version_supported,
             ) = states
             for remote_socket_exists in (False, True):
                 facts = {
@@ -227,9 +337,13 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                     "socket_exists": not socket_absent,
                     "podman_socket_enabled": not socket_unit_disabled,
                     "container_host_present": not container_host_absent,
-                    "podman_version": (
-                        "podman version 5.8.2" if podman_version_present else ""
-                    ),
+                    "packages_admitted": [
+                        {
+                            "name": "podman",
+                            "epoch": "0",
+                            "version": "5.8.2" if podman_version_supported else "6.0.0",
+                        }
+                    ],
                 }
                 intended_accepts = all(states)
                 try:
@@ -270,7 +384,18 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             ("admit-runtime-socket-unit-disabled", lambda raw: raw.__setitem__("podman_socket_status", 0)),
             ("admit-runtime-container-host-absence", lambda raw: raw.__setitem__("container_host_present", True)),
             ("admit-runtime-service-locality", mutate_podman(("host", "serviceIsRemote"), True)),
-            ("admit-runtime-podman-version", lambda raw: raw.__setitem__("podman_version", "")),
+            (
+                "admit-runtime-podman-version",
+                lambda raw: raw["packages"][0].update(
+                    {
+                        "version": "5.8.1",
+                        "nevra": "podman-5.8.1-1.el10_2.aarch64",
+                        "signed_header": raw["packages"][0]["signed_header"].replace(
+                            "5.8.2", "5.8.1"
+                        ),
+                    }
+                ),
+            ),
         )
         for operation, mutate in mutations:
             with self.subTest(operation=operation):
@@ -328,7 +453,6 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         podman["host"]["security"]["rootless"] = False
         podman["host"]["ociRuntime"]["name"] = "runc"
         raw["podman_info"] = json.dumps(podman)
-        raw["podman_version"] = ""
         with self.assertRaises(contract.ContractError) as raised:
             contract.normalize_and_admit(raw, self.realistic_options())
         self.assertEqual("admit-runtime-rootless", raised.exception.operation)
@@ -787,9 +911,9 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         document = contract.normalize_and_admit(raw, self.realistic_options())
         uppercase = json.loads(json.dumps(raw))
         uppercase_header = uppercase["packages"][0]["signed_header"].splitlines()
-        uppercase_header[1] = uppercase_header[1].upper()
-        uppercase_header[3] = uppercase_header[3].upper()
-        uppercase_header[4] = uppercase_header[4][:-16] + uppercase_header[4][-16:].upper()
+        uppercase_header[6] = uppercase_header[6].upper()
+        uppercase_header[8] = uppercase_header[8].upper()
+        uppercase_header[9] = uppercase_header[9][:-16] + uppercase_header[9][-16:].upper()
         uppercase["packages"][0]["signed_header"] = "\n".join(uppercase_header)
         uppercase_document = contract.normalize_and_admit(
             uppercase, self.realistic_options()
@@ -858,7 +982,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             )
 
         package_failures = {
-            "wrong-nevra": {"signed_header": raw["packages"][0]["signed_header"].replace("podman-1-1.aarch64", "podman-2-1.aarch64", 1)},
+            "wrong-nevra": {"signed_header": raw["packages"][0]["signed_header"].replace("podman-5.8.2-1.el10_2.aarch64", "podman-5.8.3-1.el10_2.aarch64", 1)},
             "wrong-signer": {"signed_header": raw["packages"][0]["signed_header"].replace("6fedfc85", "deadbeef")},
             "missing-signature": {"verification": "Header SHA256 digest: OK\nHeader SHA1 digest: OK"},
             "unknown-signer": {"verification": raw["packages"][0]["verification"].replace("6fedfc85", "deadbeef")},

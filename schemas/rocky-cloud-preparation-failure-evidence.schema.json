@@ -174,7 +174,6 @@
             "query-cpu-count",
             "query-update-unit",
             "read-container-config",
-            "query-podman-version",
             "query-cgroup-filesystem",
             "query-systemd-user",
             "query-podman-socket",
@@ -192,6 +191,7 @@
             "write-evidence",
             "write-collection-diagnostic",
             "normalize-os-release",
+            "normalize-native-architecture",
             "normalize-repositories",
             "normalize-subuid",
             "normalize-subgid",
@@ -304,7 +304,6 @@
             "query-podman-info",
             "inspect-fixture-repo-digests",
             "query-update-unit",
-            "query-podman-version",
             "query-cgroup-filesystem",
             "query-systemd-user",
             "query-podman-socket",
@@ -364,6 +363,7 @@
         },
         {
           "operations": [
+            "normalize-native-architecture",
             "normalize-repositories",
             "normalize-subuid-population",
             "normalize-subgid-population",
@@ -496,7 +496,6 @@
                   "query-cpu-count",
                   "query-update-unit",
                   "read-container-config",
-                  "query-podman-version",
                   "query-cgroup-filesystem",
                   "query-systemd-user",
                   "query-podman-socket",
@@ -526,6 +525,7 @@
               "operation": {
                 "enum": [
                   "normalize-os-release",
+                  "normalize-native-architecture",
                   "normalize-repositories",
                   "normalize-subuid",
                   "normalize-subgid",

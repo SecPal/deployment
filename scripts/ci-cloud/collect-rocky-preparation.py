@@ -65,7 +65,6 @@ class ObservationOperation(str, Enum):
     CPU_COUNT = "query-cpu-count"
     UPDATE_UNIT = "query-update-unit"
     CONTAINER_CONFIG = "read-container-config"
-    PODMAN_VERSION = "query-podman-version"
     CGROUP_FILESYSTEM = "query-cgroup-filesystem"
     SYSTEMD_USER = "query-systemd-user"
     PODMAN_SOCKET = "query-podman-socket"
@@ -280,7 +279,23 @@ class Observer:
     def package(self, name: str) -> dict[str, Any]:
         if name not in PACKAGES:
             raise ObservationError(ObservationOperation.PACKAGE_NEVRA, "subject-invalid")
-        _, nevra, _ = self.run(ObservationOperation.PACKAGE_NEVRA, ["rpm", "-q", "--qf", "%{NEVRA}", name], subject=name)
+        _, identity, _ = self.run(
+            ObservationOperation.PACKAGE_NEVRA,
+            [
+                "rpm", "-q", "--qf",
+                "%{NAME}\\n%{EPOCHNUM}\\n%{VERSION}\\n%{RELEASE}\\n%{ARCH}\\n%{NEVRA}\\n",
+                name,
+            ],
+            subject=name,
+        )
+        identity_lines = identity.splitlines()
+        if len(identity_lines) != 6:
+            raise ObservationError(
+                ObservationOperation.PACKAGE_NEVRA,
+                "representation-invalid",
+                name,
+            )
+        package_name, epoch, version, release, architecture, nevra = identity_lines
         _, repositories, _ = self.run(
             ObservationOperation.PACKAGE_REPOSITORY,
             self.package_repository_query(nevra),
@@ -290,6 +305,7 @@ class Observer:
             ObservationOperation.PACKAGE_SIGNED_HEADER,
             [
                 "rpm", "-qvv", "--qf",
+                "%{NAME}\\n%{EPOCHNUM}\\n%{VERSION}\\n%{RELEASE}\\n%{ARCH}\\n"
                 "%{NEVRA}\\n%{PAYLOADDIGEST}\\n%{PAYLOADDIGESTALGO}\\n"
                 "%{SHA256HEADER}\\n%{RSAHEADER:pgpsig}\\n",
                 nevra,
@@ -298,7 +314,11 @@ class Observer:
             maximum=4096,
         )
         return {
-            "name": name,
+            "name": package_name,
+            "epoch": epoch,
+            "version": version,
+            "release": release,
+            "architecture": architecture,
             "nevra": nevra,
             "repositories": repositories.splitlines(),
             "signed_header": signed_header,
@@ -353,7 +373,6 @@ def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
     _, podman_info, _ = observer.run(ObservationOperation.PODMAN_INFO, ["podman", "info", "--format", "json"], user=account["name"])
     graphroot_raw = observer.podman_graphroot(podman_info)
     _, fixture_repo_digests, _ = observer.run(ObservationOperation.FIXTURE_REPO_DIGESTS, ["podman", "image", "inspect", "--format", "{{json .RepoDigests}}", FIXTURE], user=account["name"], maximum=FIXTURE_DIGEST_METADATA_MAX_BYTES)
-    _, podman_version, _ = observer.run(ObservationOperation.PODMAN_VERSION, ["podman", "--version"])
     _, cgroup_filesystem, _ = observer.run(ObservationOperation.CGROUP_FILESYSTEM, ["stat", "-fc", "%T", "/sys/fs/cgroup"])
     systemd_user = observer.systemd_user_state(account["uid"])
     raw = {
@@ -374,7 +393,7 @@ def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
         "root_filesystem_bytes": observer.filesystem_bytes(), "cpu_count": observer.cpu_count(),
         "packages": [observer.package(name) for name in PACKAGES],
         "rocky_signing_key": observer.rocky_signing_key(),
-        "container_configs": observer.container_configs(account["home"]), "podman_version": podman_version,
+        "container_configs": observer.container_configs(account["home"]),
         "cgroup_filesystem": cgroup_filesystem, "systemd_user": systemd_user,
         "socket_exists": observer.exists(ObservationOperation.SOCKET_PATH, Path(f"/run/user/{account['uid']}/podman/podman.sock")),
         "podman_socket_status": observer.unit_status("podman.socket"),
@@ -389,15 +408,35 @@ def collect(observer: Observer, options: argparse.Namespace) -> dict[str, Any]:
     return contract.normalize_and_admit(raw, vars(options))
 
 
+def collect_native_package_admission(
+    observer: Observer, options: argparse.Namespace
+) -> dict[str, Any]:
+    _, architecture, _ = observer.run(
+        ObservationOperation.ARCHITECTURE, ["uname", "-m"]
+    )
+    raw = {
+        "os_release": observer.text(
+            ObservationOperation.OS_RELEASE,
+            Path("/etc/os-release"),
+            maximum=65_536,
+        ),
+        "architecture": architecture,
+        "packages": [observer.package(name) for name in PACKAGES],
+        "rocky_signing_key": observer.rocky_signing_key(),
+    }
+    return contract.normalize_and_admit_native_packages(raw, vars(options))
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
+    result.add_argument("--native-package-admission", action="store_true")
     result.add_argument("--target-sha", required=True)
     result.add_argument("--control-sha", required=True)
     result.add_argument("--run-id", required=True)
     result.add_argument("--run-attempt", required=True)
-    result.add_argument("--expires-at", required=True, type=int)
-    result.add_argument("--image", required=True)
-    result.add_argument("--first-boot-id", required=True)
+    result.add_argument("--expires-at", type=int)
+    result.add_argument("--image")
+    result.add_argument("--first-boot-id")
     result.add_argument("--output", required=True, type=Path)
     result.add_argument("--diagnostic-output", required=True, type=Path)
     return result
@@ -414,10 +453,15 @@ def main() -> int:
     options = parser().parse_args()
     observer = Observer()
     try:
+        document = (
+            collect_native_package_admission(observer, options)
+            if options.native_package_admission
+            else collect(observer, options)
+        )
         observer.write(
             ObservationOperation.WRITE_EVIDENCE,
             options.output,
-            collect(observer, options),
+            document,
         )
     except (ObservationError, contract.ContractError) as error:
         try:
