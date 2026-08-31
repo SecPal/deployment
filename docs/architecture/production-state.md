@@ -7,9 +7,12 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status and authority
 
-This is the implemented D.2 persistence contract for the Debian 13
-single-host reference deployment. It uses rootless Podman, the systemd user
-manager, and native Quadlet. It is not a live-host installation or a backup
+This document describes the retained D.2 persistence and product-role contracts.
+The superseded PostgreSQL product container and initializer are no longer an
+implemented production path. Until the separately owned host-native PostgreSQL
+work lands, this tree deliberately has no completed production PostgreSQL
+implementation. The retained product roles use rootless Podman, the systemd user
+manager, and native Quadlet. This is not a live-host installation or a backup
 implementation.
 
 [`config/production/state-contract.json`](../../config/production/state-contract.json)
@@ -124,18 +127,15 @@ ACL-free before creating a staging directory. A symlink, non-directory
 substitution, writable or non-root trusted ancestor, unexpected hard link,
 wrong owner/group/mode, or inaccessible ACL is a hard failure.
 
-A valid existing directory is preserved byte-for-byte. A missing state leaf
-may be created only during the explicitly acknowledged first installation.
-Once the layout marker exists, initialization becomes validation-only and a
-missing authoritative path fails instead of being recreated. An invalid
-existing leaf is never silently repaired. After state and secret validation,
-`secpal-postgres-init.service` initializes only an empty PostgreSQL directory;
-an existing valid cluster is preserved, while non-empty incomplete state fails
-instead of being repaired or overwritten. A missing, partial, malformed, or
-extra secret set prevents `secpal-state-ready.service` from succeeding. Ordinary
-stop, rollback, container removal, or recreation never removes a host state
-path. Layout changes need a separately reviewed migration with explicit rollback
-and orphan detection.
+A valid existing directory is preserved byte-for-byte. A missing state leaf may
+be created only during the explicitly acknowledged first installation. Once the
+layout marker exists, initialization becomes validation-only and a missing
+authoritative path fails instead of being recreated. An invalid existing leaf is
+never silently repaired. No current unit initializes or starts PostgreSQL. A
+missing, partial, malformed, or extra retained secret set prevents
+`secpal-state-ready.service` from succeeding. Ordinary stop, rollback, container
+removal, or recreation never removes a host state path. Layout changes need a
+separately reviewed migration with explicit rollback and orphan detection.
 
 ## PostgreSQL and application recovery boundary
 
@@ -153,13 +153,9 @@ inode metadata and cross-role visibility across native systemd-user stop/start
 and container recreation. Frontend, PostgreSQL, Valkey, and future edge roles
 receive neither application-storage bind.
 
-PostgreSQL initialization writes a transient HBA policy in container tmpfs.
-Local administration remains socket-local, while every TCP connection requires
-SCRAM. Existing and recovered clusters are admitted only after the delivered
-credential authenticates over TCP at `127.0.0.1`; a trust-only socket success
-is insufficient. The steady server listens on its container interfaces, but it
-belongs only to the internal application network, has no published port or edge
-membership, and accepts API traffic through the `postgres` alias with SCRAM.
+The removed PostgreSQL initializer, HBA policy, container listener, and internal
+network alias are not retained as current behavior. The host-native replacement
+owns those future connectivity and admission decisions.
 
 ## Valkey decision
 

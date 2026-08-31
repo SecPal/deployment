@@ -53,15 +53,23 @@ bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
 php -l scripts/phase-b-runtime-probe.php
 python3 tests/image-consumption-evidence-contract.py
+python3 tests/integration-current-topology.py
 python3 tests/oci-attestation-bundle-contract.py
+python3 tests/postgres-fixture-contract.py
 python3 tests/quadlet-integration-contract.py
 python3 tests/quadlet-integration-lifecycle.py
 python3 tests/ci-cloud-bootstrap-failure.py
 python3 tests/ci-cloud-config.py
 python3 tests/ci-cloud-contract.py
+python3 tests/ci-cloud-rocky-control.py
+python3 tests/ci-cloud-rocky-readiness.py
+python3 tests/ci-cloud-rocky-runtime-user-readiness.py
+python3 tests/ci-cloud-rocky-target-diagnostics.py
+python3 tests/rocky-evidence-architecture.py
 python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py
 python3 tests/ci-cloud-gcp-janitor.py
+python3 tests/ci-cloud-gcp-rocky-janitor.py
 bash tests/ci-cloud-gcp-identity.sh
 python3 tests/ci-cloud-host-setup-failure.py
 python3 tests/ci-cloud-janitor.py
@@ -76,7 +84,10 @@ bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
 python3 tests/production-state-contract.py
+python3 tests/production-postgres-retirement.py
 python3 tests/production-edge-decision-contract.py
+python3 tests/cloudfront-origin-prefix-lkg.py
+python3 tests/provider-capability-contract.py
 bash tests/production-state-native-lifecycle-gate.sh
 bash tests/production-state-native-lifecycle.sh
 python3 tests/work-graph-governance.py
@@ -88,6 +99,7 @@ bash tests/preflight-origin-contract.sh
 bash tests/sensitive-path-contract.sh
 bash tests/workflow-action-pin-contract.sh
 python3 scripts/validate-ci-cloud.py
+scripts/validate-rocky-evidence-architecture.py
 
 mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context -o -name .terraform -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"

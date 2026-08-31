@@ -941,8 +941,11 @@ class CloudCIContractTests(unittest.TestCase):
             ".gitignore",
             ".github/workflows/cloud-conformance.yml",
             ".github/workflows/cloud-janitor.yml",
+            ".github/workflows/rocky-cloud-qualification.yml",
+            "config/ci-cloud/gcp-rocky-10-2-arm64.json",
             "infra/ci-cloud/digitalocean",
             "infra/ci-cloud/gcp",
+            "infra/ci-cloud/gcp-rocky",
             "schemas",
             "scripts/ci-cloud",
             "scripts/fetch-oci-attestation.py",
@@ -973,6 +976,719 @@ class CloudCIContractTests(unittest.TestCase):
         result = self.run_validator()
         self.assertEqual(0, result.returncode, result.stdout)
 
+    def test_rejects_weakened_current_boot_runtime_user_readiness(self) -> None:
+        publisher = "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
+        mutations = (
+            (
+                publisher,
+                '["systemctl", "is-active", "--quiet", f"user@{runtime_uid}.service"]',
+                '["true"]',
+            ),
+            (
+                publisher,
+                "def observe_runtime_user(\n",
+                "# loginctl enable-linger is not readiness\n"
+                "def observe_runtime_user(\n",
+            ),
+            (
+                publisher,
+                "def observe_runtime_user(\n",
+                "# runtime.systemd_user from preparation\n"
+                "def observe_runtime_user(\n",
+            ),
+            (
+                publisher,
+                'stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)',
+                "True",
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                '"show-environment"',
+                '"daemon-reload"',
+            ),
+            (
+                publisher,
+                'RUNTIME_ACCOUNT = "secpal-runtime"',
+                'RUNTIME_ACCOUNT = "another-user"',
+            ),
+            (
+                publisher,
+                "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir",
+                "RUNTIME_ACCOUNT, 1, runtime.pw_dir",
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                '"CONTAINER_HOST"',
+                '"INHERITED_CONTAINER_HOST"',
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                '"CONTAINER_CONNECTION"',
+                '"INHERITED_CONTAINER_CONNECTION"',
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                'f"HOME={runtime_home}"',
+                '"HOME=/tmp"',
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                'f"XDG_RUNTIME_DIR={runtime_directory}"',
+                '"XDG_RUNTIME_DIR=/run/user/1"',
+            ),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                'f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_directory}/bus"',
+                '"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus"',
+            ),
+            (
+                "infra/ci-cloud/gcp-rocky/main.tf",
+                "runtime_user_systemd_base64gzip",
+                "runtime_user_systemd_unbound",
+            ),
+            (publisher, "WAIT_SECONDS = 60", "WAIT_SECONDS = 0"),
+            (
+                publisher,
+                "timeout=min(COMMAND_TIMEOUT_SECONDS, remaining)",
+                "timeout=COMMAND_TIMEOUT_SECONDS",
+            ),
+            (
+                publisher,
+                "sleep(min(interval, remaining))",
+                "time.sleep(WAIT_SECONDS)",
+            ),
+            (
+                publisher,
+                '"runtime_user_bus_available": result.observation.bus_available,',
+                '"runtime_user_bus_available": result.observation.manager_active,',
+            ),
+            (
+                publisher,
+                "if current_boot_id() != arguments.boot_id:\n",
+                "if False:\n",
+            ),
+            (
+                "scripts/ci-cloud/bootstrap-rocky-host.tftpl",
+                '  --boot-id "$boot_id" \\\n',
+                "",
+            ),
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "set -euo pipefail\n",
+                "set -euo pipefail\n"
+                "/usr/local/sbin/secpal-publish-rocky-qualification-readiness\n",
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
+    def test_rejects_collapsed_quadlet_target_diagnostics(self) -> None:
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        for old, new in (
+            (
+                '(237, 237, "qualify-quadlet-daemon-reload"),',
+                '(237, 237, "qualify-quadlet-runtime"),',
+            ),
+            (
+                '(238, 238, "qualify-quadlet-start"),',
+                '(238, 238, "qualify-quadlet-daemon-reload"),',
+            ),
+            (
+                '(239, 239, "qualify-quadlet-active-state"),',
+                '(239, 239, "qualify-quadlet-start"),',
+            ),
+        ):
+            with self.subTest(new=new):
+                self.assert_mutation_rejected(classifier, old, new)
+
+    def test_rejects_reintroduced_unreachable_fcontext_diagnostic(self) -> None:
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        self.assert_mutation_rejected(
+            classifier,
+            '(241, 244, "qualify-selinux-storage-directory-create"),',
+            '(241, 244, "qualify-selinux-storage-fcontext-add"),',
+        )
+
+    def test_rejects_weakened_target_trace_binding_bounds_and_ambiguity(self) -> None:
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        classifier_source = (ROOT / classifier).read_text(encoding="utf-8")
+        self.assertIn(
+            'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
+            classifier_source,
+        )
+        self.assertIn(
+            'EXPECTED_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"',
+            classifier_source,
+        )
+        for old, new in (
+            (
+                'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
+                'EXPECTED_TARGET_SHA = ""',
+            ),
+            (
+                'EXPECTED_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"',
+                'EXPECTED_HARNESS_SHA256 = ""',
+            ),
+            ("MAX_TRACE_FRAMES = 8", "MAX_TRACE_FRAMES = 9"),
+            ("MAX_TRACE_LINE = 9_999", "MAX_TRACE_LINE = 10_000"),
+            (
+                'if len(traced_operations) == 1:\n        return traced_operations.pop(), "command-failed"\n    return "qualification-harness", "unclassified-target-failure"',
+                'if traced_operations:\n        return sorted(traced_operations)[0], "command-failed"\n    return "qualification-harness", "unclassified-target-failure"',
+            ),
+        ):
+            with self.subTest(new=new):
+                self.assert_mutation_rejected(classifier, old, new)
+
+    def test_rejects_process_wide_target_file_limit_and_unbounded_capture(self) -> None:
+        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        for old, new in (
+            (
+                'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"',
+                'cat <"$trace_fifo" >"$qualification_trace"',
+            ),
+            (
+                '3>"$trace_fifo" 2>&1 | capture_bounded 65537 "$stdout"',
+                '3>"$trace_fifo" >"$stdout" 2>&1',
+            ),
+            (
+                'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"',
+                'ulimit -f 128\ncapture_bounded 4097 "$qualification_trace" <"$trace_fifo"',
+            ),
+            (
+                'wait "$observer_pid" >/dev/null 2>&1\n  observer_pid=""',
+                'wait "$observer_pid" >/dev/null 2>&1',
+            ),
+        ):
+            with self.subTest(new=new):
+                self.assert_mutation_rejected(runner, old, new)
+
+    def test_rejects_cross_record_or_unbound_avc_admission(self) -> None:
+        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        for old, new in (
+            ("date -u '+%m/%d/%y %H:%M:%S'", "date -u '+%m/%d/%Y %H:%M:%S'"),
+            (
+                'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")',
+                'datetime.strptime(audit_baseline, "%m/%d/%Y %H:%M:%S")',
+            ),
+            (
+                'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")',
+                'datetime.strptime(f"{date} {time}", "%m/%d/%Y %H:%M:%S.%f")',
+            ),
+            (
+                "audit_date, audit_time = audit_checkpoint.groups()",
+                'audit_date, audit_time = audit_baseline.split(" ", 1)',
+            ),
+            (
+                '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",',
+                '"/usr/sbin/ausearch", "-m", "AVC", "-ts",',
+            ),
+            (
+                'audit_date, audit_time, "-i",',
+                'audit_baseline, "-i",',
+            ),
+            (
+                'audit_date, audit_time, "-i",',
+                'audit_date, audit_time,',
+            ),
+            ("for attempt in range(12):", "for attempt in range(1):"),
+            (
+                'and not stdout\n                and stderr in {b"", b"<no matches>\\n"}',
+                'and True\n                and stderr in {b"", b"<no matches>\\n"}',
+            ),
+            (
+                'stderr in {b"", b"<no matches>\\n"}',
+                "len(stderr) <= 4096",
+            ),
+            (
+                'if line in {"", "----"}:',
+                'if not line or line == "ignored":',
+            ),
+            ("if events:", "if True:"),
+            (
+                'event["avc"] > 1 or event["marker"] > 1',
+                'event["avc"] > 99 or event["marker"] > 99',
+            ),
+            ("for line in audit_text.splitlines():", "for line in [audit_text]:"),
+            (
+                "event_id = audit_event_id(line)",
+                'event_id = ("one", "one")',
+            ),
+            (
+                'events.setdefault(event_id, {"avc": 0, "marker": 0})',
+                'events.setdefault(("one", "one"), {"avc": 0, "marker": 0})',
+            ),
+            (
+                'record_type == "PROCTITLE"',
+                'record_type in {"PATH", "PROCTITLE", "SYSCALL"}',
+            ),
+            (
+                "r'(?:^|\\s)/foreign/marker(?:\\s|$)'",
+                "r'(?:^|\\s)/foreign/[^\\s\"]+(?:\\s|$)'",
+            ),
+            (
+                'tclass.group(1) == "dir"',
+                'tclass.group(1) in {"file", "dir"}',
+            ),
+            (
+                'r"(?:^|\\s)permissive=0(?:\\s|$)"',
+                'r"(?:^|\\s)permissive=[01](?:\\s|$)"',
+            ),
+            (
+                'if event["avc"] == 1 and event["marker"] == 1',
+                'if event["avc"] >= 1 and event["marker"] >= 1',
+            ),
+            (
+                'cwd=str(runtime_home) if name == "podman" else None',
+                "cwd=None",
+            ),
+            (
+                "home_metadata.st_uid == runtime_account.pw_uid",
+                "False",
+            ),
+        ):
+            with self.subTest(new=new):
+                self.assert_mutation_rejected(runner, old, new)
+
+    def test_rejects_weakened_daemon_reload_failure_adjacency(self) -> None:
+        trace = "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        observer = "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        bootstrap = "scripts/ci-cloud/bootstrap-rocky-host.tftpl"
+        reload_runuser = "scripts/ci-cloud/rocky-reload-runuser.py"
+        reload_systemctl = "scripts/ci-cloud/rocky-reload-systemctl.py"
+        mutations = (
+            (
+                trace,
+                "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s",
+                "SECPAL_UNBOUNDED_RELOAD_FAILURE:%s:%s",
+            ),
+            (
+                trace,
+                '"$status" "$$" "$secpal_reload_run_space_bytes"',
+                '"$status" "1" "$secpal_reload_run_space_bytes"',
+            ),
+            (
+                reload_systemctl,
+                "SECPAL_QUADLET_RELOAD_CLIENT_V1:",
+                "SECPAL_UNBOUND_RELOAD_CLIENT:",
+            ),
+            (
+                reload_systemctl,
+                'REAL_SYSTEMCTL = "/usr/bin/systemctl"',
+                'REAL_SYSTEMCTL = "systemctl"',
+            ),
+            (
+                bootstrap,
+                "chmod 0555 /usr/local/libexec/secpal-control/rocky-reload-systemctl",
+                "chmod 0777 /usr/local/libexec/secpal-control/rocky-reload-systemctl",
+            ),
+            (
+                bootstrap,
+                "(( (8#$trusted_mode & 8#022) == 0 ))",
+                ":",
+            ),
+            (
+                bootstrap,
+                "for trusted_directory in / /opt /opt/secpal-control",
+                "for trusted_directory in / /usr",
+            ),
+            (
+                reload_runuser,
+                '"/usr/local/libexec/secpal-control/rocky-reload-systemctl"',
+                '"/usr/bin/systemctl"',
+            ),
+            (
+                trace,
+                "timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0",
+                "journalctl --no-pager --lines=1000",
+            ),
+            (
+                trace,
+                '"${14}" == daemon-reload',
+                '"${14}" == arbitrary-command',
+            ),
+            (
+                trace,
+                "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd",
+                "stat --file-system --format='%a %S' -- /run",
+            ),
+            (trace, "10#$frame == 237", "10#$frame == 238"),
+            (observer, "or 237 not in frames", "or 242 not in frames"),
+            (
+                observer,
+                "except (OSError, ObservationError, KeyError, ValueError):",
+                "except (OSError, ObservationError, KeyError, pwd.error, ValueError):",
+            ),
+            (
+                reload_runuser,
+                "os.dup2(RECORD_FD, 1, inheritable=True)",
+                "os.dup2(RECORD_FD, 4, inheritable=True)",
+            ),
+            (
+                reload_runuser,
+                "os.closerange(3, int(os.sysconf(\"SC_OPEN_MAX\")))",
+                "pass",
+            ),
+            (
+                reload_systemctl,
+                "os.getresuid() == (runtime.pw_uid,) * 3",
+                "os.geteuid() == runtime.pw_uid",
+            ),
+            (trace, "read -r -t 25 -u 5", "read -r -u 5"),
+            (trace, "trap - ERR", ":"),
+            (
+                runner,
+                "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db",
+                "",
+            ),
+            (
+                runner,
+                'mkfifo -m 0600 "$reload_event" "$reload_ack"',
+                'install -m 0600 /dev/null "$reload_event" "$reload_ack"',
+            ),
+            (runner, '--reload-adjacency "$reload_adjacency"', ""),
+            (observer, "MAX_INPUT_BYTES = 4_096", "MAX_INPUT_BYTES = 65_536"),
+            (
+                observer,
+                'reasons.add("request-client-unbound")',
+                'facts["reload_request_client_pid"] = expected_client_pid',
+            ),
+            (observer, "CAPTURE_DEADLINE_SECONDS = 22", "CAPTURE_DEADLINE_SECONDS = 26"),
+            (
+                observer,
+                "MANAGER_CONTINUITY_TIMEOUT_SECONDS = 2",
+                "MANAGER_CONTINUITY_TIMEOUT_SECONDS = 4",
+            ),
+            (
+                observer,
+                "PACKAGE_QUERY_TIMEOUT_SECONDS = 1",
+                "PACKAGE_QUERY_TIMEOUT_SECONDS = 4",
+            ),
+            (observer, "time.monotonic() > deadline", "False"),
+            (
+                observer,
+                'raise ObservationError("adjacency command could not execute")',
+                "return 125",
+            ),
+            (
+                observer,
+                "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW",
+                "os.O_RDONLY | os.O_CLOEXEC",
+            ),
+            (observer, "stat.S_ISFIFO", "stat.S_ISREG"),
+            (observer, "stat.S_ISLNK(link_metadata.st_mode)", "False"),
+            (
+                observer,
+                "directory.resolve(strict=True) == directory",
+                "directory.resolve(strict=True) != directory",
+            ),
+            (observer, 'f"QUADLET_UNIT_DIRS={input_path.parent}"', '"QUADLET_UNIT_DIRS=/"'),
+            (observer, '"--dryrun"', '"daemon-reload"'),
+            (
+                "scripts/ci-cloud/runtime_user_systemd.py",
+                '"show-environment"',
+                '"daemon-reload"',
+            ),
+            (
+                observer,
+                "manager_state_observed and bus_state_observed and control_status != 125",
+                "manager_active and bus_available and control_reachable",
+            ),
+            (
+                observer,
+                'f"CODE_FUNC={GENERATOR_CODE_FUNC}"',
+                'f"IGNORED_CODE_FUNC={GENERATOR_CODE_FUNC}"',
+            ),
+            (
+                observer,
+                'f"CODE_FILE={GENERATOR_CODE_FILE}"',
+                'f"IGNORED_CODE_FILE={GENERATOR_CODE_FILE}"',
+            ),
+            (
+                observer,
+                'f"--boot={boot_id.replace(\'-\', \'\')}"',
+                'f"--boot={boot_id}"',
+            ),
+            (
+                observer,
+                'f"--output-fields={GENERATOR_OUTPUT_FIELDS}"',
+                '"--output=json-pretty"',
+            ),
+            (
+                observer,
+                "max_bytes=MAX_GENERATOR_JOURNAL_BYTES",
+                "max_bytes=MAX_COMMAND_BYTES",
+            ),
+            (
+                observer,
+                'ROCKY_SYSTEMD_SOURCE_RPM = "systemd-257-23.el10_2.2.rocky.0.1.src.rpm"',
+                'ROCKY_SYSTEMD_SOURCE_RPM = "upstream-main"',
+            ),
+            (
+                observer,
+                'f"--output-fields={RELOAD_OUTPUT_FIELDS}"',
+                '"--output=json-pretty"',
+            ),
+            (observer, 'f"_PID={manager_pid}"', '"_UID=0"'),
+            (
+                observer,
+                'f"--after-cursor={journal_cursor}"',
+                'f"--since={arguments.journal_baseline}"',
+            ),
+            (
+                observer,
+                '"systemd-257-23.el10_2.2.rocky.0.1.aarch64"',
+                '"systemd-257-99.el10.aarch64"',
+            ),
+            (observer, 'os.statvfs("/run/systemd")', 'os.statvfs("/run")'),
+            (observer, '"tclass=system"', '"tclass=file"'),
+            (
+                observer,
+                'r"avc:\\s+denied\\s+\\{\\s*reload\\s*\\}"',
+                'r"avc:.*denied"',
+            ),
+            (
+                observer,
+                "reload_access_avc(audit, expected_client_pid)",
+                "reload_access_avc(audit, control_pid)",
+            ),
+            (observer, 'comm="podman-system-g"', 'comm="systemd"'),
+            (
+                classifier,
+                '_closed_boolean(observation, "captured_before_cleanup")',
+                "True",
+            ),
+            (
+                classifier,
+                'observation, "manager_continuity_observed"',
+                'observation, "manager_active_after_reload_failure"',
+            ),
+            (
+                classifier,
+                '_closed_boolean(\n            observation, "generator_failure_ambiguous"\n        )',
+                "False",
+            ),
+            (
+                classifier,
+                'generator_ambiguous != (generator_reason != "none")',
+                "False",
+            ),
+            (
+                classifier,
+                're.fullmatch(r"[0-9a-f]{64}", str(observation["failure_event_sha256"]))',
+                "None",
+            ),
+            (
+                classifier,
+                'reload_access_avc["source_type"]',
+                'observation["control_process_selinux_type"]',
+            ),
+            (
+                classifier,
+                'return "reload-authorization-denied", "none"',
+                'return "reload-reply-transport-failed", "none"',
+            ),
+            (
+                classifier,
+                'return "reload-rate-limited", "none"',
+                'return "manager-reload-transaction-failed", "none"',
+            ),
+            (
+                classifier,
+                'return "reload-reply-transport-failed", "none"\n',
+                'return "manager-reload-transaction-failed", "none"\n',
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
+    def test_rejects_weakened_quadlet_start_execution_diagnostics(self) -> None:
+        trace = "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        start_runuser = "scripts/ci-cloud/rocky-start-runuser.py"
+        start_env = "scripts/ci-cloud/rocky-start-env.py"
+        start_systemctl = "scripts/ci-cloud/rocky-start-systemctl.py"
+        mutations = (
+            (
+                trace,
+                "/opt/secpal-control/libexec/rocky-start-runuser",
+                "/usr/sbin/runuser",
+            ),
+            (
+                trace,
+                '"${14}" == start',
+                '"${14}" == arbitrary-command',
+            ),
+            (
+                start_runuser,
+                'REAL_RUNUSER = Path("/usr/sbin/runuser")',
+                'REAL_RUNUSER = Path("runuser")',
+            ),
+            (
+                start_runuser,
+                'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")',
+                'TRUSTED_ENV = Path("/usr/bin/env")',
+            ),
+            (
+                start_env,
+                'REAL_ENV = Path("/usr/bin/env")',
+                'REAL_ENV = Path("env")',
+            ),
+            (
+                start_systemctl,
+                'REAL_SYSTEMCTL = Path("/usr/bin/systemctl")',
+                'REAL_SYSTEMCTL = Path("systemctl")',
+            ),
+            (start_runuser, "#!/usr/bin/python3 -I", "#!/usr/bin/python3"),
+            (start_env, "#!/usr/bin/python3 -I", "#!/usr/bin/python3"),
+            (start_systemctl, "#!/usr/bin/python3 -I", "#!/usr/bin/python3"),
+            (start_runuser, "MAX_PROTOCOL_BYTES = 2_048", "MAX_PROTOCOL_BYTES = 65_536"),
+            (start_env, "MAX_PROTOCOL_BYTES = 2_048", "MAX_PROTOCOL_BYTES = 65_536"),
+            (start_systemctl, "MAX_PROPERTY_BYTES = 1_024", "MAX_PROPERTY_BYTES = 65_536"),
+            (start_runuser, "check=False,", "check=False,\n                shell=True,"),
+            (
+                trace,
+                'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json',
+                'exec 7>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json',
+            ),
+            (
+                classifier,
+                "validate_admitted_quadlet_start_diagnostic",
+                "accept_unchecked_quadlet_start_diagnostic",
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
+    def test_rejects_weakened_quadlet_active_execution_diagnostics(self) -> None:
+        trace = "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        active_runuser = "scripts/ci-cloud/rocky-active-runuser.py"
+        active_env = "scripts/ci-cloud/rocky-active-env.py"
+        active_systemctl = "scripts/ci-cloud/rocky-active-systemctl.py"
+        mutations = (
+            (
+                trace,
+                "/opt/secpal-control/libexec/rocky-active-runuser",
+                "/usr/sbin/runuser",
+            ),
+            (
+                trace,
+                '"${14}" == is-active',
+                '"${14}" == arbitrary-command',
+            ),
+            (
+                active_runuser,
+                'REAL_RUNUSER = Path("/usr/sbin/runuser")',
+                'REAL_RUNUSER = Path("runuser")',
+            ),
+            (
+                active_runuser,
+                'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-active-env")',
+                'TRUSTED_ENV = Path("/usr/bin/env")',
+            ),
+            (
+                active_env,
+                'REAL_ENV = Path("/usr/bin/env")',
+                'REAL_ENV = Path("env")',
+            ),
+            (
+                active_systemctl,
+                'REAL_SYSTEMCTL = Path("/usr/bin/systemctl")',
+                'REAL_SYSTEMCTL = Path("systemctl")',
+            ),
+            (active_runuser, "#!/usr/bin/python3 -I", "#!/usr/bin/python3"),
+            (active_env, "#!/usr/bin/python3 -I", "#!/usr/bin/python3"),
+            (active_systemctl, "#!/usr/bin/python3 -I", "#!/usr/bin/python3"),
+            (
+                active_runuser,
+                "MAX_PROTOCOL_BYTES = 2_048",
+                "MAX_PROTOCOL_BYTES = 65_536",
+            ),
+            (
+                active_env,
+                "MAX_PROTOCOL_BYTES = 2_048",
+                "MAX_PROTOCOL_BYTES = 65_536",
+            ),
+            (
+                active_runuser,
+                "check=False,",
+                "check=False,\n                    shell=True,",
+            ),
+            (
+                trace,
+                'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json',
+                'exec 6>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json',
+            ),
+            (
+                classifier,
+                "validate_admitted_quadlet_active_diagnostic",
+                "accept_unchecked_quadlet_active_diagnostic",
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
+    def test_rejects_weakened_primary_workload_direct_diagnostic(self) -> None:
+        trace = "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        primary_runuser = "scripts/ci-cloud/rocky-primary-runuser.py"
+        primary_runtime = "scripts/ci-cloud/rocky-primary-runtime.py"
+        mutations = (
+            (
+                trace,
+                '/opt/secpal-control/libexec/rocky-primary-runuser "$@"',
+                '/usr/sbin/runuser "$@"',
+            ),
+            (
+                primary_runuser,
+                'REAL_RUNUSER = Path("/usr/sbin/runuser")',
+                'REAL_RUNUSER = Path("runuser")',
+            ),
+            (
+                primary_runtime,
+                'REAL_PODMAN = Path("/usr/bin/podman")',
+                'REAL_PODMAN = Path("podman")',
+            ),
+            (primary_runuser, "#!/usr/bin/python3 -I", "#!/usr/bin/python3"),
+            (primary_runtime, "#!/usr/bin/python3 -I", "#!/usr/bin/python3"),
+            (
+                primary_runuser,
+                "MAX_PROTOCOL_BYTES = 512",
+                "MAX_PROTOCOL_BYTES = 65_536",
+            ),
+            (
+                primary_runuser,
+                'environment = {\n        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",\n        "LC_ALL": "C",\n    }',
+                "environment = dict(os.environ)",
+            ),
+            (
+                primary_runuser,
+                "Once the exact primary request starts",
+                "observer errors may replay the primary request",
+            ),
+            (
+                runner,
+                'primary_observation="$evidence_root/primary-workload-observation.json"',
+                'primary_observation="$work_root/primary-workload-observation.json"',
+            ),
+            (
+                classifier,
+                "validate_admitted_primary_workload_diagnostic",
+                "accept_unchecked_primary_workload_diagnostic",
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, old=old):
+                self.assert_mutation_rejected(relative, old, new)
+
     def test_preflight_prunes_generated_opentofu_cache(self) -> None:
         preflight = (ROOT / "scripts" / "preflight.sh").read_text(encoding="utf-8")
         self.assertEqual(
@@ -999,6 +1715,22 @@ class CloudCIContractTests(unittest.TestCase):
             "infra/ci-cloud/gcp/outputs.tf",
             "infra/ci-cloud/gcp/variables.tf",
             "infra/ci-cloud/gcp/versions.tf",
+            "infra/ci-cloud/gcp-rocky/.terraform.lock.hcl",
+            "infra/ci-cloud/gcp-rocky/main.tf",
+            "infra/ci-cloud/gcp-rocky/outputs.tf",
+            "infra/ci-cloud/gcp-rocky/variables.tf",
+            "infra/ci-cloud/gcp-rocky/versions.tf",
+            "scripts/ci-cloud/gcp-rocky-janitor.py",
+            "scripts/ci-cloud/rocky-control.py",
+            "scripts/ci-cloud/rocky-start-runuser.py",
+            "scripts/ci-cloud/rocky-start-env.py",
+            "scripts/ci-cloud/rocky-start-systemctl.py",
+            "scripts/ci-cloud/rocky-active-runuser.py",
+            "scripts/ci-cloud/rocky-active-env.py",
+            "scripts/ci-cloud/rocky-active-systemctl.py",
+            "tests/ci-cloud-gcp-rocky-janitor.py",
+            "tests/ci-cloud-rocky-control.py",
+            "tests/ci-cloud-rocky-target-diagnostics.py",
             "schemas/ci-cloud-bootstrap-failure.schema.json",
             "scripts/ci-cloud/gcp-janitor.py",
             "scripts/ci-cloud/detach-gcp-vm-identity.sh",
@@ -1008,6 +1740,60 @@ class CloudCIContractTests(unittest.TestCase):
         ):
             with self.subTest(relative=relative):
                 self.assertIn(relative, repository_contract)
+
+    def test_static_contract_rejects_opaque_target_harness_failure_regression(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/run-rocky-target-qualification.sh",
+            "exit 91",
+            "printf 'qualification harness failed with exit status %s\\n' \"$status\" >&2\n  exit 1",
+        )
+        self.assert_mutation_rejected(
+            ".github/workflows/rocky-cloud-qualification.yml",
+            "Retrieve and validate bounded target-qualification failure",
+            "Discard target-qualification failure",
+        )
+
+    def test_static_contract_rejects_target_call_stack_coverage_regressions(
+        self,
+    ) -> None:
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/rocky-target-qualification-trace.sh",
+            '"${BASH_LINENO[@]}"',
+            '"${BASH_LINENO[0]}"',
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/rocky-target-qualification-trace.sh",
+            "if ((frame_count >= 8)); then",
+            "if false; then",
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/rocky-target-qualification-trace.sh",
+            'local frames=""',
+            'local frames="${FUNCNAME[*]}"',
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            'LINE_RULES = (\n    (113, 119, "qualify-host-identity"),',
+            'LINE_RULES = (\n    (48, 50, "qualify-rootless-runtime"),\n'
+            '    (113, 119, "qualify-host-identity"),',
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            "if len(explicit) == 1 and len(traced_operations) > 1:",
+            "if False:",
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
+            'EXPECTED_TARGET_SHA = ""',
+        )
+        self.assert_mutation_rejected(
+            "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            "MAX_TRACE_FRAMES = 8",
+            "MAX_TRACE_FRAMES = 8\nMAX_TRACE_FRAMES = 7",
+        )
 
     def test_gcp_provider_disables_automatic_attribution_label(self) -> None:
         versions = (ROOT / "infra/ci-cloud/gcp/versions.tf").read_text(
@@ -1032,6 +1818,7 @@ class CloudCIContractTests(unittest.TestCase):
         for relative in (
             ".github/workflows/cloud-conformance.yml",
             ".github/workflows/cloud-janitor.yml",
+            ".github/workflows/rocky-cloud-qualification.yml",
         ):
             with self.subTest(relative=relative):
                 self.assertIn(

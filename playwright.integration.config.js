@@ -5,8 +5,7 @@ const path = require("node:path");
 
 const appOrigin = process.env.APP_ORIGIN;
 const apiOrigin = process.env.API_ORIGIN;
-const integrationInstance =
-  process.env.SECPAL_INTEGRATION_INSTANCE ?? "phasebcompose";
+const integrationInstance = process.env.SECPAL_INTEGRATION_INSTANCE;
 
 if (
   !appOrigin ||

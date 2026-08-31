@@ -1,0 +1,73 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+name: Rocky Evidence Architecture
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rocky-evidence-architecture-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dnf4-exact-nevra:
+    name: DNF4 Exact NEVRA Contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Exercise Rocky 10.2 DNF4 semantics
+        run: >-
+          podman run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace:ro"
+          --workdir /workspace
+          docker.io/rockylinux/rockylinux@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
+          bash tests/rocky-dnf4-nevra-contract.sh
+
+      - name: Exercise Rocky 10.2 RPMDB provenance semantics
+        run: >-
+          podman run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace:ro"
+          --workdir /workspace
+          docker.io/rockylinux/rockylinux@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
+          bash tests/rocky-rpmdb-provenance-contract.sh
+
+  architecture-gate:
+    name: Architecture Gate (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.12.13"
+          - "3.13.14"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up reviewed Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Validate layered Rocky evidence architecture
+        run: scripts/validate-rocky-evidence-architecture.py
+
+      - name: Install pinned schema validator
+        run: >-
+          python -m pip install --disable-pip-version-check
+          jsonschema==4.25.1
+
+      - name: Exercise architecture mutation contract
+        run: python3 tests/rocky-evidence-architecture.py

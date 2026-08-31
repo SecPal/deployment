@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/rocky-cloud-preparation-evidence.schema.json",
+  "title": "Rocky GCP preparation evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "target_sha",
+    "run",
+    "image",
+    "guest",
+    "hardware",
+    "repositories",
+    "updates",
+    "packages",
+    "selinux",
+    "runtime",
+    "service_account",
+    "fixture",
+    "persistence",
+    "cloud_identity"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "target_sha": { "$ref": "#/$defs/sha" },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "trusted_control_sha",
+        "profile",
+        "run_id",
+        "run_attempt",
+        "expires_at"
+      ],
+      "properties": {
+        "repository": { "const": "SecPal/deployment" },
+        "trusted_control_sha": { "$ref": "#/$defs/sha" },
+        "profile": { "const": "gcp-rocky-10-2-arm64" },
+        "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+        "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 1600000000,
+          "maximum": 4102444800
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "exact_self_link"],
+      "properties": {
+        "project": { "const": "rocky-linux-cloud" },
+        "exact_self_link": {
+          "type": "string",
+          "pattern": "^https://www\\.googleapis\\.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-[a-z0-9-]{1,50}$",
+          "maxLength": 256
+        }
+      }
+    },
+    "guest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version_id", "uname_machine"],
+      "properties": {
+        "id": { "const": "rocky" },
+        "version_id": { "const": "10.2" },
+        "uname_machine": { "const": "aarch64" }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_count", "memory_bytes", "root_filesystem_bytes"],
+      "properties": {
+        "cpu_count": { "const": 4 },
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 15000000000,
+          "maximum": 20000000000
+        },
+        "root_filesystem_bytes": {
+          "type": "integer",
+          "minimum": 110000000000,
+          "maximum": 130000000000
+        }
+      }
+    },
+    "repositories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "external_enabled"],
+      "properties": {
+        "enabled": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["baseos", "appstream", "extras"] }
+        },
+        "external_enabled": { "const": false }
+      }
+    },
+    "updates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mechanism", "releasever", "automatic", "automatic_reboot"],
+      "properties": {
+        "mechanism": { "const": "dnf4" },
+        "releasever": { "const": "10" },
+        "automatic": { "const": false },
+        "automatic_reboot": { "const": false }
+      }
+    },
+    "packages": {
+      "type": "array",
+      "minItems": 22,
+      "maxItems": 22,
+      "allOf": [
+        { "contains": { "properties": { "name": { "const": "podman" } } } },
+        { "contains": { "properties": { "name": { "const": "conmon" } } } },
+        { "contains": { "properties": { "name": { "const": "crun" } } } },
+        { "contains": { "properties": { "name": { "const": "netavark" } } } },
+        {
+          "contains": { "properties": { "name": { "const": "aardvark-dns" } } }
+        },
+        { "contains": { "properties": { "name": { "const": "passt" } } } },
+        {
+          "contains": {
+            "properties": { "name": { "const": "shadow-utils-subid" } }
+          }
+        },
+        { "contains": { "properties": { "name": { "const": "systemd" } } } },
+        {
+          "contains": {
+            "properties": { "name": { "const": "container-selinux" } }
+          }
+        },
+        { "contains": { "properties": { "name": { "const": "audit" } } } },
+        {
+          "contains": {
+            "properties": { "name": { "const": "policycoreutils" } }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "policycoreutils-python-utils" }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": { "name": { "const": "selinux-policy-targeted" } }
+          }
+        },
+        { "contains": { "properties": { "name": { "const": "curl" } } } },
+        { "contains": { "properties": { "name": { "const": "dnf" } } } },
+        { "contains": { "properties": { "name": { "const": "git" } } } },
+        { "contains": { "properties": { "name": { "const": "jq" } } } },
+        { "contains": { "properties": { "name": { "const": "nftables" } } } },
+        {
+          "contains": {
+            "properties": { "name": { "const": "openssh-server" } }
+          }
+        },
+        { "contains": { "properties": { "name": { "const": "sudo" } } } },
+        {
+          "contains": {
+            "properties": { "name": { "const": "python3-jsonschema" } }
+          }
+        },
+        {
+          "contains": {
+            "properties": { "name": { "const": "dnf-plugins-core" } }
+          }
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "nevra",
+          "resolved_repository",
+          "signature_verified",
+          "signer_fingerprint",
+          "payload_digest"
+        ],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-zA-Z0-9+_.-]{1,64}$" },
+          "nevra": { "type": "string", "minLength": 3, "maxLength": 256 },
+          "resolved_repository": { "enum": ["baseos", "appstream", "extras"] },
+          "signature_verified": { "const": true },
+          "signer_fingerprint": {
+            "const": "fc226859c0860bf0ddb95b085b106c736fedfc85"
+          },
+          "payload_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "selinux": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "mode",
+        "policy",
+        "container_selinux_installed",
+        "label_disable_absent"
+      ],
+      "properties": {
+        "enabled": { "const": true },
+        "mode": { "const": "Enforcing" },
+        "policy": { "const": "targeted" },
+        "container_selinux_installed": { "const": true },
+        "label_disable_absent": { "const": true }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "podman",
+        "rootless",
+        "graphroot",
+        "oci_runtime",
+        "cgroup_version",
+        "systemd_user",
+        "network_backend",
+        "seccomp_available",
+        "socket_absent",
+        "api_dependency_absent"
+      ],
+      "properties": {
+        "podman": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "rootless": { "const": true },
+        "graphroot": {
+          "type": "string",
+          "pattern": "^/[a-zA-Z0-9._/-]{1,240}$",
+          "not": { "pattern": "(?:^|/)\\.\\.(?:/|$)" }
+        },
+        "oci_runtime": { "const": "crun" },
+        "cgroup_version": { "const": 2 },
+        "systemd_user": { "const": true },
+        "network_backend": { "const": "netavark" },
+        "seccomp_available": { "const": true },
+        "socket_absent": { "const": true },
+        "api_dependency_absent": { "const": true }
+      }
+    },
+    "service_account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "uid",
+        "gid",
+        "home",
+        "shell",
+        "sudo",
+        "privileged_supplementary_groups",
+        "subuid_start",
+        "subuid_count",
+        "subgid_start",
+        "subgid_count",
+        "subids_non_overlapping",
+        "linger",
+        "quadlet_authority_writable"
+      ],
+      "properties": {
+        "name": { "const": "secpal-runtime" },
+        "uid": { "$ref": "#/$defs/id" },
+        "gid": { "$ref": "#/$defs/id" },
+        "home": {
+          "type": "string",
+          "pattern": "^/[a-zA-Z0-9._/-]{1,200}$",
+          "not": { "pattern": "(?:^|/)\\.\\.(?:/|$)" }
+        },
+        "shell": { "const": "/usr/sbin/nologin" },
+        "sudo": { "const": false },
+        "privileged_supplementary_groups": { "const": false },
+        "subuid_start": { "$ref": "#/$defs/subid" },
+        "subuid_count": { "const": 65536 },
+        "subgid_start": { "$ref": "#/$defs/subid" },
+        "subgid_count": { "const": 65536 },
+        "subids_non_overlapping": { "const": true },
+        "linger": { "const": true },
+        "quadlet_authority_writable": { "const": false }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "resolved_arm64_child", "pre_staged"],
+      "properties": {
+        "input": {
+          "const": "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
+        },
+        "resolved_arm64_child": {
+          "const": "sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192"
+        },
+        "pre_staged": { "const": true }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rebooted", "boot_id_changed", "survived_reboot"],
+      "properties": {
+        "rebooted": { "const": true },
+        "boot_id_changed": { "const": true },
+        "survived_reboot": { "const": true }
+      }
+    },
+    "cloud_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "control_service_account_absent",
+        "credential_file_absent",
+        "metadata_token_unavailable",
+        "useful_project_authority_absent"
+      ],
+      "properties": {
+        "control_service_account_absent": { "const": true },
+        "credential_file_absent": { "const": true },
+        "metadata_token_unavailable": { "const": true },
+        "useful_project_authority_absent": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "id": { "type": "integer", "minimum": 1, "maximum": 4294967294 },
+    "subid": { "type": "integer", "minimum": 65536, "maximum": 4294901760 }
+  }
+}

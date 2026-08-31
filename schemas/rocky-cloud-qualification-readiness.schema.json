@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secpal.example/schemas/rocky-cloud-qualification-readiness.schema.json",
+  "title": "Rocky qualification readiness",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "target_sha",
+    "trusted_control_sha",
+    "access_run_id",
+    "access_run_attempt",
+    "boot_id",
+    "ssh_public_key_sha256",
+    "cloud_identity_absent",
+    "guest_startup_complete",
+    "runtime_user_manager_active",
+    "runtime_user_bus_available",
+    "runtime_user_control_reachable"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "trusted_control_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "access_run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+    "access_run_attempt": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,2}$"
+    },
+    "boot_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "ssh_public_key_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "cloud_identity_absent": { "const": true },
+    "guest_startup_complete": { "const": true },
+    "runtime_user_manager_active": { "const": true },
+    "runtime_user_bus_available": { "const": true },
+    "runtime_user_control_reachable": { "const": true }
+  }
+}

@@ -58,6 +58,7 @@ GCP_IAM_PERMISSIONS = {
     "compute.firewalls.create",
     "compute.firewalls.delete",
     "compute.firewalls.get",
+    "compute.firewalls.list",
     "compute.firewalls.update",
     "compute.globalOperations.get",
     "compute.images.get",
@@ -76,6 +77,7 @@ GCP_IAM_PERMISSIONS = {
     "compute.networks.create",
     "compute.networks.delete",
     "compute.networks.get",
+    "compute.networks.list",
     # Required by the network field on subnetworks.insert and firewalls.insert.
     "compute.networks.updatePolicy",
     "compute.projects.get",
@@ -83,6 +85,7 @@ GCP_IAM_PERMISSIONS = {
     "compute.subnetworks.create",
     "compute.subnetworks.delete",
     "compute.subnetworks.get",
+    "compute.subnetworks.list",
     "compute.subnetworks.use",
     "compute.subnetworks.useExternalIp",
     "compute.zoneOperations.get",
@@ -145,6 +148,26 @@ def string_collection_constant(text: str, name: str) -> set[str]:
             if isinstance(value, (list, tuple, set)) and all(isinstance(item, str) for item in value):
                 return set(value)
     raise ContractError(f"{name} must be a literal string collection")
+
+
+def literal_constant(text: str, name: str) -> object:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        raise ContractError(f"trusted Python source containing {name} is invalid") from None
+    values: list[object] = []
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+        ):
+            try:
+                values.append(ast.literal_eval(node.value))
+            except (ValueError, TypeError, SyntaxError):
+                raise ContractError(f"{name} must be a literal constant") from None
+    if len(values) != 1:
+        raise ContractError(f"{name} must have exactly one top-level assignment")
+    return values[0]
 
 
 def integer_mapping_literal(text: str, key: str) -> int:
@@ -565,7 +588,7 @@ def validate_janitor_workflow(root: Path) -> None:
     jobs = document.get("jobs")
     require(isinstance(jobs, dict) and set(jobs) == {"digitalocean", "gcp"}, "janitor provider scope changed")
     require(text.count("secrets.DIGITALOCEAN_ACCESS_TOKEN") == 1, "DigitalOcean janitor token scope changed")
-    require(text.count("GOOGLE_OAUTH_ACCESS_TOKEN") == 1, "GCP janitor token scope changed")
+    require(text.count("GOOGLE_OAUTH_ACCESS_TOKEN") == 2, "GCP janitor token scope changed")
     require(text.count("id-token: write") == 1, "janitor OIDC permission scope changed")
     require(text.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 1, "janitor auth action pin changed")
     require(
@@ -575,7 +598,12 @@ def validate_janitor_workflow(root: Path) -> None:
         "GCP janitor identity must be validated before authentication",
     )
     require(text.count("ref: ${{ github.sha }}") == 2 and text.count("persist-credentials: false") == 2, "janitor checkout trust changed")
-    require("scripts/ci-cloud/gcp-janitor.py" in text and "--zone europe-west3-a" in text, "bounded GCP janitor invocation is missing")
+    require(
+        "scripts/ci-cloud/gcp-janitor.py" in text
+        and "scripts/ci-cloud/gcp-rocky-janitor.py" in text
+        and "--zone europe-west3-a" in text,
+        "bounded GCP janitor invocation is missing",
+    )
     validate_action_pins(document, relative)
 
 
@@ -1949,12 +1977,879 @@ def validate_gcp_iam_role(root: Path) -> None:
     )
 
 
+def validate_rocky_control_plane(root: Path) -> None:
+    relative = ".github/workflows/rocky-cloud-qualification.yml"
+    # Historical mutation tests construct a deliberately minimal legacy tree.
+    # Repository presence is owned independently by repository-contract.sh.
+    if not (root / relative).is_file():
+        return
+    document, text = load_workflow(root, relative)
+    validate_action_pins(document, relative)
+    trigger = document.get("on")
+    require(isinstance(trigger, dict), "Rocky workflow trigger must be a mapping")
+    dispatch = trigger.get("workflow_dispatch")
+    require(isinstance(dispatch, dict), "Rocky workflow must be manually dispatched")
+    inputs = dispatch.get("inputs")
+    require(isinstance(inputs, dict), "Rocky workflow inputs must be closed")
+    require(
+        set(inputs)
+        == {
+            "operation",
+            "target_sha",
+            "provider_profile",
+            "continuation_run_id",
+            "continuation_run_attempt",
+        },
+        "Rocky workflow input set changed",
+    )
+    operation = inputs.get("operation")
+    profile = inputs.get("provider_profile")
+    require(
+        isinstance(operation, dict)
+        and operation.get("options")
+        == ["discover", "provision-and-prepare", "qualify", "destroy"],
+        "Rocky lifecycle operations must remain closed",
+    )
+    require(
+        isinstance(profile, dict)
+        and profile.get("options") == ["gcp-rocky-10-2-arm64"],
+        "Rocky provider profile must remain closed",
+    )
+    require(
+        "github.ref == 'refs/heads/main'" in text
+        and "^[0-9a-fA-F]{40}$" in text,
+        "Rocky control must execute trusted main for one immutable target SHA",
+    )
+    jobs = document.get("jobs")
+    require(isinstance(jobs, dict), "Rocky workflow jobs must be a mapping")
+    require(
+        set(jobs)
+        == {
+            "validate",
+            "discover",
+            "provision",
+            "resume_control",
+            "qualify_target",
+            "cleanup",
+        },
+        "Rocky lifecycle job set changed",
+    )
+    target_job = jobs["qualify_target"]
+    require(isinstance(target_job, dict), "target qualification job is malformed")
+    target_text = json.dumps(target_job, sort_keys=True)
+    preparation = read(root, "scripts/ci-cloud/prepare-rocky-host.sh")
+    target_runner = read(root, "scripts/ci-cloud/run-rocky-target-qualification.sh")
+    target_failure_classifier = read(
+        root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+    )
+    rocky_control = read(root, "scripts/ci-cloud/rocky-control.py")
+    target_failure_trace = read(
+        root, "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+    )
+    reload_adjacency_observer = read(
+        root, "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+    )
+    reload_runuser = read(root, "scripts/ci-cloud/rocky-reload-runuser.py")
+    reload_systemctl = read(root, "scripts/ci-cloud/rocky-reload-systemctl.py")
+    start_runuser = read(root, "scripts/ci-cloud/rocky-start-runuser.py")
+    start_env = read(root, "scripts/ci-cloud/rocky-start-env.py")
+    start_systemctl = read(root, "scripts/ci-cloud/rocky-start-systemctl.py")
+    active_runuser = read(root, "scripts/ci-cloud/rocky-active-runuser.py")
+    active_env = read(root, "scripts/ci-cloud/rocky-active-env.py")
+    active_systemctl = read(root, "scripts/ci-cloud/rocky-active-systemctl.py")
+    primary_runuser = read(root, "scripts/ci-cloud/rocky-primary-runuser.py")
+    primary_runtime = read(root, "scripts/ci-cloud/rocky-primary-runtime.py")
+    bootstrap = read(root, "scripts/ci-cloud/bootstrap-rocky-host.tftpl")
+    readiness_publisher = read(
+        root, "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
+    )
+    direct_user_systemd = read(root, "scripts/ci-cloud/runtime_user_systemd.py")
+    readiness_waiter = read(
+        root, "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
+    )
+    main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
+    target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
+    storage_setup_line_rules = [
+        rule for rule in target_line_rules if 241 <= rule[0] <= 244
+    ]
+    for forbidden in (
+        "id-token",
+        "google-github-actions/auth",
+        "GOOGLE_OAUTH_ACCESS_TOKEN",
+        "GCP_SERVICE_ACCOUNT",
+        "credentials_file",
+        "ci-cloud-gcp",
+    ):
+        require(
+            forbidden not in target_text,
+            f"target qualification job retains cloud-control authority: {forbidden}",
+        )
+    require(
+        "run-rocky-target-qualification" in target_text
+        and "run-rocky-target-qualification" not in json.dumps(jobs["resume_control"]),
+        "only the uncredentialed target job may request target-owned execution",
+    )
+    metadata_policy = required_block(
+        preparation,
+        "block_metadata_credentials() {\n",
+        "\n}\n\nconfigure_subids() {",
+        "Rocky metadata credential policy",
+    )
+    udp_dns = "ip daddr 169.254.169.254 udp dport 53 accept"
+    tcp_dns = "ip daddr 169.254.169.254 tcp dport 53 accept"
+    metadata_reject = "ip daddr 169.254.169.254 reject"
+    applied_metadata_policy = [
+        line.strip()
+        for line in metadata_policy.splitlines()
+        if line.strip().startswith("ip daddr 169.254.169.254")
+    ][-3:]
+    require(
+        metadata_policy.count(udp_dns) == 2
+        and metadata_policy.count(tcp_dns) == 2
+        and metadata_policy.count(metadata_reject) == 2
+        and applied_metadata_policy == [udp_dns, tcp_dns, metadata_reject]
+        and "8.8.8.8" not in metadata_policy
+        and "1.1.1.1" not in metadata_policy,
+        "GCE DNS must remain usable while all non-DNS metadata channels fail closed",
+    )
+    require(
+        "getent ahostsv4 github.com" in target_runner
+        and "resolve-target-source" in target_runner
+        and "fetch-exact-target" in target_runner
+        and "checkout-exact-target" in target_runner
+        and "verify-target-sha" in target_runner
+        and "exit 81" in target_runner
+        and "exit 82" in target_runner
+        and "exit 83" in target_runner
+        and "exit 84" in target_runner
+        and "https://github.com/SecPal/deployment.git" in target_runner
+        and "validate-target-source-failure" in target_runner,
+        "target source acquisition must be exact and emit only closed guest-owned failures",
+    )
+    require(
+        "ulimit -f" not in target_runner
+        and 'trace_fifo="$work_root/target-qualification.trace.fifo"'
+        in target_runner
+        and "capture_bounded() {" in target_runner
+        and '/usr/bin/head -c "$maximum"' in target_runner
+        and "/usr/bin/cat >/dev/null" in target_runner
+        and 'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"'
+        in target_runner
+        and '3>"$trace_fifo" 2>&1 | capture_bounded 65537 "$stdout"'
+        in target_runner
+        and 'pipeline_statuses=("${PIPESTATUS[@]}")' in target_runner
+        and 'wait "$trace_capture_pid"' in target_runner
+        and 'wait "$observer_pid" >/dev/null 2>&1\n  observer_pid=""'
+        in target_runner
+        and '"$stdout_capture_status" -ne 0'
+        in target_runner
+        and '"$trace_capture_status" -ne 0'
+        in target_runner,
+        "target output and trace must be bounded without limiting target filesystem writes",
+    )
+    require(
+        'audit_baseline="$(date -u \'+%m/%d/%y %H:%M:%S\')"' in target_runner
+        and 'audit_checkpoint = re.fullmatch(' in target_runner
+        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})"'
+        in target_runner
+        and "audit_date, audit_time = audit_checkpoint.groups()" in target_runner
+        and 'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")'
+        in target_runner
+        and '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",'
+        in target_runner
+        and 'audit_date, audit_time, "-i",' in target_runner
+        and "def run_bounded(" in target_runner
+        and "def acquire_audit_events(" in target_runner
+        and 'stderr in {b"", b"<no matches>\\n"}' in target_runner
+        and 'and not stdout\n                and stderr in {b"", b"<no matches>\\n"}'
+        in target_runner
+        and "for attempt in range(12):" in target_runner
+        and "time.sleep(0.5)" in target_runner
+        and "if events is None:\n                return None, None" in target_runner
+        and "if events:\n                return stdout, events" in target_runner
+        and "def audit_event_id(" in target_runner
+        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "' in target_runner
+        and 'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")'
+        in target_runner
+        and "def correlated_avc_events(" in target_runner
+        and "for line in audit_text.splitlines():" in target_runner
+        and 'if line in {"", "----"}:\n            continue' in target_runner
+        and "if record is None:\n            return None" in target_runner
+        and "event_id = audit_event_id(line)" in target_runner
+        and "if event_id is None:\n            return None" in target_runner
+        and 'events.setdefault(event_id, {"avc": 0, "marker": 0})'
+        in target_runner
+        and 'event["avc"] > 1 or event["marker"] > 1' in target_runner
+        and 'r"avc:\\s+denied\\s+\\{"' in target_runner
+        and 'record_type == "PROCTITLE"' in target_runner
+        and "r'(?:^|\\s)proctitle=[^\\r\\n]*'" in target_runner
+        and "r'(?:^|\\s)/foreign/marker(?:\\s|$)'" in target_runner
+        and 'tclass.group(1) == "dir"' in target_runner
+        and 'r"(?:^|\\s)permissive=0(?:\\s|$)"' in target_runner
+        and 'if event["avc"] == 1 and event["marker"] == 1' in target_runner
+        and 'facts["process_b"],\n    facts["storage_a"],'
+        in target_runner
+        and "if not avc_events:" in target_runner
+        and "if len(avc_events) != 1:" in target_runner
+        and 'stdout_limit=65536' in target_runner
+        and 'stderr_limit=4096' in target_runner
+        and 'timeout=5' in target_runner
+        and "re.DOTALL" not in target_runner,
+        "AVC admission must correlate one enforcing marker event within one audit serial",
+    )
+    require(
+        'runtime_home == Path("/home/secpal-runtime")' in target_runner
+        and "def admitted_runtime_home()" in target_runner
+        and "except (KeyError, OSError):" in target_runner
+        and "runtime_identity = admitted_runtime_home()" in target_runner
+        and "home_metadata.st_uid == runtime_account.pw_uid"
+        in target_runner
+        and "home_metadata.st_gid == runtime_account.pw_gid"
+        in target_runner
+        and "parent_metadata.st_uid == 0" in target_runner
+        and "not parent_metadata.st_mode & 0o022" in target_runner
+        and "parent_metadata.st_mode & stat.S_IXOTH" in target_runner
+        and 'cwd=str(runtime_home) if name == "podman" else None'
+        in target_runner,
+        "rootless cleanup observation must use the validated runtime home cwd",
+    )
+    require(
+        '"/usr/sbin/runuser", "--user", "secpal-runtime"' in target_runner
+        and '"/usr/bin/podman", "ps", "-a"' in target_runner
+        and '"/usr/bin/find", "/var/tmp"' in target_runner
+        and '"/usr/bin/systemctl", "list-units"' in target_runner
+        and "cleanup_results = [\n    run_bounded(" in target_runner
+        and "timeout=10" in target_runner,
+        "target cleanup observation must remain absolute, bounded, and timed",
+    )
+    require(
+        text.index("Wait for authenticated current-boot guest readiness")
+        < text.index("Execute exact target SHA once on the ready identity-free guest")
+        < text.index("Retrieve and validate bounded target-source failure")
+        and "source_failure_expected" in target_text
+        and "head -c 1025" in target_text
+        and "stat -c %s" in target_text
+        and "target-source-failure.json" in target_text
+        and "validate-target-source-failure" in target_text,
+        "target source diagnostics must remain after readiness and before evidence admission",
+    )
+    readiness_facts = {
+        "runtime_user_manager_active",
+        "runtime_user_bus_available",
+        "runtime_user_control_reachable",
+    }
+    require(
+        literal_constant(readiness_publisher, "WAIT_SECONDS") == 60
+        and literal_constant(readiness_publisher, "PROBE_INTERVAL_SECONDS") == 5
+        and literal_constant(readiness_publisher, "MAX_PROBES") == 13
+        and "timeout=min(COMMAND_TIMEOUT_SECONDS, remaining)" in readiness_publisher
+        and "sleep(min(interval, remaining))" in readiness_publisher
+        and '"systemctl", "is-active", "--quiet", f"user@{runtime_uid}.service"'
+        in readiness_publisher
+        and 'stat.S_ISSOCK(os.stat(f"/run/user/{runtime_uid}/bus").st_mode)'
+        in readiness_publisher
+        and "direct_user_show_environment" in readiness_publisher
+        and 'RUNTIME_ACCOUNT = "secpal-runtime"' in readiness_publisher
+        and "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir"
+        in readiness_publisher
+        and "--machine=" not in readiness_publisher
+        and '"runuser"' in direct_user_systemd
+        and '"--user"' in direct_user_systemd
+        and '"CONTAINER_HOST"' in direct_user_systemd
+        and '"CONTAINER_CONNECTION"' in direct_user_systemd
+        and 'f"HOME={runtime_home}"' in direct_user_systemd
+        and 'f"XDG_RUNTIME_DIR={runtime_directory}"' in direct_user_systemd
+        and 'f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_directory}/bus"'
+        in direct_user_systemd
+        and '"show-environment"' in direct_user_systemd
+        and all(readiness_publisher.count(f'"{fact}"') == 1 for fact in readiness_facts)
+        and '"runtime_user_manager_active": result.observation.manager_active'
+        in readiness_publisher
+        and '"runtime_user_bus_available": result.observation.bus_available'
+        in readiness_publisher
+        and '"runtime_user_control_reachable": result.observation.control_reachable'
+        in readiness_publisher
+        and "loginctl" not in readiness_publisher
+        and "runtime.systemd_user" not in readiness_publisher
+        and "daemon-reload" not in readiness_publisher
+        and all(
+            operation not in readiness_publisher
+            for operation in ('"start"', '"restart"', '"stop"', '"reset-failed"')
+        )
+        and "time.sleep(WAIT_SECONDS)" not in readiness_publisher,
+        "current-boot runtime-user readiness must remain bounded, independent, and non-mutating",
+    )
+    require(
+        all(f'"{fact}"' in readiness_waiter for fact in readiness_facts)
+        and 'Path(__file__).resolve().parents[2]' in readiness_waiter
+        and "rocky-cloud-qualification-readiness.schema.json" in readiness_waiter
+        and '"runtime-user-manager"' in readiness_waiter
+        and '"runtime-user-bus"' in readiness_waiter
+        and '"runtime-user-control"' in readiness_waiter,
+        "qualification admission must preserve each closed runtime-user boundary",
+    )
+    require(
+        "readiness_publisher_base64gzip" in main
+        and "runtime_user_systemd_base64gzip" in main
+        and "secpal-publish-rocky-qualification-readiness" in bootstrap
+        and "runtime_user_systemd.py" in bootstrap
+        and '--boot-id "$boot_id"' in bootstrap
+        and readiness_publisher.count("current_boot_id() != arguments.boot_id") == 2
+        and "secpal-publish-rocky-qualification-readiness" not in target_runner
+        and bootstrap.index('rm -f -- "$qualification_readiness"')
+        < bootstrap.index("/usr/local/sbin/secpal-prepare-rocky-host")
+        < bootstrap.index('boot_id="$(cat /proc/sys/kernel/random/boot_id)"')
+        < bootstrap.rindex("/usr/local/sbin/secpal-publish-rocky-qualification-readiness")
+        and "guest_startup_complete\":true" not in bootstrap,
+        "startup must bind one invalidated current-boot marker to runtime-user admission",
+    )
+    require(
+        "EXPECTED_TARGET_SHA = \"293977ae93408a7bb812619de58649ab8a92d438\""
+        in target_failure_classifier
+        and "EXPECTED_HARNESS_SHA256 = \"8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db\""
+        in target_failure_classifier
+        and "unclassified-target-failure" in target_failure_classifier
+        and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
+        and "SECPAL_TARGET_ERR_V1" not in target_failure_classifier
+        and "${BASH_LINENO[@]}" in target_failure_trace
+        and "SECPAL_TARGET_ERR_V2:%s:%s" in target_failure_trace
+        and "frame_count >= 8" in target_failure_trace
+        and all(
+            forbidden not in target_failure_trace
+            for forbidden in ("BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
+        )
+        and target_failure_trace.count("BASH_COMMAND") == 1
+        and literal_constant(target_failure_classifier, "MAX_TRACE_FRAMES") == 8
+        and literal_constant(target_failure_classifier, "MAX_TRACE_LINE") == 9_999
+        and all(
+            isinstance(rule, tuple)
+            and len(rule) == 3
+            and type(rule[0]) is int
+            and type(rule[1]) is int
+            and rule[0] > 91
+            for rule in target_line_rules
+        )
+        and [rule for rule in target_line_rules if rule[0] <= 239 and rule[1] >= 237]
+        == [
+            (237, 237, "qualify-quadlet-daemon-reload"),
+            (238, 238, "qualify-quadlet-start"),
+            (239, 239, "qualify-quadlet-active-state"),
+        ]
+        and all(
+            operation not in {
+                "qualify-selinux-storage-fcontext-add",
+                "qualify-selinux-storage-restorecon",
+                "qualify-selinux-storage-matchpathcon",
+            }
+            for _, _, operation in target_line_rules
+        )
+        and storage_setup_line_rules
+        == [
+            (241, 244, "qualify-selinux-storage-directory-create"),
+        ]
+        and "qualify-quadlet-runtime" not in target_failure_classifier
+        and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
+        in target_failure_classifier
+        and "if len(explicit) == 1 and len(traced_operations) == 1:" in target_failure_classifier
+        and "if len(explicit) == 1 and len(traced_operations) > 1:" in target_failure_classifier
+        and "if len(traced_operations) == 1:" in target_failure_classifier
+        and 'if len(traced_operations) == 1:\n        return traced_operations.pop(), "command-failed"\n    return "qualification-harness", "unclassified-target-failure"'
+        in target_failure_classifier
+        and 'return "qualification-harness", "unclassified-target-failure"'
+        in target_failure_classifier.split(
+            'if len(traced_operations) == 1:', 1
+        )[1]
+        and "validate-target-qualification-failure" in target_runner
+        and target_runner.count("exit 91") == 2
+        and 'rm -f -- "$stdout"' in target_runner
+        and "qualification_failure_expected" in target_text
+        and "head -c 4097" in target_text
+        and "target-qualification-failure.json" in target_text,
+        "target harness failures must retain one bounded negative-only semantic identity",
+    )
+    require(
+        "/opt/secpal-control/libexec/rocky-start-runuser" in target_failure_trace
+        and "SECPAL_START_EXACT_CALL" not in target_failure_trace + start_runuser
+        and '"$#" -eq 15' in target_failure_trace
+        and '"${12}" == systemctl' in target_failure_trace
+        and '"${14}" == start' in target_failure_trace
+        and "SECPAL_START_OBSERVATION_PATH"
+        not in target_failure_trace + target_runner + start_runuser
+        and "10#$frame == 237" in target_failure_trace
+        and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in start_runuser
+        and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")'
+        in start_runuser
+        and 'REAL_ENV = Path("/usr/bin/env")' in start_env
+        and 'TRUSTED_SYSTEMCTL = Path(' in start_env
+        and '"/usr/local/libexec/secpal-control/rocky-start-systemctl"'
+        in start_env
+        and 'REAL_SYSTEMCTL = Path("/usr/bin/systemctl")' in start_systemctl
+        and all(
+            source.startswith("#!/usr/bin/python3 -I\n")
+            for source in (start_runuser, start_env, start_systemctl)
+        )
+        and "shell=True" not in start_runuser + start_env + start_systemctl
+        and "MAX_PROTOCOL_BYTES = 2_048" in start_runuser
+        and "MAX_PROTOCOL_BYTES = 2_048" in start_env
+        and "MAX_PROPERTY_BYTES = 1_024" in start_systemctl
+        and "START_STAGE_DECISIONS" in target_failure_classifier
+        and "validate_admitted_quadlet_start_diagnostic" in target_failure_classifier
+        and "validate_admitted_quadlet_start_diagnostic" in rocky_control
+        and '--start-observation "$start_observation"' in target_runner
+        and '6>"$start_observation"' not in target_runner
+        and 'start_observation="$evidence_root/quadlet-start-observation.json"'
+        in target_runner
+        and 'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json'
+        in target_failure_trace
+        and "start_runuser_base64gzip" in main
+        and "start_env_base64gzip" in main
+        and "start_systemctl_base64gzip" in main
+        and "rocky-start-runuser" in bootstrap
+        and "rocky-start-env" in bootstrap
+        and "rocky-start-systemctl" in bootstrap
+        and "0:0:700" in bootstrap
+        and "0:0:555" in bootstrap,
+        "Quadlet start must retain one closed absolute-executable diagnostic boundary",
+    )
+    require(
+        "/opt/secpal-control/libexec/rocky-active-runuser" in target_failure_trace
+        and "SECPAL_ACTIVE_EXACT_CALL" not in target_failure_trace + active_runuser
+        and '"$#" -eq 16' in target_failure_trace
+        and '"${14}" == is-active' in target_failure_trace
+        and '"${15}" == --quiet' in target_failure_trace
+        and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in active_runuser
+        and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-active-env")'
+        in active_runuser
+        and 'REAL_ENV = Path("/usr/bin/env")' in active_env
+        and 'TRUSTED_SYSTEMCTL = Path(' in active_env
+        and '"/usr/local/libexec/secpal-control/rocky-active-systemctl"'
+        in active_env
+        and 'REAL_SYSTEMCTL = Path("/usr/bin/systemctl")' in active_systemctl
+        and all(
+            source.startswith("#!/usr/bin/python3 -I\n")
+            for source in (active_runuser, active_env, active_systemctl)
+        )
+        and "shell=True" not in active_runuser + active_env + active_systemctl
+        and "dict(os.environ)" not in active_runuser + active_env + active_systemctl
+        and "MAX_PROTOCOL_BYTES = 2_048" in active_runuser
+        and "MAX_PROTOCOL_BYTES = 2_048" in active_env
+        and "ACTIVE_STAGE_DECISIONS" in target_failure_classifier
+        and "validate_admitted_quadlet_active_diagnostic"
+        in target_failure_classifier
+        and "validate_admitted_quadlet_active_diagnostic" in rocky_control
+        and '--active-observation "$active_observation"' in target_runner
+        and '7>"$active_observation"' not in target_runner
+        and "SECPAL_ACTIVE_OBSERVATION_PATH"
+        not in target_failure_trace + target_runner + active_runuser
+        and 'active_observation="$evidence_root/quadlet-active-observation.json"'
+        in target_runner
+        and 'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json'
+        in target_failure_trace
+        and "active_runuser_base64gzip" in main
+        and "active_env_base64gzip" in main
+        and "active_systemctl_base64gzip" in main
+        and "rocky-active-runuser" in bootstrap
+        and "rocky-active-env" in bootstrap
+        and "rocky-active-systemctl" in bootstrap,
+        "Quadlet active-state must retain one closed absolute-executable diagnostic boundary",
+    )
+    require(
+        '/opt/secpal-control/libexec/rocky-primary-runuser "$@"'
+        in target_failure_trace
+        and '"$#" -eq 29' in target_failure_trace
+        and '"${12}" == podman' in target_failure_trace
+        and '"${13}" == run' in target_failure_trace
+        and "SECPAL_PRIMARY_OBSERVATION_PATH"
+        not in target_failure_trace + target_runner + primary_runuser
+        and '/usr/sbin/runuser "$@"' in target_failure_trace
+        and "SECPAL_PRIMARY_EXACT_CALL" not in target_failure_trace
+        and "SECPAL_PRIMARY_BRANCH" not in target_failure_trace
+        and "SECPAL_PRIMARY_MARKER" not in target_failure_trace
+        and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in primary_runuser
+        and 'RUNTIME_HELPER = Path(' in primary_runuser
+        and '"/usr/local/libexec/secpal-control/rocky-primary-runtime"'
+        in primary_runuser
+        and 'REAL_PODMAN = Path("/usr/bin/podman")' in primary_runtime
+        and all(
+            source.startswith("#!/usr/bin/python3 -I\n")
+            for source in (primary_runuser, primary_runtime)
+        )
+        and "shell=True" not in primary_runuser + primary_runtime
+        and "dict(os.environ)" not in primary_runuser + primary_runtime
+        and "MAX_PROTOCOL_BYTES = 512" in primary_runuser
+        and '"LC_ALL": "C"' in primary_runuser
+        and "O_NOFOLLOW" in primary_runuser
+        and "Once the exact primary request starts" in primary_runuser
+        and "PRIMARY_STAGE_DECISIONS" in target_failure_classifier
+        and "validate_admitted_primary_workload_diagnostic"
+        in target_failure_classifier
+        and "validate_admitted_primary_workload_diagnostic" in rocky_control
+        and '--primary-observation "$primary_observation"' in target_runner
+        and 'primary_observation="$evidence_root/primary-workload-observation.json"'
+        in target_runner
+        and 'OBSERVATION_PATH = Path(' in primary_runuser
+        and '"/var/lib/secpal-rocky/evidence/primary-workload-observation.json"'
+        in primary_runuser
+        and "primary_runuser_base64gzip" in main
+        and "primary_runtime_base64gzip" in main
+        and "rocky-primary-runuser" in bootstrap
+        and "rocky-primary-runtime" in bootstrap
+        and not (root / "scripts/ci-cloud/rocky-primary-env.py").exists()
+        and not (root / "scripts/ci-cloud/rocky-primary-podman.py").exists(),
+        "the primary workload must use one exact direct closed helper boundary",
+    )
+    require(
+        "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s"
+        in target_failure_trace
+        and "/opt/secpal-control/libexec/rocky-reload-runuser"
+        in target_failure_trace
+        and "/usr/sbin/runuser" in target_failure_trace
+        and 'export PATH="/opt/secpal-control/libexec:$PATH"'
+        not in target_failure_trace
+        and 'TRUSTED_SYSTEMCTL = (\n    "/usr/local/libexec/secpal-control/rocky-reload-systemctl"'
+        in reload_runuser
+        and 'REAL_RUNUSER = "/usr/sbin/runuser"' in reload_runuser
+        and "os.dup2(ACK_FD, 0, inheritable=True)" in reload_runuser
+        and "os.dup2(RECORD_FD, 1, inheritable=True)" in reload_runuser
+        and "os.closerange(3" in reload_runuser
+        and "SECPAL_QUADLET_RELOAD_CLIENT_V1" in reload_systemctl
+        and 'REAL_SYSTEMCTL = "/usr/bin/systemctl"' in reload_systemctl
+        and "os.getresuid() == (runtime.pw_uid,) * 3" in reload_systemctl
+        and "os.getresgid() == (runtime.pw_gid,) * 3" in reload_systemctl
+        and "os.execv(REAL_SYSTEMCTL" in reload_systemctl
+        and "os.execve(REAL_RUNUSER" in reload_runuser
+        and '"$status" "$$" "$secpal_reload_run_space_bytes"'
+        in target_failure_trace
+        and '"$secpal_reload_audit_baseline" "$secpal_reload_journal_cursor"'
+        in target_failure_trace
+        and '[[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]'
+        in target_failure_trace
+        and "SECPAL_RELOAD_EXACT_CALL"
+        not in target_failure_trace + reload_runuser + reload_systemctl
+        and '"$#" -eq 14' in target_failure_trace
+        and '"${14}" == daemon-reload' in target_failure_trace
+        and "timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0"
+        in target_failure_trace
+        and "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd"
+        in target_failure_trace
+        and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
+        in target_failure_trace
+        and "10#$frame == 237" in target_failure_trace
+        and "trap - ERR" in target_failure_trace
+        and "read -r -t 25 -u 5" in target_failure_trace
+        and "return \"$status\"" in target_failure_trace
+        and 'mkfifo -m 0600 "$reload_event" "$reload_ack"' in target_runner
+        and '"$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438'
+        in target_runner
+        and "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        in target_runner
+        and target_runner.index("observe-rocky-quadlet-reload-adjacency.py")
+        < target_runner.index("bash \"$work_root/scripts/qualify-production-host.sh\"")
+        < target_runner.index(
+            '\npipeline_statuses=("${PIPESTATUS[@]}")\n',
+            target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
+        )
+        < target_runner.index(
+            "wait \"$observer_pid\"",
+            target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
+        )
+        and "--reload-adjacency \"$reload_adjacency\"" in target_runner
+        and "reload_observer_base64gzip" in main
+        and "reload_runuser_base64gzip" in main
+        and "reload_systemctl_base64gzip" in main
+        and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap
+        and "rocky-reload-runuser" in bootstrap
+        and "/usr/local/libexec/secpal-control/rocky-reload-systemctl" in bootstrap
+        and "chmod 0555 /usr/local/libexec/secpal-control/rocky-reload-systemctl"
+        in bootstrap
+        and "for trusted_directory in / /opt /opt/secpal-control"
+        in bootstrap
+        and "/opt/secpal-control/libexec /opt/secpal-control/scripts"
+        in bootstrap
+        and "/opt/secpal-control/scripts/ci-cloud /usr /usr/local /usr/local/libexec"
+        in bootstrap
+        and '[[ -d "$trusted_directory" && ! -L "$trusted_directory" ]]'
+        in bootstrap
+        and "(( (8#$trusted_mode & 8#022) == 0 ))" in bootstrap
+        and "0:0:700" in bootstrap
+        and "0:0:555" in bootstrap
+        and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
+        not in bootstrap
+        and "pwd.error" not in reload_adjacency_observer
+        and "or 237 not in frames" in reload_adjacency_observer
+        and "or 242 not in frames" not in reload_adjacency_observer,
+        "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
+    )
+    require(
+        literal_constant(reload_adjacency_observer, "MAX_INPUT_BYTES") == 4_096
+        and literal_constant(reload_adjacency_observer, "MAX_COMMAND_BYTES") == 65_536
+        and literal_constant(reload_adjacency_observer, "MAX_GENERATOR_RECORD_BYTES")
+        == 2_048
+        and literal_constant(
+            reload_adjacency_observer, "MAX_GENERATOR_CANDIDATE_RECORDS"
+        )
+        == 3
+        and literal_constant(reload_adjacency_observer, "MAX_RELOAD_RECORD_BYTES")
+        == 2_048
+        and literal_constant(
+            reload_adjacency_observer, "MAX_RELOAD_CANDIDATE_RECORDS"
+        )
+        == 8
+        and literal_constant(reload_adjacency_observer, "MAX_OBSERVATION_BYTES")
+        == 8_192
+        and literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS") == 3
+        and literal_constant(
+            reload_adjacency_observer, "MANAGER_CONTINUITY_TIMEOUT_SECONDS"
+        )
+        == 2
+        and literal_constant(
+            reload_adjacency_observer, "PACKAGE_QUERY_TIMEOUT_SECONDS"
+        )
+        == 1
+        and literal_constant(
+            reload_adjacency_observer, "RELOAD_JOURNAL_TIMEOUT_SECONDS"
+        )
+        == 1
+        and literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS") == 8
+        and literal_constant(reload_adjacency_observer, "CAPTURE_DEADLINE_SECONDS")
+        == 22
+        and 2
+        * literal_constant(reload_adjacency_observer, "COMMAND_TIMEOUT_SECONDS")
+        + 2
+        * literal_constant(
+            reload_adjacency_observer, "MANAGER_CONTINUITY_TIMEOUT_SECONDS"
+        )
+        + literal_constant(
+            reload_adjacency_observer, "PACKAGE_QUERY_TIMEOUT_SECONDS"
+        )
+        + literal_constant(
+            reload_adjacency_observer, "RELOAD_JOURNAL_TIMEOUT_SECONDS"
+        )
+        + literal_constant(reload_adjacency_observer, "GENERATOR_TIMEOUT_SECONDS")
+        < literal_constant(reload_adjacency_observer, "CAPTURE_DEADLINE_SECONDS")
+        and "time.monotonic() > deadline" in reload_adjacency_observer
+        and "write_document(arguments.output, document, deadline)"
+        in reload_adjacency_observer
+        and 'raise ObservationError("adjacency command could not execute")'
+        in reload_adjacency_observer
+        and "except (OSError, subprocess.TimeoutExpired)" in reload_adjacency_observer
+        and "os.O_NOFOLLOW" in reload_adjacency_observer
+        and "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW"
+        in reload_adjacency_observer
+        and "stat.S_ISFIFO" in reload_adjacency_observer
+        and "metadata.st_uid != 0" in reload_adjacency_observer
+        and "metadata.st_gid != 0" in reload_adjacency_observer
+        and "stat.S_IMODE(metadata.st_mode) != 0o600" in reload_adjacency_observer
+        and 'Path(f"/etc/containers/systemd/users/{runtime_uid}")'
+        in reload_adjacency_observer
+        and "directory_metadata = directory.lstat()" in reload_adjacency_observer
+        and "not stat.S_ISLNK(directory_metadata.st_mode)"
+        in reload_adjacency_observer
+        and "directory_metadata.st_uid == 0" in reload_adjacency_observer
+        and "directory_metadata.st_gid == 0" in reload_adjacency_observer
+        and "not directory_metadata.st_mode & 0o022" in reload_adjacency_observer
+        and "directory.resolve(strict=True) == directory"
+        in reload_adjacency_observer
+        and "stat.S_ISLNK(link_metadata.st_mode)" in reload_adjacency_observer
+        and "parent_resolved != path.parent" in reload_adjacency_observer
+        and "metadata.st_mode & 0o111 == 0" in reload_adjacency_observer
+        and '"owner_uid": metadata.st_uid' in reload_adjacency_observer
+        and '"owner_gid": metadata.st_gid' in reload_adjacency_observer
+        and 'f"{stat.S_IMODE(metadata.st_mode):04o}"' in reload_adjacency_observer
+        and "hashlib.sha256(payload).hexdigest()" in reload_adjacency_observer
+        and 'f"QUADLET_UNIT_DIRS={input_path.parent}"' in reload_adjacency_observer
+        and '"--user",\n                "--dryrun"' in reload_adjacency_observer
+        and "direct_user_show_environment" in reload_adjacency_observer
+        and "RUNTIME_ACCOUNT, runtime_uid, runtime.pw_dir"
+        in reload_adjacency_observer
+        and "--machine=" not in reload_adjacency_observer
+        and '"show-environment"' in direct_user_systemd
+        and "manager_state_observed and bus_state_observed and control_status != 125"
+        in reload_adjacency_observer
+        and 'GENERATOR_CODE_FUNC = "do_execute"' in reload_adjacency_observer
+        and 'GENERATOR_CODE_FILE = "../src/shared/exec-util.c"'
+        in reload_adjacency_observer
+        and 'GENERATOR_OUTPUT_FIELDS = "_UID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"'
+        in reload_adjacency_observer
+        and 'f"CODE_FUNC={GENERATOR_CODE_FUNC}"' in reload_adjacency_observer
+        and 'f"CODE_FILE={GENERATOR_CODE_FILE}"' in reload_adjacency_observer
+        and reload_adjacency_observer.count(
+            'f"--boot={boot_id.replace(\'-\', \'\')}"'
+        )
+        == 2
+        and 'f"--output-fields={GENERATOR_OUTPUT_FIELDS}"'
+        in reload_adjacency_observer
+        and "max_bytes=MAX_GENERATOR_JOURNAL_BYTES"
+        in reload_adjacency_observer
+        and '"journal-output-bound-exceeded"' in reload_adjacency_observer
+        and '"candidate-generator-unadmitted"' in reload_adjacency_observer
+        and '"candidate-count-exceeded"' in reload_adjacency_observer
+        and 'ROCKY_SYSTEMD_SOURCE_RPM = "systemd-257-23.el10_2.2.rocky.0.1.src.rpm"'
+        in reload_adjacency_observer
+        and '"systemd-257-23.el10_2.2.rocky.0.1.aarch64"'
+        in reload_adjacency_observer
+        and '"systemd-257-23.el10_2.2.rocky.0.1.x86_64"'
+        in reload_adjacency_observer
+        and "RELOAD_SPACE_MINIMUM_BYTES = 16 * 1024 * 1024"
+        in reload_adjacency_observer
+        and 'RELOAD_OUTPUT_FIELDS = "_PID,_BOOT_ID,CODE_FUNC,CODE_FILE,MESSAGE"'
+        in reload_adjacency_observer
+        and 'f"--output-fields={RELOAD_OUTPUT_FIELDS}"'
+        in reload_adjacency_observer
+        and 'f"_PID={manager_pid}"' in reload_adjacency_observer
+        and 'f"--after-cursor={journal_cursor}"' in reload_adjacency_observer
+        and 'reasons.add("request-client-unbound")' in reload_adjacency_observer
+        and '"rpm",\n            "-q",' in reload_adjacency_observer
+        and '("../src/core/dbus-manager.c", "log_caller")'
+        in reload_adjacency_observer
+        and '("../src/core/dbus-manager.c", "method_reload")'
+        in reload_adjacency_observer
+        and '("../src/core/main.c", "invoke_main_loop")'
+        in reload_adjacency_observer
+        and '("../src/core/manager.c", "manager_reload")'
+        in reload_adjacency_observer
+        and '("../src/core/dbus.c", "bus_send_pending_reload_message")'
+        in reload_adjacency_observer
+        and "max_bytes=MAX_RELOAD_JOURNAL_BYTES" in reload_adjacency_observer
+        and 'os.statvfs("/run/systemd")' in reload_adjacency_observer
+        and '"tclass=system"' in reload_adjacency_observer
+        and 'r"avc:\\s+denied\\s+\\{\\s*reload\\s*\\}"'
+        in reload_adjacency_observer
+        and "reload_access_avc(audit, expected_client_pid)"
+        in reload_adjacency_observer
+        and '"daemon-reload"' not in reload_adjacency_observer
+        and 'comm="systemd"' not in reload_adjacency_observer
+        and all(
+            operation not in reload_adjacency_observer
+            for operation in ('"start"', '"restart"', '"stop"', '"reset-failed"')
+        ),
+        "daemon-reload adjacency observation must remain bounded, closed, and non-mutating",
+    )
+    require(
+        "def admit_daemon_reload_adjacency(" in target_failure_classifier
+        and '"manager-continuity-lost"' in target_failure_classifier
+        and '"target-input-invalid"' in target_failure_classifier
+        and '"podman-generator-rejected"' in target_failure_classifier
+        and '"other-generator-failed"' in target_failure_classifier
+        and '"selinux-reload-denied"' in target_failure_classifier
+        and '"manager-reload-transaction-failed"' not in target_failure_classifier
+        and '"reload-run-space-rejected"' in target_failure_classifier
+        and '"reload-selinux-access-denied"' in target_failure_classifier
+        and '"reload-authorization-denied"' in target_failure_classifier
+        and '"reload-rate-limited"' in target_failure_classifier
+        and '"reload-manager-serialization-failed"' in target_failure_classifier
+        and '"reload-reply-transport-failed"' in target_failure_classifier
+        and '"reload-stage-evidence-contradictory"'
+        in target_failure_classifier
+        and '"manager-continuity-observation-unavailable"'
+        in target_failure_classifier
+        and 'observation, "manager_continuity_observed"'
+        in target_failure_classifier
+        and '"reload-completion-not-observed"' in target_failure_classifier
+        and '"diagnostic-unavailable"' in target_failure_classifier
+        and "captured_before_cleanup" in target_failure_classifier
+        and '_closed_boolean(observation, "captured_before_cleanup")'
+        in target_failure_classifier
+        and "failure_event_sha256" in target_failure_classifier
+        and 're.fullmatch(r"[0-9a-f]{64}", str(observation["failure_event_sha256"]))'
+        in target_failure_classifier
+        and "generator_failure_ambiguous" in target_failure_classifier
+        and '_closed_boolean(\n            observation, "generator_failure_ambiguous"\n        )'
+        in target_failure_classifier
+        and "generator_observation_reason" in target_failure_classifier
+        and target_failure_classifier.count(
+            'generator_ambiguous != (generator_reason != "none")'
+        )
+        == 2
+        and target_failure_classifier.count(
+            'reload_access_avc["source_type"]'
+        )
+        == 2
+        and target_failure_classifier.count(
+            'reload_access_avc["target_type"]'
+        )
+        == 2
+        and 'reload-selinux-context-observation-unavailable'
+        in target_failure_classifier
+        and "selinux_avc_ambiguous" in target_failure_classifier,
+        "daemon-reload adjacency admission must preserve the closed fail-safe decision tree",
+    )
+    require(
+        'INSTALLED_TARGET_FAILURE_CLASSIFIER = Path(\n    "/usr/local/sbin/secpal-classify-rocky-target-failure"\n)'
+        in rocky_control
+        and "SourceFileLoader" in rocky_control
+        and "spec_from_loader(loader.name, loader)" in rocky_control
+        and "TARGET_FAILURE_CLASSIFIER_SYMBOL" in rocky_control
+        and "classifier_path.lstat()" in rocky_control
+        and "metadata.st_mode & 0o022" in rocky_control
+        and "metadata.st_uid != CLASSIFIER_TRUSTED_UID" in rocky_control
+        and "stat.S_IMODE(metadata.st_mode) != 0o700" in rocky_control
+        and "spec_from_file_location" not in rocky_control,
+        "Rocky control must load only the admitted extensionless installed classifier",
+    )
+    require(
+        target_text.index("Retrieve and validate bounded target-qualification failure")
+        < target_text.index("Enforce exact target execution")
+        < target_text.index("Retrieve and validate target-owned qualification evidence")
+        and "steps.target_execution.outcome == 'success'" in target_text,
+        "negative target diagnostics must be transported before failure enforcement and never grant success",
+    )
+    require(
+        text.count("create_credentials_file: false") == 4
+        and text.count("export_environment_variables: false") == 4,
+        "Rocky WIF must stay in-memory and step-scoped",
+    )
+    require(
+        "credentials_json" not in text and "service_account_key" not in text,
+        "static GCP keys are forbidden",
+    )
+    variables = read(root, "infra/ci-cloud/gcp-rocky/variables.tf")
+    versions = read(root, "infra/ci-cloud/gcp-rocky/versions.tf")
+    require(
+        'required_version = "= 1.12.5"' in versions
+        and 'version = "= 7.40.0"' in versions,
+        "Rocky OpenTofu and Google provider versions must be exact",
+    )
+    require(
+        'image  = var.exact_image_self_link' in main
+        and 'data "google_compute_image"' not in main
+        and "discovery_family" not in main,
+        "OpenTofu may consume only the pre-resolved exact image identity",
+    )
+    require(
+        "rocky-linux-cloud/global/images/" in variables
+        and main.count('resource "google_compute_instance"') == 1
+        and re.search(r"\bcount\s*=", main) is None,
+        "Rocky image and instance count are outside the closed contract",
+    )
+    for schema_name in (
+        "rocky-cloud-discovery-evidence.schema.json",
+        "rocky-cloud-continuation.schema.json",
+        "rocky-cloud-preparation-evidence.schema.json",
+        "rocky-cloud-qualification-evidence.schema.json",
+        "rocky-cloud-qualification-readiness.schema.json",
+        "rocky-cloud-qualification-readiness-failure.schema.json",
+        "rocky-cloud-target-source-failure.schema.json",
+        "rocky-cloud-target-qualification-failure.schema.json",
+    ):
+        try:
+            schema = json.loads(read(root, f"schemas/{schema_name}"))
+            Draft202012Validator.check_schema(schema)
+        except (json.JSONDecodeError, SchemaError):
+            raise ContractError(f"Rocky evidence schema is invalid: {schema_name}") from None
+        require(
+            schema.get("additionalProperties") is False,
+            f"Rocky evidence schema is not closed: {schema_name}",
+        )
+
+
 def validate(root: Path) -> None:
     validate_conformance_workflow(root)
     validate_janitor_workflow(root)
     validate_opentofu(root)
     validate_janitor_script(root)
     validate_gcp_iam_role(root)
+    validate_rocky_control_plane(root)
     require("gha-creds-*.json" in read(root, ".gitignore"), "generated GCP credential files must be ignored defensively")
     remote = read(root, "scripts/ci-cloud/run-remote-conformance.sh")
     target = read(root, "scripts/ci-cloud/target-conformance.sh")
@@ -2075,7 +2970,7 @@ def validate(root: Path) -> None:
         and "cloud_diagnostic_stage" in quadlet_harness
         and "cloud_diagnostic_failure" in quadlet_harness
         and "workload-postgres-image-pull" in quadlet_harness
-        and "workload-valkey-image-pull" in quadlet_harness
+        and "workload-valkey-image-pull" not in quadlet_harness
         and "workload-caddy-image-pull" in quadlet_harness
         and "workload-gateway-build" in quadlet_harness
         and "workload-postgres-attestation-fetch" not in quadlet_harness

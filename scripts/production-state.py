@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "config" / "production" / "state-contract.json"
 APP_KEY_PATTERN = re.compile(rb"base64:[A-Za-z0-9+/]{43}=\n?\Z")
 PASSWORD_PATTERN = re.compile(rb"[A-Za-z0-9._~!#$%&*+\-/=?^]{24,128}\n?\Z")
-EXPECTED_OBJECTS_DIGEST = "6bb63d262ecee9de0db714aeee810c10b75411c123958780f409246dffb56516"
+EXPECTED_OBJECTS_DIGEST = "41b846f699d09344fefb12746ae8cf720307edaec579b4f476fad97490b610b2"
 EXPECTED_TOP_LEVEL = {
     "$comment",
     "schema_version",
@@ -148,14 +148,6 @@ EXPECTED_SECRET_DELIVERY = {
             "postgres-password": {"mode": "0400", "type": "password"},
             "valkey-password": {"mode": "0400", "type": "password"},
         },
-    },
-    "postgres": {
-        "directory": "/run/secpal/secrets/postgres",
-        "container_uid": 999,
-        "container_gid": 999,
-        "directory_mode": "0710",
-        "consumers": ["postgres"],
-        "files": {"password": {"mode": "0400", "type": "password"}},
     },
     "valkey": {
         "directory": "/run/secpal/secrets/valkey",
@@ -538,6 +530,9 @@ def _validate_secret_deliveries(
     root = Path(contract["secret_policy"]["delivery_root"])
     _assert_safe_component(root, True, 0o710)
     _assert_no_extended_acl(root)
+    retired_server_delivery = root / "postgres"
+    if retired_server_delivery.exists() or retired_server_delivery.is_symlink():
+        fail("retired PostgreSQL server secret delivery remains")
     expected_root_uid = 65534 if namespace_view else 0
     expected_root_gid = 0 if namespace_view else contract["rootless_mapping"]["service_gid"]
     _assert_owner(root, expected_root_uid, expected_root_gid)
@@ -570,10 +565,7 @@ def _validate_secret_deliveries(
                     )
     if require_secrets and not namespace_view:
         api = Path(contract["secret_delivery"]["api"]["directory"])
-        postgres = Path(contract["secret_delivery"]["postgres"]["directory"])
         valkey = Path(contract["secret_delivery"]["valkey"]["directory"])
-        if (api / "postgres-password").read_bytes() != (postgres / "password").read_bytes():
-            fail("PostgreSQL consumer credential copies do not match")
         if (api / "valkey-password").read_bytes() != (valkey / "password").read_bytes():
             fail("Valkey consumer credential copies do not match")
         active_raw = (api / "app-key").read_bytes()
@@ -826,10 +818,6 @@ def publish_initial_secret_tree(
                 os.fsync(directory_descriptor)
             finally:
                 os.close(directory_descriptor)
-        if (staging / "api/postgres-password").read_bytes() != (
-            staging / "postgres/password"
-        ).read_bytes():
-            fail("PostgreSQL consumer credential copies do not match")
         if (staging / "api/valkey-password").read_bytes() != (
             staging / "valkey/password"
         ).read_bytes():

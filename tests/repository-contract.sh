@@ -52,6 +52,7 @@ required_files=(
   docs/frontend-image-consumption.md
   docs/quadlet-integration.md
   docs/ci-cloud-conformance.md
+  docs/rocky-cloud-qualification.md
   docs/roadmap.md
   infra/ci-cloud/digitalocean/.terraform.lock.hcl
   infra/ci-cloud/digitalocean/main.tf
@@ -64,8 +65,21 @@ required_files=(
   infra/ci-cloud/gcp/outputs.tf
   infra/ci-cloud/gcp/variables.tf
   infra/ci-cloud/gcp/versions.tf
+  infra/ci-cloud/gcp-rocky/.terraform.lock.hcl
+  infra/ci-cloud/gcp-rocky/main.tf
+  infra/ci-cloud/gcp-rocky/outputs.tf
+  infra/ci-cloud/gcp-rocky/variables.tf
+  infra/ci-cloud/gcp-rocky/versions.tf
   schemas/ci-cloud-bootstrap-failure.schema.json
   schemas/ci-cloud-evidence.schema.json
+  schemas/rocky-cloud-continuation.schema.json
+  schemas/rocky-cloud-discovery-evidence.schema.json
+  schemas/rocky-cloud-preparation-evidence.schema.json
+  schemas/rocky-cloud-qualification-evidence.schema.json
+  schemas/rocky-cloud-qualification-readiness-failure.schema.json
+  schemas/rocky-cloud-qualification-readiness.schema.json
+  schemas/rocky-cloud-target-qualification-failure.schema.json
+  config/ci-cloud/gcp-rocky-10-2-arm64.json
   config/production/inventory.example.yaml
   config/production/state-contract.json
   config/quadlet/Caddyfile
@@ -79,12 +93,10 @@ required_files=(
   scripts/quadlet-integration.py
   scripts/quadlet-oneshot-entrypoint.sh
   scripts/production-secret-bootstrap.php
-  scripts/production-postgres-entrypoint.sh
   scripts/production-state.py
   scripts/production-valkey-entrypoint.sh
   scripts/render-production-quadlets.py
   scripts/render-integration-quadlets.py
-  scripts/valkey-entrypoint.sh
   scripts/ci-cloud/bounded-target-diagnostic.py
   scripts/ci-cloud/collect-host-evidence.py
   scripts/ci-cloud/bootstrap-conformance-host.tftpl
@@ -93,6 +105,28 @@ required_files=(
   scripts/ci-cloud/install-diagnostic-ssh.sh
   scripts/ci-cloud/digitalocean-janitor.py
   scripts/ci-cloud/gcp-janitor.py
+  scripts/ci-cloud/gcp-rocky-janitor.py
+  scripts/ci-cloud/allocate-rocky-subids.py
+  scripts/ci-cloud/bootstrap-rocky-host.tftpl
+  scripts/ci-cloud/collect-rocky-preparation.py
+  scripts/ci-cloud/prepare-rocky-host.sh
+  scripts/ci-cloud/publish-rocky-qualification-readiness.py
+  scripts/ci-cloud/rocky-control.py
+  scripts/ci-cloud/rocky-gcp-transition.py
+  scripts/ci-cloud/wait-rocky-qualification-readiness.py
+  scripts/ci-cloud/run-rocky-target-qualification.sh
+  scripts/ci-cloud/classify-rocky-target-qualification-failure.py
+  scripts/ci-cloud/rocky-target-qualification-trace.sh
+  scripts/ci-cloud/rocky-start-runuser.py
+  scripts/ci-cloud/rocky-start-env.py
+  scripts/ci-cloud/rocky-start-systemctl.py
+  scripts/ci-cloud/rocky-active-runuser.py
+  scripts/ci-cloud/rocky-active-env.py
+  scripts/ci-cloud/rocky-active-systemctl.py
+  scripts/ci-cloud/rocky-primary-runuser.py
+  scripts/ci-cloud/rocky-primary-runtime.py
+  scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py
+  scripts/ci-cloud/wait-github-artifact.sh
   scripts/ci-cloud/detach-gcp-vm-identity.sh
   scripts/ci-cloud/defer-bootstrap-for-gcp-identity.sh
   scripts/ci-cloud/host-setup-failure.py
@@ -118,6 +152,10 @@ required_files=(
   tests/ci-cloud-collector.py
   tests/ci-cloud-evidence.py
   tests/ci-cloud-gcp-janitor.py
+  tests/ci-cloud-gcp-rocky-janitor.py
+  tests/ci-cloud-rocky-control.py
+  tests/ci-cloud-rocky-target-diagnostics.py
+  tests/ci-cloud-rocky-readiness.py
   tests/ci-cloud-gcp-identity.sh
   tests/ci-cloud-host-setup-failure.py
   tests/ci-cloud-janitor.py
@@ -130,11 +168,14 @@ required_files=(
   tests/production-host-contract.sh
   tests/production-inventory-contract.py
   tests/production-state-contract.py
+  tests/production-postgres-retirement.py
   tests/production-edge-decision-contract.py
   tests/production-state-native-lifecycle-gate.sh
   tests/production-state-native-lifecycle.sh
   tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
+  tests/rocky-dnf4-nevra-contract.sh
+  tests/rocky-rpmdb-provenance-contract.sh
   tests/preflight-origin-contract.sh
   tests/sensitive-path-contract.sh
   tests/workflow-action-pin-contract.sh
@@ -148,6 +189,7 @@ required_files=(
   .github/actionlint.yaml
   .github/workflows/cloud-conformance.yml
   .github/workflows/cloud-janitor.yml
+  .github/workflows/rocky-cloud-qualification.yml
   LICENSES/AGPL-3.0-or-later.txt
   LICENSES/CC0-1.0.txt
   LICENSES/MIT.txt
@@ -164,7 +206,6 @@ fi
 
 require_text README.md "It is not a production-ready deployment."
 require_text README.md "./scripts/preflight.sh"
-require_text README.md "Local API/frontend integration: complete."
 require_text README.md "Phase B completed in the required check context"
 require_text README.md "Phase C is complete."
 require_text README.md "Ephemeral Debian 13 cloud conformance"
@@ -182,7 +223,7 @@ require_text docs/roadmap.md "Phase C — Immutable image publishing (complete)"
 require_text docs/ci-cloud-conformance.md "The workflow never checks out"
 # The Markdown backticks must remain literal.
 # shellcheck disable=SC2016
-require_text docs/roadmap.md 'is enforced for `main`'
+require_text docs/roadmap.md 'was enforced for `main` at that time'
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04"
 require_text .github/workflows/local-integration.yml "runner: ubuntu-26.04-arm"
 require_text .github/workflows/local-integration.yml \

@@ -166,12 +166,12 @@ QUADLET_UNIT_DIRS="$QUADLET_ROOT" "$GENERATOR" \
   "$GENERATED_ROOT" "$GENERATED_ROOT" "$GENERATED_ROOT"
 test -f "$GENERATED_ROOT/$SERVICE_NAME"
 
-# The full production set must also remain admissible to the native generator.
+# The retained production product-role set must remain admissible to the native generator.
 PRODUCTION_GENERATED="$FIXTURE_ROOT/production-generated"
 install -d -m 0700 "$PRODUCTION_GENERATED"
 QUADLET_UNIT_DIRS="$ROOT_DIR/config/production/quadlet" "$GENERATOR" \
   "$PRODUCTION_GENERATED" "$PRODUCTION_GENERATED" "$PRODUCTION_GENERATED"
-test "$(find "$PRODUCTION_GENERATED" -maxdepth 1 -type f | wc -l)" -eq 11
+test "$(find "$PRODUCTION_GENERATED" -maxdepth 1 -type f | wc -l)" -eq 9
 
 if ! podman image exists "$FRONTEND_IMAGE"; then
   if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then

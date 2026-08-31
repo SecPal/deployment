@@ -19,6 +19,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - Follow `SecPal/.github/docs/work-graph-contract.md` as the single authority
   for work-graph, delivery, replanning, and evidence semantics. This repository
   adds only deployment-specific implementation and security constraints.
+- Follow `SecPal/.github/docs/evidence-architecture-contract.md` as the
+  authoritative companion for evidence-pipeline and external-system
+  architecture. Do not create independent generic definitions of its
+  observation, normalization, admission, assembly, invariant-ownership,
+  diagnosability, or anti-loop rules here. Deployment-specific constraints in
+  this baseline may strengthen those rules at deployment trust boundaries but
+  do not replace their canonical definitions.
 - The native GitHub graph state is authoritative. Human-readable diagrams and
   prose are explanatory only and must not duplicate native relationship or
   progress state.
@@ -71,16 +78,22 @@ Never print secret values to logs.
 - Never evaluate untrusted input with `eval` or `source`.
 - Never expose secrets in logs.
 - Pin versions and image digests exactly in production deployment paths.
-- A non-production conformance workflow may resolve one closed official OS slug
-  and current Debian packages only when it is isolated from production, records
-  the resolved provider image ID and exact installed package versions in closed
-  schema-validated evidence, and re-admits their expected Debian provenance.
+- A non-production conformance workflow may resolve one closed official OS image
+  slug and current distribution packages only when isolated from production. It
+  records the resolved provider image ID and exact installed package versions in
+  closed schema-validated evidence, then re-admits the expected distribution
+  provenance.
 
 ## Validator and evidence design
 
-- Every semantic invariant has exactly one authoritative definition.
-  Independent enforcement remains legitimate at trust boundaries when each
-  enforcement point names or demonstrably follows that owner.
+- When deployment independently enforces a canonical invariant at a cloud,
+  host, registry, or migration trust boundary, that enforcement must name the
+  canonical owner and include executable agreement evidence; it does not
+  become a second definition of the invariant.
+- Apply the canonical evidence-architecture companion before dispatching any
+  deployment-owned cloud, host, registry, migration, or conformance operation.
+  Deployment preflight must fail closed when its reachable trusted operations
+  cannot produce the required bounded semantic diagnostics.
 - Prefer standard-library, language, runtime, and platform primitives over
   hand-written equivalents. Python scope analysis uses `symtable` for this
   reason. Custom deployment-domain validation remains legitimate where no
@@ -116,16 +129,18 @@ Never print secret values to logs.
 ## Future deployment invariants
 
 - API and frontend remain separate images.
-- Product Dockerfiles are never duplicated here.
+- SecPal-owned product Containerfiles are never duplicated here.
 - `activity-hash-chain worker: exactly one`.
 - `scheduler: exactly one`.
 - Migrations are explicit and run exactly once, never from an entrypoint or
   health check.
-- The edge owns TLS and public routing; product containers do not expose public
-  TLS.
-- CrowdSec belongs at the public edge.
+- The selected Edge mode owns Viewer TLS and public routing; product containers
+  do not expose public TLS.
+- CrowdSec integration follows ADR-019's mode-specific boundaries and remains
+  outside product containers.
 - PostgreSQL and private file storage require explicit backup contracts.
-- Valkey never replaces PostgreSQL as the source of truth.
+- Valkey is absent from the current production baseline; PostgreSQL-backed state
+  remains authoritative unless a later evidence-backed decision changes it.
 
 ## Communication
 

@@ -33,7 +33,6 @@ def validate_evidence(root: Path) -> None:
         raise EvidenceError(f"missing runtime identity owner: {runtime_path}")
 
     runtime = runpy.run_path(os.fspath(runtime_path))
-    readme = root / "README.md"
     api_doc = root / "docs" / "api-image-consumption.md"
     frontend_doc = root / "docs" / "frontend-image-consumption.md"
     failures: list[str] = []
@@ -53,17 +52,6 @@ def validate_evidence(root: Path) -> None:
             failures.append(f"{name}_SOURCE_COMMIT must be a full lowercase Git commit")
 
     for path, values in (
-        (
-            readme,
-            (
-                runtime["API_IMAGE"],
-                runtime["FRONTEND_IMAGE"],
-                runtime["FRONTEND_SOURCE_COMMIT"],
-                "4fc2796409b7c37a541f515ccf29236f143fc132",
-                "31264563173",
-                "31264562902",
-            ),
-        ),
         (
             api_doc,
             (
@@ -121,7 +109,6 @@ class ImageConsumptionEvidenceContract(unittest.TestCase):
             (fixture / "scripts").mkdir()
             (fixture / "docs").mkdir()
             for relative in (
-                "README.md",
                 "scripts/integration_runtime_contract.py",
                 "docs/api-image-consumption.md",
                 "docs/frontend-image-consumption.md",

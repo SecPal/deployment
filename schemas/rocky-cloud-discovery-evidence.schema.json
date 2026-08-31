@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/rocky-cloud-discovery-evidence.schema.json",
+  "title": "Rocky GCP image discovery evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "trusted_control_sha",
+    "provider",
+    "profile",
+    "image_project",
+    "discovery_family",
+    "exact_image_name",
+    "exact_image_self_link",
+    "architecture",
+    "image_creation_timestamp",
+    "discovered_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "trusted_control_sha": { "$ref": "#/$defs/sha" },
+    "provider": { "const": "google" },
+    "profile": { "const": "gcp-rocky-10-2-arm64" },
+    "image_project": { "const": "rocky-linux-cloud" },
+    "discovery_family": { "const": "rocky-linux-10-arm64" },
+    "exact_image_name": {
+      "type": "string",
+      "pattern": "^rocky-linux-10-[a-z0-9-]{1,50}$",
+      "maxLength": 63
+    },
+    "exact_image_self_link": {
+      "type": "string",
+      "pattern": "^https://www\\.googleapis\\.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-[a-z0-9-]{1,50}$",
+      "maxLength": 256
+    },
+    "architecture": { "const": "ARM64" },
+    "image_creation_timestamp": { "$ref": "#/$defs/timestamp" },
+    "discovered_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 32
+    }
+  }
+}

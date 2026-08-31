@@ -19,8 +19,61 @@ API_SOURCE_COMMIT = "87d1432389adac3a02574b399322928a77c5e67f"
 FRONTEND_IMAGE = "ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
 FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
 FRONTEND_SOURCE_COMMIT = "b755ca0d0ee5a85eca5ad5688d457241f070b1b4"
-POSTGRES_IMAGE = "docker.io/library/postgres@sha256:38471f330eb885e04de130b768d6db4e10469e2311879c7e5c699f6d2d8a1c74"
-VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
+
+
+@dataclass(frozen=True)
+class PostgresFixtureIdentity:
+    """One immutable authority for the active disposable PostgreSQL fixture."""
+
+    major: int
+    version: str
+    image: str
+    platform_digests: Mapping[str, str]
+    source: str
+    data_directory: str
+    volume_target: str
+
+    def __post_init__(self) -> None:
+        digest = r"sha256:[0-9a-f]{64}"
+        if (
+            self.major != 18
+            or re.fullmatch(rf"{self.major}\.[1-9][0-9]*", self.version) is None
+            or re.fullmatch(rf"docker\.io/library/postgres@{digest}", self.image)
+            is None
+            or set(self.platform_digests) != {"linux/amd64", "linux/arm64"}
+            or any(
+                re.fullmatch(digest, value) is None
+                for value in self.platform_digests.values()
+            )
+            or re.fullmatch(
+                rf"https://github\.com/docker-library/postgres\.git#[0-9a-f]{{40}}:"
+                rf"{self.major}/bookworm",
+                self.source,
+            )
+            is None
+            or self.data_directory != f"/var/lib/postgresql/{self.major}/docker"
+            or self.volume_target != "/var/lib/postgresql"
+        ):
+            raise ValueError("invalid canonical PostgreSQL integration fixture")
+
+
+POSTGRES_FIXTURE = PostgresFixtureIdentity(
+    major=18,
+    version="18.6",
+    image="docker.io/library/postgres@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af",
+    platform_digests=MappingProxyType(
+        {
+            "linux/amd64": "sha256:a10c981235b4f635e65df0cfb66a5598064628128505dbc6a3ed4ca303717521",
+            "linux/arm64": "sha256:4d155aa3f2c2cc1838bb70e81396f76373ec7275ec9ce9cf32873cd677c9a992",
+        }
+    ),
+    source=(
+        "https://github.com/docker-library/postgres.git#"
+        "e00e1bd34ec5c8a8e7ad89b273b3d42efaf6d5bc:18/bookworm"
+    ),
+    data_directory="/var/lib/postgresql/18/docker",
+    volume_target="/var/lib/postgresql",
+)
 CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 INTERNAL_NETWORKS = ("application", "edge")
 VOLUME_NAMES = ("secrets", "private-storage", "postgres")
@@ -217,10 +270,6 @@ ROLE_EXECUTION_SPECS: Mapping[str, ExecutionSpec] = MappingProxyType(
             ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
             ("/bin/bash", "/run/secpal/init-local-secrets.sh"),
         ),
-        "valkey": ExecutionSpec(
-            ("/bin/sh", "/run/secpal/valkey-entrypoint.sh"),
-            None,
-        ),
         "migrate": ExecutionSpec(
             ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
             (
@@ -322,20 +371,6 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
                 "pg_isready -U secpal_local -d secpal_local", 5, 3, 20, 10
             ),
         ),
-        "valkey": RoleSpec(
-            10002,
-            10002,
-            ("application",),
-            _tmpfs(("/tmp", 16, 0o700, True), ("/data", 32, 0o700, True)),
-            HealthSpec(
-                "VALKEYCLI_AUTH=$(cat /run/secpal-secrets/valkey-password) "
-                "valkey-cli ping | grep -qx PONG",
-                5,
-                3,
-                20,
-                5,
-            ),
-        ),
         "migrate": RoleSpec(10001, 10001, ("application",), _api_tmpfs),
         "api": RoleSpec(
             10001,
@@ -384,7 +419,19 @@ ROLE_SPECS: Mapping[str, RoleSpec] = MappingProxyType(
     }
 )
 
-CONTAINER_ROLES = tuple(ROLE_SPECS)
+CONTAINER_ROLES = (
+    "secrets-init",
+    "postgres",
+    "migrate",
+    "api",
+    "worker-general",
+    "worker-hash-chain",
+    "scheduler",
+    "frontend",
+    "gateway",
+)
+if tuple(ROLE_SPECS) != CONTAINER_ROLES:
+    raise ValueError("active integration role inventory differs from its closed contract")
 TARGET_REQUIRED_ROLES = (
     "gateway",
     "worker-general",

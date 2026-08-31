@@ -28,7 +28,19 @@ security flags, network membership, and systemd relationships are otherwise
 constants. No input accepts a registry, image, Podman argument, Quadlet
 fragment, host network, socket, auto-update policy, or security override.
 
-Each run generates ten container definitions, two internal networks, three
+The disposable database authority is `POSTGRES_FIXTURE` in
+[`integration_runtime_contract.py`](../scripts/integration_runtime_contract.py).
+It identifies PostgreSQL 18.6 from the official `18/bookworm` source at OCI
+index
+`docker.io/library/postgres@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af`.
+The fixture mounts its disposable volume at `/var/lib/postgresql` and uses the
+upstream PostgreSQL 18 data directory `/var/lib/postgresql/18/docker`. After the
+immutable pull is admitted, the runner executes `postgres --version` from that
+exact image with no network and rejects every major other than 18 before any
+fixture service can start. This identity is integration-only and defines no
+production PostgreSQL implementation or compatibility promise.
+
+Each run generates nine container definitions, two internal networks, three
 disposable volumes, and one native systemd user target. Resource names and
 `org.secpal.integration.instance` labels include the validated run identifier,
 so parallel runs do not collide.
@@ -37,8 +49,7 @@ so parallel runs do not collide.
 | --------------------- | ------------------------------------ | ----------------- | ------------------------------------------- | -------------------------------- |
 | secret initialization | `0:0` in the rootless user namespace | none              | secret, PostgreSQL, private-storage volumes | none                             |
 | PostgreSQL            | `999:999`                            | application       | PostgreSQL volume and bounded tmpfs         | successful secret initialization |
-| Valkey                | `10002:10002`                        | application       | bounded tmpfs only                          | successful secret initialization |
-| migration             | `10001:10001`                        | application       | private-storage volume and bounded tmpfs    | healthy PostgreSQL and Valkey    |
+| migration             | `10001:10001`                        | application       | private-storage volume and bounded tmpfs    | healthy PostgreSQL               |
 | API                   | `10001:10001`                        | application, edge | private-storage volume and bounded tmpfs    | successful one-shot migration    |
 | general worker        | `10001:10001`                        | application       | private-storage volume and bounded tmpfs    | successful one-shot migration    |
 | hash-chain worker     | `10001:10001`                        | application       | private-storage volume and bounded tmpfs    | successful one-shot migration    |
@@ -49,10 +60,15 @@ so parallel runs do not collide.
 There is exactly one `activity-hash-chain` worker, one scheduler, and one
 explicit migration container. Migration remains a `Type=oneshot` service and
 its reviewed `Exec=` is the only place that selects `php artisan migrate`.
+Every API-based role receives `CACHE_STORE=database`,
+`QUEUE_CONNECTION=database`, and `SESSION_DRIVER=database`. The cache round
+trip and both representative queue dispatches therefore use PostgreSQL-backed
+application state; the browser contract exercises the database-backed session
+through the credentialed Sanctum flow.
 The shared API runtime-preparation wrapper loads file-backed fixture secrets
 and prepares writable directories, but never decides to run a migration.
 Health checks, workers, and the scheduler never invoke migration.
-PostgreSQL, Valkey, API, frontend, and gateway use Podman health notifications
+PostgreSQL, API, frontend, and gateway use Podman health notifications
 as systemd readiness. Failed health or migration therefore prevents the
 dependent target from becoming active.
 
@@ -63,6 +79,9 @@ mode, and no runtime socket. Secret initialization alone receives `CHOWN` and
 properties, exact identities, `crun`, both networks' effective internal state,
 network membership, the gateway's exact `127.0.0.1:<port>:8443` publication,
 and the effective AppArmor profile when AppArmor is available.
+The retained Caddy container is only the narrow loopback browser/origin fixture.
+It is not the production edge and cannot satisfy production HAProxy or TLS
+evidence.
 
 ## Supply-chain order
 
@@ -74,7 +93,9 @@ The active runner is fail closed in this order:
    workflow, source ref, source commit, and GitHub-hosted publisher policy;
 4. stage the verified digest anonymously in local rootless Podman storage;
 5. repeat the complete gate for both API and frontend;
-6. stage the digest-pinned official PostgreSQL, Valkey, and Caddy inputs;
+6. stage the digest-pinned official PostgreSQL and test-gateway Caddy inputs,
+   then
+   execute-admit the PostgreSQL 18 major from the exact staged image;
 7. build only the integration gateway with its already-staged base and
    `--pull=never`;
 8. render, validate, root-own, install, and translate the Quadlets; and
@@ -91,7 +112,7 @@ registry.
 ## Lifecycle evidence and cleanup
 
 The same API health, separate browser origins, exact credentialed CORS,
-Sanctum/secure-cookie, CSP, service-worker, Valkey cache and queue, worker
+Sanctum/secure-cookie, CSP, service-worker, database-backed cache and queue, worker
 ownership, and private-storage probes used by the completed integration are
 run against the Quadlet services. An API restart must preserve the disposable
 private-storage fixture without creating a new migration container. The shared
@@ -117,14 +138,14 @@ unrelated gateway failure is not accepted as health-failure evidence.
 An automatically selected loopback port is chosen only after image verification
 and staging. A current-invocation gateway bind collision triggers at most two
 new selections, including during the health-failure profile. The retry
-preserves PostgreSQL, Valkey, both completed
+preserves PostgreSQL and both completed
 one-shots, and the migration invocation; it replaces only the long-running
 application roles whose origin configuration contains the port. An explicitly
 provided port is never silently replaced.
 
 Success, any failed phase, and handled `SIGHUP`, `SIGINT`, or `SIGTERM` all run
 the same exact cleanup. Cleanup stops the run target and its generated
-run-scoped services, removes only its ten named containers, two named networks,
+run-scoped services, removes only its nine named containers, two named networks,
 three named volumes, generated unit files, native target, and locally built
 gateway image, then verifies the resources and generated service states are
 absent. It never prunes images, volumes, networks, or unrelated containers.
@@ -246,10 +267,8 @@ python3 scripts/quadlet-integration.py \
 
 The identifier also scopes Playwright output and last-run state beneath
 `test-results/secpal-int-<instance>`, so concurrent browser proofs never share
-worker artifacts or trace paths. The no-instance Quadlet invocation retains the
-historical `secpal-int-phasebcompose` output-directory identifier. The name does
-not invoke or depend on Docker Compose; execution remains rootless Podman and
-native Quadlet only.
+worker artifacts or trace paths. Browser execution fails closed unless the
+current integration instance is supplied by the lifecycle runner.
 
 ## Hosted evidence and production admission
 

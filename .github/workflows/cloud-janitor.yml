@@ -91,3 +91,16 @@ jobs:
             --zone europe-west3-a \
             --apply \
             --now "$(date -u +%s)"
+
+      - name: Delete only revalidated expired Rocky GCP resources
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gcp_janitor_auth.outputs.access_token }}
+        run: |
+          [[ "$GCP_PROJECT_ID" == secpal-dev ]]
+          scripts/ci-cloud/gcp-rocky-janitor.py \
+            --project "$GCP_PROJECT_ID" \
+            --region europe-west3 \
+            --zone europe-west3-a \
+            --apply \
+            --now "$(date -u +%s)"

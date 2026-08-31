@@ -4,8 +4,8 @@
 [Unit]
 Description=SecPal production migrate
 PartOf=secpal.target
-Requires=secpal-postgres.service secpal-valkey.service
-After=secpal-postgres.service secpal-valkey.service
+Requires=secpal-valkey.service
+After=secpal-valkey.service
 [Container]
 ContainerName=secpal-migrate
 Image=ghcr.io/secpal/api@sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e

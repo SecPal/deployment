@@ -1,0 +1,1026 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secpal.example/schemas/rocky-cloud-target-qualification-failure.schema.json",
+  "title": "Bounded negative Rocky target-qualification diagnostic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase",
+    "target_sha",
+    "trusted_control_sha",
+    "qualification_run_id",
+    "qualification_run_attempt",
+    "harness_sha256",
+    "operation",
+    "reason",
+    "exit_status",
+    "diagnostic_input_sha256",
+    "diagnostic_input_bytes"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "phase": { "const": "target-qualification" },
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "trusted_control_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "qualification_run_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "qualification_run_attempt": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,2}$"
+    },
+    "harness_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "operation": {
+      "enum": [
+        "qualification-harness",
+        "qualify-host-identity",
+        "qualify-administrator-execution",
+        "qualify-fixture-reference",
+        "qualify-service-account",
+        "qualify-selinux-host",
+        "qualify-package-prerequisites",
+        "qualify-native-architecture",
+        "qualify-cgroup",
+        "qualify-rootless-runtime",
+        "qualify-fixture-presence",
+        "qualify-fixture-setup",
+        "qualify-quadlet-authority",
+        "qualify-quadlet-daemon-reload",
+        "qualify-quadlet-start",
+        "qualify-quadlet-start-runuser",
+        "qualify-quadlet-start-env",
+        "qualify-quadlet-start-systemctl",
+        "qualify-quadlet-start-service-job",
+        "qualify-quadlet-active-state",
+        "qualify-quadlet-active-state-runuser",
+        "qualify-quadlet-active-state-env",
+        "qualify-quadlet-active-state-systemctl",
+        "qualify-selinux-storage",
+        "qualify-selinux-storage-directory-create",
+        "qualify-selinux-storage-fcontext-add",
+        "qualify-selinux-storage-restorecon",
+        "qualify-selinux-storage-matchpathcon",
+        "qualify-workload-primary",
+        "qualify-workload-primary-runuser",
+        "qualify-workload-primary-env",
+        "qualify-workload-primary-podman",
+        "qualify-workload-primary-podman-oci",
+        "qualify-seccomp",
+        "qualify-workload-secondary",
+        "qualify-mcs-relationship",
+        "qualify-cross-mcs-denial",
+        "qualify-avc-correlation",
+        "qualify-selinux-policy-restoration",
+        "qualify-runtime-fallback-absence",
+        "qualify-fixture-cleanup"
+      ]
+    },
+    "reason": {
+      "enum": [
+        "invariant-failed",
+        "command-failed",
+        "representation-invalid",
+        "cleanup-failed",
+        "timeout",
+        "unclassified-target-failure",
+        "exec-failed",
+        "invocation-failed",
+        "command-exec-failed",
+        "request-failed",
+        "job-failed",
+        "diagnostic-unavailable",
+        "semanage-store-access-failed",
+        "semanage-transaction-begin-failed",
+        "semanage-fcontext-equivalency-conflict",
+        "semanage-fcontext-key-create-failed",
+        "semanage-fcontext-existence-check-failed",
+        "semanage-fcontext-record-create-failed",
+        "semanage-fcontext-context-create-failed",
+        "semanage-fcontext-type-set-failed",
+        "semanage-fcontext-context-attach-failed",
+        "semanage-fcontext-local-add-failed",
+        "semanage-transaction-commit-failed"
+      ]
+    },
+    "exit_status": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "diagnostic_input_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "diagnostic_input_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 139520
+    },
+    "quadlet_start_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "observation_complete",
+        "runuser_status",
+        "systemctl_client_status",
+        "service_result",
+        "exec_main_code",
+        "exec_main_status"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "runuser-exec-failed",
+            "runuser-invocation-failed",
+            "env-exec-failed",
+            "env-command-exec-failed",
+            "systemctl-exec-failed",
+            "systemctl-request-failed",
+            "service-job-failed",
+            "diagnostic-unavailable"
+          ]
+        },
+        "observation_complete": { "type": "boolean" },
+        "runuser_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "systemctl_client_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "service_result": {
+          "enum": [
+            "success",
+            "resources",
+            "protocol",
+            "timeout",
+            "exit-code",
+            "signal",
+            "core-dump",
+            "watchdog",
+            "start-limit-hit",
+            "oom-kill",
+            "exec-condition",
+            null
+          ]
+        },
+        "exec_main_code": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 6
+        },
+        "exec_main_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        }
+      }
+    },
+    "quadlet_active_state_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "observation_complete",
+        "runuser_status",
+        "systemctl_client_status"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "runuser-exec-failed",
+            "runuser-invocation-failed",
+            "env-exec-failed",
+            "env-command-exec-failed",
+            "systemctl-exec-failed",
+            "systemctl-request-failed",
+            "diagnostic-unavailable"
+          ]
+        },
+        "observation_complete": { "type": "boolean" },
+        "runuser_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "systemctl_client_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        }
+      }
+    },
+    "primary_workload_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "observation_complete",
+        "runuser_status",
+        "podman_status"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "runuser-exec-failed",
+            "runuser-invocation-failed",
+            "env-preparation-failed",
+            "podman-exec-failed",
+            "podman-internal-failed",
+            "podman-oci-status-126",
+            "podman-oci-status-127",
+            "podman-request-failed",
+            "diagnostic-unavailable"
+          ]
+        },
+        "observation_complete": { "type": "boolean" },
+        "runuser_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "podman_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        }
+      }
+    },
+    "daemon_reload_adjacency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "capture_complete",
+        "captured_before_cleanup",
+        "boot_id",
+        "manager_continuity_observed",
+        "manager_active_after_reload_failure",
+        "bus_available_after_reload_failure",
+        "control_reachable_after_reload_failure",
+        "manager_pid",
+        "control_process_pid",
+        "control_process_selinux_type",
+        "manager_process_selinux_type",
+        "systemd_nevra",
+        "run_systemd_statvfs_success",
+        "run_systemd_free_bytes",
+        "run_systemd_reload_minimum_bytes",
+        "run_systemd_space_sufficient",
+        "quadlet_input_admitted",
+        "quadlet_input",
+        "podman_generator_executed",
+        "podman_generator_exit_status",
+        "podman_generator_accepted_actual_input",
+        "generator_failure_observed",
+        "generator_failures",
+        "generator_failure_ambiguous",
+        "generator_observation_reason",
+        "client_reload_error",
+        "reload_authorization_outcome",
+        "reload_request_logged",
+        "reload_request_client_pid",
+        "reload_rate_limit_rejected",
+        "reload_started",
+        "reload_finished",
+        "reload_internal_failure",
+        "reload_reply_send_failed",
+        "reload_journal_observation_reason",
+        "reload_access_avc_observed",
+        "reload_access_avc",
+        "reload_access_avc_ambiguous",
+        "reload_diagnostic_reason",
+        "selinux_avc_observed",
+        "selinux_avc",
+        "selinux_avc_ambiguous"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "manager-continuity-lost",
+            "target-input-invalid",
+            "podman-generator-rejected",
+            "other-generator-failed",
+            "selinux-reload-denied",
+            "reload-run-space-rejected",
+            "reload-selinux-access-denied",
+            "reload-authorization-denied",
+            "reload-authorization-interactive-required",
+            "reload-rate-limited",
+            "reload-manager-serialization-failed",
+            "reload-reply-transport-failed",
+            "diagnostic-unavailable"
+          ]
+        },
+        "capture_complete": { "type": "boolean" },
+        "captured_before_cleanup": { "type": "boolean" },
+        "boot_id": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "manager_continuity_observed": { "type": "boolean" },
+        "manager_active_after_reload_failure": {
+          "type": ["boolean", "null"]
+        },
+        "bus_available_after_reload_failure": {
+          "type": ["boolean", "null"]
+        },
+        "control_reachable_after_reload_failure": {
+          "type": ["boolean", "null"]
+        },
+        "manager_pid": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "control_process_pid": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "control_process_selinux_type": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_]{1,64}$"
+        },
+        "manager_process_selinux_type": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_]{1,64}$"
+        },
+        "systemd_nevra": {
+          "enum": [
+            "systemd-257-23.el10_2.2.rocky.0.1.aarch64",
+            "systemd-257-23.el10_2.2.rocky.0.1.x86_64",
+            null
+          ]
+        },
+        "run_systemd_statvfs_success": { "type": "boolean" },
+        "run_systemd_free_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "run_systemd_reload_minimum_bytes": { "const": 16777216 },
+        "run_systemd_space_sufficient": { "type": "boolean" },
+        "quadlet_input_admitted": { "type": "boolean" },
+        "quadlet_input": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "match_count",
+                "present",
+                "regular_file",
+                "not_symlink",
+                "owner_uid",
+                "owner_gid",
+                "mode",
+                "size",
+                "sha256"
+              ],
+              "properties": {
+                "match_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                "present": { "type": "boolean" },
+                "regular_file": { "type": "boolean" },
+                "not_symlink": { "type": "boolean" },
+                "owner_uid": {
+                  "type": ["integer", "null"],
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "owner_gid": {
+                  "type": ["integer", "null"],
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "mode": {
+                  "type": ["string", "null"],
+                  "pattern": "^[0-7]{4}$"
+                },
+                "size": {
+                  "type": ["integer", "null"],
+                  "minimum": 0,
+                  "maximum": 4097
+                },
+                "sha256": {
+                  "type": ["string", "null"],
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          ]
+        },
+        "podman_generator_executed": { "type": "boolean" },
+        "podman_generator_exit_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "podman_generator_accepted_actual_input": { "type": "boolean" },
+        "generator_failure_observed": { "type": "boolean" },
+        "generator_failures": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["basename", "exit_status"],
+            "properties": {
+              "basename": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.@+-]{1,128}$"
+              },
+              "exit_status": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 255
+              }
+            }
+          }
+        },
+        "generator_failure_ambiguous": { "type": "boolean" },
+        "generator_observation_reason": {
+          "enum": [
+            "none",
+            "journal-command-failed",
+            "journal-timeout",
+            "journal-output-bound-exceeded",
+            "candidate-representation-invalid",
+            "candidate-generator-unadmitted",
+            "candidate-count-exceeded",
+            "multiple-causes",
+            "observation-unavailable"
+          ]
+        },
+        "client_reload_error": {
+          "enum": [
+            "rate-limited",
+            "run-space-rejected",
+            "interactive-auth-required",
+            "selinux-access-denied",
+            "access-denied",
+            "timeout",
+            "connection-reset",
+            "transport-unavailable",
+            "other-admitted-bus-error",
+            "unavailable"
+          ]
+        },
+        "reload_authorization_outcome": {
+          "enum": [
+            "authorized",
+            "denied",
+            "interactive-auth-required",
+            "not-reached-or-transport-failed",
+            "observation-unavailable"
+          ]
+        },
+        "reload_request_logged": { "type": "boolean" },
+        "reload_request_client_pid": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "reload_rate_limit_rejected": { "type": "boolean" },
+        "reload_started": { "type": "boolean" },
+        "reload_finished": { "type": "boolean" },
+        "reload_internal_failure": {
+          "enum": [
+            "none",
+            "serialization-file-failed",
+            "resource-allocation-failed",
+            "serialization-failed",
+            "serialization-seek-failed"
+          ]
+        },
+        "reload_reply_send_failed": { "type": "boolean" },
+        "reload_journal_observation_reason": {
+          "enum": [
+            "none",
+            "journal-command-failed",
+            "journal-timeout",
+            "journal-output-bound-exceeded",
+            "candidate-representation-invalid",
+            "candidate-count-exceeded",
+            "manager-pid-unavailable",
+            "journal-cursor-unavailable",
+            "request-client-unbound",
+            "multiple-causes",
+            "observation-unavailable"
+          ]
+        },
+        "reload_access_avc_observed": { "type": "boolean" },
+        "reload_access_avc": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_type",
+                "target_type",
+                "object_class",
+                "denied_permission"
+              ],
+              "properties": {
+                "source_type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "target_type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "object_class": { "const": "system" },
+                "denied_permission": { "const": "reload" }
+              }
+            }
+          ]
+        },
+        "reload_access_avc_ambiguous": { "type": "boolean" },
+        "reload_diagnostic_reason": {
+          "enum": [
+            "none",
+            "podman-generator-not-executed",
+            "generator-observation-unavailable",
+            "quadlet-selinux-observation-unavailable",
+            "manager-continuity-observation-unavailable",
+            "run-space-observation-unavailable",
+            "systemd-source-contract-mismatch",
+            "reload-journal-command-failed",
+            "reload-journal-timeout",
+            "reload-journal-output-bound-exceeded",
+            "reload-candidate-representation-invalid",
+            "reload-candidate-count-exceeded",
+            "reload-manager-pid-unavailable",
+            "reload-journal-cursor-unavailable",
+            "reload-request-client-unbound",
+            "reload-multiple-causes",
+            "reload-selinux-context-observation-unavailable",
+            "reload-selinux-observation-ambiguous",
+            "reload-stage-evidence-contradictory",
+            "reload-authorization-observation-unavailable",
+            "reload-main-loop-entry-not-observed",
+            "reload-completion-not-observed",
+            "observation-unavailable"
+          ]
+        },
+        "selinux_avc_observed": { "type": "boolean" },
+        "selinux_avc": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_type",
+                "target_type",
+                "object_class",
+                "denied_permission"
+              ],
+              "properties": {
+                "source_type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "target_type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "object_class": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                },
+                "denied_permission": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]{1,64}$"
+                }
+              }
+            }
+          ]
+        },
+        "selinux_avc_ambiguous": { "type": "boolean" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "exit_status": { "const": 0 } },
+        "required": ["exit_status"]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": { "const": "qualification-harness" },
+              "reason": { "const": "representation-invalid" }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-selinux-storage" },
+              "reason": {
+                "enum": ["representation-invalid", "invariant-failed"]
+              }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": {
+                "enum": ["qualify-mcs-relationship", "qualify-seccomp"]
+              },
+              "reason": { "const": "invariant-failed" }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-avc-correlation" },
+              "reason": { "enum": ["command-failed", "invariant-failed"] }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-fixture-cleanup" },
+              "reason": { "const": "cleanup-failed" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "qualify-quadlet-start-runuser",
+                  "qualify-quadlet-start-env",
+                  "qualify-quadlet-start-systemctl",
+                  "qualify-quadlet-start-service-job"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-quadlet-start" },
+              "reason": { "const": "diagnostic-unavailable" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      },
+      "then": { "required": ["quadlet_start_diagnostic"] },
+      "else": { "not": { "required": ["quadlet_start_diagnostic"] } }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "qualify-quadlet-active-state-runuser",
+                  "qualify-quadlet-active-state-env",
+                  "qualify-quadlet-active-state-systemctl"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-quadlet-active-state" },
+              "reason": { "const": "diagnostic-unavailable" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      },
+      "then": { "required": ["quadlet_active_state_diagnostic"] },
+      "else": { "not": { "required": ["quadlet_active_state_diagnostic"] } }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "qualify-workload-primary-runuser",
+                  "qualify-workload-primary-env",
+                  "qualify-workload-primary-podman",
+                  "qualify-workload-primary-podman-oci"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-workload-primary" },
+              "reason": { "const": "diagnostic-unavailable" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      },
+      "then": { "required": ["primary_workload_diagnostic"] },
+      "else": { "not": { "required": ["primary_workload_diagnostic"] } }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "invocation-failed" } } },
+      "then": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start-runuser",
+              "qualify-quadlet-active-state-runuser",
+              "qualify-workload-primary-runuser",
+              "qualify-workload-primary-podman-oci"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "command-exec-failed" } } },
+      "then": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start-env",
+              "qualify-quadlet-active-state-env",
+              "qualify-workload-primary-podman-oci"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "request-failed" } } },
+      "then": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start-systemctl",
+              "qualify-quadlet-active-state-systemctl",
+              "qualify-workload-primary-podman"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "job-failed" } } },
+      "then": {
+        "properties": {
+          "operation": { "const": "qualify-quadlet-start-service-job" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "reason": { "const": "diagnostic-unavailable" } }
+      },
+      "then": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start",
+              "qualify-quadlet-active-state",
+              "qualify-workload-primary"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "exec-failed" } } },
+      "then": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start-runuser",
+              "qualify-quadlet-start-env",
+              "qualify-quadlet-start-systemctl",
+              "qualify-quadlet-active-state-runuser",
+              "qualify-quadlet-active-state-env",
+              "qualify-quadlet-active-state-systemctl",
+              "qualify-workload-primary-runuser",
+              "qualify-workload-primary-podman"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": { "const": "qualify-quadlet-daemon-reload" },
+          "reason": { "const": "command-failed" }
+        },
+        "required": ["operation", "reason"]
+      },
+      "then": { "required": ["daemon_reload_adjacency"] },
+      "else": { "not": { "required": ["daemon_reload_adjacency"] } }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason": { "enum": ["timeout", "unclassified-target-failure"] }
+        }
+      },
+      "then": {
+        "properties": { "operation": { "const": "qualification-harness" } }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "cleanup-failed" } } },
+      "then": {
+        "properties": { "operation": { "const": "qualify-fixture-cleanup" } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "semanage-store-access-failed",
+              "semanage-transaction-begin-failed",
+              "semanage-fcontext-equivalency-conflict",
+              "semanage-fcontext-key-create-failed",
+              "semanage-fcontext-existence-check-failed",
+              "semanage-fcontext-record-create-failed",
+              "semanage-fcontext-context-create-failed",
+              "semanage-fcontext-type-set-failed",
+              "semanage-fcontext-context-attach-failed",
+              "semanage-fcontext-local-add-failed",
+              "semanage-transaction-commit-failed"
+            ]
+          }
+        },
+        "required": ["reason"]
+      },
+      "then": {
+        "properties": {
+          "operation": { "const": "qualify-selinux-storage-fcontext-add" }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "target_sha": {
+                "const": "83d0c3720d342d0222e8dee9819e28d0c6739f84"
+              },
+              "harness_sha256": {
+                "const": "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "293977ae93408a7bb812619de58649ab8a92d438"
+              },
+              "harness_sha256": {
+                "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          }
+        ]
+      },
+      "else": {
+        "properties": {
+          "operation": { "const": "qualification-harness" },
+          "reason": { "const": "representation-invalid" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
+          "harness_sha256": {
+            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+          }
+        },
+        "required": ["target_sha", "harness_sha256"]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["quadlet_start_diagnostic"] },
+            { "required": ["quadlet_active_state_diagnostic"] },
+            { "required": ["primary_workload_diagnostic"] },
+            {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "qualify-quadlet-start-runuser",
+                    "qualify-quadlet-start-env",
+                    "qualify-quadlet-start-systemctl",
+                    "qualify-quadlet-start-service-job",
+                    "qualify-quadlet-active-state-runuser",
+                    "qualify-quadlet-active-state-env",
+                    "qualify-quadlet-active-state-systemctl",
+                    "qualify-workload-primary-runuser",
+                    "qualify-workload-primary-env",
+                    "qualify-workload-primary-podman",
+                    "qualify-workload-primary-podman-oci"
+                  ]
+                }
+              },
+              "required": ["operation"]
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "exec-failed",
+                    "invocation-failed",
+                    "command-exec-failed",
+                    "request-failed",
+                    "job-failed",
+                    "diagnostic-unavailable"
+                  ]
+                }
+              },
+              "required": ["reason"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
+          "harness_sha256": {
+            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+          }
+        },
+        "required": ["target_sha", "harness_sha256"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "qualify-selinux-storage-fcontext-add",
+                    "qualify-selinux-storage-restorecon",
+                    "qualify-selinux-storage-matchpathcon"
+                  ]
+                }
+              },
+              "required": ["operation"]
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "semanage-store-access-failed",
+                    "semanage-transaction-begin-failed",
+                    "semanage-fcontext-equivalency-conflict",
+                    "semanage-fcontext-key-create-failed",
+                    "semanage-fcontext-existence-check-failed",
+                    "semanage-fcontext-record-create-failed",
+                    "semanage-fcontext-context-create-failed",
+                    "semanage-fcontext-type-set-failed",
+                    "semanage-fcontext-context-attach-failed",
+                    "semanage-fcontext-local-add-failed",
+                    "semanage-transaction-commit-failed"
+                  ]
+                }
+              },
+              "required": ["reason"]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
