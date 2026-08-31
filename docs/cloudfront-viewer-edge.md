@@ -128,7 +128,6 @@ no tenant
 
 AWS inactive → inactive
 AWS expired / validation-timed-out / revoked / failed → failed
-disabled + deployed + exact attachment + teardown intent → teardown-safe
 ```
 
 `active` requires all of the following read back together:
@@ -213,12 +212,12 @@ longer associated. Provider-retained non-billable managed certificate state is
 reported explicitly and is never misrepresented as a retained billable Edge
 resource.
 
-## Later real-provider qualification
+## Real-provider qualification
 
 Repository tests use deterministic synthetic representations. They prove this
 repository contract only. They are not AWS evidence.
 
-The closed `qualification_operations()` sequence is the interface for one later
+The closed `qualification_operations()` sequence is the interface for an
 explicitly authorized ephemeral run. Before dispatch, the caller must supply
 separate mutation authority, an exact AWS account context, an ephemeral technical
 key and domains, an adapter/source SHA, a parameter digest, and an approved
@@ -249,9 +248,9 @@ credential mechanism. The run must prove:
     qualification resource remains. Any cleanup failure records exact non-secret
     resource identities for bounded manual cleanup.
 
-That run requires explicit authorization to create and mutate AWS and DNS or
-validation infrastructure. No such authority is granted by this repository
-contract or by its tests.
+Provider qualification requires explicit authorization to create and mutate AWS
+and DNS or validation infrastructure. No such authority is granted by this
+repository contract or by its tests.
 
 Authorized qualification established two related create-time defects and
 cleaned every exact ephemeral resource:
@@ -282,14 +281,27 @@ ROOT_CAUSE:
 DistributionTenant.Enabled=false was incorrectly conflated with
 Domain.Status=inactive
 
+FIFTH_REAL_PROVIDER_QUALIFICATION:
+temporary CloudFront qualification dispatcher defect; exact cleanup completed
+
+CLOUDFRONT_DISPATCHER_PREFLIGHT: PASS
+
+SIXTH_REAL_PROVIDER_QUALIFICATION:
+temporary Route 53 qualification helper defect; exact cleanup completed
+
+ROUTE53_HELPER_PREFLIGHT: PASS
+
+SEVENTH_REAL_PROVIDER_QUALIFICATION: PASS
+REAL_PROVIDER_LIFECYCLE_QUALIFICATION: PASS
 RETAINED_BILLABLE_QUALIFICATION_RESOURCES: 0
-REAL_PROVIDER_QUALIFICATION: REQUALIFICATION_PENDING
 ```
 
-The corrected contract requires a routing-ready connection group, an enabled
-tenant, and a managed certificate request at tenant creation. A later
-separately authorized run must requalify the complete corrected lifecycle with
-a new nonce and parameter digest.
+The successful provider-facing qualification proved the tenant-only parent,
+custom non-default connection group, pre-tenant Viewer CNAME, enabled tenant,
+CloudFront-hosted validation, certificate issuance, fresh-ETag attachment,
+active Viewer domain, `OriginDomain` update, exact teardown, and zero retained
+billable qualification resources. Ephemeral domains, resource IDs, ETags,
+certificate ARNs, and validation values remain outside tracked documentation.
 
 ## Scope and complexity
 

@@ -63,7 +63,6 @@ class CertificateState(str, Enum):
     ACTIVE = "active"
     INACTIVE = "inactive"
     FAILED = "failed"
-    TEARDOWN_SAFE = "teardown-safe"
 
 
 class Outcome(str, Enum):
@@ -741,25 +740,19 @@ def validate_tenant_observation(
 def classify_certificate_state(
     tenant: TenantObservation,
     certificate: ManagedCertificateObservation | None,
-    *,
-    teardown_requested: bool = False,
 ) -> CertificateState:
     """Classify only provider-observed facts; tenant existence is never active."""
 
     if type(tenant) is not TenantObservation:
         raise ContractError("one typed tenant observation is required")
-    if (
-        teardown_requested
-        and not tenant.enabled
-        and tenant.deployment_status == "Deployed"
-        and certificate is not None
-    ):
-        if tenant.certificate_arn == certificate.certificate_arn:
-            return CertificateState.TEARDOWN_SAFE
     if certificate is None:
         return CertificateState.REQUESTED
     if type(certificate) is not ManagedCertificateObservation:
         raise ContractError("managed certificate observation is invalid")
+    if certificate.validation_token_host == "self-hosted":
+        raise ContractError(
+            "self-hosted validation contradicts the CloudFront-hosted lifecycle"
+        )
     if certificate.status == "pending-validation":
         return CertificateState.VALIDATION_REQUIRED
     if certificate.status == "inactive":

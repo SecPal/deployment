@@ -85,7 +85,13 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
             certificate_arn=certificate_arn,
         )
 
-    def certificate(self, status="issued", arn=None, tokens=()):
+    def certificate(
+        self,
+        status="issued",
+        arn=None,
+        tokens=(),
+        validation_token_host="cloudfront",
+    ):
         return self.contract.ManagedCertificateObservation(
             status=status,
             certificate_arn=(
@@ -93,7 +99,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                 if arn is None
                 else arn
             ),
-            validation_token_host="self-hosted",
+            validation_token_host=validation_token_host,
             validation_tokens=tuple(tokens),
         )
 
@@ -398,6 +404,17 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                     self.contract.classify_certificate_state(tenant, certificate),
                 )
 
+        for status in ("pending-validation", "issued"):
+            with self.subTest(contradictory_validation_mode=status):
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.classify_certificate_state(
+                        unattached,
+                        self.certificate(
+                            status,
+                            validation_token_host="self-hosted",
+                        ),
+                    )
+
     def test_mutations_require_exact_current_etag_and_native_target(self) -> None:
         tenant = self.tenant(domain_status="inactive", certificate_arn=None)
         operations = (
@@ -554,12 +571,17 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                 self.tenant(enabled=False), self.connection_group(), parent
             ),
         )
+        self.assertFalse(hasattr(self.contract.CertificateState, "TEARDOWN_SAFE"))
+        pending_without_arn = self.contract.ManagedCertificateObservation(
+            status="pending-validation",
+            certificate_arn=None,
+            validation_token_host="cloudfront",
+        )
         self.assertEqual(
-            self.contract.CertificateState.TEARDOWN_SAFE,
+            self.contract.CertificateState.VALIDATION_REQUIRED,
             self.contract.classify_certificate_state(
-                self.tenant(enabled=False),
-                self.certificate(),
-                teardown_requested=True,
+                self.tenant(enabled=False, certificate_arn=None),
+                pending_without_arn,
             ),
         )
         self.assertEqual(
