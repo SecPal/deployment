@@ -139,7 +139,8 @@ class ReviewLifecycleGovernanceTests(unittest.TestCase):
                 "expected exactly one PR review lifecycle section, "
                 f"found {len(matches)}"
             )
-        cls.section = " ".join(matches[0].group("body").split())
+        cls.section_raw = matches[0].group("body")
+        cls.section = " ".join(cls.section_raw.split())
 
     def require_semantics(self, *terms: str) -> None:
         for term in terms:
@@ -151,6 +152,12 @@ class ReviewLifecycleGovernanceTests(unittest.TestCase):
             r"SecPal/\.github/\.agents/skills/secpal-pr-review/references/contract\.md",
             r"canonical.*authority",
             r"subordinate.*safety",
+        )
+        self.assertRegex(
+            self.section_raw,
+            r"\[SecPal/\.github/\.agents/skills/secpal-pr-review/references/"
+            r"contract\.md\]\(https://github\.com/SecPal/\.github/blob/main/"
+            r"\.agents/skills/secpal-pr-review/references/contract\.md\)",
         )
 
     def test_review_processing_is_finite_and_operator_authorized(self) -> None:

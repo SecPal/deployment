@@ -87,9 +87,9 @@ Never print secret values to logs.
 ## PR review lifecycle
 
 The canonical review lifecycle authority is
-`SecPal/.github/.agents/skills/secpal-pr-review/references/contract.md`. The
-rules below are a subordinate safety net for unavailable skill discovery, not
-a second review contract.
+[SecPal/.github/.agents/skills/secpal-pr-review/references/contract.md](https://github.com/SecPal/.github/blob/main/.agents/skills/secpal-pr-review/references/contract.md).
+The rules below are a subordinate safety net for unavailable skill discovery,
+not a second review contract.
 
 - Review processing is finite. A new commit does not authorize another review,
   and remediation does not authorize another review. Unless the current
