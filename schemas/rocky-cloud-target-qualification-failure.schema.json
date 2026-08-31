@@ -54,12 +54,19 @@
         "qualify-quadlet-start-systemctl",
         "qualify-quadlet-start-service-job",
         "qualify-quadlet-active-state",
+        "qualify-quadlet-active-state-runuser",
+        "qualify-quadlet-active-state-env",
+        "qualify-quadlet-active-state-systemctl",
         "qualify-selinux-storage",
         "qualify-selinux-storage-directory-create",
         "qualify-selinux-storage-fcontext-add",
         "qualify-selinux-storage-restorecon",
         "qualify-selinux-storage-matchpathcon",
         "qualify-workload-primary",
+        "qualify-workload-primary-runuser",
+        "qualify-workload-primary-env",
+        "qualify-workload-primary-podman",
+        "qualify-workload-primary-podman-oci",
         "qualify-seccomp",
         "qualify-workload-secondary",
         "qualify-mcs-relationship",
@@ -97,7 +104,7 @@
         "semanage-transaction-commit-failed"
       ]
     },
-    "exit_status": { "type": "integer", "minimum": 1, "maximum": 255 },
+    "exit_status": { "type": "integer", "minimum": 0, "maximum": 255 },
     "diagnostic_input_sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
@@ -105,7 +112,7 @@
     "diagnostic_input_bytes": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 137472
+      "maximum": 139520
     },
     "quadlet_start_diagnostic": {
       "type": "object",
@@ -165,6 +172,76 @@
           "maximum": 6
         },
         "exec_main_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        }
+      }
+    },
+    "quadlet_active_state_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "observation_complete",
+        "runuser_status",
+        "systemctl_client_status"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "runuser-exec-failed",
+            "runuser-invocation-failed",
+            "env-exec-failed",
+            "env-command-exec-failed",
+            "systemctl-exec-failed",
+            "systemctl-request-failed",
+            "diagnostic-unavailable"
+          ]
+        },
+        "observation_complete": { "type": "boolean" },
+        "runuser_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "systemctl_client_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        }
+      }
+    },
+    "primary_workload_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "observation_complete",
+        "runuser_status",
+        "podman_status"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "runuser-exec-failed",
+            "runuser-invocation-failed",
+            "env-preparation-failed",
+            "podman-exec-failed",
+            "podman-internal-failed",
+            "podman-oci-status-126",
+            "podman-oci-status-127",
+            "podman-request-failed",
+            "diagnostic-unavailable"
+          ]
+        },
+        "observation_complete": { "type": "boolean" },
+        "runuser_status": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        },
+        "podman_status": {
           "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 255
@@ -537,6 +614,55 @@
   "allOf": [
     {
       "if": {
+        "properties": { "exit_status": { "const": 0 } },
+        "required": ["exit_status"]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": { "const": "qualification-harness" },
+              "reason": { "const": "representation-invalid" }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-selinux-storage" },
+              "reason": {
+                "enum": ["representation-invalid", "invariant-failed"]
+              }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": {
+                "enum": ["qualify-mcs-relationship", "qualify-seccomp"]
+              },
+              "reason": { "const": "invariant-failed" }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-avc-correlation" },
+              "reason": { "enum": ["command-failed", "invariant-failed"] }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-fixture-cleanup" },
+              "reason": { "const": "cleanup-failed" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
         "anyOf": [
           {
             "properties": {
@@ -564,24 +690,100 @@
       "else": { "not": { "required": ["quadlet_start_diagnostic"] } }
     },
     {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "qualify-quadlet-active-state-runuser",
+                  "qualify-quadlet-active-state-env",
+                  "qualify-quadlet-active-state-systemctl"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-quadlet-active-state" },
+              "reason": { "const": "diagnostic-unavailable" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      },
+      "then": { "required": ["quadlet_active_state_diagnostic"] },
+      "else": { "not": { "required": ["quadlet_active_state_diagnostic"] } }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "qualify-workload-primary-runuser",
+                  "qualify-workload-primary-env",
+                  "qualify-workload-primary-podman",
+                  "qualify-workload-primary-podman-oci"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-workload-primary" },
+              "reason": { "const": "diagnostic-unavailable" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      },
+      "then": { "required": ["primary_workload_diagnostic"] },
+      "else": { "not": { "required": ["primary_workload_diagnostic"] } }
+    },
+    {
       "if": { "properties": { "reason": { "const": "invocation-failed" } } },
       "then": {
         "properties": {
-          "operation": { "const": "qualify-quadlet-start-runuser" }
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start-runuser",
+              "qualify-quadlet-active-state-runuser",
+              "qualify-workload-primary-runuser",
+              "qualify-workload-primary-podman-oci"
+            ]
+          }
         }
       }
     },
     {
       "if": { "properties": { "reason": { "const": "command-exec-failed" } } },
       "then": {
-        "properties": { "operation": { "const": "qualify-quadlet-start-env" } }
+        "properties": {
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start-env",
+              "qualify-quadlet-active-state-env",
+              "qualify-workload-primary-podman-oci"
+            ]
+          }
+        }
       }
     },
     {
       "if": { "properties": { "reason": { "const": "request-failed" } } },
       "then": {
         "properties": {
-          "operation": { "const": "qualify-quadlet-start-systemctl" }
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start-systemctl",
+              "qualify-quadlet-active-state-systemctl",
+              "qualify-workload-primary-podman"
+            ]
+          }
         }
       }
     },
@@ -598,7 +800,15 @@
         "properties": { "reason": { "const": "diagnostic-unavailable" } }
       },
       "then": {
-        "properties": { "operation": { "const": "qualify-quadlet-start" } }
+        "properties": {
+          "operation": {
+            "enum": [
+              "qualify-quadlet-start",
+              "qualify-quadlet-active-state",
+              "qualify-workload-primary"
+            ]
+          }
+        }
       }
     },
     {
@@ -609,7 +819,12 @@
             "enum": [
               "qualify-quadlet-start-runuser",
               "qualify-quadlet-start-env",
-              "qualify-quadlet-start-systemctl"
+              "qualify-quadlet-start-systemctl",
+              "qualify-quadlet-active-state-runuser",
+              "qualify-quadlet-active-state-env",
+              "qualify-quadlet-active-state-systemctl",
+              "qualify-workload-primary-runuser",
+              "qualify-workload-primary-podman"
             ]
           }
         }
@@ -717,6 +932,8 @@
         "not": {
           "anyOf": [
             { "required": ["quadlet_start_diagnostic"] },
+            { "required": ["quadlet_active_state_diagnostic"] },
+            { "required": ["primary_workload_diagnostic"] },
             {
               "properties": {
                 "operation": {
@@ -724,7 +941,14 @@
                     "qualify-quadlet-start-runuser",
                     "qualify-quadlet-start-env",
                     "qualify-quadlet-start-systemctl",
-                    "qualify-quadlet-start-service-job"
+                    "qualify-quadlet-start-service-job",
+                    "qualify-quadlet-active-state-runuser",
+                    "qualify-quadlet-active-state-env",
+                    "qualify-quadlet-active-state-systemctl",
+                    "qualify-workload-primary-runuser",
+                    "qualify-workload-primary-env",
+                    "qualify-workload-primary-podman",
+                    "qualify-workload-primary-podman-oci"
                   ]
                 }
               },

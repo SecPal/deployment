@@ -58,7 +58,7 @@ def exact_arguments() -> list[str]:
 def main() -> int:
     try:
         arguments = sys.argv[1:]
-        if os.geteuid() != 0 or os.environ.get("SECPAL_RELOAD_EXACT_CALL") != "1":
+        if os.geteuid() != 0:
             return 126
         expected = exact_arguments()
         if arguments != expected:
@@ -70,8 +70,11 @@ def main() -> int:
         os.dup2(ACK_FD, 0, inheritable=True)
         os.dup2(RECORD_FD, 1, inheritable=True)
         os.closerange(3, int(os.sysconf("SC_OPEN_MAX")))
-        os.environ.pop("BASH_ENV", None)
-        os.execv(REAL_RUNUSER, [REAL_RUNUSER, *arguments])
+        environment = {
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+            "LC_ALL": "C",
+        }
+        os.execve(REAL_RUNUSER, [REAL_RUNUSER, *arguments], environment)
     except (KeyError, OSError, ValueError):
         return 126
     return 126

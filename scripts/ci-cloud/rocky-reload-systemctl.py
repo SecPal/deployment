@@ -53,7 +53,6 @@ def main() -> int:
     try:
         if (
             sys.argv[1:] != ["--user", "daemon-reload"]
-            or os.environ.get("SECPAL_RELOAD_EXACT_CALL") != "1"
             or not exact_runtime_identity()
         ):
             return 126

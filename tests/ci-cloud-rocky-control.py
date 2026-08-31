@@ -414,6 +414,15 @@ class RockyCloudControlTests(unittest.TestCase):
             "start_env_base64gzip": ROOT / "scripts/ci-cloud/rocky-start-env.py",
             "start_systemctl_base64gzip": ROOT
             / "scripts/ci-cloud/rocky-start-systemctl.py",
+            "active_runuser_base64gzip": ROOT
+            / "scripts/ci-cloud/rocky-active-runuser.py",
+            "active_env_base64gzip": ROOT / "scripts/ci-cloud/rocky-active-env.py",
+            "active_systemctl_base64gzip": ROOT
+            / "scripts/ci-cloud/rocky-active-systemctl.py",
+            "primary_runuser_base64gzip": ROOT
+            / "scripts/ci-cloud/rocky-primary-runuser.py",
+            "primary_runtime_base64gzip": ROOT
+            / "scripts/ci-cloud/rocky-primary-runtime.py",
             "reload_observer_base64gzip": ROOT
             / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py",
             "allocator_base64gzip": ROOT / "scripts/ci-cloud/allocate-rocky-subids.py",
@@ -555,7 +564,10 @@ class RockyCloudControlTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for status in (81, 82, 83, 84):
             self.assertIn(f"exit {status}", runner)
-        self.assertIn('if [[ "$status" -ne 0 ]]; then', runner)
+        self.assertIn(
+            'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
+            runner,
+        )
         self.assertIn("validate-target-qualification-failure", runner)
         self.assertIn("exit 91", runner)
 

@@ -11,9 +11,12 @@ set -E
 
 runuser() {
   local status
-  if [[ "${SECPAL_START_EXACT_CALL:-}" == 1 ]]; then
-    if [[ -z "${SECPAL_START_OBSERVATION_PATH:-}" ]] ||
-      ! exec 6>"${SECPAL_START_OBSERVATION_PATH}"; then
+  if [[ "$#" -eq 15 && "$1" == --user && "$2" == secpal-runtime &&
+    "$3" == -- && "$4" == env && "$5" == -u &&
+    "$6" == CONTAINER_HOST && "$7" == -u &&
+    "$8" == CONTAINER_CONNECTION &&
+    "${12}" == systemctl && "${13}" == --user && "${14}" == start ]]; then
+    if ! exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json; then
       if /usr/sbin/runuser "$@"; then
         status=0
       else
@@ -25,16 +28,53 @@ runuser() {
       status=$?
     fi
     exec 6>&- 2>/dev/null || :
-    unset SECPAL_START_EXACT_CALL
-    unset SECPAL_START_OBSERVATION_PATH
     return "$status"
-  elif [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]]; then
+  elif [[ "$#" -eq 16 && "$1" == --user && "$2" == secpal-runtime &&
+    "$3" == -- && "$4" == env && "$5" == -u &&
+    "$6" == CONTAINER_HOST && "$7" == -u &&
+    "$8" == CONTAINER_CONNECTION &&
+    "${12}" == systemctl && "${13}" == --user && "${14}" == is-active &&
+    "${15}" == --quiet ]]; then
+    if ! exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json; then
+      if /usr/sbin/runuser "$@"; then
+        status=0
+      else
+        status=$?
+      fi
+    elif /opt/secpal-control/libexec/rocky-active-runuser "$@" 7>&7; then
+      status=0
+    else
+      status=$?
+    fi
+    exec 7>&- 2>/dev/null || :
+    return "$status"
+  elif [[ "$#" -eq 14 && "$1" == --user && "$2" == secpal-runtime &&
+    "$3" == -- && "$4" == env && "$5" == -u &&
+    "$6" == CONTAINER_HOST && "$7" == -u &&
+    "$8" == CONTAINER_CONNECTION &&
+    "${12}" == systemctl && "${13}" == --user &&
+    "${14}" == daemon-reload ]]; then
     if /opt/secpal-control/libexec/rocky-reload-runuser "$@"; then
       status=0
     else
       status=$?
     fi
-    unset SECPAL_RELOAD_EXACT_CALL
+    return "$status"
+  elif [[ "$#" -eq 29 && "$1" == --user && "$2" == secpal-runtime &&
+    "$3" == -- && "$4" == env && "$5" == -u &&
+    "$6" == CONTAINER_HOST && "$7" == -u &&
+    "$8" == CONTAINER_CONNECTION && "${12}" == podman &&
+    "${13}" == run && "${14}" == --detach && "${15}" == --name &&
+    "${17}" == --security-opt && "${18}" == no-new-privileges &&
+    "${19}" == --cap-drop && "${20}" == all &&
+    "${21}" == --user && "${22}" == 65532:65532 &&
+    "${23}" == --network && "${24}" == pasta && "${25}" == -v &&
+    "${28}" == sleep && "${29}" == infinity ]]; then
+    if /opt/secpal-control/libexec/rocky-primary-runuser "$@"; then
+      status=0
+    else
+      status=$?
+    fi
     return "$status"
   else
     /usr/sbin/runuser "$@"
@@ -50,13 +90,9 @@ secpal_reload_precall() {
   local block_size=""
   local cursor_output=""
   local timestamp=""
-  if [[ "${BASH_LINENO[0]:-}" == 238 ]] &&
-    [[ "$BASH_COMMAND" == "user_systemctl start \"\${unit_name}.service\"" ]]; then
-    export SECPAL_START_EXACT_CALL=1
-  elif [[ "${BASH_LINENO[0]:-}" == 237 ]] &&
+  if [[ "${BASH_LINENO[0]:-}" == 237 ]] &&
     [[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]; then
     trap - DEBUG
-    export SECPAL_RELOAD_EXACT_CALL=1
     if cursor_output="$(timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0 2>/dev/null)" &&
       [[ "$cursor_output" =~ ^--\ cursor:\ ([A-Za-z0-9=\;._-]{1,384})$ ]]; then
       secpal_reload_journal_cursor="${BASH_REMATCH[1]}"
@@ -85,8 +121,6 @@ secpal_target_qualification_err() {
   local frames=""
   local frame_count=0
   trap - ERR
-  unset SECPAL_RELOAD_EXACT_CALL
-  unset SECPAL_START_EXACT_CALL
   for frame in "${BASH_LINENO[@]}"; do
     if ((frame_count >= 8)); then
       break

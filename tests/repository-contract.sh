@@ -120,6 +120,11 @@ required_files=(
   scripts/ci-cloud/rocky-start-runuser.py
   scripts/ci-cloud/rocky-start-env.py
   scripts/ci-cloud/rocky-start-systemctl.py
+  scripts/ci-cloud/rocky-active-runuser.py
+  scripts/ci-cloud/rocky-active-env.py
+  scripts/ci-cloud/rocky-active-systemctl.py
+  scripts/ci-cloud/rocky-primary-runuser.py
+  scripts/ci-cloud/rocky-primary-runtime.py
   scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py
   scripts/ci-cloud/wait-github-artifact.sh
   scripts/ci-cloud/detach-gcp-vm-identity.sh

@@ -2054,6 +2054,11 @@ def validate_rocky_control_plane(root: Path) -> None:
     start_runuser = read(root, "scripts/ci-cloud/rocky-start-runuser.py")
     start_env = read(root, "scripts/ci-cloud/rocky-start-env.py")
     start_systemctl = read(root, "scripts/ci-cloud/rocky-start-systemctl.py")
+    active_runuser = read(root, "scripts/ci-cloud/rocky-active-runuser.py")
+    active_env = read(root, "scripts/ci-cloud/rocky-active-env.py")
+    active_systemctl = read(root, "scripts/ci-cloud/rocky-active-systemctl.py")
+    primary_runuser = read(root, "scripts/ci-cloud/rocky-primary-runuser.py")
+    primary_runtime = read(root, "scripts/ci-cloud/rocky-primary-runtime.py")
     bootstrap = read(root, "scripts/ci-cloud/bootstrap-rocky-host.tftpl")
     readiness_publisher = read(
         root, "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
@@ -2120,6 +2125,102 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "https://github.com/SecPal/deployment.git" in target_runner
         and "validate-target-source-failure" in target_runner,
         "target source acquisition must be exact and emit only closed guest-owned failures",
+    )
+    require(
+        "ulimit -f" not in target_runner
+        and 'trace_fifo="$work_root/target-qualification.trace.fifo"'
+        in target_runner
+        and "capture_bounded() {" in target_runner
+        and '/usr/bin/head -c "$maximum"' in target_runner
+        and "/usr/bin/cat >/dev/null" in target_runner
+        and 'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"'
+        in target_runner
+        and '3>"$trace_fifo" 2>&1 | capture_bounded 65537 "$stdout"'
+        in target_runner
+        and 'pipeline_statuses=("${PIPESTATUS[@]}")' in target_runner
+        and 'wait "$trace_capture_pid"' in target_runner
+        and 'wait "$observer_pid" >/dev/null 2>&1\n  observer_pid=""'
+        in target_runner
+        and '"$stdout_capture_status" -ne 0'
+        in target_runner
+        and '"$trace_capture_status" -ne 0'
+        in target_runner,
+        "target output and trace must be bounded without limiting target filesystem writes",
+    )
+    require(
+        'audit_baseline="$(date -u \'+%m/%d/%y %H:%M:%S\')"' in target_runner
+        and 'audit_checkpoint = re.fullmatch(' in target_runner
+        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})"'
+        in target_runner
+        and "audit_date, audit_time = audit_checkpoint.groups()" in target_runner
+        and 'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")'
+        in target_runner
+        and '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",'
+        in target_runner
+        and 'audit_date, audit_time, "-i",' in target_runner
+        and "def run_bounded(" in target_runner
+        and "def acquire_audit_events(" in target_runner
+        and 'stderr in {b"", b"<no matches>\\n"}' in target_runner
+        and 'and not stdout\n                and stderr in {b"", b"<no matches>\\n"}'
+        in target_runner
+        and "for attempt in range(12):" in target_runner
+        and "time.sleep(0.5)" in target_runner
+        and "if events is None:\n                return None, None" in target_runner
+        and "if events:\n                return stdout, events" in target_runner
+        and "def audit_event_id(" in target_runner
+        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "' in target_runner
+        and 'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")'
+        in target_runner
+        and "def correlated_avc_events(" in target_runner
+        and "for line in audit_text.splitlines():" in target_runner
+        and 'if line in {"", "----"}:\n            continue' in target_runner
+        and "if record is None:\n            return None" in target_runner
+        and "event_id = audit_event_id(line)" in target_runner
+        and "if event_id is None:\n            return None" in target_runner
+        and 'events.setdefault(event_id, {"avc": 0, "marker": 0})'
+        in target_runner
+        and 'event["avc"] > 1 or event["marker"] > 1' in target_runner
+        and 'r"avc:\\s+denied\\s+\\{"' in target_runner
+        and 'record_type == "PROCTITLE"' in target_runner
+        and "r'(?:^|\\s)proctitle=[^\\r\\n]*'" in target_runner
+        and "r'(?:^|\\s)/foreign/marker(?:\\s|$)'" in target_runner
+        and 'tclass.group(1) == "dir"' in target_runner
+        and 'r"(?:^|\\s)permissive=0(?:\\s|$)"' in target_runner
+        and 'if event["avc"] == 1 and event["marker"] == 1' in target_runner
+        and 'facts["process_b"],\n    facts["storage_a"],'
+        in target_runner
+        and "if not avc_events:" in target_runner
+        and "if len(avc_events) != 1:" in target_runner
+        and 'stdout_limit=65536' in target_runner
+        and 'stderr_limit=4096' in target_runner
+        and 'timeout=5' in target_runner
+        and "re.DOTALL" not in target_runner,
+        "AVC admission must correlate one enforcing marker event within one audit serial",
+    )
+    require(
+        'runtime_home == Path("/home/secpal-runtime")' in target_runner
+        and "def admitted_runtime_home()" in target_runner
+        and "except (KeyError, OSError):" in target_runner
+        and "runtime_identity = admitted_runtime_home()" in target_runner
+        and "home_metadata.st_uid == runtime_account.pw_uid"
+        in target_runner
+        and "home_metadata.st_gid == runtime_account.pw_gid"
+        in target_runner
+        and "parent_metadata.st_uid == 0" in target_runner
+        and "not parent_metadata.st_mode & 0o022" in target_runner
+        and "parent_metadata.st_mode & stat.S_IXOTH" in target_runner
+        and 'cwd=str(runtime_home) if name == "podman" else None'
+        in target_runner,
+        "rootless cleanup observation must use the validated runtime home cwd",
+    )
+    require(
+        '"/usr/sbin/runuser", "--user", "secpal-runtime"' in target_runner
+        and '"/usr/bin/podman", "ps", "-a"' in target_runner
+        and '"/usr/bin/find", "/var/tmp"' in target_runner
+        and '"/usr/bin/systemctl", "list-units"' in target_runner
+        and "cleanup_results = [\n    run_bounded(" in target_runner
+        and "timeout=10" in target_runner,
+        "target cleanup observation must remain absolute, bounded, and timed",
     )
     require(
         text.index("Wait for authenticated current-boot guest readiness")
@@ -2217,7 +2318,7 @@ def validate_rocky_control_plane(root: Path) -> None:
             forbidden not in target_failure_trace
             for forbidden in ("BASH_SOURCE", "FUNCNAME", "COMP_WORDS")
         )
-        and target_failure_trace.count("BASH_COMMAND") == 2
+        and target_failure_trace.count("BASH_COMMAND") == 1
         and literal_constant(target_failure_classifier, "MAX_TRACE_FRAMES") == 8
         and literal_constant(target_failure_classifier, "MAX_TRACE_LINE") == 9_999
         and all(
@@ -2268,11 +2369,13 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     require(
         "/opt/secpal-control/libexec/rocky-start-runuser" in target_failure_trace
-        and "SECPAL_START_EXACT_CALL" in target_failure_trace
+        and "SECPAL_START_EXACT_CALL" not in target_failure_trace + start_runuser
+        and '"$#" -eq 15' in target_failure_trace
+        and '"${12}" == systemctl' in target_failure_trace
+        and '"${14}" == start' in target_failure_trace
+        and "SECPAL_START_OBSERVATION_PATH"
+        not in target_failure_trace + target_runner + start_runuser
         and "10#$frame == 237" in target_failure_trace
-        and '[[ "${BASH_LINENO[0]:-}" == 238 ]]' in target_failure_trace
-        and 'user_systemctl start \\"\\${unit_name}.service\\"'
-        in target_failure_trace
         and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in start_runuser
         and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")'
         in start_runuser
@@ -2294,8 +2397,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "validate_admitted_quadlet_start_diagnostic" in rocky_control
         and '--start-observation "$start_observation"' in target_runner
         and '6>"$start_observation"' not in target_runner
-        and 'SECPAL_START_OBSERVATION_PATH="$start_observation"' in target_runner
-        and 'exec 6>"${SECPAL_START_OBSERVATION_PATH}"' in target_failure_trace
+        and 'start_observation="$evidence_root/quadlet-start-observation.json"'
+        in target_runner
+        and 'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json'
+        in target_failure_trace
         and "start_runuser_base64gzip" in main
         and "start_env_base64gzip" in main
         and "start_systemctl_base64gzip" in main
@@ -2305,6 +2410,93 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "0:0:700" in bootstrap
         and "0:0:555" in bootstrap,
         "Quadlet start must retain one closed absolute-executable diagnostic boundary",
+    )
+    require(
+        "/opt/secpal-control/libexec/rocky-active-runuser" in target_failure_trace
+        and "SECPAL_ACTIVE_EXACT_CALL" not in target_failure_trace + active_runuser
+        and '"$#" -eq 16' in target_failure_trace
+        and '"${14}" == is-active' in target_failure_trace
+        and '"${15}" == --quiet' in target_failure_trace
+        and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in active_runuser
+        and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-active-env")'
+        in active_runuser
+        and 'REAL_ENV = Path("/usr/bin/env")' in active_env
+        and 'TRUSTED_SYSTEMCTL = Path(' in active_env
+        and '"/usr/local/libexec/secpal-control/rocky-active-systemctl"'
+        in active_env
+        and 'REAL_SYSTEMCTL = Path("/usr/bin/systemctl")' in active_systemctl
+        and all(
+            source.startswith("#!/usr/bin/python3 -I\n")
+            for source in (active_runuser, active_env, active_systemctl)
+        )
+        and "shell=True" not in active_runuser + active_env + active_systemctl
+        and "dict(os.environ)" not in active_runuser + active_env + active_systemctl
+        and "MAX_PROTOCOL_BYTES = 2_048" in active_runuser
+        and "MAX_PROTOCOL_BYTES = 2_048" in active_env
+        and "ACTIVE_STAGE_DECISIONS" in target_failure_classifier
+        and "validate_admitted_quadlet_active_diagnostic"
+        in target_failure_classifier
+        and "validate_admitted_quadlet_active_diagnostic" in rocky_control
+        and '--active-observation "$active_observation"' in target_runner
+        and '7>"$active_observation"' not in target_runner
+        and "SECPAL_ACTIVE_OBSERVATION_PATH"
+        not in target_failure_trace + target_runner + active_runuser
+        and 'active_observation="$evidence_root/quadlet-active-observation.json"'
+        in target_runner
+        and 'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json'
+        in target_failure_trace
+        and "active_runuser_base64gzip" in main
+        and "active_env_base64gzip" in main
+        and "active_systemctl_base64gzip" in main
+        and "rocky-active-runuser" in bootstrap
+        and "rocky-active-env" in bootstrap
+        and "rocky-active-systemctl" in bootstrap,
+        "Quadlet active-state must retain one closed absolute-executable diagnostic boundary",
+    )
+    require(
+        '/opt/secpal-control/libexec/rocky-primary-runuser "$@"'
+        in target_failure_trace
+        and '"$#" -eq 29' in target_failure_trace
+        and '"${12}" == podman' in target_failure_trace
+        and '"${13}" == run' in target_failure_trace
+        and "SECPAL_PRIMARY_OBSERVATION_PATH"
+        not in target_failure_trace + target_runner + primary_runuser
+        and '/usr/sbin/runuser "$@"' in target_failure_trace
+        and "SECPAL_PRIMARY_EXACT_CALL" not in target_failure_trace
+        and "SECPAL_PRIMARY_BRANCH" not in target_failure_trace
+        and "SECPAL_PRIMARY_MARKER" not in target_failure_trace
+        and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in primary_runuser
+        and 'RUNTIME_HELPER = Path(' in primary_runuser
+        and '"/usr/local/libexec/secpal-control/rocky-primary-runtime"'
+        in primary_runuser
+        and 'REAL_PODMAN = Path("/usr/bin/podman")' in primary_runtime
+        and all(
+            source.startswith("#!/usr/bin/python3 -I\n")
+            for source in (primary_runuser, primary_runtime)
+        )
+        and "shell=True" not in primary_runuser + primary_runtime
+        and "dict(os.environ)" not in primary_runuser + primary_runtime
+        and "MAX_PROTOCOL_BYTES = 512" in primary_runuser
+        and '"LC_ALL": "C"' in primary_runuser
+        and "O_NOFOLLOW" in primary_runuser
+        and "Once the exact primary request starts" in primary_runuser
+        and "PRIMARY_STAGE_DECISIONS" in target_failure_classifier
+        and "validate_admitted_primary_workload_diagnostic"
+        in target_failure_classifier
+        and "validate_admitted_primary_workload_diagnostic" in rocky_control
+        and '--primary-observation "$primary_observation"' in target_runner
+        and 'primary_observation="$evidence_root/primary-workload-observation.json"'
+        in target_runner
+        and 'OBSERVATION_PATH = Path(' in primary_runuser
+        and '"/var/lib/secpal-rocky/evidence/primary-workload-observation.json"'
+        in primary_runuser
+        and "primary_runuser_base64gzip" in main
+        and "primary_runtime_base64gzip" in main
+        and "rocky-primary-runuser" in bootstrap
+        and "rocky-primary-runtime" in bootstrap
+        and not (root / "scripts/ci-cloud/rocky-primary-env.py").exists()
+        and not (root / "scripts/ci-cloud/rocky-primary-podman.py").exists(),
+        "the primary workload must use one exact direct closed helper boundary",
     )
     require(
         "SECPAL_QUADLET_RELOAD_FAILURE_V3:%s:%s:%s:%s:%s:%s"
@@ -2325,12 +2517,17 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "os.getresuid() == (runtime.pw_uid,) * 3" in reload_systemctl
         and "os.getresgid() == (runtime.pw_gid,) * 3" in reload_systemctl
         and "os.execv(REAL_SYSTEMCTL" in reload_systemctl
+        and "os.execve(REAL_RUNUSER" in reload_runuser
         and '"$status" "$$" "$secpal_reload_run_space_bytes"'
         in target_failure_trace
         and '"$secpal_reload_audit_baseline" "$secpal_reload_journal_cursor"'
         in target_failure_trace
         and '[[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]'
         in target_failure_trace
+        and "SECPAL_RELOAD_EXACT_CALL"
+        not in target_failure_trace + reload_runuser + reload_systemctl
+        and '"$#" -eq 14' in target_failure_trace
+        and '"${14}" == daemon-reload' in target_failure_trace
         and "timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0"
         in target_failure_trace
         and "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd"
@@ -2341,7 +2538,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
         and "return \"$status\"" in target_failure_trace
-        and "mkfifo -m 0600" in target_runner
+        and 'mkfifo -m 0600 "$reload_event" "$reload_ack"' in target_runner
         and '"$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438'
         in target_runner
         and "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
@@ -2349,10 +2546,13 @@ def validate_rocky_control_plane(root: Path) -> None:
         and target_runner.index("observe-rocky-quadlet-reload-adjacency.py")
         < target_runner.index("bash \"$work_root/scripts/qualify-production-host.sh\"")
         < target_runner.index(
-            "\nstatus=$?\n",
+            '\npipeline_statuses=("${PIPESTATUS[@]}")\n',
             target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
         )
-        < target_runner.index("wait \"$observer_pid\"")
+        < target_runner.index(
+            "wait \"$observer_pid\"",
+            target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
+        )
         and "--reload-adjacency \"$reload_adjacency\"" in target_runner
         and "reload_observer_base64gzip" in main
         and "reload_runuser_base64gzip" in main
@@ -2362,7 +2562,11 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "/usr/local/libexec/secpal-control/rocky-reload-systemctl" in bootstrap
         and "chmod 0555 /usr/local/libexec/secpal-control/rocky-reload-systemctl"
         in bootstrap
-        and "for trusted_directory in / /usr /usr/local /usr/local/libexec"
+        and "for trusted_directory in / /opt /opt/secpal-control"
+        in bootstrap
+        and "/opt/secpal-control/libexec /opt/secpal-control/scripts"
+        in bootstrap
+        and "/opt/secpal-control/scripts/ci-cloud /usr /usr/local /usr/local/libexec"
         in bootstrap
         and '[[ -d "$trusted_directory" && ! -L "$trusted_directory" ]]'
         in bootstrap

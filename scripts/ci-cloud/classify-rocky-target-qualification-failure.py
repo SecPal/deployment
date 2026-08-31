@@ -24,6 +24,8 @@ MAX_ARTIFACT_BYTES = 8_192
 MAX_CAPTURE_FILE_BYTES = 65_536
 MAX_ADJACENCY_BYTES = 8_192
 MAX_START_OBSERVATION_BYTES = 2_048
+MAX_ACTIVE_OBSERVATION_BYTES = 2_048
+MAX_PRIMARY_OBSERVATION_BYTES = 2_048
 MAX_TRACE_FRAMES = 8
 MAX_TRACE_LINE = 9_999
 
@@ -49,12 +51,19 @@ OPERATIONS = frozenset(
         "qualify-quadlet-start-systemctl",
         "qualify-quadlet-start-service-job",
         "qualify-quadlet-active-state",
+        "qualify-quadlet-active-state-runuser",
+        "qualify-quadlet-active-state-env",
+        "qualify-quadlet-active-state-systemctl",
         "qualify-selinux-storage",
         "qualify-selinux-storage-directory-create",
         "qualify-selinux-storage-fcontext-add",
         "qualify-selinux-storage-restorecon",
         "qualify-selinux-storage-matchpathcon",
         "qualify-workload-primary",
+        "qualify-workload-primary-runuser",
+        "qualify-workload-primary-env",
+        "qualify-workload-primary-podman",
+        "qualify-workload-primary-podman-oci",
         "qualify-seccomp",
         "qualify-workload-secondary",
         "qualify-mcs-relationship",
@@ -90,6 +99,18 @@ REASONS = frozenset(
         "semanage-fcontext-context-attach-failed",
         "semanage-fcontext-local-add-failed",
         "semanage-transaction-commit-failed",
+    }
+)
+ZERO_STATUS_TRUSTED_DECISIONS = frozenset(
+    {
+        ("qualification-harness", "representation-invalid"),
+        ("qualify-selinux-storage", "representation-invalid"),
+        ("qualify-selinux-storage", "invariant-failed"),
+        ("qualify-mcs-relationship", "invariant-failed"),
+        ("qualify-seccomp", "invariant-failed"),
+        ("qualify-avc-correlation", "command-failed"),
+        ("qualify-avc-correlation", "invariant-failed"),
+        ("qualify-fixture-cleanup", "cleanup-failed"),
     }
 )
 
@@ -333,6 +354,80 @@ START_STAGE_DECISIONS = {
     ),
     "service-job-failed": ("qualify-quadlet-start-service-job", "job-failed"),
 }
+ACTIVE_STAGES = frozenset(
+    {
+        "runuser-exec-failed",
+        "runuser-invocation-failed",
+        "env-exec-failed",
+        "env-command-exec-failed",
+        "systemctl-exec-failed",
+        "systemctl-request-failed",
+        "diagnostic-unavailable",
+        "success",
+    }
+)
+ACTIVE_STAGE_DECISIONS = {
+    "runuser-exec-failed": ("qualify-quadlet-active-state-runuser", "exec-failed"),
+    "runuser-invocation-failed": (
+        "qualify-quadlet-active-state-runuser",
+        "invocation-failed",
+    ),
+    "env-exec-failed": ("qualify-quadlet-active-state-env", "exec-failed"),
+    "env-command-exec-failed": (
+        "qualify-quadlet-active-state-env",
+        "command-exec-failed",
+    ),
+    "systemctl-exec-failed": (
+        "qualify-quadlet-active-state-systemctl",
+        "exec-failed",
+    ),
+    "systemctl-request-failed": (
+        "qualify-quadlet-active-state-systemctl",
+        "request-failed",
+    ),
+}
+PRIMARY_STAGES = frozenset(
+    {
+        "runuser-exec-failed",
+        "runuser-invocation-failed",
+        "env-preparation-failed",
+        "podman-exec-failed",
+        "podman-internal-failed",
+        "podman-oci-status-126",
+        "podman-oci-status-127",
+        "podman-request-failed",
+        "diagnostic-unavailable",
+        "success",
+    }
+)
+PRIMARY_STAGE_DECISIONS = {
+    "runuser-exec-failed": ("qualify-workload-primary-runuser", "exec-failed"),
+    "runuser-invocation-failed": (
+        "qualify-workload-primary-runuser",
+        "invocation-failed",
+    ),
+    "env-preparation-failed": (
+        "qualify-workload-primary-env",
+        "invariant-failed",
+    ),
+    "podman-exec-failed": ("qualify-workload-primary-podman", "exec-failed"),
+    "podman-internal-failed": (
+        "qualify-workload-primary-podman",
+        "request-failed",
+    ),
+    "podman-request-failed": (
+        "qualify-workload-primary-podman",
+        "request-failed",
+    ),
+    "podman-oci-status-126": (
+        "qualify-workload-primary-podman-oci",
+        "invocation-failed",
+    ),
+    "podman-oci-status-127": (
+        "qualify-workload-primary-podman-oci",
+        "command-exec-failed",
+    ),
+}
 SERVICE_RESULTS = frozenset(
     {
         "success",
@@ -483,7 +578,10 @@ def classify_failure(
     if trusted_marker is not None:
         match = MARKER_PATTERN.fullmatch(trusted_marker.strip())
         if match is not None and match.group(1) in OPERATIONS and match.group(2) in REASONS:
-            return match.group(1), match.group(2)
+            decision = (match.group(1), match.group(2))
+            if exit_status != 0 or decision in ZERO_STATUS_TRUSTED_DECISIONS:
+                return decision
+            return "qualification-harness", "representation-invalid"
         return "qualification-harness", "unclassified-target-failure"
     if not target_bound:
         return "qualification-harness", "representation-invalid"
@@ -702,6 +800,184 @@ def validate_admitted_quadlet_start_diagnostic(
         or reason != expected_reason
     ):
         raise ValueError("Quadlet start classification contradicts its facts")
+
+
+def unavailable_quadlet_active_diagnostic() -> dict[str, object]:
+    return {
+        "classification": "diagnostic-unavailable",
+        "observation_complete": False,
+        "runuser_status": None,
+        "systemctl_client_status": None,
+    }
+
+
+def admit_quadlet_active_observation(
+    document: object, failure_status: int
+) -> tuple[str, str, dict[str, object]]:
+    unavailable = unavailable_quadlet_active_diagnostic()
+    fallback = ("qualify-quadlet-active-state", "diagnostic-unavailable", unavailable)
+    if not isinstance(document, dict) or set(document) != {
+        "schema_version",
+        "stage",
+        "runuser_status",
+        "systemctl_client_status",
+    }:
+        return fallback
+    stage = document.get("stage")
+    runuser_status = document.get("runuser_status")
+    client_status = document.get("systemctl_client_status")
+    if document.get("schema_version") != 1 or stage not in ACTIVE_STAGES:
+        return fallback
+    if runuser_status is not None and (
+        type(runuser_status) is not int or not 0 <= runuser_status <= 255
+    ):
+        return fallback
+    if client_status is not None and (
+        type(client_status) is not int or not 0 <= client_status <= 255
+    ):
+        return fallback
+    if stage == "runuser-exec-failed":
+        consistent = (
+            failure_status in {126, 127}
+            and runuser_status is None
+            and client_status is None
+        )
+    elif stage in {
+        "runuser-invocation-failed",
+        "env-exec-failed",
+        "env-command-exec-failed",
+    }:
+        consistent = runuser_status == failure_status and client_status is None
+    elif stage == "systemctl-exec-failed":
+        consistent = (
+            failure_status in {126, 127}
+            and runuser_status == failure_status
+            and client_status is None
+        )
+    elif stage == "systemctl-request-failed":
+        consistent = (
+            failure_status != 0
+            and runuser_status == failure_status
+            and client_status == failure_status
+        )
+    else:
+        consistent = False
+    if not consistent or stage not in ACTIVE_STAGE_DECISIONS:
+        return fallback
+    operation, reason = ACTIVE_STAGE_DECISIONS[str(stage)]
+    return operation, reason, {
+        "classification": stage,
+        "observation_complete": True,
+        "runuser_status": runuser_status,
+        "systemctl_client_status": client_status,
+    }
+
+
+def validate_admitted_quadlet_active_diagnostic(
+    diagnostic: object, operation: str, reason: str, failure_status: int
+) -> None:
+    if not isinstance(diagnostic, dict):
+        raise ValueError("Quadlet active-state diagnostic is not closed")
+    raw = {
+        "schema_version": 1,
+        "stage": diagnostic.get("classification"),
+        "runuser_status": diagnostic.get("runuser_status"),
+        "systemctl_client_status": diagnostic.get("systemctl_client_status"),
+    }
+    expected_operation, expected_reason, expected = admit_quadlet_active_observation(
+        raw, failure_status
+    )
+    if diagnostic != expected or (operation, reason) != (
+        expected_operation,
+        expected_reason,
+    ):
+        raise ValueError("Quadlet active-state classification contradicts its facts")
+
+
+def unavailable_primary_workload_diagnostic() -> dict[str, object]:
+    return {
+        "classification": "diagnostic-unavailable",
+        "observation_complete": False,
+        "runuser_status": None,
+        "podman_status": None,
+    }
+
+
+def admit_primary_workload_observation(
+    document: object, failure_status: int
+) -> tuple[str, str, dict[str, object]]:
+    unavailable = unavailable_primary_workload_diagnostic()
+    fallback = ("qualify-workload-primary", "diagnostic-unavailable", unavailable)
+    if not isinstance(document, dict) or set(document) != {
+        "schema_version", "stage", "runuser_status", "podman_status",
+    }:
+        return fallback
+    stage = document.get("stage")
+    runuser_status = document.get("runuser_status")
+    podman_status = document.get("podman_status")
+    if document.get("schema_version") != 1 or stage not in PRIMARY_STAGES:
+        return fallback
+    for status in (runuser_status, podman_status):
+        if status is not None and (
+            type(status) is not int or not 0 <= status <= 255
+        ):
+            return fallback
+    if stage == "runuser-exec-failed":
+        consistent = (
+            failure_status in {126, 127}
+            and runuser_status is None
+            and podman_status is None
+        )
+    elif stage in {"runuser-invocation-failed", "env-preparation-failed"}:
+        consistent = runuser_status == failure_status and podman_status is None
+    elif stage == "podman-exec-failed":
+        consistent = (
+            failure_status in {126, 127}
+            and runuser_status == failure_status
+            and podman_status is None
+        )
+    elif stage == "podman-internal-failed":
+        consistent = failure_status == runuser_status == podman_status == 125
+    elif stage == "podman-oci-status-126":
+        consistent = failure_status == runuser_status == podman_status == 126
+    elif stage == "podman-oci-status-127":
+        consistent = failure_status == runuser_status == podman_status == 127
+    elif stage == "podman-request-failed":
+        consistent = (
+            failure_status == runuser_status == podman_status
+            and failure_status not in {0, 125, 126, 127}
+        )
+    else:
+        consistent = False
+    if not consistent or stage not in PRIMARY_STAGE_DECISIONS:
+        return fallback
+    operation, reason = PRIMARY_STAGE_DECISIONS[str(stage)]
+    return operation, reason, {
+        "classification": stage,
+        "observation_complete": True,
+        "runuser_status": runuser_status,
+        "podman_status": podman_status,
+    }
+
+
+def validate_admitted_primary_workload_diagnostic(
+    diagnostic: object, operation: str, reason: str, failure_status: int
+) -> None:
+    if not isinstance(diagnostic, dict):
+        raise ValueError("primary-workload diagnostic is not closed")
+    raw = {
+        "schema_version": 1,
+        "stage": diagnostic.get("classification"),
+        "runuser_status": diagnostic.get("runuser_status"),
+        "podman_status": diagnostic.get("podman_status"),
+    }
+    expected_operation, expected_reason, expected = (
+        admit_primary_workload_observation(raw, failure_status)
+    )
+    if diagnostic != expected or (operation, reason) != (
+        expected_operation, expected_reason,
+    ):
+        raise ValueError("primary-workload classification contradicts its facts")
 
 
 def _closed_boolean(document: dict[str, object], name: str) -> bool:
@@ -1460,6 +1736,8 @@ def main() -> int:
     parser.add_argument("--trace", required=True, type=Path)
     parser.add_argument("--reload-adjacency", type=Path)
     parser.add_argument("--start-observation", type=Path)
+    parser.add_argument("--active-observation", type=Path)
+    parser.add_argument("--primary-observation", type=Path)
     parser.add_argument("--exit-status", required=True, type=int)
     parser.add_argument("--trusted-marker", type=Path)
     parser.add_argument("--representation-invalid", action="store_true")
@@ -1469,7 +1747,11 @@ def main() -> int:
         raise SystemExit("target and control SHAs must be exact lowercase commits")
     if not POSITIVE_INTEGER.fullmatch(options.run_id) or not POSITIVE_INTEGER.fullmatch(options.run_attempt):
         raise SystemExit("qualification run identity is outside the closed format")
-    if not 1 <= options.exit_status <= 255:
+    if not 0 <= options.exit_status <= 255 or (
+        options.exit_status == 0
+        and not options.representation_invalid
+        and options.trusted_marker is None
+    ):
         raise SystemExit("target harness status is outside the closed range")
 
     stdout = bounded_bytes(options.stdout, MAX_STDOUT_BYTES)
@@ -1495,6 +1777,10 @@ def main() -> int:
     adjacency: dict[str, object] | None = None
     start_bytes = b""
     start_diagnostic: dict[str, object] | None = None
+    active_bytes = b""
+    active_diagnostic: dict[str, object] | None = None
+    primary_bytes = b""
+    primary_diagnostic: dict[str, object] | None = None
     if operation == "qualify-quadlet-start" and reason == "command-failed":
         raw_start: object = None
         if options.start_observation is not None and options.start_observation.exists():
@@ -1507,6 +1793,35 @@ def main() -> int:
                 raw_start = None
         operation, reason, start_diagnostic = admit_quadlet_start_observation(
             raw_start, options.exit_status
+        )
+    if operation == "qualify-quadlet-active-state" and reason == "command-failed":
+        raw_active: object = None
+        if options.active_observation is not None and options.active_observation.exists():
+            try:
+                active_bytes = bounded_bytes(
+                    options.active_observation, MAX_ACTIVE_OBSERVATION_BYTES
+                )
+                raw_active = json.loads(active_bytes)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                raw_active = None
+        operation, reason, active_diagnostic = admit_quadlet_active_observation(
+            raw_active, options.exit_status
+        )
+    if operation == "qualify-workload-primary" and reason == "command-failed":
+        raw_primary: object = None
+        if (
+            options.primary_observation is not None
+            and options.primary_observation.exists()
+        ):
+            try:
+                primary_bytes = bounded_bytes(
+                    options.primary_observation, MAX_PRIMARY_OBSERVATION_BYTES
+                )
+                raw_primary = json.loads(primary_bytes)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                raw_primary = None
+        operation, reason, primary_diagnostic = admit_primary_workload_observation(
+            raw_primary, options.exit_status
         )
     if operation == "qualify-quadlet-daemon-reload" and reason == "command-failed":
         raw_adjacency: object = None
@@ -1544,19 +1859,41 @@ def main() -> int:
             (
                 b"semanage-fcontext-add-v1\0" + trace + b"\0" + reason.encode("ascii")
                 if operation == "qualify-selinux-storage-fcontext-add"
-                else stdout + b"\0" + trace + b"\0" + marker_bytes + b"\0" + adjacency_bytes + b"\0" + start_bytes
+                else stdout
+                + b"\0"
+                + trace
+                + b"\0"
+                + marker_bytes
+                + b"\0"
+                + adjacency_bytes
+                + b"\0"
+                + start_bytes
+                + b"\0"
+                + active_bytes
+                + b"\0"
+                + primary_bytes
             )
         ).hexdigest(),
         "diagnostic_input_bytes": (
             len(trace) + len(reason)
             if operation == "qualify-selinux-storage-fcontext-add"
-            else len(stdout) + len(trace) + len(marker_bytes) + len(adjacency_bytes) + len(start_bytes)
+            else len(stdout)
+            + len(trace)
+            + len(marker_bytes)
+            + len(adjacency_bytes)
+            + len(start_bytes)
+            + len(active_bytes)
+            + len(primary_bytes)
         ),
     }
     if adjacency is not None:
         document["daemon_reload_adjacency"] = adjacency
     if start_diagnostic is not None:
         document["quadlet_start_diagnostic"] = start_diagnostic
+    if active_diagnostic is not None:
+        document["quadlet_active_state_diagnostic"] = active_diagnostic
+    if primary_diagnostic is not None:
+        document["primary_workload_diagnostic"] = primary_diagnostic
     write_document(options.output, document)
     return 0
 

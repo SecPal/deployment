@@ -116,16 +116,20 @@ opaque `runuser -> env -> systemctl --user start` boundary without modifying
 the target harness. The trace redirects only that exact call through
 root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
 steps use root-owned absolute `/usr/bin/env` and `/usr/bin/systemctl` helpers.
-The exact-call trace opens root-owned FD 6 only for the root helper; the target
-harness and its earlier children never inherit the descriptor. The helper
-writes one at-most-2,048-byte closed JSON observation to its root-owned
-mode-0600 file and closes the descriptor before any fallback. Runtime-user
+The trace matches the immutable argv directly and opens root-owned FD 6 only
+for the root helper from a fixed root-owned evidence path; no observation path
+is exported into the target environment. The target harness and its earlier
+children never inherit the descriptor. The helper writes one at-most-2,048-byte
+closed JSON observation to its root-owned mode-0600 file and closes the
+descriptor before any fallback. Runtime-user
 Python starts in isolated mode, so user site packages and Python environment
 settings cannot become protocol writers. A helper precondition or pre-dispatch
 representation failure records only diagnostic unavailability and falls back
 to the original operation, so diagnostic code cannot replace the operation it
-observes. A post-dispatch diagnostic failure retains the completed operation's
-original status without repeating it.
+observes. No exported marker or DEBUG-trap state authorizes helper dispatch, so
+a completed operation cannot redirect a later runtime-account call. A post-dispatch
+diagnostic failure retains the completed operation's original status without
+repeating it.
 
 The admitted start operations distinguish `runuser` exec and invocation,
 `env` exec and command exec, `systemctl` exec and user-manager request, and a
@@ -139,6 +143,68 @@ represented as an executable or client status. Missing, malformed, oversized,
 or contradictory observations retain the target status as
 `qualify-quadlet-start/diagnostic-unavailable`; no stdout, stderr, environment,
 or journal text enters evidence.
+
+The immutable line-239 active-state check has a separate, identically bounded
+observer. Only the exact `runuser -> env -> systemctl --user is-active --quiet`
+call is redirected through root-owned
+`/opt/secpal-control/libexec/rocky-active-runuser`; absolute, root-owned
+runtime-user helpers invoke the real `/usr/bin/env` and `/usr/bin/systemctl`
+with the original arguments and return the original status. Its fixed
+root-owned evidence path is not exported into the target. Root FD 7 exists
+only during that exact call, and its at-most-2,048-byte observation contains
+only the outer runuser and systemctl client statuses plus a closed process
+stage. Trusted admission distinguishes runuser exec/invocation, env
+exec/command-exec, and systemctl exec/request failures; missing, malformed,
+oversized, or contradictory observations remain
+`qualify-quadlet-active-state/diagnostic-unavailable`. The active-state
+observer does not change service state, retry the request, or weaken the
+target-owned active predicate.
+
+The primary workload call uses the same direct-argv model without an env or
+Podman shim layer. The root-only router admits the exact immutable `runuser`
+and Podman argv, starts `runuser` with only fixed `PATH` and `LC_ALL`, and calls
+the root-owned runtime helper by absolute path. The runtime helper admits the
+runtime UID/GID and exact Podman request, discards Podman stdout, preserves
+bounded stderr only as transient target output, and emits two closed protocol
+records. The outer router retains at most 512 protocol bytes and never replays
+the workload after dispatch. Its observation file is selected internally by
+one fixed absolute path rather than an inherited environment value. Failure
+evidence contains only closed runuser,
+environment-preparation, Podman, or OCI/runtime identities and numeric status.
+
+Target stdout and trace consumers retain one byte beyond their admitted limits
+while continuing to drain both streams to EOF. Overflow therefore fails
+representation admission without closing the producer pipe, imposing a file
+limit, or replacing the original target status. A target exit status of zero is
+representable only for the closed post-success rejection decisions that the
+trusted admission code can emit; schema and classifier reject every other
+zero-status identity. The runner's own negative exit remains a separate truth.
+
+Success admission invokes absolute `/usr/sbin/ausearch --input-logs ... -i`
+with a strictly parsed C-locale two-digit-year date and time in separate argv
+fields. Interpreted audit records must match that exact selected locale and
+mode rather than a raw or different-locale grammar. Its concurrent
+stdout and stderr drainers retain only 65,536 and 4,096 bytes. A bounded retry
+admits only the tool's exact normal no-match representation while auditd makes
+the just-completed event visible. A well-formed status-0 snapshot with no exact
+candidate also retries; malformed, overfull, ambiguous, warning-bearing, or
+other status-1 output fails closed. Only blank lines and the interpreted
+format's `----` separator may appear outside typed records. Admission accepts
+only the interpreted audit timestamp grammar, correlates by the full timestamp
+and serial, and requires one unique event containing exactly one matching AVC
+and one decoded PROCTITLE marker. The marker must name the frozen harness's
+exact in-container `/foreign/marker` path; the AVC must carry the exact source context,
+target context, `permissive=0`, and `tclass=dir`. Duplicate, malformed,
+oversized, unavailable, or ambiguous audit observations fail closed without
+entering evidence.
+
+Post-target cleanup uses only absolute commands with fixed environment,
+ten-second per-command timeouts, and 4,096-byte stdout/stderr drain bounds. The
+Podman observer runs from exactly `/home/secpal-runtime` after validating the
+runtime UID/GID, owner traversal, and the root-owned non-writable `/home`
+parent. Any timeout, overflow, exec failure, residue, or invalid working
+directory prevents PASS. Raw start, active, primary, and reload observations
+are removed on every runner exit after their bounded facts have been admitted.
 
 The destroyed #118 guest retained only outer target status 126 at line 238.
 That proves neither a service `ExecMainStatus` nor which process produced 126.
