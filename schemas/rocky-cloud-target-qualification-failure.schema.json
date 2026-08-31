@@ -104,7 +104,7 @@
         "semanage-transaction-commit-failed"
       ]
     },
-    "exit_status": { "type": "integer", "minimum": 1, "maximum": 255 },
+    "exit_status": { "type": "integer", "minimum": 0, "maximum": 255 },
     "diagnostic_input_sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
@@ -612,6 +612,55 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": { "exit_status": { "const": 0 } },
+        "required": ["exit_status"]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "operation": { "const": "qualification-harness" },
+              "reason": { "const": "representation-invalid" }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-selinux-storage" },
+              "reason": {
+                "enum": ["representation-invalid", "invariant-failed"]
+              }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": {
+                "enum": ["qualify-mcs-relationship", "qualify-seccomp"]
+              },
+              "reason": { "const": "invariant-failed" }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-avc-correlation" },
+              "reason": { "enum": ["command-failed", "invariant-failed"] }
+            },
+            "required": ["operation", "reason"]
+          },
+          {
+            "properties": {
+              "operation": { "const": "qualify-fixture-cleanup" },
+              "reason": { "const": "cleanup-failed" }
+            },
+            "required": ["operation", "reason"]
+          }
+        ]
+      }
+    },
     {
       "if": {
         "anyOf": [

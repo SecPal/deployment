@@ -101,6 +101,18 @@ REASONS = frozenset(
         "semanage-transaction-commit-failed",
     }
 )
+ZERO_STATUS_TRUSTED_DECISIONS = frozenset(
+    {
+        ("qualification-harness", "representation-invalid"),
+        ("qualify-selinux-storage", "representation-invalid"),
+        ("qualify-selinux-storage", "invariant-failed"),
+        ("qualify-mcs-relationship", "invariant-failed"),
+        ("qualify-seccomp", "invariant-failed"),
+        ("qualify-avc-correlation", "command-failed"),
+        ("qualify-avc-correlation", "invariant-failed"),
+        ("qualify-fixture-cleanup", "cleanup-failed"),
+    }
+)
 
 # These are exact reviewed d892 target messages.  Variable suffixes are never
 # copied to evidence; a prefix match selects only the finite semantic identity.
@@ -566,7 +578,10 @@ def classify_failure(
     if trusted_marker is not None:
         match = MARKER_PATTERN.fullmatch(trusted_marker.strip())
         if match is not None and match.group(1) in OPERATIONS and match.group(2) in REASONS:
-            return match.group(1), match.group(2)
+            decision = (match.group(1), match.group(2))
+            if exit_status != 0 or decision in ZERO_STATUS_TRUSTED_DECISIONS:
+                return decision
+            return "qualification-harness", "representation-invalid"
         return "qualification-harness", "unclassified-target-failure"
     if not target_bound:
         return "qualification-harness", "representation-invalid"
@@ -1732,7 +1747,11 @@ def main() -> int:
         raise SystemExit("target and control SHAs must be exact lowercase commits")
     if not POSITIVE_INTEGER.fullmatch(options.run_id) or not POSITIVE_INTEGER.fullmatch(options.run_attempt):
         raise SystemExit("qualification run identity is outside the closed format")
-    if not 1 <= options.exit_status <= 255:
+    if not 0 <= options.exit_status <= 255 or (
+        options.exit_status == 0
+        and not options.representation_invalid
+        and options.trusted_marker is None
+    ):
         raise SystemExit("target harness status is outside the closed range")
 
     stdout = bounded_bytes(options.stdout, MAX_STDOUT_BYTES)

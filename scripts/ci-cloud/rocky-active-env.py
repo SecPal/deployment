@@ -83,7 +83,10 @@ def execute_env(
                     check=False,
                     stdout=protocol,
                     stderr=sys.stderr,
-                    env=dict(os.environ),
+                    env={
+                        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+                        "LC_ALL": "C",
+                    },
                 )
             except OSError as error:
                 if error.filename == os.fspath(env_path):

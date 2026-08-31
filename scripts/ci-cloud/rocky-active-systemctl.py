@@ -56,7 +56,13 @@ def execute_systemctl(
             check=False,
             stdout=sys.stderr,
             stderr=sys.stderr,
-            env=dict(os.environ),
+            env={
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+                "LC_ALL": "C",
+                "HOME": runtime.pw_dir,
+                "XDG_RUNTIME_DIR": f"/run/user/{runtime.pw_uid}",
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{runtime.pw_uid}/bus",
+            },
         )
     except OSError as error:
         if error.filename == os.fspath(systemctl_path):

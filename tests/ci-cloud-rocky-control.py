@@ -564,7 +564,10 @@ class RockyCloudControlTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for status in (81, 82, 83, 84):
             self.assertIn(f"exit {status}", runner)
-        self.assertIn('if [[ "$status" -ne 0 ]]; then', runner)
+        self.assertIn(
+            'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
+            runner,
+        )
         self.assertIn("validate-target-qualification-failure", runner)
         self.assertIn("exit 91", runner)
 

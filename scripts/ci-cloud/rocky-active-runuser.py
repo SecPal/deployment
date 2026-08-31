@@ -175,8 +175,6 @@ def write_observation(facts: dict[str, object]) -> None:
 
 def fallback(arguments: list[str]) -> int:
     os.environ.pop("BASH_ENV", None)
-    os.environ.pop("SECPAL_ACTIVE_EXACT_CALL", None)
-    os.environ.pop("SECPAL_ACTIVE_OBSERVATION_PATH", None)
     try:
         os.close(OBSERVATION_FD)
     except OSError:
@@ -191,7 +189,7 @@ def main() -> int:
     arguments = sys.argv[1:]
     try:
         runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
-        if os.geteuid() != 0 or os.environ.get("SECPAL_ACTIVE_EXACT_CALL") != "1":
+        if os.geteuid() != 0:
             return fallback(arguments)
         admitted_observation_descriptor()
         if arguments != target_arguments(runtime, arguments[-1] if arguments else ""):

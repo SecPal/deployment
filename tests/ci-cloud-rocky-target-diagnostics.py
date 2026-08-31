@@ -205,6 +205,50 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                     ),
                 )
 
+    def test_primary_router_forwards_only_the_closed_control_environment(self) -> None:
+        router = load_script(PRIMARY_RUNUSER, "rocky_primary_closed_environment")
+        payload = (
+            b'{"kind":"runtime","schema_version":1,"stage":"runtime-entered"}\n'
+            b'{"kind":"runtime","podman_status":0,"schema_version":1,'
+            b'"stage":"success"}\n'
+        )
+        with mock.patch.object(
+            router.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, stdout=payload),
+        ) as run:
+            status, facts = router.execute_primary(self.primary_podman_arguments())
+        self.assertEqual(0, status)
+        self.assertEqual("success", facts["stage"])
+        self.assertEqual(
+            {
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+                "LC_ALL": "C",
+            },
+            run.call_args.kwargs["env"],
+        )
+        runtime_helper = load_script(
+            PRIMARY_RUNTIME, "rocky_primary_runtime_closed_environment"
+        )
+        runtime = types.SimpleNamespace(
+            pw_uid=1001, pw_gid=1001, pw_dir="/home/secpal-runtime"
+        )
+        with mock.patch.object(
+            runtime_helper.os, "getresuid", return_value=(1001,) * 3
+        ), mock.patch.object(
+            runtime_helper.os, "getresgid", return_value=(1001,) * 3
+        ):
+            self.assertEqual(
+                {
+                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+                    "LC_ALL": "C",
+                    "HOME": "/home/secpal-runtime",
+                    "XDG_RUNTIME_DIR": "/run/user/1001",
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1001/bus",
+                },
+                runtime_helper.runtime_environment(runtime),
+            )
+
     def test_primary_protocol_closes_runuser_env_and_podman_boundaries(self) -> None:
         router = load_script(PRIMARY_RUNUSER, "rocky_primary_protocol_contract")
         entered = {"kind": "runtime", "schema_version": 1, "stage": "runtime-entered"}
@@ -253,11 +297,6 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         runtime = types.SimpleNamespace(pw_uid=1001, pw_dir="/runtime")
         arguments = self.primary_runuser_arguments(runtime)
         with mock.patch.object(router.sys, "argv", ["router", *arguments]), \
-             mock.patch.dict(
-                 router.os.environ,
-                 {"SECPAL_PRIMARY_OBSERVATION_PATH": "/obs"},
-                 clear=False,
-             ), \
              mock.patch.object(router.pwd, "getpwnam", return_value=runtime), \
              mock.patch.object(router.os, "geteuid", return_value=0), \
              mock.patch.object(router, "admitted_observation_path", return_value=Path("/obs")), \
@@ -421,7 +460,8 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         self.assertIn("os.dup2(RECORD_FD, 1", runner)
         self.assertIn("os.dup2(ACK_FD, 0", runner)
         self.assertIn("/usr/local/libexec/secpal-control/rocky-reload-systemctl", runner)
-        self.assertNotIn("os.environ", runner.split("RECORD_FD", 1)[0])
+        self.assertNotIn("SECPAL_RELOAD_EXACT_CALL", trace + runner + client)
+        self.assertIn("os.execve(REAL_RUNUSER", runner)
         self.assertIn('REAL_SYSTEMCTL = "/usr/bin/systemctl"', client)
         self.assertIn("os.execv(REAL_SYSTEMCTL", client)
 
@@ -445,14 +485,13 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         with (
             mock.patch.object(proxy.sys, "argv", [str(RELOAD_RUNUSER), *expected]),
             mock.patch.object(proxy.os, "geteuid", return_value=0),
-            mock.patch.dict(proxy.os.environ, {"SECPAL_RELOAD_EXACT_CALL": "1"}),
             mock.patch.object(proxy.pwd, "getpwnam", return_value=runtime),
             mock.patch.object(proxy.os, "fstat", return_value=fifo),
             mock.patch.object(proxy.fcntl, "fcntl", return_value=os.O_RDWR),
             mock.patch.object(proxy.os, "dup2") as duplicate,
             mock.patch.object(proxy.os, "closerange") as close_range,
             mock.patch.object(proxy.os, "sysconf", return_value=64),
-            mock.patch.object(proxy.os, "execv", side_effect=execution) as execute,
+            mock.patch.object(proxy.os, "execve", side_effect=execution) as execute,
         ):
             with self.assertRaisesRegex(RuntimeError, "exec"):
                 proxy.main()
@@ -462,6 +501,13 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         )
         close_range.assert_called_once_with(3, 64)
         executed = execute.call_args.args[1]
+        self.assertEqual(
+            {
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+                "LC_ALL": "C",
+            },
+            execute.call_args.args[2],
+        )
         self.assertEqual(proxy.REAL_RUNUSER, executed[0])
         self.assertEqual(proxy.TRUSTED_SYSTEMCTL, executed[-3])
         self.assertNotIn("systemctl", executed)
@@ -472,7 +518,6 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         execution = RuntimeError("exec")
         with (
             mock.patch.object(client.sys, "argv", [str(RELOAD_SYSTEMCTL), "--user", "daemon-reload"]),
-            mock.patch.dict(client.os.environ, {"SECPAL_RELOAD_EXACT_CALL": "1"}),
             mock.patch.object(client.pwd, "getpwnam", return_value=runtime),
             mock.patch.object(client.os, "getresuid", return_value=(994, 994, 994)),
             mock.patch.object(client.os, "getresgid", return_value=(994, 994, 994)),
@@ -495,7 +540,6 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 
         with (
             mock.patch.object(client.sys, "argv", [str(RELOAD_SYSTEMCTL), "--user", "daemon-reload"]),
-            mock.patch.dict(client.os.environ, {"SECPAL_RELOAD_EXACT_CALL": "1"}),
             mock.patch.object(client.pwd, "getpwnam", return_value=runtime),
             mock.patch.object(client.os, "getresuid", return_value=(0, 0, 0)),
             mock.patch.object(client.os, "getresgid", return_value=(0, 0, 0)),
@@ -964,37 +1008,34 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         trace = TRACE.read_text(encoding="utf-8")
         self.assertNotIn('6>"$start_observation"', runner)
         self.assertIn(
-            'exec 6>"${SECPAL_START_OBSERVATION_PATH}"',
+            'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json',
             trace,
         )
         self.assertIn('/usr/sbin/runuser "$@"', trace)
-        self.assertIn(
-            'SECPAL_START_OBSERVATION_PATH="$start_observation"',
-            runner,
-        )
+        self.assertNotIn("SECPAL_START_OBSERVATION_PATH", runner + trace)
 
     def test_active_observation_fd_exists_only_for_the_exact_helper(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         trace = TRACE.read_text(encoding="utf-8")
         self.assertNotIn('7>"$active_observation"', runner)
-        self.assertIn('exec 7>"${SECPAL_ACTIVE_OBSERVATION_PATH}"', trace)
-        self.assertIn('/usr/sbin/runuser "$@"', trace)
         self.assertIn(
-            'SECPAL_ACTIVE_OBSERVATION_PATH="$active_observation"', runner
+            'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json',
+            trace,
         )
+        self.assertIn('/usr/sbin/runuser "$@"', trace)
+        self.assertNotIn("SECPAL_ACTIVE_OBSERVATION_PATH", runner + trace)
         with tempfile.TemporaryDirectory() as directory:
             observation = Path(directory) / "observation.json"
             result = subprocess.run(
                 [
                     "bash",
                     "-c",
-                    "if { : >&6; } 2>/dev/null; then exit 99; fi",
+                    "if { : >&7; } 2>/dev/null; then exit 99; fi",
                 ],
                 check=False,
                 env={
                     **os.environ,
                     "BASH_ENV": str(TRACE),
-                    "SECPAL_START_OBSERVATION_PATH": str(observation),
                 },
             )
             self.assertEqual(0, result.returncode)
@@ -2225,6 +2266,20 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 )
                 self.assertEqual((operation, reason), result)
                 observed.add(operation)
+        self.assertEqual(
+            ("qualification-harness", "representation-invalid"),
+            self.classify(
+                status=0,
+                marker="qualify-workload-primary command-failed",
+            ),
+        )
+        self.assertEqual(
+            ("qualify-avc-correlation", "invariant-failed"),
+            self.classify(
+                status=0,
+                marker="qualify-avc-correlation invariant-failed",
+            ),
+        )
         start_cases = (
             (
                 {
@@ -2438,7 +2493,13 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             lines = ["set -euo pipefail"] + [""] * 238
             for line_number, source in {
                 37: "run_as_service_account() (",
-                38: '  runuser "$@"',
+                38: (
+                    "  runuser --user secpal-runtime -- env "
+                    "-u CONTAINER_HOST -u CONTAINER_CONNECTION "
+                    'HOME=/home/secpal-runtime XDG_RUNTIME_DIR=/run/user/1001 '
+                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus "
+                    '"$@"'
+                ),
                 39: ")",
                 50: "user_systemctl() {",
                 51: '  run_as_service_account systemctl --user "$@"',
@@ -2471,6 +2532,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                     os.fspath(helper),
                 )
                 .replace(
+                    "/var/lib/secpal-rocky/evidence/quadlet-start-observation.json",
+                    os.fspath(observation),
+                )
+                .replace(
                     "/opt/secpal-control/libexec/rocky-primary-runuser",
                     os.fspath(real_runuser),
                 )
@@ -2490,7 +2555,6 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                         **os.environ,
                         "BASH_ENV": os.fspath(trace),
                         "SECPAL_HELPER_LOG": os.fspath(helper_log),
-                        "SECPAL_START_OBSERVATION_PATH": os.fspath(observation),
                     },
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -2525,7 +2589,13 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             lines = ["set -euo pipefail"] + [""] * 240
             for line_number, source in {
                 37: "run_as_service_account() (",
-                38: '  runuser "$@"',
+                38: (
+                    "  runuser --user secpal-runtime -- env "
+                    "-u CONTAINER_HOST -u CONTAINER_CONNECTION "
+                    'HOME=/home/secpal-runtime XDG_RUNTIME_DIR=/run/user/1001 '
+                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus "
+                    '"$@"'
+                ),
                 39: ")",
                 50: "user_systemctl() {",
                 51: '  run_as_service_account systemctl --user "$@"',
@@ -2556,6 +2626,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                     os.fspath(helper),
                 )
                 .replace(
+                    "/var/lib/secpal-rocky/evidence/quadlet-active-observation.json",
+                    os.fspath(observation),
+                )
+                .replace(
                     "/opt/secpal-control/libexec/rocky-primary-runuser",
                     os.fspath(real_runuser),
                 )
@@ -2575,7 +2649,6 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                         **os.environ,
                         "BASH_ENV": os.fspath(trace),
                         "SECPAL_HELPER_LOG": os.fspath(helper_log),
-                        "SECPAL_ACTIVE_OBSERVATION_PATH": os.fspath(observation),
                     },
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -2614,10 +2687,16 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 "primary": root / "rocky-primary-runuser",
                 "real": root / "runuser",
             }
-            lines = ["set -euo pipefail"] + [""] * 247
+            lines = ["set -euo pipefail"] + [""] * 248
             for line_number, source in {
                 37: "run_as_service_account() (",
-                38: '  runuser "$@"',
+                38: (
+                    "  runuser --user secpal-runtime -- env "
+                    "-u CONTAINER_HOST -u CONTAINER_CONNECTION "
+                    'HOME=/home/secpal-runtime XDG_RUNTIME_DIR=/run/user/1001 '
+                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus "
+                    '"$@"'
+                ),
                 39: ")",
                 46: "rootless_podman() {",
                 47: '  run_as_service_account podman "$@"',
@@ -2660,6 +2739,8 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 ("/opt/secpal-control/libexec/rocky-start-runuser", paths["start"]),
                 ("/opt/secpal-control/libexec/rocky-active-runuser", paths["active"]),
                 ("/opt/secpal-control/libexec/rocky-primary-runuser", paths["primary"]),
+                ("/var/lib/secpal-rocky/evidence/quadlet-start-observation.json", start_observation),
+                ("/var/lib/secpal-rocky/evidence/quadlet-active-observation.json", active_observation),
                 ("/usr/sbin/runuser", paths["real"]),
             ):
                 rendered = rendered.replace(installed, os.fspath(replacement))
@@ -2682,9 +2763,6 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                         **os.environ,
                         "BASH_ENV": os.fspath(trace),
                         "SECPAL_HELPER_LOG": os.fspath(helper_log),
-                        "SECPAL_START_OBSERVATION_PATH": os.fspath(start_observation),
-                        "SECPAL_ACTIVE_OBSERVATION_PATH": os.fspath(active_observation),
-                        "SECPAL_PRIMARY_OBSERVATION_PATH": os.fspath(primary_observation),
                     },
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -2707,6 +2785,33 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             )
             self.assertEqual(b"observed\n", start_observation.read_bytes())
             self.assertEqual(b"observed\n", active_observation.read_bytes())
+
+            helper_log.write_bytes(b"")
+            runtime = types.SimpleNamespace(
+                pw_uid=os.getuid(), pw_dir=os.fspath(Path.home())
+            )
+            stale = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'export SECPAL_RELOAD_EXACT_CALL=1; runuser "$@"',
+                    "bash",
+                    *self.primary_runuser_arguments(runtime),
+                ],
+                check=False,
+                env={
+                    **os.environ,
+                    "BASH_ENV": os.fspath(trace),
+                    "SECPAL_HELPER_LOG": os.fspath(helper_log),
+                },
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.assertEqual(0, stale.returncode)
+            self.assertEqual(
+                ["primary"],
+                helper_log.read_text(encoding="ascii").splitlines(),
+            )
 
     def test_helper_frames_resolve_only_through_reviewed_outer_call_sites(self) -> None:
         cases = (
@@ -2950,6 +3055,20 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             "diagnostic_input_bytes": 100,
         }
         self.assertEqual([], list(validator.iter_errors(document)))
+        zero_status_diagnostic = dict(
+            document,
+            operation="qualification-harness",
+            reason="representation-invalid",
+            exit_status=0,
+        )
+        self.assertEqual(
+            [], list(validator.iter_errors(zero_status_diagnostic))
+        )
+        self.assertTrue(list(validator.iter_errors(dict(
+            zero_status_diagnostic,
+            operation="qualify-workload-primary",
+            reason="command-failed",
+        ))))
         for mutation in (
             dict(document, stdout="untrusted"),
             dict(document, operation="arbitrary-command"),
@@ -3568,9 +3687,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         self.assertIn("-le 4096", failure["run"])
 
         runner = RUNNER.read_text(encoding="utf-8")
-        direct_failure = runner.split('if [[ "$status" -ne 0 ]]; then', 1)[1].split(
-            "fi", 1
-        )[0]
+        direct_failure = runner.split(
+            'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
+            1,
+        )[1].split("fi", 1)[0]
         self.assertNotIn("--trusted-marker", direct_failure)
         self.assertIn(
             'rm -f -- "$source_failure" "$qualification_failure" '
@@ -3583,6 +3703,13 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         )
         self.assertIn('rm -f -- "$qualification_marker"\nset +e\npython3 -', runner)
         self.assertIn("representation_option=(--representation-invalid)", runner)
+        self.assertIn(
+            '--exit-status "$status" --trusted-marker "$qualification_marker"',
+            runner,
+        )
+        self.assertNotIn(
+            '--exit-status "$admission_status" --trusted-marker', runner
+        )
 
     def test_trace_overflow_and_unsafe_inputs_fail_closed(self) -> None:
         self.assertEqual(
@@ -3626,12 +3753,16 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
     def test_target_capture_bounds_output_without_limiting_target_files(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertNotIn("ulimit -f 128", runner)
-        self.assertIn('head -c 65537 >"$stdout"', runner)
+        self.assertIn("capture_bounded() {", runner)
+        self.assertIn('/usr/bin/head -c "$maximum"', runner)
+        self.assertIn("/usr/bin/cat >/dev/null", runner)
+        self.assertIn('capture_bounded 65537 "$stdout"', runner)
         self.assertIn(
-            'head -c 4097 <"$trace_fifo" >"$qualification_trace"', runner
+            'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"', runner
         )
         self.assertIn('pipeline_statuses=("${PIPESTATUS[@]}")', runner)
         self.assertIn('wait "$trace_capture_pid"', runner)
+        self.assertNotIn("\n  status=1\n", runner)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3645,8 +3776,14 @@ trace="$1/trace"
 trace_fifo="$1/trace.fifo"
 policy="$1/policy"
 cleanup_policy="$1/cleanup-policy"
+capture_bounded() {
+  local maximum="$1" output="$2" head_status=0 drain_status=0
+  head -c "$maximum" >"$output" || head_status=$?
+  cat >/dev/null || drain_status=$?
+  ((head_status == 0 && drain_status == 0))
+}
 mkfifo -m 0600 "$trace_fifo"
-head -c 4097 <"$trace_fifo" >"$trace" &
+capture_bounded 4097 "$trace" <"$trace_fifo" &
 trace_capture_pid=$!
 set +e
 bash -ceu '
@@ -3660,7 +3797,7 @@ bash -ceu '
   printf trace >&3
   printf pass
 ' bash "$policy" "$cleanup_policy" 3>"$trace_fifo" 2>&1 |
-  head -c 65537 >"$stdout"
+  capture_bounded 65537 "$stdout"
 pipeline_statuses=("${PIPESTATUS[@]}")
 wait "$trace_capture_pid"
 trace_capture_status=$?
@@ -3688,10 +3825,17 @@ test "$trace_capture_status" -eq 0
                     "-ceu",
                     r'''
 set +e
+capture_bounded() {
+  local maximum="$1" output="$2" head_status=0 drain_status=0
+  head -c "$maximum" >"$output" || head_status=$?
+  cat >/dev/null || drain_status=$?
+  ((head_status == 0 && drain_status == 0))
+}
 python3 -c 'import os; os.write(1, b"x" * 70000)' 2>&1 |
-  head -c 65537 >"$1/overflow"
+  capture_bounded 65537 "$1/overflow"
 statuses=("${PIPESTATUS[@]}")
 set -e
+test "${statuses[0]}" -eq 0
 test "${statuses[1]}" -eq 0
 test "$(stat -c %s "$1/overflow")" -eq 65537
 ''',
@@ -3704,65 +3848,137 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             )
             self.assertEqual(0, overflow.returncode, overflow.stderr)
 
+    def test_success_observers_drain_bounded_output_and_timeout(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        function = re.search(
+            r"\ndef run_bounded\(.*?(?=\n\npayload =)", runner, re.DOTALL
+        )
+        self.assertIsNotNone(function)
+        namespace = {
+            "os": os,
+            "signal": __import__("signal"),
+            "subprocess": subprocess,
+            "threading": threading,
+        }
+        exec(function.group(0), namespace)
+        run_bounded = namespace["run_bounded"]
+        status, stdout, stderr, invalid = run_bounded(
+            [
+                sys.executable,
+                "-c",
+                "import os; os.write(1, b'x' * 70000); "
+                "os.write(2, b'y' * 70000)",
+            ],
+            stdout_limit=64,
+            stderr_limit=32,
+            timeout=5,
+        )
+        self.assertEqual(0, status)
+        self.assertLessEqual(len(stdout), 65)
+        self.assertLessEqual(len(stderr), 33)
+        self.assertTrue(invalid)
+        status, _stdout, _stderr, invalid = run_bounded(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout_limit=64,
+            stderr_limit=32,
+            timeout=0.1,
+        )
+        self.assertNotEqual(0, status)
+        self.assertTrue(invalid)
+        started = __import__("time").monotonic()
+        status, _stdout, _stderr, invalid = run_bounded(
+            [
+                sys.executable,
+                "-c",
+                "import subprocess, sys; "
+                "subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(30)'], stdout=sys.stdout, stderr=sys.stderr)",
+            ],
+            stdout_limit=64,
+            stderr_limit=32,
+            timeout=5,
+        )
+        self.assertEqual(0, status)
+        self.assertTrue(invalid)
+        self.assertLess(__import__("time").monotonic() - started, 4)
+        self.assertIn('timeout=10,\n        cwd=str(runtime_home)', runner)
+
     def test_avc_admission_correlates_one_audit_event_without_cross_record_greed(
         self,
     ) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         function = re.search(
-            r"\ndef audit_serial\(.*?(?=\n\navc_serials =)",
+            r"\ndef audit_event_id\(.*?(?=\n\navc_events =)",
             runner,
             re.DOTALL,
         )
         self.assertIsNotNone(function)
-        namespace = {"re": re}
+        namespace = {"datetime": __import__("datetime").datetime, "re": re}
         exec(function.group(0), namespace)
-        correlate = namespace["correlated_avc_serials"]
+        correlate = namespace["correlated_avc_events"]
         process = "system_u:system_r:container_t:s0:c1,c2"
         storage = "system_u:object_r:container_file_t:s0:c1,c2"
+        event_41 = ("08/31/2026 00:43:39.673", "41")
 
         unrelated = (
-            "type=AVC msg=audit(1.1:40): avc: denied { read } "
+            "type=AVC msg=audit(08/31/2026 00:43:39.672:40) : "
+            "avc: denied { read } "
             'name="unrelated" scontext=system_u:system_r:other_t:s0 '
-            "tcontext=system_u:object_r:other_t:s0 tclass=file permissive=0"
+            "tcontext=system_u:object_r:other_t:s0 tclass=dir permissive=0"
         )
         relevant = (
-            "type=AVC msg=audit(1.2:41): avc: denied { read } "
+            "type=AVC msg=audit(08/31/2026 00:43:39.673:41) : "
+            "avc: denied { read } "
             f'name="marker" scontext={process} tcontext={storage} '
-            "tclass=file permissive=0"
+            "tclass=dir permissive=0"
         )
         trailing = (
-            "type=AVC msg=audit(1.3:42): avc: denied { write } "
+            "type=AVC msg=audit(08/31/2026 00:43:39.674:42) : "
+            "avc: denied { write } "
             'name="other" scontext=system_u:system_r:third_t:s0 '
-            f"tcontext={storage} tclass=file permissive=0"
+            f"tcontext={storage} tclass=dir permissive=0"
         )
-        self.assertEqual({"41"}, correlate(
+        self.assertEqual(set(), correlate(
             "\n".join((unrelated, relevant, trailing)), process, storage
         ))
-        self.assertEqual({"41"}, correlate(
+        self.assertEqual(set(), correlate(
             "\n".join((relevant, relevant)), process, storage
         ))
-        second = relevant.replace("1.2:41", "1.4:43")
-        self.assertEqual({"41", "43"}, correlate(
+        second = relevant.replace(":41) :", ":43) :")
+        self.assertEqual(set(), correlate(
             "\n".join((relevant, second)), process, storage
         ))
         self.assertEqual(set(), correlate(
             relevant.replace("permissive=0", "permissive=1"), process, storage
         ))
         self.assertEqual(set(), correlate(
-            relevant.replace("tclass=file", "tclass=socket"), process, storage
+            relevant.replace("tclass=dir", "tclass=socket"), process, storage
         ))
-        serial = namespace["audit_serial"]
-        interpreted_avc = relevant.replace(
-            "msg=audit(1.2:41):",
-            "msg=audit(08/31/2026 00:43:39.673:41) :",
-        ).replace("tclass=file", "tclass=dir").replace(' name="marker"', "")
+        event_id = namespace["audit_event_id"]
+        interpreted_avc = relevant.replace(' name="marker"', "")
         interpreted_proctitle = (
             "type=PROCTITLE "
             "msg=audit(08/31/2026 00:43:39.673:41) : "
             "proctitle=cat /foreign/marker"
         )
         interpreted_event = "\n".join((interpreted_avc, interpreted_proctitle))
-        self.assertEqual({"41"}, correlate(interpreted_event, process, storage))
+        self.assertEqual({event_41}, correlate(interpreted_event, process, storage))
+        self.assertEqual(set(), correlate(
+            "\n".join((interpreted_event, interpreted_proctitle)),
+            process,
+            storage,
+        ))
+        self.assertEqual(set(), correlate(
+            "\n".join((interpreted_event, interpreted_avc)),
+            process,
+            storage,
+        ))
+        second_proctitle = interpreted_proctitle.replace(":41) :", ":43) :")
+        self.assertEqual({event_41, (event_41[0], "43")}, correlate(
+            "\n".join((interpreted_event, second, second_proctitle)),
+            process,
+            storage,
+        ))
         self.assertEqual(set(), correlate(
             "\n".join((
                 interpreted_avc,
@@ -3773,6 +3989,14 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         ))
         self.assertEqual(set(), correlate(
             interpreted_event.replace("type=PROCTITLE", "type=EXECVE"),
+            process,
+            storage,
+        ))
+        self.assertEqual(set(), correlate(
+            interpreted_event.replace(
+                "/foreign/marker",
+                "/unbound/marker",
+            ),
             process,
             storage,
         ))
@@ -3788,21 +4012,52 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             storage,
         ))
         path = (
-            "type=PATH msg=audit(1.2:41): item=0 "
+            "type=PATH msg=audit(08/31/2026 00:43:39.673:41) : item=0 "
             'name="/var/tmp/secpal-host-qualification-Ab12Cd/state-a/marker" '
             "nametype=NORMAL"
         )
-        self.assertEqual({"41"}, correlate(
+        self.assertEqual(set(), correlate(
             "\n".join((relevant.replace(' name="marker"', ""), path)),
             process,
             storage,
         ))
-        self.assertEqual("41", serial(relevant))
-        self.assertEqual("41", serial(interpreted_avc))
-        self.assertIsNone(serial(interpreted_avc.replace(".673", "")))
-        self.assertIsNone(serial(interpreted_avc.replace(") :", "):")))
+        self.assertEqual(event_41, event_id(relevant))
+        self.assertEqual(event_41, event_id(interpreted_avc))
+        raw_event = interpreted_event.replace(
+            "msg=audit(08/31/2026 00:43:39.673:41) :",
+            "msg=audit(1.2:41):",
+        )
+        self.assertIsNone(event_id(raw_event.splitlines()[0]))
+        self.assertIsNone(correlate(raw_event, process, storage))
+        self.assertIsNone(correlate(
+            "\n".join((interpreted_event, raw_event)),
+            process,
+            storage,
+        ))
         self.assertEqual(
-            {"41", "43"},
+            set(),
+            correlate(
+                interpreted_event.replace("tclass=dir", "tclass=file"),
+                process,
+                storage,
+            ),
+        )
+        self.assertIsNone(event_id(interpreted_avc.replace(".673", "")))
+        self.assertIsNone(event_id(interpreted_avc.replace(") :", "):")))
+        self.assertIsNone(event_id(interpreted_avc.replace("08/31", "99/31")))
+        cross_timestamp_marker = interpreted_proctitle.replace(
+            "00:43:39.673:41", "00:44:40.000:41"
+        )
+        self.assertEqual(
+            set(),
+            correlate(
+                "\n".join((interpreted_avc, cross_timestamp_marker)),
+                process,
+                storage,
+            ),
+        )
+        self.assertEqual(
+            {event_41, (event_41[0], "43")},
             correlate(
                 interpreted_event
                 + "\n"
@@ -3811,6 +4066,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
                 storage,
             ),
         )
+
     def test_avc_admission_reads_logs_when_python_stdin_is_a_heredoc(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertIn(
@@ -3818,9 +4074,10 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             runner,
         )
         self.assertIn(
-            '["ausearch", "--input-logs", "-m", "AVC", "-ts", audit_date, audit_time, "-i"]',
+            '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",',
             runner,
         )
+        self.assertIn("audit_stdout.strip() or audit_stderr.strip()", runner)
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "ausearch"
             executable.write_text(
@@ -3879,12 +4136,64 @@ PY
             runner,
         )
         self.assertIn(
-            'runtime_home.stat().st_uid != runtime_account.pw_uid',
+            'home_metadata.st_uid == runtime_account.pw_uid',
             runner,
         )
+        self.assertIn('runtime_home == Path("/home/secpal-runtime")', runner)
         self.assertIn(
             'cwd=str(runtime_home) if name == "podman" else None',
             runner,
+        )
+        function = re.search(
+            r"\ndef runtime_home_admitted\(.*?(?=\n\npayload =)",
+            runner,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(function)
+        fake_pwd = types.SimpleNamespace(getpwnam=mock.Mock())
+        namespace = {"os": os, "Path": Path, "pwd": fake_pwd, "stat": stat}
+        exec(function.group(0), namespace)
+        admitted = namespace["runtime_home_admitted"]
+        admitted_home = namespace["admitted_runtime_home"]
+        account = types.SimpleNamespace(pw_uid=1001, pw_gid=1001)
+        home = types.SimpleNamespace(
+            st_mode=stat.S_IFDIR | 0o700, st_uid=1001, st_gid=1001
+        )
+        parent = types.SimpleNamespace(
+            st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0
+        )
+        self.assertTrue(
+            admitted(Path("/home/secpal-runtime"), account, home, parent)
+        )
+        self.assertFalse(
+            admitted(
+                Path("/home/secpal-runtime"),
+                account,
+                types.SimpleNamespace(
+                    st_mode=stat.S_IFDIR | 0o600, st_uid=1001, st_gid=1001
+                ),
+                parent,
+            )
+        )
+        fake_pwd.getpwnam.side_effect = KeyError("missing")
+        self.assertIsNone(admitted_home())
+        fake_pwd.getpwnam.side_effect = None
+        fake_pwd.getpwnam.return_value = types.SimpleNamespace(
+            pw_uid=1001,
+            pw_gid=1001,
+            pw_dir="/home/secpal-runtime",
+        )
+        with mock.patch.object(Path, "lstat", side_effect=OSError("missing")):
+            self.assertIsNone(admitted_home())
+        self.assertFalse(
+            admitted(
+                Path("/home/secpal-runtime"),
+                account,
+                home,
+                types.SimpleNamespace(
+                    st_mode=stat.S_IFDIR | 0o777, st_uid=0, st_gid=0
+                ),
+            )
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

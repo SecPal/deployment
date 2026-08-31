@@ -1144,16 +1144,16 @@ class CloudCIContractTests(unittest.TestCase):
         runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
         for old, new in (
             (
-                'head -c 4097 <"$trace_fifo" >"$qualification_trace"',
+                'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"',
                 'cat <"$trace_fifo" >"$qualification_trace"',
             ),
             (
-                '3>"$trace_fifo" 2>&1 | head -c 65537 >"$stdout"',
+                '3>"$trace_fifo" 2>&1 | capture_bounded 65537 "$stdout"',
                 '3>"$trace_fifo" >"$stdout" 2>&1',
             ),
             (
-                'head -c 4097 <"$trace_fifo" >"$qualification_trace"',
-                'ulimit -f 128\nhead -c 4097 <"$trace_fifo" >"$qualification_trace"',
+                'capture_bounded 4097 "$qualification_trace" <"$trace_fifo"',
+                'ulimit -f 128\ncapture_bounded 4097 "$qualification_trace" <"$trace_fifo"',
             ),
         ):
             with self.subTest(new=new):
@@ -1167,52 +1167,52 @@ class CloudCIContractTests(unittest.TestCase):
                 'audit_date, audit_time = audit_baseline.split(" ", 1)',
             ),
             (
-                '["ausearch", "--input-logs", "-m", "AVC", "-ts", audit_date, audit_time, "-i"]',
-                '["ausearch", "-m", "AVC", "-ts", audit_date, audit_time, "-i"]',
+                '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",',
+                '"/usr/sbin/ausearch", "-m", "AVC", "-ts",',
             ),
             (
-                '["ausearch", "--input-logs", "-m", "AVC", "-ts", audit_date, audit_time, "-i"]',
-                '["ausearch", "--input-logs", "-m", "AVC", "-ts", audit_baseline, "-i"]',
+                'audit_date, audit_time, "-i",',
+                'audit_baseline, "-i",',
             ),
             (
-                '["ausearch", "--input-logs", "-m", "AVC", "-ts", audit_date, audit_time, "-i"]',
-                '["ausearch", "--input-logs", "-m", "AVC", "-ts", audit_date, audit_time]',
+                'audit_date, audit_time, "-i",',
+                'audit_date, audit_time,',
             ),
             ("for line in audit_text.splitlines():", "for line in [audit_text]:"),
             (
-                "serial = audit_serial(line)",
-                'serial = "one"',
+                "event_id = audit_event_id(line)",
+                'event_id = ("one", "one")',
             ),
             (
-                'events.setdefault(serial, {"avc": False, "marker": False})',
-                'events.setdefault("one", {"avc": False, "marker": False})',
+                'events.setdefault(event_id, {"avc": 0, "marker": 0})',
+                'events.setdefault(("one", "one"), {"avc": 0, "marker": 0})',
             ),
             (
-                'record_type in {"AVC", "PATH", "PROCTITLE", "SYSCALL"}',
-                'record_type in {"AVC", "EXECVE", "PATH", "PROCTITLE", "SYSCALL"}',
+                'record_type == "PROCTITLE"',
+                'record_type in {"PATH", "PROCTITLE", "SYSCALL"}',
             ),
             (
-                "r'(?:^|\\s)name=\"?marker\"?(?:\\s|$)'",
-                "r'(?:^|\\s)name=\"?[^\"]+\"?(?:\\s|$)'",
+                "r'(?:^|\\s)/foreign/marker(?:\\s|$)'",
+                "r'(?:^|\\s)/foreign/[^\\s\"]+(?:\\s|$)'",
             ),
             (
+                'tclass.group(1) == "dir"',
                 'tclass.group(1) in {"file", "dir"}',
-                'tclass.group(1) in {"file", "dir", "socket"}',
             ),
             (
                 'r"(?:^|\\s)permissive=0(?:\\s|$)"',
                 'r"(?:^|\\s)permissive=[01](?:\\s|$)"',
             ),
             (
-                'if event["avc"] and event["marker"]',
-                'if event["avc"] or event["marker"]',
+                'if event["avc"] == 1 and event["marker"] == 1',
+                'if event["avc"] >= 1 and event["marker"] >= 1',
             ),
             (
                 'cwd=str(runtime_home) if name == "podman" else None',
                 "cwd=None",
             ),
             (
-                "runtime_home.stat().st_uid != runtime_account.pw_uid",
+                "home_metadata.st_uid == runtime_account.pw_uid",
                 "False",
             ),
         ):
@@ -1259,6 +1259,11 @@ class CloudCIContractTests(unittest.TestCase):
                 ":",
             ),
             (
+                bootstrap,
+                "for trusted_directory in / /opt /opt/secpal-control",
+                "for trusted_directory in / /usr",
+            ),
+            (
                 reload_runuser,
                 '"/usr/local/libexec/secpal-control/rocky-reload-systemctl"',
                 '"/usr/bin/systemctl"',
@@ -1270,8 +1275,8 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 trace,
-                '[[ "$BASHPID" == "$$" && "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]]',
-                "[[ false ]]",
+                '"${14}" == daemon-reload',
+                '"${14}" == arbitrary-command',
             ),
             (
                 trace,
@@ -1482,11 +1487,10 @@ class CloudCIContractTests(unittest.TestCase):
                 "/opt/secpal-control/libexec/rocky-start-runuser",
                 "/usr/sbin/runuser",
             ),
-            (trace, '[[ "${BASH_LINENO[0]:-}" == 238 ]]', "[[ true ]]"),
             (
                 trace,
-                '[[ "$BASHPID" == "$$" && "${SECPAL_START_EXACT_CALL:-}" == 1 ]]',
-                "[[ false ]]",
+                '"${14}" == start',
+                '"${14}" == arbitrary-command',
             ),
             (
                 start_runuser,
@@ -1517,8 +1521,8 @@ class CloudCIContractTests(unittest.TestCase):
             (start_runuser, "check=False,", "check=False,\n                shell=True,"),
             (
                 trace,
-                'exec 6>"${SECPAL_START_OBSERVATION_PATH}"',
-                'exec 7>"${SECPAL_START_OBSERVATION_PATH}"',
+                'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json',
+                'exec 7>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json',
             ),
             (
                 classifier,
@@ -1542,11 +1546,10 @@ class CloudCIContractTests(unittest.TestCase):
                 "/opt/secpal-control/libexec/rocky-active-runuser",
                 "/usr/sbin/runuser",
             ),
-            (trace, '[[ "${BASH_LINENO[0]:-}" == 239 ]]', "[[ true ]]"),
             (
                 trace,
-                '[[ "$BASHPID" == "$$" && "${SECPAL_ACTIVE_EXACT_CALL:-}" == 1 ]]',
-                "[[ false ]]",
+                '"${14}" == is-active',
+                '"${14}" == arbitrary-command',
             ),
             (
                 active_runuser,
@@ -1588,8 +1591,8 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 trace,
-                'exec 7>"${SECPAL_ACTIVE_OBSERVATION_PATH}"',
-                'exec 6>"${SECPAL_ACTIVE_OBSERVATION_PATH}"',
+                'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json',
+                'exec 6>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json',
             ),
             (
                 classifier,
@@ -1632,13 +1635,18 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 primary_runuser,
+                'environment = {\n        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",\n        "LC_ALL": "C",\n    }',
+                "environment = dict(os.environ)",
+            ),
+            (
+                primary_runuser,
                 "Once the exact primary request starts",
                 "observer errors may replay the primary request",
             ),
             (
                 runner,
-                'SECPAL_PRIMARY_OBSERVATION_PATH="$primary_observation"',
-                'SECPAL_PRIMARY_OBSERVATION_PATH=""',
+                'primary_observation="$evidence_root/primary-workload-observation.json"',
+                'primary_observation="$work_root/primary-workload-observation.json"',
             ),
             (
                 classifier,

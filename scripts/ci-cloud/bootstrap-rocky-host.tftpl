@@ -47,7 +47,9 @@ chmod 0555 /usr/local/libexec/secpal-control/rocky-active-env \
 decode_script '${primary_runuser_base64gzip}' /opt/secpal-control/libexec/rocky-primary-runuser
 decode_script '${primary_runtime_base64gzip}' /usr/local/libexec/secpal-control/rocky-primary-runtime
 chmod 0555 /usr/local/libexec/secpal-control/rocky-primary-runtime
-for trusted_directory in / /usr /usr/local /usr/local/libexec \
+for trusted_directory in / /opt /opt/secpal-control \
+  /opt/secpal-control/libexec /opt/secpal-control/scripts \
+  /opt/secpal-control/scripts/ci-cloud /usr /usr/local /usr/local/libexec \
   /usr/local/libexec/secpal-control; do
   [[ -d "$trusted_directory" && ! -L "$trusted_directory" ]]
   [[ "$(stat -c '%u:%g' -- "$trusted_directory")" == 0:0 ]]

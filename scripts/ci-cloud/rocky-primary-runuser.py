@@ -22,6 +22,9 @@ RUNTIME_HELPER = Path("/usr/local/libexec/secpal-control/rocky-primary-runtime")
 FIXTURE = "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
 CONTAINER = re.compile(r"^secpal-host-qualification-([A-Za-z0-9]{6})-a$")
 MAX_PROTOCOL_BYTES = 512
+OBSERVATION_PATH = Path(
+    "/var/lib/secpal-rocky/evidence/primary-workload-observation.json"
+)
 
 
 def process_status(returncode: int) -> int:
@@ -112,7 +115,10 @@ def execute_primary(
         os.fspath(runuser_path), "--user", RUNTIME_ACCOUNT, "--",
         os.fspath(runtime_helper_path), *podman_arguments,
     ]
-    environment = dict(os.environ)
+    environment = {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+        "LC_ALL": "C",
+    }
     try:
         result = subprocess.run(
             command,
@@ -128,10 +134,7 @@ def execute_primary(
     return status, parse_protocol(result.stdout, status)
 
 
-def admitted_observation_path(raw_path: str) -> Path:
-    path = Path(raw_path)
-    if not path.is_absolute():
-        raise OSError("primary observation path is outside the closed contract")
+def admitted_observation_path(path: Path = OBSERVATION_PATH) -> Path:
     metadata = path.lstat()
     if (
         stat.S_ISLNK(metadata.st_mode)
@@ -166,10 +169,9 @@ def main() -> int:
     try:
         runtime = pwd.getpwnam(RUNTIME_ACCOUNT)
         podman_arguments = exact_primary(arguments, runtime)
-        raw_observation = os.environ.get("SECPAL_PRIMARY_OBSERVATION_PATH", "")
-        if os.geteuid() != 0 or podman_arguments is None or not raw_observation:
+        if os.geteuid() != 0 or podman_arguments is None:
             return fallback(arguments)
-        observation = admitted_observation_path(raw_observation)
+        observation = admitted_observation_path()
     except (KeyError, OSError, ValueError):
         return fallback(arguments)
 

@@ -51,17 +51,13 @@ def runtime_environment(runtime: Any) -> dict[str, str]:
         or os.getresgid() != (runtime.pw_gid,) * 3
     ):
         raise ValueError("runtime identity is outside the closed contract")
-    environment = dict(os.environ)
-    environment.pop("CONTAINER_HOST", None)
-    environment.pop("CONTAINER_CONNECTION", None)
-    environment.update(
-        {
-            "HOME": runtime.pw_dir,
-            "XDG_RUNTIME_DIR": f"/run/user/{runtime.pw_uid}",
-            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{runtime.pw_uid}/bus",
-        }
-    )
-    return environment
+    return {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+        "LC_ALL": "C",
+        "HOME": runtime.pw_dir,
+        "XDG_RUNTIME_DIR": f"/run/user/{runtime.pw_uid}",
+        "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{runtime.pw_uid}/bus",
+    }
 
 
 def process_status(returncode: int) -> int:
