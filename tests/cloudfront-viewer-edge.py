@@ -475,6 +475,18 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                 admitted_etag=tenant.etag,
                 certificate=self.certificate("pending-validation"),
             )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_tenant_mutation(
+                self.contract.Operation.ATTACH_CERTIFICATE,
+                self.target,
+                tenant,
+                self.inputs,
+                admitted_etag=tenant.etag,
+                certificate=self.certificate(
+                    "issued",
+                    validation_token_host="self-hosted",
+                ),
+            )
 
     def test_realistic_aws_representations_normalize_before_admission(self) -> None:
         tenant_response = {

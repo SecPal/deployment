@@ -737,6 +737,19 @@ def validate_tenant_observation(
         raise ContractError("tenant observation mismatches the exact target or parameters")
 
 
+def _admit_cloudfront_certificate_observation(
+    certificate: ManagedCertificateObservation,
+) -> None:
+    """Reject explicit validation-mode evidence that contradicts this lifecycle."""
+
+    if type(certificate) is not ManagedCertificateObservation:
+        raise ContractError("managed certificate observation is invalid")
+    if certificate.validation_token_host == "self-hosted":
+        raise ContractError(
+            "self-hosted validation contradicts the CloudFront-hosted lifecycle"
+        )
+
+
 def classify_certificate_state(
     tenant: TenantObservation,
     certificate: ManagedCertificateObservation | None,
@@ -747,12 +760,7 @@ def classify_certificate_state(
         raise ContractError("one typed tenant observation is required")
     if certificate is None:
         return CertificateState.REQUESTED
-    if type(certificate) is not ManagedCertificateObservation:
-        raise ContractError("managed certificate observation is invalid")
-    if certificate.validation_token_host == "self-hosted":
-        raise ContractError(
-            "self-hosted validation contradicts the CloudFront-hosted lifecycle"
-        )
+    _admit_cloudfront_certificate_observation(certificate)
     if certificate.status == "pending-validation":
         return CertificateState.VALIDATION_REQUIRED
     if certificate.status == "inactive":
@@ -818,7 +826,10 @@ def plan_tenant_mutation(
     parameters: dict[str, object]
     api_operation = "UpdateDistributionTenant"
     if operation is Operation.ATTACH_CERTIFICATE:
-        if certificate is None or certificate.status != "issued":
+        if certificate is None:
+            raise ContractError("only an issued managed certificate may be attached")
+        _admit_cloudfront_certificate_observation(certificate)
+        if certificate.status != "issued":
             raise ContractError("only an issued managed certificate may be attached")
         assert certificate.certificate_arn is not None
         parameters = {
