@@ -36,12 +36,14 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         cls.inputs = cls.contract.TenantInputs(
             deployment_key="qualification-17",
             distribution_id="E1EXAMPLEPARENT",
+            connection_group_id="cg_example17",
             viewer_domain="viewer.example.test",
             origin_domain="origin.example.test",
         )
         cls.target = cls.contract.CloudFrontTarget(
             requested_key="qualification-17",
             distribution_id="E1EXAMPLEPARENT",
+            connection_group_id="cg_example17",
             tenant_id="dt_example17",
         )
         cls.authority = cls.contract.ExecutionAuthority(
@@ -73,6 +75,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         return self.contract.TenantObservation(
             tenant_id="dt_example17",
             distribution_id="E1EXAMPLEPARENT",
+            connection_group_id="cg_example17",
             etag=etag,
             enabled=enabled,
             deployment_status=status,
@@ -92,6 +95,25 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
             ),
             validation_token_host="self-hosted",
             validation_tokens=tuple(tokens),
+        )
+
+    def connection_group(
+        self,
+        *,
+        etag="GROUP-ETAG",
+        enabled=True,
+        status="Deployed",
+        is_default=False,
+        tenant_association_present=False,
+    ):
+        return self.contract.ConnectionGroupObservation(
+            connection_group_id="cg_example17",
+            etag=etag,
+            routing_endpoint="example17.cloudfront.net",
+            enabled=enabled,
+            deployment_status=status,
+            is_default=is_default,
+            tenant_association_present=tenant_association_present,
         )
 
     def request(self, operation):
@@ -200,7 +222,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                 with self.assertRaises(self.contract.ContractError):
                     self.contract.validate_distribution_config(changed)
 
-    def test_tenant_create_keeps_viewer_and_origin_identity_separate(self) -> None:
+    def test_tenant_create_binds_routing_and_certificate_bootstrap(self) -> None:
         request = self.contract.build_create_tenant_request(self.inputs)
         self.assertEqual([{"Domain": "viewer.example.test"}], request["Domains"])
         self.assertEqual(
@@ -208,13 +230,115 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
             request["Parameters"],
         )
         self.assertFalse(request["Enabled"])
-        self.assertNotIn("ManagedCertificateRequest", request)
+        self.assertEqual("cg_example17", request["ConnectionGroupId"])
+        self.assertEqual(
+            {
+                "ValidationTokenHost": "cloudfront",
+                "PrimaryDomainName": "viewer.example.test",
+                "CertificateTransparencyLoggingPreference": "enabled",
+            },
+            request["ManagedCertificateRequest"],
+        )
 
         for origin_domain in ("", self.inputs.viewer_domain):
             with self.assertRaises(self.contract.ContractError):
                 self.contract.build_create_tenant_request(
                     replace(self.inputs, origin_domain=origin_domain)
                 )
+
+    def test_custom_connection_group_is_exact_routing_prerequisite(self) -> None:
+        create = self.contract.plan_create_connection_group("qualification-17")
+        self.assertEqual("CreateConnectionGroup", create.api_operation)
+        self.assertEqual(
+            {"Name": "qualification-17", "Enabled": True}, create.parameters
+        )
+        inspect = self.contract.plan_inspection(
+            self.contract.Operation.INSPECT_CONNECTION_GROUP, self.target
+        )
+        self.assertEqual("GetConnectionGroup", inspect.api_operation)
+        self.assertEqual("cg_example17", inspect.resource_id)
+
+        observation = self.contract.normalize_connection_group_response(
+            {
+                "ETag": "GROUP-ETAG",
+                "ConnectionGroup": {
+                    "Id": "cg_example17",
+                    "RoutingEndpoint": "example17.cloudfront.net",
+                    "Enabled": True,
+                    "Status": "Deployed",
+                    "IsDefault": False,
+                },
+            },
+            tenant_association_present=False,
+        )
+        group_target = replace(self.target, connection_group_id="cg_example17")
+        self.contract.validate_connection_group_observation(
+            observation, group_target, qualification_owned=True
+        )
+        existing_default = replace(observation, is_default=True)
+        self.contract.validate_connection_group_observation(
+            existing_default, group_target, qualification_owned=False
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.validate_connection_group_observation(
+                existing_default, group_target, qualification_owned=True
+            )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.validate_connection_group_observation(
+                observation,
+                replace(group_target, connection_group_id="cg_other"),
+                qualification_owned=True,
+            )
+        for endpoint in ("origin.example.test", "cloudfront.net"):
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaises(self.contract.ContractError):
+                    replace(observation, routing_endpoint=endpoint)
+        disabled = self.contract.plan_connection_group_mutation(
+            self.contract.Operation.DISABLE_CONNECTION_GROUP,
+            group_target,
+            observation,
+            admitted_etag=observation.etag,
+        )
+        self.assertEqual({"Enabled": False}, disabled.parameters)
+        deleted = self.contract.plan_connection_group_mutation(
+            self.contract.Operation.DELETE_CONNECTION_GROUP,
+            group_target,
+            replace(observation, enabled=False),
+            admitted_etag=observation.etag,
+        )
+        self.assertEqual("DeleteConnectionGroup", deleted.api_operation)
+
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_connection_group_mutation(
+                self.contract.Operation.DISABLE_CONNECTION_GROUP,
+                group_target,
+                observation,
+                admitted_etag="GROUP-STALE",
+            )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_connection_group_mutation(
+                self.contract.Operation.DELETE_CONNECTION_GROUP,
+                group_target,
+                replace(observation, enabled=False, tenant_association_present=True),
+                admitted_etag=observation.etag,
+            )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_connection_group_mutation(
+                self.contract.Operation.DELETE_CONNECTION_GROUP,
+                group_target,
+                replace(observation, enabled=False, is_default=True),
+                admitted_etag=observation.etag,
+            )
+
+    def test_qualification_orders_routing_before_tenant_without_request_update(self) -> None:
+        operations = self.contract.qualification_operations()
+        self.assertLess(
+            operations.index(self.contract.Operation.INSPECT_CONNECTION_GROUP),
+            operations.index(self.contract.Operation.CREATE_TENANT),
+        )
+        self.assertNotIn(
+            "request-certificate", [operation.value for operation in operations]
+        )
 
     def test_tenant_existence_is_not_certificate_activation(self) -> None:
         tenant = self.tenant(
@@ -224,7 +348,7 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.contract.CertificateState.REQUESTED,
-            self.contract.classify_certificate_state(tenant, None, request_accepted=True),
+            self.contract.classify_certificate_state(tenant, None),
         )
         self.assertNotEqual(
             self.contract.CertificateState.ACTIVE,
@@ -274,7 +398,6 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
     def test_mutations_require_exact_current_etag_and_native_target(self) -> None:
         tenant = self.tenant(domain_status="inactive", certificate_arn=None)
         operations = (
-            self.contract.Operation.REQUEST_CERTIFICATE,
             self.contract.Operation.ATTACH_CERTIFICATE,
             self.contract.Operation.ACTIVATE_TENANT,
             self.contract.Operation.UPDATE_TENANT,
@@ -296,27 +419,16 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         missing_id = replace(self.target, tenant_id=None)
         with self.assertRaises(self.contract.ContractError):
             self.contract.plan_tenant_mutation(
-                self.contract.Operation.REQUEST_CERTIFICATE,
+                self.contract.Operation.ATTACH_CERTIFICATE,
                 missing_id,
                 tenant,
                 self.inputs,
                 admitted_etag=tenant.etag,
+                certificate=self.certificate(),
             )
 
-    def test_certificate_request_issue_and_attachment_are_separate_updates(self) -> None:
+    def test_certificate_issue_attachment_and_activation_are_separate(self) -> None:
         tenant = self.tenant(domain_status="inactive", certificate_arn=None)
-        request = self.contract.plan_tenant_mutation(
-            self.contract.Operation.REQUEST_CERTIFICATE,
-            self.target,
-            tenant,
-            self.inputs,
-            admitted_etag=tenant.etag,
-        )
-        self.assertEqual("UpdateDistributionTenant", request.api_operation)
-        self.assertEqual(tenant.etag, request.if_match)
-        self.assertIn("ManagedCertificateRequest", request.parameters)
-        self.assertNotIn("Customizations", request.parameters)
-
         attachment = self.contract.plan_tenant_mutation(
             self.contract.Operation.ATTACH_CERTIFICATE,
             self.target,
@@ -429,18 +541,22 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.contract.Operation.DISABLE_TENANT,
-            self.contract.next_teardown_operation(self.tenant(), parent),
+            self.contract.next_teardown_operation(
+                self.tenant(), self.connection_group(), parent
+            ),
         )
         self.assertEqual(
             self.contract.Operation.INSPECT_TENANT,
             self.contract.next_teardown_operation(
-                self.tenant(enabled=False, status="InProgress"), parent
+                self.tenant(enabled=False, status="InProgress"),
+                self.connection_group(),
+                parent,
             ),
         )
         self.assertEqual(
             self.contract.Operation.DELETE_TENANT,
             self.contract.next_teardown_operation(
-                self.tenant(enabled=False), parent
+                self.tenant(enabled=False), self.connection_group(), parent
             ),
         )
         self.assertEqual(
@@ -452,12 +568,26 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
+            self.contract.Operation.DISABLE_CONNECTION_GROUP,
+            self.contract.next_teardown_operation(
+                None, self.connection_group(), parent
+            ),
+        )
+        self.assertEqual(
+            self.contract.Operation.DELETE_CONNECTION_GROUP,
+            self.contract.next_teardown_operation(
+                None, self.connection_group(enabled=False), parent
+            ),
+        )
+        self.assertEqual(
             self.contract.Operation.DISABLE_DISTRIBUTION,
-            self.contract.next_teardown_operation(None, parent),
+            self.contract.next_teardown_operation(None, None, parent),
         )
         self.assertEqual(
             self.contract.Operation.DELETE_DISTRIBUTION,
-            self.contract.next_teardown_operation(None, replace(parent, enabled=False)),
+            self.contract.next_teardown_operation(
+                None, None, replace(parent, enabled=False)
+            ),
         )
 
         unsafe = self.tenant(enabled=True)
@@ -473,6 +603,13 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
     def test_authority_and_results_are_exactly_correlated(self) -> None:
         request = self.request(self.contract.Operation.ATTACH_CERTIFICATE)
         self.contract.admit_request(request, self.authority)
+
+        missing_group_target = replace(self.target, connection_group_id=None)
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_request(
+                replace(request, target=missing_group_target),
+                replace(self.authority, target=missing_group_target),
+            )
 
         mismatches = (
             replace(self.authority, source_revision="c" * 40),

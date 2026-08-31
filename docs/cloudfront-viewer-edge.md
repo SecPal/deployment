@@ -24,24 +24,37 @@ The contract follows the current official CloudFront APIs and terminology:
 - [`CreateDistribution`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_CreateDistribution.html)
   creates a distribution with `ConnectionMode=tenant-only`, one required
   `OriginDomain` tenant parameter, and one reviewed default behavior.
+- [`CreateConnectionGroup`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_CreateConnectionGroup.html)
+  creates the explicit custom Viewer-routing prerequisite used for a
+  self-contained first-tenant bootstrap. Its exact `RoutingEndpoint` is
+  inspected before tenant creation.
 - [`CreateDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_CreateDistributionTenant.html)
-  creates one disabled tenant with a Viewer domain and the tenant-specific
-  `OriginDomain` parameter. It intentionally makes no managed certificate
-  request.
+  creates one disabled tenant with the exact custom connection group, Viewer
+  domain, tenant-specific `OriginDomain`, and CloudFront-hosted managed
+  certificate request. Current AWS rejects this path when neither a certificate
+  nor `ManagedCertificateRequest` is present.
 - [`GetManagedCertificateDetails`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_GetManagedCertificateDetails.html)
   reports `pending-validation`, `issued`, `inactive`, `expired`,
   `validation-timed-out`, `revoked`, or `failed`. A certificate inspection can
   update the tenant, so a later mutation always obtains a fresh tenant ETag.
 - [`UpdateDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_UpdateDistributionTenant.html)
-  requires the current ETag for certificate request, certificate attachment,
-  activation, OriginDomain update, and disable operations.
+  requires the current ETag for certificate attachment, activation,
+  OriginDomain update, and disable operations.
 - [`DeleteDistributionTenant`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_DeleteDistributionTenant.html)
   requires a disabled tenant and its current ETag. The parent distribution can
   be disabled and deleted only after its tenants are gone.
 
-These current provider semantics do not contradict ADR-019. They confirm that
-tenant creation, certificate request, validation, issuance, attachment, and
-domain activation are separate observations or mutations.
+[`UpdateConnectionGroup`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_UpdateConnectionGroup.html)
+and [`DeleteConnectionGroup`](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_DeleteConnectionGroup.html)
+require the current custom-group ETag. Deletion is admitted only after the exact
+group has no represented tenant association and is disabled and deployed.
+Default connection groups remain valid externally supplied prerequisites, but
+this contract never plans their mutation or deletion.
+
+These provider semantics preserve ADR-019's distinction between accepting a
+tenant create plus certificate request, validation, issuance, attachment, and
+domain activation. They do not require tenant creation and certificate request
+to be separate API mutations.
 
 ## Parent and tenant baseline
 
@@ -71,10 +84,19 @@ The absence of caching ensures authenticated or session-specific responses
 cannot cross Viewer or Tenant boundaries through a CloudFront cache hit.
 
 One SecPal deployment maps to one Distribution Tenant. The caller supplies a
-deployment-scoped technical key, Viewer domain, explicit `OriginDomain`, and
-exact parent ID. Viewer Host and Origin Host are separate inputs and must differ.
-The portable implementation contains no customer identity, fleet inventory,
-placement, account-selection, rollout, SLA, pricing, or commercial policy.
+deployment-scoped technical key, Viewer domain, explicit `OriginDomain`, exact
+parent ID, and exact admitted connection-group ID. Viewer Host and Origin Host
+are separate inputs and must differ. The portable implementation contains no
+customer identity, fleet inventory, placement, account-selection, rollout,
+SLA, pricing, or commercial policy.
+
+For a fresh-account or self-contained qualification bootstrap, the caller first
+creates one exact custom connection group and inspects its provider-assigned ID,
+current ETag, `RoutingEndpoint`, status, enabled state, and non-default status.
+DNS remains external: before tenant creation, the caller must route the Viewer
+domain to that endpoint and verify resolution. Route 53 is not part of this
+portable contract. An existing admitted default or custom connection group may
+instead be caller-supplied when its routing endpoint is already ready.
 
 ## Lifecycle and certificate states
 
@@ -82,8 +104,9 @@ The resource-specific operations are closed and CloudFront-specific:
 
 ```text
 create/inspect/update/disable/delete distribution
+create/inspect/disable/delete custom connection group
 create/inspect/update/disable/delete tenant
-request/inspect managed certificate
+inspect managed certificate
 attach issued certificate
 activate tenant
 ```
@@ -96,8 +119,8 @@ correlation, and bounded diagnostic patterns are reused at this boundary.
 The one managed Viewer-certificate state model is:
 
 ```text
-absent
-→ requested
+no tenant
+→ requested (disabled tenant create + managed certificate request accepted)
 → validation-required (AWS pending-validation)
 → issued
 → attached
@@ -116,8 +139,9 @@ disabled + deployed + exact attachment + teardown intent → teardown-safe
 - tenant `Enabled=true`; and
 - tenant deployment status `Deployed`.
 
-A tenant ID, accepted certificate request, validation token, issued-but-unattached
-certificate, or attached-but-disabled tenant cannot satisfy `active`.
+A tenant ID, accepted create-time certificate request, validation token,
+issued-but-unattached certificate, or attached-but-disabled tenant cannot
+satisfy `active`.
 
 CloudFront managed certificates expose no private key to this contract. Current
 managed-certificate details may contain bounded HTTP validation redirects for a
@@ -134,6 +158,7 @@ authorization identity
 adapter identity and exact source revision
 AWS partition, exact account ID, global CloudFront scope, and ACM certificate region
 exact distribution and tenant IDs when assigned
+exact connection-group ID when assigned or externally admitted
 exact CloudFront-specific operation
 SHA-256 parameter digest
 non-secret credential mechanism
@@ -160,6 +185,11 @@ inspect exact tenant
 → disable tenant with current tenant ETag
 → inspect until Deployed and obtain new ETag
 → delete exact tenant with that ETag
+→ caller removes the exact Viewer DNS record outside this contract
+→ inspect exact qualification-owned custom connection group
+→ disable custom group with its current ETag
+→ inspect until Deployed and obtain new ETag
+→ delete custom group with that ETag
 → inspect exact parent
 → disable parent with complete current config and current parent ETag
 → inspect until Deployed and obtain new ETag
@@ -167,6 +197,8 @@ inspect exact tenant
 ```
 
 The implementation never lists an account and deletes by name or tag prefix.
+It never deletes a default connection group. An externally admitted existing
+group remains caller-owned and outside qualification-owned cleanup.
 Cleanup failure remains an explicit bounded failure associated with the exact
 created IDs; it does not authorize broader cleanup. Managed-certificate cleanup
 must be inspected by exact ARN after tenant removal. An adapter may request ACM
@@ -186,36 +218,50 @@ separate mutation authority, an exact AWS account context, an ephemeral technica
 key and domains, an adapter/source SHA, a parameter digest, and an approved
 credential mechanism. The run must prove:
 
-1. create and inspect one exact `tenant-only` parent and its connection-group
-   prerequisite;
-2. read back mandatory Viewer `https-only`, `CachingDisabled`, the reviewed
+1. create and inspect one exact `tenant-only` parent;
+2. create and inspect one exact custom connection group, require
+   `IsDefault=false`, and obtain its `RoutingEndpoint` before tenant creation;
+3. have the external DNS harness create and verify the exact Viewer CNAME to
+   that endpoint; DNS mutation is not a CloudFront lifecycle operation;
+4. read back mandatory Viewer `https-only`, `CachingDisabled`, the reviewed
    Origin Request Policy, required `OriginDomain`, and Origin `https-only`;
-3. create one disabled tenant and prove tenant existence is not activation;
-4. request a managed certificate, surface validation-required details, and
-   observe issuance without changing DNS through this contract;
-5. re-read the tenant ETag, attach the issued ARN, inspect, then use the new ETag
+5. create one disabled tenant with the exact connection-group ID and
+   `ManagedCertificateRequest(ValidationTokenHost=cloudfront)`, then prove
+   accepted creation/request is not activation;
+6. surface validation-required details and observe issuance without changing
+   DNS through this contract;
+7. re-read the tenant ETag, attach the issued ARN, inspect, then use the new ETag
    to activate and observe the exact domain `active`;
-6. update `OriginDomain` with the latest ETag and verify the exact read-back;
-7. exercise a deliberately stale synthetic/admission ETag without dispatching a
+8. update `OriginDomain` with the latest ETag and verify the exact read-back;
+9. exercise a deliberately stale synthetic/admission ETag without dispatching a
    conflicting provider mutation, while provider qualification records the
    bounded precondition behavior available to the authorized adapter;
-8. disable and delete the exact tenant, then disable and delete the exact parent
-   in the required order; and
-9. verify no retained billable CloudFront, connection-group, tenant, or other
-   qualification resource remains. Any cleanup failure records exact non-secret
-   resource identities for bounded manual cleanup.
+10. disable and delete the exact tenant, remove its external Viewer CNAME,
+    disable and delete the exact custom group, then disable and delete the exact
+    parent in the required order; and
+11. verify no retained billable CloudFront, connection-group, tenant, or other
+    qualification resource remains. Any cleanup failure records exact non-secret
+    resource identities for bounded manual cleanup.
 
 That run requires explicit authorization to create and mutate AWS and DNS or
 validation infrastructure. No such authority is granted by this repository
 contract or by its tests.
 
-Current status:
+The first authorized qualification accepted and deployed the reviewed parent,
+then found and cleaned an in-contract provider mismatch before a tenant or DNS
+record was created:
 
 ```text
-REAL_PROVIDER_QUALIFICATION: NOT YET AUTHORIZED / NOT RUN
-AWS_RESOURCES_CREATED: 0
-AWS_RESOURCES_MUTATED: 0
+FIRST_REAL_PROVIDER_QUALIFICATION: CONTRACT_DEFECT_FOUND_AND_CLEANED
+PROVIDER_FINDING: certificate-absent CreateDistributionTenant rejected
+RETAINED_BILLABLE_QUALIFICATION_RESOURCES: 0
+REAL_PROVIDER_QUALIFICATION: REQUALIFICATION_PENDING
 ```
+
+The corrected contract requires a routing-ready connection group and managed
+certificate request at tenant creation. A later separately authorized run must
+requalify the complete corrected lifecycle with a new nonce and parameter
+digest.
 
 ## Scope and complexity
 

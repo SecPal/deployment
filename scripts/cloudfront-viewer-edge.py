@@ -40,9 +40,12 @@ class Operation(str, Enum):
     CREATE_DISTRIBUTION = "create-distribution"
     INSPECT_DISTRIBUTION = "inspect-distribution"
     UPDATE_DISTRIBUTION = "update-distribution"
+    CREATE_CONNECTION_GROUP = "create-connection-group"
+    INSPECT_CONNECTION_GROUP = "inspect-connection-group"
+    DISABLE_CONNECTION_GROUP = "disable-connection-group"
+    DELETE_CONNECTION_GROUP = "delete-connection-group"
     CREATE_TENANT = "create-tenant"
     INSPECT_TENANT = "inspect-tenant"
-    REQUEST_CERTIFICATE = "request-certificate"
     INSPECT_CERTIFICATE = "inspect-certificate"
     ATTACH_CERTIFICATE = "attach-certificate"
     ACTIVATE_TENANT = "activate-tenant"
@@ -54,7 +57,6 @@ class Operation(str, Enum):
 
 
 class CertificateState(str, Enum):
-    ABSENT = "absent"
     REQUESTED = "requested"
     VALIDATION_REQUIRED = "validation-required"
     ISSUED = "issued"
@@ -137,12 +139,14 @@ class AwsProviderContext:
 class CloudFrontTarget:
     requested_key: str
     distribution_id: str | None = None
+    connection_group_id: str | None = None
     tenant_id: str | None = None
 
     def __post_init__(self) -> None:
         _identity("deployment-scoped technical key", self.requested_key)
         for label, value in (
             ("CloudFront distribution ID", self.distribution_id),
+            ("CloudFront connection group ID", self.connection_group_id),
             ("CloudFront distribution tenant ID", self.tenant_id),
         ):
             if value is not None:
@@ -280,12 +284,14 @@ class LifecycleResult:
 class TenantInputs:
     deployment_key: str
     distribution_id: str
+    connection_group_id: str
     viewer_domain: str
     origin_domain: str
 
     def __post_init__(self) -> None:
         _identity("deployment-scoped technical key", self.deployment_key)
         _identity("multi-tenant distribution ID", self.distribution_id)
+        _identity("CloudFront connection group ID", self.connection_group_id)
         _domain("Viewer domain", self.viewer_domain)
         _domain("OriginDomain", self.origin_domain)
         if self.viewer_domain.casefold() == self.origin_domain.casefold():
@@ -344,6 +350,7 @@ class ManagedCertificateObservation:
 class TenantObservation:
     tenant_id: str
     distribution_id: str
+    connection_group_id: str
     etag: str
     enabled: bool
     deployment_status: str
@@ -355,6 +362,7 @@ class TenantObservation:
     def __post_init__(self) -> None:
         _identity("distribution tenant ID", self.tenant_id)
         _identity("multi-tenant distribution ID", self.distribution_id)
+        _identity("CloudFront connection group ID", self.connection_group_id)
         _etag(self.etag)
         if type(self.enabled) is not bool:
             raise ContractError("tenant enabled state must be boolean")
@@ -382,6 +390,30 @@ class DistributionObservation:
             raise ContractError("distribution enabled state must be boolean")
         if self.deployment_status not in {"InProgress", "Deployed"}:
             raise ContractError("unknown distribution deployment status")
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionGroupObservation:
+    connection_group_id: str
+    etag: str
+    routing_endpoint: str
+    enabled: bool
+    deployment_status: str
+    is_default: bool
+    tenant_association_present: bool
+
+    def __post_init__(self) -> None:
+        _identity("CloudFront connection group ID", self.connection_group_id)
+        _etag(self.etag)
+        _domain("CloudFront RoutingEndpoint", self.routing_endpoint)
+        if not self.routing_endpoint.casefold().endswith(".cloudfront.net"):
+            raise ContractError("connection group RoutingEndpoint is not CloudFront-owned")
+        if type(self.enabled) is not bool or type(self.is_default) is not bool:
+            raise ContractError("connection group flags must be boolean")
+        if type(self.tenant_association_present) is not bool:
+            raise ContractError("connection group association state must be explicit")
+        if self.deployment_status not in {"InProgress", "Deployed"}:
+            raise ContractError("unknown connection group deployment status")
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,6 +494,19 @@ def plan_create_distribution(caller_reference: str) -> AwsOperationPlan:
     )
 
 
+def plan_create_connection_group(name: str) -> AwsOperationPlan:
+    """Plan one enabled custom routing prerequisite without optional products."""
+
+    _identity("CloudFront connection group name", name)
+    return AwsOperationPlan(
+        operation=Operation.CREATE_CONNECTION_GROUP,
+        api_operation="CreateConnectionGroup",
+        resource_id=None,
+        if_match=None,
+        parameters={"Name": name, "Enabled": True},
+    )
+
+
 def validate_distribution_config(config: object) -> None:
     """Admit only the ADR-019 dynamic/authenticated parent baseline."""
 
@@ -503,7 +548,7 @@ def validate_distribution_config(config: object) -> None:
 
 
 def build_create_tenant_request(inputs: TenantInputs) -> dict[str, object]:
-    """Create one disabled tenant without pretending its certificate is active."""
+    """Create one disabled tenant and request, but never imply, activation."""
 
     if type(inputs) is not TenantInputs:
         raise ContractError("typed tenant inputs are required")
@@ -512,6 +557,12 @@ def build_create_tenant_request(inputs: TenantInputs) -> dict[str, object]:
         "Name": inputs.deployment_key,
         "Domains": [{"Domain": inputs.viewer_domain}],
         "Parameters": [{"Name": ORIGIN_PARAMETER, "Value": inputs.origin_domain}],
+        "ConnectionGroupId": inputs.connection_group_id,
+        "ManagedCertificateRequest": {
+            "ValidationTokenHost": "cloudfront",
+            "PrimaryDomainName": inputs.viewer_domain,
+            "CertificateTransparencyLoggingPreference": "enabled",
+        },
         "Enabled": False,
     }
 
@@ -533,6 +584,9 @@ def plan_inspection(operation: Operation, target: CloudFrontTarget) -> AwsOperat
     if operation is Operation.INSPECT_DISTRIBUTION:
         resource_id = target.distribution_id
         api_operation = "GetDistributionConfig"
+    elif operation is Operation.INSPECT_CONNECTION_GROUP:
+        resource_id = target.connection_group_id
+        api_operation = "GetConnectionGroup"
     elif operation is Operation.INSPECT_TENANT:
         resource_id = target.tenant_id
         api_operation = "GetDistributionTenant"
@@ -550,6 +604,45 @@ def plan_inspection(operation: Operation, target: CloudFrontTarget) -> AwsOperat
         if_match=None,
         parameters={},
     )
+
+
+def normalize_connection_group_response(
+    response: object, *, tenant_association_present: bool
+) -> ConnectionGroupObservation:
+    """Normalize GetConnectionGroup plus the caller's exact known association fact."""
+
+    if type(response) is not dict or type(response.get("ConnectionGroup")) is not dict:
+        raise ContractError("CloudFront connection group response is outside the reviewed shape")
+    group = response["ConnectionGroup"]
+    try:
+        return ConnectionGroupObservation(
+            connection_group_id=group["Id"],
+            etag=response["ETag"],
+            routing_endpoint=group["RoutingEndpoint"],
+            enabled=group["Enabled"],
+            deployment_status=group["Status"],
+            is_default=group["IsDefault"],
+            tenant_association_present=tenant_association_present,
+        )
+    except (KeyError, TypeError) as error:
+        raise ContractError("CloudFront connection group response is incomplete") from error
+
+
+def validate_connection_group_observation(
+    observation: ConnectionGroupObservation,
+    target: CloudFrontTarget,
+    *,
+    qualification_owned: bool,
+) -> None:
+    if type(observation) is not ConnectionGroupObservation or type(target) is not CloudFrontTarget:
+        raise ContractError("typed connection group admission inputs are required")
+    if (
+        target.connection_group_id is None
+        or observation.connection_group_id != target.connection_group_id
+    ):
+        raise ContractError("connection group observation mismatches the exact target")
+    if qualification_owned and observation.is_default:
+        raise ContractError("qualification-owned connection group must be custom")
 
 
 def normalize_tenant_response(response: object) -> TenantObservation:
@@ -581,6 +674,7 @@ def normalize_tenant_response(response: object) -> TenantObservation:
         return TenantObservation(
             tenant_id=tenant["Id"],
             distribution_id=tenant["DistributionId"],
+            connection_group_id=tenant["ConnectionGroupId"],
             etag=response["ETag"],
             enabled=tenant["Enabled"],
             deployment_status=tenant["Status"],
@@ -637,6 +731,8 @@ def validate_tenant_observation(
         or observation.tenant_id != target.tenant_id
         or observation.distribution_id != inputs.distribution_id
         or observation.distribution_id != target.distribution_id
+        or observation.connection_group_id != inputs.connection_group_id
+        or observation.connection_group_id != target.connection_group_id
         or observation.viewer_domain != inputs.viewer_domain
         or observation.origin_domain != inputs.origin_domain
     ):
@@ -647,7 +743,6 @@ def classify_certificate_state(
     tenant: TenantObservation,
     certificate: ManagedCertificateObservation | None,
     *,
-    request_accepted: bool = False,
     teardown_requested: bool = False,
 ) -> CertificateState:
     """Classify only provider-observed facts; tenant existence is never active."""
@@ -663,7 +758,7 @@ def classify_certificate_state(
         if tenant.certificate_arn == certificate.certificate_arn:
             return CertificateState.TEARDOWN_SAFE
     if certificate is None:
-        return CertificateState.REQUESTED if request_accepted else CertificateState.ABSENT
+        return CertificateState.REQUESTED
     if type(certificate) is not ManagedCertificateObservation:
         raise ContractError("managed certificate observation is invalid")
     if certificate.status == "pending-validation":
@@ -702,6 +797,7 @@ def replace_inputs_origin(inputs: TenantInputs, origin_domain: str) -> TenantInp
     return TenantInputs(
         deployment_key=inputs.deployment_key,
         distribution_id=inputs.distribution_id,
+        connection_group_id=inputs.connection_group_id,
         viewer_domain=inputs.viewer_domain,
         origin_domain=origin_domain,
     )
@@ -719,7 +815,6 @@ def plan_tenant_mutation(
     """Plan one exact ETag-bound tenant mutation with no retries."""
 
     if type(operation) is not Operation or operation not in {
-        Operation.REQUEST_CERTIFICATE,
         Operation.ATTACH_CERTIFICATE,
         Operation.ACTIVATE_TENANT,
         Operation.UPDATE_TENANT,
@@ -731,17 +826,7 @@ def plan_tenant_mutation(
     assert target.tenant_id is not None
     parameters: dict[str, object]
     api_operation = "UpdateDistributionTenant"
-    if operation is Operation.REQUEST_CERTIFICATE:
-        if tenant.certificate_arn is not None:
-            raise ContractError("certificate request would replace an attached certificate")
-        parameters = {
-            "ManagedCertificateRequest": {
-                "ValidationTokenHost": "cloudfront",
-                "PrimaryDomainName": inputs.viewer_domain,
-                "CertificateTransparencyLoggingPreference": "enabled",
-            }
-        }
-    elif operation is Operation.ATTACH_CERTIFICATE:
+    if operation is Operation.ATTACH_CERTIFICATE:
         if certificate is None or certificate.status != "issued":
             raise ContractError("only an issued managed certificate may be attached")
         assert certificate.certificate_arn is not None
@@ -772,6 +857,51 @@ def plan_tenant_mutation(
         api_operation=api_operation,
         resource_id=target.tenant_id,
         if_match=tenant.etag,
+        parameters=parameters,
+    )
+
+
+def plan_connection_group_mutation(
+    operation: Operation,
+    target: CloudFrontTarget,
+    observation: ConnectionGroupObservation,
+    *,
+    admitted_etag: str,
+) -> AwsOperationPlan:
+    """Plan exact custom-group disable/delete with current ETag semantics."""
+
+    if operation not in {
+        Operation.DISABLE_CONNECTION_GROUP,
+        Operation.DELETE_CONNECTION_GROUP,
+    }:
+        raise ContractError("operation is not a connection group mutation")
+    validate_connection_group_observation(
+        observation, target, qualification_owned=True
+    )
+    _etag(admitted_etag)
+    if admitted_etag != observation.etag:
+        raise ContractError("admitted connection group ETag is stale or mismatched")
+    if observation.is_default:
+        raise ContractError("default connection groups are never mutated by this lifecycle")
+    if operation is Operation.DISABLE_CONNECTION_GROUP:
+        api_operation = "UpdateConnectionGroup"
+        parameters: dict[str, object] = {"Enabled": False}
+    else:
+        if (
+            observation.enabled
+            or observation.deployment_status != "Deployed"
+            or observation.tenant_association_present
+        ):
+            raise ContractError(
+                "custom connection group must be unassociated, disabled, and deployed before deletion"
+            )
+        api_operation = "DeleteConnectionGroup"
+        parameters = {}
+    return AwsOperationPlan(
+        operation=operation,
+        api_operation=api_operation,
+        resource_id=observation.connection_group_id,
+        if_match=observation.etag,
         parameters=parameters,
     )
 
@@ -816,7 +946,9 @@ def plan_distribution_mutation(
 
 
 def next_teardown_operation(
-    tenant: TenantObservation | None, distribution: DistributionObservation
+    tenant: TenantObservation | None,
+    connection_group: ConnectionGroupObservation | None,
+    distribution: DistributionObservation,
 ) -> Operation:
     """Return the next exact-target teardown transition; never broad cleanup."""
 
@@ -826,6 +958,16 @@ def next_teardown_operation(
         if tenant.deployment_status != "Deployed":
             return Operation.INSPECT_TENANT
         return Operation.DELETE_TENANT
+    if connection_group is not None:
+        if connection_group.is_default:
+            raise ContractError("default connection groups remain caller-owned prerequisites")
+        if connection_group.tenant_association_present:
+            raise ContractError("connection group teardown requires cleared tenant associations")
+        if connection_group.enabled:
+            return Operation.DISABLE_CONNECTION_GROUP
+        if connection_group.deployment_status != "Deployed":
+            return Operation.INSPECT_CONNECTION_GROUP
+        return Operation.DELETE_CONNECTION_GROUP
     if distribution.enabled:
         return Operation.DISABLE_DISTRIBUTION
     if distribution.deployment_status != "Deployed":
@@ -848,12 +990,25 @@ def admit_request(request: LifecycleRequest, authority: ExecutionAuthority) -> N
         raise ContractError("request does not match the exact authorized target")
     if request.operation not in authority.operations:
         raise ContractError("operation is not authorized for this exact target")
-    if request.operation not in {Operation.CREATE_DISTRIBUTION, Operation.CREATE_TENANT}:
+    if request.operation is not Operation.CREATE_DISTRIBUTION:
         if request.target.distribution_id is None:
             raise ContractError("operation requires a provider-native distribution ID")
     if request.operation in {
+        Operation.INSPECT_CONNECTION_GROUP,
+        Operation.DISABLE_CONNECTION_GROUP,
+        Operation.DELETE_CONNECTION_GROUP,
+        Operation.CREATE_TENANT,
         Operation.INSPECT_TENANT,
-        Operation.REQUEST_CERTIFICATE,
+        Operation.INSPECT_CERTIFICATE,
+        Operation.ATTACH_CERTIFICATE,
+        Operation.ACTIVATE_TENANT,
+        Operation.UPDATE_TENANT,
+        Operation.DISABLE_TENANT,
+        Operation.DELETE_TENANT,
+    } and request.target.connection_group_id is None:
+        raise ContractError("operation requires a provider-native connection group ID")
+    if request.operation in {
+        Operation.INSPECT_TENANT,
         Operation.INSPECT_CERTIFICATE,
         Operation.ATTACH_CERTIFICATE,
         Operation.ACTIVATE_TENANT,
@@ -879,20 +1034,29 @@ def admit_result(request: LifecycleRequest, result: LifecycleResult) -> None:
         or result.parameters_sha256 != request.parameters_sha256
     ):
         raise ContractError("result is not bound to the exact request")
-    expected_resource = (
-        request.target.tenant_id
-        if request.operation in {
-            Operation.INSPECT_TENANT,
-            Operation.REQUEST_CERTIFICATE,
-            Operation.INSPECT_CERTIFICATE,
-            Operation.ATTACH_CERTIFICATE,
-            Operation.ACTIVATE_TENANT,
-            Operation.UPDATE_TENANT,
-            Operation.DISABLE_TENANT,
-            Operation.DELETE_TENANT,
-        }
-        else request.target.distribution_id
-    )
+    if request.operation in {
+        Operation.CREATE_CONNECTION_GROUP,
+        Operation.CREATE_TENANT,
+    }:
+        expected_resource = None
+    elif request.operation in {
+        Operation.INSPECT_TENANT,
+        Operation.INSPECT_CERTIFICATE,
+        Operation.ATTACH_CERTIFICATE,
+        Operation.ACTIVATE_TENANT,
+        Operation.UPDATE_TENANT,
+        Operation.DISABLE_TENANT,
+        Operation.DELETE_TENANT,
+    }:
+        expected_resource = request.target.tenant_id
+    elif request.operation in {
+        Operation.INSPECT_CONNECTION_GROUP,
+        Operation.DISABLE_CONNECTION_GROUP,
+        Operation.DELETE_CONNECTION_GROUP,
+    }:
+        expected_resource = request.target.connection_group_id
+    else:
+        expected_resource = request.target.distribution_id
     if result.resource_id is not None and expected_resource is not None:
         if result.resource_id != expected_resource:
             raise ContractError("result resource identity mismatches the target")
@@ -908,9 +1072,10 @@ def qualification_operations() -> tuple[Operation, ...]:
     return (
         Operation.CREATE_DISTRIBUTION,
         Operation.INSPECT_DISTRIBUTION,
+        Operation.CREATE_CONNECTION_GROUP,
+        Operation.INSPECT_CONNECTION_GROUP,
         Operation.CREATE_TENANT,
         Operation.INSPECT_TENANT,
-        Operation.REQUEST_CERTIFICATE,
         Operation.INSPECT_CERTIFICATE,
         Operation.ATTACH_CERTIFICATE,
         Operation.INSPECT_TENANT,
@@ -921,6 +1086,9 @@ def qualification_operations() -> tuple[Operation, ...]:
         Operation.DISABLE_TENANT,
         Operation.INSPECT_TENANT,
         Operation.DELETE_TENANT,
+        Operation.DISABLE_CONNECTION_GROUP,
+        Operation.INSPECT_CONNECTION_GROUP,
+        Operation.DELETE_CONNECTION_GROUP,
         Operation.DISABLE_DISTRIBUTION,
         Operation.INSPECT_DISTRIBUTION,
         Operation.DELETE_DISTRIBUTION,
