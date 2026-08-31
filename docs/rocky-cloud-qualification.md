@@ -270,6 +270,28 @@ subgid ranges. The account has `nologin`, no sudo grant, no supplementary
 privileged groups, linger enabled, and no write access to administrator Quadlet
 authority.
 
+Administrator preparation binds the user manager's effective
+`QUADLET_UNIT_DIRS` to `/etc/containers/systemd/users/<runtime-uid>` through a
+root-owned system-service drop-in. Before the qualification harness reloads the user
+manager, it walks every component from `/` through that exact directory and the
+fixture definition without following symlinks, admits root ownership and the
+absence of group/other write permission, and independently proves that the
+runtime account cannot write any component. It applies the same check to the
+search-path drop-in and observes the effective manager environment, so default
+user-writable Quadlet locations cannot replace the admitted input. After reload
+and before activation, it also admits the generated service's exact fragment
+and source paths, absence of drop-ins, and direct Podman execution; a shadowing
+user unit or user-owned override therefore fails closed.
+
+The account UID/GID must be nonzero before preparation changes it. Qualification
+then admits Podman's effective rootless report and binds both the invoking
+process and the active Quadlet unit's main process to that exact account. The
+running Quadlet container supplies `/proc/1/status`; one admission function
+requires effective UID/GID `65532:65532`, `NoNewPrivs: 1`, zero inherited,
+permitted, effective, bounding, and ambient capability masks, and `Seccomp: 2`.
+The Quadlet requests these values, but only the observed process state satisfies
+qualification.
+
 The prior Alpine digest was the architecture-specific `amd64` child. The Rocky
 ARM input is the immutable Alpine 3.22.1 multi-platform index
 `sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1`;

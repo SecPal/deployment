@@ -428,7 +428,7 @@ admit_repositories() {
 }
 
 install_policy() {
-  local fixture_digest_metadata runtime_uid
+  local fixture_digest_metadata runtime_uid runtime_gid quadlet_root user_manager_dropin
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="repositories"
@@ -455,6 +455,9 @@ install_policy() {
     useradd --system --user-group --create-home \
       --shell /usr/sbin/nologin "$runtime_account"
   fi
+  runtime_uid="$(id -u "$runtime_account")"
+  runtime_gid="$(id -g "$runtime_account")"
+  [[ "$runtime_uid" =~ ^[1-9][0-9]*$ && "$runtime_gid" =~ ^[1-9][0-9]*$ ]]
   usermod --shell /usr/sbin/nologin "$runtime_account"
   [[ "$(id -Gn "$runtime_account")" == "$runtime_account" ]]
   current_phase="subids"
@@ -463,11 +466,17 @@ install_policy() {
   loginctl enable-linger "$runtime_account"
   runtime_uid="$(id -u "$runtime_account")"
   current_phase="quadlet-authority"
-  install -d -o root -g root -m 0755 "/etc/containers/systemd/users/$runtime_uid"
-  if run_as_runtime test -w "/etc/containers/systemd/users/$runtime_uid"; then
+  quadlet_root="/etc/containers/systemd/users/$runtime_uid"
+  user_manager_dropin="/etc/systemd/system/user@${runtime_uid}.service.d"
+  install -d -o root -g root -m 0755 "$quadlet_root" "$user_manager_dropin"
+  printf '[Service]\nEnvironment=QUADLET_UNIT_DIRS=%s\n' "$quadlet_root" |
+    install -o root -g root -m 0644 /dev/stdin \
+      "$user_manager_dropin/50-secpal-quadlet.conf"
+  if run_as_runtime test -w "$quadlet_root"; then
     printf 'ERROR: runtime account can write administrator Quadlet authority.\n' >&2
     exit 1
   fi
+  systemctl daemon-reload
   systemctl start "user@$runtime_uid.service"
   run_as_runtime systemctl --user mask --now podman.socket podman.service
   current_phase="fixture"

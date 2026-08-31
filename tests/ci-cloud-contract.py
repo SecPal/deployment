@@ -949,6 +949,7 @@ class CloudCIContractTests(unittest.TestCase):
             "schemas",
             "scripts/ci-cloud",
             "scripts/fetch-oci-attestation.py",
+            "scripts/qualify-production-host.sh",
             "scripts/quadlet-integration.py",
         ):
             source = ROOT / path
@@ -975,6 +976,71 @@ class CloudCIContractTests(unittest.TestCase):
     def test_repository_cloud_ci_contract_is_valid(self) -> None:
         result = self.run_validator()
         self.assertEqual(0, result.returncode, result.stdout)
+
+    def test_static_contract_rejects_weakened_runtime_authority_admission(self) -> None:
+        harness = "scripts/qualify-production-host.sh"
+        mutations = (
+            (
+                '[[ "$service_uid" =~ ^[1-9][0-9]*$ && "$service_gid" =~ ^[1-9][0-9]*$ ]]',
+                '[[ "$service_uid" =~ ^[0-9]+$ && "$service_gid" =~ ^[0-9]+$ ]]',
+            ),
+            (
+                'podman_rootless="$(rootless_podman info --format \'{{.Host.Security.Rootless}}\')"',
+                'podman_rootless=true',
+            ),
+            ('[[ -e "$component" && ! -L "$component" ]]', '[[ -e "$component" ]]'),
+            (
+                '[[ "$uid" == "$administrator_uid" && "$gid" == "$administrator_gid" ]]',
+                '[[ "$uid" == "$administrator_uid" ]]',
+            ),
+            ("(((8#$mode & 8#022) == 0))", ":"),
+            (
+                'service_account_cannot_write_path "$quadlet_root" /',
+                'administrator_path_admitted "$quadlet_root" / 0 0',
+            ),
+            ('[[ "$value" == 1 ]]', '[[ "$value" =~ ^[01]$ ]]'),
+            (
+                "for field in CapInh CapPrm CapEff CapBnd CapAmb; do",
+                "for field in CapEff; do",
+            ),
+            ('[[ "$value" == 0000000000000000 ]]', '[[ -n "$value" ]]'),
+            ('[[ "$value" == 2 ]]', '[[ "$value" =~ ^[012]$ ]]'),
+            (
+                'administrator_path_admitted "$quadlet_search_policy" / 0 0 file 644',
+                'administrator_path_admitted "$quadlet_root" / 0 0 directory 755',
+            ),
+            (
+                '[[ "$effective_quadlet_dirs" != "$quadlet_root" ]]',
+                '[[ -z "$effective_quadlet_dirs" ]]',
+            ),
+            (
+                '[[ "$fragment" == "$expected_fragment" ]]',
+                '[[ -n "$fragment" ]]',
+            ),
+            (
+                '[[ "$source" == "$expected_source" ]]',
+                '[[ -n "$source" ]]',
+            ),
+            ('[[ -z "$drop_ins" ]]', '[[ -n "$drop_ins" ]]'),
+            (
+                "direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '",
+                "direct_podman_prefix='{ path=/usr/bin/sh ; argv[]=/usr/bin/sh -c '",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(old=old):
+                self.assert_mutation_rejected(harness, old, new)
+
+        preparation = "scripts/ci-cloud/prepare-rocky-host.sh"
+        for old, new in (
+            (
+                '[[ "$runtime_uid" =~ ^[1-9][0-9]*$ && "$runtime_gid" =~ ^[1-9][0-9]*$ ]]',
+                '[[ "$runtime_uid" =~ ^[0-9]+$ && "$runtime_gid" =~ ^[0-9]+$ ]]',
+            ),
+            ("Environment=QUADLET_UNIT_DIRS=%s", "Environment=HOME=%s"),
+        ):
+            with self.subTest(old=old):
+                self.assert_mutation_rejected(preparation, old, new)
 
     def test_rejects_weakened_current_boot_runtime_user_readiness(self) -> None:
         publisher = "scripts/ci-cloud/publish-rocky-qualification-readiness.py"

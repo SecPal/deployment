@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -44,6 +45,7 @@ ACTIVE_ENV = ROOT / "scripts/ci-cloud/rocky-active-env.py"
 ACTIVE_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-active-systemctl.py"
 PRIMARY_RUNUSER = ROOT / "scripts/ci-cloud/rocky-primary-runuser.py"
 PRIMARY_RUNTIME = ROOT / "scripts/ci-cloud/rocky-primary-runtime.py"
+QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
 
 
 class RetainedBytesIO(io.BytesIO):
@@ -100,6 +102,231 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.classifier = load_classifier()
         cls.observer = load_observer()
+
+    def run_authority_contract(
+        self, command: str, *arguments: str, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        invocation = " ".join(shlex.quote(argument) for argument in arguments)
+        return subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"source {shlex.quote(os.fspath(QUALIFICATION_HARNESS))}; "
+                f"{command} {invocation}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, **(environment or {})},
+        )
+
+    def test_quadlet_authority_rejects_unsafe_ancestor_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ancestor = root / "etc"
+            leaf = ancestor / "containers" / "systemd" / "users" / "20000"
+            leaf.mkdir(parents=True)
+            component = root
+            component.chmod(0o755)
+            for name in leaf.relative_to(root).parts:
+                component /= name
+                component.chmod(0o755)
+            uid = str(os.getuid())
+            gid = str(os.getgid())
+
+            valid = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertEqual(0, valid.returncode, valid.stderr)
+
+            ancestor.chmod(0o775)
+            writable = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertNotEqual(0, writable.returncode)
+            ancestor.chmod(0o755)
+
+            ancestor.chmod(0o757)
+            world_writable = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertNotEqual(0, world_writable.returncode)
+            ancestor.chmod(0o755)
+
+            wrong_owner = self.run_authority_contract(
+                "administrator_path_admitted",
+                leaf.as_posix(),
+                root.as_posix(),
+                str(os.getuid() + 1),
+                gid,
+            )
+            self.assertNotEqual(0, wrong_owner.returncode)
+
+            real_leaf = leaf.parent / "real"
+            leaf.rename(real_leaf)
+            leaf.symlink_to(real_leaf, target_is_directory=True)
+            redirected = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertNotEqual(0, redirected.returncode)
+
+            leaf.unlink()
+            real_leaf.rename(leaf)
+            containers = ancestor / "containers"
+            real_containers = ancestor / "real-containers"
+            containers.rename(real_containers)
+            containers.symlink_to(real_containers, target_is_directory=True)
+            ancestor_redirected = self.run_authority_contract(
+                "administrator_path_admitted", leaf.as_posix(), root.as_posix(), uid, gid
+            )
+            self.assertNotEqual(0, ancestor_redirected.returncode)
+
+    def test_effective_quadlet_service_admission_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            properties = Path(directory) / "service.properties"
+            expected_fragment = (
+                "/run/user/20000/systemd/generator/"
+                "secpal-host-qualification-fixture.service"
+            )
+            expected_source = (
+                "/etc/containers/systemd/users/20000/"
+                "secpal-host-qualification-fixture.container"
+            )
+            baseline = {
+                "FragmentPath": expected_fragment,
+                "SourcePath": expected_source,
+                "DropInPaths": "",
+                "ExecStart": (
+                    "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run "
+                    "--name=secpal-host-qualification-fixture ; }"
+                ),
+            }
+
+            def admitted(values: dict[str, str]) -> subprocess.CompletedProcess[str]:
+                properties.write_text(
+                    "".join(f"{name}={value}\n" for name, value in values.items()),
+                    encoding="utf-8",
+                )
+                return self.run_authority_contract(
+                    "effective_quadlet_service_admitted",
+                    properties.as_posix(),
+                    expected_fragment,
+                    expected_source,
+                )
+
+            valid = admitted(baseline)
+            self.assertEqual(0, valid.returncode, valid.stderr)
+
+            mutations = {
+                "shadowed fragment": {
+                    "FragmentPath": (
+                        "/home/secpal-deploy/.config/systemd/user/"
+                        "secpal-host-qualification-fixture.service"
+                    )
+                },
+                "substituted source": {
+                    "SourcePath": "/home/secpal-deploy/fixture.container"
+                },
+                "runtime drop-in": {
+                    "DropInPaths": (
+                        "/home/secpal-deploy/.config/systemd/user/"
+                        "secpal-host-qualification-fixture.service.d/override.conf"
+                    )
+                },
+                "substituted execution": {
+                    "ExecStart": "{ path=/usr/bin/sh ; argv[]=/usr/bin/sh -c true ; }"
+                },
+            }
+            for name, mutation in mutations.items():
+                with self.subTest(name=name):
+                    self.assertNotEqual(0, admitted({**baseline, **mutation}).returncode)
+
+            duplicate = dict(baseline)
+            duplicate["FragmentPath"] += f"\nFragmentPath={expected_fragment}"
+            self.assertNotEqual(0, admitted(duplicate).returncode)
+
+    def test_quadlet_authority_rejects_effective_service_account_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            leaf = root / "etc" / "containers" / "systemd" / "users" / "20000"
+            leaf.mkdir(parents=True)
+            result = self.run_authority_contract(
+                "run_as_service_account() { [[ \"${*: -1}\" == \"$WRITABLE_PATH\" ]]; }; "
+                "service_account_cannot_write_path",
+                leaf.as_posix(),
+                root.as_posix(),
+                environment={"WRITABLE_PATH": leaf.parent.as_posix()},
+            )
+            self.assertNotEqual(0, result.returncode)
+
+    def test_rootless_runtime_identity_admission_fails_closed(self) -> None:
+        for facts in (
+            ("false", "20000", "20000", "20000", "20000"),
+            ("true", "0", "0", "0", "0"),
+            ("true", "20001", "20000", "20000", "20000"),
+            ("true", "20000", "20001", "20000", "20000"),
+        ):
+            with self.subTest(facts=facts):
+                result = self.run_authority_contract(
+                    "runtime_identity_admitted", *facts
+                )
+                self.assertNotEqual(0, result.returncode)
+
+        valid = self.run_authority_contract(
+            "runtime_identity_admitted", "true", "20000", "20000", "20000", "20000"
+        )
+        self.assertEqual(0, valid.returncode, valid.stderr)
+
+    def test_effective_workload_least_authority_admission(self) -> None:
+        baseline = {
+            "Uid": "65532\t65532\t65532\t65532",
+            "Gid": "65532\t65532\t65532\t65532",
+            "NoNewPrivs": "1",
+            "CapInh": "0000000000000000",
+            "CapPrm": "0000000000000000",
+            "CapEff": "0000000000000000",
+            "CapBnd": "0000000000000000",
+            "CapAmb": "0000000000000000",
+            "Seccomp": "2",
+        }
+        mutations = (
+            ("Uid", "65532\t0\t65532\t65532"),
+            ("Gid", "65532\t0\t65532\t65532"),
+            ("NoNewPrivs", "0"),
+            ("CapInh", "0000000000000001"),
+            ("CapPrm", "0000000000000001"),
+            ("CapEff", "0000000000000001"),
+            ("CapBnd", "0000000000000001"),
+            ("CapAmb", "0000000000000001"),
+            ("Seccomp", "0"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            status_path = Path(directory) / "status"
+
+            def write_status(fields: dict[str, str]) -> None:
+                status_path.write_text(
+                    "".join(f"{name}:\t{value}\n" for name, value in fields.items()),
+                    encoding="ascii",
+                )
+
+            write_status(baseline)
+            valid = self.run_authority_contract(
+                "least_authority_process_admitted",
+                status_path.as_posix(),
+                "65532",
+                "65532",
+            )
+            self.assertEqual(0, valid.returncode, valid.stderr)
+            for field, value in mutations:
+                with self.subTest(field=field):
+                    write_status({**baseline, field: value})
+                    result = self.run_authority_contract(
+                        "least_authority_process_admitted",
+                        status_path.as_posix(),
+                        "65532",
+                        "65532",
+                    )
+                    self.assertNotEqual(0, result.returncode)
 
     @staticmethod
     def reload_observation_fields() -> dict[str, object]:

@@ -2039,6 +2039,7 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_text = json.dumps(target_job, sort_keys=True)
     preparation = read(root, "scripts/ci-cloud/prepare-rocky-host.sh")
     target_runner = read(root, "scripts/ci-cloud/run-rocky-target-qualification.sh")
+    qualification_harness = read(root, "scripts/qualify-production-host.sh")
     target_failure_classifier = read(
         root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
     )
@@ -2133,6 +2134,95 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'bash "$work_root/scripts/qualify-production-host.sh"' in target_runner
         and "qualification_harness_base64gzip" not in bootstrap + main,
         "trusted control must bind the exact target qualification workload bytes",
+    )
+    require(
+        '[[ "$service_uid" =~ ^[1-9][0-9]*$ && "$service_gid" =~ ^[1-9][0-9]*$ ]]'
+        in qualification_harness
+        and 'podman_rootless="$(rootless_podman info --format \'{{.Host.Security.Rootless}}\')"'
+        in qualification_harness
+        and 'runtime_status="$(run_as_service_account cat /proc/self/status)"'
+        in qualification_harness
+        and qualification_harness.count("runtime_identity_admitted \\\n") == 2,
+        "qualification must bind a non-root service identity to effective rootless Podman and Quadlet execution",
+    )
+    require(
+        "administrator_path_admitted() {" in qualification_harness
+        and '[[ -e "$component" && ! -L "$component" ]]'
+        in qualification_harness
+        and "stat -c '%u:%g:%a' -- \"$component\"" in qualification_harness
+        and '[[ "$uid" == "$administrator_uid" && "$gid" == "$administrator_gid" ]]'
+        in qualification_harness
+        and "(((8#$mode & 8#022) == 0))" in qualification_harness
+        and "service_account_cannot_write_path() {" in qualification_harness
+        and qualification_harness.count(
+            'service_account_cannot_write_path "$quadlet_'
+        )
+        == 4
+        and 'service_account_cannot_write_path "$unit_path" /'
+        in qualification_harness
+        and qualification_harness.index(
+            'administrator_path_admitted "$unit_path" / 0 0 file 644'
+        )
+        < qualification_harness.index(
+            "\nuser_systemctl daemon-reload\n"
+        ),
+        "qualification must admit immutable administrator ownership across the exact Quadlet ancestry before reload",
+    )
+    require(
+        '[[ "$runtime_uid" =~ ^[1-9][0-9]*$ && "$runtime_gid" =~ ^[1-9][0-9]*$ ]]'
+        in preparation
+        and preparation.index(
+            '[[ "$runtime_uid" =~ ^[1-9][0-9]*$ && "$runtime_gid" =~ ^[1-9][0-9]*$ ]]'
+        )
+        < preparation.index('usermod --shell /usr/sbin/nologin "$runtime_account"')
+        and 'user_manager_dropin="/etc/systemd/system/user@${runtime_uid}.service.d"'
+        in preparation
+        and "Environment=QUADLET_UNIT_DIRS=%s" in preparation
+        and 'systemctl daemon-reload\n  systemctl start "user@$runtime_uid.service"'
+        in preparation
+        and 'administrator_path_admitted "$quadlet_search_policy" / 0 0 file 644'
+        in qualification_harness
+        and 'service_account_cannot_write_path "$quadlet_search_policy" /'
+        in qualification_harness
+        and 'user_systemctl show-environment |' in qualification_harness
+        and '[[ "$effective_quadlet_dirs" != "$quadlet_root" ]]'
+        in qualification_harness,
+        "administrator preparation and effective generator discovery must agree on the one immutable UID-scoped Quadlet path",
+    )
+    require(
+        "effective_quadlet_service_admitted() {" in qualification_harness
+        and '[[ "$fragment" == "$expected_fragment" ]]'
+        in qualification_harness
+        and '[[ "$source" == "$expected_source" ]]'
+        in qualification_harness
+        and '[[ -z "$drop_ins" ]]' in qualification_harness
+        and "direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '"
+        in qualification_harness
+        and '--property=FragmentPath --property=SourcePath' in qualification_harness
+        and '--property=DropInPaths --property=ExecStart' in qualification_harness
+        and qualification_harness.index("\nuser_systemctl daemon-reload\n")
+        < qualification_harness.index(
+            "\nif ! effective_quadlet_service_admitted \\\n"
+        )
+        < qualification_harness.index(
+            '\nuser_systemctl start "${unit_name}.service"\n'
+        ),
+        "qualification must admit the effective generated service before activation",
+    )
+    require(
+        "least_authority_process_admitted() {" in qualification_harness
+        and 'identities="$(effective_process_ids "$status_path")"'
+        in qualification_harness
+        and '[[ "$value" == 1 ]]' in qualification_harness
+        and "for field in CapInh CapPrm CapEff CapBnd CapAmb; do"
+        in qualification_harness
+        and '[[ "$value" == 0000000000000000 ]]' in qualification_harness
+        and '[[ "$value" == 2 ]]' in qualification_harness
+        and 'rootless_podman exec "$unit_name" awk' in qualification_harness
+        and 'least_authority_process_admitted \\\n'
+        '    "$workload_status" "$WORKLOAD_UID" "$WORKLOAD_GID"'
+        in qualification_harness,
+        "qualification must observe and admit the running workload's complete least-authority process state",
     )
     require(
         "ulimit -f" not in target_runner

@@ -8,6 +8,8 @@ readonly NOT_RUN=2
 readonly QUALIFIED_ROCKY_MINOR="10.2"
 readonly DEFAULT_ACCOUNT="secpal-deploy"
 readonly UNIT_PREFIX="secpal-host-qualification"
+readonly WORKLOAD_UID="65532"
+readonly WORKLOAD_GID="65532"
 
 image=""
 service_account="$DEFAULT_ACCOUNT"
@@ -58,6 +60,130 @@ matching_marker_avc() {
     grep -F 'marker' >/dev/null
 }
 
+path_ancestry() {
+  local target="$1" boundary="$2" relative component
+  [[ "$target" == /* && "$boundary" == /* ]] || return 1
+  [[ "$(realpath -m -- "$target")" == "$target" ]] || return 1
+  [[ "$(realpath -m -- "$boundary")" == "$boundary" ]] || return 1
+  if [[ "$boundary" == / ]]; then
+    relative="${target#/}"
+  else
+    [[ "$target" == "$boundary" || "$target" == "$boundary/"* ]] || return 1
+    relative="${target#"$boundary"}"
+    relative="${relative#/}"
+  fi
+  printf '%s\n' "$boundary"
+  component="$boundary"
+  while [[ -n "$relative" ]]; do
+    local name="${relative%%/*}"
+    [[ -n "$name" && "$name" != . && "$name" != .. ]] || return 1
+    if [[ "$component" == / ]]; then
+      component="/$name"
+    else
+      component="$component/$name"
+    fi
+    printf '%s\n' "$component"
+    if [[ "$relative" == */* ]]; then
+      relative="${relative#*/}"
+    else
+      relative=""
+    fi
+  done
+}
+
+administrator_path_admitted() {
+  local target="$1" boundary="$2" administrator_uid="$3" administrator_gid="$4"
+  local leaf_type="${5:-directory}" leaf_mode="${6:-}" component metadata uid gid mode
+  local -a components=()
+  mapfile -t components < <(path_ancestry "$target" "$boundary") || return 1
+  ((${#components[@]} >= 1)) || return 1
+  for component in "${components[@]}"; do
+    [[ -e "$component" && ! -L "$component" ]] || return 1
+    if [[ "$component" == "$target" && "$leaf_type" == file ]]; then
+      [[ -f "$component" ]] || return 1
+    else
+      [[ -d "$component" ]] || return 1
+    fi
+    metadata="$(stat -c '%u:%g:%a' -- "$component")" || return 1
+    IFS=: read -r uid gid mode <<<"$metadata"
+    [[ "$uid" == "$administrator_uid" && "$gid" == "$administrator_gid" ]] || return 1
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (((8#$mode & 8#022) == 0)) || return 1
+    if [[ "$component" == "$target" && -n "$leaf_mode" ]]; then
+      [[ "$mode" == "$leaf_mode" ]] || return 1
+    fi
+  done
+  return 0
+}
+
+service_account_cannot_write_path() {
+  local target="$1" boundary="$2" component
+  local -a components=()
+  mapfile -t components < <(path_ancestry "$target" "$boundary") || return 1
+  ((${#components[@]} >= 1)) || return 1
+  for component in "${components[@]}"; do
+    if run_as_service_account test -w "$component"; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+effective_process_ids() {
+  local status_path="$1" identities
+  identities="$(awk '
+    $1 == "Uid:" { uid_count++; uid = $3 }
+    $1 == "Gid:" { gid_count++; gid = $3 }
+    END {
+      if (uid_count != 1 || gid_count != 1) exit 1
+      print uid ":" gid
+    }
+  ' "$status_path")" || return 1
+  [[ "$identities" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  printf '%s\n' "$identities"
+}
+
+runtime_identity_admitted() {
+  local rootless="$1" observed_uid="$2" observed_gid="$3" expected_uid="$4" expected_gid="$5"
+  [[ "$rootless" == true ]] || return 1
+  [[ "$expected_uid" =~ ^[1-9][0-9]*$ && "$expected_gid" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$observed_uid" == "$expected_uid" && "$observed_gid" == "$expected_gid" ]] || return 1
+  return 0
+}
+
+effective_quadlet_service_admitted() {
+  local properties_path="$1" expected_fragment="$2" expected_source="$3"
+  local fragment source drop_ins exec_start direct_podman_prefix
+  [[ -f "$properties_path" ]] || return 1
+  [[ "$(awk 'END { print NR }' "$properties_path")" == 4 ]] || return 1
+  fragment="$(awk -F= '$1 == "FragmentPath" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
+  source="$(awk -F= '$1 == "SourcePath" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
+  drop_ins="$(awk -F= '$1 == "DropInPaths" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
+  exec_start="$(awk -F= '$1 == "ExecStart" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
+  [[ "$fragment" == "$expected_fragment" ]] || return 1
+  [[ "$source" == "$expected_source" ]] || return 1
+  [[ -z "$drop_ins" ]] || return 1
+  direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '
+  [[ "$exec_start" == "$direct_podman_prefix"* && "$exec_start" == *' ; }' ]] || return 1
+  [[ "${exec_start#*\{ path=}" != *'{ path='* ]] || return 1
+  return 0
+}
+
+least_authority_process_admitted() {
+  local status_path="$1" expected_uid="$2" expected_gid="$3" identities field value
+  identities="$(effective_process_ids "$status_path")" || return 1
+  [[ "$identities" == "$expected_uid:$expected_gid" ]] || return 1
+  value="$(awk '$1 == "NoNewPrivs:" { count++; value = $2 } END { if (count != 1) exit 1; print value }' "$status_path")" || return 1
+  [[ "$value" == 1 ]] || return 1
+  for field in CapInh CapPrm CapEff CapBnd CapAmb; do
+    value="$(awk -v field="$field:" '$1 == field { count++; value = $2 } END { if (count != 1) exit 1; print value }' "$status_path")" || return 1
+    [[ "$value" == 0000000000000000 ]] || return 1
+  done
+  value="$(awk '$1 == "Seccomp:" { count++; value = $2 } END { if (count != 1) exit 1; print value }' "$status_path")" || return 1
+  [[ "$value" == 2 ]] || return 1
+  return 0
+}
+
 cleanup() {
   local exit_status=$?
   set +e
@@ -86,6 +212,8 @@ cleanup() {
   fi
   exit "$exit_status"
 }
+
+main() {
 
 while (($#)); do
   case "$1" in
@@ -140,11 +268,16 @@ if [[ -z "$service_home" || "$service_home" != /* || ! -d "$service_home" ]]; th
   exit 1
 fi
 readonly service_uid service_gid service_home
+if ! [[ "$service_uid" =~ ^[1-9][0-9]*$ && "$service_gid" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'ERROR: service account must resolve to a non-root runtime identity.\n' >&2
+  exit 1
+fi
 if ! run_as_service_account test -d "$service_home"; then
   printf 'ERROR: service-account home is not usable by %s: %s\n' "$service_account" "$service_home" >&2
   exit 1
 fi
 readonly quadlet_root="/etc/containers/systemd/users/${service_uid}"
+readonly quadlet_search_policy="/etc/systemd/system/user@${service_uid}.service.d/50-secpal-quadlet.conf"
 
 if [[ "$(getenforce)" != Enforcing ]]; then
   printf 'ERROR: SELinux is not Enforcing.\n' >&2
@@ -178,6 +311,15 @@ if [[ "$(rootless_podman info --format '{{.Host.NetworkBackend}}')" != netavark 
   printf 'ERROR: rootless Podman does not select Netavark.\n' >&2
   exit 1
 fi
+runtime_status="$(run_as_service_account cat /proc/self/status)"
+runtime_ids="$(effective_process_ids <(printf '%s\n' "$runtime_status"))"
+IFS=: read -r runtime_uid runtime_gid <<<"$runtime_ids"
+podman_rootless="$(rootless_podman info --format '{{.Host.Security.Rootless}}')"
+if ! runtime_identity_admitted \
+  "$podman_rootless" "$runtime_uid" "$runtime_gid" "$service_uid" "$service_gid"; then
+  printf 'ERROR: effective Podman runtime is not the admitted rootless service identity.\n' >&2
+  exit 1
+fi
 if ! rootless_podman image exists "$image"; then
   printf 'ERROR: digest-only fixture image is not pre-staged for the service account.\n' >&2
   exit 1
@@ -192,13 +334,23 @@ unit_name="${UNIT_PREFIX}-${fixture_id}"
 unit_path="${quadlet_root}/${unit_name}.container"
 trap cleanup EXIT HUP INT TERM
 
-install -d -o 0 -g 0 -m 0755 "$quadlet_root"
-if run_as_service_account test -w "$quadlet_root"; then
-  printf 'ERROR: service account can write the administrator Quadlet directory.\n' >&2
+readonly quadlet_parent="${quadlet_root%/*}"
+if ! administrator_path_admitted "$quadlet_parent" / 0 0 directory 755 ||
+  ! service_account_cannot_write_path "$quadlet_parent" /; then
+  printf 'ERROR: administrator Quadlet path ancestry is not trusted.\n' >&2
   exit 1
 fi
-if [[ -L "$quadlet_root" || -L "$unit_path" ]]; then
-  printf 'ERROR: unsafe Quadlet symlink detected.\n' >&2
+if [[ -e "$quadlet_root" || -L "$quadlet_root" ]]; then
+  if ! administrator_path_admitted "$quadlet_root" / 0 0 directory 755 ||
+    ! service_account_cannot_write_path "$quadlet_root" /; then
+    printf 'ERROR: administrator Quadlet path ancestry is not trusted.\n' >&2
+    exit 1
+  fi
+fi
+install -d -o 0 -g 0 -m 0755 "$quadlet_root"
+if ! administrator_path_admitted "$quadlet_root" / 0 0 directory 755 ||
+  ! service_account_cannot_write_path "$quadlet_root" /; then
+  printf 'ERROR: administrator Quadlet path ancestry is not trusted.\n' >&2
   exit 1
 fi
 
@@ -210,7 +362,7 @@ printf '%s\n' \
   "Image=${image}" \
   "ContainerName=${unit_name}" \
   'Pull=never' \
-  'User=65532:65532' \
+  "User=${WORKLOAD_UID}:${WORKLOAD_GID}" \
   'DropCapability=all' \
   'Network=none' \
   'Exec=sleep infinity' \
@@ -220,8 +372,22 @@ printf '%s\n' \
   >"$unit_path"
 chmod 0644 "$unit_path"
 
-if run_as_service_account test -w "$unit_path"; then
-  printf 'ERROR: service account can write the administrator Quadlet definition.\n' >&2
+if ! administrator_path_admitted "$unit_path" / 0 0 file 644 ||
+  ! service_account_cannot_write_path "$unit_path" /; then
+  printf 'ERROR: administrator Quadlet path ancestry is not trusted.\n' >&2
+  exit 1
+fi
+if ! administrator_path_admitted "$quadlet_search_policy" / 0 0 file 644 ||
+  ! service_account_cannot_write_path "$quadlet_search_policy" /; then
+  printf 'ERROR: administrator Quadlet search-path policy is not trusted.\n' >&2
+  exit 1
+fi
+effective_quadlet_dirs="$(
+  user_systemctl show-environment |
+    awk -F= '$1 == "QUADLET_UNIT_DIRS" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }'
+)"
+if [[ "$effective_quadlet_dirs" != "$quadlet_root" ]]; then
+  printf 'ERROR: effective Quadlet search path is not the admitted administrator directory.\n' >&2
   exit 1
 fi
 if grep -En 'AutoUpdate=|Network=host|label=disable|Privileged=true' "$unit_path"; then
@@ -229,8 +395,49 @@ if grep -En 'AutoUpdate=|Network=host|label=disable|Privileged=true' "$unit_path
   exit 1
 fi
 user_systemctl daemon-reload
+unit_properties="${fixture_root}/quadlet-service.properties"
+if ! user_systemctl show "${unit_name}.service" \
+  --property=FragmentPath --property=SourcePath \
+  --property=DropInPaths --property=ExecStart >"$unit_properties"; then
+  printf 'ERROR: effective Quadlet service authority is unavailable.\n' >&2
+  exit 1
+fi
+chmod 0600 "$unit_properties"
+if ! effective_quadlet_service_admitted \
+  "$unit_properties" \
+  "/run/user/${service_uid}/systemd/generator/${unit_name}.service" \
+  "$unit_path"; then
+  printf 'ERROR: effective Quadlet service contradicts the admitted administrator configuration.\n' >&2
+  exit 1
+fi
 user_systemctl start "${unit_name}.service"
 user_systemctl is-active --quiet "${unit_name}.service"
+
+unit_main_pid="$(user_systemctl show --property MainPID --value "${unit_name}.service")"
+if ! [[ "$unit_main_pid" =~ ^[1-9][0-9]*$ && -r "/proc/${unit_main_pid}/status" ]]; then
+  printf 'ERROR: effective Quadlet runtime identity is unavailable.\n' >&2
+  exit 1
+fi
+unit_runtime_ids="$(effective_process_ids "/proc/${unit_main_pid}/status")"
+IFS=: read -r unit_runtime_uid unit_runtime_gid <<<"$unit_runtime_ids"
+if ! runtime_identity_admitted \
+  true "$unit_runtime_uid" "$unit_runtime_gid" "$service_uid" "$service_gid"; then
+  printf 'ERROR: effective Quadlet runtime identity contradicts the service account.\n' >&2
+  exit 1
+fi
+workload_status="${fixture_root}/quadlet-workload.status"
+# The single-quoted $1 is the awk field selector.
+# shellcheck disable=SC2016
+rootless_podman exec "$unit_name" awk \
+  '$1 ~ /^(Uid:|Gid:|NoNewPrivs:|CapInh:|CapPrm:|CapEff:|CapBnd:|CapAmb:|Seccomp:)$/ { print }' \
+  /proc/1/status >"$workload_status"
+if [[ "$(stat -c %s -- "$workload_status")" -gt 1024 ]] ||
+  ! least_authority_process_admitted \
+    "$workload_status" "$WORKLOAD_UID" "$WORKLOAD_GID"; then
+  printf 'ERROR: representative workload lacks the effective least-authority process state.\n' >&2
+  exit 1
+fi
+seccomp_mode=2
 
 state_a="${fixture_root}/state-a"
 state_b="${fixture_root}/state-b"
@@ -238,19 +445,12 @@ install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a" "$state_b"
 
 rootless_podman run --detach --name "$container_a" \
   --security-opt no-new-privileges --cap-drop all \
-  --user 65532:65532 --network pasta \
+  --user "${WORKLOAD_UID}:${WORKLOAD_GID}" --network pasta \
   -v "${state_a}:/state:Z" "$image" sleep infinity >/dev/null
 rootless_podman exec "$container_a" sh -ceu 'printf native-selinux > /state/marker; chmod 0666 /state/marker; cat /state/marker' >/dev/null
-seccomp_line="$(rootless_podman exec "$container_a" grep '^Seccomp:' /proc/1/status)"
-seccomp_mode="$(printf '%s' "${seccomp_line#*:}" | tr -d '[:space:]')"
-if [[ "$seccomp_mode" != 2 ]]; then
-  printf 'ERROR: representative rootless workload is not effectively seccomp-confined.\n' >&2
-  exit 1
-fi
-
 rootless_podman run --detach --name "$container_b" \
   --security-opt no-new-privileges --cap-drop all \
-  --user 65532:65532 --network pasta \
+  --user "${WORKLOAD_UID}:${WORKLOAD_GID}" --network pasta \
   -v "${state_a}:/foreign:ro" "$image" sleep infinity >/dev/null
 
 process_a="$(rootless_podman top "$container_a" label | tr -d '\000' | tail -n 1 | tr -d '[:space:]')"
@@ -321,3 +521,8 @@ fi
 
 printf 'PASS: Rocky Linux %s target workload contract (%s); native admission requires trusted control.\n' \
   "$os_version" "$architecture"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
