@@ -84,6 +84,27 @@ Never print secret values to logs.
   closed schema-validated evidence, then re-admits the expected distribution
   provenance.
 
+## PR review lifecycle
+
+The canonical review lifecycle authority is
+`SecPal/.github/.agents/skills/secpal-pr-review/references/contract.md`. The
+rules below are a subordinate safety net for unavailable skill discovery, not
+a second review contract.
+
+- Review processing is finite. A new commit does not authorize another review,
+  and remediation does not authorize another review. Unless the current
+  explicit operator instruction authorizes one additional bounded review round,
+  agents must not request, trigger, recommend, or wait for another review. A
+  generic review, remediation, review loop is prohibited.
+- After the first explicitly authorized `Draft -> Ready`, Ready is monotonic.
+  Remediation, pushes, CI, findings, metadata changes, and bounded recovery must
+  not cause `Ready -> Draft` or `Ready -> Draft -> Ready`. A later Draft
+  transition requires explicit operator authorization for a separate stated
+  reason.
+- A new explicit operator instruction that stops, narrows, prohibits, or pauses
+  work supersedes unfinished agent and delegated work. The coordinator must stop
+  delegated work when it cannot propagate that instruction reliably.
+
 ## Validator and evidence design
 
 - When deployment independently enforces a canonical invariant at a cloud,
