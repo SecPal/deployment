@@ -210,6 +210,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -304,6 +305,29 @@ def run_bounded(
     return status, stdout, stderr, invalid or stdout_invalid or stderr_invalid
 
 
+def acquire_audit_events(command: list[str]) -> bytes | None:
+    for attempt in range(12):
+        status, stdout, stderr, invalid = run_bounded(
+            command,
+            stdout_limit=65536,
+            stderr_limit=4096,
+            timeout=5,
+        )
+        if status == 0 and not invalid and not stderr.strip():
+            return stdout
+        no_finding = (
+            status == 1
+            and not invalid
+            and not stdout
+            and stderr in {b"", b"<no matches>\n"}
+        )
+        if not no_finding:
+            return None
+        if attempt < 11:
+            time.sleep(0.5)
+    return b""
+
+
 def runtime_home_admitted(
     runtime_home: Path,
     runtime_account: object,
@@ -382,23 +406,13 @@ try:
     datetime.strptime(audit_baseline, "%m/%d/%Y %H:%M:%S")
 except ValueError:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-audit_status, audit_stdout, audit_stderr, audit_invalid = run_bounded(
+audit_stdout = acquire_audit_events(
     [
         "/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",
         audit_date, audit_time, "-i",
-    ],
-    stdout_limit=65536,
-    stderr_limit=4096,
-    timeout=30,
+    ]
 )
-if (
-    audit_status not in (0, 1)
-    or audit_invalid
-    or (
-        audit_status == 1
-        and (audit_stdout.strip() or audit_stderr.strip())
-    )
-):
+if audit_stdout is None:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
 try:
     audit_text = audit_stdout.decode("utf-8")

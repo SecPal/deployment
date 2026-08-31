@@ -1178,6 +1178,15 @@ class CloudCIContractTests(unittest.TestCase):
                 'audit_date, audit_time, "-i",',
                 'audit_date, audit_time,',
             ),
+            ("for attempt in range(12):", "for attempt in range(1):"),
+            (
+                'and not stdout\n            and stderr in {b"", b"<no matches>\\n"}',
+                'and True\n            and stderr in {b"", b"<no matches>\\n"}',
+            ),
+            (
+                'stderr in {b"", b"<no matches>\\n"}',
+                "len(stderr) <= 4096",
+            ),
             ("for line in audit_text.splitlines():", "for line in [audit_text]:"),
             (
                 "event_id = audit_event_id(line)",

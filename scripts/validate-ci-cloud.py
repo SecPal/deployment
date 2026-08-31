@@ -2156,6 +2156,12 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and 'audit_date, audit_time, "-i",' in target_runner
         and "def run_bounded(" in target_runner
+        and "def acquire_audit_events(" in target_runner
+        and 'stderr in {b"", b"<no matches>\\n"}' in target_runner
+        and 'and not stdout\n            and stderr in {b"", b"<no matches>\\n"}'
+        in target_runner
+        and "for attempt in range(12):" in target_runner
+        and "time.sleep(0.5)" in target_runner
         and "def audit_event_id(" in target_runner
         and "def correlated_avc_events(" in target_runner
         and "for line in audit_text.splitlines():" in target_runner
@@ -2174,10 +2180,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and "if not avc_events:" in target_runner
         and "if len(avc_events) != 1:" in target_runner
-        and "audit_stdout.strip() or audit_stderr.strip()" in target_runner
         and 'stdout_limit=65536' in target_runner
         and 'stderr_limit=4096' in target_runner
-        and 'timeout=30' in target_runner
+        and 'timeout=5' in target_runner
         and "re.DOTALL" not in target_runner,
         "AVC admission must correlate one enforcing marker event within one audit serial",
     )

@@ -3859,6 +3859,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             "signal": __import__("signal"),
             "subprocess": subprocess,
             "threading": threading,
+            "time": __import__("time"),
         }
         exec(function.group(0), namespace)
         run_bounded = namespace["run_bounded"]
@@ -3901,6 +3902,26 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         self.assertEqual(0, status)
         self.assertTrue(invalid)
         self.assertLess(__import__("time").monotonic() - started, 4)
+        acquire = namespace["acquire_audit_events"]
+        no_match = (1, b"", b"<no matches>\n", False)
+        namespace["run_bounded"] = mock.Mock(
+            side_effect=(no_match, (0, b"event", b"", False))
+        )
+        with mock.patch.object(namespace["time"], "sleep") as pause:
+            self.assertEqual(b"event", acquire(["/usr/sbin/ausearch"]))
+        pause.assert_called_once_with(0.5)
+        namespace["run_bounded"] = mock.Mock(
+            return_value=(1, b"unexpected", b"", False)
+        )
+        self.assertIsNone(acquire(["/usr/sbin/ausearch"]))
+        namespace["run_bounded"] = mock.Mock(
+            return_value=(1, b"", b"warning\n", False)
+        )
+        self.assertIsNone(acquire(["/usr/sbin/ausearch"]))
+        namespace["run_bounded"] = mock.Mock(return_value=no_match)
+        with mock.patch.object(namespace["time"], "sleep") as pause:
+            self.assertEqual(b"", acquire(["/usr/sbin/ausearch"]))
+        self.assertEqual(11, pause.call_count)
         self.assertIn('timeout=10,\n        cwd=str(runtime_home)', runner)
 
     def test_avc_admission_correlates_one_audit_event_without_cross_record_greed(
@@ -4077,7 +4098,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",',
             runner,
         )
-        self.assertIn("audit_stdout.strip() or audit_stderr.strip()", runner)
+        self.assertIn('stderr in {b"", b"<no matches>\\n"}', runner)
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "ausearch"
             executable.write_text(

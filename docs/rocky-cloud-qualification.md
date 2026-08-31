@@ -182,7 +182,10 @@ zero-status identity. The runner's own negative exit remains a separate truth.
 
 Success admission invokes absolute `/usr/sbin/ausearch --input-logs ... -i`
 with a strictly parsed date and time in separate argv fields. Its concurrent
-stdout and stderr drainers retain only 65,536 and 4,096 bytes. Admission accepts
+stdout and stderr drainers retain only 65,536 and 4,096 bytes. A bounded retry
+admits only the tool's exact normal no-match representation while auditd makes
+the just-completed event visible; status-1 output or any other warning remains
+a transport failure. Admission accepts
 only the interpreted audit timestamp grammar, correlates by the full timestamp
 and serial, and requires one unique event containing exactly one matching AVC
 and one decoded PROCTITLE marker. The marker must name the frozen harness's
