@@ -159,6 +159,30 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_package_identity_and_podman_range_are_one_authenticated_contract(self) -> None:
         contract = load_contract()
 
+        preparation_schema = json.loads(
+            (ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )["properties"]["packages"]["items"]["properties"]
+        qualification_schema = json.loads(
+            (
+                ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json"
+            ).read_text(encoding="utf-8")
+        )["$defs"]["package"]["properties"]
+        for schema in (preparation_schema, qualification_schema):
+            self.assertEqual(
+                contract.RPM_VERSION_RELEASE_MAX_LENGTH,
+                schema["version"]["maxLength"],
+            )
+            self.assertEqual(
+                contract.RPM_VERSION_RELEASE_MAX_LENGTH,
+                schema["release"]["maxLength"],
+            )
+            self.assertEqual(
+                contract.RPM_NEVRA_MAX_LENGTH,
+                schema["nevra"]["maxLength"],
+            )
+
         def package(
             version: str = "5.8.2",
             architecture: str = "aarch64",
@@ -241,6 +265,27 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 )
                 contract.admit_runtime_podman_version(
                     {"packages_admitted": [admitted]}
+                )
+
+        for field in ("version", "release"):
+            with self.subTest(rejected=f"overlong-{field}"):
+                with self.assertRaises(contract.ContractError) as raised:
+                    raw = package()
+                    raw[field] = "1" * 129
+                    raw["nevra"] = contract.canonical_nevra(
+                        raw["name"],
+                        raw["epoch"],
+                        raw["version"],
+                        raw["release"],
+                        raw["architecture"],
+                    )
+                    header = raw["signed_header"].splitlines()
+                    header[2 if field == "version" else 3] = raw[field]
+                    header[5] = raw["nevra"]
+                    raw["signed_header"] = "\n".join(header)
+                    contract.normalize_package("podman", raw, "aarch64")
+                self.assertEqual(
+                    "normalize-package-evidence", raised.exception.operation
                 )
 
     def test_architecture_gate_rejects_collapsed_runtime_admission(self) -> None:

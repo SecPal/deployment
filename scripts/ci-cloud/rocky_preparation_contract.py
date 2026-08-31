@@ -71,6 +71,8 @@ PAYLOAD_DIGEST = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 RPM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.-]{0,63}$")
 RPM_VERSION = re.compile(r"^[0-9][A-Za-z0-9+_.~^]*$")
 RPM_RELEASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.~^]*$")
+RPM_VERSION_RELEASE_MAX_LENGTH = 128
+RPM_NEVRA_MAX_LENGTH = 256
 RPM_ARCHITECTURES = frozenset({"aarch64", "x86_64", "noarch"})
 PODMAN_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 MINIMUM_PODMAN_VERSION = (5, 8, 2)
@@ -318,10 +320,14 @@ def normalize_package(
             "normalization", "normalize-package-evidence", "subject-invalid", package_key
         )
     identity_fields = ("name", "epoch", "version", "release", "architecture", "nevra")
-    if any(
-        not isinstance(raw.get(field), str)
-        or len(raw[field].encode("utf-8")) > 256
-        for field in identity_fields
+    if any(not isinstance(raw.get(field), str) for field in identity_fields):
+        reject(
+            "normalization", "normalize-package-evidence", "wrong-type", package_key
+        )
+    if (
+        len(raw["version"]) > RPM_VERSION_RELEASE_MAX_LENGTH
+        or len(raw["release"]) > RPM_VERSION_RELEASE_MAX_LENGTH
+        or len(raw["nevra"]) > RPM_NEVRA_MAX_LENGTH
     ):
         reject(
             "normalization", "normalize-package-evidence", "wrong-type", package_key
