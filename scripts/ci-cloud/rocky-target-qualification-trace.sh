@@ -28,6 +28,23 @@ runuser() {
     unset SECPAL_START_EXACT_CALL
     unset SECPAL_START_OBSERVATION_PATH
     return "$status"
+  elif [[ "${SECPAL_ACTIVE_EXACT_CALL:-}" == 1 ]]; then
+    if [[ -z "${SECPAL_ACTIVE_OBSERVATION_PATH:-}" ]] ||
+      ! exec 7>"${SECPAL_ACTIVE_OBSERVATION_PATH}"; then
+      if /usr/sbin/runuser "$@"; then
+        status=0
+      else
+        status=$?
+      fi
+    elif /opt/secpal-control/libexec/rocky-active-runuser "$@" 7>&7; then
+      status=0
+    else
+      status=$?
+    fi
+    exec 7>&- 2>/dev/null || :
+    unset SECPAL_ACTIVE_EXACT_CALL
+    unset SECPAL_ACTIVE_OBSERVATION_PATH
+    return "$status"
   elif [[ "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]]; then
     if /opt/secpal-control/libexec/rocky-reload-runuser "$@"; then
       status=0
@@ -37,7 +54,7 @@ runuser() {
     unset SECPAL_RELOAD_EXACT_CALL
     return "$status"
   else
-    /usr/sbin/runuser "$@"
+    /opt/secpal-control/libexec/rocky-primary-runuser "$@"
   fi
 }
 
@@ -50,9 +67,23 @@ secpal_reload_precall() {
   local block_size=""
   local cursor_output=""
   local timestamp=""
+  if [[ "$BASHPID" == "$$" && "${SECPAL_RELOAD_EXACT_CALL:-}" == 1 ]]; then
+    unset SECPAL_RELOAD_EXACT_CALL
+  fi
+  if [[ "$BASHPID" == "$$" && "${SECPAL_START_EXACT_CALL:-}" == 1 ]]; then
+    unset SECPAL_START_EXACT_CALL
+    unset SECPAL_START_OBSERVATION_PATH
+  fi
+  if [[ "$BASHPID" == "$$" && "${SECPAL_ACTIVE_EXACT_CALL:-}" == 1 ]]; then
+    unset SECPAL_ACTIVE_EXACT_CALL
+    unset SECPAL_ACTIVE_OBSERVATION_PATH
+  fi
   if [[ "${BASH_LINENO[0]:-}" == 238 ]] &&
     [[ "$BASH_COMMAND" == "user_systemctl start \"\${unit_name}.service\"" ]]; then
     export SECPAL_START_EXACT_CALL=1
+  elif [[ "${BASH_LINENO[0]:-}" == 239 ]] &&
+    [[ "$BASH_COMMAND" == "user_systemctl is-active --quiet \"\${unit_name}.service\"" ]]; then
+    export SECPAL_ACTIVE_EXACT_CALL=1
   elif [[ "${BASH_LINENO[0]:-}" == 237 ]] &&
     [[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]; then
     trap - DEBUG
@@ -87,6 +118,7 @@ secpal_target_qualification_err() {
   trap - ERR
   unset SECPAL_RELOAD_EXACT_CALL
   unset SECPAL_START_EXACT_CALL
+  unset SECPAL_ACTIVE_EXACT_CALL
   for frame in "${BASH_LINENO[@]}"; do
     if ((frame_count >= 8)); then
       break

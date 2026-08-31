@@ -39,6 +39,14 @@ decode_script '${start_env_base64gzip}' /usr/local/libexec/secpal-control/rocky-
 decode_script '${start_systemctl_base64gzip}' /usr/local/libexec/secpal-control/rocky-start-systemctl
 chmod 0555 /usr/local/libexec/secpal-control/rocky-start-env \
   /usr/local/libexec/secpal-control/rocky-start-systemctl
+decode_script '${active_runuser_base64gzip}' /opt/secpal-control/libexec/rocky-active-runuser
+decode_script '${active_env_base64gzip}' /usr/local/libexec/secpal-control/rocky-active-env
+decode_script '${active_systemctl_base64gzip}' /usr/local/libexec/secpal-control/rocky-active-systemctl
+chmod 0555 /usr/local/libexec/secpal-control/rocky-active-env \
+  /usr/local/libexec/secpal-control/rocky-active-systemctl
+decode_script '${primary_runuser_base64gzip}' /opt/secpal-control/libexec/rocky-primary-runuser
+decode_script '${primary_runtime_base64gzip}' /usr/local/libexec/secpal-control/rocky-primary-runtime
+chmod 0555 /usr/local/libexec/secpal-control/rocky-primary-runtime
 for trusted_directory in / /usr /usr/local /usr/local/libexec \
   /usr/local/libexec/secpal-control; do
   [[ -d "$trusted_directory" && ! -L "$trusted_directory" ]]
@@ -55,6 +63,16 @@ done
 [[ "$(stat -c '%u:%g:%a' -- /usr/local/libexec/secpal-control/rocky-start-env)" == \
   0:0:555 ]]
 [[ "$(stat -c '%u:%g:%a' -- /usr/local/libexec/secpal-control/rocky-start-systemctl)" == \
+  0:0:555 ]]
+[[ "$(stat -c '%u:%g:%a' -- /opt/secpal-control/libexec/rocky-active-runuser)" == \
+  0:0:700 ]]
+[[ "$(stat -c '%u:%g:%a' -- /usr/local/libexec/secpal-control/rocky-active-env)" == \
+  0:0:555 ]]
+[[ "$(stat -c '%u:%g:%a' -- /usr/local/libexec/secpal-control/rocky-active-systemctl)" == \
+  0:0:555 ]]
+[[ "$(stat -c '%u:%g:%a' -- /opt/secpal-control/libexec/rocky-primary-runuser)" == \
+  0:0:700 ]]
+[[ "$(stat -c '%u:%g:%a' -- /usr/local/libexec/secpal-control/rocky-primary-runtime)" == \
   0:0:555 ]]
 decode_script '${reload_observer_base64gzip}' /opt/secpal-control/scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py
 decode_script '${allocator_base64gzip}' /usr/local/sbin/secpal-allocate-rocky-subids

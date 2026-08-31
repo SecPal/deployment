@@ -35,6 +35,10 @@ fi
 work_root="$(mktemp -d /var/tmp/secpal-rocky-target-XXXXXX)"
 chmod 0700 "$work_root"
 cleanup() {
+  if [[ -n "${trace_capture_pid:-}" ]]; then
+    kill "$trace_capture_pid" >/dev/null 2>&1 || :
+    wait "$trace_capture_pid" >/dev/null 2>&1 || :
+  fi
   rm -rf -- "$work_root"
 }
 trap cleanup EXIT HUP INT TERM
@@ -93,8 +97,16 @@ boot_id="$(cat /proc/sys/kernel/random/boot_id)"
 reload_event="$work_root/quadlet-reload.event"
 reload_ack="$work_root/quadlet-reload.ack"
 start_observation="$work_root/quadlet-start-observation.json"
+active_observation="$work_root/quadlet-active-observation.json"
+primary_observation="$work_root/primary-workload-observation.json"
+trace_fifo="$work_root/target-qualification.trace.fifo"
 install -o root -g root -m 0600 /dev/null "$start_observation"
+install -o root -g root -m 0600 /dev/null "$active_observation"
+install -o root -g root -m 0600 /dev/null "$primary_observation"
+mkfifo -m 0600 "$trace_fifo"
 observer_pid=""
+trace_capture_pid=""
+primary_environment=()
 if [[ "$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438 ]] &&
   [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" == \
     8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db ]]; then
@@ -107,18 +119,25 @@ if [[ "$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438 ]] &&
   observer_pid=$!
   exec 4<>"$reload_event"
   exec 5<>"$reload_ack"
+  primary_environment=(SECPAL_PRIMARY_OBSERVATION_PATH="$primary_observation")
 fi
+head -c 4097 <"$trace_fifo" >"$qualification_trace" &
+trace_capture_pid=$!
 set +e
-(
-  ulimit -f 128
-  timeout --signal=TERM --kill-after=30s 45m \
-    env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
-    SECPAL_START_OBSERVATION_PATH="$start_observation" \
-    bash "$work_root/scripts/qualify-production-host.sh" \
-    --image "$fixture" --service-account secpal-runtime >"$stdout" 2>&1 \
-    3>"$qualification_trace"
-)
-status=$?
+timeout --signal=TERM --kill-after=30s 45m \
+  env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
+  SECPAL_START_OBSERVATION_PATH="$start_observation" \
+  SECPAL_ACTIVE_OBSERVATION_PATH="$active_observation" \
+  "${primary_environment[@]}" \
+  bash "$work_root/scripts/qualify-production-host.sh" \
+  --image "$fixture" --service-account secpal-runtime \
+  3>"$trace_fifo" 2>&1 | head -c 65537 >"$stdout"
+pipeline_statuses=("${PIPESTATUS[@]}")
+status="${pipeline_statuses[0]}"
+stdout_capture_status="${pipeline_statuses[1]}"
+wait "$trace_capture_pid"
+trace_capture_status=$?
+trace_capture_pid=""
 if [[ -n "$observer_pid" ]]; then
   exec 4>&-
   exec 5<&-
@@ -128,7 +147,8 @@ set -e
 stdout_size="$(stat -c %s "$stdout")"
 trace_size="$(stat -c %s "$qualification_trace")"
 representation_option=()
-if [[ "$stdout_size" -gt 65536 || "$trace_size" -gt 4096 ]]; then
+if [[ "$stdout_capture_status" -ne 0 || "$trace_capture_status" -ne 0 ||
+  "$stdout_size" -gt 65536 || "$trace_size" -gt 4096 ]]; then
   representation_option=(--representation-invalid)
   status=1
 fi
@@ -142,6 +162,8 @@ if [[ "$status" -ne 0 ]]; then
     --stdout "$stdout" --trace "$qualification_trace" \
     --reload-adjacency "$reload_adjacency" --exit-status "$status" \
     --start-observation "$start_observation" \
+    --active-observation "$active_observation" \
+    --primary-observation "$primary_observation" \
     "${representation_option[@]}" \
     --output "$qualification_failure"
   classifier_status=$?
@@ -210,35 +232,126 @@ if parsed["process_a"][3] != parsed["storage_a"][3] or parsed["process_b"][3] ==
     reject("qualify-mcs-relationship", "invariant-failed", "qualification MCS relationship is not admitted")
 if facts["seccomp_mode"] != "2":
     reject("qualify-seccomp", "invariant-failed", "qualification seccomp mode is not enforcing")
-audit = subprocess.run(["ausearch", "-m", "AVC", "-ts", audit_baseline], check=False, capture_output=True, text=True, timeout=30)
-if audit.returncode not in (0, 1) or len(audit.stdout.encode()) > 65536:
+audit_checkpoint = re.fullmatch(
+    r"([0-9]{2}/[0-9]{2}/[0-9]{4}) ([0-9]{2}:[0-9]{2}:[0-9]{2})",
+    audit_baseline,
+)
+if audit_checkpoint is None:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-avc_pattern = re.compile(r"scontext=(\S+).*tcontext=(\S+).*permissive=0", re.DOTALL)
-avcs = [(source, target) for source, target in avc_pattern.findall(audit.stdout) if source == facts["process_b"] and target == facts["storage_a"]]
-if len(avcs) != 1:
+audit_date, audit_time = audit_checkpoint.groups()
+audit = subprocess.run(["ausearch", "--input-logs", "-m", "AVC", "-ts", audit_date, audit_time, "-i"], check=False, capture_output=True, text=True, timeout=30)
+if (
+    audit.returncode not in (0, 1)
+    or len(audit.stdout.encode()) > 65536
+    or len(audit.stderr.encode()) > 4096
+):
+    reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
+
+
+def audit_serial(line: str) -> str | None:
+    raw = re.search(
+        r"\bmsg=audit\([0-9]+(?:\.[0-9]+)?:([1-9][0-9]*)\):", line
+    )
+    if raw is not None:
+        return raw.group(1)
+    interpreted = re.search(
+        r"\bmsg=audit\("
+        r"[0-9]{2}/[0-9]{2}/[0-9]{4} "
+        r"[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}:([1-9][0-9]*)"
+        r"\) :",
+        line,
+    )
+    return interpreted.group(1) if interpreted is not None else None
+
+
+def correlated_avc_serials(
+    audit_text: str, source_context: str, target_context: str
+) -> set[str]:
+    events = {}
+    for line in audit_text.splitlines():
+        serial = audit_serial(line)
+        record = re.match(r"^type=([A-Z][A-Z0-9_]*)\s", line)
+        if serial is None or record is None:
+            continue
+        event = events.setdefault(serial, {"avc": False, "marker": False})
+        record_type = record.group(1)
+        if record_type in {"AVC", "PATH", "PROCTITLE", "SYSCALL"} and (
+            re.search(r'(?:^|\s)name="?marker"?(?:\s|$)', line) is not None
+            or re.search(
+                r'(?:^|[\s="])(?:/[^\s"]*)?/marker(?:[\s"]|$)', line
+            )
+            is not None
+        ):
+            event["marker"] = True
+        if record_type != "AVC":
+            continue
+        source = re.search(r"(?:^|\s)scontext=(\S+)", line)
+        target = re.search(r"(?:^|\s)tcontext=(\S+)", line)
+        tclass = re.search(r"(?:^|\s)tclass=(\S+)", line)
+        event["avc"] = event["avc"] or (
+            re.search(r"avc:\s+denied\s+\{", line) is not None
+            and source is not None
+            and target is not None
+            and tclass is not None
+            and source.group(1) == source_context
+            and target.group(1) == target_context
+            and tclass.group(1) in {"file", "dir"}
+            and re.search(r"(?:^|\s)permissive=0(?:\s|$)", line) is not None
+        )
+    return {
+        serial
+        for serial, event in events.items()
+        if event["avc"] and event["marker"]
+    }
+
+
+avc_serials = correlated_avc_serials(
+    audit.stdout, facts["process_b"], facts["storage_a"]
+)
+if not avc_serials:
     reject(
         "qualify-avc-correlation",
         "invariant-failed",
-        "qualification lacks one correlated enforcing AVC",
+        "qualification lacks a correlated enforcing AVC",
+    )
+if len(avc_serials) != 1:
+    reject(
+        "qualify-avc-correlation",
+        "invariant-failed",
+        "qualification has ambiguous correlated enforcing AVCs",
     )
 runtime_account = pwd.getpwnam("secpal-runtime")
+runtime_home = Path(runtime_account.pw_dir)
+if (
+    not runtime_home.is_absolute()
+    or runtime_home.is_symlink()
+    or not runtime_home.is_dir()
+    or runtime_home.stat().st_uid != runtime_account.pw_uid
+):
+    reject("qualify-fixture-cleanup", "cleanup-failed", "qualification cleanup is incomplete")
 cleanup_checks = [
-    [
+    ("podman", [
         "runuser", "--user", "secpal-runtime", "--", "env",
         f"HOME={runtime_account.pw_dir}",
         f"XDG_RUNTIME_DIR=/run/user/{runtime_account.pw_uid}",
         f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{runtime_account.pw_uid}/bus",
         "podman", "ps", "-a", "--format", "{{.Names}}",
-    ],
-    ["find", "/etc/containers/systemd/users", "-name", "secpal-host-qualification-*.container", "-print"],
-    ["find", "/var/tmp", "-maxdepth", "1", "-name", "secpal-host-qualification-*", "-print"],
-    ["find", "/etc/selinux/targeted/contexts/files", "-name", "secpal-host-qualification-*", "-print"],
-    ["systemctl", "list-units", "--all", "--no-legend", "secpal-host-qualification-*"],
+    ]),
+    ("quadlet", ["find", "/etc/containers/systemd/users", "-name", "secpal-host-qualification-*.container", "-print"]),
+    ("vartmp", ["find", "/var/tmp", "-maxdepth", "1", "-name", "secpal-host-qualification-*", "-print"]),
+    ("fcontext", ["find", "/etc/selinux/targeted/contexts/files", "-name", "secpal-host-qualification-*", "-print"]),
+    ("units", ["systemctl", "list-units", "--all", "--no-legend", "secpal-host-qualification-*"]),
 ]
 import subprocess
 cleanup_results = [
-    subprocess.run(command, check=False, capture_output=True, text=True)
-    for command in cleanup_checks
+    subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=str(runtime_home) if name == "podman" else None,
+    )
+    for name, command in cleanup_checks
 ]
 cleanup_complete = all(
     result.returncode == 0 and not result.stdout.strip()
@@ -272,6 +385,8 @@ if [[ "$admission_status" -ne 0 ]]; then
     --harness "$work_root/scripts/qualify-production-host.sh" \
     --stdout "$stdout" --trace "$qualification_trace" \
     --start-observation "$start_observation" \
+    --active-observation "$active_observation" \
+    --primary-observation "$primary_observation" \
     --exit-status "$admission_status" --trusted-marker "$qualification_marker" \
     --output "$qualification_failure"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \

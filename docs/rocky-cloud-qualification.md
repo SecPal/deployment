@@ -124,8 +124,11 @@ Python starts in isolated mode, so user site packages and Python environment
 settings cannot become protocol writers. A helper precondition or pre-dispatch
 representation failure records only diagnostic unavailability and falls back
 to the original operation, so diagnostic code cannot replace the operation it
-observes. A post-dispatch diagnostic failure retains the completed operation's
-original status without repeating it.
+observes. The parent target shell consumes the exported exact-call marker
+before its next top-level command, so later runtime-account calls cannot
+re-enter the observer or truncate its completed observation. A post-dispatch
+diagnostic failure retains the completed operation's original status without
+repeating it.
 
 The admitted start operations distinguish `runuser` exec and invocation,
 `env` exec and command exec, `systemctl` exec and user-manager request, and a
@@ -139,6 +142,22 @@ represented as an executable or client status. Missing, malformed, oversized,
 or contradictory observations retain the target status as
 `qualify-quadlet-start/diagnostic-unavailable`; no stdout, stderr, environment,
 or journal text enters evidence.
+
+The immutable line-239 active-state check has a separate, identically bounded
+observer. Only the exact `runuser -> env -> systemctl --user is-active --quiet`
+call is redirected through root-owned
+`/opt/secpal-control/libexec/rocky-active-runuser`; absolute, root-owned
+runtime-user helpers invoke the real `/usr/bin/env` and `/usr/bin/systemctl`
+with the original arguments and return the original status. Root FD 7 exists
+only during that exact call, and its at-most-2,048-byte observation contains
+only the outer runuser and systemctl client statuses plus a closed process
+stage. The parent shell consumes the one-shot marker before its next top-level
+command. Trusted admission distinguishes runuser exec/invocation, env
+exec/command-exec, and systemctl exec/request failures; missing, malformed,
+oversized, or contradictory observations remain
+`qualify-quadlet-active-state/diagnostic-unavailable`. The active-state
+observer does not change service state, retry the request, or weaken the
+target-owned active predicate.
 
 The destroyed #118 guest retained only outer target status 126 at line 238.
 That proves neither a service `ExecMainStatus` nor which process produced 126.
