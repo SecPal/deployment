@@ -867,6 +867,25 @@ class RockyCloudControlTests(unittest.TestCase):
                     )
                 self.assertEqual(0, completed.returncode, completed.stderr)
 
+        malformed_version = deepcopy(base)
+        malformed_version["collection_diagnostic"].update(
+            {
+                "operation": "admit-runtime-podman-version",
+                "reason": "representation-invalid",
+            }
+        )
+        self.assertFalse(list(validator.iter_errors(malformed_version)))
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+            json.dump(malformed_version, path)
+            path.flush()
+            completed = subprocess.run(
+                [control, "validate-evidence", "preparation-failure", path.name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+
         collapsed = deepcopy(base)
         collapsed["collection_diagnostic"]["operation"] = "admit-runtime"
         self.assertTrue(list(validator.iter_errors(collapsed)))
@@ -2244,6 +2263,22 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertLess(
             runner.index("--native-package-admission"),
             runner.index("timeout --signal=TERM"),
+        )
+        self.assertEqual(
+            2,
+            runner.count("/usr/local/sbin/secpal-collect-rocky-preparation"),
+        )
+        self.assertNotIn(
+            "/opt/secpal-control/scripts/ci-cloud/collect-rocky-preparation.py",
+            runner,
+        )
+        self.assertLess(
+            runner.index("timeout --signal=TERM"),
+            runner.index("# Re-observe after candidate execution"),
+        )
+        self.assertLess(
+            runner.index("# Re-observe after candidate execution"),
+            runner.index('stdout_size="$(stat -c %s "$stdout")"'),
         )
         self.assertIn("exit 92", runner)
         self.assertIn('validate-collection-diagnostic "$native_diagnostic"', runner)

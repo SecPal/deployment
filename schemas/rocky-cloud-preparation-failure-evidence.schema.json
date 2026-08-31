@@ -452,11 +452,14 @@
             "admit-runtime-socket-unit-disabled",
             "admit-runtime-container-host-absence",
             "admit-runtime-service-locality",
-            "admit-runtime-podman-version",
             "admit-service-account",
             "admit-cloud-identity"
           ],
           "reasons": ["invariant-failed"]
+        },
+        {
+          "operations": ["admit-runtime-podman-version"],
+          "reasons": ["invariant-failed", "representation-invalid"]
         },
         {
           "operations": ["assemble-evidence"],

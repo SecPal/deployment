@@ -406,10 +406,12 @@ rejects a malformed version, a lower version, or 6.0.0 and newer. `podman
 Immediately before any target qualification workload executes, the existing
 trusted controller re-observes this package/RPMDB contract and binds it to the
 exact target SHA, trusted-control SHA, qualification run and attempt, Rocky
-10.2 identity, and host architecture. The target-owned harness reports only
+10.2 identity, and host architecture. It re-observes the same contract after
+the target exits, so a candidate-writable intermediate document is never used
+as native success authority. The target-owned harness reports only
 target-workload success. Only the controller combines that result with its
-authenticated current observation to assemble native PASS evidence. Generic
-schema validation confirms representation only and cannot promote a
+authenticated post-workload observation to assemble native PASS evidence.
+Generic schema validation confirms representation only and cannot promote a
 caller-authored document, `classification` label, or equivalent field into
 native evidence.
 
