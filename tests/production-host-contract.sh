@@ -27,11 +27,6 @@ require_text() {
   grep -Fq -- "$text" "$path" || fail "$path must contain: $text"
 }
 
-if ! command -v rg >/dev/null 2>&1; then
-  printf 'FAIL: production host contract requires ripgrep (rg).\n' >&2
-  exit 1
-fi
-
 required_paths=(
   docs/architecture/production-host.md
   schemas/production-host-facts.schema.json
@@ -119,17 +114,17 @@ for text in "${validator_terms[@]}"; do
 done
 
 checks=$((checks + 1))
-if rg -n 'const.*debian|debian_release_suites|trixie|debian-archive|apparmor.*required|AppArmor enabled|unattended-upgrades' schemas/production-host-facts.schema.json scripts/validate-production-contract.py; then
+if grep -En -- 'const.*debian|debian_release_suites|trixie|debian-archive|apparmor.*required|AppArmor enabled|unattended-upgrades' schemas/production-host-facts.schema.json scripts/validate-production-contract.py; then
   fail "active machine admission retains a Debian/AppArmor production requirement"
 fi
 
 checks=$((checks + 1))
-if rg -n 'label=disable|Network=host|Privileged=true|AutoUpdate=registry' config/production/quadlet scripts/render-production-quadlets.py; then
+if grep -ERn -- 'label=disable|Network=host|Privileged=true|AutoUpdate=registry' config/production/quadlet scripts/render-production-quadlets.py; then
   fail "production Quadlet inputs contain a forbidden runtime fallback"
 fi
 
 checks=$((checks + 1))
-if rg -n 'docker_engine_version|docker_compose_version|docker_data_root|/var/run/docker\.sock' schemas/production-host-facts.schema.json scripts/validate-production-contract.py; then
+if grep -En -- 'docker_engine_version|docker_compose_version|docker_data_root|/var/run/docker\.sock' schemas/production-host-facts.schema.json scripts/validate-production-contract.py; then
   fail "active host machine contract retains Docker runtime fields"
 fi
 
