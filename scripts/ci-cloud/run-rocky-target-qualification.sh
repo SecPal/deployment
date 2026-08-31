@@ -423,7 +423,7 @@ except UnicodeDecodeError:
 def audit_event_id(line: str) -> tuple[str, str] | None:
     interpreted = re.search(
         r"\bmsg=audit\("
-        r"([0-9]{2}/[0-9]{2}/[0-9]{4}) "
+        r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "
         r"([0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}):([1-9][0-9]*)"
         r"\) :",
         line,
@@ -432,7 +432,7 @@ def audit_event_id(line: str) -> tuple[str, str] | None:
         return None
     date, time, serial = interpreted.groups()
     try:
-        datetime.strptime(f"{date} {time}", "%m/%d/%Y %H:%M:%S.%f")
+        datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")
     except ValueError:
         return None
     return f"{date} {time}", serial

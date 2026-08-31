@@ -1168,6 +1168,10 @@ class CloudCIContractTests(unittest.TestCase):
                 'datetime.strptime(audit_baseline, "%m/%d/%Y %H:%M:%S")',
             ),
             (
+                'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")',
+                'datetime.strptime(f"{date} {time}", "%m/%d/%Y %H:%M:%S.%f")',
+            ),
+            (
                 "audit_date, audit_time = audit_checkpoint.groups()",
                 'audit_date, audit_time = audit_baseline.split(" ", 1)',
             ),

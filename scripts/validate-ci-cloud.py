@@ -2164,6 +2164,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "for attempt in range(12):" in target_runner
         and "time.sleep(0.5)" in target_runner
         and "def audit_event_id(" in target_runner
+        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "' in target_runner
+        and 'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")'
+        in target_runner
         and "def correlated_avc_events(" in target_runner
         and "for line in audit_text.splitlines():" in target_runner
         and "event_id = audit_event_id(line)" in target_runner

@@ -3944,22 +3944,22 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         correlate = namespace["correlated_avc_events"]
         process = "system_u:system_r:container_t:s0:c1,c2"
         storage = "system_u:object_r:container_file_t:s0:c1,c2"
-        event_41 = ("08/31/2026 00:43:39.673", "41")
+        event_41 = ("08/31/26 00:43:39.673", "41")
 
         unrelated = (
-            "type=AVC msg=audit(08/31/2026 00:43:39.672:40) : "
+            "type=AVC msg=audit(08/31/26 00:43:39.672:40) : "
             "avc: denied { read } "
             'name="unrelated" scontext=system_u:system_r:other_t:s0 '
             "tcontext=system_u:object_r:other_t:s0 tclass=dir permissive=0"
         )
         relevant = (
-            "type=AVC msg=audit(08/31/2026 00:43:39.673:41) : "
+            "type=AVC msg=audit(08/31/26 00:43:39.673:41) : "
             "avc: denied { read } "
             f'name="marker" scontext={process} tcontext={storage} '
             "tclass=dir permissive=0"
         )
         trailing = (
-            "type=AVC msg=audit(08/31/2026 00:43:39.674:42) : "
+            "type=AVC msg=audit(08/31/26 00:43:39.674:42) : "
             "avc: denied { write } "
             'name="other" scontext=system_u:system_r:third_t:s0 '
             f"tcontext={storage} tclass=dir permissive=0"
@@ -3984,7 +3984,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         interpreted_avc = relevant.replace(' name="marker"', "")
         interpreted_proctitle = (
             "type=PROCTITLE "
-            "msg=audit(08/31/2026 00:43:39.673:41) : "
+            "msg=audit(08/31/26 00:43:39.673:41) : "
             "proctitle=cat /foreign/marker"
         )
         interpreted_event = "\n".join((interpreted_avc, interpreted_proctitle))
@@ -4038,7 +4038,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             storage,
         ))
         path = (
-            "type=PATH msg=audit(08/31/2026 00:43:39.673:41) : item=0 "
+            "type=PATH msg=audit(08/31/26 00:43:39.673:41) : item=0 "
             'name="/var/tmp/secpal-host-qualification-Ab12Cd/state-a/marker" '
             "nametype=NORMAL"
         )
@@ -4050,7 +4050,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         self.assertEqual(event_41, event_id(relevant))
         self.assertEqual(event_41, event_id(interpreted_avc))
         raw_event = interpreted_event.replace(
-            "msg=audit(08/31/2026 00:43:39.673:41) :",
+            "msg=audit(08/31/26 00:43:39.673:41) :",
             "msg=audit(1.2:41):",
         )
         self.assertIsNone(event_id(raw_event.splitlines()[0]))
@@ -4071,6 +4071,9 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         self.assertIsNone(event_id(interpreted_avc.replace(".673", "")))
         self.assertIsNone(event_id(interpreted_avc.replace(") :", "):")))
         self.assertIsNone(event_id(interpreted_avc.replace("08/31", "99/31")))
+        self.assertIsNone(
+            event_id(interpreted_avc.replace("08/31/26", "08/31/2026"))
+        )
         cross_timestamp_marker = interpreted_proctitle.replace(
             "00:43:39.673:41", "00:44:40.000:41"
         )
