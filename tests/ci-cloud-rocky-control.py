@@ -10,6 +10,7 @@ import json
 import re
 import base64
 import gzip
+import hashlib
 import importlib.util
 import os
 from copy import deepcopy
@@ -101,6 +102,7 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn("fetch-exact-target", runner)
         self.assertIn("checkout-exact-target", runner)
         self.assertIn("verify-target-sha", runner)
+        self.assertIn("verify-native-observation", runner)
         schema = json.loads(
             (ROOT / "schemas/rocky-cloud-target-source-failure.schema.json").read_text(
                 encoding="utf-8"
@@ -115,8 +117,17 @@ class RockyCloudControlTests(unittest.TestCase):
             "exit_status": 1,
             "source_host": "github.com",
             "target_sha": "293977ae93408a7bb812619de58649ab8a92d438",
+            "trusted_control_sha": "a36abbfc07104ba2e31ae3c15be1f684faff207c",
+            "qualification_run_id": "33123855032",
+            "qualification_run_attempt": "1",
         }
         self.assertEqual([], list(validator.iter_errors(base)))
+        native_handoff = dict(
+            base,
+            operation="verify-native-observation",
+            reason="postcondition-failed",
+        )
+        self.assertEqual([], list(validator.iter_errors(native_handoff)))
         for mutation in (
             dict(base, source_host="example.com"),
             dict(base, operation="arbitrary-command"),
@@ -132,9 +143,15 @@ class RockyCloudControlTests(unittest.TestCase):
                 str(path),
                 "--target-sha",
                 base["target_sha"],
+                "--control-sha",
+                base["trusted_control_sha"],
+                "--run-id",
+                base["qualification_run_id"],
+                "--run-attempt",
+                base["qualification_run_attempt"],
             ]
             self.assertEqual(0, subprocess.run(command, check=False).returncode)
-            command[-1] = "a" * 40
+            command[-1] = "2"
             self.assertNotEqual(0, subprocess.run(command, check=False).returncode)
 
     def test_access_request_validation_is_exact_bound_and_order_independent(self) -> None:
@@ -364,6 +381,11 @@ class RockyCloudControlTests(unittest.TestCase):
         observer = collector.Observer()
         signed_header = "\n".join(
             (
+                "podman",
+                "0",
+                "5.6.0",
+                "12.el10_2",
+                "aarch64",
                 nevra,
                 "a" * 64,
                 "8",
@@ -375,7 +397,7 @@ class RockyCloudControlTests(unittest.TestCase):
             observer,
             "run",
             side_effect=(
-                (0, nevra, ""),
+                (0, f"podman\n0\n5.6.0\n12.el10_2\naarch64\n{nevra}", ""),
                 (0, "appstream", ""),
                 (
                     0,
@@ -389,6 +411,36 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertEqual(nevra, observed["nevra"])
         self.assertEqual(nevra, run.call_args_list[1].args[1][-1])
         self.assertEqual(nevra, run.call_args_list[2].args[1][-1])
+
+    def test_full_preparation_collection_requires_its_mode_specific_inputs(self) -> None:
+        collector = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [
+                    collector,
+                    "--target-sha",
+                    "a" * 40,
+                    "--control-sha",
+                    "b" * 40,
+                    "--run-id",
+                    "1",
+                    "--run-attempt",
+                    "1",
+                    "--output",
+                    str(Path(directory) / "evidence.json"),
+                    "--diagnostic-output",
+                    str(Path(directory) / "diagnostic.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(2, completed.returncode)
+        self.assertIn(
+            "required without --native-package-admission: "
+            "--expires-at, --image, --first-boot-id",
+            completed.stderr,
+        )
 
     def test_rendered_rocky_startup_script_is_bounded_valid_bash(self) -> None:
         template = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
@@ -542,7 +594,7 @@ class RockyCloudControlTests(unittest.TestCase):
         publication = steps["Publish bounded target-source failure"]
         execution_run = execution["run"]
         retrieval_run = retrieval["run"]
-        self.assertIn("81|82|83|84)", execution_run)
+        self.assertIn("81|82|83|84|86)", execution_run)
         self.assertIn("source_failure_expected=true", execution_run)
         self.assertIn("91)", execution_run)
         self.assertIn("qualification_failure_expected=true", execution_run)
@@ -562,8 +614,16 @@ class RockyCloudControlTests(unittest.TestCase):
         runner = (
             ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
         ).read_text(encoding="utf-8")
-        for status in (81, 82, 83, 84):
+        for status in (81, 82, 83, 84, 86):
             self.assertIn(f"exit {status}", runner)
+        self.assertIn(
+            'validate-target-source-failure \\\n    "$source_failure" --target-sha "$target_sha" \\\n    --control-sha "$control_sha"',
+            runner,
+        )
+        self.assertIn(
+            '--control-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"',
+            retrieval_run,
+        )
         self.assertIn(
             'if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then',
             runner,
@@ -702,11 +762,11 @@ class RockyCloudControlTests(unittest.TestCase):
             "repositories": {"enabled": ["baseos", "appstream", "extras"], "external_enabled": False},
             "updates": {"mechanism": "dnf4", "releasever": "10", "automatic": False, "automatic_reboot": False},
             "packages": [
-                {"name": name, "nevra": f"{name}-1-1.aarch64", "resolved_repository": "baseos", "signature_verified": True, "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85", "payload_digest": "a" * 64}
+                {"name": name, "epoch": "0", "version": "5.8.2" if name == "podman" else "1.0", "release": "1.el10_2", "architecture": "aarch64", "nevra": f"{name}-{'5.8.2' if name == 'podman' else '1.0'}-1.el10_2.aarch64", "resolved_repository": "baseos", "signature_verified": True, "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85", "payload_digest": "a" * 64}
                 for name in package_names
             ],
             "selinux": {"enabled": True, "mode": "Enforcing", "policy": "targeted", "container_selinux_installed": True, "label_disable_absent": True},
-            "runtime": {"podman": "podman version 5.8.2", "rootless": True, "graphroot": "/home/secpal-runtime/.local/share/containers/storage", "oci_runtime": "crun", "cgroup_version": 2, "systemd_user": True, "network_backend": "netavark", "seccomp_available": True, "socket_absent": True, "api_dependency_absent": True},
+            "runtime": {"podman": "5.8.2", "rootless": True, "graphroot": "/home/secpal-runtime/.local/share/containers/storage", "oci_runtime": "crun", "cgroup_version": 2, "systemd_user": True, "network_backend": "netavark", "seccomp_available": True, "socket_absent": True, "api_dependency_absent": True},
             "service_account": {"name": "secpal-runtime", "uid": 991, "gid": 991, "home": "/home/secpal-runtime", "shell": "/usr/sbin/nologin", "sudo": False, "privileged_supplementary_groups": False, "subuid_start": 1048576, "subuid_count": 65536, "subgid_start": 1048576, "subgid_count": 65536, "subids_non_overlapping": True, "linger": True, "quadlet_authority_writable": False},
             "fixture": {"input": "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1", "resolved_arm64_child": "sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192", "pre_staged": True},
             "persistence": {"rebooted": True, "boot_id_changed": True, "survived_reboot": True},
@@ -830,6 +890,25 @@ class RockyCloudControlTests(unittest.TestCase):
                         text=True,
                     )
                 self.assertEqual(0, completed.returncode, completed.stderr)
+
+        malformed_version = deepcopy(base)
+        malformed_version["collection_diagnostic"].update(
+            {
+                "operation": "admit-runtime-podman-version",
+                "reason": "representation-invalid",
+            }
+        )
+        self.assertFalse(list(validator.iter_errors(malformed_version)))
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+            json.dump(malformed_version, path)
+            path.flush()
+            completed = subprocess.run(
+                [control, "validate-evidence", "preparation-failure", path.name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(0, completed.returncode, completed.stderr)
 
         collapsed = deepcopy(base)
         collapsed["collection_diagnostic"]["operation"] = "admit-runtime"
@@ -2197,10 +2276,238 @@ class RockyCloudControlTests(unittest.TestCase):
         schema = json.loads((ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json").read_text(encoding="utf-8"))
         self.assertNotIn("positive_access", schema["required"])
         runner = (ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh").read_text(encoding="utf-8")
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        bootstrap = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
+            encoding="utf-8"
+        )
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
+        target = (ROOT / "scripts/qualify-production-host.sh").read_text(
+            encoding="utf-8"
+        )
         for required in ("duplicate", "MCS relationship", "seccomp mode", "ausearch", "correlated enforcing AVC", "cleanup is incomplete"):
             self.assertIn(required, runner)
         self.assertNotIn('"mcs_distinct": passed', runner)
         self.assertNotIn('"classification": "PASS" if passed', runner)
+        self.assertLess(
+            runner.index("--native-package-admission"),
+            runner.index('git -C "$work_root" fetch'),
+        )
+        self.assertLess(
+            runner.index("validate-native-observation"),
+            runner.index("timeout --signal=TERM"),
+        )
+        self.assertIn(
+            "/usr/local/sbin/secpal-collect-rocky-preparation",
+            runner,
+        )
+        self.assertIn(
+            '[[ -f "$work_root/scripts/qualify-production-host.sh" && '
+            '! -L "$work_root/scripts/qualify-production-host.sh" && '
+            '-x "$work_root/scripts/qualify-production-host.sh" ]]',
+            runner,
+        )
+        self.assertIn(
+            '"$(sha256sum "$work_root/scripts/qualify-production-host.sh" | '
+            "awk '{print $1}')\" != \"$qualification_harness_sha256\"",
+            runner,
+        )
+        self.assertIn('bash "$work_root/scripts/qualify-production-host.sh"', runner)
+        self.assertNotIn("verify-target-harness", runner)
+        self.assertNotIn("sudo bash -s", workflow)
+        self.assertNotIn("secpal-collect-rocky-native-admission", workflow + bootstrap)
+        self.assertNotIn("qualification_harness_base64gzip", bootstrap)
+        self.assertIn(
+            "NOPASSWD: /usr/local/sbin/secpal-run-rocky-target-qualification "
+            "[0-9a-f]* [0-9a-f]* [1-9]* [1-9]* [0-9a-f]*",
+            preparation,
+        )
+        self.assertEqual(
+            0,
+            workflow.count("/usr/local/sbin/secpal-collect-rocky-preparation"),
+        )
+        self.assertIn(
+            '--native-observation "$native_observation"', runner
+        )
+        self.assertIn(
+            '"$RUNNER_TEMP/rocky-target/native-package-observation.json"',
+            workflow,
+        )
+        self.assertIn("validate-collection-diagnostic", runner)
+        self.assertIn("native admission requires trusted control", target)
+        self.assertNotIn("PASS: Rocky Linux %s native", target)
+        self.assertNotIn("rpm -q --qf '%{NEVRA}", target)
+
+    def test_schema_only_qualification_cannot_self_assert_native_success(self) -> None:
+        candidate = {
+            "schema_version": 1,
+            "target_sha": "b" * 40,
+            "exit_status": 0,
+            "stdout_sha256": "a" * 64,
+            "stdout_bytes": 1,
+            "process_contexts": [
+                "system_u:system_r:container_t:s0:c1,c2",
+                "system_u:system_r:container_t:s0:c3,c4",
+            ],
+            "storage_context": "system_u:object_r:container_file_t:s0:c1,c2",
+            "mcs_distinct": True,
+            "cross_mcs_denied": True,
+            "avc_observed": True,
+            "seccomp_enforced": True,
+            "cleanup_complete": True,
+            "classification": "PASS",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "caller-authored.json"
+            path.write_text(json.dumps(candidate), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    ROOT / "scripts/ci-cloud/rocky-control.py",
+                    "validate-evidence",
+                    "qualification",
+                    path,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+
+    def test_authenticated_native_qualification_binds_run_packages_and_architecture(self) -> None:
+        control_spec = importlib.util.spec_from_file_location(
+            "rocky_control",
+            ROOT / "scripts/ci-cloud/rocky-control.py",
+        )
+        assert control_spec is not None and control_spec.loader is not None
+        control = importlib.util.module_from_spec(control_spec)
+        control_spec.loader.exec_module(control)
+        self.assertEqual(
+            "rocky_preparation_contract.admit_package",
+            control.AUTHENTICATED_PACKAGE_INVARIANT_OWNER,
+        )
+        package_names = [
+            branch["contains"]["properties"]["name"]["const"]
+            for branch in json.loads(
+                (
+                    ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json"
+                ).read_text(encoding="utf-8")
+            )["properties"]["packages"]["allOf"]
+        ]
+        packages = []
+        for name in package_names:
+            version = "5.8.2" if name == "podman" else "1.0"
+            packages.append(
+                {
+                    "name": name,
+                    "epoch": "0",
+                    "version": version,
+                    "release": "1.el10_2",
+                    "architecture": "aarch64",
+                    "nevra": f"{name}-{version}-1.el10_2.aarch64",
+                    "resolved_repository": "appstream",
+                    "signature_verified": True,
+                    "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+                    "payload_digest": "a" * 64,
+                }
+            )
+        stdout = b"target workload\n"
+        candidate = {
+            "schema_version": 1,
+            "target_sha": "b" * 40,
+            "native_observation": {
+                "schema_version": 1,
+                "target_sha": "b" * 40,
+                "trusted_control_sha": "a" * 40,
+                "qualification_run_id": "12345",
+                "qualification_run_attempt": "1",
+                "host": {
+                    "id": "rocky",
+                    "version_id": "10.2",
+                    "architecture": "aarch64",
+                },
+                "podman_version": "5.8.2",
+                "packages": packages,
+            },
+            "exit_status": 0,
+            "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+            "stdout_bytes": len(stdout),
+            "process_contexts": [
+                "system_u:system_r:container_t:s0:c1,c2",
+                "system_u:system_r:container_t:s0:c3,c4",
+            ],
+            "storage_context": "system_u:object_r:container_file_t:s0:c1,c2",
+            "mcs_distinct": True,
+            "cross_mcs_denied": True,
+            "avc_observed": True,
+            "seccomp_enforced": True,
+            "cleanup_complete": True,
+            "classification": "PASS",
+        }
+
+        def validate(document):
+            with tempfile.TemporaryDirectory() as directory:
+                evidence = Path(directory) / "qualification.json"
+                output = Path(directory) / "qualification.stdout"
+                binding = Path(directory) / "native-observation.json"
+                evidence.write_text(json.dumps(document), encoding="utf-8")
+                output.write_bytes(stdout)
+                binding.write_text(
+                    json.dumps(candidate["native_observation"]), encoding="utf-8"
+                )
+                return subprocess.run(
+                    [
+                        ROOT / "scripts/ci-cloud/rocky-control.py",
+                        "validate-native-qualification",
+                        evidence,
+                        "--stdout",
+                        output,
+                        "--native-observation",
+                        binding,
+                        "--target-sha",
+                        "b" * 40,
+                        "--control-sha",
+                        "a" * 40,
+                        "--run-id",
+                        "12345",
+                        "--run-attempt",
+                        "1",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+        self.assertEqual(0, validate(candidate).returncode)
+        mutations = {}
+        for version in ("5.8.1", "5.8.02", "6.0.0", "not-a-version"):
+            mutated = deepcopy(candidate)
+            mutated["native_observation"]["podman_version"] = version
+            mutated["native_observation"]["packages"][0]["version"] = version
+            mutated["native_observation"]["packages"][0]["nevra"] = (
+                f"podman-{version}-1.el10_2.aarch64"
+            )
+            mutations[f"podman-{version}"] = mutated
+        wrong_key = deepcopy(candidate)
+        wrong_key["native_observation"]["packages"][0]["name"] = "conmon"
+        mutations["wrong-package-key"] = wrong_key
+        wrong_arch = deepcopy(candidate)
+        wrong_arch["native_observation"]["packages"][0]["architecture"] = "x86_64"
+        wrong_arch["native_observation"]["packages"][0]["nevra"] = (
+            "podman-5.8.2-1.el10_2.x86_64"
+        )
+        mutations["wrong-architecture"] = wrong_arch
+        malformed = deepcopy(candidate)
+        malformed["native_observation"]["packages"][0]["nevra"] = "xxx"
+        mutations["malformed-nevra"] = malformed
+        duplicate = deepcopy(candidate)
+        duplicate["native_observation"]["packages"][1] = deepcopy(
+            duplicate["native_observation"]["packages"][0]
+        )
+        mutations["duplicate-conflict"] = duplicate
+        for name, document in mutations.items():
+            with self.subTest(rejected=name):
+                self.assertNotEqual(0, validate(document).returncode)
 
     def test_transition_rejects_replacement_with_same_name_and_labels(self) -> None:
         transition_path = ROOT / "scripts/ci-cloud/rocky-gcp-transition.py"

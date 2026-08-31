@@ -20,6 +20,7 @@ from typing import Any
 
 RESPONSIBILITY = "normalization,admission,assembly"
 INVARIANT_OWNERS = {
+    "authenticated-native-packages": "rocky_preparation_contract.admit_package",
     "fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity",
     "rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key",
     "runtime-cgroup": "rocky_preparation_contract.admit_runtime_cgroup",
@@ -67,7 +68,15 @@ IMAGE = re.compile(
     r"global/images/rocky-linux-10-[a-z0-9-]{1,50}$"
 )
 PAYLOAD_DIGEST = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
-NEVRA = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:~^-]{2,255}$")
+RPM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.-]{0,63}$")
+RPM_VERSION = re.compile(r"^[0-9][A-Za-z0-9+_.~^]*$")
+RPM_RELEASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.~^]*$")
+RPM_VERSION_RELEASE_MAX_LENGTH = 128
+RPM_NEVRA_MAX_LENGTH = 256
+RPM_ARCHITECTURES = frozenset({"aarch64", "x86_64", "noarch"})
+PODMAN_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+MINIMUM_PODMAN_VERSION = (5, 8, 2)
+MAXIMUM_PODMAN_VERSION = (6, 0, 0)
 HEADER_SIGNATURE = re.compile(
     r"^RSA/SHA256, [ -~]{1,128}, Key ID [0-9a-f]{16}$",
     re.IGNORECASE,
@@ -296,73 +305,194 @@ def admit_rocky_signing_key(fact: dict[str, str]) -> str:
     return ROCKY_FINGERPRINT
 
 
-def normalize_package(raw: dict[str, Any]) -> dict[str, Any]:
-    name = raw.get("name")
-    if name not in PACKAGES:
-        reject("normalization", "normalize-package-evidence", "subject-invalid")
+def canonical_nevra(
+    name: str, epoch: str, version: str, release: str, architecture: str
+) -> str:
+    epoch_prefix = "" if epoch == "0" else f"{epoch}:"
+    return f"{name}-{epoch_prefix}{version}-{release}.{architecture}"
+
+
+def normalize_package(
+    package_key: str, raw: dict[str, Any], host_architecture: str
+) -> dict[str, Any]:
+    if package_key not in PACKAGES or not isinstance(raw, dict):
+        reject(
+            "normalization", "normalize-package-evidence", "subject-invalid", package_key
+        )
+    identity_fields = ("name", "epoch", "version", "release", "architecture", "nevra")
+    if any(not isinstance(raw.get(field), str) for field in identity_fields):
+        reject(
+            "normalization", "normalize-package-evidence", "wrong-type", package_key
+        )
+    if (
+        len(raw["version"]) > RPM_VERSION_RELEASE_MAX_LENGTH
+        or len(raw["release"]) > RPM_VERSION_RELEASE_MAX_LENGTH
+        or len(raw["nevra"]) > RPM_NEVRA_MAX_LENGTH
+    ):
+        reject(
+            "normalization", "normalize-package-evidence", "wrong-type", package_key
+        )
+    name = raw["name"]
+    epoch = raw["epoch"]
+    version = raw["version"]
+    release = raw["release"]
+    architecture = raw["architecture"]
+    if (
+        name != package_key
+        or RPM_NAME.fullmatch(name) is None
+        or re.fullmatch(r"0|[1-9][0-9]{0,9}", epoch) is None
+        or RPM_VERSION.fullmatch(version) is None
+        or RPM_RELEASE.fullmatch(release) is None
+        or architecture not in RPM_ARCHITECTURES
+        or host_architecture not in {"aarch64", "x86_64"}
+        or architecture not in {host_architecture, "noarch"}
+        or raw["nevra"]
+        != canonical_nevra(name, epoch, version, release, architecture)
+    ):
+        reject(
+            "normalization",
+            "normalize-package-evidence",
+            "representation-invalid",
+            package_key,
+        )
     repositories = raw.get("repositories")
     if not isinstance(repositories, list) or not all(isinstance(item, str) for item in repositories):
-        reject("normalization", "normalize-package-evidence", "wrong-type", name)
+        reject("normalization", "normalize-package-evidence", "wrong-type", package_key)
     if any(
         not isinstance(raw.get(field), str)
         or len(raw[field].encode("utf-8")) > 4096
-        for field in ("nevra", "signed_header", "verification")
+        for field in ("signed_header", "verification")
     ):
-        reject("normalization", "normalize-package-evidence", "wrong-type", name)
-    if (
-        NEVRA.fullmatch(raw["nevra"]) is None
-        or not raw["nevra"].startswith(f"{name}-")
-    ):
-        reject("normalization", "normalize-package-evidence", "representation-invalid", name)
+        reject("normalization", "normalize-package-evidence", "wrong-type", package_key)
     header = raw["signed_header"].splitlines()
     verification_lines = raw["verification"].splitlines()
     verification = frozenset(
         line for line in verification_lines if line.startswith("Header ")
     )
     if (
-        len(header) != 5
-        or not header[0]
-        or PAYLOAD_DIGEST.fullmatch(header[1]) is None
-        or header[2] != "8"
-        or PAYLOAD_DIGEST.fullmatch(header[3]) is None
-        or HEADER_SIGNATURE.fullmatch(header[4]) is None
-        or not header[4].lower().endswith("5b106c736fedfc85")
+        len(header) != 10
+        or header[:6]
+        != [name, epoch, version, release, architecture, raw["nevra"]]
+        or PAYLOAD_DIGEST.fullmatch(header[6]) is None
+        or header[7] != "8"
+        or PAYLOAD_DIGEST.fullmatch(header[8]) is None
+        or HEADER_SIGNATURE.fullmatch(header[9]) is None
+        or not header[9].lower().endswith("5b106c736fedfc85")
         or verification != VERIFIED_HEADER_LINES
         or any(
             line.startswith("Header ") and line not in VERIFIED_HEADER_LINES
             for line in verification_lines
         )
     ):
-        reject("normalization", "normalize-installed-signed-header", "representation-invalid", name)
+        reject("normalization", "normalize-installed-signed-header", "representation-invalid", package_key)
     return {
         "name": name,
+        "epoch": epoch,
+        "version": version,
+        "release": release,
+        "architecture": architecture,
         "nevra": raw["nevra"],
         "repositories": repositories,
-        "header_nevra": header[0],
-        "payload_digest": header[1].lower(),
-        "payload_digest_algorithm": header[2],
-        "header_sha256": header[3].lower(),
-        "header_signature": header[4][:-16] + header[4][-16:].lower(),
+        "header_nevra": header[5],
+        "payload_digest": header[6].lower(),
+        "payload_digest_algorithm": header[7],
+        "header_sha256": header[8].lower(),
+        "header_signature": header[9][:-16] + header[9][-16:].lower(),
     }
 
 
-def admit_package(fact: dict[str, Any], signer_fingerprint: str) -> dict[str, Any]:
+def admit_package(
+    fact: dict[str, Any], signer_fingerprint: str, host_architecture: str
+) -> dict[str, Any]:
     name = fact["name"]
     official = fact["repositories"]
     if len(official) != 1 or official[0] not in REPOSITORIES:
         reject("admission", "admit-package-repository", "cardinality-invalid", name)
     if signer_fingerprint != ROCKY_FINGERPRINT:
         reject("admission", "admit-package-signature", "invariant-failed", name)
-    if fact["header_nevra"] != fact["nevra"]:
+    if (
+        fact["header_nevra"] != fact["nevra"]
+        or fact["architecture"] not in {host_architecture, "noarch"}
+    ):
         reject("admission", "admit-package-identity", "invariant-failed", name)
     return {
         "name": name,
+        "epoch": fact["epoch"],
+        "version": fact["version"],
+        "release": fact["release"],
+        "architecture": fact["architecture"],
         "nevra": fact["nevra"],
         "resolved_repository": official[0],
         "signature_verified": True,
         "signer_fingerprint": ROCKY_FINGERPRINT,
         "payload_digest": fact["payload_digest"],
     }
+
+
+def normalize_native_package_observations(raw: dict[str, Any]) -> dict[str, Any]:
+    architecture = raw.get("architecture")
+    observations = raw.get("packages")
+    if architecture not in {"aarch64", "x86_64"}:
+        reject("normalization", "normalize-native-architecture", "representation-invalid")
+    if not isinstance(observations, list) or len(observations) != len(PACKAGES):
+        reject("normalization", "normalize-package-evidence", "cardinality-invalid")
+    return {
+        "release": normalize_os_release(raw.get("os_release", "")),
+        "architecture": architecture,
+        "packages": [
+            normalize_package(package_key, observation, architecture)
+            for package_key, observation in zip(PACKAGES, observations, strict=True)
+        ],
+        "rocky_signing_key": normalize_rocky_signing_key(
+            raw.get("rocky_signing_key", "")
+        ),
+    }
+
+
+def admit_native_package_observations(
+    facts: dict[str, Any], options: dict[str, Any]
+) -> dict[str, Any]:
+    target_sha = str(options.get("target_sha", ""))
+    control_sha = str(options.get("control_sha", ""))
+    run_id = str(options.get("run_id", ""))
+    run_attempt = str(options.get("run_attempt", ""))
+    if (
+        SHA.fullmatch(target_sha) is None
+        or SHA.fullmatch(control_sha) is None
+        or re.fullmatch(r"[1-9][0-9]{0,19}", run_id) is None
+        or re.fullmatch(r"[1-9][0-9]{0,2}", run_attempt) is None
+    ):
+        reject("admission", "admit-run-identity", "invariant-failed")
+    if facts["release"] != {"ID": "rocky", "VERSION_ID": "10.2"}:
+        reject("admission", "admit-guest-identity", "invariant-failed")
+    signer = admit_rocky_signing_key(facts["rocky_signing_key"])
+    packages = [
+        admit_package(package, signer, facts["architecture"])
+        for package in facts["packages"]
+    ]
+    runtime_facts = {"packages_admitted": packages}
+    admit_runtime_podman_version(runtime_facts)
+    return {
+        "schema_version": 1,
+        "target_sha": target_sha,
+        "trusted_control_sha": control_sha,
+        "qualification_run_id": run_id,
+        "qualification_run_attempt": run_attempt,
+        "host": {
+            "id": facts["release"]["ID"],
+            "version_id": facts["release"]["VERSION_ID"],
+            "architecture": facts["architecture"],
+        },
+        "podman_version": runtime_facts["podman_version_admitted"],
+        "packages": packages,
+    }
+
+
+def normalize_and_admit_native_packages(
+    raw: dict[str, Any], options: dict[str, Any]
+) -> dict[str, Any]:
+    facts = normalize_native_package_observations(raw)
+    return admit_native_package_observations(facts, options)
 
 
 def subids_independent(
@@ -394,6 +524,9 @@ def normalize_observations(raw: dict[str, Any]) -> dict[str, Any]:
     ranges = normalize_all_subid_ranges(raw["subuid"], "normalize-subuid-population")
     ranges += normalize_all_subid_ranges(raw["subgid"], "normalize-subgid-population")
     podman = normalize_podman(raw["podman_info"])
+    package_observations = raw.get("packages")
+    if not isinstance(package_observations, list) or len(package_observations) != len(PACKAGES):
+        reject("normalization", "normalize-package-evidence", "cardinality-invalid")
     return {
         **raw,
         "release": normalize_os_release(raw["os_release"]),
@@ -407,7 +540,10 @@ def normalize_observations(raw: dict[str, Any]) -> dict[str, Any]:
         "fixture_identities": normalize_fixture_repo_digests(
             raw["fixture_repo_digests"]
         ),
-        "packages_normalized": [normalize_package(item) for item in raw["packages"]],
+        "packages_normalized": [
+            normalize_package(package_key, item, raw["architecture"])
+            for package_key, item in zip(PACKAGES, package_observations, strict=True)
+        ],
         "rocky_signing_key_normalized": normalize_rocky_signing_key(
             raw["rocky_signing_key"]
         ),
@@ -489,8 +625,17 @@ def admit_runtime_service_locality(host: dict[str, Any]) -> None:
 
 
 def admit_runtime_podman_version(facts: dict[str, Any]) -> None:
-    if not isinstance(facts["podman_version"], str) or not facts["podman_version"]:
-        reject("admission", "admit-runtime-podman-version", "invariant-failed")
+    package = facts["packages_admitted"][0]
+    match = PODMAN_VERSION.fullmatch(str(package.get("version", "")))
+    version = tuple(int(part) for part in match.groups()) if match else None
+    if (
+        package.get("name") != "podman"
+        or version is None
+        or not MINIMUM_PODMAN_VERSION <= version < MAXIMUM_PODMAN_VERSION
+    ):
+        reason = "representation-invalid" if match is None else "invariant-failed"
+        reject("admission", "admit-runtime-podman-version", reason)
+    facts["podman_version_admitted"] = package["version"]
 
 
 def admit_runtime(facts: dict[str, Any]) -> None:
@@ -578,11 +723,12 @@ def admit_facts(facts: dict[str, Any], options: dict[str, Any]) -> dict[str, Any
         facts["rocky_signing_key_normalized"]
     )
     packages = [
-        admit_package(item, signer_fingerprint)
+        admit_package(item, signer_fingerprint, facts["architecture"])
         for item in facts["packages_normalized"]
     ]
     if [item["name"] for item in packages] != list(PACKAGES):
         reject("admission", "admit-package-set", "invariant-failed")
+    facts["packages_admitted"] = packages
     if (
         facts["cpu_count"] != 4
         or not 15_000_000_000 <= facts["memory_bytes"] <= 20_000_000_000
@@ -651,7 +797,7 @@ def assemble_preparation_evidence(
         "packages": facts["packages_admitted"],
         "selinux": {"enabled": True, "mode": "Enforcing", "policy": "targeted", "container_selinux_installed": True, "label_disable_absent": facts["label_disable_absent"]},
         "runtime": {
-            "podman": facts["podman_version"],
+            "podman": facts["podman_version_admitted"],
             "rootless": bool(host.get("security", {}).get("rootless")),
             "graphroot": facts["graphroot"],
             "oci_runtime": host.get("ociRuntime", {}).get("name"),

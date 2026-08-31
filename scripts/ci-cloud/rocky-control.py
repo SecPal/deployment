@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
 from importlib.machinery import SourceFileLoader
 import importlib.util
 import ipaddress
@@ -56,6 +57,17 @@ SCHEMAS = {
 SHA = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
 RUN_ATTEMPT = re.compile(r"^[1-9][0-9]{0,2}$")
+AUTHENTICATED_PACKAGE_INVARIANT_OWNER = (
+    "rocky_preparation_contract.admit_package"
+)
+ROCKY_PACKAGES = (
+    "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
+    "shadow-utils-subid", "systemd", "container-selinux", "audit",
+    "policycoreutils", "policycoreutils-python-utils",
+    "selinux-policy-targeted", "curl", "dnf", "git", "jq", "nftables",
+    "openssh-server", "sudo", "python3-jsonschema", "dnf-plugins-core",
+)
+PODMAN_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 ACCESS_REQUEST_FIELDS = {
     "runner_ipv4",
     "run_attempt",
@@ -258,7 +270,57 @@ def validate_profile(path: Path) -> None:
         raise ControlError("profile differs from the one reviewed Rocky contract")
 
 
-def validate_evidence(kind: str, path: Path) -> dict[str, Any]:
+def validate_authenticated_package_semantics(
+    packages: list[dict[str, Any]], host_architecture: str, podman_version: str
+) -> None:
+    """Independently enforce rocky_preparation_contract.admit_package."""
+    if len(packages) != len(ROCKY_PACKAGES):
+        raise ControlError("authenticated package set has invalid cardinality")
+    for package_key, package in zip(ROCKY_PACKAGES, packages, strict=True):
+        name = package["name"]
+        epoch = package["epoch"]
+        version = package["version"]
+        release = package["release"]
+        architecture = package["architecture"]
+        epoch_prefix = "" if epoch == "0" else f"{epoch}:"
+        expected_nevra = (
+            f"{name}-{epoch_prefix}{version}-{release}.{architecture}"
+        )
+        if (
+            name != package_key
+            or architecture not in {host_architecture, "noarch"}
+            or package["nevra"] != expected_nevra
+        ):
+            raise ControlError(
+                "authenticated package identity contradicts its package key or host architecture"
+            )
+    podman = packages[0]
+    match = PODMAN_VERSION.fullmatch(podman["version"])
+    if match is None:
+        raise ControlError("Podman package version representation is malformed")
+    version = tuple(int(part) for part in match.groups())
+    if (
+        not (5, 8, 2) <= version < (6, 0, 0)
+        or podman_version != podman["version"]
+    ):
+        raise ControlError("Podman package version is outside the admitted range")
+
+
+def validate_preparation_package_semantics(document: dict[str, Any]) -> None:
+    validate_authenticated_package_semantics(
+        document["packages"],
+        document["guest"]["uname_machine"],
+        document["runtime"]["podman"],
+    )
+
+
+def validate_evidence(
+    kind: str, path: Path, *, authenticated_native: bool = False
+) -> dict[str, Any]:
+    if kind == "qualification" and not authenticated_native:
+        raise ControlError(
+            "qualification schema validity is not authenticated native admission"
+        )
     schema = load_object(SCHEMAS[kind])
     document = load_object(path)
     validator = Draft202012Validator(schema, format_checker=FormatChecker())
@@ -269,15 +331,112 @@ def validate_evidence(kind: str, path: Path) -> dict[str, Any]:
         raise ControlError(f"{kind} evidence rejected at {location}: {first.message}")
     if kind == "preparation-failure":
         validate_preparation_failure_semantics(document)
+    elif kind == "preparation":
+        validate_preparation_package_semantics(document)
     return document
 
 
-def validate_target_source_failure(path: Path, target_sha: str) -> None:
-    if SHA.fullmatch(target_sha) is None:
-        raise ControlError("target SHA must be one exact lowercase commit")
+def validate_native_observation(
+    path: Path,
+    target_sha: str,
+    control_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> dict[str, Any]:
+    if (
+        SHA.fullmatch(target_sha) is None
+        or SHA.fullmatch(control_sha) is None
+        or RUN_ID.fullmatch(run_id) is None
+        or RUN_ATTEMPT.fullmatch(run_attempt) is None
+    ):
+        raise ControlError("native observation bindings are outside the closed format")
+    schema = load_object(SCHEMAS["qualification"])
+    observation_schema = {
+        **schema["properties"]["native_observation"],
+        "$defs": schema["$defs"],
+    }
+    observation = load_object(path)
+    errors = sorted(
+        Draft202012Validator(observation_schema).iter_errors(observation),
+        key=lambda item: list(item.path),
+    )
+    if errors:
+        first = errors[0]
+        location = ".".join(str(part) for part in first.path) or "<root>"
+        raise ControlError(
+            f"native observation rejected at {location}: {first.message}"
+        )
+    expected = {
+        "target_sha": target_sha,
+        "trusted_control_sha": control_sha,
+        "qualification_run_id": run_id,
+        "qualification_run_attempt": run_attempt,
+    }
+    if any(observation[key] != value for key, value in expected.items()):
+        raise ControlError("native observation is not bound to this exact run")
+    validate_authenticated_package_semantics(
+        observation["packages"],
+        observation["host"]["architecture"],
+        observation["podman_version"],
+    )
+    return observation
+
+
+def validate_native_qualification(
+    path: Path,
+    stdout_path: Path,
+    native_observation_path: Path,
+    target_sha: str,
+    control_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> None:
+    authenticated_observation = validate_native_observation(
+        native_observation_path, target_sha, control_sha, run_id, run_attempt
+    )
+    document = validate_evidence(
+        "qualification", path, authenticated_native=True
+    )
+    if (
+        document["target_sha"] != target_sha
+        or document["native_observation"] != authenticated_observation
+    ):
+        raise ControlError(
+            "native qualification differs from its authenticated controller binding"
+        )
+    try:
+        stdout = stdout_path.read_bytes()
+    except OSError as error:
+        raise ControlError("native qualification stdout is unavailable") from error
+    if (
+        len(stdout) != document["stdout_bytes"]
+        or hashlib.sha256(stdout).hexdigest() != document["stdout_sha256"]
+    ):
+        raise ControlError("native qualification stdout binding is invalid")
+
+
+def validate_target_source_failure(
+    path: Path,
+    target_sha: str,
+    control_sha: str,
+    run_id: str,
+    run_attempt: str,
+) -> None:
+    if (
+        SHA.fullmatch(target_sha) is None
+        or SHA.fullmatch(control_sha) is None
+        or RUN_ID.fullmatch(run_id) is None
+        or RUN_ATTEMPT.fullmatch(run_attempt) is None
+    ):
+        raise ControlError("target source failure bindings are outside the closed format")
     document = validate_evidence("target-source-failure", path)
-    if document["target_sha"] != target_sha:
-        raise ControlError("target source failure is not bound to the exact target SHA")
+    if (
+        document["target_sha"] != target_sha
+        or document["trusted_control_sha"] != control_sha
+        or document["qualification_run_id"] != run_id
+        or document["qualification_run_attempt"] != run_attempt
+    ):
+        raise ControlError("target source failure is not bound to this qualification run")
 
 
 def load_target_failure_classifier() -> Any:
@@ -744,9 +903,28 @@ def parser() -> argparse.ArgumentParser:
     evidence = subparsers.add_parser("validate-evidence")
     evidence.add_argument("kind", choices=sorted(SCHEMAS))
     evidence.add_argument("path", type=Path)
+    native_qualification = subparsers.add_parser("validate-native-qualification")
+    native_qualification.add_argument("path", type=Path)
+    native_qualification.add_argument("--stdout", required=True, type=Path)
+    native_qualification.add_argument(
+        "--native-observation", required=True, type=Path
+    )
+    native_qualification.add_argument("--target-sha", required=True)
+    native_qualification.add_argument("--control-sha", required=True)
+    native_qualification.add_argument("--run-id", required=True)
+    native_qualification.add_argument("--run-attempt", required=True)
+    native_observation = subparsers.add_parser("validate-native-observation")
+    native_observation.add_argument("path", type=Path)
+    native_observation.add_argument("--target-sha", required=True)
+    native_observation.add_argument("--control-sha", required=True)
+    native_observation.add_argument("--run-id", required=True)
+    native_observation.add_argument("--run-attempt", required=True)
     target_source_failure = subparsers.add_parser("validate-target-source-failure")
     target_source_failure.add_argument("path", type=Path)
     target_source_failure.add_argument("--target-sha", required=True)
+    target_source_failure.add_argument("--control-sha", required=True)
+    target_source_failure.add_argument("--run-id", required=True)
+    target_source_failure.add_argument("--run-attempt", required=True)
     target_qualification_failure = subparsers.add_parser(
         "validate-target-qualification-failure"
     )
@@ -797,8 +975,32 @@ def main(arguments: list[str]) -> int:
             validate_profile(options.path)
         elif options.command == "validate-evidence":
             validate_evidence(options.kind, options.path)
+        elif options.command == "validate-native-qualification":
+            validate_native_qualification(
+                options.path,
+                options.stdout,
+                options.native_observation,
+                options.target_sha,
+                options.control_sha,
+                options.run_id,
+                options.run_attempt,
+            )
+        elif options.command == "validate-native-observation":
+            validate_native_observation(
+                options.path,
+                options.target_sha,
+                options.control_sha,
+                options.run_id,
+                options.run_attempt,
+            )
         elif options.command == "validate-target-source-failure":
-            validate_target_source_failure(options.path, options.target_sha)
+            validate_target_source_failure(
+                options.path,
+                options.target_sha,
+                options.control_sha,
+                options.run_id,
+                options.run_attempt,
+            )
         elif options.command == "validate-target-qualification-failure":
             validate_target_qualification_failure(
                 options.path,

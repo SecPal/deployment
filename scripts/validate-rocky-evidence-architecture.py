@@ -115,6 +115,13 @@ def validate_pure_contract(path: Path) -> None:
         raise ArchitectureError("authoritative fixture invariant owner is absent")
     if '"rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key"' not in source:
         raise ArchitectureError("authoritative package-signing invariant owner is absent")
+    if (
+        '"authenticated-native-packages": "rocky_preparation_contract.admit_package"'
+        not in source
+    ):
+        raise ArchitectureError(
+            "authoritative authenticated-package invariant owner is absent"
+        )
     invariant_owners = assignment_string_dict(tree, "INVARIANT_OWNERS")
     if invariant_owners is None or any(
         invariant_owners.get(invariant) != owner
@@ -217,6 +224,21 @@ def validate_pure_contract(path: Path) -> None:
         "assemble_preparation_evidence",
     }:
         raise ArchitectureError("pure orchestration crosses an undeclared responsibility surface")
+    native_orchestrator = functions.get("normalize_and_admit_native_packages")
+    if native_orchestrator is None:
+        raise ArchitectureError("authenticated native package orchestration is absent")
+    native_calls = {
+        call.func.id
+        for call in ast.walk(native_orchestrator)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+    }
+    if native_calls != {
+        "normalize_native_package_observations",
+        "admit_native_package_observations",
+    }:
+        raise ArchitectureError(
+            "authenticated native package boundaries are collapsed"
+        )
 
 
 def responsibility_set(tree: ast.Module) -> set[str]:
@@ -447,7 +469,8 @@ def validate_collector(path: Path) -> None:
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "contract"
             and node.func.attr.startswith("normalize_")
-            and node.func.attr != "normalize_and_admit"
+            and node.func.attr
+            not in {"normalize_and_admit", "normalize_and_admit_native_packages"}
         ):
             raise ArchitectureError("collector performs normalization before handoff")
         if isinstance(node.func, ast.Attribute) and node.func.attr == "run":

@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "target_sha",
+    "native_observation",
     "exit_status",
     "stdout_sha256",
     "stdout_bytes",
@@ -22,6 +23,56 @@
   "properties": {
     "schema_version": { "const": 1 },
     "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "native_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "target_sha",
+        "trusted_control_sha",
+        "qualification_run_id",
+        "qualification_run_attempt",
+        "host",
+        "podman_version",
+        "packages"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "trusted_control_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "qualification_run_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "qualification_run_attempt": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,2}$"
+        },
+        "host": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version_id", "architecture"],
+          "properties": {
+            "id": { "const": "rocky" },
+            "version_id": { "const": "10.2" },
+            "architecture": { "enum": ["aarch64", "x86_64"] }
+          }
+        },
+        "podman_version": {
+          "type": "string",
+          "pattern": "^5\\.(?:8\\.(?:[2-9]|[1-9][0-9]+)|(?:9|[1-9][0-9]+)\\.[0-9]+)$"
+        },
+        "packages": {
+          "type": "array",
+          "minItems": 22,
+          "maxItems": 22,
+          "items": { "$ref": "#/$defs/package" }
+        }
+      }
+    },
     "exit_status": { "const": 0 },
     "stdout_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "stdout_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
@@ -46,5 +97,55 @@
     "seccomp_enforced": { "const": true },
     "cleanup_complete": { "const": true },
     "classification": { "const": "PASS" }
+  },
+  "$defs": {
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "epoch",
+        "version",
+        "release",
+        "architecture",
+        "nevra",
+        "resolved_repository",
+        "signature_verified",
+        "signer_fingerprint",
+        "payload_digest"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9+_.-]{1,64}$"
+        },
+        "epoch": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,9})$" },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9][a-zA-Z0-9+_.~^]*$",
+          "maxLength": 128
+        },
+        "release": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9+_.~^]*$",
+          "maxLength": 128
+        },
+        "architecture": { "enum": ["aarch64", "x86_64", "noarch"] },
+        "nevra": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9+_.-]+-(?:[1-9][0-9]*:)?[0-9][a-zA-Z0-9+_.~^]*-[a-zA-Z0-9][a-zA-Z0-9+_.~^]*\\.(?:aarch64|x86_64|noarch)$",
+          "maxLength": 256
+        },
+        "resolved_repository": { "enum": ["baseos", "appstream", "extras"] },
+        "signature_verified": { "const": true },
+        "signer_fingerprint": {
+          "const": "fc226859c0860bf0ddb95b085b106c736fedfc85"
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
   }
 }

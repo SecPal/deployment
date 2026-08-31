@@ -89,6 +89,22 @@ class ProductionContractRegressionTests(unittest.TestCase):
     def validate_synthetic_inventory(self, inventory: dict[str, object]) -> None:
         self.validator.validate_inventory(inventory, synthetic=True)
 
+    def test_caller_authored_native_label_cannot_authenticate_host_facts(self) -> None:
+        candidate = copy.deepcopy(self.host_facts)
+        candidate["evidence_class"] = "rocky-native"
+
+        def validate() -> None:
+            try:
+                self.validator.validate_host_facts(
+                    self.inventory, candidate, synthetic=False
+                )
+            except TypeError as error:
+                if "synthetic" not in str(error):
+                    raise
+                self.validator.validate_host_facts(self.inventory, candidate)
+
+        self.assert_contract_violation(validate)
+
     def test_noncanonical_numeric_ipv4_origins_are_rejected(self) -> None:
         for hostname in ("127.1", "0177.0.0.1", "0x7f.1"):
             with self.subTest(hostname=hostname):

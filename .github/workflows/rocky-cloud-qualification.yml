@@ -683,17 +683,19 @@ jobs:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
         run: |
           ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          harness_sha256="$(sha256sum scripts/qualify-production-host.sh | awk '{print $1}')"
           set +e
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip" \
             sudo /usr/local/sbin/secpal-run-rocky-target-qualification \
-            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$harness_sha256"
           status=$?
           set -e
           case "$status" in
-            81|82|83|84)
+            81|82|83|84|86)
               source_failure_expected=true
               qualification_failure_expected=false
               ;;
@@ -706,8 +708,10 @@ jobs:
               qualification_failure_expected=false
               ;;
           esac
-          printf 'source_failure_expected=%s\n' "$source_failure_expected" >>"$GITHUB_OUTPUT"
-          printf 'qualification_failure_expected=%s\n' "$qualification_failure_expected" >>"$GITHUB_OUTPUT"
+          {
+            printf 'source_failure_expected=%s\n' "$source_failure_expected"
+            printf 'qualification_failure_expected=%s\n' "$qualification_failure_expected"
+          } >>"$GITHUB_OUTPUT"
           exit "$status"
 
       - name: Retrieve and validate bounded target-source failure
@@ -727,7 +731,9 @@ jobs:
           test "$(stat -c %s "$RUNNER_TEMP/rocky-target/target-source-failure.json")" -le 1024
           scripts/ci-cloud/rocky-control.py validate-target-source-failure \
             "$RUNNER_TEMP/rocky-target/target-source-failure.json" \
-            --target-sha "${{ needs.validate.outputs.target_sha }}"
+            --target-sha "${{ needs.validate.outputs.target_sha }}" \
+            --control-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       - name: Publish bounded target-source failure
         if: >-
@@ -796,26 +802,18 @@ jobs:
             -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
             "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/qualification.stdout" \
             "$RUNNER_TEMP/rocky-target/qualification.stdout"
-          scripts/ci-cloud/rocky-control.py validate-evidence qualification \
-            "$RUNNER_TEMP/rocky-target/qualification.json"
-          python3 - "$TARGET_SHA" \
+          scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip:/var/lib/secpal-rocky/evidence/native-package-observation.json" \
+            "$RUNNER_TEMP/rocky-target/native-package-observation.json"
+          scripts/ci-cloud/rocky-control.py validate-native-qualification \
             "$RUNNER_TEMP/rocky-target/qualification.json" \
-            "$RUNNER_TEMP/rocky-target/qualification.stdout" <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          target_sha, evidence_path, stdout_path = sys.argv[1:]
-          evidence = json.loads(Path(evidence_path).read_text(encoding="utf-8"))
-          stdout = Path(stdout_path).read_bytes()
-          if (
-              evidence["target_sha"] != target_sha
-              or evidence["stdout_bytes"] != len(stdout)
-              or evidence["stdout_sha256"] != hashlib.sha256(stdout).hexdigest()
-          ):
-              raise SystemExit("qualification evidence is not bound to target stdout")
-          PY
+            --stdout "$RUNNER_TEMP/rocky-target/qualification.stdout" \
+            --native-observation \
+            "$RUNNER_TEMP/rocky-target/native-package-observation.json" \
+            --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       - name: Publish bounded target-owned qualification evidence
         if: ${{ steps.target_execution.outcome == 'success' }}
