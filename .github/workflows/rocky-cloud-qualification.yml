@@ -686,38 +686,9 @@ jobs:
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
             -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
-            "secpal-cloud@$ip" sudo bash -s -- \
-            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" \
-            "$GITHUB_RUN_ATTEMPT" <<'REMOTE'
-          set -euo pipefail
-          readonly target_sha="$1" control_sha="$2" run_id="$3" run_attempt="$4"
-          readonly root=/var/lib/secpal-rocky/evidence
-          readonly output="$root/native-package-observation.json"
-          readonly diagnostic="$root/native-package-observation-failure.json"
-          rm -f -- "$output" "$diagnostic"
-          set +e
-          /usr/local/sbin/secpal-collect-rocky-preparation \
-            --native-package-admission --target-sha "$target_sha" \
-            --control-sha "$control_sha" --run-id "$run_id" \
-            --run-attempt "$run_attempt" --output "$output" \
-            --diagnostic-output "$diagnostic"
-          status=$?
-          set -e
-          if [[ "$status" -ne 0 ]]; then
-            [[ -f "$diagnostic" && ! -L "$diagnostic" ]]
-            /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
-              validate-collection-diagnostic "$diagnostic"
-            chown secpal-cloud:secpal-cloud "$diagnostic"
-            chmod 0400 "$diagnostic"
-            exit 92
-          fi
-          /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
-            validate-native-observation "$output" \
-            --target-sha "$target_sha" --control-sha "$control_sha" \
-            --run-id "$run_id" --run-attempt "$run_attempt"
-          chown secpal-cloud:secpal-cloud "$output"
-          chmod 0400 "$output"
-          REMOTE
+            "secpal-cloud@$ip" \
+            sudo /usr/local/sbin/secpal-collect-rocky-native-admission \
+            "$TARGET_SHA" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
 
       - name: Retrieve and validate authenticated native package binding
         if: ${{ steps.native_admission.outcome == 'success' }}

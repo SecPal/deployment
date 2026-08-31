@@ -437,6 +437,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "runtime_user_systemd_base64gzip": ROOT
             / "scripts/ci-cloud/runtime_user_systemd.py",
             "target_runner_base64gzip": ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh",
+            "native_admission_runner_base64gzip": ROOT
+            / "scripts/ci-cloud/collect-rocky-native-admission.sh",
             "target_failure_classifier_base64gzip": ROOT
             / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
             "target_trace_base64gzip": ROOT
@@ -2252,7 +2254,19 @@ class RockyCloudControlTests(unittest.TestCase):
         schema = json.loads((ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json").read_text(encoding="utf-8"))
         self.assertNotIn("positive_access", schema["required"])
         runner = (ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh").read_text(encoding="utf-8")
+        native_admission_runner = (
+            ROOT / "scripts/ci-cloud/collect-rocky-native-admission.sh"
+        ).read_text(encoding="utf-8")
+        native_admission_runner_path = (
+            ROOT / "scripts/ci-cloud/collect-rocky-native-admission.sh"
+        )
         workflow = WORKFLOW.read_text(encoding="utf-8")
+        bootstrap = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
+            encoding="utf-8"
+        )
+        preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(
+            encoding="utf-8"
+        )
         target = (ROOT / "scripts/qualify-production-host.sh").read_text(
             encoding="utf-8"
         )
@@ -2279,10 +2293,37 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotIn(
             "/usr/local/sbin/secpal-collect-rocky-preparation", runner
         )
+        self.assertNotIn("sudo bash -s", workflow)
+        self.assertIn(
+            "sudo /usr/local/sbin/secpal-collect-rocky-native-admission",
+            workflow,
+        )
+        self.assertIn(
+            "decode_script '${native_admission_runner_base64gzip}' "
+            "/usr/local/sbin/secpal-collect-rocky-native-admission",
+            bootstrap,
+        )
+        self.assertIn(
+            "NOPASSWD: /usr/local/sbin/secpal-collect-rocky-native-admission "
+            "[0-9a-f]* [0-9a-f]* [1-9]* [1-9]*",
+            preparation,
+        )
         self.assertEqual(
-            1,
+            0,
             workflow.count("/usr/local/sbin/secpal-collect-rocky-preparation"),
         )
+        self.assertIn(
+            "/usr/local/sbin/secpal-collect-rocky-preparation",
+            native_admission_runner,
+        )
+        rejected = subprocess.run(
+            [str(native_admission_runner_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("usage: collect-rocky-native-admission.sh", rejected.stderr)
         self.assertIn(
             '--native-observation "$native_observation"', runner
         )
@@ -2290,8 +2331,11 @@ class RockyCloudControlTests(unittest.TestCase):
             '"$RUNNER_TEMP/rocky-target/native-package-observation.json"',
             workflow,
         )
-        self.assertIn("exit 92", workflow)
-        self.assertIn('validate-collection-diagnostic "$diagnostic"', workflow)
+        self.assertIn("exit 92", native_admission_runner)
+        self.assertIn(
+            'validate-collection-diagnostic "$diagnostic"',
+            native_admission_runner,
+        )
         self.assertIn("rocky-cloud-native-package-failure-", workflow)
         cleanup = target.split("cleanup() {", 1)[1].split("\n}\n", 1)[0]
         self.assertLess(

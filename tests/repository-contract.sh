@@ -108,6 +108,7 @@ required_files=(
   scripts/ci-cloud/gcp-rocky-janitor.py
   scripts/ci-cloud/allocate-rocky-subids.py
   scripts/ci-cloud/bootstrap-rocky-host.tftpl
+  scripts/ci-cloud/collect-rocky-native-admission.sh
   scripts/ci-cloud/collect-rocky-preparation.py
   scripts/ci-cloud/prepare-rocky-host.sh
   scripts/ci-cloud/publish-rocky-qualification-readiness.py
