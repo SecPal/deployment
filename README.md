@@ -61,6 +61,9 @@ are authoritative for their current delivery state.
 The public [portable provider capability contract](docs/provider-capability-contract.md)
 defines bounded create, inspect, rebuild, and delete adapter mechanics without
 embedding provider selection, customer/fleet state, or commercial policy.
+The [PROTECTED CloudFront Viewer Edge contract](docs/cloudfront-viewer-edge.md)
+implements the bounded Multi-Tenant Distribution, Distribution Tenant, and
+managed Viewer-certificate lifecycle without performing provider mutation.
 
 The general PROTECTED Sandbox PoC is complete and retired. Portable production
 implementation is separately owned by #209; its native graph is authoritative
