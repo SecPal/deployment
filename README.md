@@ -64,6 +64,9 @@ embedding provider selection, customer/fleet state, or commercial policy.
 The [PROTECTED CloudFront Viewer Edge contract](docs/cloudfront-viewer-edge.md)
 implements the bounded Multi-Tenant Distribution, Distribution Tenant, and
 managed Viewer-certificate lifecycle without performing provider mutation.
+The [PROTECTED shared WAF contract](docs/cloudfront-waf.md) implements the
+distribution-level Anti-DDoS and privacy-minimized logging baseline without
+performing provider mutation.
 
 The general PROTECTED Sandbox PoC is complete and retired. Portable production
 implementation is separately owned by #209; its native graph is authoritative
