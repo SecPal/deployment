@@ -119,7 +119,23 @@ class CloudFrontWafTests(unittest.TestCase):
         web_acl = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)
         protections = web_acl["DataProtectionConfig"]["DataProtections"]
         self.assertTrue(all(item["Action"] == "SUBSTITUTION" for item in protections))
-        self.assertIn({"FieldType": "SINGLE_HEADER"}, [item["Field"] for item in protections])
+        fields = {item["Field"]["FieldType"]: item["Field"] for item in protections}
+        self.assertEqual({"FieldType": "BODY"}, fields["BODY"])
+        self.assertEqual({"FieldType": "QUERY_STRING"}, fields["QUERY_STRING"])
+        self.assertEqual(
+            {
+                "FieldType": "SINGLE_HEADER",
+                "FieldKeys": [
+                    "authorization",
+                    "cookie",
+                    "x-secpal-origin-token",
+                    "x-secpal-viewer-host",
+                    "x-secpal-viewer-ip",
+                ],
+            },
+            fields["SINGLE_HEADER"],
+        )
+        self.assertNotIn("x-unreviewed-sensitive-header", fields["SINGLE_HEADER"]["FieldKeys"])
         logging = self.contract.build_logging_configuration(self.target)
         headers = {item["SingleHeader"]["Name"] for item in logging["RedactedFields"] if "SingleHeader" in item}
         self.assertTrue({"authorization", "cookie", "x-secpal-origin-token", "x-secpal-viewer-host", "x-secpal-viewer-ip"}.issubset(headers))

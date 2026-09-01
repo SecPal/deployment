@@ -91,10 +91,19 @@ Logging defaults to `DROP` and has one `KEEP` condition for the fully-qualified
 event, as well as ordinary Allow, challengeable-only, unrelated-rule, and
 unrelated-label traffic.
 
-Data protection uses `SUBSTITUTION` for bodies, query strings, and all current
-WAF-representable header values. Logging redaction independently covers URI
-path, query string, Authorization, Cookie, and the three `X-SecPal-*` headers.
-This is defense in depth: redaction does not affect sampling.
+Data protection uses `SUBSTITUTION` for:
+
+- the request body;
+- the complete query string; and
+- the explicitly reviewed Authorization, Cookie, `X-SecPal-Origin-Token`,
+  `X-SecPal-Viewer-Host`, and `X-SecPal-Viewer-IP` header keys.
+
+Current live provider behavior requires non-empty `FieldKeys` for
+`SINGLE_HEADER`; the contract therefore enumerates this existing reviewed set.
+It does not claim an all-header protection mode. A future sensitive application
+header must be added to the reviewed contract or protected at another suitable
+layer. Logging redaction independently covers URI path, query string, the same
+reviewed headers, and remains distinct from Data Protection and sampling.
 
 AWS currently documents `AWS-WAF-TOKEN` as a provider-owned exception to WAF
 data-protection coverage. The contract records that limitation rather than
@@ -139,6 +148,13 @@ The #212 intake observed the AWS default `Version_1.0`, capacity 50 WCU, three
 current internal rules, and a current CloudFront Web ACL ceiling of 5000 WCU.
 These are mutable provider observations, not permanent SecPal guarantees. The
 intake also observed the current Anti-DDoS configuration surface and labels.
+
+Diagnostic run `q212-diag-379c83a077` reproduced a live `CreateWebACL`
+`WAFInvalidParameterException`: `SINGLE_HEADER` rejected omitted `FieldKeys` as
+null or empty. This observed service requirement conflicts with the generic AWS
+API reference that currently describes `FieldKeys` as optional. The live
+provider evidence controls this executable request shape without creating a new
+architecture concept.
 
 ## Later real-provider qualification
 

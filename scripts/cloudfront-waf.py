@@ -286,7 +286,10 @@ def _data_protections() -> list[dict[str, object]]:
         },
         {
             "Action": "SUBSTITUTION",
-            "Field": {"FieldType": "SINGLE_HEADER"},
+            "Field": {
+                "FieldType": "SINGLE_HEADER",
+                "FieldKeys": list(SENSITIVE_HEADERS),
+            },
             "ExcludeRateBasedDetails": False,
             "ExcludeRuleMatchDetails": False,
         },
