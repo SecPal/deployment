@@ -507,6 +507,26 @@ def plan_create_connection_group(name: str) -> AwsOperationPlan:
     )
 
 
+def _require_exact_method_set(
+    methods: object, *, quantity: int, members: frozenset[str]
+) -> None:
+    """Admit one complete CloudFront method set regardless of response order."""
+
+    if type(methods) is not dict:
+        raise ContractError("the complete Viewer method baseline is mandatory")
+    items = methods.get("Items")
+    if (
+        type(methods.get("Quantity")) is not int
+        or methods["Quantity"] != quantity
+        or type(items) is not list
+        or len(items) != quantity
+        or any(type(item) is not str for item in items)
+        or len(set(items)) != len(items)
+        or set(items) != members
+    ):
+        raise ContractError("the complete Viewer method baseline is mandatory")
+
+
 def validate_distribution_config(config: object) -> None:
     """Admit only the ADR-019 dynamic/authenticated parent baseline."""
 
@@ -543,16 +563,16 @@ def validate_distribution_config(config: object) -> None:
         raise ContractError("the reviewed Origin Request Policy is mandatory")
     if behavior.get("TargetOriginId") != ORIGIN_ID:
         raise ContractError("default behavior targets an unknown origin")
-    expected_methods = {
-        "Quantity": 7,
-        "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
-        "CachedMethods": {
-            "Quantity": 3,
-            "Items": ["GET", "HEAD", "OPTIONS"],
-        },
-    }
-    if allowed_methods != expected_methods:
-        raise ContractError("the complete Viewer method baseline is mandatory")
+    _require_exact_method_set(
+        allowed_methods,
+        quantity=7,
+        members=frozenset({"GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"}),
+    )
+    _require_exact_method_set(
+        allowed_methods.get("CachedMethods"),
+        quantity=3,
+        members=frozenset({"GET", "HEAD", "OPTIONS"}),
+    )
     if config.get("CacheBehaviors") != {"Quantity": 0}:
         raise ContractError("unqualified route-specific cache behaviors are forbidden")
     if origins.get("Quantity") != 1:

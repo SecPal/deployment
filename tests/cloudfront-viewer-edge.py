@@ -206,6 +206,45 @@ class CloudFrontViewerEdgeTests(unittest.TestCase):
                 with self.assertRaises(self.contract.ContractError):
                     self.contract.validate_distribution_config(changed)
 
+    def test_parent_method_baseline_admits_provider_ordering_only(self) -> None:
+        config = self.contract.build_distribution_config("qualification-17")
+        methods = config["DefaultCacheBehavior"]["AllowedMethods"]
+        methods["Items"] = [
+            "HEAD",
+            "DELETE",
+            "POST",
+            "GET",
+            "OPTIONS",
+            "PUT",
+            "PATCH",
+        ]
+        methods["CachedMethods"]["Items"] = ["HEAD", "GET", "OPTIONS"]
+
+        self.contract.validate_distribution_config(config)
+
+    def test_parent_method_baseline_rejects_malformed_membership(self) -> None:
+        cases = (
+            ("missing-allowed", "AllowedMethods", "Items", ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH"]),
+            ("duplicate-allowed", "AllowedMethods", "Items", ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "GET"]),
+            ("wrong-allowed-quantity", "AllowedMethods", "Quantity", 6),
+            ("extra-allowed", "AllowedMethods", "Items", ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE", "TRACE"]),
+            ("missing-cached", "CachedMethods", "Items", ["GET", "HEAD"]),
+            ("duplicate-cached", "CachedMethods", "Items", ["GET", "HEAD", "GET"]),
+            ("wrong-cached-quantity", "CachedMethods", "Quantity", 2),
+            ("non-list", "AllowedMethods", "Items", "GET"),
+            ("non-string", "CachedMethods", "Items", ["GET", "HEAD", 3]),
+        )
+        for label, scope, key, value in cases:
+            with self.subTest(method_membership=label):
+                changed = self.contract.deep_copy(
+                    self.contract.build_distribution_config("qualification-17")
+                )
+                methods = changed["DefaultCacheBehavior"]["AllowedMethods"]
+                target = methods if scope == "AllowedMethods" else methods[scope]
+                target[key] = value
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.validate_distribution_config(changed)
+
     def test_parent_create_inspect_update_disable_delete_are_exact(self) -> None:
         create = self.contract.plan_create_distribution("qualification-17")
         self.assertEqual("CreateDistribution", create.api_operation)
