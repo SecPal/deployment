@@ -5,73 +5,108 @@ SPDX-License-Identifier: CC0-1.0
 
 # PROTECTED provider-firewall adapter contract
 
-`scripts/provider-firewall-contract.py` is the pure, provider-neutral seam for
-the PROTECTED Origin firewall policy. It owns no provider selection, credential,
-customer or fleet inventory, firewall identifier, mutable provider state, or
-provider API syntax. A later concrete adapter supplies those runtime inputs and
-performs provider observation and mutation.
+`scripts/provider-firewall-contract.py` is the provider-neutral, ownership-scoped
+seam for PROTECTED Origin firewall policy. It owns no provider selection,
+credential, customer or fleet inventory, live firewall identity, mutable provider
+state, provider API syntax, or concrete provider mutation. A later adapter such
+as #216 supplies those runtime facts and effects.
 
-It reuses the portable provider-capability contract from [#169](https://github.com/SecPal/deployment/issues/169): separately supplied `ExecutionAuthority`, opaque provider context and exact `ResourceTarget`, source revision, adapter identity, parameter digest, and provider concurrency identity remain that contract's authority. The firewall target must be the exact authority target, must have a provider-native resource identity, and its current observation must match `ResourceTarget.expected_version` when that authority is exposed. A stale version is an error, never a last-write-wins retry. Providers without a concurrency authority leave it absent; this seam does not invent a universal ETag.
+## Existing authorities
 
-The accepted CloudFront prefix input comes only from [#214](https://github.com/SecPal/deployment/issues/214). The caller reads its `accepted` LKG boundary and supplies that document plus its exact `candidate_sha256` identity. This seam checks the closed #214 representation and identity, `CLOUDFRONT_ORIGIN_FACING` service, source URL, deterministic non-empty IPv4 and IPv6 sets, canonical CIDRs, and rejection of default routes. It does not fetch AWS ranges, inspect candidates, promote an LKG, or create acceptance provenance. The caller's #214 boundary remains responsible for proving that the document came from `accepted`, rather than `candidate`; a stale or substituted identity is rejected here.
+The seam consumes the accepted CloudFront Origin prefix state only by calling
+`read_lkg(state_directory)` from the authoritative
+`scripts/cloudfront-origin-prefix-lkg.py` implementation delivered by #214.
+Raw dictionaries and caller-computed digests are not prefix authority. #214
+continues to own source observation, candidate validation, publication ordering,
+explicit acceptance, safe state storage, and accepted-LKG reads. #215 copies
+only the resulting IPv4 and IPv6 strings into immutable semantic policy values.
 
-## Bounded lifecycle
+Every provider observation, mutation, result, and rollback reuses #169:
 
-```text
-provider inspect → normalize FirewallObservation → admit accepted input
-→ plan exact owned rule → adapter apply with observed revision
-→ fresh provider inspect → semantic verification
-                         ↘ failure → exact prior-observation rollback → inspect
-```
+- observation is `Operation.INSPECT`;
+- owned-policy reconciliation and rollback are `Operation.REBUILD`;
+- `admit_request()` checks the separately supplied `ExecutionAuthority`,
+  supported operation, adapter, source revision, exact target, and parameter
+  digest; and
+- `admit_result()` checks exact request/result correlation before #215 uses
+  provider evidence.
 
-`FirewallInput` accepts only `EdgeMode.PROTECTED`, TCP, and port 443. `DIRECT`
-is rejected rather than being translated into a CloudFront-only ingress policy.
-The desired owned rule contains precisely the admitted IPv4 and IPv6 source
-sets. Both families are mandatory; a missing family cannot create an empty or
-broader policy.
+The mutation parameter digest binds PROTECTED mode, exact target and observed
+revision, accepted #214 identity, TCP/443 desired policy, adapter/source identity,
+the authenticated prior owned slice, required operator-access identities, and
+the opaque preserved-state identity. A record constructor is data transport, not
+authority; public mutation and verification functions always repeat the #169
+admission appropriate to their phase.
 
-`FirewallObservation` is a provider-normalized, exact-target read-back. Its
-rules carry an adapter-provided opaque `rule_id` and explicit `ownership_id`.
-The plan finds #215-owned rules exclusively by exact `ownership_id`; overlap,
-port, description, provider object location, or resemblance are not ownership.
-More than one matching owned rule fails closed. All other rules form the exact
-unrelated-policy snapshot and are not deletion authority.
+## Ownership-scoped observation
 
-The plan has only two outcomes:
+`FirewallObservation` is one adapter-produced, #169-correlated complete provider
+read. Its closed ownership scope distinguishes at most one #215-owned Origin
+slice from required operator access and all other provider-native state.
+Ownership is never caller supplied or inferred from protocol, port, prefixes,
+name, description, position, or semantic resemblance. A provider rule cannot be
+both #215-owned and operator access.
 
-- `no-mutation` for the one exact desired owned rule; and
-- `replace-owned` for a missing or stale owned rule.
+Issue #215 normalizes only the owned ingress semantics needed by this contract:
+protocol, port, and canonical IPv4/IPv6 sources. Provider-native rule identity is
+separate and may change across create, update, or rollback. The desired policy is
+exactly TCP 443 from the accepted dual-stack #214 prefix set.
 
-The latter never authorizes a whole-firewall replacement. The concrete adapter
-must bind its mutation to `expected_revision`, preserve every unrelated rule,
-and retain the complete prior `FirewallObservation`. The adapter may use its
-provider's safe update primitive, but must not remove the known-safe owned rule
-before a replacement is safely recoverable.
+The adapter supplies one deterministic SHA-256 identity for the complete
+non-owned provider policy, including required operator-access state and any
+provider-native rule types #215 does not model. The adapter must compute that
+identity from one complete provider read. Missing completeness, ambiguous owned
+state, malformed owned semantics, ownership/operator overlap, or non-owned state
+identity drift fails closed. This keeps core patch-like and ownership bounded
+without inventing a generic provider firewall DSL.
 
-`ApplyOutcome.APPLY_ACCEPTED` proves only that the adapter accepted its request;
-it is not verification. `verify` requires fresh observation of the exact owned
-TCP/443 dual-stack policy, all preserved unrelated rules, and every declared
-operator-access rule identity. Extra unrelated rules or any unrelated-policy
-drift fail closed rather than being silently accepted.
+An empty operator-access tuple means the adapter's complete read found no rules
+classified as required operator access. It never grants #215 ownership of those
+rules. Providers that internally require replacement must retain every
+unmodelled provider-native field when implementing the ownership-bounded
+operation; an incomplete projection is never a replacement payload.
 
-On an adapter mutation failure, `admit_apply_result` produces a `RollbackPlan`
-whose only action is `restore-prior`. That plan holds the exact prior target,
-revision, and complete normalized observation. `verify_rollback` accepts only
-an identical fresh observation. The seam cannot synthesize a permissive policy,
-flush a firewall, guess unrelated rules, or roll back a different/stale target.
-If the adapter cannot represent that exact restore, it must report a bounded
-failure diagnostic and stop.
+## Plan, apply, verification, and recovery
 
-## Adapter obligations and diagnostics
+`plan()` has two outcomes:
 
-Adapters perform the side effects outside this pure module. They must emit
-bounded, non-secret diagnostic codes that distinguish invalid accepted-prefix
-input, target mismatch, ownership ambiguity, concurrency conflict, provider
-mutation failure, verification mismatch, and rollback failure. Provider API
-responses, credentials, account state, customer inventory, and mutable resource
-state are not diagnostics and must not enter Git or this contract.
+- `NO_MUTATION` when the one authenticated owned slice is semantically equal to
+  the desired policy, regardless of its provider-native rule ID; and
+- `REPLACE_OWNED` when that slice is absent or semantically stale.
 
-The contract creates no provider registry, plugin framework, provider-specific
-rule DSL, schema, evidence format, or lifecycle engine. It is a portable
-admission/planning boundary for a later adapter such as #216; it is not that
-adapter, host nftables, fleet placement, or a provider mutation implementation.
+A plan alone authorizes no write. `build_mutation_request()` produces the
+correlated #169 REBUILD request only when a separately supplied authority matches
+the complete mutation digest and the current observation supplied a non-empty
+revision. Missing or stale concurrency authority has no write fallback.
+
+Every mutation result, including APPLIED, ALREADY_SATISFIED, FAILED, UNSUPPORTED,
+or an incomplete-cleanup failure, requires a fresh correlated INSPECT. Apply
+acceptance is never verification. Verification requires the exact desired owned
+semantics, the same non-owned provider-state identity, the same operator-access
+identities, exact provider target, adapter, and source revision. A new
+provider-native owned rule ID is valid.
+
+Failure or uncertainty never directly creates rollback authority. The fresh
+post-mutation read is classified first:
+
+- desired semantics present: desired state is verified;
+- prior owned semantics present: recovery is already satisfied;
+- changed but representable owned semantics: rollback may be planned; or
+- incomplete, ambiguous, wrong-target, non-owned/operator drift, or missing
+  revision: fail closed.
+
+A rollback REBUILD request is bound to the fresh post-failure revision and the
+prior owned semantics. Its result also requires a fresh INSPECT. Rollback
+verification accepts a naturally advanced provider revision and a newly assigned
+provider rule ID, while requiring the prior owned semantics, exact target,
+operator access, and opaque non-owned state identity to remain intact.
+
+The adapter operation is one ownership-bounded logical operation. A concrete
+adapter that needs multiple provider-native writes owns their internal ordering,
+partial-state diagnosis, and safe recovery; it must return #169 cleanup semantics
+and cannot claim completion until the complete ownership-scoped observation is
+available.
+
+The contract adds no provider registry, plugin system, generic policy DSL,
+second provider authority, evidence architecture, schema, runtime dependency, or
+provider-specific behavior.

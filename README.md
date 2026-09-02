@@ -62,8 +62,8 @@ The public [portable provider capability contract](docs/provider-capability-cont
 defines bounded create, inspect, rebuild, and delete adapter mechanics without
 embedding provider selection, customer/fleet state, or commercial policy.
 The [PROTECTED provider-firewall adapter contract](docs/provider-firewall-contract.md)
-consumes the accepted CloudFront Origin prefix LKG and defines bounded
-provider-neutral inspect, plan, apply, verify, and exact rollback obligations.
+consumes #214 accepted CloudFront Origin state and defines #169-correlated,
+ownership-scoped planning, verification, and fresh-state-bound semantic rollback.
 The [PROTECTED CloudFront Viewer Edge contract](docs/cloudfront-viewer-edge.md)
 implements the bounded Multi-Tenant Distribution, Distribution Tenant, and
 managed Viewer-certificate lifecycle without performing provider mutation.

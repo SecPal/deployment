@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -28,179 +29,498 @@ def load_contract():
     return module
 
 
-class ProviderFirewallContractTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.contract = load_contract()
-        cls.capability = cls.contract.capability
-        cls.target = cls.capability.ResourceTarget(
+
+class AuthenticatedFirewallRemediationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.contract = load_contract()
+        self.capability = self.contract.capability
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state = Path(self.temporary.name) / "prefix-state"
+        source = {
+            "syncToken": "1788081425",
+            "createDate": "2026-08-30-09-17-05",
+            "prefixes": [
+                {
+                    "ip_prefix": "192.0.2.0/24",
+                    "region": "GLOBAL",
+                    "service": "CLOUDFRONT_ORIGIN_FACING",
+                    "network_border_group": "GLOBAL",
+                }
+            ],
+            "ipv6_prefixes": [
+                {
+                    "ipv6_prefix": "2001:db8:1::/48",
+                    "region": "GLOBAL",
+                    "service": "CLOUDFRONT_ORIGIN_FACING",
+                    "network_border_group": "GLOBAL",
+                }
+            ],
+        }
+        candidate = self.contract.lkg.build_candidate(
+            source, retrieved_at="2026-08-30T12:20:10Z"
+        )
+        self.contract.lkg.write_candidate(self.state, candidate)
+        self.contract.lkg.accept_candidate(
+            self.state, candidate["candidate_sha256"]
+        )
+        self.accepted_identity = candidate["candidate_sha256"]
+        self.target = self.capability.ResourceTarget(
             provider="example-cloud",
             scope="project-42/region-a",
             requested_key="origin-firewall",
             provider_resource_id="firewall-17",
-            expected_version="revision-3",
         )
-        cls.authority = cls.capability.ExecutionAuthority(
-            authorization_id="workflow-run-17",
-            adapter_id="example-firewall-v1",
+        self.intent = self.contract.FirewallIntent(
+            edge_mode=self.contract.EdgeMode.PROTECTED,
+            origin_protocol="tcp",
+            origin_port=443,
+        )
+        self.desired = self.contract.FirewallPolicy(
+            protocol="tcp",
+            port=443,
+            ipv4_sources=("192.0.2.0/24",),
+            ipv6_sources=("2001:db8:1::/48",),
+        )
+
+    def observation(
+        self,
+        *,
+        phase=None,
+        owned=(),
+        operator_access=("operator-rule-9",),
+        preserved_state_sha256="d" * 64,
+        revision="revision-3",
+        complete=True,
+        authority_operation=None,
+        request_parameters=None,
+        result_request_id=None,
+        result_source_revision=None,
+        provider_rule_id=None,
+        supported_operations=None,
+    ):
+        phase = phase or self.contract.ObservationPhase.CURRENT
+        if supported_operations is None:
+            supported_operations = frozenset(
+                {
+                    self.capability.Operation.INSPECT,
+                    self.capability.Operation.REBUILD,
+                }
+            )
+        digest = (
+            request_parameters
+            or self.contract.inspection_parameters_sha256(
+                self.target, phase, supported_operations
+            )
+        )
+        operation = authority_operation or self.capability.Operation.INSPECT
+        authority = self.capability.ExecutionAuthority(
+            authorization_id=f"inspect-{phase.value}",
+            adapter_id="example-firewall-v2",
             source_revision="a" * 40,
-            target=cls.target,
-            operations=frozenset(cls.capability.Operation),
-            parameters_sha256="b" * 64,
+            target=self.target,
+            operations=frozenset({operation}),
+            parameters_sha256=digest,
+            credential_mechanism="oidc-workload-identity",
+        )
+        request = self.capability.CapabilityRequest(
+            request_id=f"request-{phase.value}",
+            adapter_id=authority.adapter_id,
+            source_revision=authority.source_revision,
+            operation=self.capability.Operation.INSPECT,
+            target=self.target,
+            parameters_sha256=digest,
+        )
+        result = self.capability.CapabilityResult(
+            request_id=result_request_id or request.request_id,
+            adapter_id=request.adapter_id,
+            source_revision=result_source_revision or request.source_revision,
+            operation=request.operation,
+            target=request.target,
+            parameters_sha256=request.parameters_sha256,
+            outcome=self.capability.Outcome.OBSERVED,
+            cleanup=self.capability.CleanupOutcome.NOT_APPLICABLE,
+            provider_resource_id=self.target.provider_resource_id,
+            provider_resource_version=revision,
+        )
+        if provider_rule_id is not None:
+            owned = (
+                self.contract.OwnedFirewallPolicy(provider_rule_id, self.desired),
+            )
+        observation = self.contract.FirewallObservation(
+            phase=phase,
+            request=request,
+            result=result,
+            supported_operations=supported_operations,
+            ownership_scope=self.contract.OwnershipScope.PROTECTED_ORIGIN,
+            owned=tuple(owned),
+            operator_access=tuple(operator_access),
+            preserved_state_sha256=preserved_state_sha256,
+            completeness=(
+                self.contract.ProjectionCompleteness.COMPLETE
+                if complete
+                else None
+            ),
+        )
+        return observation, authority
+
+    def mutation_authority(self, plan):
+        target = plan.target
+        return self.capability.ExecutionAuthority(
+            authorization_id="mutate-owned-origin",
+            adapter_id="example-firewall-v2",
+            source_revision="a" * 40,
+            target=target,
+            operations=frozenset({self.capability.Operation.REBUILD}),
+            parameters_sha256=self.contract.mutation_parameters_sha256(plan),
             credential_mechanism="oidc-workload-identity",
         )
 
-    def accepted(self, **changes):
-        document = {
+    def mutation_result(self, request, *, outcome=None, cleanup=None):
+        return self.capability.CapabilityResult(
+            request_id=request.request_id,
+            adapter_id=request.adapter_id,
+            source_revision=request.source_revision,
+            operation=request.operation,
+            target=request.target,
+            parameters_sha256=request.parameters_sha256,
+            outcome=outcome or self.capability.Outcome.APPLIED,
+            cleanup=cleanup or self.capability.CleanupOutcome.NOT_APPLICABLE,
+            provider_resource_id=request.target.provider_resource_id,
+            provider_resource_version="revision-4",
+            diagnostic_code=(
+                "provider-mutation-failed"
+                if outcome is self.capability.Outcome.FAILED
+                else None
+            ),
+        )
+
+    def test_f1_only_actual_214_accepted_state_is_authority(self) -> None:
+        current, inspect_authority = self.observation()
+        fabricated = {
             "schema_version": 1,
-            "source_url": "https://ip-ranges.amazonaws.com/ip-ranges.json",
-            "source_sync_token": "1788081425",
-            "source_create_date": "2026-08-30-09-17-05",
-            "retrieved_at": "2026-08-30T12:20:10Z",
-            "service": "CLOUDFRONT_ORIGIN_FACING",
-            "ipv4_prefixes": ["192.0.2.0/24"],
-            "ipv6_prefixes": ["2001:db8:1::/48"],
+            "candidate_sha256": "f" * 64,
         }
-        document.update(changes)
-        document["candidate_sha256"] = self.contract.prefix_digest(document)
-        return document
-
-    def input(self, **changes):
-        document = self.accepted()
-        values = {
-            "authority": self.authority,
-            "target": self.target,
-            "edge_mode": self.contract.EdgeMode.PROTECTED,
-            "accepted_lkg": document,
-            "accepted_lkg_identity": document["candidate_sha256"],
-            "origin_protocol": "tcp",
-            "origin_port": 443,
-            "ownership_id": "secpal-origin-lockdown-v1",
-            "operator_access": ("operator-access-rule-9",),
-        }
-        values.update(changes)
-        return self.contract.FirewallInput(**values)
-
-    def rule(self, rule_id, ownership_id, sources, *, port=443):
-        return self.contract.FirewallRule(
-            rule_id=rule_id,
-            ownership_id=ownership_id,
-            protocol="tcp",
-            port=port,
-            ipv4_sources=tuple(source for source in sources if ":" not in source),
-            ipv6_sources=tuple(source for source in sources if ":" in source),
-        )
-
-    def observation(self, *rules, revision="revision-3"):
-        return self.contract.FirewallObservation(
-            target=self.target,
-            revision=revision,
-            rules=tuple(rules),
-        )
-
-    def test_valid_accepted_dual_stack_protected_policy_is_admitted(self) -> None:
-        admitted = self.contract.admit_input(self.input(operator_access=()))
-        self.assertEqual(admitted.desired.ipv4_sources, ("192.0.2.0/24",))
-        self.assertEqual(admitted.desired.ipv6_sources, ("2001:db8:1::/48",))
-        self.assertEqual(admitted.desired.port, 443)
-
-    def test_unsafe_prefix_and_evidence_inputs_fail_closed(self) -> None:
-        cases = {
-            "empty IPv4": self.accepted(ipv4_prefixes=[]),
-            "empty IPv6": self.accepted(ipv6_prefixes=[]),
-            "default IPv4": self.accepted(ipv4_prefixes=["0.0.0.0/0"]),
-            "default IPv6": self.accepted(ipv6_prefixes=["::/0"]),
-            "malformed IPv4": self.accepted(ipv4_prefixes=["not-a-cidr"]),
-            "malformed IPv6": self.accepted(ipv6_prefixes=["not-a-cidr"]),
-            "wrong service": self.accepted(service="AMAZON"),
-        }
-        for label, document in cases.items():
-            document["candidate_sha256"] = self.contract.prefix_digest(document)
-            with self.subTest(label=label), self.assertRaises(self.contract.ContractError):
-                self.contract.admit_input(
-                    self.input(
-                        accepted_lkg=document,
-                        accepted_lkg_identity=document["candidate_sha256"],
-                    )
-                )
-        with self.assertRaises(self.contract.ContractError):
-            self.contract.admit_input(self.input(accepted_lkg_identity="c" * 64))
-
-    def test_target_provider_and_direct_mismatches_fail_closed(self) -> None:
-        with self.assertRaises(self.contract.ContractError):
-            self.contract.admit_input(
-                self.input(target=self.capability.ResourceTarget(
-                    provider="other-cloud", scope="project-42/region-a",
-                    requested_key="origin-firewall", provider_resource_id="firewall-17",
-                    expected_version="revision-3",
-                ))
+        with self.assertRaises((TypeError, self.contract.ContractError)):
+            self.contract.plan(
+                self.intent, fabricated, current, inspect_authority
             )
-        with self.assertRaises(self.contract.ContractError):
-            self.contract.admit_input(self.input(edge_mode=self.contract.EdgeMode.DIRECT))
+        accepted = self.contract.lkg.read_lkg(self.state)
+        assert accepted is not None
+        accepted["schema_version"] = True
+        accepted["candidate_sha256"] = self.contract.lkg.candidate_digest(accepted)
+        accepted_path = self.state / self.contract.lkg.LKG_FILE
+        accepted_path.write_bytes(self.contract.lkg._canonical_bytes(accepted))
+        with self.assertRaises(self.contract.lkg.ContractError):
+            self.contract.plan(
+                self.intent, self.state, current, inspect_authority
+            )
 
-    def test_plan_is_idempotent_and_preserves_unrelated_rules(self) -> None:
-        admitted = self.contract.admit_input(self.input())
-        desired = admitted.desired
-        unrelated = self.rule("operator-access-rule-9", "operator", ("203.0.113.0/24",), port=22)
-        current = self.observation(desired, unrelated)
-        plan = self.contract.plan(admitted, current)
-        self.assertEqual(plan.action, self.contract.PlanAction.NO_MUTATION)
-        self.assertEqual(plan.unrelated_rules, (unrelated,))
-
-    def test_missing_or_stale_owned_rule_is_a_bounded_replacement(self) -> None:
-        admitted = self.contract.admit_input(self.input())
-        unrelated = self.rule("operator-access-rule-9", "operator", ("203.0.113.0/24",), port=22)
-        missing = self.contract.plan(admitted, self.observation(unrelated))
-        stale = self.contract.plan(
-            admitted,
-            self.observation(self.rule("owned-rule", "secpal-origin-lockdown-v1", ("198.51.100.0/24", "2001:db8:2::/48")), unrelated),
+    def test_f2_169_operation_parameter_and_result_binding(self) -> None:
+        current, authority = self.observation(
+            authority_operation=self.capability.Operation.CREATE
         )
-        self.assertEqual(missing.action, self.contract.PlanAction.REPLACE_OWNED)
-        self.assertEqual(stale.action, self.contract.PlanAction.REPLACE_OWNED)
-        self.assertEqual(stale.unrelated_rules, (unrelated,))
-
-    def test_ambiguous_ownership_and_stale_concurrency_fail_closed(self) -> None:
-        admitted = self.contract.admit_input(self.input())
-        duplicate = self.rule("owned-rule-2", "secpal-origin-lockdown-v1", ("192.0.2.0/24", "2001:db8:1::/48"))
+        with self.assertRaises(self.capability.ContractError):
+            self.contract.plan(self.intent, self.state, current, authority)
+        current, authority = self.observation(request_parameters="e" * 64)
         with self.assertRaises(self.contract.ContractError):
-            self.contract.plan(admitted, self.observation(admitted.desired, duplicate))
-        with self.assertRaises(self.contract.ContractError):
-            self.contract.plan(admitted, self.observation(admitted.desired, revision="revision-4"))
+            self.contract.plan(self.intent, self.state, current, authority)
+        with self.assertRaises(self.capability.ContractError):
+            current, authority = self.observation(result_request_id="other-request")
+            self.contract.plan(self.intent, self.state, current, authority)
+        with self.assertRaises(self.capability.ContractError):
+            current, authority = self.observation(
+                result_source_revision="b" * 40
+            )
+            self.contract.plan(self.intent, self.state, current, authority)
 
-    def test_apply_is_not_verification_and_failure_requires_exact_rollback(self) -> None:
-        admitted = self.contract.admit_input(self.input(operator_access=()))
-        prior = self.observation()
-        plan = self.contract.plan(admitted, prior)
-        failed = self.contract.ApplyResult(
-            plan=plan, outcome=self.contract.ApplyOutcome.FAILED, diagnostic_code="provider-mutation-failed"
+        current, authority = self.observation(
+            supported_operations=frozenset({self.capability.Operation.INSPECT})
         )
-        rollback = self.contract.admit_apply_result(failed)
-        self.assertEqual(rollback.prior, prior)
-        self.assertEqual(rollback.action, self.contract.RollbackAction.RESTORE_PRIOR)
-        accepted = self.contract.ApplyResult(plan=plan, outcome=self.contract.ApplyOutcome.APPLY_ACCEPTED)
-        self.assertIsNone(self.contract.admit_apply_result(accepted))
-        with self.assertRaises(self.contract.ContractError):
-            self.contract.verify(plan, self.observation())
+        mutation_plan = self.contract.plan(
+            self.intent, self.state, current, authority
+        )
+        mutation_authority = self.mutation_authority(mutation_plan)
+        with self.assertRaises(self.capability.UnsupportedCapability):
+            self.contract.build_mutation_request(
+                mutation_plan, mutation_authority, "unsupported-rebuild"
+            )
 
-    def test_verify_requires_exact_policy_operator_access_and_unrelated_rules(self) -> None:
-        admitted = self.contract.admit_input(self.input())
-        operator = self.rule("operator-access-rule-9", "operator", ("203.0.113.0/24",), port=22)
-        prior = self.observation(operator)
-        plan = self.contract.plan(admitted, prior)
-        verified = self.observation(admitted.desired, operator)
-        self.contract.verify(plan, verified)
+    def test_f3_no_constructor_can_bypass_admission(self) -> None:
+        self.assertFalse(hasattr(self.contract, "AdmittedFirewallInput"))
         with self.assertRaises(self.contract.ContractError):
-            self.contract.verify(plan, self.observation(admitted.desired))
-        with self.assertRaises(self.contract.ContractError):
-            self.contract.verify(plan, self.observation(admitted.desired, operator, self.rule("extra", "other", ("10.0.0.0/8",))))
+            self.contract.FirewallIntent(
+                self.contract.EdgeMode.PROTECTED, "tcp", 22
+            )
 
-    def test_rollback_is_exact_prior_observation_only(self) -> None:
-        admitted = self.contract.admit_input(self.input())
-        prior = self.observation(self.rule("operator-access-rule-9", "operator", ("203.0.113.0/24",), port=22))
-        rollback = self.contract.rollback_plan(self.contract.plan(admitted, prior))
-        self.contract.verify_rollback(rollback, prior)
+    def test_f4_ownership_is_adapter_bound_and_disjoint_from_operator(self) -> None:
         with self.assertRaises(self.contract.ContractError):
-            self.contract.verify_rollback(rollback, self.observation())
+            self.observation(provider_rule_id="operator-rule-9")
+        with self.assertRaises(TypeError):
+            self.contract.FirewallIntent(
+                edge_mode=self.contract.EdgeMode.PROTECTED,
+                origin_protocol="tcp",
+                origin_port=443,
+                ownership_id="operator",
+            )
+
+    def test_f5_mutation_requires_observed_concurrency(self) -> None:
+        current, authority = self.observation(revision=None)
+        plan = self.contract.plan(self.intent, self.state, current, authority)
+        mutation_authority = self.mutation_authority(plan)
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.build_mutation_request(
+                plan, mutation_authority, "mutation-1"
+            )
+
+    def test_f6_failure_reinspects_and_rollback_uses_fresh_revision(self) -> None:
+        current, inspect_authority = self.observation()
+        plan = self.contract.plan(
+            self.intent, self.state, current, inspect_authority
+        )
+        mutation_authority = self.mutation_authority(plan)
+        request = self.contract.build_mutation_request(
+            plan, mutation_authority, "mutation-1"
+        )
+        failed = self.mutation_result(
+            request,
+            outcome=self.capability.Outcome.FAILED,
+            cleanup=self.capability.CleanupOutcome.INCOMPLETE,
+        )
+        self.assertIs(
+            self.contract.admit_mutation_result(
+                plan, mutation_authority, request, failed
+            ),
+            self.contract.MutationDisposition.REINSPECTION_REQUIRED,
+        )
+        fresh, fresh_authority = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            revision="revision-4",
+            owned=(
+                self.contract.OwnedFirewallPolicy(
+                    "provider-partial-8",
+                    self.contract.FirewallPolicy(
+                        "tcp",
+                        443,
+                        ("198.51.100.0/24",),
+                        ("2001:db8:2::/48",),
+                    ),
+                ),
+            ),
+        )
+        rollback = self.contract.recovery_plan(
+            plan,
+            mutation_authority,
+            request,
+            failed,
+            fresh,
+            fresh_authority,
+        )
+        self.assertEqual(rollback.target.expected_version, "revision-4")
+
+    def test_f7_provider_assigned_identity_is_semantically_idempotent(self) -> None:
+        current, authority = self.observation(provider_rule_id="provider-rule-99")
+        plan = self.contract.plan(self.intent, self.state, current, authority)
+        self.assertIs(plan.action, self.contract.PlanAction.NO_MUTATION)
+
+    def test_f8_incomplete_or_overlapping_projection_fails_closed(self) -> None:
+        with self.assertRaises(self.contract.ContractError):
+            self.observation(complete=False)
+        with self.assertRaises(self.contract.ContractError):
+            self.observation(preserved_state_sha256="not-a-digest")
+
+    def test_direct_and_forged_plan_cannot_reach_mutation(self) -> None:
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.FirewallIntent(
+                self.contract.EdgeMode.DIRECT, "tcp", 443
+            )
+        current, inspect_authority = self.observation()
+        valid = self.contract.plan(
+            self.intent, self.state, current, inspect_authority
+        )
+        valid_authority = self.mutation_authority(valid)
+        forged = self.contract.FirewallPlan(
+            action=self.contract.PlanAction.REPLACE_OWNED,
+            target=valid.target,
+            adapter_id=valid.adapter_id,
+            source_revision=valid.source_revision,
+            supported_operations=valid.supported_operations,
+            accepted_lkg_identity=valid.accepted_lkg_identity,
+            desired=self.contract.FirewallPolicy(
+                "tcp",
+                22,
+                ("10.0.0.0/8",),
+                ("2001:db8::/32",),
+            ),
+            prior_owned=valid.prior_owned,
+            preserved_state_sha256=valid.preserved_state_sha256,
+            operator_access=valid.operator_access,
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.build_mutation_request(
+                forged, valid_authority, "forged-mutation"
+            )
+
+    def test_mutation_authority_and_result_are_exactly_correlated(self) -> None:
+        current, inspect_authority = self.observation()
+        plan = self.contract.plan(
+            self.intent, self.state, current, inspect_authority
+        )
+        authority = self.mutation_authority(plan)
+        wrong_adapter = self.capability.ExecutionAuthority(
+            authorization_id="wrong-adapter",
+            adapter_id="different-adapter",
+            source_revision=authority.source_revision,
+            target=authority.target,
+            operations=authority.operations,
+            parameters_sha256=authority.parameters_sha256,
+            credential_mechanism=authority.credential_mechanism,
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.build_mutation_request(
+                plan, wrong_adapter, "mutation-1"
+            )
+        request = self.contract.build_mutation_request(
+            plan, authority, "mutation-1"
+        )
+        uncorrelated = self.mutation_result(request)
+        uncorrelated = self.capability.CapabilityResult(
+            request_id="different-request",
+            adapter_id=uncorrelated.adapter_id,
+            source_revision=uncorrelated.source_revision,
+            operation=uncorrelated.operation,
+            target=uncorrelated.target,
+            parameters_sha256=uncorrelated.parameters_sha256,
+            outcome=uncorrelated.outcome,
+            cleanup=uncorrelated.cleanup,
+            provider_resource_id=uncorrelated.provider_resource_id,
+            provider_resource_version=uncorrelated.provider_resource_version,
+        )
+        with self.assertRaises(self.capability.ContractError):
+            self.contract.admit_mutation_result(
+                plan, authority, request, uncorrelated
+            )
+
+    def test_apply_is_not_verify_and_opaque_preserved_state_is_exact(self) -> None:
+        current, inspect_authority = self.observation()
+        plan = self.contract.plan(
+            self.intent, self.state, current, inspect_authority
+        )
+        authority = self.mutation_authority(plan)
+        request = self.contract.build_mutation_request(
+            plan, authority, "mutation-1"
+        )
+        applied = self.mutation_result(request)
+        self.assertIs(
+            self.contract.admit_mutation_result(
+                plan, authority, request, applied
+            ),
+            self.contract.MutationDisposition.REINSPECTION_REQUIRED,
+        )
+        fresh, fresh_authority = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            revision="revision-4",
+            provider_rule_id="provider-assigned-99",
+        )
+        self.contract.verify(
+            plan, authority, request, applied, fresh, fresh_authority
+        )
+        drifted, drifted_authority = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            revision="revision-4",
+            provider_rule_id="provider-assigned-99",
+            preserved_state_sha256="e" * 64,
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.verify(
+                plan,
+                authority,
+                request,
+                applied,
+                drifted,
+                drifted_authority,
+            )
+
+    def test_semantic_rollback_accepts_new_provider_identity_and_revision(self) -> None:
+        prior_policy = self.contract.FirewallPolicy(
+            "tcp",
+            443,
+            ("198.51.100.0/24",),
+            ("2001:db8:2::/48",),
+        )
+        prior, inspect_authority = self.observation(
+            owned=(
+                self.contract.OwnedFirewallPolicy(
+                    "provider-old-7", prior_policy
+                ),
+            )
+        )
+        plan = self.contract.plan(
+            self.intent, self.state, prior, inspect_authority
+        )
+        mutation_authority = self.mutation_authority(plan)
+        mutation_request = self.contract.build_mutation_request(
+            plan, mutation_authority, "mutation-1"
+        )
+        failed = self.mutation_result(
+            mutation_request,
+            outcome=self.capability.Outcome.FAILED,
+            cleanup=self.capability.CleanupOutcome.INCOMPLETE,
+        )
+        partial, partial_authority = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            revision="revision-4",
+            owned=(
+                self.contract.OwnedFirewallPolicy(
+                    "provider-partial-8",
+                    self.contract.FirewallPolicy(
+                        "tcp",
+                        443,
+                        ("203.0.113.0/24",),
+                        ("2001:db8:3::/48",),
+                    ),
+                ),
+            ),
+        )
+        rollback = self.contract.recovery_plan(
+            plan,
+            mutation_authority,
+            mutation_request,
+            failed,
+            partial,
+            partial_authority,
+        )
+        self.assertIsInstance(rollback, self.contract.RollbackPlan)
+        rollback_authority = self.capability.ExecutionAuthority(
+            authorization_id="rollback-owned-origin",
+            adapter_id=rollback.adapter_id,
+            source_revision=rollback.source_revision,
+            target=rollback.target,
+            operations=frozenset({self.capability.Operation.REBUILD}),
+            parameters_sha256=self.contract.rollback_parameters_sha256(rollback),
+            credential_mechanism="oidc-workload-identity",
+        )
+        rollback_request = self.contract.build_rollback_request(
+            rollback, rollback_authority, "rollback-1"
+        )
+        rollback_result = self.mutation_result(rollback_request)
+        restored, restored_authority = self.observation(
+            phase=self.contract.ObservationPhase.POST_ROLLBACK,
+            revision="revision-5",
+            owned=(
+                self.contract.OwnedFirewallPolicy(
+                    "provider-restored-10", prior_policy
+                ),
+            ),
+        )
+        self.contract.verify_rollback(
+            rollback,
+            rollback_authority,
+            rollback_request,
+            rollback_result,
+            restored,
+            restored_authority,
+        )
 
 
 if __name__ == "__main__":
