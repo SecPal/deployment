@@ -166,7 +166,9 @@ class CloudFrontWafTests(unittest.TestCase):
         self.assertEqual("PutLoggingConfiguration", plans[0].api_operation)
 
     def test_cloudfront_etag_and_waf_locktoken_are_not_interchangeable(self) -> None:
-        distribution = self.contract.DistributionObservation(self.target.distribution_id, "distribution-etag", self.target.web_acl_arn)
+        distribution = self.contract.DistributionObservation(
+            self.target.distribution_id, "distribution-etag", None
+        )
         configuration = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)
         web_acl = self.contract.WebAclObservation(self.target.web_acl_id, self.target.web_acl_arn, "waf-lock-token", configuration)
         association = self.contract.plan_associate_distribution(self.target, distribution, "distribution-etag")
@@ -177,6 +179,40 @@ class CloudFrontWafTests(unittest.TestCase):
             self.contract.plan_associate_distribution(self.target, distribution, "waf-lock-token")
         with self.assertRaises(self.contract.ContractError):
             self.contract.plan_update_web_acl(self.target, web_acl, "distribution-etag", configuration)
+
+    def test_association_requires_unowned_current_state(self) -> None:
+        absent = self.contract.DistributionObservation(
+            self.target.distribution_id, "fresh-etag", None
+        )
+        plan = self.contract.plan_associate_distribution(
+            self.target, absent, "fresh-etag"
+        )
+        self.assertEqual(
+            {"WebACLArn": self.target.web_acl_arn}, plan.materialize_parameters()
+        )
+        exact = replace(absent, web_acl_arn=self.target.web_acl_arn)
+        self.assertIsNone(
+            self.contract.plan_associate_distribution(
+                self.target, exact, "fresh-etag"
+            )
+        )
+        unrelated = replace(
+            absent,
+            web_acl_arn=(
+                "arn:aws:wafv2:us-east-1:123456789012:global/"
+                "webacl/unrelated/acl-other"
+            ),
+        )
+        with self.assertRaisesRegex(
+            self.contract.ContractError, "association.*ownership.*acl-other"
+        ):
+            self.contract.plan_associate_distribution(
+                self.target, unrelated, "fresh-etag"
+            )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_associate_distribution(
+                self.target, absent, "stale-etag"
+            )
 
     def test_rollback_and_cleanup_require_fresh_exact_authority(self) -> None:
         configuration = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)
@@ -200,7 +236,14 @@ class CloudFrontWafTests(unittest.TestCase):
         create = self.contract.plan_create_web_acl(
             create_target, self.contract.ManagedRuleMode.ENFORCEMENT
         )
-        self.assertEqual(configuration, {key: value for key, value in create.parameters.items() if key != "Name"})
+        self.assertEqual(
+            configuration,
+            {
+                key: value
+                for key, value in create.materialize_parameters().items()
+                if key != "Name"
+            },
+        )
         observation = self.contract.WebAclObservation(
             self.target.web_acl_id,
             self.target.web_acl_arn,
@@ -213,8 +256,183 @@ class CloudFrontWafTests(unittest.TestCase):
         rollback = self.contract.plan_rollback(
             self.target, observation, "fresh-token", configuration
         )
-        self.assertEqual(configuration, update.parameters)
-        self.assertEqual(configuration, rollback.parameters)
+        self.assertEqual(configuration, update.materialize_parameters())
+        self.assertEqual(configuration, rollback.materialize_parameters())
+
+    def test_count_requires_explicit_qualification_ownership(self) -> None:
+        count = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.QUALIFICATION_COUNT,
+            qualification_owned=True,
+        )
+        permanent = replace(self.target, qualification_owned=False)
+        permanent_create = replace(
+            permanent,
+            web_acl_id=None,
+            web_acl_arn=None,
+            logging_destination_arn=None,
+        )
+        observation = self.contract.WebAclObservation(
+            permanent.web_acl_id,
+            permanent.web_acl_arn,
+            "fresh-token",
+            self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT),
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_create_web_acl(
+                permanent_create, self.contract.ManagedRuleMode.QUALIFICATION_COUNT
+            )
+        for planner in (
+            self.contract.plan_update_web_acl,
+            self.contract.plan_rollback,
+        ):
+            with self.subTest(planner=planner.__name__):
+                with self.assertRaises(self.contract.ContractError):
+                    planner(permanent, observation, "fresh-token", count)
+
+        qualification_create = replace(
+            self.target,
+            web_acl_id=None,
+            web_acl_arn=None,
+            logging_destination_arn=None,
+        )
+        self.contract.plan_create_web_acl(
+            qualification_create, self.contract.ManagedRuleMode.QUALIFICATION_COUNT
+        )
+        qualification_observation = replace(
+            observation,
+            web_acl_id=self.target.web_acl_id,
+            web_acl_arn=self.target.web_acl_arn,
+        )
+        self.contract.plan_update_web_acl(
+            self.target, qualification_observation, "fresh-token", count
+        )
+        self.contract.plan_rollback(
+            self.target, qualification_observation, "fresh-token", count
+        )
+        with self.assertRaises(self.contract.ContractError):
+            replace(self.target, qualification_owned=1)
+
+    def test_permanent_enforcement_is_admitted_for_all_replacement_paths(self) -> None:
+        configuration = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        permanent = replace(self.target, qualification_owned=False)
+        create_target = replace(
+            permanent,
+            web_acl_id=None,
+            web_acl_arn=None,
+            logging_destination_arn=None,
+        )
+        self.contract.plan_create_web_acl(
+            create_target, self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        observation = self.contract.WebAclObservation(
+            permanent.web_acl_id,
+            permanent.web_acl_arn,
+            "fresh-token",
+            configuration,
+        )
+        self.contract.plan_update_web_acl(
+            permanent, observation, "fresh-token", configuration
+        )
+        self.contract.plan_rollback(
+            permanent, observation, "fresh-token", configuration
+        )
+
+    def test_plans_are_immutable_across_admission_and_materialization(self) -> None:
+        configuration = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        observation = self.contract.WebAclObservation(
+            self.target.web_acl_id,
+            self.target.web_acl_arn,
+            "fresh-token",
+            configuration,
+        )
+        desired = copy.deepcopy(configuration)
+        plan = self.contract.plan_update_web_acl(
+            self.target, observation, "fresh-token", desired
+        )
+        desired["Rules"].clear()
+        self.assertEqual(configuration, plan.materialize_parameters())
+        with self.assertRaises(TypeError):
+            plan.parameters["DefaultAction"] = {"Block": {}}
+        with self.assertRaises(AttributeError):
+            plan.parameters["Rules"].append({})
+
+        logging_plan = self.contract.plan_logging_configuration(
+            self.target, self.contract.Operation.PUT_LOGGING
+        )
+        with self.assertRaises(AttributeError):
+            logging_plan.parameters["LoggingFilter"]["Filters"].append({})
+        first = logging_plan.materialize_parameters()
+        second = logging_plan.materialize_parameters()
+        first["LoggingFilter"]["Filters"].clear()
+        self.assertEqual(1, len(second["LoggingFilter"]["Filters"]))
+        self.assertEqual(
+            self.contract.build_logging_configuration(self.target),
+            logging_plan.materialize_parameters(),
+        )
+
+    def test_web_acl_contract_is_type_strict(self) -> None:
+        configuration = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        cases = (
+            ("VisibilityConfig", "SampledRequestsEnabled", 0),
+            ("VisibilityConfig", "CloudWatchMetricsEnabled", 1),
+        )
+        for container, field, replacement in cases:
+            changed = copy.deepcopy(configuration)
+            changed[container][field] = replacement
+            with self.subTest(field=field, replacement=replacement):
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.validate_complete_web_acl(changed)
+        integer_changed = copy.deepcopy(configuration)
+        integer_changed["Rules"][0]["Priority"] = False
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.validate_complete_web_acl(integer_changed)
+        self.contract.validate_complete_web_acl(configuration)
+
+    def test_get_web_acl_projects_only_mutable_contract_fields(self) -> None:
+        configuration = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        response = {
+            "WebACL": {
+                "Id": self.target.web_acl_id,
+                "ARN": self.target.web_acl_arn,
+                "Name": "qualification-212",
+                "Capacity": 50,
+                "LabelNamespace": "awswaf:123456789012:webacl:qualification-212:",
+                **copy.deepcopy(configuration),
+            },
+            "LockToken": "fresh-token",
+        }
+        observation = self.contract.normalize_web_acl_observation(response, self.target)
+        self.assertEqual(configuration, observation.configuration)
+        self.contract.validate_complete_web_acl(
+            observation.configuration, qualification_owned=True
+        )
+        projected_update = self.contract.plan_update_web_acl(
+            self.target,
+            observation,
+            "fresh-token",
+            observation.configuration,
+        )
+        self.assertEqual(configuration, projected_update.materialize_parameters())
+        response["WebACL"]["Rules"].clear()
+        self.assertEqual(configuration, observation.configuration)
+        incomplete = copy.deepcopy(response)
+        incomplete["WebACL"]["Rules"] = copy.deepcopy(configuration["Rules"])
+        del incomplete["WebACL"]["DataProtectionConfig"]
+        incomplete_observation = self.contract.normalize_web_acl_observation(
+            incomplete, self.target
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.validate_complete_web_acl(
+                incomplete_observation.configuration, qualification_owned=True
+            )
 
     def test_update_and_rollback_reject_function_bound_header_authority(self) -> None:
         configuration = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)

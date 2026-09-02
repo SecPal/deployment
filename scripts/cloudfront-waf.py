@@ -10,9 +10,11 @@ loads credentials, calls AWS, creates a resource, or retains provider output.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from enum import Enum
 import re
+from types import MappingProxyType
 from typing import FrozenSet, Mapping
 
 
@@ -86,6 +88,49 @@ def _mapping(label: str, value: object) -> dict[str, object]:
     return value
 
 
+def _typed_equal(actual: object, expected: object) -> bool:
+    """Compare one closed semantic value without Python scalar coercion."""
+
+    if type(actual) is not type(expected):
+        return False
+    if type(expected) is dict:
+        return actual.keys() == expected.keys() and all(
+            _typed_equal(actual[key], expected[key]) for key in expected
+        )
+    if type(expected) is list:
+        return len(actual) == len(expected) and all(
+            _typed_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected)
+        )
+    return actual == expected
+
+
+def _freeze_parameters(value: object) -> object:
+    """Detach and recursively freeze one admitted provider parameter value."""
+
+    if type(value) is dict:
+        return MappingProxyType(
+            {key: _freeze_parameters(item) for key, item in value.items()}
+        )
+    if type(value) is list:
+        return tuple(_freeze_parameters(item) for item in value)
+    if type(value) in {str, int, bool, type(None)}:
+        return value
+    raise ContractError("provider parameters are outside the immutable request shape")
+
+
+def _materialize_parameters(value: object) -> object:
+    """Return a fresh ordinary provider payload from immutable admitted state."""
+
+    if isinstance(value, Mapping):
+        return {
+            key: _materialize_parameters(item) for key, item in value.items()
+        }
+    if type(value) is tuple:
+        return [_materialize_parameters(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class AwsProviderContext:
     """The exact AWS account and endpoint authority for this WAF contract."""
@@ -113,6 +158,8 @@ class WafTarget:
     qualification_owned: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.qualification_owned) is not bool:
+            raise ContractError("qualification ownership must be explicit boolean authority")
         _identity("requested WAF key", self.requested_key)
         _identity("CloudFront distribution identity", self.distribution_id)
         if (self.web_acl_id is None) != (self.web_acl_arn is None):
@@ -330,24 +377,34 @@ def validate_waf_rule_trust(configuration: object) -> None:
             raise ContractError("WAF rule configuration trusts a Function-bound header")
 
 
-def validate_complete_web_acl(configuration: object) -> None:
+def validate_complete_web_acl(
+    configuration: object, *, qualification_owned: bool = False
+) -> None:
     """Admit one complete permanent shared-WAF replacement specification."""
 
     config = _mapping("complete WAF configuration", configuration)
     validate_waf_rule_trust(config)
-    accepted = (
-        _build_web_acl_configuration(ManagedRuleMode.QUALIFICATION_COUNT),
-        _build_web_acl_configuration(ManagedRuleMode.ENFORCEMENT),
+    accepted_modes = (
+        (ManagedRuleMode.QUALIFICATION_COUNT, ManagedRuleMode.ENFORCEMENT)
+        if qualification_owned
+        else (ManagedRuleMode.ENFORCEMENT,)
     )
-    if config not in accepted:
+    if not any(
+        _typed_equal(config, _build_web_acl_configuration(mode))
+        for mode in accepted_modes
+    ):
         raise ContractError("complete WAF configuration escapes the shared baseline")
 
 
-def build_web_acl(mode: ManagedRuleMode) -> dict[str, object]:
+def build_web_acl(
+    mode: ManagedRuleMode, *, qualification_owned: bool = False
+) -> dict[str, object]:
     """Build and admit the complete shared Web ACL replacement configuration."""
 
     configuration = _build_web_acl_configuration(mode)
-    validate_complete_web_acl(configuration)
+    validate_complete_web_acl(
+        configuration, qualification_owned=qualification_owned
+    )
     return configuration
 
 
@@ -461,6 +518,22 @@ class WebAclObservation:
         _mapping("complete Web ACL configuration", self.configuration)
 
 
+def project_web_acl_configuration(web_acl: object) -> dict[str, object]:
+    """Project provider read-back onto the closed mutable SecPal WAF shape."""
+
+    response = _mapping("GetWebACL WebACL", web_acl)
+    configuration = {"Scope": WAF_SCOPE}
+    for field in (
+        "DefaultAction",
+        "Rules",
+        "VisibilityConfig",
+        "DataProtectionConfig",
+    ):
+        if field in response:
+            configuration[field] = copy.deepcopy(response[field])
+    return configuration
+
+
 def normalize_web_acl_observation(response: object, target: WafTarget) -> WebAclObservation:
     """Normalize one exact GetWebACL response without retaining arbitrary output."""
 
@@ -469,7 +542,8 @@ def normalize_web_acl_observation(response: object, target: WafTarget) -> WebAcl
     response_map = _mapping("GetWebACL response", response)
     web_acl = _mapping("GetWebACL WebACL", response_map.get("WebACL"))
     observation = WebAclObservation(
-        web_acl.get("Id"), web_acl.get("ARN"), response_map.get("LockToken"), web_acl
+        web_acl.get("Id"), web_acl.get("ARN"), response_map.get("LockToken"),
+        project_web_acl_configuration(web_acl),
     )
     _exact_web_acl(target, observation)
     return observation
@@ -498,9 +572,18 @@ class AwsOperationPlan:
     operation: Operation
     api_operation: str
     resource_id: str
-    parameters: dict[str, object]
+    parameters: Mapping[str, object]
     if_match: str | None = None
     lock_token: str | None = None
+
+    def __post_init__(self) -> None:
+        parameters = _mapping("provider parameters", self.parameters)
+        object.__setattr__(self, "parameters", _freeze_parameters(parameters))
+
+    def materialize_parameters(self) -> dict[str, object]:
+        """Materialize a fresh provider payload from the admitted plan."""
+
+        return _materialize_parameters(self.parameters)
 
 
 def _exact_web_acl(target: WafTarget, observation: WebAclObservation) -> None:
@@ -521,7 +604,10 @@ def plan_create_web_acl(
         Operation.CREATE_WEB_ACL,
         "CreateWebACL",
         target.requested_key,
-        {"Name": target.requested_key, **build_web_acl(mode)},
+        {
+            "Name": target.requested_key,
+            **build_web_acl(mode, qualification_owned=target.qualification_owned),
+        },
     )
 
 
@@ -529,7 +615,7 @@ def plan_associate_distribution(
     target: WafTarget,
     observation: DistributionObservation,
     admitted_etag: str,
-) -> AwsOperationPlan:
+) -> AwsOperationPlan | None:
     """Plan distribution-only association from the freshly admitted ETag."""
 
     if type(target) is not WafTarget or type(observation) is not DistributionObservation:
@@ -538,6 +624,13 @@ def plan_associate_distribution(
         raise ContractError("distribution ETag is missing, stale, or mismatched")
     if target.web_acl_arn is None:
         raise ContractError("association requires the exact shared Web ACL ARN")
+    if observation.web_acl_arn == target.web_acl_arn:
+        return None
+    if observation.web_acl_arn is not None:
+        raise ContractError(
+            "distribution Web ACL association ownership mismatch: "
+            f"observed {observation.web_acl_arn!r}, intended {target.web_acl_arn!r}"
+        )
     return AwsOperationPlan(
         Operation.ASSOCIATE_DISTRIBUTION, "AssociateDistributionWebACL", target.distribution_id,
         {"WebACLArn": target.web_acl_arn}, if_match=observation.etag,
@@ -557,7 +650,9 @@ def plan_update_web_acl(
     _exact_web_acl(target, observation)
     if admitted_lock_token != observation.lock_token:
         raise ContractError("WAF LockToken is missing, stale, or mismatched")
-    validate_complete_web_acl(desired_configuration)
+    validate_complete_web_acl(
+        desired_configuration, qualification_owned=target.qualification_owned
+    )
     return AwsOperationPlan(
         Operation.UPDATE_WEB_ACL, "UpdateWebACL", observation.web_acl_id,
         desired_configuration, lock_token=observation.lock_token,
