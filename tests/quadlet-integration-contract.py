@@ -122,6 +122,30 @@ class QuadletContract(unittest.TestCase):
             capture_output=True,
         )
 
+    def require_supported_native_quadlet_generator(
+        self, generator: Path, description: str
+    ) -> None:
+        if not generator.is_file():
+            self.skipTest(f"{description} is not installed")
+        podman = shutil.which("podman")
+        if podman is None:
+            self.skipTest("Podman client is not installed")
+        version_result = subprocess.run(
+            [podman, "version", "--format", "{{.Client.Version}}"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        version = version_result.stdout.strip()
+        if (
+            version_result.returncode != 0
+            or not quadlet_generator_version_supported(version)
+        ):
+            self.skipTest(
+                "installed Quadlet generator belongs to unsupported Podman "
+                f"{version or 'unknown'}"
+            )
+
     def render_cloud(self) -> dict[str, str]:
         result = self.run_renderer(
             "--cloud-gateway-digest", GATEWAY_DIGEST, check=True
@@ -732,26 +756,7 @@ class QuadletContract(unittest.TestCase):
 
     def test_installed_quadlet_generator_translates_every_native_resource(self) -> None:
         generator = Path("/usr/libexec/podman/quadlet")
-        if not generator.is_file():
-            self.skipTest("Podman Quadlet generator is not installed")
-        podman = shutil.which("podman")
-        if podman is None:
-            self.skipTest("Podman client is not installed")
-        version_result = subprocess.run(
-            [podman, "version", "--format", "{{.Client.Version}}"],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-        )
-        version = version_result.stdout.strip()
-        if (
-            version_result.returncode != 0
-            or not quadlet_generator_version_supported(version)
-        ):
-            observed = version or "unknown"
-            self.skipTest(
-                f"installed Quadlet generator belongs to unsupported Podman {observed}"
-            )
+        self.require_supported_native_quadlet_generator(generator, "Podman Quadlet generator")
         units = self.render()
         environment = dict(os.environ)
         environment["QUADLET_UNIT_DIRS"] = os.fspath(self.output)
@@ -867,8 +872,9 @@ class QuadletContract(unittest.TestCase):
         generator = Path(
             "/usr/lib/systemd/user-generators/podman-user-generator"
         )
-        if not generator.is_file():
-            self.skipTest("native Podman user generator is not installed")
+        self.require_supported_native_quadlet_generator(
+            generator, "native Podman user generator"
+        )
         self.render_cloud()
         environment = dict(os.environ)
         environment["QUADLET_UNIT_DIRS"] = os.fspath(self.output)
@@ -932,6 +938,7 @@ class QuadletContract(unittest.TestCase):
         self.assertTrue(quadlet_generator_version_supported("5.4.2"))
         self.assertTrue(quadlet_generator_version_supported("5.4.2+ds1-1+b1"))
         self.assertTrue(quadlet_generator_version_supported("5.7.0"))
+        self.assertTrue(quadlet_generator_version_supported("5.8.2"))
         self.assertFalse(quadlet_generator_version_supported("6.0.0"))
         self.assertFalse(quadlet_generator_version_supported("not-a-version"))
 
