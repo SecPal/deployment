@@ -36,6 +36,46 @@ SENSITIVE_HEADERS = (
     "x-secpal-viewer-host",
     "x-secpal-viewer-ip",
 )
+WEB_ACL_SUPPORTED_MUTABLE_FIELDS = frozenset({
+    "DataProtectionConfig",
+    "DefaultAction",
+    "Rules",
+    "VisibilityConfig",
+})
+WEB_ACL_UNSUPPORTED_MUTABLE_FIELDS = frozenset({
+    "ApplicationConfig",
+    "AssociationConfig",
+    "CaptchaConfig",
+    "ChallengeConfig",
+    "CustomResponseBodies",
+    "Description",
+    "MonetizationConfig",
+    "OnSourceDDoSProtectionConfig",
+    "TokenDomains",
+})
+WEB_ACL_RESPONSE_ONLY_FIELDS = frozenset({
+    "ARN",
+    "Capacity",
+    "Id",
+    "LabelNamespace",
+    "ManagedByFirewallManager",
+    "Name",
+    "PostProcessFirewallManagerRuleGroups",
+    "PreProcessFirewallManagerRuleGroups",
+    "RetrofittedByFirewallManager",
+})
+WEB_ACL_PROVIDER_RESPONSE_FIELDS = (
+    WEB_ACL_SUPPORTED_MUTABLE_FIELDS
+    | WEB_ACL_UNSUPPORTED_MUTABLE_FIELDS
+    | WEB_ACL_RESPONSE_ONLY_FIELDS
+)
+_EMPTY_MAPPING_UNSUPPORTED_WEB_ACL_FIELDS = frozenset({
+    "ApplicationConfig",
+    "AssociationConfig",
+    "CaptchaConfig",
+    "ChallengeConfig",
+    "MonetizationConfig",
+})
 
 
 class ContractError(ValueError):
@@ -522,13 +562,33 @@ def project_web_acl_configuration(web_acl: object) -> dict[str, object]:
     """Project provider read-back onto the closed mutable SecPal WAF shape."""
 
     response = _mapping("GetWebACL WebACL", web_acl)
+    unclassified = set(response) - WEB_ACL_PROVIDER_RESPONSE_FIELDS
+    if unclassified:
+        raise ContractError(
+            "unclassified Web ACL provider fields: "
+            + ", ".join(sorted(unclassified))
+        )
+    for field in WEB_ACL_UNSUPPORTED_MUTABLE_FIELDS:
+        if field not in response:
+            continue
+        value = response[field]
+        if value is None:
+            continue
+        semantically_absent = False
+        if field == "Description":
+            semantically_absent = type(value) is str and value == ""
+        elif field == "TokenDomains":
+            semantically_absent = type(value) is list and value == []
+        elif field == "CustomResponseBodies":
+            semantically_absent = type(value) is dict and value == {}
+        elif field in _EMPTY_MAPPING_UNSUPPORTED_WEB_ACL_FIELDS:
+            semantically_absent = type(value) is dict and value == {}
+        if not semantically_absent:
+            raise ContractError(
+                f"unsupported mutable Web ACL field {field} is configured"
+            )
     configuration = {"Scope": WAF_SCOPE}
-    for field in (
-        "DefaultAction",
-        "Rules",
-        "VisibilityConfig",
-        "DataProtectionConfig",
-    ):
+    for field in WEB_ACL_SUPPORTED_MUTABLE_FIELDS:
         if field in response:
             configuration[field] = copy.deepcopy(response[field])
     return configuration
@@ -558,9 +618,12 @@ def normalize_distribution_observation(response: object, target: WafTarget) -> D
     config = _mapping(
         "distribution configuration", response_map.get("DistributionConfig")
     )
+    web_acl_arn = config.get("WebACLId")
+    if web_acl_arn == "":
+        web_acl_arn = None
     observation = DistributionObservation(
         response_map.get("Id", target.distribution_id), response_map.get("ETag"),
-        config.get("WebACLId"),
+        web_acl_arn,
     )
     if observation.distribution_id != target.distribution_id:
         raise ContractError("distribution observation does not match the exact target")

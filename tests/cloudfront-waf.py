@@ -214,6 +214,84 @@ class CloudFrontWafTests(unittest.TestCase):
                 self.target, absent, "stale-etag"
             )
 
+    def test_distribution_provider_absence_normalizes_before_ownership(self) -> None:
+        for provider_value in (None, ""):
+            with self.subTest(provider_value=provider_value):
+                observation = self.contract.normalize_distribution_observation(
+                    {
+                        "ETag": "fresh-etag",
+                        "DistributionConfig": {"WebACLId": provider_value},
+                    },
+                    self.target,
+                )
+                self.assertIsNone(observation.web_acl_arn)
+                plan = self.contract.plan_associate_distribution(
+                    self.target, observation, "fresh-etag"
+                )
+                self.assertEqual(
+                    {"WebACLArn": self.target.web_acl_arn},
+                    plan.materialize_parameters(),
+                )
+
+        for provider_value in (
+            self.target.web_acl_arn,
+            (
+                "arn:aws:wafv2:us-east-1:123456789012:global/"
+                "webacl/unrelated/acl-other"
+            ),
+        ):
+            with self.subTest(provider_value=provider_value):
+                observation = self.contract.normalize_distribution_observation(
+                    {
+                        "ETag": "fresh-etag",
+                        "DistributionConfig": {"WebACLId": provider_value},
+                    },
+                    self.target,
+                )
+                self.assertEqual(provider_value, observation.web_acl_arn)
+
+        exact = self.contract.normalize_distribution_observation(
+            {
+                "ETag": "fresh-etag",
+                "DistributionConfig": {"WebACLId": self.target.web_acl_arn},
+            },
+            self.target,
+        )
+        self.assertIsNone(
+            self.contract.plan_associate_distribution(
+                self.target, exact, "fresh-etag"
+            )
+        )
+        unrelated = replace(
+            exact,
+            web_acl_arn=(
+                "arn:aws:wafv2:us-east-1:123456789012:global/"
+                "webacl/unrelated/acl-other"
+            ),
+        )
+        with self.assertRaisesRegex(
+            self.contract.ContractError, "association.*ownership.*acl-other"
+        ):
+            self.contract.plan_associate_distribution(
+                self.target, unrelated, "fresh-etag"
+            )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan_associate_distribution(
+                self.target,
+                replace(exact, web_acl_arn=None),
+                "stale-etag",
+            )
+        for malformed in (False, 0, [], {}, " "):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.normalize_distribution_observation(
+                        {
+                            "ETag": "fresh-etag",
+                            "DistributionConfig": {"WebACLId": malformed},
+                        },
+                        self.target,
+                    )
+
     def test_rollback_and_cleanup_require_fresh_exact_authority(self) -> None:
         configuration = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)
         web_acl = self.contract.WebAclObservation(self.target.web_acl_id, self.target.web_acl_arn, "new-lock-token", configuration)
@@ -405,7 +483,11 @@ class CloudFrontWafTests(unittest.TestCase):
                 "Name": "qualification-212",
                 "Capacity": 50,
                 "LabelNamespace": "awswaf:123456789012:webacl:qualification-212:",
-                **copy.deepcopy(configuration),
+                **{
+                    key: copy.deepcopy(value)
+                    for key, value in configuration.items()
+                    if key != "Scope"
+                },
             },
             "LockToken": "fresh-token",
         }
@@ -433,6 +515,172 @@ class CloudFrontWafTests(unittest.TestCase):
             self.contract.validate_complete_web_acl(
                 incomplete_observation.configuration, qualification_owned=True
             )
+
+    def test_get_web_acl_classifies_every_current_provider_field(self) -> None:
+        expected_provider_fields = {
+            "ARN",
+            "ApplicationConfig",
+            "AssociationConfig",
+            "Capacity",
+            "CaptchaConfig",
+            "ChallengeConfig",
+            "CustomResponseBodies",
+            "DataProtectionConfig",
+            "DefaultAction",
+            "Description",
+            "Id",
+            "LabelNamespace",
+            "ManagedByFirewallManager",
+            "MonetizationConfig",
+            "Name",
+            "OnSourceDDoSProtectionConfig",
+            "PostProcessFirewallManagerRuleGroups",
+            "PreProcessFirewallManagerRuleGroups",
+            "RetrofittedByFirewallManager",
+            "Rules",
+            "TokenDomains",
+            "VisibilityConfig",
+        }
+        self.assertEqual(
+            expected_provider_fields,
+            self.contract.WEB_ACL_PROVIDER_RESPONSE_FIELDS,
+        )
+
+    def test_get_web_acl_rejects_configured_unsupported_mutable_state(self) -> None:
+        configured_values = {
+            "ApplicationConfig": {"Attributes": {"ApplicationParam": "value"}},
+            "AssociationConfig": {
+                "RequestBody": {
+                    "CLOUDFRONT": {"DefaultSizeInspectionLimit": "KB_16"}
+                }
+            },
+            "CaptchaConfig": {"ImmunityTimeProperty": {"ImmunityTime": 300}},
+            "ChallengeConfig": {"ImmunityTimeProperty": {"ImmunityTime": 300}},
+            "CustomResponseBodies": {
+                "blocked": {"ContentType": "TEXT_PLAIN", "Content": "blocked"}
+            },
+            "Description": "unexpected provider-managed description",
+            "MonetizationConfig": {"CurrencyMode": "USD"},
+            "OnSourceDDoSProtectionConfig": {
+                "ALBLowReputationMode": "ACTIVE_UNDER_DDOS"
+            },
+            "TokenDomains": ["unrelated.example"],
+        }
+        self.assertEqual(
+            set(configured_values),
+            self.contract.WEB_ACL_UNSUPPORTED_MUTABLE_FIELDS,
+        )
+        baseline = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        for field, value in configured_values.items():
+            response = {
+                "WebACL": {
+                    "Id": self.target.web_acl_id,
+                    "ARN": self.target.web_acl_arn,
+                    **{
+                        key: copy.deepcopy(item)
+                        for key, item in baseline.items()
+                        if key != "Scope"
+                    },
+                    field: value,
+                },
+                "LockToken": "fresh-token",
+            }
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(
+                    self.contract.ContractError,
+                    f"unsupported mutable Web ACL field {field}",
+                ):
+                    self.contract.normalize_web_acl_observation(
+                        response, self.target
+                    )
+
+    def test_get_web_acl_allows_only_typed_semantic_absence_for_unsupported_state(self) -> None:
+        absent_values = {
+            "ApplicationConfig": {},
+            "AssociationConfig": {},
+            "CaptchaConfig": {},
+            "ChallengeConfig": {},
+            "CustomResponseBodies": {},
+            "Description": "",
+            "MonetizationConfig": {},
+            "OnSourceDDoSProtectionConfig": None,
+            "TokenDomains": [],
+        }
+        baseline = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        response_only = {
+            "Name": self.target.requested_key,
+            "Capacity": 50,
+            "LabelNamespace": "awswaf:example:",
+            "ManagedByFirewallManager": False,
+            "PostProcessFirewallManagerRuleGroups": [],
+            "PreProcessFirewallManagerRuleGroups": [],
+            "RetrofittedByFirewallManager": False,
+        }
+        response = {
+            "WebACL": {
+                "Id": self.target.web_acl_id,
+                "ARN": self.target.web_acl_arn,
+                **{
+                    key: copy.deepcopy(value)
+                    for key, value in baseline.items()
+                    if key != "Scope"
+                },
+                **absent_values,
+                **response_only,
+            },
+            "LockToken": "fresh-token",
+        }
+        observation = self.contract.normalize_web_acl_observation(
+            response, self.target
+        )
+        self.assertEqual(baseline, observation.configuration)
+        self.contract.validate_complete_web_acl(
+            observation.configuration, qualification_owned=True
+        )
+
+        for field, value in (
+            ("TokenDomains", {}),
+            ("Description", []),
+            ("CaptchaConfig", []),
+            ("OnSourceDDoSProtectionConfig", {}),
+        ):
+            malformed = copy.deepcopy(response)
+            malformed["WebACL"][field] = value
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(
+                    self.contract.ContractError,
+                    f"unsupported mutable Web ACL field {field}",
+                ):
+                    self.contract.normalize_web_acl_observation(
+                        malformed, self.target
+                    )
+
+    def test_get_web_acl_rejects_unclassified_provider_fields(self) -> None:
+        baseline = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        response = {
+            "WebACL": {
+                "Id": self.target.web_acl_id,
+                "ARN": self.target.web_acl_arn,
+                **{
+                    key: copy.deepcopy(value)
+                    for key, value in baseline.items()
+                    if key != "Scope"
+                },
+                "FutureMutableField": None,
+            },
+            "LockToken": "fresh-token",
+        }
+        with self.assertRaisesRegex(
+            self.contract.ContractError,
+            "unclassified Web ACL provider fields.*FutureMutableField",
+        ):
+            self.contract.normalize_web_acl_observation(response, self.target)
 
     def test_update_and_rollback_reject_function_bound_header_authority(self) -> None:
         configuration = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)
