@@ -296,19 +296,15 @@ def _data_protections() -> list[dict[str, object]]:
     ]
 
 
-def build_web_acl(mode: ManagedRuleMode) -> dict[str, object]:
-    """Build the complete shared Web ACL replacement configuration."""
-
+def _build_web_acl_configuration(mode: ManagedRuleMode) -> dict[str, object]:
     rule = build_managed_rule(mode)
-    configuration = {
+    return {
         "Scope": WAF_SCOPE,
         "DefaultAction": {"Allow": {}},
         "Rules": [rule],
         "VisibilityConfig": _visibility("secpal-protected-waf"),
         "DataProtectionConfig": {"DataProtections": _data_protections()},
     }
-    validate_waf_rule_trust(configuration)
-    return configuration
 
 
 def _walk_strings(value: object):
@@ -332,6 +328,27 @@ def validate_waf_rule_trust(configuration: object) -> None:
     for value in _walk_strings(rules):
         if value.lower() in SENSITIVE_HEADERS[2:]:
             raise ContractError("WAF rule configuration trusts a Function-bound header")
+
+
+def validate_complete_web_acl(configuration: object) -> None:
+    """Admit one complete permanent shared-WAF replacement specification."""
+
+    config = _mapping("complete WAF configuration", configuration)
+    validate_waf_rule_trust(config)
+    accepted = (
+        _build_web_acl_configuration(ManagedRuleMode.QUALIFICATION_COUNT),
+        _build_web_acl_configuration(ManagedRuleMode.ENFORCEMENT),
+    )
+    if config not in accepted:
+        raise ContractError("complete WAF configuration escapes the shared baseline")
+
+
+def build_web_acl(mode: ManagedRuleMode) -> dict[str, object]:
+    """Build and admit the complete shared Web ACL replacement configuration."""
+
+    configuration = _build_web_acl_configuration(mode)
+    validate_complete_web_acl(configuration)
+    return configuration
 
 
 def waf_contract_for_viewer_headers(headers: Mapping[str, str]) -> dict[str, object]:
@@ -540,7 +557,7 @@ def plan_update_web_acl(
     _exact_web_acl(target, observation)
     if admitted_lock_token != observation.lock_token:
         raise ContractError("WAF LockToken is missing, stale, or mismatched")
-    _mapping("desired complete Web ACL configuration", desired_configuration)
+    validate_complete_web_acl(desired_configuration)
     return AwsOperationPlan(
         Operation.UPDATE_WEB_ACL, "UpdateWebACL", observation.web_acl_id,
         desired_configuration, lock_token=observation.lock_token,
@@ -605,23 +622,35 @@ def plan_cleanup(
         raise ContractError("cleanup distribution does not match the exact target")
     if admitted_lock_token != web_acl.lock_token or admitted_etag != distribution.etag:
         raise ContractError("cleanup requires fresh WAF LockToken and CloudFront ETag")
-    return (
-        plan_logging_configuration(target, Operation.DELETE_LOGGING),
-        AwsOperationPlan(
-            Operation.DISASSOCIATE_DISTRIBUTION,
-            "DisassociateDistributionWebACL",
-            distribution.distribution_id,
-            {},
-            if_match=distribution.etag,
-        ),
+    if (
+        distribution.web_acl_arn is not None
+        and distribution.web_acl_arn != target.web_acl_arn
+    ):
+        raise ContractError(
+            "cleanup Web ACL association ownership mismatch: "
+            f"observed {distribution.web_acl_arn!r}, owned {target.web_acl_arn!r}"
+        )
+    plans = [plan_logging_configuration(target, Operation.DELETE_LOGGING)]
+    if distribution.web_acl_arn == target.web_acl_arn:
+        plans.append(
+            AwsOperationPlan(
+                Operation.DISASSOCIATE_DISTRIBUTION,
+                "DisassociateDistributionWebACL",
+                distribution.distribution_id,
+                {},
+                if_match=distribution.etag,
+            )
+        )
+    plans.append(
         AwsOperationPlan(
             Operation.DELETE_WEB_ACL,
             "DeleteWebACL",
             web_acl.web_acl_id,
             {},
             lock_token=web_acl.lock_token,
-        ),
+        )
     )
+    return tuple(plans)
 
 
 @dataclass(frozen=True, slots=True)
@@ -744,16 +773,23 @@ def admit_result(request: LifecycleRequest, result: LifecycleResult) -> None:
         raise ContractError("failed result requires a bounded diagnostic code")
     if result.outcome is not Outcome.FAILED and result.diagnostic_code is not None:
         raise ContractError("successful result cannot carry a failure diagnostic")
-    observed_operations = {
-        Operation.DISCOVER_MANAGED_RULE,
-        Operation.CHECK_CAPACITY,
-        Operation.INSPECT_WEB_ACL,
-        Operation.INSPECT_DISTRIBUTION,
-        Operation.INSPECT_TENANT,
-        Operation.INSPECT_LOGGING,
+    successful_outcomes = {
+        Operation.DISCOVER_MANAGED_RULE: Outcome.OBSERVED,
+        Operation.CHECK_CAPACITY: Outcome.OBSERVED,
+        Operation.CREATE_WEB_ACL: Outcome.APPLIED,
+        Operation.INSPECT_WEB_ACL: Outcome.OBSERVED,
+        Operation.UPDATE_WEB_ACL: Outcome.APPLIED,
+        Operation.ASSOCIATE_DISTRIBUTION: Outcome.APPLIED,
+        Operation.INSPECT_DISTRIBUTION: Outcome.OBSERVED,
+        Operation.INSPECT_TENANT: Outcome.OBSERVED,
+        Operation.PUT_LOGGING: Outcome.APPLIED,
+        Operation.INSPECT_LOGGING: Outcome.OBSERVED,
+        Operation.DELETE_LOGGING: Outcome.APPLIED,
+        Operation.DISASSOCIATE_DISTRIBUTION: Outcome.APPLIED,
+        Operation.DELETE_WEB_ACL: Outcome.APPLIED,
     }
-    if (
-        result.outcome is Outcome.OBSERVED
-        and request.operation not in observed_operations
-    ):
-        raise ContractError("observed outcome contradicts a mutating WAF operation")
+    expected_outcome = successful_outcomes.get(request.operation)
+    if expected_outcome is None:
+        raise ContractError("WAF operation has no explicit success outcome")
+    if result.outcome not in {expected_outcome, Outcome.FAILED}:
+        raise ContractError("result outcome is incompatible with the WAF operation")

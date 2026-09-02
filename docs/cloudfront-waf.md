@@ -140,7 +140,10 @@ DeleteLoggingConfiguration for the exact Web ACL ARN
 ```
 
 It never discovers or deletes resources by name, prefix, tag, or account-wide
-listing, and it cannot delete a pre-existing external Web ACL.
+listing, and it cannot delete a pre-existing external Web ACL. Disassociation
+is emitted only when a fresh Distribution observation names the exact owned Web
+ACL ARN. No association is already satisfied; a different current ARN is
+ownership drift and fails closed without disassociation.
 
 ## Current provider observation
 
@@ -156,24 +159,49 @@ API reference that currently describes `FieldKeys` as optional. The live
 provider evidence controls this executable request shape without creating a new
 architecture concept.
 
-## Later real-provider qualification
+## Real-provider qualification evidence
 
-Real-provider qualification remains required before Ready/closure. With separate
-mutation authority it will create only ephemeral exact resources, re-run provider
-discovery and `CheckCapacity`, prove distribution association and tenant
-inheritance, exercise Count then enforcement read-back, prove WAF-before-Function
-ordering with a qualification fixture, verify forged internal-header
-independence, inspect privacy sentinels in retained events, prove stale ETag and
-LockToken diagnostics, perform update/rollback, and leave zero billable
-qualification resources.
+The complete real-provider qualification executed against source revision
+`064790e6880d1c1a8737c7838b5b26029c9ebe84` in run
+`q212-f4932136b38f`. It completed all 62 runtime steps and returned
+`PROTECTED_WAF_TARGET_SHA_REAL_PROVIDER_QUALIFIED` with full security evidence,
+exact cleanup, no final resource bindings, no retained billable qualification
+resources, no unknown resource leaks, and no final finding.
 
-This tracked implementation provides synthetic contract evidence only. It makes
-no production DDoS guarantee and does not enable CloudFront standard or
-real-time logging.
+```text
+QUALIFIED_HEAD: 064790e6880d1c1a8737c7838b5b26029c9ebe84
+RUN_ID: q212-f4932136b38f
+MARKER: PROTECTED_WAF_TARGET_SHA_REAL_PROVIDER_QUALIFIED
+REAL_RUNTIME_STEPS: 62
+FULL_SECURITY_EVIDENCE: PASS
+EXACT_CLEANUP: PASS
+FINAL_RESOURCE_BINDINGS: 0
+RETAINED_BILLABLE_QUALIFICATION_RESOURCES: 0
+UNKNOWN_RESOURCE_LEAKS: 0
+FINAL_FINDING: NONE
+```
+
+The accepted evidence covered provider discovery and capacity admission;
+IAM-to-Lambda propagation and pre-dispatch `CreateFunction` reconciliation;
+Function URL permissions and policy read-back; CloudFront asynchronous and
+certificate lifecycle; direct authoritative DNS evidence; complete Distribution
+configuration round-trips; shared-WAF inheritance and Tenant A/B runtime
+evidence; WAFV2 blob serialization and `GetWebACL`-to-`UpdateWebACL` projection;
+Data Protection; causal WAF-before-Function evidence; absence of forged
+`X-SecPal-*` WAF authority; the CloudWatch logging dataplane and runtime privacy
+sentinels; enforcement configuration; LockToken and Distribution ETag
+concurrency; accepted-baseline restoration; and exact cleanup.
+
+That AWS evidence remains bound only to the exact qualified revision and run
+above. Later tracked revisions, including review-finding remediation, do not
+inherit a claim that their source was executed by AWS. The qualification did
+not exercise a real attack and records
+`PRODUCTION_DDOS_EFFECTIVENESS: NOT_CLAIMED`; it also does not enable CloudFront
+standard or real-time logging.
 
 ## Cost and scope boundary
 
-The AWS Anti-DDoS managed group and logging can incur AWS charges. Later
-qualification requires explicit mutation authorization, an ephemeral bounded
-window, exact cleanup, and a retained-billable-resource report. Budget decisions
-do not automatically disable security controls.
+The AWS Anti-DDoS managed group and logging can incur AWS charges. Any future
+requalification requires explicit mutation authorization, an ephemeral bounded
+window, exact cleanup, and a retained-billable-resource report. Budget
+decisions do not automatically disable security controls.
