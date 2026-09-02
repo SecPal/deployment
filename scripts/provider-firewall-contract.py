@@ -88,6 +88,7 @@ def _identity(label: str, value: object) -> None:
         or not value
         or value != value.strip()
         or not value.isprintable()
+        or len(value.encode("utf-8")) > capability.MAX_IDENTITY_BYTES
     ):
         raise ContractError(f"{label} is invalid")
 
@@ -120,6 +121,21 @@ def _target_document(target: capability.ResourceTarget) -> dict[str, Any]:
         "requested_key": target.requested_key,
         "provider_resource_id": target.provider_resource_id,
         "expected_version": target.expected_version,
+    }
+
+
+def _request_document(
+    request: capability.CapabilityRequest,
+) -> dict[str, Any]:
+    if type(request) is not capability.CapabilityRequest:
+        raise ContractError("one exact #169 predecessor request is required")
+    return {
+        "request_id": request.request_id,
+        "adapter_id": request.adapter_id,
+        "source_revision": request.source_revision,
+        "operation": request.operation.value,
+        "target": _target_document(request.target),
+        "parameters_sha256": request.parameters_sha256,
     }
 
 
@@ -359,10 +375,17 @@ def inspection_parameters_sha256(
     target: capability.ResourceTarget,
     phase: ObservationPhase,
     supported_operations: frozenset[capability.Operation],
+    predecessor_request: capability.CapabilityRequest | None = None,
 ) -> str:
     if type(phase) is not ObservationPhase:
         raise ContractError("inspection phase is invalid")
     _supported_operations(supported_operations)
+    if phase is ObservationPhase.CURRENT:
+        if predecessor_request is not None:
+            raise ContractError("current inspection has no predecessor transaction")
+        predecessor = None
+    else:
+        predecessor = _request_document(predecessor_request)
     return _canonical_digest(
         {
             "contract": "secpal-provider-firewall-inspection-v1",
@@ -373,6 +396,7 @@ def inspection_parameters_sha256(
             "supported_operations": sorted(
                 operation.value for operation in supported_operations
             ),
+            "predecessor_request": predecessor,
         }
     )
 
@@ -382,6 +406,7 @@ def _admit_observation(
     authority: capability.ExecutionAuthority,
     phase: ObservationPhase,
     expected_target: capability.ResourceTarget | None = None,
+    predecessor_request: capability.CapabilityRequest | None = None,
 ) -> None:
     if (
         type(observation) is not FirewallObservation
@@ -394,6 +419,7 @@ def _admit_observation(
         observation.request.target,
         phase,
         observation.supported_operations,
+        predecessor_request,
     )
     if observation.request.parameters_sha256 != expected_parameters:
         raise ContractError("inspection parameters do not bind the firewall read")
@@ -405,6 +431,8 @@ def _admit_observation(
     capability.admit_result(observation.request, observation.result)
     if observation.request.operation is not capability.Operation.INSPECT:
         raise ContractError("provider observation is not an INSPECT operation")
+    if observation.result.outcome is not capability.Outcome.OBSERVED:
+        raise ContractError("provider observation requires an OBSERVED result")
     if expected_target is not None and not _same_resource(
         observation.request.target, expected_target
     ):
@@ -578,9 +606,14 @@ def _admit_fresh_observation(
     fresh: FirewallObservation,
     inspect_authority: capability.ExecutionAuthority,
     phase: ObservationPhase,
+    predecessor_request: capability.CapabilityRequest,
 ) -> None:
     _admit_observation(
-        fresh, inspect_authority, phase, expected_target=plan_to_check.target
+        fresh,
+        inspect_authority,
+        phase,
+        expected_target=plan_to_check.target,
+        predecessor_request=predecessor_request,
     )
     if (
         fresh.request.adapter_id != plan_to_check.adapter_id
@@ -614,6 +647,7 @@ def verify(
         fresh,
         fresh_inspect_authority,
         ObservationPhase.POST_MUTATION,
+        mutation_request,
     )
     if len(fresh.owned) != 1 or fresh.owned[0].policy != plan_to_verify.desired:
         raise ContractError("fresh provider read did not verify exact desired policy")
@@ -639,16 +673,34 @@ def recovery_plan(
         fresh,
         fresh_inspect_authority,
         ObservationPhase.POST_MUTATION,
+        mutation_request,
     )
     fresh_owned = fresh.owned[0] if fresh.owned else None
-    if fresh_owned is not None and fresh_owned.policy == plan_to_recover.desired:
-        return RecoveryDecision.DESIRED_VERIFIED
     prior_policy = (
         plan_to_recover.prior_owned.policy
         if plan_to_recover.prior_owned is not None
         else None
     )
     fresh_policy = fresh_owned.policy if fresh_owned is not None else None
+    no_retained_effect = (
+        mutation_result.outcome
+        in {
+            capability.Outcome.UNSUPPORTED,
+            capability.Outcome.ALREADY_SATISFIED,
+        }
+        or (
+            mutation_result.outcome is capability.Outcome.FAILED
+            and mutation_result.cleanup is capability.CleanupOutcome.COMPLETE
+        )
+    )
+    if no_retained_effect:
+        if fresh_policy == prior_policy:
+            return RecoveryDecision.PRIOR_VERIFIED
+        raise ContractError(
+            "no-effect mutation result cannot authorize recovery of provider drift"
+        )
+    if fresh_owned is not None and fresh_owned.policy == plan_to_recover.desired:
+        return RecoveryDecision.DESIRED_VERIFIED
     if fresh_policy == prior_policy:
         return RecoveryDecision.PRIOR_VERIFIED
     if fresh.revision is None:
@@ -766,6 +818,7 @@ def verify_rollback(
         fresh_inspect_authority,
         ObservationPhase.POST_ROLLBACK,
         expected_target=rollback.target,
+        predecessor_request=rollback_request,
     )
     if (
         fresh.request.adapter_id != rollback.adapter_id

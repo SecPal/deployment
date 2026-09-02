@@ -97,9 +97,12 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
         result_request_id=None,
         result_source_revision=None,
         provider_rule_id=None,
+        predecessor_request=None,
+        result_outcome=None,
         supported_operations=None,
     ):
         phase = phase or self.contract.ObservationPhase.CURRENT
+        result_outcome = result_outcome or self.capability.Outcome.OBSERVED
         if supported_operations is None:
             supported_operations = frozenset(
                 {
@@ -107,11 +110,12 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
                     self.capability.Operation.REBUILD,
                 }
             )
+        parameters = (self.target, phase, supported_operations)
+        if predecessor_request is not None:
+            parameters += (predecessor_request,)
         digest = (
             request_parameters
-            or self.contract.inspection_parameters_sha256(
-                self.target, phase, supported_operations
-            )
+            or self.contract.inspection_parameters_sha256(*parameters)
         )
         operation = authority_operation or self.capability.Operation.INSPECT
         authority = self.capability.ExecutionAuthority(
@@ -138,10 +142,27 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
             operation=request.operation,
             target=request.target,
             parameters_sha256=request.parameters_sha256,
-            outcome=self.capability.Outcome.OBSERVED,
+            outcome=result_outcome,
             cleanup=self.capability.CleanupOutcome.NOT_APPLICABLE,
-            provider_resource_id=self.target.provider_resource_id,
-            provider_resource_version=revision,
+            provider_resource_id=(
+                None
+                if result_outcome is self.capability.Outcome.UNSUPPORTED
+                else self.target.provider_resource_id
+            ),
+            provider_resource_version=(
+                None
+                if result_outcome is self.capability.Outcome.UNSUPPORTED
+                else revision
+            ),
+            diagnostic_code=(
+                "inspection-unavailable"
+                if result_outcome
+                in {
+                    self.capability.Outcome.FAILED,
+                    self.capability.Outcome.UNSUPPORTED,
+                }
+                else None
+            ),
         )
         if provider_rule_id is not None:
             owned = (
@@ -175,8 +196,9 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
             parameters_sha256=self.contract.mutation_parameters_sha256(plan),
             credential_mechanism="oidc-workload-identity",
         )
-
     def mutation_result(self, request, *, outcome=None, cleanup=None):
+        outcome = outcome or self.capability.Outcome.APPLIED
+        unsupported = outcome is self.capability.Outcome.UNSUPPORTED
         return self.capability.CapabilityResult(
             request_id=request.request_id,
             adapter_id=request.adapter_id,
@@ -184,13 +206,19 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
             operation=request.operation,
             target=request.target,
             parameters_sha256=request.parameters_sha256,
-            outcome=outcome or self.capability.Outcome.APPLIED,
+            outcome=outcome,
             cleanup=cleanup or self.capability.CleanupOutcome.NOT_APPLICABLE,
-            provider_resource_id=request.target.provider_resource_id,
-            provider_resource_version="revision-4",
+            provider_resource_id=(
+                None if unsupported else request.target.provider_resource_id
+            ),
+            provider_resource_version=None if unsupported else "revision-4",
             diagnostic_code=(
-                "provider-mutation-failed"
-                if outcome is self.capability.Outcome.FAILED
+                "provider-mutation-unavailable"
+                if outcome
+                in {
+                    self.capability.Outcome.FAILED,
+                    self.capability.Outcome.UNSUPPORTED,
+                }
                 else None
             ),
         )
@@ -295,6 +323,7 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
         )
         fresh, fresh_authority = self.observation(
             phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=request,
             revision="revision-4",
             owned=(
                 self.contract.OwnedFirewallPolicy(
@@ -419,6 +448,7 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
         )
         fresh, fresh_authority = self.observation(
             phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=request,
             revision="revision-4",
             provider_rule_id="provider-assigned-99",
         )
@@ -427,6 +457,7 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
         )
         drifted, drifted_authority = self.observation(
             phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=request,
             revision="revision-4",
             provider_rule_id="provider-assigned-99",
             preserved_state_sha256="e" * 64,
@@ -469,6 +500,7 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
         )
         partial, partial_authority = self.observation(
             phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=mutation_request,
             revision="revision-4",
             owned=(
                 self.contract.OwnedFirewallPolicy(
@@ -506,6 +538,7 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
         rollback_result = self.mutation_result(rollback_request)
         restored, restored_authority = self.observation(
             phase=self.contract.ObservationPhase.POST_ROLLBACK,
+            predecessor_request=rollback_request,
             revision="revision-5",
             owned=(
                 self.contract.OwnedFirewallPolicy(
@@ -520,6 +553,264 @@ class AuthenticatedFirewallRemediationTests(unittest.TestCase):
             rollback_result,
             restored,
             restored_authority,
+        )
+
+    def test_ready_inspection_failures_never_become_observation_authority(self) -> None:
+        failed_current, failed_current_authority = self.observation(
+            result_outcome=self.capability.Outcome.FAILED
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.plan(
+                self.intent,
+                self.state,
+                failed_current,
+                failed_current_authority,
+            )
+
+        current, inspect_authority = self.observation()
+        plan = self.contract.plan(
+            self.intent, self.state, current, inspect_authority
+        )
+        mutation_authority = self.mutation_authority(plan)
+        mutation_request = self.contract.build_mutation_request(
+            plan, mutation_authority, "mutation-observation-outcome"
+        )
+        mutation_result = self.mutation_result(mutation_request)
+        for outcome in (
+            self.capability.Outcome.FAILED,
+            self.capability.Outcome.UNSUPPORTED,
+        ):
+            fresh, fresh_authority = self.observation(
+                phase=self.contract.ObservationPhase.POST_MUTATION,
+                predecessor_request=mutation_request,
+                provider_rule_id="provider-desired-rule",
+                result_outcome=outcome,
+            )
+            with self.subTest(outcome=outcome), self.assertRaises(
+                self.contract.ContractError
+            ):
+                self.contract.verify(
+                    plan,
+                    mutation_authority,
+                    mutation_request,
+                    mutation_result,
+                    fresh,
+                    fresh_authority,
+                )
+            with self.subTest(outcome=outcome), self.assertRaises(
+                self.contract.ContractError
+            ):
+                self.contract.recovery_plan(
+                    plan,
+                    mutation_authority,
+                    mutation_request,
+                    mutation_result,
+                    fresh,
+                    fresh_authority,
+                )
+
+    def test_ready_no_effect_results_cannot_authorize_rollback_of_drift(self) -> None:
+        current, inspect_authority = self.observation()
+        plan = self.contract.plan(
+            self.intent, self.state, current, inspect_authority
+        )
+        mutation_authority = self.mutation_authority(plan)
+        mutation_request = self.contract.build_mutation_request(
+            plan, mutation_authority, "mutation-no-effect"
+        )
+        drift_policy = self.contract.FirewallPolicy(
+            "tcp",
+            443,
+            ("198.51.100.0/24",),
+            ("2001:db8:2::/48",),
+        )
+        drifted, drifted_authority = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=mutation_request,
+            owned=(
+                self.contract.OwnedFirewallPolicy(
+                    "concurrent-provider-rule", drift_policy
+                ),
+            ),
+            revision="revision-4",
+        )
+        no_effect_results = (
+            self.mutation_result(
+                mutation_request,
+                outcome=self.capability.Outcome.UNSUPPORTED,
+            ),
+            self.mutation_result(
+                mutation_request,
+                outcome=self.capability.Outcome.ALREADY_SATISFIED,
+            ),
+            self.mutation_result(
+                mutation_request,
+                outcome=self.capability.Outcome.FAILED,
+                cleanup=self.capability.CleanupOutcome.COMPLETE,
+            ),
+        )
+        for result in no_effect_results:
+            with self.subTest(outcome=result.outcome), self.assertRaises(
+                self.contract.ContractError
+            ):
+                self.contract.recovery_plan(
+                    plan,
+                    mutation_authority,
+                    mutation_request,
+                    result,
+                    drifted,
+                    drifted_authority,
+                )
+
+        unchanged, unchanged_authority = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=mutation_request,
+            revision="revision-4",
+        )
+        self.assertIs(
+            self.contract.recovery_plan(
+                plan,
+                mutation_authority,
+                mutation_request,
+                no_effect_results[2],
+                unchanged,
+                unchanged_authority,
+            ),
+            self.contract.RecoveryDecision.PRIOR_VERIFIED,
+        )
+        desired, desired_authority = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=mutation_request,
+            provider_rule_id="provider-desired-rule",
+            revision="revision-4",
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.recovery_plan(
+                plan,
+                mutation_authority,
+                mutation_request,
+                no_effect_results[1],
+                desired,
+                desired_authority,
+            )
+
+    def test_ready_provider_identities_use_the_169_utf8_bound(self) -> None:
+        maximum = self.capability.MAX_IDENTITY_BYTES
+        self.contract.OwnedFirewallPolicy("r" * maximum, self.desired)
+        self.observation(operator_access=("o" * maximum,))
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.OwnedFirewallPolicy("r" * (maximum + 1), self.desired)
+        with self.assertRaises(self.contract.ContractError):
+            self.observation(operator_access=("o" * (maximum + 1),))
+
+    def test_ready_post_write_inspections_bind_the_exact_transaction(self) -> None:
+        current, inspect_authority = self.observation()
+        plan = self.contract.plan(
+            self.intent, self.state, current, inspect_authority
+        )
+        mutation_authority = self.mutation_authority(plan)
+        mutation_a = self.contract.build_mutation_request(
+            plan, mutation_authority, "mutation-a"
+        )
+        mutation_b = self.contract.build_mutation_request(
+            plan, mutation_authority, "mutation-b"
+        )
+        result_a = self.mutation_result(mutation_a)
+        result_b = self.mutation_result(mutation_b)
+        observed_a, authority_a = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=mutation_a,
+            provider_rule_id="provider-desired-rule",
+            revision="revision-4",
+        )
+        self.contract.verify(
+            plan, mutation_authority, mutation_a, result_a, observed_a, authority_a
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.verify(
+                plan,
+                mutation_authority,
+                mutation_b,
+                result_b,
+                observed_a,
+                authority_a,
+            )
+        observed_b, authority_b = self.observation(
+            phase=self.contract.ObservationPhase.POST_MUTATION,
+            predecessor_request=mutation_b,
+            provider_rule_id="provider-desired-rule",
+            revision="revision-5",
+        )
+        self.contract.verify(
+            plan, mutation_authority, mutation_b, result_b, observed_b, authority_b
+        )
+
+        rollback = self.contract.RollbackPlan(
+            target=self.capability.ResourceTarget(
+                provider=self.target.provider,
+                scope=self.target.scope,
+                requested_key=self.target.requested_key,
+                provider_resource_id=self.target.provider_resource_id,
+                expected_version="revision-4",
+            ),
+            adapter_id=plan.adapter_id,
+            source_revision=plan.source_revision,
+            supported_operations=plan.supported_operations,
+            restore_policy=None,
+            preserved_state_sha256=plan.preserved_state_sha256,
+            operator_access=plan.operator_access,
+        )
+        rollback_authority = self.capability.ExecutionAuthority(
+            authorization_id="rollback-transaction-correlation",
+            adapter_id=rollback.adapter_id,
+            source_revision=rollback.source_revision,
+            target=rollback.target,
+            operations=frozenset({self.capability.Operation.REBUILD}),
+            parameters_sha256=self.contract.rollback_parameters_sha256(rollback),
+            credential_mechanism="oidc-workload-identity",
+        )
+        rollback_a = self.contract.build_rollback_request(
+            rollback, rollback_authority, "rollback-a"
+        )
+        rollback_b = self.contract.build_rollback_request(
+            rollback, rollback_authority, "rollback-b"
+        )
+        rollback_result_a = self.mutation_result(rollback_a)
+        rollback_result_b = self.mutation_result(rollback_b)
+        restored_a, restored_authority_a = self.observation(
+            phase=self.contract.ObservationPhase.POST_ROLLBACK,
+            predecessor_request=rollback_a,
+            revision="revision-5",
+        )
+        self.contract.verify_rollback(
+            rollback,
+            rollback_authority,
+            rollback_a,
+            rollback_result_a,
+            restored_a,
+            restored_authority_a,
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.verify_rollback(
+                rollback,
+                rollback_authority,
+                rollback_b,
+                rollback_result_b,
+                restored_a,
+                restored_authority_a,
+            )
+        restored_b, restored_authority_b = self.observation(
+            phase=self.contract.ObservationPhase.POST_ROLLBACK,
+            predecessor_request=rollback_b,
+            revision="revision-6",
+        )
+        self.contract.verify_rollback(
+            rollback,
+            rollback_authority,
+            rollback_b,
+            rollback_result_b,
+            restored_b,
+            restored_authority_b,
         )
 
 

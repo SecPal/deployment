@@ -41,7 +41,9 @@ admission appropriate to their phase.
 ## Ownership-scoped observation
 
 `FirewallObservation` is one adapter-produced, #169-correlated complete provider
-read. Its closed ownership scope distinguishes at most one #215-owned Origin
+read whose correlated result is explicitly OBSERVED. Failed or unsupported
+INSPECT results are never provider-state authority. Provider-supplied identities are
+bounded by the #169 UTF-8 identity limit. Its closed ownership scope distinguishes at most one #215-owned Origin
 slice from required operator access and all other provider-native state.
 Ownership is never caller supplied or inferred from protocol, port, prefixes,
 name, description, position, or semantic resemblance. A provider rule cannot be
@@ -84,10 +86,17 @@ or an incomplete-cleanup failure, requires a fresh correlated INSPECT. Apply
 acceptance is never verification. Verification requires the exact desired owned
 semantics, the same non-owned provider-state identity, the same operator-access
 identities, exact provider target, adapter, and source revision. A new
-provider-native owned rule ID is valid.
+provider-native owned rule ID is valid. Each post-mutation inspection parameter
+digest binds the exact preceding #169 mutation request; each post-rollback digest
+similarly binds its exact rollback request, preventing same-resource replay across
+transactions while allowing provider revisions to advance.
 
 Failure or uncertainty never directly creates rollback authority. The fresh
-post-mutation read is classified first:
+post-mutation read is classified first. For results that guarantee no retained
+mutation effect (UNSUPPORTED, ALREADY_SATISFIED, or FAILED with complete cleanup),
+only the prior safe semantics may yield PRIOR_VERIFIED; any different state is
+concurrent provider drift and fails closed without automatic rollback or invented
+causality. For results that can retain mutation effects:
 
 - desired semantics present: desired state is verified;
 - prior owned semantics present: recovery is already satisfied;
