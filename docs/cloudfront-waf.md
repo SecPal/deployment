@@ -65,10 +65,12 @@ Before a real mutation, the caller must provide bounded typed discovery for the
 exact vendor/name/scope, default and available static versions, reported
 capacity, exact `CheckCapacity` result, current applicable Web ACL capacity
 ceiling, current rule/action facts, labels, and required Anti-DDoS configuration
-surface. The contract requires a resolved default version, the reviewed
-`anti-ddos:ddos-request` label, disabled client-side challenge support, low
-block sensitivity support, positive capacity facts, an exact successful capacity
-result, and capacity within the current ceiling.
+surface. The contract requires the exact historically qualified default
+`Version_1.0`, the reviewed `anti-ddos:ddos-request` label, disabled client-side
+challenge support, low block sensitivity support, positive capacity facts, an
+exact successful capacity result, and capacity within the current ceiling.
+Other available versions are informational and do not change the qualified
+default.
 
 A provider-default change is `REQUALIFICATION_REQUIRED`. The portable baseline
 does not pin a static version, maintain pins, or fall back to expired versions.
@@ -82,8 +84,11 @@ permanent rule-name list.
 
 The logging configuration requires one caller-supplied exact destination ARN.
 It accepts the AWS WAF destination families CloudWatch Logs, Amazon S3, and
-Amazon Data Firehose without selecting one as SecPal Managed policy. Destination
-creation, retention, and destination access policy remain outside this contract.
+Amazon Data Firehose without selecting one as SecPal Managed policy. Every
+destination uses the `aws` partition and the provider-bound region/account fields
+where that ARN family carries them. Its log group, bucket, or delivery stream
+name begins with `aws-waf-logs-`. Destination creation, retention, and destination
+access policy remain outside this contract.
 
 Logging defaults to `DROP` and has one `KEEP` condition for the fully-qualified
 `awswaf:managed:aws:anti-ddos:ddos-request` label. It excludes broad
@@ -134,8 +139,15 @@ Later qualification cleanup is exact and only authorizes resources marked as
 qualification-owned:
 
 ```text
-DeleteLoggingConfiguration for the exact Web ACL ARN
+fresh observation with logging present
+→ DeleteLoggingConfiguration for the exact Web ACL ARN
+→ stop and reobserve
+
+fresh observation with logging absent and the exact association present
 → DisassociateDistributionWebACL with a fresh Distribution ETag
+→ stop and reobserve
+
+fresh observation with logging and association absent
 → DeleteWebACL with a fresh WAF LockToken
 ```
 

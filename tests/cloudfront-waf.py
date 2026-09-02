@@ -44,8 +44,8 @@ class CloudFrontWafTests(unittest.TestCase):
         )
         cls.discovery = cls.contract.ProviderDiscovery(
             vendor="AWS", name="AWSManagedRulesAntiDDoSRuleSet", scope="CLOUDFRONT",
-            current_default_version="Version_fixture", available_versions=(
-                cls.contract.ManagedRuleVersion("Version_fixture", None),
+            current_default_version="Version_1.0", available_versions=(
+                cls.contract.ManagedRuleVersion("Version_1.0", None),
             ), capacity=50, check_capacity=50, web_acl_capacity_ceiling=5000,
             available_rules=(
                 cls.contract.ManagedRule("challenge-a", "Challenge"),
@@ -57,6 +57,12 @@ class CloudFrontWafTests(unittest.TestCase):
 
     def test_provider_default_is_admitted_without_a_permanent_pin(self) -> None:
         self.contract.admit_provider_discovery(self.discovery)
+        with_additional_version = replace(
+            self.discovery,
+            available_versions=self.discovery.available_versions
+            + (self.contract.ManagedRuleVersion("Version_new", None),),
+        )
+        self.contract.admit_provider_discovery(with_additional_version)
         rule = self.contract.build_managed_rule(self.contract.ManagedRuleMode.ENFORCEMENT)
         self.assertNotIn("Version", rule["Statement"]["ManagedRuleGroupStatement"])
 
@@ -64,6 +70,18 @@ class CloudFrontWafTests(unittest.TestCase):
         dynamic = replace(self.discovery, capacity=61, check_capacity=61)
         self.contract.admit_provider_discovery(dynamic)
         self.assertEqual(61, dynamic.capacity)
+
+    def test_unqualified_new_provider_default_requires_requalification(self) -> None:
+        drifted = replace(
+            self.discovery,
+            current_default_version="Version_new",
+            available_versions=(
+                self.contract.ManagedRuleVersion("Version_1.0", None),
+                self.contract.ManagedRuleVersion("Version_new", None),
+            ),
+        )
+        with self.assertRaisesRegex(self.contract.ContractError, "requalification"):
+            self.contract.admit_provider_discovery(drifted)
 
     def test_provider_drift_fails_closed(self) -> None:
         cases = {
@@ -153,6 +171,28 @@ class CloudFrontWafTests(unittest.TestCase):
         with self.assertRaises(self.contract.ContractError):
             self.contract.validate_logging_destination_arn("arn:aws:lambda:us-east-1:123:function:bad")
 
+    def test_logging_destination_rejects_wrong_name_and_partition(self) -> None:
+        invalid = (
+            "arn:aws:logs:us-east-1:123456789012:log-group:not-prefixed",
+            "arn:aws-cn:logs:us-east-1:123456789012:log-group:aws-waf-logs-test",
+            "arn:aws-us-gov:logs:us-east-1:123456789012:log-group:aws-waf-logs-test",
+            "arn:aws:logs:eu-west-1:123456789012:log-group:aws-waf-logs-test",
+            "arn:aws:logs:us-east-1:123:log-group:aws-waf-logs-test",
+            "arn:aws:logs:us-east-1:123456789012:stream:aws-waf-logs-test",
+            "not-an-arn",
+        )
+        for arn in invalid:
+            with self.subTest(arn=arn):
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.validate_logging_destination_arn(arn)
+        other_account = self.contract.AwsProviderContext(
+            partition="aws", account_id="210987654321", waf_region="us-east-1"
+        )
+        with self.assertRaisesRegex(self.contract.ContractError, "provider context"):
+            self.contract.validate_logging_destination_arn(
+                self.target.logging_destination_arn, other_account
+            )
+
     def test_logging_lifecycle_binds_only_the_exact_web_acl(self) -> None:
         plans = [
             self.contract.plan_logging_configuration(self.target, operation)
@@ -165,12 +205,85 @@ class CloudFrontWafTests(unittest.TestCase):
         self.assertEqual([self.target.web_acl_arn] * 3, [plan.resource_id for plan in plans])
         self.assertEqual("PutLoggingConfiguration", plans[0].api_operation)
 
+    def test_logging_readback_requires_the_complete_admitted_configuration(self) -> None:
+        configuration = self.contract.build_logging_configuration(self.target)
+        observation = self.contract.normalize_logging_observation(
+            {"LoggingConfiguration": copy.deepcopy(configuration)},
+            self.target,
+            self.context,
+        )
+        request = self.contract.LifecycleRequest(
+            "request-logging-readback",
+            "aws-cloudfront-waf-v1",
+            "a" * 40,
+            self.context,
+            self.target,
+            self.contract.Operation.INSPECT_LOGGING,
+            "b" * 64,
+        )
+        result = self.contract.LifecycleResult(
+            request.request_id,
+            request.adapter_id,
+            request.source_revision,
+            request.provider_context,
+            request.target,
+            request.operation,
+            request.parameters_sha256,
+            self.contract.Outcome.OBSERVED,
+            logging_observation=observation,
+        )
+        self.contract.admit_result(request, result)
+
+        invalid_configurations = {}
+        for label, destination in (
+            (
+                "wrong-destination",
+                "arn:aws:logs:us-east-1:123456789012:log-group:aws-waf-logs-other",
+            ),
+            (
+                "wrong-prefix",
+                "arn:aws:logs:us-east-1:123456789012:log-group:not-prefixed",
+            ),
+            (
+                "wrong-partition",
+                "arn:aws-cn:logs:us-east-1:123456789012:log-group:aws-waf-logs-example",
+            ),
+        ):
+            changed = copy.deepcopy(configuration)
+            changed["LogDestinationConfigs"] = [destination]
+            invalid_configurations[label] = changed
+        weakened_filter = copy.deepcopy(configuration)
+        weakened_filter["LoggingFilter"]["DefaultBehavior"] = "KEEP"
+        invalid_configurations["weakened-filter"] = weakened_filter
+        weakened_redaction = copy.deepcopy(configuration)
+        weakened_redaction["RedactedFields"].pop()
+        invalid_configurations["weakened-redaction"] = weakened_redaction
+
+        for label, changed in invalid_configurations.items():
+            changed_observation = self.contract.LoggingObservation(
+                self.target.web_acl_arn, changed
+            )
+            with self.subTest(label=label):
+                with self.assertRaises(self.contract.ContractError):
+                    self.contract.admit_result(
+                        request,
+                        replace(result, logging_observation=changed_observation),
+                    )
+
+        absent = self.contract.normalize_logging_observation(
+            {}, self.target, self.context
+        )
+        with self.assertRaisesRegex(self.contract.ContractError, "absent"):
+            self.contract.admit_result(
+                request, replace(result, logging_observation=absent)
+            )
+
     def test_cloudfront_etag_and_waf_locktoken_are_not_interchangeable(self) -> None:
         distribution = self.contract.DistributionObservation(
             self.target.distribution_id, "distribution-etag", None
         )
         configuration = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)
-        web_acl = self.contract.WebAclObservation(self.target.web_acl_id, self.target.web_acl_arn, "waf-lock-token", configuration)
+        web_acl = self.contract.WebAclObservation(self.target.web_acl_id, self.target.web_acl_arn, self.target.requested_key, "waf-lock-token", configuration)
         association = self.contract.plan_associate_distribution(self.target, distribution, "distribution-etag")
         self.assertEqual("distribution-etag", association.if_match)
         update = self.contract.plan_update_web_acl(self.target, web_acl, "waf-lock-token", configuration)
@@ -179,6 +292,27 @@ class CloudFrontWafTests(unittest.TestCase):
             self.contract.plan_associate_distribution(self.target, distribution, "waf-lock-token")
         with self.assertRaises(self.contract.ContractError):
             self.contract.plan_update_web_acl(self.target, web_acl, "distribution-etag", configuration)
+
+    def test_update_materialization_preserves_exact_web_acl_name(self) -> None:
+        configuration = self.contract.build_web_acl(
+            self.contract.ManagedRuleMode.ENFORCEMENT
+        )
+        web_acl = self.contract.WebAclObservation(
+            self.target.web_acl_id, self.target.web_acl_arn, self.target.requested_key, "fresh-token", configuration
+        )
+        plan = self.contract.plan_update_web_acl(
+            self.target, web_acl, "fresh-token", configuration
+        )
+        self.assertEqual(self.target.requested_key, plan.materialize_parameters()["Name"])
+        with self.assertRaises(TypeError):
+            plan.parameters["Name"] = "changed"
+        with self.assertRaisesRegex(self.contract.ContractError, "exact target"):
+            self.contract.plan_update_web_acl(
+                self.target,
+                replace(web_acl, web_acl_name="other-name"),
+                "fresh-token",
+                configuration,
+            )
 
     def test_association_requires_unowned_current_state(self) -> None:
         absent = self.contract.DistributionObservation(
@@ -294,14 +428,18 @@ class CloudFrontWafTests(unittest.TestCase):
 
     def test_rollback_and_cleanup_require_fresh_exact_authority(self) -> None:
         configuration = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)
-        web_acl = self.contract.WebAclObservation(self.target.web_acl_id, self.target.web_acl_arn, "new-lock-token", configuration)
+        web_acl = self.contract.WebAclObservation(self.target.web_acl_id, self.target.web_acl_arn, self.target.requested_key, "new-lock-token", configuration)
         rollback = self.contract.plan_rollback(self.target, web_acl, "new-lock-token", configuration)
         self.assertEqual("new-lock-token", rollback.lock_token)
         distribution = self.contract.DistributionObservation(self.target.distribution_id, "new-etag", self.target.web_acl_arn)
-        cleanup = self.contract.plan_cleanup(self.target, web_acl, distribution, "new-lock-token", "new-etag")
-        self.assertEqual((self.contract.Operation.DELETE_LOGGING, self.contract.Operation.DISASSOCIATE_DISTRIBUTION, self.contract.Operation.DELETE_WEB_ACL), tuple(plan.operation for plan in cleanup))
+        logging = self.contract.LoggingObservation(
+            self.target.web_acl_arn,
+            self.contract.build_logging_configuration(self.target),
+        )
+        cleanup = self.contract.plan_cleanup(self.target, web_acl, distribution, logging, "new-lock-token", "new-etag")
+        self.assertEqual((self.contract.Operation.DELETE_LOGGING,), tuple(plan.operation for plan in cleanup))
         with self.assertRaises(self.contract.ContractError):
-            self.contract.plan_cleanup(replace(self.target, qualification_owned=False), web_acl, distribution, "new-lock-token", "new-etag")
+            self.contract.plan_cleanup(replace(self.target, qualification_owned=False), web_acl, distribution, logging, "new-lock-token", "new-etag")
 
     def test_complete_web_acl_admission_is_shared_by_create_update_and_rollback(self) -> None:
         configuration = self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT)
@@ -325,6 +463,7 @@ class CloudFrontWafTests(unittest.TestCase):
         observation = self.contract.WebAclObservation(
             self.target.web_acl_id,
             self.target.web_acl_arn,
+            self.target.requested_key,
             "fresh-token",
             configuration,
         )
@@ -334,8 +473,9 @@ class CloudFrontWafTests(unittest.TestCase):
         rollback = self.contract.plan_rollback(
             self.target, observation, "fresh-token", configuration
         )
-        self.assertEqual(configuration, update.materialize_parameters())
-        self.assertEqual(configuration, rollback.materialize_parameters())
+        expected = {"Name": self.target.requested_key, **configuration}
+        self.assertEqual(expected, update.materialize_parameters())
+        self.assertEqual(expected, rollback.materialize_parameters())
 
     def test_count_requires_explicit_qualification_ownership(self) -> None:
         count = self.contract.build_web_acl(
@@ -352,6 +492,7 @@ class CloudFrontWafTests(unittest.TestCase):
         observation = self.contract.WebAclObservation(
             permanent.web_acl_id,
             permanent.web_acl_arn,
+            permanent.requested_key,
             "fresh-token",
             self.contract.build_web_acl(self.contract.ManagedRuleMode.ENFORCEMENT),
         )
@@ -407,6 +548,7 @@ class CloudFrontWafTests(unittest.TestCase):
         observation = self.contract.WebAclObservation(
             permanent.web_acl_id,
             permanent.web_acl_arn,
+            permanent.requested_key,
             "fresh-token",
             configuration,
         )
@@ -424,6 +566,7 @@ class CloudFrontWafTests(unittest.TestCase):
         observation = self.contract.WebAclObservation(
             self.target.web_acl_id,
             self.target.web_acl_arn,
+            self.target.requested_key,
             "fresh-token",
             configuration,
         )
@@ -432,7 +575,7 @@ class CloudFrontWafTests(unittest.TestCase):
             self.target, observation, "fresh-token", desired
         )
         desired["Rules"].clear()
-        self.assertEqual(configuration, plan.materialize_parameters())
+        self.assertEqual({"Name": self.target.requested_key, **configuration}, plan.materialize_parameters())
         with self.assertRaises(TypeError):
             plan.parameters["DefaultAction"] = {"Block": {}}
         with self.assertRaises(AttributeError):
@@ -502,7 +645,7 @@ class CloudFrontWafTests(unittest.TestCase):
             "fresh-token",
             observation.configuration,
         )
-        self.assertEqual(configuration, projected_update.materialize_parameters())
+        self.assertEqual({"Name": self.target.requested_key, **configuration}, projected_update.materialize_parameters())
         response["WebACL"]["Rules"].clear()
         self.assertEqual(configuration, observation.configuration)
         incomplete = copy.deepcopy(response)
@@ -687,6 +830,7 @@ class CloudFrontWafTests(unittest.TestCase):
         observation = self.contract.WebAclObservation(
             self.target.web_acl_id,
             self.target.web_acl_arn,
+            self.target.requested_key,
             "fresh-token",
             configuration,
         )
@@ -713,6 +857,7 @@ class CloudFrontWafTests(unittest.TestCase):
         observation = self.contract.WebAclObservation(
             self.target.web_acl_id,
             self.target.web_acl_arn,
+            self.target.requested_key,
             "fresh-token",
             configuration,
         )
@@ -730,26 +875,30 @@ class CloudFrontWafTests(unittest.TestCase):
         web_acl = self.contract.WebAclObservation(
             self.target.web_acl_id,
             self.target.web_acl_arn,
+            self.target.requested_key,
             "fresh-token",
             configuration,
         )
         exact = self.contract.DistributionObservation(
             self.target.distribution_id, "fresh-etag", self.target.web_acl_arn
         )
-        exact_plan = self.contract.plan_cleanup(
-            self.target, web_acl, exact, "fresh-token", "fresh-etag"
+        absent_logging = self.contract.LoggingObservation(
+            self.target.web_acl_arn, None
         )
-        self.assertIn(
-            self.contract.Operation.DISASSOCIATE_DISTRIBUTION,
-            {step.operation for step in exact_plan},
+        exact_plan = self.contract.plan_cleanup(
+            self.target, web_acl, exact, absent_logging, "fresh-token", "fresh-etag"
+        )
+        self.assertEqual(
+            (self.contract.Operation.DISASSOCIATE_DISTRIBUTION,),
+            tuple(step.operation for step in exact_plan),
         )
         absent = replace(exact, web_acl_arn=None)
         absent_plan = self.contract.plan_cleanup(
-            self.target, web_acl, absent, "fresh-token", "fresh-etag"
+            self.target, web_acl, absent, absent_logging, "fresh-token", "fresh-etag"
         )
-        self.assertNotIn(
-            self.contract.Operation.DISASSOCIATE_DISTRIBUTION,
-            {step.operation for step in absent_plan},
+        self.assertEqual(
+            (self.contract.Operation.DELETE_WEB_ACL,),
+            tuple(step.operation for step in absent_plan),
         )
         unrelated = replace(
             exact,
@@ -759,12 +908,58 @@ class CloudFrontWafTests(unittest.TestCase):
             self.contract.ContractError, "association.*mismatch.*acl-other"
         ):
             self.contract.plan_cleanup(
-                self.target, web_acl, unrelated, "fresh-token", "fresh-etag"
+                self.target, web_acl, unrelated, absent_logging, "fresh-token", "fresh-etag"
             )
         with self.assertRaises(self.contract.ContractError):
             self.contract.plan_cleanup(
-                self.target, web_acl, exact, "fresh-token", "stale-etag"
+                self.target, web_acl, exact, absent_logging, "fresh-token", "stale-etag"
             )
+
+    def test_delete_request_requires_qualification_owned_target(self) -> None:
+        permanent = replace(self.target, qualification_owned=False)
+        authority = self.contract.ExecutionAuthority(
+            "authority-delete", "aws-cloudfront-waf-v1", "a" * 40,
+            self.context, permanent, frozenset({self.contract.Operation.DELETE_WEB_ACL}),
+            "b" * 64, "oidc-workload-identity",
+        )
+        request = self.contract.LifecycleRequest(
+            "request-delete", "aws-cloudfront-waf-v1", "a" * 40,
+            self.context, permanent, self.contract.Operation.DELETE_WEB_ACL, "b" * 64,
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_request(request, authority)
+        qualified_authority = replace(authority, target=self.target)
+        qualified_request = replace(request, target=self.target)
+        self.contract.admit_request(qualified_request, qualified_authority)
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_request(
+                qualified_request,
+                replace(
+                    qualified_authority,
+                    operations=frozenset({self.contract.Operation.INSPECT_WEB_ACL}),
+                ),
+            )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_request(
+                replace(
+                    qualified_request,
+                    target=replace(self.target, distribution_id="E2OTHERDISTRIBUTION"),
+                ),
+                qualified_authority,
+            )
+
+    def test_logging_inspection_requires_semantic_observation(self) -> None:
+        request = self.contract.LifecycleRequest(
+            "request-logging", "aws-cloudfront-waf-v1", "a" * 40,
+            self.context, self.target, self.contract.Operation.INSPECT_LOGGING, "b" * 64,
+        )
+        result = self.contract.LifecycleResult(
+            request.request_id, request.adapter_id, request.source_revision,
+            request.provider_context, request.target, request.operation,
+            request.parameters_sha256, self.contract.Outcome.OBSERVED,
+        )
+        with self.assertRaises(self.contract.ContractError):
+            self.contract.admit_result(request, result)
 
     def test_result_correlation_is_exact_and_operation_compatible(self) -> None:
         authority = self.contract.ExecutionAuthority("authority-1", "aws-cloudfront-waf-v1", "a" * 40, self.context, self.target, frozenset(self.contract.Operation), "b" * 64, "oidc-workload-identity")
@@ -804,6 +999,14 @@ class CloudFrontWafTests(unittest.TestCase):
                 operation,
                 "b" * 64,
             )
+            logging_observation = (
+                self.contract.LoggingObservation(
+                    self.target.web_acl_arn,
+                    self.contract.build_logging_configuration(self.target),
+                )
+                if operation is self.contract.Operation.INSPECT_LOGGING
+                else None
+            )
             result = self.contract.LifecycleResult(
                 request.request_id,
                 request.adapter_id,
@@ -813,6 +1016,7 @@ class CloudFrontWafTests(unittest.TestCase):
                 request.operation,
                 request.parameters_sha256,
                 expected,
+                logging_observation=logging_observation,
             )
             with self.subTest(operation=operation.value, outcome=expected.value):
                 self.contract.admit_result(request, result)
@@ -828,6 +1032,7 @@ class CloudFrontWafTests(unittest.TestCase):
                         result,
                         outcome=self.contract.Outcome.FAILED,
                         diagnostic_code="provider.failure",
+                        logging_observation=None,
                     ),
                 )
 

@@ -24,6 +24,7 @@ ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
 DDOS_REQUEST_LABEL = "awswaf:managed:aws:anti-ddos:ddos-request"
 MANAGED_VENDOR = "AWS"
 MANAGED_NAME = "AWSManagedRulesAntiDDoSRuleSet"
+QUALIFIED_MANAGED_RULE_DEFAULT_VERSION = "Version_1.0"
 WAF_SCOPE = "CLOUDFRONT"
 PROVIDER_PRIVACY_LIMITATION = (
     "AWS-WAF-TOKEN is a provider-owned cookie exception to current AWS WAF "
@@ -293,6 +294,11 @@ def admit_provider_discovery(discovery: ProviderDiscovery) -> None:
         version.name for version in discovery.available_versions
     }:
         raise ContractError("current default managed-rule version is unresolved")
+    if (
+        discovery.current_default_version
+        != QUALIFIED_MANAGED_RULE_DEFAULT_VERSION
+    ):
+        raise ContractError("provider default changed; requalification is required")
     if not all(type(value) is int and value > 0 for value in (
         discovery.capacity, discovery.check_capacity, discovery.web_acl_capacity_ceiling,
     )):
@@ -458,13 +464,64 @@ def waf_contract_for_viewer_headers(headers: Mapping[str, str]) -> dict[str, obj
     return build_web_acl(ManagedRuleMode.ENFORCEMENT)
 
 
-def validate_logging_destination_arn(arn: object) -> None:
-    """Accept only documented WAF destination families without parsing their details."""
+def validate_logging_destination_arn(
+    arn: object, provider_context: AwsProviderContext | None = None
+) -> None:
+    """Admit one closed AWS WAF logging destination identity."""
 
     _identity("logging destination ARN", arn)
+    if provider_context is not None and type(provider_context) is not AwsProviderContext:
+        raise ContractError("typed AWS provider context is required")
     parts = arn.split(":", 5)
-    if len(parts) != 6 or parts[0] != "arn" or parts[2] not in {"logs", "s3", "firehose"}:
+    if len(parts) != 6 or parts[0] != "arn" or parts[1] != "aws":
+        raise ContractError("logging destination must use the qualified aws partition")
+    _, partition, service, region, account_id, resource = parts
+    if service not in {"logs", "s3", "firehose"}:
         raise ContractError("logging destination is not a supported AWS WAF destination")
+    if provider_context is not None and partition != provider_context.partition:
+        raise ContractError("logging destination partition does not match provider context")
+
+    if service == "s3":
+        if region or account_id:
+            raise ContractError("S3 logging destination has invalid ARN authority fields")
+        name = resource
+    else:
+        if region != "us-east-1" or ACCOUNT_ID.fullmatch(account_id) is None:
+            raise ContractError("logging destination region or account is invalid")
+        if provider_context is not None and (
+            region != provider_context.waf_region
+            or account_id != provider_context.account_id
+        ):
+            raise ContractError("logging destination does not match provider context")
+        resource_prefix = (
+            "log-group:" if service == "logs" else "deliverystream/"
+        )
+        if not resource.startswith(resource_prefix):
+            raise ContractError("logging destination resource form is invalid")
+        name = resource.removeprefix(resource_prefix)
+
+    if not name.startswith("aws-waf-logs-"):
+        raise ContractError("logging destination name lacks aws-waf-logs- prefix")
+    if service == "logs":
+        valid_name = (
+            len(name) <= 512
+            and re.fullmatch(r"aws-waf-logs-[A-Za-z0-9._/#-]+", name) is not None
+        )
+    elif service == "firehose":
+        valid_name = (
+            len(name) <= 64
+            and re.fullmatch(r"aws-waf-logs-[A-Za-z0-9._-]+", name) is not None
+        )
+    else:
+        valid_name = (
+            len(name) <= 63
+            and re.fullmatch(r"aws-waf-logs-[a-z0-9.-]+", name) is not None
+            and ".." not in name
+            and ".-" not in name
+            and "-." not in name
+        )
+    if not valid_name:
+        raise ContractError("logging destination name is outside the bounded form")
 
 
 def _redacted_fields() -> list[dict[str, object]]:
@@ -495,6 +552,72 @@ def build_logging_configuration(target: WafTarget) -> dict[str, object]:
             }],
         },
     }
+
+
+@dataclass(frozen=True, slots=True)
+class LoggingObservation:
+    resource_arn: str
+    configuration: Mapping[str, object] | None
+
+    def __post_init__(self) -> None:
+        _identity("logging observation resource ARN", self.resource_arn)
+        if self.configuration is not None:
+            configuration = _mapping(
+                "logging observation configuration", self.configuration
+            )
+            object.__setattr__(
+                self, "configuration", _freeze_parameters(configuration)
+            )
+
+
+def validate_logging_observation(
+    observation: LoggingObservation,
+    target: WafTarget,
+    provider_context: AwsProviderContext,
+) -> None:
+    """Admit exact semantic logging state from provider read-back."""
+
+    if (
+        type(observation) is not LoggingObservation
+        or type(target) is not WafTarget
+        or type(provider_context) is not AwsProviderContext
+    ):
+        raise ContractError("typed logging observation inputs are required")
+    if observation.resource_arn != target.web_acl_arn:
+        raise ContractError("logging observation does not match the exact Web ACL")
+    if observation.configuration is None:
+        raise ContractError("required logging configuration is absent")
+    configuration = _materialize_parameters(observation.configuration)
+    destinations = configuration.get("LogDestinationConfigs")
+    if type(destinations) is not list or len(destinations) != 1:
+        raise ContractError("logging observation requires one exact destination")
+    validate_logging_destination_arn(destinations[0], provider_context)
+    if not _typed_equal(configuration, build_logging_configuration(target)):
+        raise ContractError("logging observation weakens the admitted configuration")
+
+
+def normalize_logging_observation(
+    response: object,
+    target: WafTarget,
+    provider_context: AwsProviderContext,
+) -> LoggingObservation:
+    """Normalize one GetLoggingConfiguration response into bounded state."""
+
+    if type(target) is not WafTarget or type(provider_context) is not AwsProviderContext:
+        raise ContractError("typed logging observation context is required")
+    response_map = _mapping("GetLoggingConfiguration response", response)
+    configuration = response_map.get("LoggingConfiguration")
+    if configuration is None:
+        if target.web_acl_arn is None:
+            raise ContractError("logging observation requires the exact Web ACL ARN")
+        return LoggingObservation(target.web_acl_arn, None)
+    configuration = copy.deepcopy(
+        _mapping("GetLoggingConfiguration configuration", configuration)
+    )
+    resource_arn = configuration.get("ResourceArn")
+    observation = LoggingObservation(resource_arn, configuration)
+    validate_logging_observation(observation, target, provider_context)
+    return observation
 
 
 @dataclass(frozen=True, slots=True)
@@ -548,12 +671,14 @@ class DistributionObservation:
 class WebAclObservation:
     web_acl_id: str
     web_acl_arn: str
+    web_acl_name: str
     lock_token: str
     configuration: dict[str, object]
 
     def __post_init__(self) -> None:
         _identity("Web ACL identity", self.web_acl_id)
         _identity("Web ACL ARN", self.web_acl_arn)
+        _identity("Web ACL name", self.web_acl_name)
         _token("WAF LockToken", self.lock_token)
         _mapping("complete Web ACL configuration", self.configuration)
 
@@ -602,7 +727,8 @@ def normalize_web_acl_observation(response: object, target: WafTarget) -> WebAcl
     response_map = _mapping("GetWebACL response", response)
     web_acl = _mapping("GetWebACL WebACL", response_map.get("WebACL"))
     observation = WebAclObservation(
-        web_acl.get("Id"), web_acl.get("ARN"), response_map.get("LockToken"),
+        web_acl.get("Id"), web_acl.get("ARN"), web_acl.get("Name"),
+        response_map.get("LockToken"),
         project_web_acl_configuration(web_acl),
     )
     _exact_web_acl(target, observation)
@@ -650,7 +776,11 @@ class AwsOperationPlan:
 
 
 def _exact_web_acl(target: WafTarget, observation: WebAclObservation) -> None:
-    if target.web_acl_id != observation.web_acl_id or target.web_acl_arn != observation.web_acl_arn:
+    if (
+        target.web_acl_id != observation.web_acl_id
+        or target.web_acl_arn != observation.web_acl_arn
+        or target.requested_key != observation.web_acl_name
+    ):
         raise ContractError("Web ACL observation does not match the exact target")
 
 
@@ -718,7 +848,7 @@ def plan_update_web_acl(
     )
     return AwsOperationPlan(
         Operation.UPDATE_WEB_ACL, "UpdateWebACL", observation.web_acl_id,
-        desired_configuration, lock_token=observation.lock_token,
+        {"Name": observation.web_acl_name, **desired_configuration}, lock_token=observation.lock_token,
     )
 
 
@@ -768,12 +898,17 @@ def plan_cleanup(
     target: WafTarget,
     web_acl: WebAclObservation,
     distribution: DistributionObservation,
+    logging: LoggingObservation,
     admitted_lock_token: str,
     admitted_etag: str,
 ) -> tuple[AwsOperationPlan, ...]:
-    """Return exact qualification cleanup; external or guessed resources are excluded."""
+    """Return only the cleanup mutation safe from one fresh observation set."""
 
-    if type(target) is not WafTarget or not target.qualification_owned:
+    if (
+        type(target) is not WafTarget
+        or type(logging) is not LoggingObservation
+        or not target.qualification_owned
+    ):
         raise ContractError("only exact qualification-owned resources authorize cleanup")
     _exact_web_acl(target, web_acl)
     if distribution.distribution_id != target.distribution_id:
@@ -788,27 +923,29 @@ def plan_cleanup(
             "cleanup Web ACL association ownership mismatch: "
             f"observed {distribution.web_acl_arn!r}, owned {target.web_acl_arn!r}"
         )
-    plans = [plan_logging_configuration(target, Operation.DELETE_LOGGING)]
+    if logging.resource_arn != target.web_acl_arn:
+        raise ContractError("cleanup logging observation does not match the exact target")
+    if logging.configuration is not None:
+        return (plan_logging_configuration(target, Operation.DELETE_LOGGING),)
     if distribution.web_acl_arn == target.web_acl_arn:
-        plans.append(
+        return (
             AwsOperationPlan(
                 Operation.DISASSOCIATE_DISTRIBUTION,
                 "DisassociateDistributionWebACL",
                 distribution.distribution_id,
                 {},
                 if_match=distribution.etag,
-            )
+            ),
         )
-    plans.append(
+    return (
         AwsOperationPlan(
             Operation.DELETE_WEB_ACL,
             "DeleteWebACL",
             web_acl.web_acl_id,
             {},
             lock_token=web_acl.lock_token,
-        )
+        ),
     )
-    return tuple(plans)
 
 
 @dataclass(frozen=True, slots=True)
@@ -833,6 +970,10 @@ class ExecutionAuthority:
             raise ContractError("authority requires exact source and parameter digests")
         if type(self.provider_context) is not AwsProviderContext or type(self.target) is not WafTarget:
             raise ContractError("authority requires exact provider context and target")
+        if self.target.logging_destination_arn is not None:
+            validate_logging_destination_arn(
+                self.target.logging_destination_arn, self.provider_context
+            )
         if (
             type(self.operations) is not frozenset
             or not self.operations
@@ -858,6 +999,10 @@ class LifecycleRequest:
             raise ContractError("request requires exact source and parameter digests")
         if type(self.provider_context) is not AwsProviderContext or type(self.target) is not WafTarget or type(self.operation) is not Operation:
             raise ContractError("request is outside the closed WAF contract")
+        if self.target.logging_destination_arn is not None:
+            validate_logging_destination_arn(
+                self.target.logging_destination_arn, self.provider_context
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,6 +1016,7 @@ class LifecycleResult:
     parameters_sha256: str
     outcome: Outcome
     diagnostic_code: str | None = None
+    logging_observation: LoggingObservation | None = None
 
     def __post_init__(self) -> None:
         if type(self.outcome) is not Outcome:
@@ -902,6 +1048,11 @@ def admit_request(request: LifecycleRequest, authority: ExecutionAuthority) -> N
         raise ContractError("request is not bound to the exact execution authority")
     if request.operation not in authority.operations:
         raise ContractError("WAF operation is not authorized")
+    if (
+        request.operation is Operation.DELETE_WEB_ACL
+        and not request.target.qualification_owned
+    ):
+        raise ContractError("Web ACL deletion requires qualification cleanup ownership")
 
 
 def admit_result(request: LifecycleRequest, result: LifecycleResult) -> None:
@@ -931,6 +1082,19 @@ def admit_result(request: LifecycleRequest, result: LifecycleResult) -> None:
         raise ContractError("failed result requires a bounded diagnostic code")
     if result.outcome is not Outcome.FAILED and result.diagnostic_code is not None:
         raise ContractError("successful result cannot carry a failure diagnostic")
+    if result.outcome is Outcome.FAILED:
+        if result.logging_observation is not None:
+            raise ContractError("failed result cannot carry admitted logging state")
+    elif request.operation is Operation.INSPECT_LOGGING:
+        if type(result.logging_observation) is not LoggingObservation:
+            raise ContractError("logging inspection requires semantic observation")
+        validate_logging_observation(
+            result.logging_observation,
+            request.target,
+            request.provider_context,
+        )
+    elif result.logging_observation is not None:
+        raise ContractError("operation cannot carry a logging observation")
     successful_outcomes = {
         Operation.DISCOVER_MANAGED_RULE: Outcome.OBSERVED,
         Operation.CHECK_CAPACITY: Outcome.OBSERVED,
