@@ -9,10 +9,12 @@ FRONTEND_IMAGE='ghcr.io/secpal/frontend@sha256:cdccded2eade53d9300aafff3a2663a77
 GENERATOR=/usr/lib/systemd/user-generators/podman-user-generator
 
 native_unavailable() {
+  local reason="$1"
+
   if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then
     native_failure
   fi
-  printf 'SKIP: Production state native lifecycle unavailable: native Quadlet user generator is not installed.\n'
+  printf 'SKIP: Production state native lifecycle unavailable: %s.\n' "$reason"
   exit 0
 }
 
@@ -54,7 +56,7 @@ admit_native_generator() {
   local podman_version
 
   if [ ! -e "$GENERATOR" ] && [ ! -L "$GENERATOR" ]; then
-    native_unavailable
+    native_unavailable 'native Quadlet user generator is not installed'
   fi
   if ! trusted_directory "$(dirname -- "$GENERATOR")"; then
     native_failure
@@ -70,7 +72,11 @@ admit_native_generator() {
     native_failure
   fi
   generator_version="$("$resolved" --version 2>/dev/null | sed -n '1p')" || native_failure
-  podman_version="$(podman --version 2>/dev/null | awk '{print $3}')" || native_failure
+  if ! command -v podman >/dev/null 2>&1; then
+    native_unavailable 'Podman client is not installed'
+  fi
+  podman_version="$(podman --version 2>/dev/null | awk '{print $3}')" || \
+    native_unavailable 'Podman client version cannot be established'
   if [ -z "$generator_version" ] || [ -z "$podman_version" ] \
     || ! python3 -c '
 import importlib.util
@@ -90,7 +96,7 @@ sys.exit(
 )
 ' "$ROOT_DIR/scripts/integration_runtime_contract.py" "$generator_version" "$podman_version" \
       >/dev/null 2>&1; then
-    native_failure
+    native_unavailable 'native Quadlet generator and Podman client do not satisfy the supported compatible runtime contract'
   fi
   GENERATOR="$resolved"
 }

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -27,6 +28,7 @@ from integration_runtime_contract import (
     FRONTEND_DIGEST,
     POSTGRES_FIXTURE,
     podman_version_supported as quadlet_generator_version_supported,
+    podman_versions_compatible as quadlet_generator_versions_compatible,
 )
 
 
@@ -130,21 +132,104 @@ class QuadletContract(unittest.TestCase):
         podman = shutil.which("podman")
         if podman is None:
             self.skipTest("Podman client is not installed")
-        version_result = subprocess.run(
+
+        def require_version(command: list[str], capability: str) -> str:
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                diagnostic = re.sub(r"\s+", " ", result.stderr).strip()[:160]
+                suffix = f": {diagnostic}" if diagnostic else ""
+                self.skipTest(
+                    f"{capability} version query failed (rc={result.returncode}){suffix}"
+                )
+            version = result.stdout.strip()
+            if not version:
+                self.skipTest(f"{capability} version query returned no version")
+            return version
+
+        podman_version = require_version(
             [podman, "version", "--format", "{{.Client.Version}}"],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
+            "Podman client",
         )
-        version = version_result.stdout.strip()
-        if (
-            version_result.returncode != 0
-            or not quadlet_generator_version_supported(version)
+        if not quadlet_generator_version_supported(podman_version):
+            self.skipTest(f"installed Podman {podman_version} is unsupported")
+        generator_version = require_version(
+            [os.fspath(generator), "--version"], "native Quadlet generator"
+        )
+        if not quadlet_generator_versions_compatible(
+            generator_version, podman_version
         ):
             self.skipTest(
-                "installed Quadlet generator belongs to unsupported Podman "
-                f"{version or 'unknown'}"
+                "native Quadlet generator does not match installed Podman "
+                f"{podman_version}"
             )
+
+    def write_fake_version_executable(
+        self, name: str, version: str, returncode: int = 0, stderr: str = ""
+    ) -> Path:
+        executable = self.root / name
+        executable.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' {shlex.quote(stderr)} >&2\n"
+            f"printf '%s\\n' {shlex.quote(version)}\n"
+            f"exit {returncode}\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+        return executable
+
+    def test_native_generator_admission_correlates_versions_and_diagnostics(self) -> None:
+        cases = (
+            ("5.4.2", "5.4.2", 0, 0, None),
+            ("5.4.2", "5.7.0", 0, 0, "does not match installed Podman"),
+            ("4.9.3", "4.9.3", 0, 0, "installed Podman 4.9.3 is unsupported"),
+            (
+                "5.4.2",
+                "5.4.2",
+                0,
+                23,
+                "native Quadlet generator version query failed (rc=23)",
+            ),
+            (
+                "5.4.2",
+                "",
+                17,
+                0,
+                "Podman client version query failed (rc=17)",
+            ),
+        )
+        for generator_version, podman_version, podman_returncode, generator_returncode, expected in cases:
+            with self.subTest(
+                generator_version=generator_version,
+                podman_version=podman_version,
+                podman_returncode=podman_returncode,
+                generator_returncode=generator_returncode,
+            ):
+                generator = self.write_fake_version_executable(
+                    "quadlet", generator_version, generator_returncode, "generator failed"
+                )
+                self.write_fake_version_executable(
+                    "podman", podman_version, podman_returncode, "client failed"
+                )
+                with mock.patch.dict(
+                    os.environ,
+                    {"PATH": f"{self.root}{os.pathsep}{os.environ['PATH']}"},
+                ):
+                    if expected is None:
+                        self.require_supported_native_quadlet_generator(
+                            generator, "fake Quadlet generator"
+                        )
+                    else:
+                        with self.assertRaisesRegex(
+                            unittest.SkipTest, re.escape(expected)
+                        ):
+                            self.require_supported_native_quadlet_generator(
+                                generator, "fake Quadlet generator"
+                            )
 
     def render_cloud(self) -> dict[str, str]:
         result = self.run_renderer(
