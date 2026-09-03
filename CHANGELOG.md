@@ -9,6 +9,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- Protected OpenTofu ownership classifications for the active deployment cloud
+  infrastructure modules, establishing trusted manifest-coverage policy for
+  subsequent Dependabot adoption.
 - The authoritative production persistence matrix, deterministic rootless host
   ownership mapping, fail-closed state/secret preparation, and checked native
   Quadlet bind declarations for PostgreSQL, application storage, and Valkey.
