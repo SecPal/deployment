@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+---
+version: 1
+classifications:
+  - directory: infra/ci-cloud/digitalocean
+    ecosystem: opentofu
+    reason: The active cloud module is executed and locked with OpenTofu.
+    reviewed-by: "@aroviqen"
+    reviewed-on: "2026-09-03"
+  - directory: infra/ci-cloud/gcp
+    ecosystem: opentofu
+    reason: The active cloud module is executed and locked with OpenTofu.
+    reviewed-by: "@aroviqen"
+    reviewed-on: "2026-09-03"
+  - directory: infra/ci-cloud/gcp-rocky
+    ecosystem: opentofu
+    reason: The active cloud module is executed and locked with OpenTofu.
+    reviewed-by: "@aroviqen"
+    reviewed-on: "2026-09-03"
