@@ -202,6 +202,11 @@ The inventory declares admission requirements. CPU, total storage, and total
 inode values cannot be lower than the schema contract. Memory remains an
 explicit positive operator-selected byte requirement until D.10 supplies a
 measured universal floor; it is still compared exactly with supplied facts.
+These per-host values do not name a capacity profile. The separate
+[`M` capability contract](capacity-capabilities.md) admits effective resources
+only with the additional sustained-workload, operational-headroom,
+resource-quality, freshness, and qualification evidence required by its
+schema; an inventory or provider product cannot self-declare that mapping.
 `resources.storage` contains only byte and inode
 headroom observations plus the backing filesystem's byte and inode totals.
 Each absolute/percentage pair must exactly match those per-filesystem totals,

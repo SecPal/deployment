@@ -290,6 +290,14 @@ presented as an empirically proven SecPal minimum. The initial 8 GiB planning
 share remains useful for the first measurement cycle without rejecting a host
 solely because provider-reserved memory makes its guest-visible value smaller.
 
+These D.1 inventory values are raw host-admission inputs, not named SecPal
+capacity profiles and not provider-product mappings. The provider-neutral
+[`M` capability](capacity-capabilities.md) reuses the defensible planning
+envelope only when its effective resource, sustained-workload, storage-quality,
+freshness, and headroom evidence all pass. A D.1 host is therefore not
+implicitly `M`, and the recommended column below does not define `L` or a
+commercial server size.
+
 | Resource            |            Minimum |                   Recommended | Evidence and behavior below the floor                                                                                                                                    |
 | ------------------- | -----------------: | ----------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Logical CPU         |                  4 |                             8 | Scheduling floor for the current role set; admission fails below 4. Production load tests in D.10 must replace assumptions with measured concurrency.                    |
@@ -332,7 +340,8 @@ workload occupies at most half of those two capacities. Recommended storage is
 the 100 GiB floor plus a 100 GiB first measurement window and 50 GiB reserve;
 recommended inodes double the minimum. These are deliberately visible policy
 assumptions and must be replaced by measured values through the evidence method
-below, rather than presented as production observations.
+below, rather than presented as production observations, a provider SKU, or a
+second capacity profile.
 
 The evidence method is: record per-service CPU and peak RSS under D.10's
 acceptance workload; measure OCI unpacked size; measure PostgreSQL plus private

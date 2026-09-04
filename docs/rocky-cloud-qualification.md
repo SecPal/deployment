@@ -43,12 +43,20 @@ address. The current SecPal target-source and host-qualification contract does
 not consume or admit that service, so UDP port 123 remains rejected by the
 guest policy; this leaf does not create a time-service dependency.
 
-## Closed profile and image handoff
+## Closed provider-run selector and image handoff
 
-`gcp-rocky-10-2-arm64` is the only current Rocky profile. It fixes Google,
+`gcp-rocky-10-2-arm64` is the only current Rocky provider-run selector. It fixes Google,
 `secpal-dev`, `europe-west3`, `europe-west3-a`, `c4a-standard-4`, one native
 ARM64 guest, and one 120 GiB `hyperdisk-balanced` disk. The official
 `rocky-linux-cloud/rocky-linux-10-arm64` family is a discovery input only.
+
+The selector and machine type are bounded #118/#123 qualification inputs, not
+SecPal capacity profiles or universal ARM recommendations. Under the
+[provider-neutral capacity contract](architecture/capacity-capabilities.md),
+`c4a-standard-4` may appear only as current provider-product evidence. Existing
+Rocky evidence does not retroactively claim `M`; #123 must consume the new
+capability vocabulary and assemble its required workload, headroom, storage,
+freshness, and cleanup evidence when that leaf is implemented.
 
 The discovery operation calls the exact family endpoint through WIF and emits
 the returned image name, immutable self-link, ARM64 architecture, creation
