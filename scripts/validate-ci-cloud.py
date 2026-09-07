@@ -3162,7 +3162,7 @@ def validate(root: Path) -> None:
         and "trusted_user_environment_generator_is_admitted" in workload_collector
         and "trusted_user_environment_generator_admission_failure"
         in workload_collector
-        and "NORMALIZATION_EVIDENCE_STAGES" in workload_collector
+        and "NORMALIZATION_STAGES" in workload_collector
         and "prepared != expected" in workload_collector
         and workload_collector.count("observed != expected") == 2
         and '"pre-reload-manager-environment-read"' in workload_collector
@@ -3209,10 +3209,10 @@ def validate(root: Path) -> None:
         and '"rootless": rootless' in workload_collector
         and 'item["Rootless"]' not in workload_collector
         and 'security_options != ["no-new-privileges"]' in workload_collector
-        and "D1A_RESOURCE_INVENTORY" in workload_collector
-        and "D1A_VOLUME_TOPOLOGY" in workload_collector
-        and "D1A_TMPFS_TOPOLOGY" in workload_collector
-        and "D1A_CONTAINER_LIFECYCLE" in workload_collector
+        and "WORKLOAD_RESOURCE_INVENTORY" in workload_collector
+        and "WORKLOAD_VOLUME_TOPOLOGY" in workload_collector
+        and "WORKLOAD_TMPFS_TOPOLOGY" in workload_collector
+        and "WORKLOAD_CONTAINER_LIFECYCLE" in workload_collector
         and "container_lifecycle_events" in workload_collector
         and 'item.get("effective_caps") != expected_caps' in workload_collector
         and "PODMAN_HEALTH_TIMER_PROPERTIES" in workload_collector
@@ -3262,14 +3262,14 @@ def validate(root: Path) -> None:
         evidence_schema.get("properties", {})
         .get("schema_version", {})
         .get("const")
-        == 3
+        == 4
         and {"host_admission", "workload"}.issubset(
             set(evidence_schema.get("required", []))
         )
         and "workload_admission_failures" in evidence_assembler
         and "TARGET_WORKLOAD_PREPARE_START" in evidence_assembler
         and "TRUSTED_POST_CLEANUP_COLLECTION" in evidence_assembler,
-        "D.1 and D.1a evidence must remain separate and jointly fail closed",
+        "host and application-workload evidence must remain separate and jointly fail closed",
     )
     require(
         'live_normalization_json="$evidence_dir/.normalization-live.json"'

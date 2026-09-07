@@ -16,7 +16,7 @@
     "workload"
   ],
   "properties": {
-    "schema_version": { "const": 3 },
+    "schema_version": { "const": 4 },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -731,7 +731,6 @@
           "enum": [
             "secrets-init",
             "postgres",
-            "valkey",
             "migrate",
             "api",
             "worker-general",
@@ -829,7 +828,6 @@
       "enum": [
         "secrets-init",
         "postgres",
-        "valkey",
         "migrate",
         "api",
         "worker-general",
@@ -939,6 +937,10 @@
         "group_add",
         "effective_caps",
         "bounding_caps",
+        "selinux_process_label",
+        "selinux_mount_label",
+        "effective_process_label",
+        "effective_seccomp_mode",
         "devices_present",
         "mounts",
         "tmpfs",
@@ -951,7 +953,9 @@
         "systemd_unit",
         "container_cgroup",
         "lifecycle_service_invocation",
-        "image"
+        "image",
+        "image_id",
+        "image_digest"
       ],
       "properties": {
         "id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -1007,6 +1011,13 @@
         "group_add": { "$ref": "#/$defs/stringArray" },
         "effective_caps": { "$ref": "#/$defs/stringArray" },
         "bounding_caps": { "$ref": "#/$defs/stringArray" },
+        "selinux_process_label": { "type": "string", "maxLength": 256 },
+        "selinux_mount_label": { "type": "string", "maxLength": 256 },
+        "effective_process_label": { "type": "string", "maxLength": 256 },
+        "effective_seccomp_mode": {
+          "type": "integer",
+          "enum": [-1, 2]
+        },
         "devices_present": { "type": "boolean" },
         "mounts": {
           "type": "array",
@@ -1039,7 +1050,15 @@
           "type": "string",
           "pattern": "^$|^[0-9a-f]{32}$"
         },
-        "image": { "type": "string", "maxLength": 512 }
+        "image": { "type": "string", "maxLength": 512 },
+        "image_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "image_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
       },
       "allOf": [
         {
@@ -1211,6 +1230,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1226,6 +1246,7 @@
       ],
       "properties": {
         "phase": { "const": "baseline" },
+        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
@@ -1249,6 +1270,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1271,6 +1293,7 @@
       ],
       "properties": {
         "phase": { "const": "live" },
+        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
@@ -1279,19 +1302,19 @@
         "installed_units": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 16,
+          "maxItems": 15,
           "items": { "$ref": "#/$defs/unitFact" }
         },
         "generated_services": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 15,
+          "maxItems": 14,
           "items": { "$ref": "#/$defs/generatedServiceFact" }
         },
         "containers": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 10,
+          "maxItems": 9,
           "items": { "$ref": "#/$defs/containerFact" }
         },
         "podman_rootless": { "type": "boolean" },
@@ -1316,6 +1339,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1336,6 +1360,7 @@
       ],
       "properties": {
         "phase": { "const": "post-cleanup" },
+        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
@@ -1368,6 +1393,9 @@
       "additionalProperties": false,
       "required": [
         "protocol_version",
+        "claim_scope",
+        "database_scope",
+        "target_sha",
         "instance",
         "result",
         "failed_admission_invariants",
@@ -1377,6 +1405,13 @@
       ],
       "properties": {
         "protocol_version": { "const": 1 },
+        "claim_scope": {
+          "const": "disposable-rootless-application-integration"
+        },
+        "database_scope": {
+          "const": "disposable-postgresql-18-fixture"
+        },
+        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
         "instance": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
         "result": { "enum": ["passed", "failed"] },
         "failed_admission_invariants": { "$ref": "#/$defs/invariantArray" },
@@ -1417,9 +1452,9 @@
                   "quadlet_search_paths": {
                     "const": ["/etc/containers/systemd/users/20000"]
                   },
-                  "installed_units": { "minItems": 16, "maxItems": 16 },
-                  "generated_services": { "minItems": 15, "maxItems": 15 },
-                  "containers": { "minItems": 10, "maxItems": 10 },
+                  "installed_units": { "minItems": 15, "maxItems": 15 },
+                  "generated_services": { "minItems": 14, "maxItems": 14 },
+                  "containers": { "minItems": 9, "maxItems": 9 },
                   "networks": { "minItems": 2, "maxItems": 2 },
                   "volumes": { "minItems": 3, "maxItems": 3 },
                   "podman_rootless": { "const": true },
@@ -1488,8 +1523,6 @@
             "manager-environment-set",
             "pre-reload-manager-environment-read",
             "pre-reload-manager-environment-admission",
-            "manager-environment-admission",
-            "user-environment-generator-admission",
             "user-environment-generator-inventory-read",
             "user-environment-generator-inventory-admission",
             "user-environment-generator-presence-admission",
@@ -1503,7 +1536,6 @@
             "target-unit-admission",
             "generated-unit-admission",
             "target-start",
-            "post-manager-environment-read",
             "post-activation-manager-environment-read",
             "post-activation-manager-environment-admission",
             "quadlet-search-path-admission",

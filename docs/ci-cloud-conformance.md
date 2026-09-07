@@ -429,7 +429,7 @@ runs the separate target `host` phase for D.1 admission, and repeats the same
 fixed Quadlet normalization before post-cleanup collection. Both normalization
 results are explicit phase statuses and are required to pass. Only after every
 target-controlled phase has returned does the trusted post-cleanup collector
-finalize D.1a evidence. Host-phase
+finalize current application-workload evidence. Host-phase
 descendants can therefore neither prepare the observed workload nor race the
 earlier baseline, and a resource created or leaked by that final target phase
 cannot escape the final inventory.
@@ -878,11 +878,11 @@ covered now; the remaining limitation is explicit.
 ## Evidence and interpretation
 
 Each reachable host produces JSON validated against the committed closed schema
-plus a concise Markdown summary. Schema version 2 keeps the D.1 production-host
-admission result separate from the D.1a workload result; the overall result can
+plus a concise Markdown summary. Schema version 4 keeps the historical Debian
+host admission result separate from the current application-workload result; the overall result can
 pass only when both pass and every target and collector phase exits zero.
-The D.1 host phase status contributes only to D.1 host admission; baseline,
-live, cleanup, and workload phase statuses contribute only to D.1a admission.
+The historical host phase status contributes only to host admission; baseline, live,
+cleanup, and workload phase statuses contribute only to workload admission.
 Incomplete, schema-invalid, oversized,
 unknown, credential-shaped, or internally contradictory evidence fails.
 If orchestration fails before the full collector can complete, the trusted
@@ -1179,15 +1179,18 @@ rejected even while no Podman service process exists. The exact Debian Netavark
 it is network plumbing and remains independently covered by the admitted
 Netavark package and backend facts.
 
-The trusted root-only host setup records loaded and enforcing AppArmor policy
+The trusted root-only historical host setup records loaded and enforcing AppArmor policy
 counts in a root-owned, non-writable `/run` snapshot. The unprivileged collector
 validates that file's parent and file ownership, type, mode, size, and closed
 contents before using it. `podman apparmorEnabled=false` does not mean host
-AppArmor is disabled. The collector fails D.1 host admission when kernel
-AppArmor or enforcing profiles are absent, while recording rootless container
-AppArmor capability separately.
-It does not claim a per-container profile unless later workload evidence
-actually observes one. Seccomp is a separate hard runtime fact.
+AppArmor is disabled. The host collector fails D.1 host admission when kernel
+AppArmor or enforcing profiles are absent. These are historical host facts, not
+current workload acceptance. Current workload evidence is Rocky Linux 10.2+
+evidence and observes each container's configured and effective SELinux process
+label, matching mount label, and effective seccomp mode. It cannot pass on the
+obsolete Debian/AppArmor execution path. #118 owns the separate current Rocky
+host authority; #123 owns real-system composition and replay of the two current
+contracts.
 
 Evidence proves reproducibility of the reviewed Debian 13, rootless Podman,
 and Quadlet host-capability contract on the exact representative VM that ran.
@@ -1197,8 +1200,9 @@ versions while requiring those packages to come from the authenticated Debian
 immutable across separate conformance runs; that variability is intentional
 only for this isolated, non-production compatibility probe.
 The workload collector establishes only the bounded facts represented by the
-closed D.1a schema. It does not prove per-container AppArmor confinement unless
-that fact is separately added to the trusted protocol, production
+closed current-workload schema. Its explicit claim scope is disposable rootless
+application integration and its containerized PostgreSQL 18 scope is an
+integration fixture. It does not prove native production PostgreSQL, production
 service-account paths, production readiness, customer workload
 capacity, backup/restore, public networking, every provider image, or universal
 hardware compatibility.

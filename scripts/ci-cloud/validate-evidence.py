@@ -180,7 +180,7 @@ def validate_document(document: object) -> dict[str, object]:
         },
         "$",
     )
-    if root["schema_version"] != 3:
+    if root["schema_version"] != 4:
         fail("unsupported evidence schema version")
     workflow = exact_keys(root["workflow"], {"repository", "run_id", "run_attempt", "target_sha"}, "$.workflow")
     test = exact_keys(
@@ -262,7 +262,7 @@ def validate_document(document: object) -> dict[str, object]:
         elif (
             phase_statuses[phase_name] == 0
             or diagnostic["stage"]
-            not in workload_module.NORMALIZATION_EVIDENCE_STAGES
+            not in workload_module.NORMALIZATION_STAGES
             or diagnostic["failure_reason"]
             not in workload_module.NORMALIZATION_FAILURE_REASONS
             or (diagnostic["failure_reason"] == "command-exit")
@@ -329,15 +329,23 @@ def validate_document(document: object) -> dict[str, object]:
     workload = exact_keys(
         root["workload"],
         {
-            "protocol_version", "instance", "result",
+            "protocol_version", "claim_scope", "database_scope",
+            "target_sha", "instance", "result",
             "failed_admission_invariants", "baseline", "live", "post_cleanup",
         },
         "$.workload",
     )
+    if (
+        workload["claim_scope"]
+        != "disposable-rootless-application-integration"
+        or workload["database_scope"]
+        != "disposable-postgresql-18-fixture"
+    ):
+        fail("workload evidence overstates its integration-only authority")
     baseline = exact_keys(
         workload["baseline"],
         {
-            "phase", "target_admitted", "collector_uid", "collector_gid",
+            "phase", "target_sha", "target_admitted", "collector_uid", "collector_gid",
             "complete", "containers", "networks", "volumes",
             "migration_invocation_count", "podman_api", "user_work",
             "processes", "control_resources",
@@ -347,7 +355,7 @@ def validate_document(document: object) -> dict[str, object]:
     live = exact_keys(
         workload["live"],
         {
-            "phase", "target_admitted", "collector_uid", "collector_gid",
+            "phase", "target_sha", "target_admitted", "collector_uid", "collector_gid",
             "complete", "quadlet_search_paths", "installed_units",
             "generated_services", "containers", "networks",
             "volumes", "all_containers", "all_networks", "all_volumes",
@@ -359,7 +367,7 @@ def validate_document(document: object) -> dict[str, object]:
     post_cleanup = exact_keys(
         workload["post_cleanup"],
         {
-            "phase", "target_admitted", "collector_uid", "collector_gid",
+            "phase", "target_sha", "target_admitted", "collector_uid", "collector_gid",
             "complete", "owned_units", "generated_services", "containers",
             "networks", "volumes", "all_containers", "all_networks",
             "all_volumes", "migration_invocation_count", "podman_api",
@@ -437,10 +445,13 @@ def validate_document(document: object) -> dict[str, object]:
                 "read_only_rootfs", "entrypoint", "command",
                 "healthcheck_command", "pid_mode", "user_namespace",
                 "ipc_mode", "uts_mode", "network_mode", "cap_add", "group_add",
-                "effective_caps", "bounding_caps", "devices_present",
+                "effective_caps", "bounding_caps", "selinux_process_label",
+                "selinux_mount_label", "effective_process_label",
+                "effective_seccomp_mode", "devices_present",
                 "mounts", "tmpfs", "remote_api_environment", "security_opt",
                 "lifecycle_events", "networks", "published_ports", "auto_update", "systemd_unit",
                 "container_cgroup", "lifecycle_service_invocation", "image",
+                "image_id", "image_digest",
             },
             f"$.workload.live.containers[{index}]",
         )
@@ -635,6 +646,14 @@ def validate_document(document: object) -> dict[str, object]:
         fail("workflow identity is invalid")
     if workload["instance"] != str(workflow["target_sha"])[:12]:
         fail("workload instance does not match the exact target SHA")
+    if (
+        workload["target_sha"] != workflow["target_sha"]
+        or any(
+            observation["target_sha"] != workflow["target_sha"]
+            for observation in (baseline, live, post_cleanup)
+        )
+    ):
+        fail("workload observations do not match the exact target SHA")
     provider_identity = (
         test["provider"],
         test["region"],
@@ -717,7 +736,7 @@ def validate_document(document: object) -> dict[str, object]:
     if workload["failed_admission_invariants"] != workload_failures or (
         workload["result"] != ("passed" if not workload_failures else "failed")
     ):
-        fail("workload admission failures do not match independent D.1a observations")
+        fail("workload admission failures do not match independent observations")
     expected_result = "passed" if not overall_failures else "failed"
     if test["result"] != expected_result:
         fail("result contradicts phase status or admission failures")
@@ -762,7 +781,7 @@ def write_summary(document: dict[str, object], path: Path) -> None:
         "",
         f"- Result: `{test['result']}`",
         f"- D.1 production-host admission: `{host_admission['result']}`",
-        f"- D.1a workload admission: `{workload['result']}`",
+        f"- Application-workload admission: `{workload['result']}`",
         f"- Target SHA: `{workflow['target_sha']}`",
         f"- Provider/profile: `{test['provider']}/{test['profile']}` in `{test['region']}`",
         f"- Machine type: `{test['machine_type']}`",

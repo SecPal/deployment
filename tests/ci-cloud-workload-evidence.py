@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Contract tests for trusted D.1a Quadlet workload observations."""
+"""Contract tests for trusted current Quadlet workload observations."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import os
 import re
 import runpy
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -27,6 +28,7 @@ COLLECTOR_PATH = ROOT / "scripts" / "ci-cloud" / "collect-workload-evidence.py"
 ASSEMBLER_PATH = ROOT / "scripts" / "ci-cloud" / "assemble-evidence.py"
 RUNNER_PATH = ROOT / "scripts" / "ci-cloud" / "run-remote-conformance.sh"
 TARGET_PATH = ROOT / "scripts" / "ci-cloud" / "target-conformance.sh"
+INTEGRATION_CONTRACT_PATH = ROOT / "scripts" / "integration_runtime_contract.py"
 PODMAN_54_USERNS_FIXTURE = (
     ROOT / "tests" / "fixtures" / "podman-5.4.2-rootless-userns.json"
 )
@@ -58,15 +60,17 @@ REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE = (
         "size_bytes": 129_271_672,
     },
 )
+API_DIGEST = "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
+FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
+POSTGRES_DIGEST = "sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af"
 
 ROLES = (
-    "secrets-init", "postgres", "valkey", "migrate", "api",
+    "secrets-init", "postgres", "migrate", "api",
     "worker-general", "worker-hash-chain", "scheduler", "frontend", "gateway",
 )
 ROLE_NETWORKS = {
     "secrets-init": (),
     "postgres": ("application",),
-    "valkey": ("application",),
     "migrate": ("application",),
     "api": ("application", "edge"),
     "worker-general": ("application",),
@@ -142,7 +146,6 @@ ROLE_VOLUME_MOUNTS = {
         ("secrets", "/run/secpal-secrets", False),
         ("postgres", "/var/lib/postgresql", True),
     ),
-    "valkey": (("secrets", "/run/secpal-secrets", False),),
     **{
         role: (
             ("secrets", "/run/secpal-secrets", False),
@@ -165,7 +168,6 @@ ROLE_BINDS = {
         ("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
     ),
     "postgres": (),
-    "valkey": (("valkey-entrypoint.sh", "/run/secpal/valkey-entrypoint.sh"),),
     "migrate": API_BINDS
     + (("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),),
     "api": API_BINDS,
@@ -189,7 +191,6 @@ API_TMPFS = (
 ROLE_TMPFS = {
     "secrets-init": (("/tmp", 16, "0700", True),),
     "postgres": (("/tmp", 32, "0700", True), ("/run/postgresql", 16, "0750", True)),
-    "valkey": (("/tmp", 16, "0700", True), ("/data", 32, "0700", True)),
     "migrate": API_TMPFS,
     "api": API_TMPFS,
     "worker-general": API_TMPFS,
@@ -199,16 +200,15 @@ ROLE_TMPFS = {
     "gateway": (("/tmp", 16, "0700", True), ("/config", 16, "0700", True), ("/data", 32, "0700", True)),
 }
 ROLE_IDENTITIES = {
-    "secrets-init": (0, 0), "postgres": (999, 999), "valkey": (10002, 10002),
+    "secrets-init": (0, 0), "postgres": (999, 999),
     "migrate": (10001, 10001), "api": (10001, 10001),
     "worker-general": (10001, 10001), "worker-hash-chain": (10001, 10001),
     "scheduler": (10001, 10001), "frontend": (101, 101),
     "gateway": (10003, 10003),
 }
-HEALTHY_ROLES = {"postgres", "valkey", "api", "frontend", "gateway"}
+HEALTHY_ROLES = {"postgres", "api", "frontend", "gateway"}
 HEALTH_INTERVAL_USEC = {
     "postgres": 5_000_000,
-    "valkey": 5_000_000,
     "api": 10_000_000,
     "frontend": 10_000_000,
     "gateway": 10_000_000,
@@ -216,9 +216,18 @@ HEALTH_INTERVAL_USEC = {
 API_ENTRYPOINT = ("/bin/bash", "/run/secpal/container-entrypoint.sh")
 ROLE_EXECUTION = {
     "secrets-init": (
-        ("/bin/bash", "/run/secpal/init-local-secrets.sh"), (), ()
+        ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
+        ("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+        (),
     ),
-    "migrate": (API_ENTRYPOINT, ("php", "artisan", "migrate", "--force"), ()),
+    "migrate": (
+        ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
+        (
+            "/bin/bash", "/run/secpal/container-entrypoint.sh",
+            "php", "artisan", "migrate", "--force",
+        ),
+        (),
+    ),
     "api": (
         API_ENTRYPOINT,
         ("frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"),
@@ -468,6 +477,18 @@ def valid_observations() -> dict[str, object]:
                 "group_add": [],
                 "effective_caps": capabilities,
                 "bounding_caps": capabilities,
+                "selinux_process_label": (
+                    f"system_u:system_r:container_t:s0:c{role_index},c{role_index + 500}"
+                ),
+                "selinux_mount_label": (
+                    f"system_u:object_r:container_file_t:s0:c{role_index},c{role_index + 500}"
+                ),
+                "effective_process_label": (
+                    ""
+                    if one_shot
+                    else f"system_u:system_r:container_t:s0:c{role_index},c{role_index + 500}"
+                ),
+                "effective_seccomp_mode": -1 if one_shot else 2,
                 "devices_present": False,
                 "mounts": mounts,
                 "tmpfs": tmpfs,
@@ -493,18 +514,43 @@ def valid_observations() -> dict[str, object]:
                     f"{generated_names.index(role) + 1:032x}" if one_shot else ""
                 ),
                 "image": (
-                    f"localhost/secpal-ci-{role}@sha256:"
-                    f"{(5 if role in {'secrets-init', 'migrate', 'api', 'worker-general', 'worker-hash-chain', 'scheduler'} else role_index):064x}"
+                    "localhost/secpal-ci-api:verified"
+                    if role in {
+                        "secrets-init", "migrate", "api", "worker-general",
+                        "worker-hash-chain", "scheduler",
+                    }
+                    else "localhost/secpal-ci-postgres:verified"
+                    if role == "postgres"
+                    else "localhost/secpal-ci-frontend:verified"
+                    if role == "frontend"
+                    else f"localhost/secpal-ci-gateway-{instance}:verified"
+                ),
+                "image_id": f"sha256:{role_index + 1:064x}",
+                "image_digest": (
+                    API_DIGEST
+                    if role in {
+                        "secrets-init", "migrate", "api", "worker-general",
+                        "worker-hash-chain", "scheduler",
+                    }
+                    else POSTGRES_DIGEST
+                    if role == "postgres"
+                    else FRONTEND_DIGEST
+                    if role == "frontend"
+                    else f"sha256:{9:064x}"
                 ),
             }
         )
     return {
         "protocol_version": 1,
+        "claim_scope": "disposable-rootless-application-integration",
+        "database_scope": "disposable-postgresql-18-fixture",
+        "target_sha": "a" * 40,
         "instance": instance,
         "result": "passed",
         "failed_admission_invariants": [],
         "baseline": {
             "phase": "baseline",
+            "target_sha": "a" * 40,
             "target_admitted": True,
             "collector_uid": 20000,
             "collector_gid": 20000,
@@ -529,6 +575,7 @@ def valid_observations() -> dict[str, object]:
         },
         "live": {
             "phase": "live",
+            "target_sha": "a" * 40,
             "target_admitted": True,
             "collector_uid": 20000,
             "collector_gid": 20000,
@@ -621,6 +668,7 @@ def valid_observations() -> dict[str, object]:
         },
         "post_cleanup": {
             "phase": "post-cleanup",
+            "target_sha": "a" * 40,
             "target_admitted": True,
             "collector_uid": 20000,
             "collector_gid": 20000,
@@ -676,6 +724,86 @@ class WorkloadEvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.collector.COLLECTOR_PODMAN_SCOPE_UNITS.clear()
         self.collector.COLLECTOR_PODMAN_SCOPE_TRACKING_COMPLETE = True
+
+    def test_cloud_inventory_uses_current_no_valkey_integration_contract(self) -> None:
+        expected_roles = (
+            "secrets-init",
+            "postgres",
+            "migrate",
+            "api",
+            "worker-general",
+            "worker-hash-chain",
+            "scheduler",
+            "frontend",
+            "gateway",
+        )
+        self.assertEqual(expected_roles, self.collector.ROLES)
+        self.assertEqual(expected_roles, tuple(self.collector.ROLE_CONTRACTS))
+        self.assertNotIn(
+            "D1A_", COLLECTOR_PATH.read_text(encoding="utf-8")
+        )
+
+    def test_trusted_image_admission_agrees_with_current_integration_owner(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "integration_runtime_contract", INTEGRATION_CONTRACT_PATH
+        )
+        self.assertIsNotNone(spec)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.modules.pop(spec.name, None)
+        self.assertEqual(module.API_DIGEST, self.collector.API_DIGEST)
+        self.assertEqual(module.FRONTEND_DIGEST, self.collector.FRONTEND_DIGEST)
+        self.assertEqual(
+            module.POSTGRES_FIXTURE.image.rsplit("@", 1)[1],
+            self.collector.POSTGRES_DIGEST,
+        )
+
+    def test_effective_selinux_and_seccomp_are_collected_per_container(self) -> None:
+        source = COLLECTOR_PATH.read_text(encoding="utf-8")
+        for fact in (
+            '"ProcessLabel"',
+            '"MountLabel"',
+            '"effective_seccomp_mode"',
+        ):
+            self.assertIn(fact, source)
+
+    def test_selinux_and_seccomp_observations_fail_closed(self) -> None:
+        for field, value, invariant in (
+            ("selinux_process_label", "", "WORKLOAD_SELINUX_ISOLATION"),
+            (
+                "selinux_mount_label",
+                "system_u:object_r:container_file_t:s0:c1,c999",
+                "WORKLOAD_SELINUX_ISOLATION",
+            ),
+            (
+                "effective_process_label",
+                "system_u:system_r:container_t:s0:c1,c999",
+                "WORKLOAD_SELINUX_ISOLATION",
+            ),
+            ("effective_seccomp_mode", 0, "WORKLOAD_SECCOMP_ISOLATION"),
+        ):
+            with self.subTest(field=field):
+                self.assert_failure(
+                    lambda evidence, field=field, value=value: evidence["live"][
+                        "containers"
+                    ][3].__setitem__(field, value),
+                    invariant,
+                )
+
+    def test_each_observation_is_bound_to_the_exact_target_sha(self) -> None:
+        for path in ("target_sha", "baseline", "live", "post_cleanup"):
+            with self.subTest(path=path):
+                def mutate(evidence, selected=path):
+                    if selected == "target_sha":
+                        evidence[selected] = "b" * 40
+                    else:
+                        evidence[selected]["target_sha"] = "b" * 40
+
+                self.assert_failure(mutate, "WORKLOAD_TARGET_BINDING")
 
     def test_synthetic_complete_trusted_orchestration_sequence(self) -> None:
         observations = valid_observations()
@@ -847,9 +975,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
         mutation(observations)
         self.assertIn(expected, self.collector.workload_admission_failures(observations))
 
-    def test_exact_snapshot_contains_sixteen_root_owned_units(self) -> None:
+    def test_exact_snapshot_contains_fifteen_root_owned_units(self) -> None:
         live = valid_observations()["live"]
-        self.assertEqual(16, len(live["installed_units"]))
+        self.assertEqual(15, len(live["installed_units"]))
         self.assertEqual(
             [], self.collector.workload_admission_failures(valid_observations())
         )
@@ -972,7 +1100,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     lambda evidence, phase=phase, field=field: evidence[phase][
                         field
                     ].append("target-created-rogue"),
-                    "D1A_RESOURCE_INVENTORY",
+                    "WORKLOAD_RESOURCE_INVENTORY",
                 )
 
     def test_baseline_rejects_preexisting_fixture_resources(self) -> None:
@@ -980,7 +1108,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             lambda evidence: evidence["baseline"]["containers"].append(
                 "secpal-int-aaaaaaaaaaaa-api"
             ),
-            "D1A_BASELINE_INVENTORY",
+            "WORKLOAD_BASELINE_INVENTORY",
         )
 
     def test_baseline_rejects_a_migration_run_by_the_host_phase(self) -> None:
@@ -988,13 +1116,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             lambda evidence: evidence["baseline"].__setitem__(
                 "migration_invocation_count", 1
             ),
-            "D1A_BASELINE_MIGRATION",
+            "WORKLOAD_BASELINE_MIGRATION",
         )
 
     def test_false_green_target_status_cannot_replace_live_observation(self) -> None:
         self.assert_failure(
             lambda evidence: evidence.__setitem__("live", None),
-            "D1A_LIVE_OBSERVATION",
+            "WORKLOAD_LIVE_OBSERVATION",
         )
 
     def test_generated_unit_outside_trusted_generator_path_is_rejected(self) -> None:
@@ -1002,7 +1130,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             lambda evidence: evidence["live"]["generated_services"][0].__setitem__(
                 "fragment_path", "/home/secpal-ci/.config/systemd/user/escape.service"
             ),
-            "D1A_GENERATED_UNITS",
+            "WORKLOAD_GENERATED_UNITS",
         )
 
     def test_generated_drop_in_owner_and_mode_are_admitted_independently(self) -> None:
@@ -1015,7 +1143,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 {"uid": 0, "gid": 0, "mode": "0600"}
             ]
 
-        self.assert_failure(add_untrusted_drop_in, "D1A_GENERATED_UNITS")
+        self.assert_failure(add_untrusted_drop_in, "WORKLOAD_GENERATED_UNITS")
 
     def test_effective_service_state_is_required_for_every_generated_unit(self) -> None:
         for field, value in (
@@ -1028,7 +1156,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     lambda evidence, field=field, value=value: evidence["live"][
                         "generated_services"
                     ][4].__setitem__(field, value),
-                    "D1A_SERVICE_STATE",
+                    "WORKLOAD_SERVICE_STATE",
                 )
 
     def test_podman_54_delegated_workload_oneshots_are_admitted(self) -> None:
@@ -1052,8 +1180,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
         secrets_init["cap_add"] = []
         failures = self.collector.workload_admission_failures(observations)
         for invariant in (
-            "D1A_SERVICE_STATE", "D1A_HOST_NAMESPACES",
-            "D1A_PRIVILEGE_BOUNDARY", "D1A_SERVICE_BINDING",
+            "WORKLOAD_SERVICE_STATE", "WORKLOAD_HOST_NAMESPACES",
+            "WORKLOAD_PRIVILEGE_BOUNDARY", "WORKLOAD_SERVICE_BINDING",
         ):
             self.assertNotIn(invariant, failures)
 
@@ -1061,7 +1189,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             item for item in services if item["logical_name"] == "migrate"
         )["control_group"] += "/attacker.scope"
         self.assertIn(
-            "D1A_SERVICE_STATE",
+            "WORKLOAD_SERVICE_STATE",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -1076,34 +1204,34 @@ class WorkloadEvidenceTests(unittest.TestCase):
             f"{migrate_service['unit']}"
         )
         self.assertIn(
-            "D1A_SERVICE_STATE",
+            "WORKLOAD_SERVICE_STATE",
             self.collector.workload_admission_failures(wrong_prefix),
         )
 
     def test_each_container_is_bound_to_its_generated_systemd_service(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "container_cgroup", "/user.slice/unrelated.service/container"
             ),
-            "D1A_SERVICE_BINDING",
+            "WORKLOAD_SERVICE_BINDING",
+        )
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][2].__setitem__(
+                "lifecycle_service_invocation", "f" * 32
+            ),
+            "WORKLOAD_SERVICE_BINDING",
         )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][3].__setitem__(
-                "lifecycle_service_invocation", "f" * 32
-            ),
-            "D1A_SERVICE_BINDING",
-        )
-        self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
                 "systemd_unit", "unrelated.service"
             ),
-            "D1A_SERVICE_BINDING",
+            "WORKLOAD_SERVICE_BINDING",
         )
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "pid", True
             ),
-            "D1A_SERVICE_BINDING",
+            "WORKLOAD_SERVICE_BINDING",
         )
 
     def test_running_container_binding_uses_the_effective_service_cgroup(self) -> None:
@@ -1436,52 +1564,62 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ):
             self.assert_failure(
                 lambda evidence, mutate=mutate: mutate(evidence["live"]["containers"]),
-                "D1A_CONTAINER_SET",
+                "WORKLOAD_CONTAINER_SET",
             )
 
     def test_duplicate_singleton_roles_are_rejected(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][9].__setitem__(
+            lambda evidence: evidence["live"]["containers"][8].__setitem__(
                 "role", "scheduler"
             ),
-            "D1A_SINGLETON_ROLES",
+            "WORKLOAD_SINGLETON_ROLES",
         )
 
     def test_rootful_remote_host_network_privilege_and_auto_update_are_rejected(self) -> None:
         mutations = (
-            ("rootless", False, "D1A_ROOTLESS"),
-            ("oci_runtime", "runc", "D1A_OCI_RUNTIME"),
-            ("privileged", True, "D1A_PRIVILEGE_BOUNDARY"),
-            ("pid_mode", "host", "D1A_HOST_NAMESPACES"),
-            ("ipc_mode", "host", "D1A_HOST_NAMESPACES"),
-            ("uts_mode", "host", "D1A_HOST_NAMESPACES"),
-            ("network_mode", "host", "D1A_HOST_NETWORK"),
-            ("auto_update", True, "D1A_AUTO_UPDATE_DISABLED"),
+            ("rootless", False, "WORKLOAD_ROOTLESS"),
+            ("oci_runtime", "runc", "WORKLOAD_OCI_RUNTIME"),
+            ("privileged", True, "WORKLOAD_PRIVILEGE_BOUNDARY"),
+            ("pid_mode", "host", "WORKLOAD_HOST_NAMESPACES"),
+            ("ipc_mode", "host", "WORKLOAD_HOST_NAMESPACES"),
+            ("uts_mode", "host", "WORKLOAD_HOST_NAMESPACES"),
+            ("network_mode", "host", "WORKLOAD_HOST_NETWORK"),
+            ("auto_update", True, "WORKLOAD_AUTO_UPDATE_DISABLED"),
         )
         for field, value, invariant in mutations:
             with self.subTest(field=field):
                 self.assert_failure(
-                    lambda evidence, field=field, value=value: evidence["live"]["containers"][4].__setitem__(field, value),
+                    lambda evidence, field=field, value=value: evidence["live"]["containers"][3].__setitem__(field, value),
                     invariant,
                 )
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "cap_add", ["SYS_ADMIN"]
             ),
-            "D1A_PRIVILEGE_BOUNDARY",
+            "WORKLOAD_PRIVILEGE_BOUNDARY",
         )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][0].__setitem__(
                 "effective_caps", ["CAP_CHOWN", "CAP_FOWNER", "CAP_SYS_ADMIN"]
             ),
-            "D1A_PRIVILEGE_BOUNDARY",
+            "WORKLOAD_PRIVILEGE_BOUNDARY",
         )
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "image", "docker.io/secpal/api:latest"
             ),
-            "D1A_IMAGE_PROVENANCE",
+            "WORKLOAD_IMAGE_PROVENANCE",
         )
+        for field, value in (
+            ("image_id", "sha256:malformed"),
+            ("image_digest", "sha256:" + "f" * 64),
+        ):
+            with self.subTest(field=field):
+                self.assert_failure(
+                    lambda evidence, field=field, value=value: evidence["live"]
+                    ["containers"][3].__setitem__(field, value),
+                    "WORKLOAD_IMAGE_PROVENANCE",
+                )
 
     def test_effective_user_namespace_facts_fail_closed(self) -> None:
         mutations = (
@@ -1514,25 +1652,25 @@ class WorkloadEvidenceTests(unittest.TestCase):
             with self.subTest(mutate=mutate):
                 self.assert_failure(
                     lambda evidence, mutate=mutate: mutate(
-                        evidence["live"]["containers"][4]["user_namespace"]
+                        evidence["live"]["containers"][3]["user_namespace"]
                     ),
-                    "D1A_HOST_NAMESPACES",
+                    "WORKLOAD_HOST_NAMESPACES",
                 )
 
     def test_explicit_user_namespace_joins_are_rejected(self) -> None:
         for mode in ("host", "container:0123456789abcdef", "ns:/proc/1/ns/user"):
             with self.subTest(mode=mode):
                 self.assert_failure(
-                    lambda evidence, mode=mode: evidence["live"]["containers"][4][
+                    lambda evidence, mode=mode: evidence["live"]["containers"][3][
                         "user_namespace"
                     ].__setitem__("create_options", [mode]),
-                    "D1A_HOST_NAMESPACES",
+                    "WORKLOAD_HOST_NAMESPACES",
                 )
                 self.assert_failure(
-                    lambda evidence, mode=mode: evidence["live"]["containers"][4][
+                    lambda evidence, mode=mode: evidence["live"]["containers"][3][
                         "user_namespace"
                     ].__setitem__("compat_mode", mode),
-                    "D1A_HOST_NAMESPACES",
+                    "WORKLOAD_HOST_NAMESPACES",
                 )
 
     def test_service_environment_cannot_supply_unreviewed_values(self) -> None:
@@ -1543,12 +1681,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 self.assert_failure(
                     lambda evidence, name=name: evidence["live"]
                     ["generated_services"][4].__setitem__("environment", [name]),
-                    "D1A_HOST_NAMESPACES",
+                    "WORKLOAD_HOST_NAMESPACES",
                 )
                 self.assert_failure(
                     lambda evidence, name=name: evidence["live"]
                     ["generated_services"][10].__setitem__("environment", [name]),
-                    "D1A_HOST_NAMESPACES",
+                    "WORKLOAD_HOST_NAMESPACES",
                 )
 
     def test_service_environment_values_are_discarded_from_evidence(self) -> None:
@@ -1793,7 +1931,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_configured_mapping_must_match_the_effective_kernel_mapping(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4]["user_namespace"].update(
+            lambda evidence: evidence["live"]["containers"][3]["user_namespace"].update(
                 {
                     "configured_uid_map": [
                         {"container_id": 0, "host_id": 3_000_000_000, "size": 65_536}
@@ -1803,13 +1941,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     ],
                 }
             ),
-            "D1A_HOST_NAMESPACES",
+            "WORKLOAD_HOST_NAMESPACES",
         )
 
     def test_auto_mapping_uses_kernel_derived_host_process_identity(self) -> None:
         observations = valid_observations()
-        container = observations["live"]["containers"][4]
-        service = observations["live"]["generated_services"][4]
+        container = observations["live"]["containers"][3]
+        service = observations["live"]["generated_services"][3]
         namespace = container["user_namespace"]
         auto_map = [{"container_id": 0, "host_id": 200_000, "size": 65_536}]
         namespace["create_options"] = ["auto"]
@@ -1837,14 +1975,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         namespace["configured_uid_map"] = []
         namespace["configured_gid_map"] = []
         self.assertNotIn(
-            "D1A_HOST_NAMESPACES",
+            "WORKLOAD_HOST_NAMESPACES",
             self.collector.workload_admission_failures(observations),
         )
         namespace["podman_uid_map"] = [
             {"container_id": 0, "host_id": 200_000, "size": 10}
         ]
         self.assertIn(
-            "D1A_HOST_NAMESPACES",
+            "WORKLOAD_HOST_NAMESPACES",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -1867,9 +2005,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
             with self.subTest(mutate=mutate):
                 self.assert_failure(
                     lambda evidence, mutate=mutate: mutate(
-                        evidence["live"]["containers"][3]
+                        evidence["live"]["containers"][2]
                     ),
-                    "D1A_HOST_NAMESPACES",
+                    "WORKLOAD_HOST_NAMESPACES",
                 )
 
     def test_podman_54_empty_compatibility_mode_is_not_host_evidence(self) -> None:
@@ -1899,7 +2037,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
         for create_options in ([], ["auto"]):
             observations = valid_observations()
-            namespace = observations["live"]["containers"][4]["user_namespace"]
+            namespace = observations["live"]["containers"][3]["user_namespace"]
             namespace["compat_mode"] = ""
             namespace["create_options"] = create_options
             if create_options:
@@ -1909,7 +2047,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 namespace["uid_map"] = copy.deepcopy(auto_map)
                 namespace["gid_map"] = copy.deepcopy(auto_map)
             self.assertNotIn(
-                "D1A_HOST_NAMESPACES",
+                "WORKLOAD_HOST_NAMESPACES",
                 self.collector.workload_admission_failures(observations),
             )
 
@@ -2029,12 +2167,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_api_and_frontend_require_distinct_image_identities(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][8].__setitem__(
-                "image",
-                "localhost/secpal-ci-frontend@sha256:"
-                + evidence["live"]["containers"][4]["image"].rsplit(":", 1)[1],
+            lambda evidence: evidence["live"]["containers"][7].__setitem__(
+                "image_digest",
+                evidence["live"]["containers"][3]["image_digest"],
             ),
-            "D1A_IMAGE_ROLE_SEPARATION",
+            "WORKLOAD_IMAGE_ROLE_SEPARATION",
         )
 
     def test_secrets_initializer_requires_the_api_image_digest(self) -> None:
@@ -2044,26 +2181,21 @@ class WorkloadEvidenceTests(unittest.TestCase):
         secrets_init = next(
             item for item in containers if item["role"] == "secrets-init"
         )
-        api_digest = api["image"].rsplit("@sha256:", 1)[1]
-        secrets_init["image"] = (
-            "localhost/secpal-ci-secrets-init@sha256:" + api_digest
-        )
+        secrets_init["image_digest"] = api["image_digest"]
         self.assertNotIn(
-            "D1A_EXECUTION_CONTRACT",
+            "WORKLOAD_EXECUTION_CONTRACT",
             self.collector.workload_admission_failures(observations),
         )
-        secrets_init["image"] = (
-            "localhost/secpal-ci-secrets-init@sha256:" + "f" * 64
-        )
+        secrets_init["image_digest"] = "sha256:" + "f" * 64
         self.assertIn(
-            "D1A_EXECUTION_CONTRACT",
+            "WORKLOAD_EXECUTION_CONTRACT",
             self.collector.workload_admission_failures(observations),
         )
 
     def test_secrets_initializer_requires_exact_bounded_capabilities(self) -> None:
         observations = valid_observations()
         self.assertNotIn(
-            "D1A_PRIVILEGE_BOUNDARY",
+            "WORKLOAD_PRIVILEGE_BOUNDARY",
             self.collector.workload_admission_failures(observations),
         )
         for field in ("cap_add", "effective_caps", "bounding_caps"):
@@ -2072,7 +2204,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     lambda evidence, field=field: evidence["live"]["containers"][
                         0
                     ].__setitem__(field, ["CAP_CHOWN"]),
-                    "D1A_PRIVILEGE_BOUNDARY",
+                    "WORKLOAD_PRIVILEGE_BOUNDARY",
                 )
 
         observations = valid_observations()
@@ -2083,21 +2215,21 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         secrets_init["cap_add"] = []
         self.assertNotIn(
-            "D1A_PRIVILEGE_BOUNDARY",
+            "WORKLOAD_PRIVILEGE_BOUNDARY",
             self.collector.workload_admission_failures(observations),
         )
         secrets_init["bounding_caps"] = ["CAP_CHOWN"]
         self.assertIn(
-            "D1A_PRIVILEGE_BOUNDARY",
+            "WORKLOAD_PRIVILEGE_BOUNDARY",
             self.collector.workload_admission_failures(observations),
         )
 
     def test_each_container_requires_its_exact_fixture_network(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "networks", ["podman"]
             ),
-            "D1A_CONTAINER_NETWORKS",
+            "WORKLOAD_CONTAINER_NETWORKS",
         )
 
     def test_exited_migration_admits_reviewed_empty_podman_networks(self) -> None:
@@ -2110,7 +2242,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         migrate["networks"] = []
         migrate["network_mode"] = "bridge"
         self.assertNotIn(
-            "D1A_CONTAINER_NETWORKS",
+            "WORKLOAD_CONTAINER_NETWORKS",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -2138,34 +2270,34 @@ class WorkloadEvidenceTests(unittest.TestCase):
             mutated[field] = value
             with self.subTest(field=field):
                 self.assertIn(
-                    "D1A_CONTAINER_NETWORKS",
+                    "WORKLOAD_CONTAINER_NETWORKS",
                     self.collector.workload_admission_failures(candidate),
                 )
 
     def test_only_gateway_may_publish_its_exact_loopback_port(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "published_ports", ["127.0.0.1:18443:8443/tcp"]
             ),
-            "D1A_PUBLISHED_PORTS",
+            "WORKLOAD_PUBLISHED_PORTS",
         )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][-1].__setitem__(
                 "published_ports", ["127.0.0.1:18443:8443/tcp"]
             ),
-            "D1A_PUBLISHED_PORTS",
+            "WORKLOAD_PUBLISHED_PORTS",
         )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][-1].__setitem__(
                 "published_ports", []
             ),
-            "D1A_PUBLISHED_PORTS",
+            "WORKLOAD_PUBLISHED_PORTS",
         )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][-1].__setitem__(
                 "networks", ["secpal-int-aaaaaaaaaaaa-application"]
             ),
-            "D1A_CONTAINER_NETWORKS",
+            "WORKLOAD_CONTAINER_NETWORKS",
         )
 
     def test_container_inspection_malformed_security_facts_are_incomplete(
@@ -2228,7 +2360,9 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "OCIRuntime": "crun",
             "EffectiveCaps": [],
             "BoundingCaps": [],
-            "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
+            "Image": f"sha256:{'b' * 64}",
+            "ImageDigest": API_DIGEST,
+            "ImageName": "localhost/secpal-ci-api:verified",
         }
 
         def collect(candidate):
@@ -2363,7 +2497,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "OCIRuntime": "crun",
             "EffectiveCaps": None,
             "BoundingCaps": None,
-            "ImageName": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
+            "ProcessLabel": "system_u:system_r:container_t:s0:c1,c501",
+            "MountLabel": "system_u:object_r:container_file_t:s0:c1,c501",
+            "Image": f"sha256:{'b' * 64}",
+            "ImageDigest": API_DIGEST,
+            "ImageName": "localhost/secpal-ci-api:verified",
         }
         namespace_facts = {
             "process_identity": "user:[4026540001]",
@@ -2397,6 +2535,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "effective_user_namespace_facts",
             return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ), mock.patch.object(
+            self.collector,
+            "process_security_facts",
+            return_value=(
+                "system_u:system_r:container_t:s0:c1,c501",
+                2,
+                True,
+            ),
         ):
             facts, network_endpoints, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True,
@@ -2529,6 +2675,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "effective_user_namespace_facts",
             return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ), mock.patch.object(
+            self.collector,
+            "process_security_facts",
+            return_value=(
+                "system_u:system_r:container_t:s0:c1,c501",
+                2,
+                True,
+            ),
         ):
             facts, _, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True,
@@ -2632,6 +2786,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "effective_user_namespace_facts",
             return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ), mock.patch.object(
+            self.collector,
+            "process_security_facts",
+            return_value=(
+                "system_u:system_r:container_t:s0:c1,c501",
+                2,
+                True,
+            ),
         ):
             facts, _, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True,
@@ -2695,6 +2857,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             self.collector,
             "effective_user_namespace_facts",
             return_value=(namespace_facts, 10001, 10001, [10001], True),
+        ), mock.patch.object(
+            self.collector,
+            "process_security_facts",
+            return_value=(
+                "system_u:system_r:container_t:s0:c1,c501",
+                2,
+                True,
+            ),
         ):
             facts, _, complete = self.collector.container_facts(
                 "aaaaaaaaaaaa", rootless=True,
@@ -2711,25 +2881,25 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_no_new_privileges_requires_the_exact_security_option(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "security_opt",
                 ["seccomp=/home/secpal-ci/no-new-privileges.json"],
             ),
-            "D1A_SECURITY_OPTIONS",
+            "WORKLOAD_SECURITY_OPTIONS",
         )
 
     def test_no_new_privileges_does_not_admit_a_custom_seccomp_profile(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "security_opt",
                 ["no-new-privileges", "seccomp=/tmp/allow-all.json"],
             ),
-            "D1A_SECURITY_OPTIONS",
+            "WORKLOAD_SECURITY_OPTIONS",
         )
 
     def test_control_volume_cannot_be_consumed_by_a_fixture_container(self) -> None:
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "mounts",
                 [
                     {
@@ -2740,7 +2910,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     }
                 ],
             ),
-            "D1A_VOLUME_TOPOLOGY",
+            "WORKLOAD_VOLUME_TOPOLOGY",
         )
 
     def test_role_mount_topology_is_closed(self) -> None:
@@ -2761,22 +2931,22 @@ class WorkloadEvidenceTests(unittest.TestCase):
         for name, mutate in mutations.items():
             with self.subTest(name=name):
                 observations = valid_observations()
-                mounts = observations["live"]["containers"][4]["mounts"]
+                mounts = observations["live"]["containers"][3]["mounts"]
                 mutate(mounts)
                 self.assertIn(
-                    "D1A_VOLUME_TOPOLOGY",
+                    "WORKLOAD_VOLUME_TOPOLOGY",
                     self.collector.workload_admission_failures(observations),
                 )
 
         observations = valid_observations()
         api_bind = next(
             mount
-            for mount in observations["live"]["containers"][4]["mounts"]
+            for mount in observations["live"]["containers"][3]["mounts"]
             if mount["type"] == "bind"
         )
         api_bind["source"] = "/tmp/target-selected-entrypoint.sh"
         self.assertIn(
-            "D1A_VOLUME_TOPOLOGY",
+            "WORKLOAD_VOLUME_TOPOLOGY",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -2790,18 +2960,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
         for name, mutate in mutations.items():
             with self.subTest(name=name):
                 observations = valid_observations()
-                tmpfs = observations["live"]["containers"][4]["tmpfs"]
+                tmpfs = observations["live"]["containers"][3]["tmpfs"]
                 mutate(tmpfs)
                 self.assertIn(
-                    "D1A_TMPFS_TOPOLOGY",
+                    "WORKLOAD_TMPFS_TOPOLOGY",
                     self.collector.workload_admission_failures(observations),
                 )
 
         observations = valid_observations()
-        observations["live"]["containers"][4]["tmpfs"][0]["flags"].append("rw")
-        observations["live"]["containers"][4]["tmpfs"][0]["flags"].sort()
+        observations["live"]["containers"][3]["tmpfs"][0]["flags"].append("rw")
+        observations["live"]["containers"][3]["tmpfs"][0]["flags"].sort()
         self.assertNotIn(
-            "D1A_TMPFS_TOPOLOGY",
+            "WORKLOAD_TMPFS_TOPOLOGY",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -2834,12 +3004,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
         for name, mutate in mutations.items():
             with self.subTest(name=name):
                 observations = valid_observations()
-                events = observations["live"]["containers"][3][
+                events = observations["live"]["containers"][2][
                     "lifecycle_events"
                 ]
                 mutate(events)
                 self.assertIn(
-                    "D1A_CONTAINER_LIFECYCLE",
+                    "WORKLOAD_CONTAINER_LIFECYCLE",
                     self.collector.workload_admission_failures(observations),
                 )
 
@@ -2903,11 +3073,11 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations = valid_observations()
         observations["live"]["podman_api"] = True
         self.assertIn(
-            "D1A_PODMAN_API_DISABLED",
+            "WORKLOAD_PODMAN_API_DISABLED",
             self.collector.workload_admission_failures(observations),
         )
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4]["mounts"].append(
+            lambda evidence: evidence["live"]["containers"][3]["mounts"].append(
                 {
                     "type": "bind",
                     "source": "/run/user/20000/podman/podman.sock",
@@ -2915,13 +3085,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "rw": True,
                 }
             ),
-            "D1A_PODMAN_API_DISABLED",
+            "WORKLOAD_PODMAN_API_DISABLED",
         )
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "remote_api_environment", True
             ),
-            "D1A_PODMAN_API_DISABLED",
+            "WORKLOAD_PODMAN_API_DISABLED",
         )
 
     def test_process_scan_failure_marks_podman_api_observation_incomplete(self) -> None:
@@ -3260,36 +3430,36 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 item for item in evidence["live"]["containers"]
                 if item["role"] == "migrate"
             ).__setitem__("state", "running"),
-            "D1A_MIGRATION",
+            "WORKLOAD_MIGRATION",
         )
         self.assert_failure(
             lambda evidence: evidence["post_cleanup"].__setitem__(
                 "migration_invocation_count", 2
             ),
-            "D1A_MIGRATION",
+            "WORKLOAD_MIGRATION",
         )
         self.assert_failure(
             lambda evidence: next(
                 item for item in evidence["live"]["containers"]
                 if item["role"] == "api"
             ).__setitem__("health", "unhealthy"),
-            "D1A_READINESS",
+            "WORKLOAD_READINESS",
         )
 
     def test_runtime_identity_and_read_only_rootfs_are_contract_facts(self) -> None:
         identity = valid_observations()
-        identity["live"]["containers"][8]["configured_user"] = "0:0"
-        identity["live"]["containers"][8]["effective_uid"] = 0
-        identity["live"]["containers"][8]["effective_gid"] = 0
+        identity["live"]["containers"][7]["configured_user"] = "0:0"
+        identity["live"]["containers"][7]["effective_uid"] = 0
+        identity["live"]["containers"][7]["effective_gid"] = 0
         self.assertIn(
-            "D1A_RUNTIME_IDENTITY",
+            "WORKLOAD_RUNTIME_IDENTITY",
             self.collector.workload_admission_failures(identity),
         )
 
         writable = valid_observations()
-        writable["live"]["containers"][8]["read_only_rootfs"] = False
+        writable["live"]["containers"][7]["read_only_rootfs"] = False
         self.assertIn(
-            "D1A_READ_ONLY_ROOTFS",
+            "WORKLOAD_READ_ONLY_ROOTFS",
             self.collector.workload_admission_failures(writable),
         )
 
@@ -3302,7 +3472,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             )
             container[field] = value
             self.assertIn(
-                "D1A_EXECUTION_CONTRACT",
+                "WORKLOAD_EXECUTION_CONTRACT",
                 self.collector.workload_admission_failures(observations),
             )
 
@@ -3319,14 +3489,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "/home/secpal-ci/.config/containers/systemd/attacker.container"
         )
         self.assertIn(
-            "D1A_GENERATED_PROVENANCE",
+            "WORKLOAD_GENERATED_PROVENANCE",
             self.collector.workload_admission_failures(wrong_source),
         )
 
         wrong_digest = valid_observations()
         wrong_digest["live"]["generated_services"][0]["fragment_sha256"] = ""
         self.assertIn(
-            "D1A_GENERATED_PROVENANCE",
+            "WORKLOAD_GENERATED_PROVENANCE",
             self.collector.workload_admission_failures(wrong_digest),
         )
 
@@ -3335,7 +3505,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "drop_in_sha256"
         ] = ["a" * 64]
         self.assertIn(
-            "D1A_GENERATED_PROVENANCE",
+            "WORKLOAD_GENERATED_PROVENANCE",
             self.collector.workload_admission_failures(contradictory_drop_ins),
         )
 
@@ -3348,7 +3518,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "hidden-scheduler.service"
         )
         self.assertIn(
-            "D1A_LIVE_USER_WORK",
+            "WORKLOAD_LIVE_USER_WORK",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -3360,14 +3530,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             observations["live"]["user_work"]["active_units"],
         )
         self.assertNotIn(
-            "D1A_LIVE_USER_WORK",
+            "WORKLOAD_LIVE_USER_WORK",
             self.collector.workload_admission_failures(observations),
         )
         observations["live"]["user_work"]["active_units"].remove(
             fixture_target
         )
         self.assertIn(
-            "D1A_LIVE_USER_WORK",
+            "WORKLOAD_LIVE_USER_WORK",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -3394,8 +3564,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
         live = observations["live"]
         failures = self.collector.workload_admission_failures(observations)
         for invariant in (
-            "D1A_PENDING_USER_WORK", "D1A_LIVE_USER_WORK",
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PENDING_USER_WORK", "WORKLOAD_LIVE_USER_WORK",
+            "WORKLOAD_PROCESS_DELTA",
         ):
             self.assertNotIn(invariant, failures)
 
@@ -3405,7 +3575,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             candidate = valid_observations()
             replace_health_timer_suffix(candidate, suffix)
             self.assertNotIn(
-                "D1A_LIVE_USER_WORK",
+                "WORKLOAD_LIVE_USER_WORK",
                 self.collector.workload_admission_failures(candidate),
             )
 
@@ -3413,13 +3583,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             candidate = valid_observations()
             replace_health_timer_suffix(candidate, suffix)
             self.assertIn(
-                "D1A_LIVE_USER_WORK",
+                "WORKLOAD_LIVE_USER_WORK",
                 self.collector.workload_admission_failures(candidate),
             )
 
         live["processes"][0]["executable"] = "/usr/bin/attacker"
         self.assertIn(
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PROCESS_DELTA",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -3429,7 +3599,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "rootless-netns-deadbeef.scope"
         )
         self.assertIn(
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PROCESS_DELTA",
             self.collector.workload_admission_failures(wrong_scope),
         )
         live["processes"][0]["executable"] = "/usr/bin/pasta.avx2"
@@ -3437,7 +3607,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             f"{live['containers'][0]['id']}-1111111111111111.timer"
         )
         self.assertIn(
-            "D1A_LIVE_USER_WORK",
+            "WORKLOAD_LIVE_USER_WORK",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -3464,14 +3634,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ]
 
         self.assertIn(
-            "D1A_LIVE_USER_WORK",
+            "WORKLOAD_LIVE_USER_WORK",
             self.collector.workload_admission_failures(observations),
         )
 
     def test_podman_health_timers_require_collected_provenance(self) -> None:
         observations = valid_observations()
         self.assertNotIn(
-            "D1A_LIVE_USER_WORK",
+            "WORKLOAD_LIVE_USER_WORK",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -3479,14 +3649,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "service"
         ] = "attacker.service"
         self.assertIn(
-            "D1A_LIVE_USER_WORK",
+            "WORKLOAD_LIVE_USER_WORK",
             self.collector.workload_admission_failures(observations),
         )
 
         missing = valid_observations()
         missing["live"]["user_work"]["podman_health_timers"].pop()
         self.assertIn(
-            "D1A_LIVE_USER_WORK",
+            "WORKLOAD_LIVE_USER_WORK",
             self.collector.workload_admission_failures(missing),
         )
 
@@ -3531,7 +3701,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             }
         )
         self.assertIn(
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PROCESS_DELTA",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -3547,7 +3717,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "count": 1,
         })
         self.assertIn(
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PROCESS_DELTA",
             self.collector.workload_admission_failures(wrong_identity),
         )
 
@@ -3560,7 +3730,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "count": 1,
         }]
         self.assertIn(
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PROCESS_DELTA",
             self.collector.workload_admission_failures(cleanup_leak),
         )
 
@@ -3579,13 +3749,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations["live"]["processes"].append(opaque)
         observations["post_cleanup"]["processes"] = [opaque]
         self.assertNotIn(
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PROCESS_DELTA",
             self.collector.workload_admission_failures(observations),
         )
 
         observations["live"]["processes"].remove(opaque)
         self.assertIn(
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PROCESS_DELTA",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -3594,7 +3764,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             {**opaque, "control_group": "/user.slice/user-20000.slice/hidden.scope"}
         )
         self.assertIn(
-            "D1A_PROCESS_DELTA",
+            "WORKLOAD_PROCESS_DELTA",
             self.collector.workload_admission_failures(malformed),
         )
 
@@ -3622,7 +3792,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     }
                 )
                 self.assertIn(
-                    "D1A_PROCESS_DELTA",
+                    "WORKLOAD_PROCESS_DELTA",
                     self.collector.workload_admission_failures(observations),
                 )
 
@@ -6291,18 +6461,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
         api["group_add"] = []
         api["effective_supplementary_gids"] = [10001]
         self.assertNotIn(
-            "D1A_PRIVILEGE_BOUNDARY",
+            "WORKLOAD_PRIVILEGE_BOUNDARY",
             self.collector.workload_admission_failures(observations),
         )
         api["group_add"] = ["0"]
         self.assertIn(
-            "D1A_PRIVILEGE_BOUNDARY",
+            "WORKLOAD_PRIVILEGE_BOUNDARY",
             self.collector.workload_admission_failures(observations),
         )
         api["group_add"] = []
         api["effective_supplementary_gids"] = [0, 10001]
         self.assertIn(
-            "D1A_PRIVILEGE_BOUNDARY",
+            "WORKLOAD_PRIVILEGE_BOUNDARY",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -6311,13 +6481,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             lambda evidence: evidence["post_cleanup"].__setitem__(
                 "migration_invocation_count", 2
             ),
-            "D1A_CLEANUP_MIGRATION",
+            "WORKLOAD_CLEANUP_MIGRATION",
         )
         self.assert_failure(
             lambda evidence: evidence["post_cleanup"].__setitem__(
                 "podman_api", True
             ),
-            "D1A_PODMAN_API_DISABLED",
+            "WORKLOAD_PODMAN_API_DISABLED",
         )
 
     def test_post_cleanup_rejects_target_scheduled_user_work(self) -> None:
@@ -6337,7 +6507,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "podman_health_timers": [],
         }
         self.assertIn(
-            "D1A_PENDING_USER_WORK",
+            "WORKLOAD_PENDING_USER_WORK",
             self.collector.workload_admission_failures(observations),
         )
 
@@ -6346,7 +6516,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "active_units"
         ].remove("podman-user-wait-network-online.service")
         self.assertIn(
-            "D1A_PENDING_USER_WORK",
+            "WORKLOAD_PENDING_USER_WORK",
             self.collector.workload_admission_failures(
                 missing_reviewed_service
             ),
@@ -6407,10 +6577,10 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertIn("--output-fields=_SYSTEMD_INVOCATION_ID", arguments)
         self.assertNotIn("--all", arguments)
         self.assert_failure(
-            lambda evidence: evidence["live"]["containers"][4].__setitem__(
+            lambda evidence: evidence["live"]["containers"][3].__setitem__(
                 "health", "none"
             ),
-            "D1A_READINESS",
+            "WORKLOAD_READINESS",
         )
 
     def test_cleanup_claim_fails_while_any_owned_resource_remains(self) -> None:
@@ -6424,7 +6594,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assert_failure(
                     lambda evidence, field=field, value=value: evidence["post_cleanup"].__setitem__(field, value),
-                    "D1A_CLEANUP_ABSENCE",
+                    "WORKLOAD_CLEANUP_ABSENCE",
                 )
 
     def test_cleanup_must_preserve_unrelated_control_resources(self) -> None:
@@ -6432,13 +6602,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             lambda evidence: evidence["post_cleanup"]["control_resources"].__setitem__(
                 "network_present", False
             ),
-            "D1A_CONTROL_RESOURCES_PRESERVED",
+            "WORKLOAD_CONTROL_RESOURCES_PRESERVED",
         )
         self.assert_failure(
             lambda evidence: evidence["post_cleanup"]["control_resources"].__setitem__(
                 "network_id", "c" * 64
             ),
-            "D1A_CONTROL_RESOURCES_PRESERVED",
+            "WORKLOAD_CONTROL_RESOURCES_PRESERVED",
         )
 
     def test_cleanup_generator_scan_failure_marks_observation_incomplete(self) -> None:
@@ -6662,7 +6832,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     lambda evidence, mode=network_mode: evidence["live"][
                         "containers"
                     ][0].__setitem__("network_mode", mode),
-                    "D1A_HOST_NETWORK",
+                    "WORKLOAD_HOST_NETWORK",
                 )
 
     def test_malformed_observation_becomes_closed_incomplete_evidence(self) -> None:
@@ -6670,7 +6840,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             path = Path(temporary_directory) / "live.json"
             path.write_text('{"phase":', encoding="utf-8")
             observation = self.assembler.read_observation(
-                path, "live", collection_status=255
+                path, "live", collection_status=255, target_sha="a" * 40
             )
         self.assertEqual("live", observation["phase"])
         self.assertFalse(observation["target_admitted"])
