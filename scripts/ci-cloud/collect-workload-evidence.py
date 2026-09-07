@@ -104,45 +104,19 @@ TRUSTED_USER_SOCKET_UNITS = {
     )
     for name, service in {
         "dbus.socket": "dbus.service",
-        "dirmngr.socket": "dirmngr.service",
-        "gpg-agent-browser.socket": "gpg-agent.service",
-        "gpg-agent-extra.socket": "gpg-agent.service",
-        "gpg-agent-ssh.socket": "gpg-agent.service",
-        "gpg-agent.socket": "gpg-agent.service",
-        "keyboxd.socket": "keyboxd.service",
-        "ssh-agent.socket": "ssh-agent.service",
     }.items()
 }
 TRUSTED_USER_SERVICE_UNITS = {
-    name: frozenset(
+    "dbus.service": frozenset(
         {
-            Path("/usr/lib/systemd/user") / name,
-            Path("/lib/systemd/user") / name,
+            Path("/usr/lib/systemd/user/dbus-broker.service"),
+            Path("/lib/systemd/user/dbus-broker.service"),
         }
-    )
-    for name in {
-        "dbus.service",
-        "dirmngr.service",
-        "gpg-agent.service",
-        "keyboxd.service",
-        "ssh-agent.service",
-    }
+    ),
 }
 TRUSTED_USER_UNIT_PACKAGES = {
-    "dbus.socket": "dbus-user-session",
-    "dbus.service": "dbus-user-session",
-    "dirmngr.socket": "dirmngr",
-    "dirmngr.service": "dirmngr",
-    "gpg-agent-browser.socket": "gpg-agent",
-    "gpg-agent-extra.socket": "gpg-agent",
-    "gpg-agent-ssh.socket": "gpg-agent",
-    "gpg-agent.socket": "gpg-agent",
-    "gpg-agent.service": "gpg-agent",
-    # Debian 13 (trixie) ships Keyboxd and both user units in binary package gpg.
-    "keyboxd.socket": "gpg",
-    "keyboxd.service": "gpg",
-    "ssh-agent.socket": "openssh-client",
-    "ssh-agent.service": "openssh-client",
+    "dbus.socket": "dbus-common",
+    "dbus.service": "dbus-broker",
 }
 CONTROL_NETWORK = "secpal-ci-unrelated-control-network"
 CONTROL_VOLUME = "secpal-ci-unrelated-control-volume"
@@ -308,8 +282,8 @@ ROLE_CONTRACTS = {
         ),
         tmpfs=(("/tmp", 16, "0700", True),),
         capabilities=("CAP_CHOWN", "CAP_FOWNER"),
-        entrypoint=("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
-        command=("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+        entrypoint=("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+        command=(),
         healthcheck=(),
     ),
     "postgres": RoleContract(
@@ -328,11 +302,8 @@ ROLE_CONTRACTS = {
         binds=API_BINDS
         + (("quadlet-oneshot-entrypoint.sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),),
         tmpfs=API_TMPFS,
-        entrypoint=("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
-        command=(
-            "/bin/bash", "/run/secpal/container-entrypoint.sh",
-            "php", "artisan", "migrate", "--force",
-        ),
+        entrypoint=("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        command=("php", "artisan", "migrate", "--force"),
         healthcheck=(),
     ),
     "api": RoleContract(
@@ -707,7 +678,12 @@ def expected_gateway_port(instance: str) -> int:
     return 20_000 + int(instance[:8], 16) % 40_000
 
 
-def expected_image_identity(instance: str, role: str, container: object) -> bool:
+def expected_image_identity(
+    instance: str,
+    role: str,
+    container: object,
+    installed_reference: object,
+) -> bool:
     if not isinstance(container, dict):
         return False
     api_roles = {
@@ -715,9 +691,9 @@ def expected_image_identity(instance: str, role: str, container: object) -> bool
         "worker-hash-chain", "scheduler",
     }
     exact_references = {
-        **{name: "localhost/secpal-ci-api:verified" for name in api_roles},
-        "postgres": "localhost/secpal-ci-postgres:verified",
-        "frontend": "localhost/secpal-ci-frontend:verified",
+        **{name: f"localhost/secpal-ci-api@{API_DIGEST}" for name in api_roles},
+        "postgres": f"localhost/secpal-ci-postgres@{POSTGRES_DIGEST}",
+        "frontend": f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}",
     }
     exact_digests = {
         **{name: API_DIGEST for name in api_roles},
@@ -727,13 +703,16 @@ def expected_image_identity(instance: str, role: str, container: object) -> bool
     image_id = container.get("image_id")
     image_digest = container.get("image_digest")
     image_reference = container.get("image")
+    if image_reference != installed_reference:
+        return False
     if re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_id)) is None:
         return False
     if role == "gateway":
         return (
-            image_reference == f"localhost/secpal-ci-gateway-{instance}:verified"
-            and re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_digest))
+            re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_digest))
             is not None
+            and image_reference
+            == f"localhost/secpal-ci-gateway-{instance}@{image_digest}"
         )
     return (
         image_reference == exact_references.get(role)
@@ -1225,6 +1204,22 @@ def installed_unit_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
         if fact is None:
             complete = False
         else:
+            image_reference = ""
+            if name.endswith(".container"):
+                observation = bounded_regular_file(path)
+                matches = (
+                    re.findall(rb"(?m)^Image=([^\r\n]+)$", observation[0])
+                    if observation is not None
+                    else []
+                )
+                if len(matches) != 1:
+                    complete = False
+                else:
+                    try:
+                        image_reference = matches[0].decode("utf-8")
+                    except UnicodeDecodeError:
+                        complete = False
+            fact["image"] = image_reference
             facts.append(fact)
     prefix = f"secpal-int-{instance}"
     expected_paths = {
@@ -2661,6 +2656,7 @@ def container_facts(
             or re.fullmatch(r"sha256:[0-9a-f]{64}", str(item["Image"])) is None
             or re.fullmatch(r"sha256:[0-9a-f]{64}", str(item["ImageDigest"])) is None
             or not isinstance(item["ImageName"], str)
+            or config.get("Image") != item["ImageName"]
             or (
                 item["EffectiveCaps"] is not None
                 and not isinstance(item["EffectiveCaps"], list)
@@ -3017,12 +3013,12 @@ def systemd_unit_owned_by_package(path: Path, package: str) -> bool:
         return False
     canonical = Path("/usr/lib/systemd/user") / path.name
     status_code, output, complete = command_result(
-        ["dpkg-query", "-S", str(canonical)]
+        ["rpm", "-qf", "--qf", "%{NAME}", str(canonical)]
     )
     return (
         status_code == 0
         and complete
-        and output == f"{package}: {canonical}"
+        and output == package
     )
 
 
@@ -4957,7 +4953,9 @@ def workload_admission_failures(observations: object) -> list[str]:
         unit.get("name") for unit in units if isinstance(unit, dict)
     } != set(names) or any(
         not isinstance(unit, dict)
-        or set(unit) != {"name", "path", "uid", "gid", "mode", "sha256"}
+        or set(unit) != {
+            "name", "path", "uid", "gid", "mode", "sha256", "image",
+        }
         or unit["uid"] != 0 or unit["gid"] != 0 or unit["mode"] != "0644"
         or re.fullmatch(r"[0-9a-f]{64}", str(unit["sha256"])) is None
         or unit["path"] != str(
@@ -5031,6 +5029,11 @@ def workload_admission_failures(observations: object) -> list[str]:
             ):
                 failures.append("WORKLOAD_SERVICE_STATE")
     containers = live.get("containers")
+    installed_images = {
+        str(unit.get("name")): unit.get("image")
+        for unit in units
+        if isinstance(unit, dict)
+    } if isinstance(units, list) else {}
     container_roles = [
         item.get("role") for item in containers if isinstance(item, dict)
     ] if isinstance(containers, list) else []
@@ -5150,7 +5153,12 @@ def workload_admission_failures(observations: object) -> list[str]:
             ):
                 failures.append("WORKLOAD_SECCOMP_ISOLATION")
             if not expected_image_identity(
-                str(instance), str(item.get("role")), item
+                str(instance),
+                str(item.get("role")),
+                item,
+                installed_images.get(
+                    f"secpal-int-{instance}-{item.get('role')}.container"
+                ),
             ):
                 failures.append("WORKLOAD_IMAGE_PROVENANCE")
             if any(network == "host" for network in item.get("networks", [])):

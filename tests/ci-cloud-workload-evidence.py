@@ -216,16 +216,13 @@ HEALTH_INTERVAL_USEC = {
 API_ENTRYPOINT = ("/bin/bash", "/run/secpal/container-entrypoint.sh")
 ROLE_EXECUTION = {
     "secrets-init": (
-        ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
         ("/bin/bash", "/run/secpal/init-local-secrets.sh"),
+        (),
         (),
     ),
     "migrate": (
-        ("/bin/sh", "/run/secpal/quadlet-oneshot-entrypoint.sh"),
-        (
-            "/bin/bash", "/run/secpal/container-entrypoint.sh",
-            "php", "artisan", "migrate", "--force",
-        ),
+        ("/bin/bash", "/run/secpal/container-entrypoint.sh"),
+        ("php", "artisan", "migrate", "--force"),
         (),
     ),
     "api": (
@@ -287,6 +284,18 @@ def valid_observations() -> dict[str, object]:
         + [f"{prefix}-{name}.volume" for name in ("secrets", "private-storage", "postgres")]
         + [f"{prefix}.target"]
     )
+    unit_images = {
+        **{
+            role: f"localhost/secpal-ci-api@{API_DIGEST}"
+            for role in (
+                "secrets-init", "migrate", "api", "worker-general",
+                "worker-hash-chain", "scheduler",
+            )
+        },
+        "postgres": f"localhost/secpal-ci-postgres@{POSTGRES_DIGEST}",
+        "frontend": f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}",
+        "gateway": f"localhost/secpal-ci-gateway-{instance}@sha256:{9:064x}",
+    }
     units = [
         {
             "name": name,
@@ -299,6 +308,14 @@ def valid_observations() -> dict[str, object]:
             "gid": 0,
             "mode": "0644",
             "sha256": f"{index + 1:064x}",
+            "image": next(
+                (
+                    reference
+                    for role, reference in unit_images.items()
+                    if name == f"{prefix}-{role}.container"
+                ),
+                "",
+            ),
         }
         for index, name in enumerate(unit_names)
     ]
@@ -514,16 +531,16 @@ def valid_observations() -> dict[str, object]:
                     f"{generated_names.index(role) + 1:032x}" if one_shot else ""
                 ),
                 "image": (
-                    "localhost/secpal-ci-api:verified"
+                    f"localhost/secpal-ci-api@{API_DIGEST}"
                     if role in {
                         "secrets-init", "migrate", "api", "worker-general",
                         "worker-hash-chain", "scheduler",
                     }
-                    else "localhost/secpal-ci-postgres:verified"
+                    else f"localhost/secpal-ci-postgres@{POSTGRES_DIGEST}"
                     if role == "postgres"
-                    else "localhost/secpal-ci-frontend:verified"
+                    else f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}"
                     if role == "frontend"
-                    else f"localhost/secpal-ci-gateway-{instance}:verified"
+                    else f"localhost/secpal-ci-gateway-{instance}@sha256:{9:064x}"
                 ),
                 "image_id": f"sha256:{role_index + 1:064x}",
                 "image_digest": (
@@ -1620,6 +1637,22 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     ["containers"][3].__setitem__(field, value),
                     "WORKLOAD_IMAGE_PROVENANCE",
                 )
+        self.assert_failure(
+            lambda evidence: evidence["live"]["containers"][8].__setitem__(
+                "image_digest", "sha256:" + "e" * 64
+            ),
+            "WORKLOAD_IMAGE_PROVENANCE",
+        )
+        self.assert_failure(
+            lambda evidence: next(
+                unit
+                for unit in evidence["live"]["installed_units"]
+                if unit["name"].endswith("-gateway.container")
+            ).__setitem__(
+                "image", f"localhost/secpal-ci-gateway-aaaaaaaaaaaa@sha256:{8:064x}"
+            ),
+            "WORKLOAD_IMAGE_PROVENANCE",
+        )
 
     def test_effective_user_namespace_facts_fail_closed(self) -> None:
         mutations = (
@@ -2317,7 +2350,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "PODMAN_SYSTEMD_UNIT": "secpal-int-aaaaaaaaaaaa-api.service"
                 },
                 "Env": [],
-                "Image": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
+                "Image": f"localhost/secpal-ci-api@{API_DIGEST}",
                 "User": "10001:10001",
                 "Entrypoint": list(API_ENTRYPOINT),
                 "Cmd": list(ROLE_EXECUTION["api"][1]),
@@ -2362,7 +2395,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "BoundingCaps": [],
             "Image": f"sha256:{'b' * 64}",
             "ImageDigest": API_DIGEST,
-            "ImageName": "localhost/secpal-ci-api:verified",
+            "ImageName": f"localhost/secpal-ci-api@{API_DIGEST}",
         }
 
         def collect(candidate):
@@ -2454,7 +2487,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     "PODMAN_SYSTEMD_UNIT": "secpal-int-aaaaaaaaaaaa-api.service"
                 },
                 "Env": [],
-                "Image": f"localhost/secpal-ci-api@sha256:{'a' * 64}",
+                "Image": f"localhost/secpal-ci-api@{API_DIGEST}",
                 "User": "10001:10001",
                 "Entrypoint": list(API_ENTRYPOINT),
                 "Cmd": list(ROLE_EXECUTION["api"][1]),
@@ -2501,7 +2534,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             "MountLabel": "system_u:object_r:container_file_t:s0:c1,c501",
             "Image": f"sha256:{'b' * 64}",
             "ImageDigest": API_DIGEST,
-            "ImageName": "localhost/secpal-ci-api:verified",
+            "ImageName": f"localhost/secpal-ci-api@{API_DIGEST}",
         }
         namespace_facts = {
             "process_identity": "user:[4026540001]",
@@ -3154,17 +3187,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertTrue(complete)
         self.assertTrue(unsafe)
 
-    def test_podman_api_accepts_trusted_debian_agent_socket_units(self) -> None:
-        trusted = {
-            "dbus.socket": "dbus.service",
-            "dirmngr.socket": "dirmngr.service",
-            "gpg-agent-browser.socket": "gpg-agent.service",
-            "gpg-agent-extra.socket": "gpg-agent.service",
-            "gpg-agent-ssh.socket": "gpg-agent.service",
-            "gpg-agent.socket": "gpg-agent.service",
-            "keyboxd.socket": "keyboxd.service",
-            "ssh-agent.socket": "ssh-agent.service",
-        }
+    def test_podman_api_accepts_only_trusted_rocky_dbus_activation(self) -> None:
+        trusted = {"dbus.socket": "dbus.service"}
         trusted_services = set(trusted.values())
         listing = "\n".join(
             f"{name} loaded active listening trusted fixture"
@@ -3185,7 +3209,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 if name in trusted_services:
                     return (
                         0,
-                        f"FragmentPath=/usr/lib/systemd/user/{name}\n"
+                        "FragmentPath=/usr/lib/systemd/user/dbus-broker.service\n"
                         "DropInPaths=",
                         True,
                     )
@@ -3213,24 +3237,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
         self.assertTrue(complete)
         self.assertFalse(unsafe)
 
-    def test_podman_api_rejects_user_controlled_agent_service(self) -> None:
-        listing = "\n".join(
-            (
-                "dbus.socket loaded active listening trusted fixture",
-                "gpg-agent.socket loaded active listening trusted fixture",
-            )
-        )
+    def test_podman_api_rejects_user_controlled_dbus_service(self) -> None:
+        listing = "dbus.socket loaded active listening trusted fixture"
         valid_service = {
-            "FragmentPath": "/usr/lib/systemd/user/gpg-agent.service",
+            "FragmentPath": "/usr/lib/systemd/user/dbus-broker.service",
             "DropInPaths": "",
         }
         mutations = {
             "FragmentPath": (
-                "/home/secpal-ci/.config/systemd/user/gpg-agent.service"
+                "/home/secpal-ci/.config/systemd/user/dbus.service"
             ),
             "DropInPaths": (
                 "/home/secpal-ci/.config/systemd/user/"
-                "gpg-agent.service.d/override.conf"
+                "dbus.service.d/override.conf"
             ),
         }
 
@@ -3257,26 +3276,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                             True,
                         )
                     if arguments[:4] == [
-                        "systemctl", "--user", "show", "gpg-agent.socket",
-                    ]:
-                        return (
-                            0,
-                            "FragmentPath=/usr/lib/systemd/user/"
-                            "gpg-agent.socket\nDropInPaths=\n"
-                            "Triggers=gpg-agent.service",
-                            True,
-                        )
-                    if arguments[:4] == [
                         "systemctl", "--user", "show", "dbus.service",
-                    ]:
-                        return (
-                            0,
-                            "FragmentPath=/usr/lib/systemd/user/dbus.service\n"
-                            "DropInPaths=",
-                            True,
-                        )
-                    if arguments[:4] == [
-                        "systemctl", "--user", "show", "gpg-agent.service",
                     ]:
                         return (
                             0,
@@ -3303,20 +3303,15 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 self.assertTrue(complete)
                 self.assertTrue(unsafe)
 
-    def test_podman_api_rejects_modified_debian_agent_socket_units(self) -> None:
-        listing = "\n".join(
-            (
-                "dbus.socket loaded active listening trusted fixture",
-                "gpg-agent.socket loaded active listening trusted fixture",
-            )
-        )
+    def test_podman_api_rejects_modified_rocky_dbus_socket(self) -> None:
+        listing = "dbus.socket loaded active listening trusted fixture"
         valid = {
-            "FragmentPath": "/usr/lib/systemd/user/gpg-agent.socket",
+            "FragmentPath": "/usr/lib/systemd/user/dbus.socket",
             "DropInPaths": "",
-            "Triggers": "gpg-agent.service",
+            "Triggers": "dbus.service",
         }
         mutations = {
-            "FragmentPath": "/home/secpal-ci/.config/systemd/user/gpg-agent.socket",
+            "FragmentPath": "/home/secpal-ci/.config/systemd/user/dbus.socket",
             "DropInPaths": "/home/secpal-ci/.config/systemd/user/override.conf",
             "Triggers": "attacker.service",
         }
@@ -3335,24 +3330,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
                         return 0, listing, True
                     if arguments[:4] == [
                         "systemctl", "--user", "show", "dbus.socket",
-                    ]:
-                        return (
-                            0,
-                            "FragmentPath=/usr/lib/systemd/user/dbus.socket\n"
-                            "DropInPaths=\nTriggers=dbus.service",
-                            True,
-                        )
-                    if arguments[:4] == [
-                        "systemctl", "--user", "show", "dbus.service",
-                    ]:
-                        return (
-                            0,
-                            "FragmentPath=/usr/lib/systemd/user/dbus.service\n"
-                            "DropInPaths=",
-                            True,
-                        )
-                    if arguments[:4] == [
-                        "systemctl", "--user", "show", "gpg-agent.socket",
                     ]:
                         return (
                             0,
@@ -3390,38 +3367,41 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ):
             self.assertFalse(
                 self.collector.root_owned_systemd_unit(
-                    Path("/usr/lib/systemd/user/gpg-agent.service")
+                    Path("/usr/lib/systemd/user/dbus-broker.service")
                 )
             )
 
-    def test_keyboxd_units_are_bound_to_the_debian_gpg_package(self) -> None:
+    def test_dbus_units_are_bound_to_rocky_packages(self) -> None:
         self.assertEqual(
-            "gpg",
-            self.collector.TRUSTED_USER_UNIT_PACKAGES["keyboxd.socket"],
+            "dbus-common",
+            self.collector.TRUSTED_USER_UNIT_PACKAGES["dbus.socket"],
         )
         self.assertEqual(
-            "gpg",
-            self.collector.TRUSTED_USER_UNIT_PACKAGES["keyboxd.service"],
+            "dbus-broker",
+            self.collector.TRUSTED_USER_UNIT_PACKAGES["dbus.service"],
         )
 
     def test_systemd_unit_package_admission_requires_exact_owner(self) -> None:
-        fragment = Path("/lib/systemd/user/keyboxd.socket")
-        expected = "/usr/lib/systemd/user/keyboxd.socket"
+        fragment = Path("/lib/systemd/user/dbus.socket")
         with mock.patch.object(
             self.collector,
             "command_result",
-            return_value=(0, f"keyboxd: {expected}", True),
+            return_value=(0, "untrusted-package", True),
         ):
             self.assertFalse(
-                self.collector.systemd_unit_owned_by_package(fragment, "gpg")
+                self.collector.systemd_unit_owned_by_package(
+                    fragment, "dbus-common"
+                )
             )
         with mock.patch.object(
             self.collector,
             "command_result",
-            return_value=(0, f"gpg: {expected}", True),
+            return_value=(0, "dbus-common", True),
         ):
             self.assertTrue(
-                self.collector.systemd_unit_owned_by_package(fragment, "gpg")
+                self.collector.systemd_unit_owned_by_package(
+                    fragment, "dbus-common"
+                )
             )
 
     def test_migration_and_readiness_are_derived_from_raw_facts(self) -> None:

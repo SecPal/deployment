@@ -286,6 +286,17 @@ def validate_conformance_workflow(root: Path) -> None:
         root, "scripts/ci-cloud/init-cleanup-root.sh"
     )
     require("pull_request_target" not in text, "pull_request_target is forbidden")
+    retirement = (
+        'if [[ "$SECPAL_DEBIAN_CONFORMANCE_RETIRED" == true ]]; then\n'
+        "  printf '%s\\n' \\\n"
+        "    'ERROR: Debian/AppArmor conformance is retired; use Rocky "
+        "qualification.' >&2\n"
+        "  exit 1\nfi"
+    )
+    require(
+        text.count("SECPAL_DEBIAN_CONFORMANCE_RETIRED") == 2,
+        "superseded Debian conformance must fail before provider authority",
+    )
     trigger = document.get("on")
     require(isinstance(trigger, dict), "cloud conformance trigger must be a mapping")
     require(set(trigger) == {"workflow_dispatch"}, "cloud conformance must be manual only")
@@ -341,6 +352,18 @@ def validate_conformance_workflow(root: Path) -> None:
 
     jobs = document.get("jobs")
     assert isinstance(jobs, dict)
+    validate_steps = jobs["validate"].get("steps", [])
+    require(
+        isinstance(validate_steps, list)
+        and isinstance(validate_steps[0], dict)
+        and validate_steps[0].get("env", {}).get(
+            "SECPAL_DEBIAN_CONFORMANCE_RETIRED"
+        ) == "true"
+        and str(validate_steps[0].get("run", "")).startswith(
+            f"{retirement}\n"
+        ),
+        "Debian retirement must be the first validation action",
+    )
     require(
         set(jobs)
         == {"validate", "digitalocean", "digitalocean_cleanup", "gcp", "gcp_cleanup"},
@@ -3243,8 +3266,11 @@ def validate(root: Path) -> None:
         and '"systemctl", "--user", "show", trigger,' in workload_collector
         and "service_fragment not in service_fragments" in workload_collector
         and "not root_owned_systemd_unit(service_fragment)" in workload_collector
-        and '"keyboxd.socket": "gpg"' in workload_collector
-        and '"keyboxd.service": "gpg"' in workload_collector
+        and '"dbus.socket": "dbus-common"' in workload_collector
+        and '"dbus.service": "dbus-broker"' in workload_collector
+        and '["rpm", "-qf", "--qf", "%{NAME}", str(canonical)]'
+        in workload_collector
+        and "dpkg-query" not in workload_collector
         and 'not systemd_unit_owned_by_package(fragment, package)'
         in workload_collector
         and "not systemd_unit_owned_by_package(\n"

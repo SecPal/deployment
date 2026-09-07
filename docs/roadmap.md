@@ -91,10 +91,10 @@ integration parity, production state/secrets, and a Debian NGINX production
 Edge. Those documents and runs remain historical evidence. They are not the
 current Rocky/SELinux, PostgreSQL 18, or ADR-019 Edge authority.
 
-The retained non-production Debian cloud-conformance work likewise records its
-original environment and evidence honestly. Current Rocky qualification has a
-separate owner; history is not rewritten as though Rocky had always been the
-decision.
+The retired non-production Debian cloud-conformance implementation records its
+original environment and evidence honestly, but now fails before provider
+authority. Current Rocky qualification has a separate owner; history is not
+rewritten as though Rocky had always been the decision.
 
 ### Former Phase E edge selection (historical / superseded)
 

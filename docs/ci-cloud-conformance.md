@@ -1166,18 +1166,12 @@ the exact bounded outer mapping independently collected from Podman; present
 null, malformed, and non-default alternatives are rejected. It never
 presents those configuration facts as live `/proc` evidence.
 
-Workload admission additionally restricts the active user socket-unit set to
-the root-owned Debian D-Bus, GnuPG, and OpenSSH agent sockets. Each socket and
-its effective triggered service must use the fixed vendor fragment, mode, and
-ownership with no drop-ins; their owning packages are installed explicitly,
-recorded with exact versions and Debian provenance, and excluded from upgrades
-during the run. The live workload collector additionally requires every
-fragment's exact `dpkg-query -S` owner, including Debian's `gpg` ownership of
-the Keyboxd units. A target-created socket or service activation path is therefore
-rejected even while no Podman service process exists. The exact Debian Netavark
-`/run/podman/nv-proxy.sock` path is the sole Podman-runtime pathname exception:
-it is network plumbing and remains independently covered by the admitted
-Netavark package and backend facts.
+Current workload admission restricts the active user socket-unit set to Rocky's
+root-owned D-Bus socket and its triggered service. Both must use fixed vendor
+fragments, modes, ownership, no drop-ins, and their exact RPM owners. Any other
+user activation socket, including Podman's API socket, is rejected. The exact
+Netavark `/run/podman/nv-proxy.sock` path remains the sole Podman-runtime
+pathname exception because it is internal network plumbing rather than an API.
 
 The trusted root-only historical host setup records loaded and enforcing AppArmor policy
 counts in a root-owned, non-writable `/run` snapshot. The unprivileged collector
@@ -1214,22 +1208,19 @@ closed singleton role, not application-internal leader-election semantics.
 Three successful representative hosts demonstrate independent reproducibility;
 they do not prove that all hardware is compatible.
 
-## Running an exact commit
+## Historical dispatch status
 
-1. Confirm the selected provider's protected environments and dedicated
-   credential model are ready.
-2. Open **Actions → Debian 13 Cloud Conformance → Run workflow** on `main`.
-3. Paste the full commit SHA and choose exactly one provider profile.
-4. Inspect the bounded evidence artifact and the independent cleanup job.
-5. Treat any named invariant, missing evidence, cleanup failure, or janitor
-   ambiguity as a failure.
+The Debian 13/AppArmor workflow is retained only as auditable historical
+implementation. Its validation job now fails before provider authority, so it
+cannot run the current Rocky/SELinux workload admission contract or spend cloud
+resources. Current Rocky host qualification follows
+`rocky-cloud-qualification.yml`; composition of that trusted control plane with
+this workload contract belongs to the downstream real-provider replay leaf.
 
-For PR #22 specifically, merge this prerequisite first, update PR #22 from the
-merged commit, implement only its fixed-client target phases, and dispatch the
-three providers against one exact resulting PR #22 SHA. Evidence from an older
-PR #22 SHA cannot exercise this main-controlled protocol and is not admissible.
+The PR #22 instructions and exact-SHA dispatches below are retained as records
+of the historical protocol; they are not instructions for a current run.
 
-Real `main` runs have completed the full provision, Debian 13 conformance,
+Historical `main` runs completed the full provision, Debian 13 conformance,
 bounded-evidence, and exact-cleanup lifecycle for every implemented profile:
 
 | Profile              | Tested target SHA                          | Successful run                                                               |

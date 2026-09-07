@@ -412,7 +412,7 @@ def validate_document(document: object) -> dict[str, object]:
         )
     for index, unit in enumerate(live["installed_units"] if isinstance(live["installed_units"], list) else []):
         exact_keys(
-            unit, {"name", "path", "uid", "gid", "mode", "sha256"},
+            unit, {"name", "path", "uid", "gid", "mode", "sha256", "image"},
             f"$.workload.live.installed_units[{index}]",
         )
     for index, service in enumerate(live["generated_services"] if isinstance(live["generated_services"], list) else []):

@@ -674,7 +674,7 @@
     "unitFact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "path", "uid", "gid", "mode", "sha256"],
+      "required": ["name", "path", "uid", "gid", "mode", "sha256", "image"],
       "properties": {
         "name": {
           "type": "string",
@@ -689,7 +689,8 @@
         "uid": { "const": 0 },
         "gid": { "const": 0 },
         "mode": { "const": "0644" },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "image": { "type": "string", "maxLength": 512 }
       }
     },
     "dropInOwner": {
