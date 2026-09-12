@@ -2075,8 +2075,39 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     require(
         isinstance(profile, dict)
-        and profile.get("options") == ["gcp-rocky-10-2-arm64"],
+        and profile.get("options")
+        == ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"],
         "Rocky provider profile must remain closed",
+    )
+    arm64_profile = json.loads(
+        read(root, "config/ci-cloud/gcp-rocky-10-2-arm64.json")
+    )
+    x86_64_profile = json.loads(
+        read(root, "config/ci-cloud/gcp-rocky-10-2-x86-64.json")
+    )
+    require(
+        arm64_profile["profile"] == "gcp-rocky-10-2-arm64"
+        and arm64_profile["architecture"] == "aarch64"
+        and arm64_profile["machine_type"] == "c4a-standard-4"
+        and arm64_profile["image"]["discovery_family"]
+        == "rocky-linux-10-arm64"
+        and x86_64_profile["profile"] == "gcp-rocky-10-2-x86-64"
+        and x86_64_profile["architecture"] == "x86_64"
+        and x86_64_profile["cpu_baseline"] == "x86-64-v3"
+        and x86_64_profile["machine_type"] == "c3-standard-4"
+        and x86_64_profile["image"]["discovery_family"] == "rocky-linux-10"
+        and arm64_profile["fixture"]["input"]
+        == x86_64_profile["fixture"]["input"]
+        and arm64_profile["fixture"]["arm64_child"]
+        != x86_64_profile["fixture"]["amd64_child"],
+        "Rocky reviewed profiles have incompatible provider or architecture facts",
+    )
+    require(
+        "config/ci-cloud/${" not in text
+        and "config/ci-cloud/${{ inputs.provider_profile }}" not in text
+        and 'gcp-rocky-10-2-x86-64) machine_type=c3-standard-4'
+        in text,
+        "Rocky profile selection must remain closed and path-independent",
     )
     require(
         "github.ref == 'refs/heads/main'" in text
@@ -3089,6 +3120,15 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'data "google_compute_image"' not in main
         and "discovery_family" not in main,
         "OpenTofu may consume only the pre-resolved exact image identity",
+    )
+    require(
+        'var.profile == "gcp-rocky-10-2-arm64"' in variables
+        and 'var.machine_type == "c4a-standard-4"' in variables
+        and 'var.profile == "gcp-rocky-10-2-x86-64"' in variables
+        and 'var.machine_type == "c3-standard-4"' in variables
+        and "rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*" in variables
+        and "rocky-linux-10-v[0-9]{8}" in variables,
+        "OpenTofu profile, machine, image, and architecture admission disagree",
     )
     require(
         "rocky-linux-cloud/global/images/" in variables

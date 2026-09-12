@@ -23,11 +23,18 @@ PROJECT = "secpal-dev"
 ZONE = "europe-west3-a"
 PROJECT_ROOT = f"https://compute.googleapis.com/compute/v1/projects/{PROJECT}"
 API_ROOT = f"{PROJECT_ROOT}/zones/{ZONE}"
+MACHINE_TYPE_ROOT = (
+    f"https://www.googleapis.com/compute/v1/projects/{PROJECT}/zones/{ZONE}/machineTypes"
+)
 INSTANCE = re.compile(r"^sprk-([1-9][0-9]{0,19})-([1-9][0-9]{0,2})-instance$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 NUMBER = re.compile(r"^[1-9][0-9]{0,19}$")
 PUBLIC_KEY = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/]+={0,2} secpal-rocky-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}$")
 BOOTSTRAP_ACCOUNT = "secpal-ci-bootstrap@secpal-dev.iam.gserviceaccount.com"
+PROFILE_MACHINE_TYPES = {
+    "gcp-rocky-10-2-arm64": "c4a-standard-4",
+    "gcp-rocky-10-2-x86-64": "c3-standard-4",
+}
 
 
 class TransitionError(RuntimeError):
@@ -111,7 +118,7 @@ def validate_instance(instance: dict[str, Any], options: argparse.Namespace) -> 
         "github_run_attempt": attempt,
         "target_sha": options.target_sha,
         "control_sha": options.control_sha,
-        "provider_profile": "gcp-rocky-10-2-arm64",
+        "provider_profile": options.profile,
         "created_at": options.created_at,
         "expires_at": options.expires_at,
     }
@@ -119,6 +126,20 @@ def validate_instance(instance: dict[str, Any], options: argparse.Namespace) -> 
         raise TransitionError("instance ownership does not exactly match the continuation")
     if str(instance.get("id", "")) != options.instance_id:
         raise TransitionError("live immutable instance ID does not match the continuation")
+    if instance.get("machineType") != (
+        f"{MACHINE_TYPE_ROOT}/{PROFILE_MACHINE_TYPES[options.profile]}"
+    ):
+        raise TransitionError("live machine type contradicts the reviewed profile")
+    metadata = instance.get("metadata")
+    items = metadata.get("items", []) if isinstance(metadata, dict) else []
+    profile_values = [
+        item.get("value")
+        for item in items
+        if isinstance(item, dict)
+        and item.get("key") == "secpal-rocky-provider-profile"
+    ]
+    if profile_values != [options.profile]:
+        raise TransitionError("live metadata contradicts the reviewed profile")
     validate_service_accounts(instance)
 
 
@@ -301,6 +322,7 @@ def main() -> int:
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--target-sha", required=True)
     parser.add_argument("--control-sha", required=True)
+    parser.add_argument("--profile", required=True, choices=tuple(PROFILE_MACHINE_TYPES))
     parser.add_argument("--created-at", required=True)
     parser.add_argument("--expires-at", required=True)
     parser.add_argument("--ssh-public-key", required=True)

@@ -66,7 +66,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     )
 
     @staticmethod
-    def realistic_raw(contract):
+    def realistic_raw(contract, architecture="aarch64"):
         payload = "a" * 64
         header = "b" * 64
         key_packet = b"reviewed Rocky 10 signing key packet"
@@ -74,14 +74,14 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         packages = []
         for name in contract.PACKAGES:
             version = "5.8.2" if name == "podman" else "1.0"
-            nevra = f"{name}-{version}-1.el10_2.aarch64"
+            nevra = f"{name}-{version}-1.el10_2.{architecture}"
             packages.append(
                 {
                 "name": name,
                 "epoch": "0",
                 "version": version,
                 "release": "1.el10_2",
-                "architecture": "aarch64",
+                    "architecture": architecture,
                 "nevra": nevra,
                 "repositories": ["appstream"],
                 "signed_header": "\n".join(
@@ -90,7 +90,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                         "0",
                         version,
                         "1.el10_2",
-                        "aarch64",
+                        architecture,
                         nevra,
                         payload,
                         "8",
@@ -107,10 +107,15 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 ),
                 }
             )
-        expected = f"{contract.FIXTURE_REPOSITORY}@{contract.ARM_CHILD}"
+        child = (
+            contract.ARM_CHILD
+            if architecture == "aarch64"
+            else contract.AMD64_CHILD
+        )
+        expected = f"{contract.FIXTURE_REPOSITORY}@{child}"
         return {
             "os_release": 'NAME="Rocky Linux"\nID="rocky"\nVERSION_ID="10.2"',
-            "architecture": "aarch64",
+            "architecture": architecture,
             "dnf_version": "4.22.0\nInstalled: dnf-0:4.22.0",
             "releasever": "10",
             "getenforce": "Enforcing",
@@ -155,8 +160,9 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             "control_sha": "a" * 40,
             "run_id": "12345",
             "run_attempt": "1",
+            "profile": "gcp-rocky-10-2-arm64",
             "expires_at": 1800010800,
-            "image": "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-2-20260801-arm64",
+            "image": "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-arm64-v20260801",
             "first_boot_id": "11111111-1111-1111-1111-111111111111",
         }
 
@@ -918,7 +924,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         realistic = json.dumps([parent, expected], separators=(",", ":"))
         self.assertEqual(
             contract.ARM_CHILD,
-            contract.admit_fixture_repo_digests(realistic),
+            contract.admit_fixture_repo_digests(realistic, "aarch64"),
         )
         self.assertIn("--admit-fixture-repo-digests", preparation)
         self.assertNotIn("jq -e", preparation[preparation.index('current_phase="fixture"'):])
@@ -958,15 +964,17 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             with self.subTest(accepted=representation):
                 raw = json.dumps(representation, separators=(",", ":"))
                 fact = contract.normalize_fixture_repo_digests(raw)
-                decision = contract.admit_fixture_identity(fact)
-                document = contract.assemble_fixture_evidence(decision)
-                contract.validate_fixture_evidence(document)
+                decision = contract.admit_fixture_identity(fact, "aarch64")
+                document = contract.assemble_fixture_evidence(
+                    decision, "aarch64"
+                )
+                contract.validate_fixture_evidence(document, "aarch64")
         for representation in rejected:
             with self.subTest(rejected=representation):
                 raw = json.dumps(representation, separators=(",", ":"))
                 with self.assertRaises(contract.ContractError):
                     fact = contract.normalize_fixture_repo_digests(raw)
-                    contract.admit_fixture_identity(fact)
+                    contract.admit_fixture_identity(fact, "aarch64")
 
     def test_realistic_host_representations_cross_normalization_schema_and_validator(self) -> None:
         contract = load_contract()
@@ -989,6 +997,40 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 0,
                 subprocess.run(
                     [CONTROL, "validate-evidence", "preparation", path],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+            )
+
+        x86_options = self.realistic_options()
+        x86_options.update(
+            {
+                "profile": "gcp-rocky-10-2-x86-64",
+                "image": "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-v20260910",
+            }
+        )
+        x86_document = contract.normalize_and_admit(
+            self.realistic_raw(contract, "x86_64"), x86_options
+        )
+        self.assertEqual("gcp-rocky-10-2-x86-64", x86_document["run"]["profile"])
+        self.assertEqual("x86_64", x86_document["guest"]["uname_machine"])
+        self.assertTrue(
+            all(
+                package["architecture"] == "x86_64"
+                for package in x86_document["packages"]
+            )
+        )
+        self.assertEqual(
+            contract.AMD64_CHILD,
+            x86_document["fixture"]["resolved_amd64_child"],
+        )
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+            json.dump(x86_document, path)
+            path.flush()
+            self.assertEqual(
+                0,
+                subprocess.run(
+                    [CONTROL, "validate-evidence", "preparation", path.name],
                     check=False,
                     capture_output=True,
                 ).returncode,

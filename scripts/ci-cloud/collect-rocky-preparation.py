@@ -27,6 +27,7 @@ COHERENT_EXTERNAL_CONTRACT = "rocky-preparation-evidence-v1"
 PACKAGES = contract.PACKAGES
 FIXTURE = contract.FIXTURE
 ARM_CHILD = contract.ARM_CHILD
+AMD64_CHILD = contract.AMD64_CHILD
 FIXTURE_REPOSITORY = contract.FIXTURE_REPOSITORY
 FIXTURE_DIGEST_IDENTITY_MAX = contract.FIXTURE_DIGEST_IDENTITY_MAX
 FIXTURE_DIGEST_METADATA_MAX_BYTES = contract.FIXTURE_DIGEST_METADATA_MAX_BYTES
@@ -351,7 +352,13 @@ class Observer:
 
 def admitted_fixture_arm64_child(repo_digests_metadata: str) -> str:
     """Compatibility name; the pure contract remains the authoritative owner."""
-    return contract.admit_fixture_repo_digests(repo_digests_metadata)
+    return contract.admit_fixture_repo_digests(repo_digests_metadata, "aarch64")
+
+
+def admitted_fixture_architecture_child(
+    repo_digests_metadata: str, architecture: str
+) -> str:
+    return contract.admit_fixture_repo_digests(repo_digests_metadata, architecture)
 
 
 def diagnostic_document(error: ObservationError | contract.ContractError) -> dict[str, str]:
@@ -434,6 +441,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--control-sha", required=True)
     result.add_argument("--run-id", required=True)
     result.add_argument("--run-attempt", required=True)
+    result.add_argument("--profile")
     result.add_argument("--expires-at", type=int)
     result.add_argument("--image")
     result.add_argument("--first-boot-id")
@@ -443,10 +451,16 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    if sys.argv[1:] == ["--admit-fixture-repo-digests"]:
+    if sys.argv[1:2] == ["--admit-fixture-repo-digests"]:
+        if (
+            len(sys.argv) != 4
+            or sys.argv[2] != "--architecture"
+            or sys.argv[3] not in {"aarch64", "x86_64"}
+        ):
+            return 1
         try:
             raw = sys.stdin.read(FIXTURE_DIGEST_METADATA_MAX_BYTES + 1)
-            contract.admit_fixture_repo_digests(raw)
+            contract.admit_fixture_repo_digests(raw, sys.argv[3])
         except contract.ContractError:
             return 1
         return 0
@@ -459,6 +473,7 @@ def main() -> int:
                 ("--expires-at", options.expires_at),
                 ("--image", options.image),
                 ("--first-boot-id", options.first_boot_id),
+                ("--profile", options.profile),
             )
             if value is None
         ]

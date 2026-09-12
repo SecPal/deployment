@@ -143,6 +143,7 @@ resource "google_compute_instance" "qualification" {
     secpal-rocky-target-sha              = var.target_sha
     secpal-rocky-trusted-control-sha     = var.trusted_control_sha
     secpal-rocky-exact-image-self-link   = var.exact_image_self_link
+    secpal-rocky-provider-profile        = var.profile
     secpal-rocky-expires-at              = var.expires_at
     secpal-rocky-ssh-public-key          = trimspace(var.ssh_public_key)
     "startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-rocky-host.tftpl", {
@@ -175,7 +176,8 @@ resource "google_compute_instance" "qualification" {
       qualification_schema_base64gzip                = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-qualification-evidence.schema.json"))
       target_source_failure_schema_base64gzip        = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-target-source-failure.schema.json"))
       target_qualification_failure_schema_base64gzip = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-target-qualification-failure.schema.json"))
-      profile_base64gzip                             = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-arm64.json"))
+      arm64_profile_base64gzip                       = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-arm64.json"))
+      x86_64_profile_base64gzip                      = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-x86-64.json"))
     })
   }
 

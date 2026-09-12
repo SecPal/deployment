@@ -18,6 +18,7 @@ SPDX-License-Identifier = "MIT"
 path = [
   "config/production/state-contract.json",
   "config/ci-cloud/gcp-rocky-10-2-arm64.json",
+  "config/ci-cloud/gcp-rocky-10-2-x86-64.json",
   "infra/ci-cloud/digitalocean/.terraform.lock.hcl",
   "infra/ci-cloud/gcp/.terraform.lock.hcl",
   "infra/ci-cloud/gcp-rocky/.terraform.lock.hcl",

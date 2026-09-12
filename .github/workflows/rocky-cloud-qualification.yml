@@ -26,6 +26,7 @@ on:
         type: choice
         options:
           - gcp-rocky-10-2-arm64
+          - gcp-rocky-10-2-x86-64
       continuation_run_id:
         description: Exact preparation run ID for qualify or destroy
         required: false
@@ -54,6 +55,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       operation: ${{ steps.closed.outputs.operation }}
+      provider_profile: ${{ steps.closed.outputs.provider_profile }}
       target_sha: ${{ steps.closed.outputs.target_sha }}
       source_run_id: ${{ steps.closed.outputs.source_run_id }}
       source_run_attempt: ${{ steps.closed.outputs.source_run_attempt }}
@@ -98,7 +100,10 @@ jobs:
           [[ "$RAW_TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
           [[ "$(sha256sum scripts/qualify-production-host.sh | awk '{print $1}')" == \
             "$expected_harness_sha256" ]]
-          [[ "$RAW_PROFILE" == gcp-rocky-10-2-arm64 ]]
+          case "$RAW_PROFILE" in
+            gcp-rocky-10-2-arm64 | gcp-rocky-10-2-x86-64) ;;
+            *) exit 1 ;;
+          esac
           case "$RAW_OPERATION" in
             discover | provision-and-prepare)
               [[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]
@@ -119,6 +124,7 @@ jobs:
           esac
           {
             printf 'operation=%s\n' "$RAW_OPERATION"
+            printf 'provider_profile=%s\n' "$RAW_PROFILE"
             printf 'target_sha=%s\n' "${RAW_TARGET_SHA,,}"
             printf 'source_run_id=%s\n' "$RAW_SOURCE_RUN_ID"
             printf 'source_run_attempt=%s\n' "$RAW_SOURCE_RUN_ATTEMPT"
@@ -129,7 +135,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
   discover:
-    name: Resolve exact official Rocky ARM64 image
+    name: Resolve exact official Rocky image
     needs: validate
     if: >-
       ${{ needs.validate.outputs.operation == 'discover' ||
@@ -149,12 +155,12 @@ jobs:
 
       - name: Validate reviewed profile and WIF identity
         env:
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
         run: |
-          scripts/ci-cloud/rocky-control.py validate-profile \
-            config/ci-cloud/gcp-rocky-10-2-arm64.json
+          scripts/ci-cloud/rocky-control.py validate-profile "$PROVIDER_PROFILE"
           [[ "$GCP_PROJECT_ID" == secpal-dev ]]
           [[ "$GCP_WORKLOAD_IDENTITY_PROVIDER" == \
             projects/94792370946/locations/global/workloadIdentityPools/secpal/providers/github ]]
@@ -176,9 +182,11 @@ jobs:
       - name: Resolve family once to an immutable image
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.discovery_auth.outputs.access_token }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
         run: |
           install -d -m 0700 "$RUNNER_TEMP/rocky-cloud"
           scripts/ci-cloud/rocky-control.py discover-image \
+            --profile "$PROVIDER_PROFILE" \
             --control-sha "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/rocky-cloud/discovery.json"
 
@@ -217,6 +225,7 @@ jobs:
       - name: Generate private per-run SSH authority and exact variables
         env:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
           GCP_BOOTSTRAP_SERVICE_ACCOUNT: ${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}
         run: |
           [[ "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" == \
@@ -241,14 +250,19 @@ jobs:
           PY
           created_at="$(date -u +%s)"
           expires_at="$((created_at + 10800))"
+          case "$PROVIDER_PROFILE" in
+            gcp-rocky-10-2-arm64) machine_type=c4a-standard-4 ;;
+            gcp-rocky-10-2-x86-64) machine_type=c3-standard-4 ;;
+            *) exit 1 ;;
+          esac
           jq -n \
             --arg project_id secpal-dev \
             --arg bootstrap_service_account "$GCP_BOOTSTRAP_SERVICE_ACCOUNT" \
             --arg trusted_control_sha "$GITHUB_SHA" \
             --arg target_sha "$TARGET_SHA" \
-            --arg profile gcp-rocky-10-2-arm64 \
+            --arg profile "$PROVIDER_PROFILE" \
             --arg zone europe-west3-a \
-            --arg machine_type c4a-standard-4 \
+            --arg machine_type "$machine_type" \
             --arg disk_type hyperdisk-balanced \
             --arg exact_image_self_link "$(jq -er .exact_image_self_link "$RUNNER_TEMP/rocky-cloud/discovery.json")" \
             --arg run_id "$GITHUB_RUN_ID" \
@@ -332,11 +346,13 @@ jobs:
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
         run: |
           scripts/ci-cloud/rocky-gcp-transition.py \
             --instance "$(cat "$RUNNER_TEMP/rocky-cloud/instance_name")" \
             --instance-id "$(cat "$RUNNER_TEMP/rocky-cloud/instance_id")" \
             --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --profile "$PROVIDER_PROFILE" \
             --created-at "$(jq -er .created_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
             --expires-at "$(jq -er .expires_at infra/ci-cloud/gcp-rocky/run.auto.tfvars.json)" \
             --ssh-public-key "$(cat "$RUNNER_TEMP/rocky-cloud/id_ed25519.pub")" \
@@ -350,6 +366,7 @@ jobs:
         if: ${{ steps.identity_transition.outcome == 'success' }}
         env:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
         run: |
           unset GOOGLE_OAUTH_ACCESS_TOKEN GOOGLE_APPLICATION_CREDENTIALS
           ip="$(cat "$RUNNER_TEMP/rocky-cloud/ipv4_address")"
@@ -430,12 +447,15 @@ jobs:
           scripts/ci-cloud/rocky-control.py validate-evidence preparation \
             "$RUNNER_TEMP/rocky-cloud/preparation.json"
           jq -e --arg target_sha "$TARGET_SHA" --arg control_sha "$GITHUB_SHA" \
+            --arg profile "$PROVIDER_PROFILE" \
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             '.target_sha == $target_sha and
              .run.trusted_control_sha == $control_sha and
+             .run.profile == $profile and
              .run.run_id == $run_id and .run.run_attempt == $run_attempt' \
             "$RUNNER_TEMP/rocky-cloud/preparation.json"
           scripts/ci-cloud/rocky-control.py create-continuation \
+            --profile "$PROVIDER_PROFILE" \
             --control-sha "$GITHUB_SHA" --target-sha "$TARGET_SHA" \
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --image "$(jq -er .exact_image_self_link "$RUNNER_TEMP/rocky-cloud/discovery.json")" \
@@ -517,11 +537,13 @@ jobs:
       - name: Admit exact unexpired continuation
         env:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
           SOURCE_RUN_ID: ${{ needs.validate.outputs.source_run_id }}
           SOURCE_RUN_ATTEMPT: ${{ needs.validate.outputs.source_run_attempt }}
         run: |
           scripts/ci-cloud/rocky-control.py validate-continuation \
             "$RUNNER_TEMP/rocky-resume/continuation.json" \
+            --profile "$PROVIDER_PROFILE" \
             --control-sha "$GITHUB_SHA" --target-sha "$TARGET_SHA" \
             --source-run-id "$SOURCE_RUN_ID" \
             --source-run-attempt "$SOURCE_RUN_ATTEMPT" \
@@ -567,6 +589,7 @@ jobs:
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.resume_auth.outputs.access_token }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
         run: |
           variables="$RUNNER_TEMP/rocky-resume/run.auto.tfvars.json"
           request="$RUNNER_TEMP/rocky-exchange/access-request.json"
@@ -574,6 +597,7 @@ jobs:
             --instance "$(jq -er .instance_name "$RUNNER_TEMP/rocky-resume/continuation.json")" \
             --instance-id "$(jq -er .instance_id "$RUNNER_TEMP/rocky-resume/continuation.json")" \
             --target-sha "$TARGET_SHA" --control-sha "$GITHUB_SHA" \
+            --profile "$PROVIDER_PROFILE" \
             --created-at "$(jq -er .created_at "$variables")" \
             --expires-at "$(jq -er .expires_at "$variables")" \
             --ssh-public-key "$(jq -er .ssh_public_key "$request")" \
@@ -907,6 +931,7 @@ jobs:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
           SOURCE_RUN_ID: ${{ needs.validate.outputs.source_run_id }}
           SOURCE_RUN_ATTEMPT: ${{ needs.validate.outputs.source_run_attempt }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
         run: |
           extra=()
           if [[ "${{ needs.validate.outputs.operation }}" == destroy ]]; then
@@ -916,6 +941,7 @@ jobs:
           fi
           scripts/ci-cloud/rocky-control.py validate-continuation \
             "$RUNNER_TEMP/rocky-cleanup/continuation.json" \
+            --profile "$PROVIDER_PROFILE" \
             --control-sha "$GITHUB_SHA" --target-sha "$TARGET_SHA" \
             --source-run-id "$SOURCE_RUN_ID" \
             --source-run-attempt "$SOURCE_RUN_ATTEMPT" \

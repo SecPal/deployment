@@ -214,6 +214,8 @@ def validate_pure_contract(path: Path) -> None:
     source = path.read_text(encoding="utf-8")
     if '"fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity"' not in source:
         raise ArchitectureError("authoritative fixture invariant owner is absent")
+    if '"fixture-amd64-child": "rocky_preparation_contract.admit_fixture_identity"' not in source:
+        raise ArchitectureError("authoritative amd64 fixture invariant owner is absent")
     if '"rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key"' not in source:
         raise ArchitectureError("authoritative package-signing invariant owner is absent")
     if (
@@ -353,7 +355,7 @@ def validate_component_complexity(contract_path: Path, collector_path: Path) -> 
         if {"observation", "normalization", "admission", "assembly"} <= responsibilities:
             raise ArchitectureError("evidence component collapses all semantic responsibilities")
     collector = collector_path.read_text(encoding="utf-8")
-    if "INVARIANT_OWNERS" in collector or '"fixture-arm64-child"' in collector:
+    if "INVARIANT_OWNERS" in collector or '"fixture-arm64-child"' in collector or '"fixture-amd64-child"' in collector:
         raise ArchitectureError("duplicate declared invariant ownership")
     if "EXTERNAL_DOMAINS" in collector and "COHERENT_EXTERNAL_CONTRACT" not in collector:
         raise ArchitectureError("multiple external domains lack a reviewed coherent contract")
