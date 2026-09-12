@@ -80,6 +80,7 @@ required_files=(
   schemas/rocky-cloud-qualification-readiness.schema.json
   schemas/rocky-cloud-target-qualification-failure.schema.json
   config/ci-cloud/gcp-rocky-10-2-arm64.json
+  config/ci-cloud/gcp-rocky-10-2-x86-64.json
   config/production/inventory.example.yaml
   config/production/state-contract.json
   config/quadlet/Caddyfile

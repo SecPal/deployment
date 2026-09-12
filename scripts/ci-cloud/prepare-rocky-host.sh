@@ -42,7 +42,6 @@ case "$profile" in
     ;;
   *) exit 64 ;;
 esac
-/opt/secpal-control/scripts/ci-cloud/rocky-control.py validate-profile "$profile"
 readonly failure_output="$state_root/evidence/preparation-failure.json"
 readonly collection_diagnostic_output="$state_root/evidence/collection-diagnostic.json"
 [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
@@ -455,6 +454,7 @@ install_policy() {
     container-selinux audit policycoreutils policycoreutils-python-utils \
     selinux-policy-targeted curl dnf git jq nftables openssh-server sudo \
     python3-jsonschema dnf-plugins-core
+  /opt/secpal-control/scripts/ci-cloud/rocky-control.py validate-profile "$profile"
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="selinux"

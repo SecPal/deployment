@@ -339,7 +339,7 @@ def image_matches_profile(profile: dict[str, Any], self_link: object) -> bool:
         return False
     name = self_link.removeprefix(IMAGE_PREFIX)
     pattern = (
-        r"^rocky-linux-10-arm64-v[0-9]{8}$"
+        r"^rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*$"
         if profile["architecture"] == "aarch64"
         else r"^rocky-linux-10-v[0-9]{8}$"
     )
@@ -990,7 +990,7 @@ def discover_image(profile_name: str, control_sha: str, output: Path) -> None:
     image_architecture = image.get("architecture")
     creation = image.get("creationTimestamp")
     expected_name = re.compile(
-        r"^rocky-linux-10-arm64-v[0-9]{8}$"
+        r"^rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*$"
         if profile_architecture == "aarch64"
         else r"^rocky-linux-10-v[0-9]{8}$"
     )

@@ -3126,7 +3126,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'var.machine_type == "c4a-standard-4"' in variables
         and 'var.profile == "gcp-rocky-10-2-x86-64"' in variables
         and 'var.machine_type == "c3-standard-4"' in variables
-        and "rocky-linux-10-arm64-v[0-9]{8}" in variables
+        and "rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*" in variables
         and "rocky-linux-10-v[0-9]{8}" in variables,
         "OpenTofu profile, machine, image, and architecture admission disagree",
     )

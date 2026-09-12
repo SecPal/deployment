@@ -662,6 +662,7 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_workflow_has_only_closed_operations_and_profile(self) -> None:
         document = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        workflow = WORKFLOW.read_text(encoding="utf-8")
         inputs = document["on"]["workflow_dispatch"]["inputs"]
         self.assertEqual(
             ["discover", "provision-and-prepare", "qualify", "destroy"],
@@ -671,7 +672,43 @@ class RockyCloudControlTests(unittest.TestCase):
             ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"],
             inputs["provider_profile"]["options"],
         )
-        self.assertIn("^[0-9a-fA-F]{40}$", WORKFLOW.read_text(encoding="utf-8"))
+        self.assertIn("^[0-9a-fA-F]{40}$", workflow)
+        self.assertIn('--arg profile "$PROVIDER_PROFILE"', workflow)
+        self.assertIn(".run.profile == $profile", workflow)
+
+    def test_reviewed_profiles_are_required_repository_files(self) -> None:
+        manifest = (ROOT / "tests/repository-contract.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("config/ci-cloud/gcp-rocky-10-2-arm64.json", manifest)
+        self.assertIn("config/ci-cloud/gcp-rocky-10-2-x86-64.json", manifest)
+
+    def test_arm64_image_admission_preserves_reviewed_name_variants(self) -> None:
+        control = load_rocky_control()
+        profile = control.canonical_profile(control.ARM64_PROFILE)
+        for name in (
+            "rocky-linux-10-arm64-v20260910",
+            "rocky-linux-10-2-20260801-arm64",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(
+                    control.image_matches_profile(
+                        profile, f"{control.IMAGE_PREFIX}{name}"
+                    )
+                )
+        self.assertFalse(
+            control.image_matches_profile(
+                profile, f"{control.IMAGE_PREFIX}rocky-linux-10-v20260910"
+            )
+        )
+
+    def test_guest_profile_validation_runs_after_dependency_install_and_trap(self) -> None:
+        preparation = (
+            ROOT / "scripts/ci-cloud/prepare-rocky-host.sh"
+        ).read_text(encoding="utf-8")
+        validation = preparation.index('validate-profile "$profile"')
+        self.assertLess(preparation.index("trap 'preparation_exit"), validation)
+        self.assertLess(preparation.index("python3-jsonschema"), validation)
 
     def test_target_execution_job_has_no_cloud_authority(self) -> None:
         document = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
@@ -947,6 +984,7 @@ class RockyCloudControlTests(unittest.TestCase):
         for key, value in (
             ("profile", "gcp-rocky-10-2-arm64"),
             ("architecture", "aarch64"),
+            ("image", deepcopy(document["image"])),
             (
                 "fixture",
                 deepcopy(document["fixture"]),
@@ -959,7 +997,7 @@ class RockyCloudControlTests(unittest.TestCase):
                 elif key == "architecture":
                     candidate["guest"]["uname_machine"] = value
                 else:
-                    candidate["fixture"] = value
+                    candidate[key] = value
                 self.assertTrue(list(validator.iter_errors(candidate)))
         mutations = (
             (("guest", "id"), "almalinux"),

@@ -90,7 +90,7 @@ variable "exact_image_self_link" {
     condition = (
       var.profile == "gcp-rocky-10-2-arm64" &&
       can(regex(
-        "^https://www\\.googleapis\\.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-arm64-v[0-9]{8}$",
+        "^https://www\\.googleapis\\.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*$",
         var.exact_image_self_link,
       ))
       ) || (

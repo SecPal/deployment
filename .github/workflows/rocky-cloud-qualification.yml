@@ -447,9 +447,11 @@ jobs:
           scripts/ci-cloud/rocky-control.py validate-evidence preparation \
             "$RUNNER_TEMP/rocky-cloud/preparation.json"
           jq -e --arg target_sha "$TARGET_SHA" --arg control_sha "$GITHUB_SHA" \
+            --arg profile "$PROVIDER_PROFILE" \
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             '.target_sha == $target_sha and
              .run.trusted_control_sha == $control_sha and
+             .run.profile == $profile and
              .run.run_id == $run_id and .run.run_attempt == $run_attempt' \
             "$RUNNER_TEMP/rocky-cloud/preparation.json"
           scripts/ci-cloud/rocky-control.py create-continuation \

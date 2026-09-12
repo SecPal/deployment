@@ -67,7 +67,7 @@
       "properties": {
         "profile": { "const": "gcp-rocky-10-2-arm64" },
         "exact_image_self_link": {
-          "pattern": "/rocky-linux-10-arm64-v[0-9]{8}$"
+          "pattern": "/rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*$"
         }
       }
     },

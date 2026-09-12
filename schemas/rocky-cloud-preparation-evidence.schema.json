@@ -374,6 +374,13 @@
             "profile": { "const": "gcp-rocky-10-2-arm64" }
           }
         },
+        "image": {
+          "properties": {
+            "exact_self_link": {
+              "pattern": "/rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*$"
+            }
+          }
+        },
         "guest": {
           "properties": { "uname_machine": { "const": "aarch64" } }
         },
@@ -385,6 +392,13 @@
         "run": {
           "properties": {
             "profile": { "const": "gcp-rocky-10-2-x86-64" }
+          }
+        },
+        "image": {
+          "properties": {
+            "exact_self_link": {
+              "pattern": "/rocky-linux-10-v[0-9]{8}$"
+            }
           }
         },
         "guest": {
