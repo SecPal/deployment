@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -125,7 +126,10 @@ def _identities(fragment_path: str, source_path: str) -> tuple[int, str]:
         raise AuthorityError("Quadlet authority paths are malformed")
     if fragment.group("uid", "unit") != source.group("uid", "unit"):
         raise AuthorityError("Quadlet authority paths disagree")
-    return int(fragment.group("uid")), fragment.group("unit")
+    runtime_uid = int(fragment.group("uid"))
+    if runtime_uid > 4_294_967_294:
+        raise AuthorityError("Quadlet runtime UID exceeds its closed bound")
+    return runtime_uid, fragment.group("unit")
 
 
 def admit_quadlet_authority(
@@ -241,8 +245,12 @@ def main() -> int:
             properties, options.expected_fragment, options.expected_source
         )
         write_evidence(options.output, evidence)
-    except (OSError, UnicodeError, AuthorityError) as error:
-        raise SystemExit(str(error)) from error
+    except AuthorityError as error:
+        print(error, file=sys.stderr)
+        return 1
+    except (OSError, UnicodeError) as error:
+        print(error, file=sys.stderr)
+        return 125
     return 0
 
 

@@ -155,15 +155,21 @@ runtime_identity_admitted() {
 
 effective_quadlet_service_admitted() {
   local properties_path="$1" expected_fragment="$2" expected_source="$3"
-  local evidence_path="$4"
+  local evidence_path="$4" status
   [[ -f "$QUADLET_AUTHORITY_CONTRACT" && ! -L "$QUADLET_AUTHORITY_CONTRACT" ]] || return 1
-  python3 "$QUADLET_AUTHORITY_CONTRACT" "$properties_path" \
+  if python3 "$QUADLET_AUTHORITY_CONTRACT" "$properties_path" \
     --expected-fragment "$expected_fragment" \
     --expected-source "$expected_source" --output "$evidence_path" \
-    >/dev/null 2>&1 &&
-    grep -Fq \
-      "\"invariant_owner\":\"${QUADLET_AUTHORITY_INVARIANT_OWNER}\"" \
-      "$evidence_path"
+    >/dev/null 2>&1; then
+    :
+  else
+    status=$?
+    ((status == 1)) && return 1
+    return 125
+  fi
+  grep -Fq \
+    "\"invariant_owner\":\"${QUADLET_AUTHORITY_INVARIANT_OWNER}\"" \
+    "$evidence_path"
 }
 
 least_authority_process_admitted() {
@@ -526,10 +532,17 @@ if ! user_systemctl show "${unit_name}.service" \
   exit 1
 fi
 chmod 0600 "$unit_properties"
-if ! effective_quadlet_service_admitted \
+if effective_quadlet_service_admitted \
   "$unit_properties" \
   "/run/user/${service_uid}/systemd/generator/${unit_name}.service" \
   "$unit_path" "$quadlet_authority_evidence"; then
+  :
+else
+  authority_status=$?
+  if ((authority_status == 125)); then
+    printf 'ERROR: unable to evaluate effective Quadlet service authority.\n' >&2
+    exit 1
+  fi
   printf 'ERROR: effective Quadlet service contradicts the admitted administrator configuration.\n' >&2
   exit 1
 fi

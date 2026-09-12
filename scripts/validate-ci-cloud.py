@@ -1984,35 +1984,35 @@ def validate_rocky_control_plane(root: Path) -> None:
         "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
     )
     expected_target_line_rules = (
-        (362, 368, "qualify-host-identity"),
-        (370, 373, "qualify-administrator-execution"),
-        (374, 377, "qualify-fixture-reference"),
-        (378, 399, "qualify-service-account"),
-        (403, 406, "qualify-selinux-host"),
-        (408, 421, "qualify-native-architecture"),
-        (423, 426, "qualify-cgroup"),
-        (427, 443, "qualify-rootless-runtime"),
-        (444, 447, "qualify-fixture-presence"),
-        (449, 457, "qualify-fixture-setup"),
-        (459, 518, "qualify-quadlet-authority"),
-        (519, 519, "qualify-quadlet-daemon-reload"),
-        (520, 535, "qualify-quadlet-authority"),
-        (536, 536, "qualify-quadlet-start"),
-        (537, 537, "qualify-quadlet-active-state"),
-        (539, 550, "qualify-quadlet-authority"),
-        (551, 556, "qualify-workload-primary"),
-        (557, 562, "qualify-seccomp"),
-        (566, 566, "qualify-selinux-storage-directory-create"),
-        (568, 572, "qualify-workload-primary"),
-        (573, 576, "qualify-workload-secondary"),
-        (578, 584, "qualify-selinux-storage"),
-        (588, 594, "qualify-avc-correlation"),
-        (597, 603, "qualify-selinux-policy-restoration"),
-        (606, 611, "qualify-avc-correlation"),
-        (613, 621, "qualify-selinux-policy-restoration"),
-        (624, 640, "qualify-avc-correlation"),
-        (649, 652, "qualify-runtime-fallback-absence"),
-        (654, 654, "qualification-harness"),
+        (368, 374, "qualify-host-identity"),
+        (376, 379, "qualify-administrator-execution"),
+        (380, 383, "qualify-fixture-reference"),
+        (384, 405, "qualify-service-account"),
+        (409, 412, "qualify-selinux-host"),
+        (414, 427, "qualify-native-architecture"),
+        (429, 432, "qualify-cgroup"),
+        (433, 449, "qualify-rootless-runtime"),
+        (450, 453, "qualify-fixture-presence"),
+        (455, 463, "qualify-fixture-setup"),
+        (465, 524, "qualify-quadlet-authority"),
+        (525, 525, "qualify-quadlet-daemon-reload"),
+        (526, 548, "qualify-quadlet-authority"),
+        (549, 549, "qualify-quadlet-start"),
+        (550, 550, "qualify-quadlet-active-state"),
+        (552, 563, "qualify-quadlet-authority"),
+        (564, 569, "qualify-workload-primary"),
+        (570, 576, "qualify-seccomp"),
+        (579, 579, "qualify-selinux-storage-directory-create"),
+        (581, 585, "qualify-workload-primary"),
+        (586, 589, "qualify-workload-secondary"),
+        (591, 597, "qualify-selinux-storage"),
+        (601, 607, "qualify-avc-correlation"),
+        (610, 616, "qualify-selinux-policy-restoration"),
+        (619, 624, "qualify-avc-correlation"),
+        (626, 634, "qualify-selinux-policy-restoration"),
+        (637, 653, "qualify-avc-correlation"),
+        (662, 665, "qualify-runtime-fallback-absence"),
+        (667, 667, "qualification-harness"),
     )
 
     def schema_const_pairs(document: object) -> list[tuple[str, str]]:
@@ -2420,6 +2420,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'properties["DropInPaths"]' in quadlet_authority_contract
         and 'properties["ExecStart"] != expected_exec_start(unit_name)'
         in quadlet_authority_contract
+        and "runtime_uid > 4_294_967_294" in quadlet_authority_contract
+        and "return 125" in quadlet_authority_contract
+        and "((status == 1)) && return 1" in qualification_harness
+        and "return 125" in qualification_harness
+        and "ERROR: unable to evaluate effective Quadlet service authority"
+        in qualification_harness
+        and '"qualify-quadlet-authority", "command-failed"'
+        in target_failure_classifier
         and quadlet_authority_contract.count('"executable": "/usr/bin/podman"')
         == 2
         and '"--network",\n        "none",' in quadlet_authority_contract
@@ -2440,7 +2448,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         in bootstrap
         and qualification_harness.index("\nuser_systemctl daemon-reload\n")
         < qualification_harness.index(
-            "\nif ! effective_quadlet_service_admitted \\\n"
+            "\nif effective_quadlet_service_admitted \\\n"
         )
         < qualification_harness.index(
             '\nuser_systemctl start "${unit_name}.service"\n'
@@ -2677,13 +2685,13 @@ def validate_rocky_control_plane(root: Path) -> None:
             for rule in target_line_rules
         )
         and target_line_rules == expected_target_line_rules
-        and [rule for rule in target_line_rules if rule[0] <= 550 and rule[1] >= 519]
+        and [rule for rule in target_line_rules if rule[0] <= 563 and rule[1] >= 525]
         == [
-            (519, 519, "qualify-quadlet-daemon-reload"),
-            (520, 535, "qualify-quadlet-authority"),
-            (536, 536, "qualify-quadlet-start"),
-            (537, 537, "qualify-quadlet-active-state"),
-            (539, 550, "qualify-quadlet-authority"),
+            (525, 525, "qualify-quadlet-daemon-reload"),
+            (526, 548, "qualify-quadlet-authority"),
+            (549, 549, "qualify-quadlet-start"),
+            (550, 550, "qualify-quadlet-active-state"),
+            (552, 563, "qualify-quadlet-authority"),
         ]
         and all(
             operation not in {
@@ -2695,7 +2703,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         and storage_setup_line_rules
         == [
-            (566, 566, "qualify-selinux-storage-directory-create"),
+            (579, 579, "qualify-selinux-storage-directory-create"),
         ]
         and "qualify-quadlet-runtime" not in target_failure_classifier
         and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
@@ -2725,7 +2733,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"${14}" == start' in target_failure_trace
         and "SECPAL_START_OBSERVATION_PATH"
         not in target_failure_trace + target_runner + start_runuser
-        and "10#$frame == 519" in target_failure_trace
+        and "10#$frame == 525" in target_failure_trace
         and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in start_runuser
         and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")'
         in start_runuser
@@ -2884,7 +2892,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_trace
         and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
         in target_failure_trace
-        and "10#$frame == 519" in target_failure_trace
+        and "10#$frame == 525" in target_failure_trace
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
         and "return \"$status\"" in target_failure_trace
@@ -2926,7 +2934,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
         not in bootstrap
         and "pwd.error" not in reload_adjacency_observer
-        and "or 519 not in frames" in reload_adjacency_observer
+        and "or 525 not in frames" in reload_adjacency_observer
         and "or 242 not in frames" not in reload_adjacency_observer,
         "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
     )

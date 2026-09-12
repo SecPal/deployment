@@ -46,35 +46,35 @@ EXPECTED_HARNESS_SHA256 = (
 )
 HISTORICAL_CLEANUP_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
 EXPECTED_TARGET_LINE_RULES = (
-    (362, 368, "qualify-host-identity"),
-    (370, 373, "qualify-administrator-execution"),
-    (374, 377, "qualify-fixture-reference"),
-    (378, 399, "qualify-service-account"),
-    (403, 406, "qualify-selinux-host"),
-    (408, 421, "qualify-native-architecture"),
-    (423, 426, "qualify-cgroup"),
-    (427, 443, "qualify-rootless-runtime"),
-    (444, 447, "qualify-fixture-presence"),
-    (449, 457, "qualify-fixture-setup"),
-    (459, 518, "qualify-quadlet-authority"),
-    (519, 519, "qualify-quadlet-daemon-reload"),
-    (520, 535, "qualify-quadlet-authority"),
-    (536, 536, "qualify-quadlet-start"),
-    (537, 537, "qualify-quadlet-active-state"),
-    (539, 550, "qualify-quadlet-authority"),
-    (551, 556, "qualify-workload-primary"),
-    (557, 562, "qualify-seccomp"),
-    (566, 566, "qualify-selinux-storage-directory-create"),
-    (568, 572, "qualify-workload-primary"),
-    (573, 576, "qualify-workload-secondary"),
-    (578, 584, "qualify-selinux-storage"),
-    (588, 594, "qualify-avc-correlation"),
-    (597, 603, "qualify-selinux-policy-restoration"),
-    (606, 611, "qualify-avc-correlation"),
-    (613, 621, "qualify-selinux-policy-restoration"),
-    (624, 640, "qualify-avc-correlation"),
-    (649, 652, "qualify-runtime-fallback-absence"),
-    (654, 654, "qualification-harness"),
+    (368, 374, "qualify-host-identity"),
+    (376, 379, "qualify-administrator-execution"),
+    (380, 383, "qualify-fixture-reference"),
+    (384, 405, "qualify-service-account"),
+    (409, 412, "qualify-selinux-host"),
+    (414, 427, "qualify-native-architecture"),
+    (429, 432, "qualify-cgroup"),
+    (433, 449, "qualify-rootless-runtime"),
+    (450, 453, "qualify-fixture-presence"),
+    (455, 463, "qualify-fixture-setup"),
+    (465, 524, "qualify-quadlet-authority"),
+    (525, 525, "qualify-quadlet-daemon-reload"),
+    (526, 548, "qualify-quadlet-authority"),
+    (549, 549, "qualify-quadlet-start"),
+    (550, 550, "qualify-quadlet-active-state"),
+    (552, 563, "qualify-quadlet-authority"),
+    (564, 569, "qualify-workload-primary"),
+    (570, 576, "qualify-seccomp"),
+    (579, 579, "qualify-selinux-storage-directory-create"),
+    (581, 585, "qualify-workload-primary"),
+    (586, 589, "qualify-workload-secondary"),
+    (591, 597, "qualify-selinux-storage"),
+    (601, 607, "qualify-avc-correlation"),
+    (610, 616, "qualify-selinux-policy-restoration"),
+    (619, 624, "qualify-avc-correlation"),
+    (626, 634, "qualify-selinux-policy-restoration"),
+    (637, 653, "qualify-avc-correlation"),
+    (662, 665, "qualify-runtime-fallback-absence"),
+    (667, 667, "qualification-harness"),
 )
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
@@ -740,7 +740,7 @@ def validate_target_qualification_binding(
     line_rules = assignment_literal(classifier_tree, "LINE_RULES")
     if line_rules != EXPECTED_TARGET_LINE_RULES:
         raise ArchitectureError("current diagnostic line map disagrees")
-    reload_line = 519
+    reload_line = 525
     if (
         f"10#$frame == {reload_line}" not in trace
         or f"or {reload_line} not in frames" not in reload_observer
