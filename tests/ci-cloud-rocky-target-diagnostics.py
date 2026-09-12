@@ -46,6 +46,7 @@ ACTIVE_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-active-systemctl.py"
 PRIMARY_RUNUSER = ROOT / "scripts/ci-cloud/rocky-primary-runuser.py"
 PRIMARY_RUNTIME = ROOT / "scripts/ci-cloud/rocky-primary-runtime.py"
 QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
+QUADLET_AUTHORITY = ROOT / "scripts/quadlet_authority_contract.py"
 
 
 class RetainedBytesIO(io.BytesIO):
@@ -102,6 +103,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.classifier = load_classifier()
         cls.observer = load_observer()
+        cls.quadlet_authority = load_script(
+            QUADLET_AUTHORITY, "quadlet_authority_contract"
+        )
 
     def run_authority_contract(
         self, command: str, *arguments: str, environment: dict[str, str] | None = None
@@ -184,13 +188,15 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     def test_effective_quadlet_service_admission_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             properties = Path(directory) / "service.properties"
+            evidence_path = Path(directory) / "quadlet-authority.json"
+            unit_name = "secpal-host-qualification-Ab12Cd"
             expected_fragment = (
                 "/run/user/20000/systemd/generator/"
-                "secpal-host-qualification-fixture.service"
+                f"{unit_name}.service"
             )
             expected_source = (
                 "/etc/containers/systemd/users/20000/"
-                "secpal-host-qualification-fixture.container"
+                f"{unit_name}.container"
             )
             baseline = {
                 "FragmentPath": expected_fragment,
@@ -198,24 +204,38 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "DropInPaths": "",
                 "ExecStart": (
                     "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run "
-                    "--name=secpal-host-qualification-fixture ; }"
+                    f"--name {unit_name} --replace --rm --cgroups=split "
+                    "--pull never --network none --sdnotify=conmon -d "
+                    "--cap-drop all --user 65532:65532 "
+                    "--security-opt=no-new-privileges "
+                    f"{self.quadlet_authority.FIXTURE_IMAGE} sleep infinity ; "
+                    "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; "
+                    "pid=0 ; code=(null) ; status=0/0 }"
                 ),
             }
 
-            def admitted(values: dict[str, str]) -> subprocess.CompletedProcess[str]:
-                properties.write_text(
-                    "".join(f"{name}={value}\n" for name, value in values.items()),
-                    encoding="utf-8",
-                )
-                return self.run_authority_contract(
-                    "effective_quadlet_service_admitted",
-                    properties.as_posix(),
-                    expected_fragment,
-                    expected_source,
+            def representation(values: dict[str, str]) -> str:
+                return "".join(
+                    f"{name}={value}\n" for name, value in values.items()
                 )
 
-            valid = admitted(baseline)
-            self.assertEqual(0, valid.returncode, valid.stderr)
+            admitted = self.quadlet_authority.admit_quadlet_authority(
+                representation(baseline), expected_fragment, expected_source
+            )
+            self.quadlet_authority.validate_authority_evidence(admitted)
+            properties.write_text(representation(baseline), encoding="utf-8")
+            wrapper = self.run_authority_contract(
+                "effective_quadlet_service_admitted",
+                properties.as_posix(),
+                expected_fragment,
+                expected_source,
+                evidence_path.as_posix(),
+            )
+            self.assertEqual(0, wrapper.returncode, wrapper.stderr)
+            self.assertEqual(
+                admitted,
+                json.loads(evidence_path.read_text(encoding="utf-8")),
+            )
 
             mutations = {
                 "shadowed fragment": {
@@ -236,14 +256,32 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "substituted execution": {
                     "ExecStart": "{ path=/usr/bin/sh ; argv[]=/usr/bin/sh -c true ; }"
                 },
+                "generated argv drift": {
+                    "ExecStart": baseline["ExecStart"].replace(
+                        "--network none", "--network host", 1
+                    )
+                },
+                "execution metadata drift": {
+                    "ExecStart": baseline["ExecStart"].replace(
+                        "ignore_errors=no", "ignore_errors=yes", 1
+                    )
+                },
             }
             for name, mutation in mutations.items():
                 with self.subTest(name=name):
-                    self.assertNotEqual(0, admitted({**baseline, **mutation}).returncode)
+                    with self.assertRaises(self.quadlet_authority.AuthorityError):
+                        self.quadlet_authority.admit_quadlet_authority(
+                            representation({**baseline, **mutation}),
+                            expected_fragment,
+                            expected_source,
+                        )
 
             duplicate = dict(baseline)
             duplicate["FragmentPath"] += f"\nFragmentPath={expected_fragment}"
-            self.assertNotEqual(0, admitted(duplicate).returncode)
+            with self.assertRaises(self.quadlet_authority.AuthorityError):
+                self.quadlet_authority.admit_quadlet_authority(
+                    representation(duplicate), expected_fragment, expected_source
+                )
 
     def test_quadlet_authority_rejects_effective_service_account_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
