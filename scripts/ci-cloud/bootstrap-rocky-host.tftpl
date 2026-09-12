@@ -89,7 +89,18 @@ decode_script '${preparation_failure_schema_base64gzip}' /opt/secpal-control/sch
 decode_script '${qualification_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-qualification-evidence.schema.json
 decode_script '${target_source_failure_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-target-source-failure.schema.json
 decode_script '${target_qualification_failure_schema_base64gzip}' /opt/secpal-control/schemas/rocky-cloud-target-qualification-failure.schema.json
-decode_script '${profile_base64gzip}' /opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
+profile="$(metadata_value instance/attributes/secpal-rocky-provider-profile)"
+case "$profile" in
+  gcp-rocky-10-2-arm64)
+    decode_script '${arm64_profile_base64gzip}' \
+      /opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
+    ;;
+  gcp-rocky-10-2-x86-64)
+    decode_script '${x86_64_profile_base64gzip}' \
+      /opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-x86-64.json
+    ;;
+  *) exit 1 ;;
+esac
 chmod 0644 /opt/secpal-control/schemas/*.json /opt/secpal-control/config/ci-cloud/*.json
 
 public_key="$(metadata_value instance/attributes/secpal-rocky-ssh-public-key)"
@@ -124,7 +135,7 @@ run_attempt="$${BASH_REMATCH[2]}"
 
 /usr/local/sbin/secpal-prepare-rocky-host \
   "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$expires_at" "$image" \
-  /var/lib/secpal-rocky/evidence/preparation.json
+  "$profile" /var/lib/secpal-rocky/evidence/preparation.json
 
 # The initial preparation phase deliberately reboots before the admitted state
 # exists.  Only a completed current-boot startup may publish qualification

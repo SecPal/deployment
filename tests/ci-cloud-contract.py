@@ -943,6 +943,7 @@ class CloudCIContractTests(unittest.TestCase):
             ".github/workflows/cloud-janitor.yml",
             ".github/workflows/rocky-cloud-qualification.yml",
             "config/ci-cloud/gcp-rocky-10-2-arm64.json",
+            "config/ci-cloud/gcp-rocky-10-2-x86-64.json",
             "infra/ci-cloud/digitalocean",
             "infra/ci-cloud/gcp",
             "infra/ci-cloud/gcp-rocky",

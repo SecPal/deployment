@@ -62,18 +62,28 @@ guest policy; this leaf does not create a time-service dependency.
 
 ## Closed profile and image handoff
 
-`gcp-rocky-10-2-arm64` is the only current Rocky profile. It fixes Google,
-`secpal-dev`, `europe-west3`, `europe-west3-a`, `c4a-standard-4`, one native
-ARM64 guest, and one 120 GiB `hyperdisk-balanced` disk. The official
-`rocky-linux-cloud/rocky-linux-10-arm64` family is a discovery input only.
+The closed selector contains exactly two reviewed Rocky profiles. Both fix
+Google, `secpal-dev`, `europe-west3`, `europe-west3-a`, one guest, and one
+120 GiB `hyperdisk-balanced` disk:
+
+- `gcp-rocky-10-2-arm64` binds `c4a-standard-4`, native `aarch64`, and the
+  official `rocky-linux-cloud/rocky-linux-10-arm64` discovery family.
+- `gcp-rocky-10-2-x86-64` binds `c3-standard-4`, native `x86_64`, the
+  `x86-64-v3` baseline, and the official
+  `rocky-linux-cloud/rocky-linux-10` discovery family.
+
+Both families are discovery inputs only. Callers select a reviewed profile
+identity, never a profile path, image family, machine type, architecture, or
+fixture child.
 
 The discovery operation calls the exact family endpoint through WIF and emits
-the returned image name, immutable self-link, ARM64 architecture, creation
+the returned image name, immutable self-link, provider architecture, creation
 timestamp, family, profile, and trusted control SHA. OpenTofu has no image data
-source and accepts only an immutable self-link matching the official Rocky ARM64
-shape. Guest admission separately requires `ID=rocky`, `VERSION_ID=10.2`, and
-`uname -m=aarch64`; an official family that has moved to another minor therefore
-fails closed after provisioning rather than changing the qualification contract.
+source and accepts only an immutable self-link matching the selected profile.
+Guest admission separately requires `ID=rocky`, `VERSION_ID=10.2`, and the
+profile-bound `uname -m`. The exact target harness additionally admits
+`x86-64-v3` on `x86_64`; an official family or machine that cannot satisfy these
+facts fails closed rather than changing the qualification contract.
 
 ## Lifecycle and retention
 
@@ -270,7 +280,7 @@ ambiguous or changed metadata results in no deletion.
 
 ## Rocky preparation and evidence
 
-Preparation admits only Rocky 10.2 with native `aarch64`, DNF4 releasever 10,
+Preparation admits only Rocky 10.2 with the selected native architecture, DNF4 releasever 10,
 exactly `baseos`, `appstream`, and `extras`, disabled automatic update and reboot
 timers, SELinux targeted and Enforcing, rootless Podman with crun, Netavark,
 cgroup v2, systemd-user, seccomp, and no Podman socket or API dependency.
@@ -305,11 +315,12 @@ permitted, effective, bounding, and ambient capability masks, and `Seccomp: 2`.
 The Quadlet requests these values, but only the observed process state satisfies
 qualification.
 
-The prior Alpine digest was the architecture-specific `amd64` child. The Rocky
-ARM input is the immutable Alpine 3.22.1 multi-platform index
+The fixture input is the immutable Alpine 3.22.1 multi-platform index
 `sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1`;
-preparation also records the resolved ARM64 child
-`sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192`.
+preparation records exactly the selected architecture child: ARM64
+`sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192`
+or amd64
+`sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f`.
 
 Discovery, preparation, continuation, and qualification use separate closed
 JSON schemas with `additionalProperties: false`. Preparation is not native
@@ -333,18 +344,18 @@ closed evidence assembly. The latter imports no process, filesystem, network,
 environment, or clock capability. A single transported script would not permit
 these responsibilities to collapse.
 
-| Evidence concept                          | External representation / observation owner                                    | Normalization and authoritative admission owner                                                                            | Assembly / schema / independent validation                                                                 | Diagnostic operation family                                                                   |
-| ----------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Immutable run, target, and image identity | workflow inputs and exact image self-link                                      | pure Rocky preparation contract                                                                                            | pure assembly; preparation schema; `rocky-control.py`                                                      | `admit-immutable-shas`, `admit-provider-image`                                                |
-| Guest OS and architecture                 | `/etc/os-release`, `uname` through the collector observer                      | pure OS parser and `admit-guest-identity`                                                                                  | pure assembly; preparation schema; trusted controller                                                      | `read-os-release`, `query-architecture`                                                       |
-| DNF and enabled repositories              | bounded `dnf4`/RPM observations                                                | pure repository parser and update/repository admission                                                                     | pure assembly; preparation schema; trusted controller                                                      | `query-dnf-version`, `query-releasever`, `query-enabled-repositories`                         |
-| Installed package provenance              | bounded RPMDB/DNF observations, one reviewed package key at a time             | pure exact NAME/EPOCH/VERSION/RELEASE/ARCH/NEVRA, repository, signature, payload, architecture, and Podman-range admission | pure assembly; preparation schema; trusted-controller agreement validator                                  | closed `query-`, `resolve-`, `inspect-`, `normalize-`, and `admit-package-*` operations       |
-| SELinux and container labeling            | `getenforce`, `selinuxenabled`, `sestatus`, and bounded container config reads | pure SELinux and label-configuration admission                                                                             | pure assembly; preparation schema; trusted controller                                                      | `query-selinux-*`, `read-container-config`                                                    |
-| Service account and subordinate IDs       | passwd/group databases plus bounded subuid/subgid reads                        | pure account, range, cardinality, and overlap admission                                                                    | pure assembly; preparation schema; trusted controller                                                      | `resolve-service-account`, `read-subuid`, `read-subgid`, identity operations                  |
-| Rootless Podman/runtime boundary          | bounded Podman JSON, systemd, cgroup, socket, and environment observations     | pure Podman normalization and runtime admission                                                                            | pure assembly; preparation schema; trusted controller                                                      | `query-podman-*`, `query-systemd-user`, `query-cgroup-filesystem`                             |
-| Immutable ARM64 fixture identity          | Podman's complete bounded `.RepoDigests` representation                        | `rocky_preparation_contract.admit_fixture_identity` is the sole semantic owner                                             | preparation delegates through the same contract CLI; pure assembly; preparation schema; trusted controller | `inspect-fixture-repo-digests`, `normalize-fixture-repo-digests`, `admit-fixture-arm64-child` |
-| Reboot and hardware persistence           | boot ID, CPU, memory, and root filesystem observations                         | pure representation normalization and persistence admission                                                                | pure assembly; preparation schema; trusted controller                                                      | `read-boot-id`, `query-cpu-count`, `read-memory-info`, `query-root-filesystem`                |
-| Cloud-identity absence                    | identity-transition marker and closed environment facts                        | pure cloud-boundary admission                                                                                              | pure assembly; preparation schema; trusted controller                                                      | `query-cloud-identity-marker`, `query-environment-authority`                                  |
+| Evidence concept                          | External representation / observation owner                                    | Normalization and authoritative admission owner                                                                            | Assembly / schema / independent validation                                                                 | Diagnostic operation family                                                                                                |
+| ----------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Immutable run, target, and image identity | workflow inputs and exact image self-link                                      | pure Rocky preparation contract                                                                                            | pure assembly; preparation schema; `rocky-control.py`                                                      | `admit-immutable-shas`, `admit-provider-image`                                                                             |
+| Guest OS and architecture                 | `/etc/os-release`, `uname` through the collector observer                      | pure OS parser and `admit-guest-identity`                                                                                  | pure assembly; preparation schema; trusted controller                                                      | `read-os-release`, `query-architecture`                                                                                    |
+| DNF and enabled repositories              | bounded `dnf4`/RPM observations                                                | pure repository parser and update/repository admission                                                                     | pure assembly; preparation schema; trusted controller                                                      | `query-dnf-version`, `query-releasever`, `query-enabled-repositories`                                                      |
+| Installed package provenance              | bounded RPMDB/DNF observations, one reviewed package key at a time             | pure exact NAME/EPOCH/VERSION/RELEASE/ARCH/NEVRA, repository, signature, payload, architecture, and Podman-range admission | pure assembly; preparation schema; trusted-controller agreement validator                                  | closed `query-`, `resolve-`, `inspect-`, `normalize-`, and `admit-package-*` operations                                    |
+| SELinux and container labeling            | `getenforce`, `selinuxenabled`, `sestatus`, and bounded container config reads | pure SELinux and label-configuration admission                                                                             | pure assembly; preparation schema; trusted controller                                                      | `query-selinux-*`, `read-container-config`                                                                                 |
+| Service account and subordinate IDs       | passwd/group databases plus bounded subuid/subgid reads                        | pure account, range, cardinality, and overlap admission                                                                    | pure assembly; preparation schema; trusted controller                                                      | `resolve-service-account`, `read-subuid`, `read-subgid`, identity operations                                               |
+| Rootless Podman/runtime boundary          | bounded Podman JSON, systemd, cgroup, socket, and environment observations     | pure Podman normalization and runtime admission                                                                            | pure assembly; preparation schema; trusted controller                                                      | `query-podman-*`, `query-systemd-user`, `query-cgroup-filesystem`                                                          |
+| Immutable architecture fixture identity   | Podman's complete bounded `.RepoDigests` representation                        | `rocky_preparation_contract.admit_fixture_identity` is the sole semantic owner                                             | preparation delegates through the same contract CLI; pure assembly; preparation schema; trusted controller | `inspect-fixture-repo-digests`, `normalize-fixture-repo-digests`, `admit-fixture-arm64-child`, `admit-fixture-amd64-child` |
+| Reboot and hardware persistence           | boot ID, CPU, memory, and root filesystem observations                         | pure representation normalization and persistence admission                                                                | pure assembly; preparation schema; trusted controller                                                      | `read-boot-id`, `query-cpu-count`, `read-memory-info`, `query-root-filesystem`                                             |
+| Cloud-identity absence                    | identity-transition marker and closed environment facts                        | pure cloud-boundary admission                                                                                              | pure assembly; preparation schema; trusted controller                                                      | `query-cloud-identity-marker`, `query-environment-authority`                                                               |
 
 Every fallible collector operation is selected from `ObservationOperation` and
 emits only a closed layer, operation, reason, and, where applicable, a reviewed

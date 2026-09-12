@@ -155,8 +155,9 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             "control_sha": "a" * 40,
             "run_id": "12345",
             "run_attempt": "1",
+            "profile": "gcp-rocky-10-2-arm64",
             "expires_at": 1800010800,
-            "image": "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-2-20260801-arm64",
+            "image": "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-arm64-v20260801",
             "first_boot_id": "11111111-1111-1111-1111-111111111111",
         }
 
@@ -918,7 +919,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         realistic = json.dumps([parent, expected], separators=(",", ":"))
         self.assertEqual(
             contract.ARM_CHILD,
-            contract.admit_fixture_repo_digests(realistic),
+            contract.admit_fixture_repo_digests(realistic, "aarch64"),
         )
         self.assertIn("--admit-fixture-repo-digests", preparation)
         self.assertNotIn("jq -e", preparation[preparation.index('current_phase="fixture"'):])
@@ -958,15 +959,17 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             with self.subTest(accepted=representation):
                 raw = json.dumps(representation, separators=(",", ":"))
                 fact = contract.normalize_fixture_repo_digests(raw)
-                decision = contract.admit_fixture_identity(fact)
-                document = contract.assemble_fixture_evidence(decision)
-                contract.validate_fixture_evidence(document)
+                decision = contract.admit_fixture_identity(fact, "aarch64")
+                document = contract.assemble_fixture_evidence(
+                    decision, "aarch64"
+                )
+                contract.validate_fixture_evidence(document, "aarch64")
         for representation in rejected:
             with self.subTest(rejected=representation):
                 raw = json.dumps(representation, separators=(",", ":"))
                 with self.assertRaises(contract.ContractError):
                     fact = contract.normalize_fixture_repo_digests(raw)
-                    contract.admit_fixture_identity(fact)
+                    contract.admit_fixture_identity(fact, "aarch64")
 
     def test_realistic_host_representations_cross_normalization_schema_and_validator(self) -> None:
         contract = load_contract()
