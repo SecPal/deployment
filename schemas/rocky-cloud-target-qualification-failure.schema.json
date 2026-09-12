@@ -908,6 +908,17 @@
               }
             },
             "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+              },
+              "harness_sha256": {
+                "const": "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
           }
         ]
       },
@@ -920,13 +931,30 @@
     },
     {
       "if": {
-        "properties": {
-          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
-          "harness_sha256": {
-            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        "anyOf": [
+          {
+            "properties": {
+              "target_sha": {
+                "const": "293977ae93408a7bb812619de58649ab8a92d438"
+              },
+              "harness_sha256": {
+                "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+              },
+              "harness_sha256": {
+                "const": "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
           }
-        },
-        "required": ["target_sha", "harness_sha256"]
+        ]
       },
       "else": {
         "not": {
@@ -975,13 +1003,30 @@
     },
     {
       "if": {
-        "properties": {
-          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
-          "harness_sha256": {
-            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        "anyOf": [
+          {
+            "properties": {
+              "target_sha": {
+                "const": "293977ae93408a7bb812619de58649ab8a92d438"
+              },
+              "harness_sha256": {
+                "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+              },
+              "harness_sha256": {
+                "const": "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
           }
-        },
-        "required": ["target_sha", "harness_sha256"]
+        ]
       },
       "then": {
         "not": {

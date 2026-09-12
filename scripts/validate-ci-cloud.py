@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import base64
 import gzip
+import hashlib
 import json
 import re
 import sys
@@ -1978,6 +1979,10 @@ def validate_gcp_iam_role(root: Path) -> None:
 
 
 def validate_rocky_control_plane(root: Path) -> None:
+    expected_target_sha = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+    expected_harness_sha256 = (
+        "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+    )
     relative = ".github/workflows/rocky-cloud-qualification.yml"
     # Historical mutation tests construct a deliberately minimal legacy tree.
     # Repository presence is owned independently by repository-contract.sh.
@@ -2017,8 +2022,17 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     require(
         "github.ref == 'refs/heads/main'" in text
-        and "^[0-9a-fA-F]{40}$" in text,
-        "Rocky control must execute trusted main for one immutable target SHA",
+        and "^[0-9a-fA-F]{40}$" in text
+        and f"readonly expected_target_sha={expected_target_sha}" in text
+        and f"readonly expected_harness_sha256={expected_harness_sha256}" in text
+        and '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]' in text
+        and (
+            '[[ "$(sha256sum scripts/qualify-production-host.sh | awk '
+            "'{print $1}')\" == \\\n"
+            '            "$expected_harness_sha256" ]]'
+        )
+        in text,
+        "Rocky control must authenticate one immutable target/harness pair",
     )
     jobs = document.get("jobs")
     require(isinstance(jobs, dict), "Rocky workflow jobs must be a mapping")
@@ -2045,6 +2059,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     qualification_schema = json.loads(
         read(root, "schemas/rocky-cloud-qualification-evidence.schema.json")
+    )
+    target_failure_schema = read(
+        root, "schemas/rocky-cloud-target-qualification-failure.schema.json"
     )
     target_failure_classifier = read(
         root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
@@ -2077,8 +2094,37 @@ def validate_rocky_control_plane(root: Path) -> None:
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
     storage_setup_line_rules = [
-        rule for rule in target_line_rules if 241 <= rule[0] <= 244
+        rule
+        for rule in target_line_rules
+        if rule[2] == "qualify-selinux-storage-directory-create"
     ]
+    validate_job_text = json.dumps(jobs["validate"], sort_keys=True)
+    require(
+        "scripts/validate-rocky-evidence-architecture.py" in validate_job_text
+        and "scripts/validate-ci-cloud.py" not in validate_job_text,
+        "Rocky schema and diagnostic agreement must fail before provider authority",
+    )
+    require(
+        hashlib.sha256((root / "scripts/qualify-production-host.sh").read_bytes()).hexdigest()
+        == expected_harness_sha256
+        and f'EXPECTED_TARGET_SHA = "{expected_target_sha}"'
+        in target_failure_classifier
+        and f'EXPECTED_HARNESS_SHA256 = "{expected_harness_sha256}"'
+        in target_failure_classifier
+        and f"readonly expected_target_sha={expected_target_sha}" in target_runner
+        and f"readonly expected_harness_sha256={expected_harness_sha256}"
+        in target_runner
+        and '[[ "$target_sha" != "$expected_target_sha" ||' in target_runner
+        and '"$qualification_harness_sha256" != "$expected_harness_sha256" ]]'
+        in target_runner
+        and target_runner.index('[[ "$target_sha" != "$expected_target_sha" ||')
+        < target_runner.index("secpal-collect-rocky-preparation")
+        < target_runner.index("getent ahostsv4 github.com")
+        < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+        and target_failure_schema.count(expected_target_sha) == 3
+        and target_failure_schema.count(expected_harness_sha256) == 3,
+        "active target, harness, classifier, and schema bindings disagree",
+    )
     for forbidden in (
         "id-token",
         "google-github-actions/auth",
@@ -2456,9 +2502,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"293977ae93408a7bb812619de58649ab8a92d438\""
+        "EXPECTED_TARGET_SHA = \"b8f5a505d318d06a64a5975cfaba9f1e5ba0041f\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256 = \"8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db\""
+        and "EXPECTED_HARNESS_SHA256 = \"918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa\""
         in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
@@ -2481,11 +2527,12 @@ def validate_rocky_control_plane(root: Path) -> None:
             and rule[0] > 91
             for rule in target_line_rules
         )
-        and [rule for rule in target_line_rules if rule[0] <= 239 and rule[1] >= 237]
+        and [rule for rule in target_line_rules if rule[0] <= 552 and rule[1] >= 522]
         == [
-            (237, 237, "qualify-quadlet-daemon-reload"),
-            (238, 238, "qualify-quadlet-start"),
-            (239, 239, "qualify-quadlet-active-state"),
+            (522, 522, "qualify-quadlet-daemon-reload"),
+            (523, 537, "qualify-quadlet-authority"),
+            (538, 538, "qualify-quadlet-start"),
+            (539, 552, "qualify-quadlet-active-state"),
         ]
         and all(
             operation not in {
@@ -2497,7 +2544,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         and storage_setup_line_rules
         == [
-            (241, 244, "qualify-selinux-storage-directory-create"),
+            (568, 568, "qualify-selinux-storage-directory-create"),
         ]
         and "qualify-quadlet-runtime" not in target_failure_classifier
         and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
@@ -2527,7 +2574,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"${14}" == start' in target_failure_trace
         and "SECPAL_START_OBSERVATION_PATH"
         not in target_failure_trace + target_runner + start_runuser
-        and "10#$frame == 237" in target_failure_trace
+        and "10#$frame == 522" in target_failure_trace
         and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in start_runuser
         and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")'
         in start_runuser
@@ -2686,14 +2733,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_trace
         and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
         in target_failure_trace
-        and "10#$frame == 237" in target_failure_trace
+        and "10#$frame == 522" in target_failure_trace
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
         and "return \"$status\"" in target_failure_trace
         and 'mkfifo -m 0600 "$reload_event" "$reload_ack"' in target_runner
-        and '"$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438'
+        and '"$target_sha" == "$expected_target_sha"'
         in target_runner
-        and "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        and '"$qualification_harness_sha256" == "$expected_harness_sha256"'
         in target_runner
         and target_runner.index("observe-rocky-quadlet-reload-adjacency.py")
         < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
@@ -2728,7 +2775,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
         not in bootstrap
         and "pwd.error" not in reload_adjacency_observer
-        and "or 237 not in frames" in reload_adjacency_observer
+        and "or 522 not in frames" in reload_adjacency_observer
         and "or 242 not in frames" not in reload_adjacency_observer,
         "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
     )

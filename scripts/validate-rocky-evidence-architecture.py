@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
+import re
 import symtable
 import sys
 from pathlib import Path
@@ -27,6 +29,17 @@ DEFAULT_QUALIFICATION_RUNNER = (
     ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
 )
 DEFAULT_ROCKY_CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
+DEFAULT_WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+DEFAULT_TARGET_FAILURE_CLASSIFIER = (
+    ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+)
+DEFAULT_TARGET_FAILURE_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
+)
+DEFAULT_TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+DEFAULT_RELOAD_OBSERVER = (
+    ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+)
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
     "asyncio", "datetime", "grp", "http", "os", "pathlib", "pwd", "requests",
@@ -100,6 +113,21 @@ def assignment_string_dict(tree: ast.Module, name: str) -> dict[str, str] | None
             return None
         return dict(pairs)
     return None
+
+
+def assignment_literal(tree: ast.Module, name: str) -> object:
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            try:
+                return ast.literal_eval(node.value)
+            except (TypeError, ValueError) as error:
+                raise ArchitectureError(
+                    f"architecture constant is not literal: {name}"
+                ) from error
+    raise ArchitectureError(f"architecture constant is missing: {name}")
 
 
 def validate_pure_contract(path: Path) -> None:
@@ -577,6 +605,110 @@ def validate_selinux_isolation_architecture(
         raise ArchitectureError("SELinux isolation owner performs external observation")
 
 
+def validate_target_qualification_binding(
+    workflow_path: Path,
+    harness_path: Path,
+    runner_path: Path,
+    classifier_path: Path,
+    failure_schema_path: Path,
+    trace_path: Path,
+    reload_observer_path: Path,
+) -> None:
+    """Enforce agreement with the workflow-owned current target identity."""
+
+    try:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        harness = harness_path.read_bytes()
+        runner = runner_path.read_text(encoding="utf-8")
+        classifier = classifier_path.read_text(encoding="utf-8")
+        failure_schema = failure_schema_path.read_text(encoding="utf-8")
+        json.loads(failure_schema)
+        trace = trace_path.read_text(encoding="utf-8")
+        reload_observer = reload_observer_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ArchitectureError(
+            "target-qualification binding component is unavailable"
+        ) from error
+
+    target_matches = re.findall(
+        r"^\s*readonly expected_target_sha=([0-9a-f]{40})$", workflow, re.MULTILINE
+    )
+    harness_matches = re.findall(
+        r"^\s*readonly expected_harness_sha256=([0-9a-f]{64})$",
+        workflow,
+        re.MULTILINE,
+    )
+    if len(target_matches) != 1 or len(harness_matches) != 1:
+        raise ArchitectureError("workflow must own one exact target/harness pair")
+    expected_target = target_matches[0]
+    expected_harness = harness_matches[0]
+    if (
+        '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]' not in workflow
+        or "sha256sum scripts/qualify-production-host.sh" not in workflow
+        or '"$expected_harness_sha256" ]]' not in workflow
+        or hashlib.sha256(harness).hexdigest() != expected_harness
+    ):
+        raise ArchitectureError("workflow target/harness authentication disagrees")
+
+    classifier_tree = parse(classifier_path)
+    if (
+        assignment_string(classifier_tree, "EXPECTED_TARGET_SHA") != expected_target
+        or assignment_string(classifier_tree, "EXPECTED_HARNESS_SHA256")
+        != expected_harness
+    ):
+        raise ArchitectureError("diagnostic classifier target/harness binding disagrees")
+
+    line_rules = assignment_literal(classifier_tree, "LINE_RULES")
+    if not isinstance(line_rules, tuple):
+        raise ArchitectureError("current diagnostic line map is not closed")
+    previous_last = 0
+    reload_lines: list[int] = []
+    for rule in line_rules:
+        if (
+            not isinstance(rule, tuple)
+            or len(rule) != 3
+            or not isinstance(rule[0], int)
+            or not isinstance(rule[1], int)
+            or not isinstance(rule[2], str)
+            or rule[0] <= previous_last
+            or rule[0] > rule[1]
+        ):
+            raise ArchitectureError("current diagnostic line map is not closed")
+        if rule[2] == "qualify-quadlet-daemon-reload" and rule[0] == rule[1]:
+            reload_lines.append(rule[0])
+        previous_last = rule[1]
+    if len(reload_lines) != 1:
+        raise ArchitectureError("daemon-reload diagnostic source mapping disagrees")
+    reload_line = reload_lines[0]
+    if (
+        f"10#$frame == {reload_line}" not in trace
+        or f"or {reload_line} not in frames" not in reload_observer
+    ):
+        raise ArchitectureError("daemon-reload diagnostic source mapping disagrees")
+
+    runner_target = f"readonly expected_target_sha={expected_target}"
+    runner_harness = f"readonly expected_harness_sha256={expected_harness}"
+    pair_gate = '[[ "$target_sha" != "$expected_target_sha" ||'
+    if (
+        runner_target not in runner
+        or runner_harness not in runner
+        or pair_gate not in runner
+        or '"$qualification_harness_sha256" != "$expected_harness_sha256" ]]'
+        not in runner
+        or runner.index(pair_gate) >= runner.index("[[ -f /var/lib/secpal-rocky/prepared ]]")
+        or runner.index(pair_gate) >= runner.index("getent ahostsv4 github.com")
+        or runner.index(pair_gate)
+        >= runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+    ):
+        raise ArchitectureError("guest target/harness authentication disagrees")
+
+    if (
+        failure_schema.count(expected_target) != 3
+        or failure_schema.count(expected_harness) != 3
+    ):
+        raise ArchitectureError("diagnostic schema target/harness binding disagrees")
+
+
 def main(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
@@ -595,6 +727,19 @@ def main(arguments: list[str]) -> int:
         "--qualification-runner", type=Path, default=DEFAULT_QUALIFICATION_RUNNER
     )
     parser.add_argument("--rocky-control", type=Path, default=DEFAULT_ROCKY_CONTROL)
+    parser.add_argument("--workflow", type=Path, default=DEFAULT_WORKFLOW)
+    parser.add_argument(
+        "--target-failure-classifier",
+        type=Path,
+        default=DEFAULT_TARGET_FAILURE_CLASSIFIER,
+    )
+    parser.add_argument(
+        "--target-failure-schema", type=Path, default=DEFAULT_TARGET_FAILURE_SCHEMA
+    )
+    parser.add_argument("--target-trace", type=Path, default=DEFAULT_TARGET_TRACE)
+    parser.add_argument(
+        "--reload-observer", type=Path, default=DEFAULT_RELOAD_OBSERVER
+    )
     options = parser.parse_args(arguments)
     try:
         validate_pure_contract(options.contract)
@@ -608,6 +753,15 @@ def main(arguments: list[str]) -> int:
             options.qualification_harness,
             options.qualification_runner,
             options.rocky_control,
+        )
+        validate_target_qualification_binding(
+            options.workflow,
+            options.qualification_harness,
+            options.qualification_runner,
+            options.target_failure_classifier,
+            options.target_failure_schema,
+            options.target_trace,
+            options.reload_observer,
         )
     except ArchitectureError as error:
         print(f"ERROR: Rocky evidence architecture rejected: {error}", file=sys.stderr)

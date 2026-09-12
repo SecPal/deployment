@@ -71,7 +71,7 @@ jobs:
         with:
           python-version: "3.12.13"
 
-      - name: Validate Rocky evidence architecture before provider authority
+      - name: Validate Rocky evidence architecture and trusted control before provider authority
         run: scripts/validate-rocky-evidence-architecture.py
 
       - name: Validate immutable inputs
@@ -84,8 +84,13 @@ jobs:
           RAW_SOURCE_RUN_ATTEMPT: ${{ inputs.continuation_run_attempt }}
           IS_DEFAULT_BRANCH: ${{ github.ref == 'refs/heads/main' }}
         run: |
+          readonly expected_target_sha=b8f5a505d318d06a64a5975cfaba9f1e5ba0041f
+          readonly expected_harness_sha256=918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa
           [[ "$IS_DEFAULT_BRANCH" == true ]]
           [[ "$RAW_TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]
+          [[ "$(sha256sum scripts/qualify-production-host.sh | awk '{print $1}')" == \
+            "$expected_harness_sha256" ]]
           [[ "$RAW_PROFILE" == gcp-rocky-10-2-arm64 ]]
           case "$RAW_OPERATION" in
             discover | provision-and-prepare)

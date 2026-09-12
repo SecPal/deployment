@@ -26,6 +26,13 @@ readonly control_sha="$2"
 readonly qualification_run_id="$3"
 readonly qualification_run_attempt="$4"
 readonly qualification_harness_sha256="$5"
+readonly expected_target_sha=b8f5a505d318d06a64a5975cfaba9f1e5ba0041f
+readonly expected_harness_sha256=918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa
+if [[ "$target_sha" != "$expected_target_sha" ||
+  "$qualification_harness_sha256" != "$expected_harness_sha256" ]]; then
+  printf 'ERROR: target and qualification harness are not the trusted pair.\n' >&2
+  exit 64
+fi
 [[ -f /var/lib/secpal-rocky/prepared ]]
 [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]
 [[ -z "${GOOGLE_OAUTH_ACCESS_TOKEN:-}" ]]
@@ -180,9 +187,8 @@ install -o root -g root -m 0600 /dev/null "$primary_observation"
 mkfifo -m 0600 "$trace_fifo"
 observer_pid=""
 trace_capture_pid=""
-if [[ "$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438 ]] &&
-  [[ "$qualification_harness_sha256" == \
-    8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db ]]; then
+if [[ "$target_sha" == "$expected_target_sha" ]] &&
+  [[ "$qualification_harness_sha256" == "$expected_harness_sha256" ]]; then
   mkfifo -m 0600 "$reload_event" "$reload_ack"
   /opt/secpal-control/scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py \
     --event "$reload_event" --ack "$reload_ack" --output "$reload_adjacency" \
