@@ -40,6 +40,42 @@ DEFAULT_TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace
 DEFAULT_RELOAD_OBSERVER = (
     ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
 )
+EXPECTED_TARGET_SHA = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+EXPECTED_HARNESS_SHA256 = (
+    "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+)
+HISTORICAL_CLEANUP_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
+EXPECTED_TARGET_LINE_RULES = (
+    (365, 371, "qualify-host-identity"),
+    (373, 376, "qualify-administrator-execution"),
+    (377, 380, "qualify-fixture-reference"),
+    (381, 402, "qualify-service-account"),
+    (406, 409, "qualify-selinux-host"),
+    (411, 424, "qualify-native-architecture"),
+    (426, 429, "qualify-cgroup"),
+    (430, 446, "qualify-rootless-runtime"),
+    (447, 450, "qualify-fixture-presence"),
+    (452, 460, "qualify-fixture-setup"),
+    (462, 521, "qualify-quadlet-authority"),
+    (522, 522, "qualify-quadlet-daemon-reload"),
+    (523, 537, "qualify-quadlet-authority"),
+    (538, 538, "qualify-quadlet-start"),
+    (539, 539, "qualify-quadlet-active-state"),
+    (541, 552, "qualify-quadlet-authority"),
+    (553, 558, "qualify-workload-primary"),
+    (559, 564, "qualify-seccomp"),
+    (568, 568, "qualify-selinux-storage-directory-create"),
+    (570, 574, "qualify-workload-primary"),
+    (575, 578, "qualify-workload-secondary"),
+    (580, 586, "qualify-selinux-storage"),
+    (590, 596, "qualify-avc-correlation"),
+    (599, 605, "qualify-selinux-policy-restoration"),
+    (608, 613, "qualify-avc-correlation"),
+    (615, 623, "qualify-selinux-policy-restoration"),
+    (626, 642, "qualify-avc-correlation"),
+    (649, 652, "qualify-runtime-fallback-absence"),
+    (654, 654, "qualification-harness"),
+)
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
     "asyncio", "datetime", "grp", "http", "os", "pathlib", "pwd", "requests",
@@ -128,6 +164,34 @@ def assignment_literal(tree: ast.Module, name: str) -> object:
                     f"architecture constant is not literal: {name}"
                 ) from error
     raise ArchitectureError(f"architecture constant is missing: {name}")
+
+
+def schema_const_pairs(document: object) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    if isinstance(document, dict):
+        properties = document.get("properties")
+        required = document.get("required")
+        if (
+            isinstance(properties, dict)
+            and isinstance(required, list)
+            and all(isinstance(item, str) for item in required)
+        ):
+            target = properties.get("target_sha")
+            harness = properties.get("harness_sha256")
+            if (
+                {"target_sha", "harness_sha256"} <= set(required)
+                and isinstance(target, dict)
+                and isinstance(target.get("const"), str)
+                and isinstance(harness, dict)
+                and isinstance(harness.get("const"), str)
+            ):
+                pairs.append((target["const"], harness["const"]))
+        for value in document.values():
+            pairs.extend(schema_const_pairs(value))
+    elif isinstance(document, list):
+        for value in document:
+            pairs.extend(schema_const_pairs(value))
+    return pairs
 
 
 def validate_pure_contract(path: Path) -> None:
@@ -621,8 +685,7 @@ def validate_target_qualification_binding(
         harness = harness_path.read_bytes()
         runner = runner_path.read_text(encoding="utf-8")
         classifier = classifier_path.read_text(encoding="utf-8")
-        failure_schema = failure_schema_path.read_text(encoding="utf-8")
-        json.loads(failure_schema)
+        failure_schema = json.loads(failure_schema_path.read_text(encoding="utf-8"))
         trace = trace_path.read_text(encoding="utf-8")
         reload_observer = reload_observer_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -640,10 +703,24 @@ def validate_target_qualification_binding(
     )
     if len(target_matches) != 1 or len(harness_matches) != 1:
         raise ArchitectureError("workflow must own one exact target/harness pair")
-    expected_target = target_matches[0]
-    expected_harness = harness_matches[0]
+    expected_target = EXPECTED_TARGET_SHA
+    expected_harness = EXPECTED_HARNESS_SHA256
+    current_target_gate = '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]'
+    cleanup_target_gate = (
+        '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ||\n'
+        '                "${RAW_TARGET_SHA,,}" == '
+        '"$historical_cleanup_target_sha" ]]'
+    )
     if (
-        '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]' not in workflow
+        target_matches != [expected_target]
+        or harness_matches != [expected_harness]
+        or workflow.count(current_target_gate) != 2
+        or workflow.count(
+            "readonly historical_cleanup_target_sha="
+            + HISTORICAL_CLEANUP_TARGET_SHA
+        )
+        != 1
+        or workflow.count(cleanup_target_gate) != 1
         or "sha256sum scripts/qualify-production-host.sh" not in workflow
         or '"$expected_harness_sha256" ]]' not in workflow
         or hashlib.sha256(harness).hexdigest() != expected_harness
@@ -659,27 +736,9 @@ def validate_target_qualification_binding(
         raise ArchitectureError("diagnostic classifier target/harness binding disagrees")
 
     line_rules = assignment_literal(classifier_tree, "LINE_RULES")
-    if not isinstance(line_rules, tuple):
-        raise ArchitectureError("current diagnostic line map is not closed")
-    previous_last = 0
-    reload_lines: list[int] = []
-    for rule in line_rules:
-        if (
-            not isinstance(rule, tuple)
-            or len(rule) != 3
-            or not isinstance(rule[0], int)
-            or not isinstance(rule[1], int)
-            or not isinstance(rule[2], str)
-            or rule[0] <= previous_last
-            or rule[0] > rule[1]
-        ):
-            raise ArchitectureError("current diagnostic line map is not closed")
-        if rule[2] == "qualify-quadlet-daemon-reload" and rule[0] == rule[1]:
-            reload_lines.append(rule[0])
-        previous_last = rule[1]
-    if len(reload_lines) != 1:
-        raise ArchitectureError("daemon-reload diagnostic source mapping disagrees")
-    reload_line = reload_lines[0]
+    if line_rules != EXPECTED_TARGET_LINE_RULES:
+        raise ArchitectureError("current diagnostic line map disagrees")
+    reload_line = 522
     if (
         f"10#$frame == {reload_line}" not in trace
         or f"or {reload_line} not in frames" not in reload_observer
@@ -703,8 +762,10 @@ def validate_target_qualification_binding(
         raise ArchitectureError("guest target/harness authentication disagrees")
 
     if (
-        failure_schema.count(expected_target) != 3
-        or failure_schema.count(expected_harness) != 3
+        schema_const_pairs(failure_schema).count(
+            (expected_target, expected_harness)
+        )
+        != 3
     ):
         raise ArchitectureError("diagnostic schema target/harness binding disagrees")
 

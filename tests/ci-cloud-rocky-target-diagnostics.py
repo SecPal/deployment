@@ -598,9 +598,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             line_rules=self.classifier.HISTORICAL_LINE_RULES,
         )
 
-    def classify_current(self, trace: str) -> tuple[str, str]:
+    def classify_current(self, trace: str, output: str = "") -> tuple[str, str]:
         return self.classifier.classify_failure(
-            b"", trace.encode(), 1, target_bound=True,
+            output.encode(), trace.encode(), 1, target_bound=True,
             line_rules=self.classifier.LINE_RULES,
         )
 
@@ -825,6 +825,41 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 )
         for line in (568, 569, 570):
             self.assertNotEqual("qualify-selinux-storage-fcontext-add", self.classifier.operation_for_line(line))
+
+    def test_current_target_messages_preserve_invariant_semantics(self) -> None:
+        cases = (
+            (
+                "ERROR: service account must resolve to a non-root runtime identity.\n",
+                396,
+                "qualify-service-account",
+            ),
+            (
+                "ERROR: effective Podman runtime is not the admitted rootless service identity.\n",
+                444,
+                "qualify-rootless-runtime",
+            ),
+            (
+                "ERROR: effective Quadlet runtime identity contradicts the service account.\n",
+                550,
+                "qualify-quadlet-authority",
+            ),
+            (
+                "ERROR: representative workload lacks the effective least-authority process state.\n",
+                562,
+                "qualify-seccomp",
+            ),
+            (
+                "ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n",
+                612,
+                "qualify-avc-correlation",
+            ),
+        )
+        for message, line, operation in cases:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    (operation, "invariant-failed"),
+                    self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}", message),
+                )
 
     def test_every_current_line_range_is_closed_nonoverlapping_and_reachable(
         self,
@@ -1414,7 +1449,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 executable = fake_bin / name
                 executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
                 executable.chmod(0o700)
-            lines = ["set -euo pipefail"] + [""] * 521
+            lines = ["set -euo pipefail"] + [""] * 523
             definitions = {
                 52: "user_systemctl() {",
                 53: "  false",
@@ -1426,7 +1461,10 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 66: "}",
                 204: "trap cleanup EXIT",
                 216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
+                500: "main() {",
                 522: "user_systemctl daemon-reload",
+                523: "}",
+                524: "main",
             }
             for line_number, source in definitions.items():
                 lines[line_number - 1] = source
@@ -2725,6 +2763,18 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
     def test_every_reviewed_message_and_call_site_has_a_closed_mapping(self) -> None:
         for prefix, operation, reason in self.classifier.EXPLICIT_RULES:
             with self.subTest(prefix=prefix):
+                self.assertEqual(
+                    (operation, reason),
+                    self.classifier.classify_failure(
+                        prefix.encode(),
+                        b"",
+                        1,
+                        target_bound=True,
+                        line_rules=self.classifier.LINE_RULES,
+                    ),
+                )
+        for prefix, operation, reason in self.classifier.HISTORICAL_EXPLICIT_RULES:
+            with self.subTest(historical_prefix=prefix):
                 self.assertEqual((operation, reason), self.classify(prefix))
         for first, last, operation in self.classifier.HISTORICAL_LINE_RULES:
             with self.subTest(line=first):

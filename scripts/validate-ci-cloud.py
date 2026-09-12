@@ -1983,6 +1983,64 @@ def validate_rocky_control_plane(root: Path) -> None:
     expected_harness_sha256 = (
         "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
     )
+    expected_target_line_rules = (
+        (365, 371, "qualify-host-identity"),
+        (373, 376, "qualify-administrator-execution"),
+        (377, 380, "qualify-fixture-reference"),
+        (381, 402, "qualify-service-account"),
+        (406, 409, "qualify-selinux-host"),
+        (411, 424, "qualify-native-architecture"),
+        (426, 429, "qualify-cgroup"),
+        (430, 446, "qualify-rootless-runtime"),
+        (447, 450, "qualify-fixture-presence"),
+        (452, 460, "qualify-fixture-setup"),
+        (462, 521, "qualify-quadlet-authority"),
+        (522, 522, "qualify-quadlet-daemon-reload"),
+        (523, 537, "qualify-quadlet-authority"),
+        (538, 538, "qualify-quadlet-start"),
+        (539, 539, "qualify-quadlet-active-state"),
+        (541, 552, "qualify-quadlet-authority"),
+        (553, 558, "qualify-workload-primary"),
+        (559, 564, "qualify-seccomp"),
+        (568, 568, "qualify-selinux-storage-directory-create"),
+        (570, 574, "qualify-workload-primary"),
+        (575, 578, "qualify-workload-secondary"),
+        (580, 586, "qualify-selinux-storage"),
+        (590, 596, "qualify-avc-correlation"),
+        (599, 605, "qualify-selinux-policy-restoration"),
+        (608, 613, "qualify-avc-correlation"),
+        (615, 623, "qualify-selinux-policy-restoration"),
+        (626, 642, "qualify-avc-correlation"),
+        (649, 652, "qualify-runtime-fallback-absence"),
+        (654, 654, "qualification-harness"),
+    )
+
+    def schema_const_pairs(document: object) -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        if isinstance(document, dict):
+            properties = document.get("properties")
+            required = document.get("required")
+            if (
+                isinstance(properties, dict)
+                and isinstance(required, list)
+                and all(isinstance(item, str) for item in required)
+            ):
+                target = properties.get("target_sha")
+                harness = properties.get("harness_sha256")
+                if (
+                    {"target_sha", "harness_sha256"} <= set(required)
+                    and isinstance(target, dict)
+                    and isinstance(target.get("const"), str)
+                    and isinstance(harness, dict)
+                    and isinstance(harness.get("const"), str)
+                ):
+                    pairs.append((target["const"], harness["const"]))
+            for value in document.values():
+                pairs.extend(schema_const_pairs(value))
+        elif isinstance(document, list):
+            for value in document:
+                pairs.extend(schema_const_pairs(value))
+        return pairs
     relative = ".github/workflows/rocky-cloud-qualification.yml"
     # Historical mutation tests construct a deliberately minimal legacy tree.
     # Repository presence is owned independently by repository-contract.sh.
@@ -2025,7 +2083,19 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "^[0-9a-fA-F]{40}$" in text
         and f"readonly expected_target_sha={expected_target_sha}" in text
         and f"readonly expected_harness_sha256={expected_harness_sha256}" in text
-        and '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]' in text
+        and text.count('[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]')
+        == 2
+        and text.count(
+            "readonly historical_cleanup_target_sha="
+            "293977ae93408a7bb812619de58649ab8a92d438"
+        )
+        == 1
+        and text.count(
+            '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ||\n'
+            '                "${RAW_TARGET_SHA,,}" == '
+            '"$historical_cleanup_target_sha" ]]'
+        )
+        == 1
         and (
             '[[ "$(sha256sum scripts/qualify-production-host.sh | awk '
             "'{print $1}')\" == \\\n"
@@ -2060,8 +2130,8 @@ def validate_rocky_control_plane(root: Path) -> None:
     qualification_schema = json.loads(
         read(root, "schemas/rocky-cloud-qualification-evidence.schema.json")
     )
-    target_failure_schema = read(
-        root, "schemas/rocky-cloud-target-qualification-failure.schema.json"
+    target_failure_schema = json.loads(
+        read(root, "schemas/rocky-cloud-target-qualification-failure.schema.json")
     )
     target_failure_classifier = read(
         root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
@@ -2101,7 +2171,8 @@ def validate_rocky_control_plane(root: Path) -> None:
     validate_job_text = json.dumps(jobs["validate"], sort_keys=True)
     require(
         "scripts/validate-rocky-evidence-architecture.py" in validate_job_text
-        and "scripts/validate-ci-cloud.py" not in validate_job_text,
+        and "scripts/validate-ci-cloud.py" in validate_job_text
+        and "jsonschema==4.25.1 PyYAML==6.0.2" in validate_job_text,
         "Rocky schema and diagnostic agreement must fail before provider authority",
     )
     require(
@@ -2121,8 +2192,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         < target_runner.index("secpal-collect-rocky-preparation")
         < target_runner.index("getent ahostsv4 github.com")
         < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
-        and target_failure_schema.count(expected_target_sha) == 3
-        and target_failure_schema.count(expected_harness_sha256) == 3,
+        and schema_const_pairs(target_failure_schema).count(
+            (expected_target_sha, expected_harness_sha256)
+        )
+        == 3,
         "active target, harness, classifier, and schema bindings disagree",
     )
     for forbidden in (
@@ -2527,12 +2600,14 @@ def validate_rocky_control_plane(root: Path) -> None:
             and rule[0] > 91
             for rule in target_line_rules
         )
+        and target_line_rules == expected_target_line_rules
         and [rule for rule in target_line_rules if rule[0] <= 552 and rule[1] >= 522]
         == [
             (522, 522, "qualify-quadlet-daemon-reload"),
             (523, 537, "qualify-quadlet-authority"),
             (538, 538, "qualify-quadlet-start"),
-            (539, 552, "qualify-quadlet-active-state"),
+            (539, 539, "qualify-quadlet-active-state"),
+            (541, 552, "qualify-quadlet-authority"),
         ]
         and all(
             operation not in {

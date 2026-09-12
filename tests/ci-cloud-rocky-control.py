@@ -58,6 +58,11 @@ class RockyCloudControlTests(unittest.TestCase):
         self,
     ) -> None:
         runner = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
+        runner_source = runner.read_text(encoding="utf-8")
+        pair_gate = runner_source.index(
+            'if [[ "$target_sha" != "$expected_target_sha" ||'
+        )
+        gate_end = runner_source.index("\nfi\n", pair_gate) + len("\nfi\n")
         current_target = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
         current_harness = (
             "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
@@ -66,32 +71,45 @@ class RockyCloudControlTests(unittest.TestCase):
         historical_harness = (
             "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
         )
-        for target, harness in (
-            (historical_target, historical_harness),
-            (current_target, historical_harness),
-            (historical_target, current_harness),
-            ("a" * 40, current_harness),
-            (current_target, "b" * 64),
-        ):
-            with self.subTest(target=target, harness=harness):
-                completed = subprocess.run(
-                    [runner, target, "c" * 40, "12345", "1", harness],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(64, completed.returncode)
-                self.assertEqual(
-                    "ERROR: target and qualification harness are not the trusted pair.\n",
-                    completed.stderr,
-                )
+        with tempfile.TemporaryDirectory() as directory:
+            isolated_gate = Path(directory) / "target-pair-gate.sh"
+            isolated_gate.write_text(
+                runner_source[:gate_end] + "exit 0\n", encoding="utf-8"
+            )
+            isolated_gate.chmod(0o700)
+            for target, harness in (
+                (historical_target, historical_harness),
+                (current_target, historical_harness),
+                (historical_target, current_harness),
+                ("a" * 40, current_harness),
+                (current_target, "b" * 64),
+            ):
+                with self.subTest(target=target, harness=harness):
+                    completed = subprocess.run(
+                        [isolated_gate, target, "c" * 40, "12345", "1", harness],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(64, completed.returncode)
+                    self.assertEqual(
+                        "ERROR: target and qualification harness are not the trusted pair.\n",
+                        completed.stderr,
+                    )
 
-        admitted = subprocess.run(
-            [runner, current_target, "c" * 40, "12345", "1", current_harness],
-            check=False,
-            capture_output=True,
-        )
-        self.assertNotEqual(64, admitted.returncode)
+            admitted = subprocess.run(
+                [
+                    isolated_gate,
+                    current_target,
+                    "c" * 40,
+                    "12345",
+                    "1",
+                    current_harness,
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, admitted.returncode)
 
     def test_gce_metadata_policy_separates_dns_from_metadata_api(self) -> None:
         preparation = (ROOT / "scripts/ci-cloud/prepare-rocky-host.sh").read_text(

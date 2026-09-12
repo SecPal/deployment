@@ -116,9 +116,8 @@ ZERO_STATUS_TRUSTED_DECISIONS = frozenset(
     }
 )
 
-# These are exact reviewed d892 target messages.  Variable suffixes are never
-# copied to evidence; a prefix match selects only the finite semantic identity.
-EXPLICIT_RULES = (
+# Historical rules remain available only with a historical immutable line map.
+HISTORICAL_EXPLICIT_RULES = (
     ("NOT RUN: Rocky Linux ", "qualify-host-identity", "invariant-failed"),
     ("ERROR: native qualification must run as an administrator", "qualify-administrator-execution", "invariant-failed"),
     ("ERROR: --image must be a fully qualified, pre-staged digest reference", "qualify-fixture-reference", "invariant-failed"),
@@ -144,6 +143,41 @@ EXPLICIT_RULES = (
     ("ERROR: unable to temporarily expose SELinux dontaudit denials", "qualify-selinux-policy-restoration", "command-failed"),
     ("ERROR: SELinux stopped Enforcing while exposing dontaudit denials", "qualify-selinux-policy-restoration", "invariant-failed"),
     ("ERROR: cross-boundary failure lacks a matching SELinux AVC denial", "qualify-avc-correlation", "invariant-failed"),
+    ("ERROR: unable to restore SELinux dontaudit policy", "qualify-selinux-policy-restoration", "command-failed"),
+    ("ERROR: SELinux is not Enforcing after restoring dontaudit policy", "qualify-selinux-policy-restoration", "invariant-failed"),
+    ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
+)
+
+# These are exact reviewed current-target messages.  Variable suffixes are never
+# copied to evidence; a prefix match selects only the finite semantic identity.
+EXPLICIT_RULES = (
+    ("NOT RUN: Rocky Linux ", "qualify-host-identity", "invariant-failed"),
+    ("ERROR: native qualification must run as an administrator", "qualify-administrator-execution", "invariant-failed"),
+    ("ERROR: --image must be a fully qualified, pre-staged digest reference", "qualify-fixture-reference", "invariant-failed"),
+    ("ERROR: required service account does not exist", "qualify-service-account", "invariant-failed"),
+    ("ERROR: service-account home must be an existing absolute directory", "qualify-service-account", "invariant-failed"),
+    ("ERROR: service account must resolve to a non-root runtime identity", "qualify-service-account", "invariant-failed"),
+    ("ERROR: service-account home is not usable", "qualify-service-account", "invariant-failed"),
+    ("ERROR: SELinux is not Enforcing.", "qualify-selinux-host", "invariant-failed"),
+    ("ERROR: x86_64 CPU does not satisfy Rocky Linux 10 x86-64-v3", "qualify-native-architecture", "invariant-failed"),
+    ("ERROR: unsupported native architecture", "qualify-native-architecture", "invariant-failed"),
+    ("ERROR: unified cgroup v2 is not effective", "qualify-cgroup", "invariant-failed"),
+    ("ERROR: rootless Podman does not select crun", "qualify-rootless-runtime", "invariant-failed"),
+    ("ERROR: rootless Podman does not select Netavark", "qualify-rootless-runtime", "invariant-failed"),
+    ("ERROR: effective Podman runtime is not the admitted rootless service identity", "qualify-rootless-runtime", "invariant-failed"),
+    ("ERROR: digest-only fixture image is not pre-staged", "qualify-fixture-presence", "invariant-failed"),
+    ("ERROR: administrator Quadlet path ancestry is not trusted", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: administrator Quadlet search-path policy is not trusted", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: effective Quadlet search path is not the admitted administrator directory", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: unsafe Quadlet setting detected", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: effective Quadlet service contradicts the admitted administrator configuration", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: effective Quadlet runtime identity contradicts the service account", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: representative workload lacks the effective least-authority process state", "qualify-seccomp", "invariant-failed"),
+    ("ERROR: representative process or storage label is not container-confined", "qualify-selinux-storage", "invariant-failed"),
+    ("ERROR: cross-boundary denial observation is invalid", "qualify-avc-correlation", "invariant-failed"),
+    ("ERROR: unable to temporarily expose SELinux dontaudit denials", "qualify-selinux-policy-restoration", "command-failed"),
+    ("ERROR: SELinux stopped Enforcing while exposing dontaudit denials", "qualify-selinux-policy-restoration", "invariant-failed"),
+    ("ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial", "qualify-avc-correlation", "invariant-failed"),
     ("ERROR: unable to restore SELinux dontaudit policy", "qualify-selinux-policy-restoration", "command-failed"),
     ("ERROR: SELinux is not Enforcing after restoring dontaudit policy", "qualify-selinux-policy-restoration", "invariant-failed"),
     ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
@@ -219,7 +253,8 @@ LINE_RULES = (
     (522, 522, "qualify-quadlet-daemon-reload"),
     (523, 537, "qualify-quadlet-authority"),
     (538, 538, "qualify-quadlet-start"),
-    (539, 552, "qualify-quadlet-active-state"),
+    (539, 539, "qualify-quadlet-active-state"),
+    (541, 552, "qualify-quadlet-authority"),
     (553, 558, "qualify-workload-primary"),
     (559, 564, "qualify-seccomp"),
     (568, 568, "qualify-selinux-storage-directory-create"),
@@ -629,9 +664,12 @@ def classify_failure(
     if exit_status in (124, 137):
         return "qualification-harness", "timeout"
 
+    explicit_rules = (
+        EXPLICIT_RULES if line_rules is LINE_RULES else HISTORICAL_EXPLICIT_RULES
+    )
     explicit = {
         (operation, reason)
-        for prefix, operation, reason in EXPLICIT_RULES
+        for prefix, operation, reason in explicit_rules
         if any(line.startswith(prefix) for line in text.splitlines())
     }
     if len(explicit) > 1:

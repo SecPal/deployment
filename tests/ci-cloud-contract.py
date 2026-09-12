@@ -1174,8 +1174,12 @@ class CloudCIContractTests(unittest.TestCase):
                 '(538, 538, "qualify-quadlet-daemon-reload"),',
             ),
             (
-                '(539, 552, "qualify-quadlet-active-state"),',
-                '(539, 552, "qualify-quadlet-start"),',
+                '(539, 539, "qualify-quadlet-active-state"),',
+                '(539, 539, "qualify-quadlet-start"),',
+            ),
+            (
+                '(570, 574, "qualify-workload-primary"),',
+                '(570, 574, "qualify-workload-secondary"),',
             ),
         ):
             with self.subTest(new=new):
@@ -1299,6 +1303,79 @@ class CloudCIContractTests(unittest.TestCase):
         for relative, old, new in mutations:
             with self.subTest(relative=relative, new=new):
                 self.assert_mutation_rejected(relative, old, new)
+
+    def test_rejects_schema_pair_substitution_with_unchanged_literal_counts(
+        self,
+    ) -> None:
+        relative = "schemas/rocky-cloud-target-qualification-failure.schema.json"
+        current = (
+            "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+        )
+        historical = (
+            "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        )
+        fixture = self.mutated_root(relative, current, "x" * 64)
+        schema = (fixture / relative).read_text(encoding="utf-8")
+        schema = schema.replace(historical, current, 1).replace(
+            "x" * 64, historical, 1
+        )
+        (fixture / relative).write_text(schema, encoding="utf-8")
+        result = self.run_validator(fixture)
+        self.assertNotEqual(0, result.returncode, result.stdout)
+
+    def test_destroy_cleanup_authenticates_retained_target_before_oidc(self) -> None:
+        workflow = (
+            ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+        ).read_text(encoding="utf-8")
+        validation = workflow.split(
+            "      - name: Validate immutable inputs\n", 1
+        )[1].split("\n  discover:\n", 1)[0]
+        cleanup = workflow.split("\n  cleanup:\n", 1)[1]
+        self.assertIn(
+            'destroy)\n              [[ "${RAW_TARGET_SHA,,}" == '
+            '"$expected_target_sha" ||\n                "${RAW_TARGET_SHA,,}" == '
+            '"$historical_cleanup_target_sha" ]]',
+            validation,
+        )
+        self.assertIn(
+            "readonly historical_cleanup_target_sha="
+            "293977ae93408a7bb812619de58649ab8a92d438",
+            validation,
+        )
+        self.assert_mutation_rejected(
+            ".github/workflows/rocky-cloud-qualification.yml",
+            '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ||\n'
+            '                "${RAW_TARGET_SHA,,}" == '
+            '"$historical_cleanup_target_sha" ]]',
+            '[[ -n "${RAW_TARGET_SHA,,}" ]]',
+        )
+        admission = cleanup.index("Admit continuation before cross-run cleanup")
+        provider_authentication = cleanup.index(
+            "Authenticate separate exact cleanup authority through OIDC"
+        )
+        self.assertLess(admission, provider_authentication)
+        self.assertIn(
+            '--target-sha "$TARGET_SHA"',
+            cleanup[admission:provider_authentication],
+        )
+
+    def test_preprovider_gate_runs_pinned_schema_validator(self) -> None:
+        workflow = (
+            ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+        ).read_text(encoding="utf-8")
+        validation_job = workflow.split("jobs:\n  validate:", 1)[1].split(
+            "\n  discover:", 1
+        )[0]
+        self.assertIn(
+            "jsonschema==4.25.1 PyYAML==6.0.2", validation_job
+        )
+        architecture = validation_job.index(
+            "scripts/validate-rocky-evidence-architecture.py"
+        )
+        schema = validation_job.index("scripts/validate-ci-cloud.py")
+        immutable = validation_job.index("Validate immutable inputs")
+        self.assertLess(architecture, immutable)
+        self.assertLess(schema, immutable)
 
     def test_rejects_process_wide_target_file_limit_and_unbounded_capture(self) -> None:
         runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"

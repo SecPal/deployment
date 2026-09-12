@@ -1190,6 +1190,12 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 'readonly DEFAULT_ACCOUNT="secpal-deploy"',
                 'readonly DEFAULT_ACCOUNT="caller-selected"',
             ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                '(570, 574, "qualify-workload-primary"),',
+                '(570, 574, "qualify-workload-secondary"),',
+            ),
         )
         for option, source_path, old, new in mutations:
             with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
@@ -1207,6 +1213,42 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 )
                 self.assertNotEqual(0, completed.returncode)
                 self.assertIn("disagree", completed.stderr)
+
+    def test_architecture_gate_rejects_schema_pair_substitution(self) -> None:
+        current = (
+            "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+        )
+        historical = (
+            "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        )
+        source = TARGET_FAILURE_SCHEMA.read_text(encoding="utf-8")
+        mutation = source.replace(current, "x" * 64, 1)
+        mutation = mutation.replace(historical, current, 1)
+        mutation = mutation.replace("x" * 64, historical, 1)
+        self.assertEqual(source.count(current), mutation.count(current))
+        self.assertEqual(source.count(historical), mutation.count(historical))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / TARGET_FAILURE_SCHEMA.name
+            path.write_text(mutation, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--target-failure-schema", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+
+    def test_architecture_gate_pins_corrected_pair_independently(self) -> None:
+        source = VALIDATOR.read_text(encoding="utf-8")
+        self.assertIn(
+            'EXPECTED_TARGET_SHA = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"',
+            source,
+        )
+        self.assertIn(
+            'EXPECTED_HARNESS_SHA256 = (\n    '
+            '"918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"',
+            source,
+        )
 
 
 if __name__ == "__main__":

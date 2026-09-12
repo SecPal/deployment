@@ -7,7 +7,7 @@
 # failure call stacks for negative diagnostic classification.  The closed V2
 # record contains only one status and at most eight numeric source lines.
 
-set -E
+set -ET
 
 runuser() {
   local status

@@ -31,7 +31,10 @@ reproducibly from its immutable Git bytes with
 The earlier `293977ae93408a7bb812619de58649ab8a92d438` /
 `8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db`
 pair and older retained identities remain historical evidence bindings only;
-they cannot select a current lifecycle.
+they cannot select current qualification. The earlier target SHA may select
+only `destroy` for its exact retained continuation and OpenTofu state. Trusted
+cleanup admits that continuation and its matching target before obtaining
+provider authority, and it never executes target-owned bytes.
 
 The qualification runner job has no environment, `id-token` permission, WIF
 action, provider token, or credential file. It generates an Ed25519 key locally
