@@ -923,10 +923,10 @@
           {
             "properties": {
               "target_sha": {
-                "const": "cef901390f5decf733ecab1892c7cba98067f0fb"
+                "const": "539d5faa6549be62060c8e20028caf200e5eca01"
               },
               "harness_sha256": {
-                "const": "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
               }
             },
             "required": ["target_sha", "harness_sha256"]
@@ -957,10 +957,10 @@
           {
             "properties": {
               "target_sha": {
-                "const": "cef901390f5decf733ecab1892c7cba98067f0fb"
+                "const": "539d5faa6549be62060c8e20028caf200e5eca01"
               },
               "harness_sha256": {
-                "const": "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
               }
             },
             "required": ["target_sha", "harness_sha256"]
@@ -1029,10 +1029,10 @@
           {
             "properties": {
               "target_sha": {
-                "const": "cef901390f5decf733ecab1892c7cba98067f0fb"
+                "const": "539d5faa6549be62060c8e20028caf200e5eca01"
               },
               "harness_sha256": {
-                "const": "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
               }
             },
             "required": ["target_sha", "harness_sha256"]

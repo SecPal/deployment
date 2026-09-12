@@ -74,9 +74,9 @@ class RockyCloudControlTests(unittest.TestCase):
             'if [[ "$target_sha" != "$expected_target_sha" ||'
         )
         gate_end = runner_source.index("\nfi\n", pair_gate) + len("\nfi\n")
-        current_target = "cef901390f5decf733ecab1892c7cba98067f0fb"
+        current_target = "539d5faa6549be62060c8e20028caf200e5eca01"
         current_harness = (
-            "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
+            "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
         )
         historical_target = "293977ae93408a7bb812619de58649ab8a92d438"
         historical_harness = (

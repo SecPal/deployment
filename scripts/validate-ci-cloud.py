@@ -1979,9 +1979,9 @@ def validate_gcp_iam_role(root: Path) -> None:
 
 
 def validate_rocky_control_plane(root: Path) -> None:
-    expected_target_sha = "cef901390f5decf733ecab1892c7cba98067f0fb"
+    expected_target_sha = "539d5faa6549be62060c8e20028caf200e5eca01"
     expected_harness_sha256 = (
-        "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
+        "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
     )
     expected_target_line_rules = (
         (368, 374, "qualify-host-identity"),
@@ -2659,9 +2659,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"cef901390f5decf733ecab1892c7cba98067f0fb\""
+        "EXPECTED_TARGET_SHA = \"539d5faa6549be62060c8e20028caf200e5eca01\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256 = \"cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e\""
+        and "EXPECTED_HARNESS_SHA256 = \"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c\""
         in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier

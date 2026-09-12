@@ -16,9 +16,9 @@ The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
 preparation, continuation admission, evidence admission, and cleanup. A target
 revision is accepted only when it is the exact signed commit
-`cef901390f5decf733ecab1892c7cba98067f0fb` and its
+`539d5faa6549be62060c8e20028caf200e5eca01` and its
 `scripts/qualify-production-host.sh` bytes have SHA-256
-`cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e`.
+`f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c`.
 The pair is independently enforced by the trusted workflow, target runner,
 diagnostic classifier, schema, and repository agreement checks. The target is
 fetched by the guest only after every GCP service account has been detached and
@@ -28,7 +28,7 @@ That target adds the #254 Quadlet authority correction to the first
 GitHub-verified protected-main commit containing the merged contracts for issues
 229, 230, and 231. The harness digest is derived reproducibly from its
 immutable Git bytes with
-`git show cef901390f5decf733ecab1892c7cba98067f0fb:scripts/qualify-production-host.sh | sha256sum`.
+`git show 539d5faa6549be62060c8e20028caf200e5eca01:scripts/qualify-production-host.sh | sha256sum`.
 The failed native #234 target/harness pair
 `b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` /
 `918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa`

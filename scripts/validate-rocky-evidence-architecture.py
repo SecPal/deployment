@@ -40,9 +40,9 @@ DEFAULT_TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace
 DEFAULT_RELOAD_OBSERVER = (
     ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
 )
-EXPECTED_TARGET_SHA = "cef901390f5decf733ecab1892c7cba98067f0fb"
+EXPECTED_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
 EXPECTED_HARNESS_SHA256 = (
-    "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
+    "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
 )
 HISTORICAL_CLEANUP_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
 EXPECTED_TARGET_LINE_RULES = (
