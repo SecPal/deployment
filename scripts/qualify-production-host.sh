@@ -10,6 +10,10 @@ readonly DEFAULT_ACCOUNT="secpal-deploy"
 readonly UNIT_PREFIX="secpal-host-qualification"
 readonly WORKLOAD_UID="65532"
 readonly WORKLOAD_GID="65532"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+readonly SELINUX_ISOLATION_CONTRACT="${SCRIPT_DIR}/selinux_isolation_contract.py"
+readonly SELINUX_ISOLATION_INVARIANT_OWNER="selinux_isolation_contract.admit_selinux_isolation"
 
 image=""
 service_account="$DEFAULT_ACCOUNT"
@@ -19,6 +23,9 @@ container_a=""
 container_b=""
 unit_name=""
 dontaudit_disabled=false
+interrupted_status=0
+cleanup_started=false
+qualification_success_marker=""
 
 usage() {
   printf 'Usage: %s --image REGISTRY/IMAGE@sha256:DIGEST [--service-account NAME]\n' "$0"
@@ -51,13 +58,6 @@ rootless_podman() {
 
 user_systemctl() {
   run_as_service_account systemctl --user "$@"
-}
-
-matching_marker_avc() {
-  local audit_date="$1"
-  local audit_time="$2"
-  LC_ALL=C ausearch --input-logs -m AVC -ts "$audit_date" "$audit_time" -i |
-    grep -F 'marker' >/dev/null
 }
 
 path_ancestry() {
@@ -186,31 +186,155 @@ least_authority_process_admitted() {
 
 cleanup() {
   local exit_status=$?
+  trap - EXIT HUP INT TERM
+  if ((interrupted_status != 0)); then
+    exit_status="$interrupted_status"
+  fi
+  if [[ "$cleanup_started" == true ]]; then
+    exit "$exit_status"
+  fi
+  cleanup_started=true
   set +e
+  if [[ -n "$qualification_success_marker" ]]; then
+    /usr/bin/timeout --signal=KILL 5s rm -f -- "$qualification_success_marker" \
+      >/dev/null 2>&1
+  fi
   if [[ "$dontaudit_disabled" == true ]]; then
-    semodule -B >/dev/null 2>&1
+    /usr/bin/timeout --signal=KILL 30s semodule -B >/dev/null 2>&1
     dontaudit_disabled=false
   fi
   if [[ -n "$unit_name" ]]; then
-    user_systemctl stop "${unit_name}.service" >/dev/null 2>&1
+    run_as_service_account /usr/bin/timeout --signal=KILL 20s \
+      systemctl --user stop "${unit_name}.service" >/dev/null 2>&1
   fi
   if [[ -n "$container_a" ]]; then
-    rootless_podman rm --force "$container_a" >/dev/null 2>&1
+    run_as_service_account /usr/bin/timeout --signal=KILL 20s \
+      podman rm --force "$container_a" >/dev/null 2>&1
   fi
   if [[ -n "$container_b" ]]; then
-    rootless_podman rm --force "$container_b" >/dev/null 2>&1
+    run_as_service_account /usr/bin/timeout --signal=KILL 20s \
+      podman rm --force "$container_b" >/dev/null 2>&1
   fi
   if [[ -n "$unit_path" && -f "$unit_path" ]]; then
-    rm -- "$unit_path"
-    user_systemctl daemon-reload >/dev/null 2>&1
+    /usr/bin/timeout --signal=KILL 5s rm -- "$unit_path" >/dev/null 2>&1
+    run_as_service_account /usr/bin/timeout --signal=KILL 20s \
+      systemctl --user daemon-reload >/dev/null 2>&1
   fi
   if [[ -n "$unit_name" ]]; then
-    user_systemctl reset-failed "${unit_name}.service" >/dev/null 2>&1
+    run_as_service_account /usr/bin/timeout --signal=KILL 20s \
+      systemctl --user reset-failed "${unit_name}.service" >/dev/null 2>&1
   fi
   if [[ -n "$fixture_root" && -d "$fixture_root" ]]; then
-    rm -rf -- "$fixture_root"
+    /usr/bin/timeout --signal=KILL 10s rm -rf -- "$fixture_root" \
+      >/dev/null 2>&1
   fi
   exit "$exit_status"
+}
+
+interrupted() {
+  interrupted_status="$1"
+  trap - HUP INT TERM
+  exit "$interrupted_status"
+}
+
+install_cleanup_traps() {
+  trap cleanup EXIT
+  trap 'interrupted 129' HUP
+  trap 'interrupted 130' INT
+  trap 'interrupted 143' TERM
+}
+
+admit_audit_observation() {
+  local audit_path="$1" output_path="$2"
+  python3 - "$SELINUX_ISOLATION_CONTRACT" "$audit_path" "$output_path" \
+    "$process_a" "$process_b" "$storage_a" \
+    "$SELINUX_ISOLATION_INVARIANT_OWNER" <<'PY'
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+(
+    contract_path,
+    audit_path,
+    output_path,
+    process_a,
+    process_b,
+    storage_a,
+    invariant_owner,
+) = sys.argv[1:]
+specification = importlib.util.spec_from_file_location(
+    "selinux_isolation_contract", contract_path
+)
+if specification is None or specification.loader is None:
+    raise SystemExit(1)
+contract = importlib.util.module_from_spec(specification)
+sys.dont_write_bytecode = True
+try:
+    specification.loader.exec_module(contract)
+    if contract.INVARIANT_OWNER != invariant_owner:
+        raise ValueError("SELinux isolation invariant owner mismatch")
+    document = contract.admit_selinux_isolation(
+        process_a=process_a,
+        process_b=process_b,
+        storage_a=storage_a,
+        audit_text=Path(audit_path).read_text(encoding="utf-8"),
+    )
+except contract.NoMatchingAvc:
+    raise SystemExit(2) from None
+except (OSError, UnicodeError, ValueError, contract.IsolationError):
+    raise SystemExit(1) from None
+Path(output_path).write_bytes(contract.canonical_bytes(document))
+PY
+}
+
+observe_denied_access() {
+  local audit_date audit_time access_status audit_status capture_status
+  local admission_status audit_size attempt
+  rm -f -- "$audit_observation" "$isolation_document"
+  read -r audit_date audit_time < <(LC_ALL=C date '+%x %T')
+  set +e
+  rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1
+  access_status=$?
+  set -e
+  if [[ "$access_status" -eq 0 ]]; then
+    return 2
+  fi
+  if [[ ! -e "${state_a}/marker" || ! -r "${state_a}/marker" ]]; then
+    return 2
+  fi
+
+  for attempt in {1..12}; do
+    set +e
+    LC_ALL=C /usr/bin/timeout --signal=KILL 5s \
+      ausearch --input-logs -m AVC -ts "$audit_date" "$audit_time" -i \
+      2>/dev/null | /usr/bin/head -c 65537 >"$audit_observation"
+    pipeline_statuses=("${PIPESTATUS[@]}")
+    audit_status="${pipeline_statuses[0]}"
+    capture_status="${pipeline_statuses[1]}"
+    set -e
+    audit_size="$(stat -c %s -- "$audit_observation")"
+    if [[ "$audit_status" -eq 0 && "$capture_status" -eq 0 &&
+      "$audit_size" -le 65536 ]]; then
+      set +e
+      admit_audit_observation \
+        "$audit_observation" "$isolation_document"
+      admission_status=$?
+      set -e
+      case "$admission_status" in
+        0) return 0 ;;
+        2) ;;
+        *) return 2 ;;
+      esac
+    elif [[ "$audit_status" -ne 1 || "$capture_status" -ne 0 ||
+      "$audit_size" -gt 65536 ]]; then
+      return 2
+    fi
+    if ((attempt < 12)); then
+      sleep 0.5
+    fi
+  done
+  return 3
 }
 
 main() {
@@ -332,7 +456,8 @@ container_a="${UNIT_PREFIX}-${fixture_id}-a"
 container_b="${UNIT_PREFIX}-${fixture_id}-b"
 unit_name="${UNIT_PREFIX}-${fixture_id}"
 unit_path="${quadlet_root}/${unit_name}.container"
-trap cleanup EXIT HUP INT TERM
+qualification_success_marker="${fixture_root}/qualification.success"
+install_cleanup_traps
 
 readonly quadlet_parent="${quadlet_root%/*}"
 if ! administrator_path_admitted "$quadlet_parent" / 0 0 directory 755 ||
@@ -440,8 +565,7 @@ fi
 seccomp_mode=2
 
 state_a="${fixture_root}/state-a"
-state_b="${fixture_root}/state-b"
-install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a" "$state_b"
+install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a"
 
 rootless_podman run --detach --name "$container_a" \
   --security-opt no-new-privileges --cap-drop all \
@@ -460,29 +584,19 @@ if [[ "$process_a" != *:container_t:* || "$process_b" != *:container_t:* || "$st
   printf 'ERROR: representative process or storage label is not container-confined.\n' >&2
   exit 1
 fi
-process_a_mcs="${process_a#*:container_t:}"
-process_b_mcs="${process_b#*:container_t:}"
-storage_a_mcs="${storage_a#*:container_file_t:}"
-if [[ "$process_a_mcs" != "$storage_a_mcs" || "$process_a_mcs" == "$process_b_mcs" ]]; then
-  printf 'ERROR: representative SELinux MCS boundaries are not distinct and effective.\n' >&2
+audit_observation="${fixture_root}/audit-avc.txt"
+isolation_document="${fixture_root}/selinux-isolation.json"
+set +e
+observe_denied_access
+denial_status=$?
+set -e
+if [[ "$denial_status" -eq 2 ]]; then
+  printf 'ERROR: cross-boundary denial observation is invalid.\n' >&2
   exit 1
 fi
-
-printf 'seccomp_mode=%s\nprocess_a=%s\nprocess_b=%s\nstorage_a=%s\n' \
-  "$seccomp_mode" "$process_a" "$process_b" "$storage_a"
-
-read -r audit_date audit_time < <(LC_ALL=C date '+%x %T')
-if rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1; then
-  printf 'ERROR: cross-boundary read unexpectedly succeeded.\n' >&2
-  exit 1
-fi
-if [[ ! -e "${state_a}/marker" || ! -r "${state_a}/marker" ]]; then
-  printf 'ERROR: negative test cannot distinguish missing path or DAC denial.\n' >&2
-  exit 1
-fi
-if ! matching_marker_avc "$audit_date" "$audit_time"; then
+if [[ "$denial_status" -ne 0 ]]; then
   dontaudit_disabled=true
-  if ! semodule -DB; then
+  if ! /usr/bin/timeout --signal=KILL 30s semodule -DB; then
     printf 'ERROR: unable to temporarily expose SELinux dontaudit denials.\n' >&2
     exit 1
   fi
@@ -490,20 +604,15 @@ if ! matching_marker_avc "$audit_date" "$audit_time"; then
     printf 'ERROR: SELinux stopped Enforcing while exposing dontaudit denials.\n' >&2
     exit 1
   fi
-  read -r audit_date audit_time < <(LC_ALL=C date '+%x %T')
-  if rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1; then
-    printf 'ERROR: cross-boundary read unexpectedly succeeded with dontaudit disabled.\n' >&2
+  set +e
+  observe_denied_access
+  denial_status=$?
+  set -e
+  if [[ "$denial_status" -ne 0 ]]; then
+    printf 'ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n' >&2
     exit 1
   fi
-  if [[ ! -e "${state_a}/marker" || ! -r "${state_a}/marker" ]]; then
-    printf 'ERROR: repeated negative test cannot distinguish missing path or DAC denial.\n' >&2
-    exit 1
-  fi
-  if ! matching_marker_avc "$audit_date" "$audit_time"; then
-    printf 'ERROR: cross-boundary failure lacks a matching SELinux AVC denial.\n' >&2
-    exit 1
-  fi
-  if ! semodule -B; then
+  if ! /usr/bin/timeout --signal=KILL 30s semodule -B; then
     printf 'ERROR: unable to restore SELinux dontaudit policy.\n' >&2
     exit 1
   fi
@@ -514,13 +623,38 @@ if ! matching_marker_avc "$audit_date" "$audit_time"; then
   fi
 fi
 
+denial_pid="$(python3 - "$isolation_document" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+pid = document.get("denial", {}).get("pid")
+if not isinstance(pid, int) or isinstance(pid, bool) or not 1 <= pid <= 2_147_483_647:
+    raise SystemExit(1)
+print(pid)
+PY
+)"
+selinux_isolation_sha256="$(sha256sum "$isolation_document" | awk '{print $1}')"
+if ! [[ "$selinux_isolation_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'ERROR: normalized SELinux isolation evidence is unavailable.\n' >&2
+  exit 1
+fi
+
+printf 'seccomp_mode=%s\nprocess_a=%s\nprocess_b=%s\nstorage_a=%s\n' \
+  "$seccomp_mode" "$process_a" "$process_b" "$storage_a"
+printf 'denial_pid=%s\nselinux_isolation_sha256=%s\n' \
+  "$denial_pid" "$selinux_isolation_sha256"
+
 if rootless_podman inspect "$container_a" "$container_b" | grep -Eq 'label=disable|"Privileged": true|"NetworkMode": "host"'; then
   printf 'ERROR: effective runtime facts contain a forbidden security fallback.\n' >&2
   exit 1
 fi
 
+install -o 0 -g 0 -m 0600 /dev/null "$qualification_success_marker"
 printf 'PASS: Rocky Linux %s target workload contract (%s); native admission requires trusted control.\n' \
   "$os_version" "$architecture"
+rm -f -- "$qualification_success_marker"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

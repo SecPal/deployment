@@ -481,6 +481,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "collector_base64gzip": ROOT / "scripts/ci-cloud/collect-rocky-preparation.py",
             "preparation_contract_base64gzip": ROOT / "scripts/ci-cloud/rocky_preparation_contract.py",
             "control_utility_base64gzip": ROOT / "scripts/ci-cloud/rocky-control.py",
+            "selinux_isolation_contract_base64gzip": ROOT
+            / "scripts/selinux_isolation_contract.py",
             "discovery_schema_base64gzip": ROOT / "schemas/rocky-cloud-discovery-evidence.schema.json",
             "continuation_schema_base64gzip": ROOT / "schemas/rocky-cloud-continuation.schema.json",
             "preparation_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json",
@@ -2286,8 +2288,16 @@ class RockyCloudControlTests(unittest.TestCase):
         target = (ROOT / "scripts/qualify-production-host.sh").read_text(
             encoding="utf-8"
         )
-        for required in ("duplicate", "MCS relationship", "seccomp mode", "ausearch", "correlated enforcing AVC", "cleanup is incomplete"):
+        for required in (
+            "facts are duplicated",
+            "seccomp mode",
+            "ausearch",
+            "SELinux isolation normalization disagree",
+            "cleanup is incomplete",
+        ):
             self.assertIn(required, runner)
+        self.assertIn("selinux_isolation", schema["required"])
+        self.assertNotIn("mcs_distinct", schema["required"])
         self.assertNotIn('"mcs_distinct": passed', runner)
         self.assertNotIn('"classification": "PASS" if passed', runner)
         self.assertLess(
@@ -2305,7 +2315,12 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn(
             '[[ -f "$work_root/scripts/qualify-production-host.sh" && '
             '! -L "$work_root/scripts/qualify-production-host.sh" && '
-            '-x "$work_root/scripts/qualify-production-host.sh" ]]',
+            '-x "$work_root/scripts/qualify-production-host.sh" &&',
+            runner,
+        )
+        self.assertIn(
+            '-f "$work_root/scripts/selinux_isolation_contract.py" && '
+            '! -L "$work_root/scripts/selinux_isolation_contract.py" ]]',
             runner,
         )
         self.assertIn(
@@ -2411,9 +2426,41 @@ class RockyCloudControlTests(unittest.TestCase):
                     "payload_digest": "a" * 64,
                 }
             )
-        stdout = b"target workload\n"
+        isolation_spec = importlib.util.spec_from_file_location(
+            "selinux_isolation_contract",
+            ROOT / "scripts/selinux_isolation_contract.py",
+        )
+        assert isolation_spec is not None and isolation_spec.loader is not None
+        isolation_contract = importlib.util.module_from_spec(isolation_spec)
+        isolation_spec.loader.exec_module(isolation_contract)
+        process_a = "system_u:system_r:container_t:s0:c0"
+        process_b = "system_u:system_r:container_t:s0:c1023"
+        storage_a = "system_u:object_r:container_file_t:s0:c0"
+        audit_identity = "msg=audit(08/31/26 00:43:39.673:41) :"
+        audit = "\n".join(
+            (
+                f"type=AVC {audit_identity} avc: denied {{ read }} pid=4242 "
+                f'name="marker" scontext={process_b} tcontext={storage_a} '
+                "tclass=dir permissive=0",
+                f"type=PROCTITLE {audit_identity} proctitle=cat /foreign/marker",
+                f'type=SYSCALL {audit_identity} pid=4242 comm="cat"',
+            )
+        )
+        isolation = isolation_contract.admit_selinux_isolation(
+            process_a=process_a,
+            process_b=process_b,
+            storage_a=storage_a,
+            audit_text=audit,
+        )
+        isolation_digest = hashlib.sha256(
+            isolation_contract.canonical_bytes(isolation)
+        ).hexdigest()
+        stdout = (
+            f"selinux_isolation_sha256={isolation_digest}\n"
+            "PASS: Rocky Linux 10.2 target workload contract\n"
+        ).encode()
         candidate = {
-            "schema_version": 1,
+            "schema_version": 2,
             "target_sha": "b" * 40,
             "native_observation": {
                 "schema_version": 1,
@@ -2432,14 +2479,7 @@ class RockyCloudControlTests(unittest.TestCase):
             "exit_status": 0,
             "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
             "stdout_bytes": len(stdout),
-            "process_contexts": [
-                "system_u:system_r:container_t:s0:c1,c2",
-                "system_u:system_r:container_t:s0:c3,c4",
-            ],
-            "storage_context": "system_u:object_r:container_file_t:s0:c1,c2",
-            "mcs_distinct": True,
-            "cross_mcs_denied": True,
-            "avc_observed": True,
+            "selinux_isolation": isolation,
             "seccomp_enforced": True,
             "cleanup_complete": True,
             "classification": "PASS",

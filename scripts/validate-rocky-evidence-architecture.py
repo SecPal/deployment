@@ -18,6 +18,15 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "scripts/ci-cloud/rocky_preparation_contract.py"
 DEFAULT_COLLECTOR = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
 DEFAULT_PREPARATION = ROOT / "scripts/ci-cloud/prepare-rocky-host.sh"
+DEFAULT_ISOLATION_CONTRACT = ROOT / "scripts/selinux_isolation_contract.py"
+DEFAULT_QUALIFICATION_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json"
+)
+DEFAULT_QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
+DEFAULT_QUALIFICATION_RUNNER = (
+    ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
+)
+DEFAULT_ROCKY_CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
     "asyncio", "datetime", "grp", "http", "os", "pathlib", "pwd", "requests",
@@ -495,11 +504,97 @@ def validate_preparation(path: Path) -> None:
         raise ArchitectureError("preparation independently redefines fixture identity")
 
 
+def validate_selinux_isolation_architecture(
+    contract_path: Path,
+    schema_path: Path,
+    harness_path: Path,
+    runner_path: Path,
+    control_path: Path,
+) -> None:
+    tree = parse(contract_path)
+    source = contract_path.read_text(encoding="utf-8")
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module.split(".")[0])
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in FORBIDDEN_PURE_CALLS
+        ):
+            raise ArchitectureError(
+                f"forbidden SELinux isolation capability: {node.func.id}"
+            )
+    forbidden = sorted(imports & (FORBIDDEN_PURE_IMPORTS - {"datetime"}))
+    if forbidden:
+        raise ArchitectureError(
+            "forbidden SELinux isolation capability import: "
+            + ",".join(forbidden)
+        )
+    if assignment_string(tree, "RESPONSIBILITY") != "normalization,admission":
+        raise ArchitectureError("SELinux isolation responsibility is invalid")
+    owner = "selinux_isolation_contract.admit_selinux_isolation"
+    if assignment_string(tree, "INVARIANT_OWNER") != owner:
+        raise ArchitectureError("SELinux isolation invariant owner is invalid")
+    functions = {
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    if not {
+        "normalize_context",
+        "normalize_context_relationship",
+        "normalize_unique_enforcing_avc",
+        "admit_selinux_isolation",
+        "validate_isolation_evidence",
+    } <= functions:
+        raise ArchitectureError("SELinux isolation layered surface is incomplete")
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema_owner = schema["$defs"]["selinux_isolation"]["properties"][
+            "invariant_owner"
+        ]["const"]
+        maximum = schema["$defs"]["normalized_context"]["properties"][
+            "mcs_categories"
+        ]["items"]["maximum"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ArchitectureError("SELinux isolation schema projection is invalid") from error
+    if schema_owner != owner or maximum != 1023:
+        raise ArchitectureError("SELinux isolation schema projection disagrees")
+    for path in (harness_path, runner_path, control_path):
+        try:
+            consumer = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise ArchitectureError("SELinux isolation consumer is unavailable") from error
+        if "selinux_isolation_contract" not in consumer:
+            raise ArchitectureError("SELinux isolation consumer omits its owner")
+    if (
+        "subprocess" in source
+        or "pathlib" in source
+        or "open(" in source
+        or any(clock in source for clock in ("datetime.now", "datetime.utcnow", "datetime.today"))
+    ):
+        raise ArchitectureError("SELinux isolation owner performs external observation")
+
+
 def main(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--collector", type=Path, default=DEFAULT_COLLECTOR)
     parser.add_argument("--preparation", type=Path, default=DEFAULT_PREPARATION)
+    parser.add_argument(
+        "--isolation-contract", type=Path, default=DEFAULT_ISOLATION_CONTRACT
+    )
+    parser.add_argument(
+        "--qualification-schema", type=Path, default=DEFAULT_QUALIFICATION_SCHEMA
+    )
+    parser.add_argument(
+        "--qualification-harness", type=Path, default=DEFAULT_QUALIFICATION_HARNESS
+    )
+    parser.add_argument(
+        "--qualification-runner", type=Path, default=DEFAULT_QUALIFICATION_RUNNER
+    )
+    parser.add_argument("--rocky-control", type=Path, default=DEFAULT_ROCKY_CONTROL)
     options = parser.parse_args(arguments)
     try:
         validate_pure_contract(options.contract)
@@ -507,6 +602,13 @@ def main(arguments: list[str]) -> int:
         validate_preparation(options.preparation)
         validate_component_complexity(options.contract, options.collector)
         validate_diagnostic_contract(options.contract, options.collector)
+        validate_selinux_isolation_architecture(
+            options.isolation_contract,
+            options.qualification_schema,
+            options.qualification_harness,
+            options.qualification_runner,
+            options.rocky_control,
+        )
     except ArchitectureError as error:
         print(f"ERROR: Rocky evidence architecture rejected: {error}", file=sys.stderr)
         return 1

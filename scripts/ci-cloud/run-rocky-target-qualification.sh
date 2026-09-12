@@ -55,7 +55,14 @@ cleanup() {
     "$qualification_trace" "$qualification_marker"
   rm -rf -- "$work_root"
 }
-trap cleanup EXIT HUP INT TERM
+interrupted() {
+  trap - HUP INT TERM
+  exit "$1"
+}
+trap cleanup EXIT
+trap 'interrupted 129' HUP
+trap 'interrupted 130' INT
+trap 'interrupted 143' TERM
 
 capture_bounded() {
   local maximum="$1" output="$2" head_status=0 drain_status=0
@@ -145,7 +152,8 @@ if [[ "$(git -C "$work_root" rev-parse HEAD)" != "$target_sha" ]]; then
   write_source_failure verify-target-sha postcondition-failed 1
   exit 84
 fi
-if ! [[ -f "$work_root/scripts/qualify-production-host.sh" && ! -L "$work_root/scripts/qualify-production-host.sh" && -x "$work_root/scripts/qualify-production-host.sh" ]] ||
+if ! [[ -f "$work_root/scripts/qualify-production-host.sh" && ! -L "$work_root/scripts/qualify-production-host.sh" && -x "$work_root/scripts/qualify-production-host.sh" &&
+  -f "$work_root/scripts/selinux_isolation_contract.py" && ! -L "$work_root/scripts/selinux_isolation_contract.py" ]] ||
   [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" != "$qualification_harness_sha256" ]]; then
   write_source_failure verify-target-sha postcondition-failed 1
   exit 84
@@ -248,6 +256,7 @@ python3 - "$target_sha" "$status" "$stdout" "$audit_baseline" \
   "$evidence_root/qualification.json" "$qualification_marker" \
   "$native_observation" <<'PY'
 import hashlib
+import importlib.util
 import json
 import os
 import pwd
@@ -271,10 +280,35 @@ from pathlib import Path
     native_observation_path,
 ) = sys.argv[1:]
 
-
 def reject(operation: str, reason: str, message: str) -> None:
     Path(marker_path).write_text(f"{operation} {reason}\n", encoding="ascii")
     raise SystemExit(message)
+
+
+contract_path = Path(
+    "/opt/secpal-control/scripts/selinux_isolation_contract.py"
+)
+contract_specification = importlib.util.spec_from_file_location(
+    "selinux_isolation_contract", contract_path
+)
+if contract_specification is None or contract_specification.loader is None:
+    reject(
+        "qualify-selinux-storage",
+        "command-failed",
+        "SELinux isolation contract is unavailable",
+    )
+selinux_isolation_contract = importlib.util.module_from_spec(
+    contract_specification
+)
+sys.dont_write_bytecode = True
+try:
+    contract_specification.loader.exec_module(selinux_isolation_contract)
+except Exception:
+    reject(
+        "qualify-selinux-storage",
+        "command-failed",
+        "SELinux isolation contract is unavailable",
+    )
 
 
 def run_bounded(
@@ -361,8 +395,12 @@ def run_bounded(
 
 
 def acquire_audit_events(
-    command: list[str], source_context: str, target_context: str
-) -> tuple[bytes | None, set[tuple[str, str]] | None]:
+    command: list[str],
+    *,
+    process_a: str,
+    process_b: str,
+    storage_a: str,
+) -> tuple[bytes | None, dict[str, object] | None]:
     for attempt in range(12):
         status, stdout, stderr, invalid = run_bounded(
             command,
@@ -375,13 +413,19 @@ def acquire_audit_events(
                 audit_text = stdout.decode("utf-8")
             except UnicodeDecodeError:
                 return None, None
-            events = correlated_avc_events(
-                audit_text, source_context, target_context
-            )
-            if events is None:
+            try:
+                isolation = selinux_isolation_contract.admit_selinux_isolation(
+                    process_a=process_a,
+                    process_b=process_b,
+                    storage_a=storage_a,
+                    audit_text=audit_text,
+                )
+            except selinux_isolation_contract.NoMatchingAvc:
+                isolation = None
+            except selinux_isolation_contract.IsolationError:
                 return None, None
-            if events:
-                return stdout, events
+            if isolation is not None:
+                return stdout, isolation
             no_finding = True
         else:
             no_finding = (
@@ -394,7 +438,7 @@ def acquire_audit_events(
             return None, None
         if attempt < 11:
             time.sleep(0.5)
-    return b"", set()
+    return b"", None
 
 
 def runtime_home_admitted(
@@ -445,25 +489,34 @@ if int(raw_status) != 0:
 if text.count("PASS: Rocky Linux 10.2 target workload contract") != 1:
     reject("qualification-harness", "representation-invalid", "qualification PASS marker is not singular")
 facts = {}
-for key, value in re.findall(r"^(process_a|process_b|storage_a|seccomp_mode)=([^\r\n]+)$", text, re.MULTILINE):
+for key, value in re.findall(
+    r"^(process_a|process_b|storage_a|seccomp_mode|denial_pid|"
+    r"selinux_isolation_sha256)=([^\r\n]+)$",
+    text,
+    re.MULTILINE,
+):
     if key in facts:
         reject("qualification-harness", "representation-invalid", "qualification facts are duplicated")
     facts[key] = value
-if set(facts) != {"process_a", "process_b", "storage_a", "seccomp_mode"}:
+if set(facts) != {
+    "process_a",
+    "process_b",
+    "storage_a",
+    "seccomp_mode",
+    "denial_pid",
+    "selinux_isolation_sha256",
+}:
     reject("qualification-harness", "representation-invalid", "qualification facts are incomplete")
-context = re.compile(r"^([^:]+):([^:]+):(container_t|container_file_t):(s0(?::c[0-9]+(?:,c[0-9]+)?)?)$")
-parsed = {}
-for key in ("process_a", "process_b", "storage_a"):
-    match = context.fullmatch(facts[key])
-    if match is None:
-        reject("qualify-selinux-storage", "representation-invalid", "qualification SELinux context is malformed")
-    parsed[key] = match.groups()
-if parsed["process_a"][2] != "container_t" or parsed["process_b"][2] != "container_t" or parsed["storage_a"][2] != "container_file_t":
-    reject("qualify-selinux-storage", "invariant-failed", "qualification SELinux types are not admitted")
-if parsed["process_a"][3] != parsed["storage_a"][3] or parsed["process_b"][3] == parsed["process_a"][3]:
-    reject("qualify-mcs-relationship", "invariant-failed", "qualification MCS relationship is not admitted")
 if facts["seccomp_mode"] != "2":
     reject("qualify-seccomp", "invariant-failed", "qualification seccomp mode is not enforcing")
+try:
+    denial_pid = int(facts["denial_pid"])
+except ValueError:
+    reject("qualify-avc-correlation", "representation-invalid", "qualification process identity is malformed")
+if str(denial_pid) != facts["denial_pid"] or not 1 <= denial_pid <= 2_147_483_647:
+    reject("qualify-avc-correlation", "representation-invalid", "qualification process identity is malformed")
+if re.fullmatch(r"[0-9a-f]{64}", facts["selinux_isolation_sha256"]) is None:
+    reject("qualify-avc-correlation", "representation-invalid", "qualification isolation digest is malformed")
 audit_checkpoint = re.fullmatch(
     r"([0-9]{2}/[0-9]{2}/[0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})",
     audit_baseline,
@@ -475,93 +528,31 @@ try:
     datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")
 except ValueError:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-def audit_event_id(line: str) -> tuple[str, str] | None:
-    interpreted = re.search(
-        r"\bmsg=audit\("
-        r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "
-        r"([0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}):([1-9][0-9]*)"
-        r"\) :",
-        line,
-    )
-    if interpreted is None:
-        return None
-    date, time, serial = interpreted.groups()
-    try:
-        datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")
-    except ValueError:
-        return None
-    return f"{date} {time}", serial
-
-
-def correlated_avc_events(
-    audit_text: str, source_context: str, target_context: str
-) -> set[tuple[str, str]] | None:
-    events = {}
-    for line in audit_text.splitlines():
-        if line in {"", "----"}:
-            continue
-        record = re.match(r"^type=([A-Z][A-Z0-9_]*)\s", line)
-        if record is None:
-            return None
-        event_id = audit_event_id(line)
-        if event_id is None:
-            return None
-        event = events.setdefault(event_id, {"avc": 0, "marker": 0})
-        record_type = record.group(1)
-        if record_type == "PROCTITLE" and re.search(
-            r'(?:^|\s)proctitle=[^\r\n]*'
-            r'(?:^|\s)/foreign/marker(?:\s|$)',
-            line,
-        ) is not None:
-            event["marker"] += 1
-        if record_type != "AVC":
-            continue
-        source = re.search(r"(?:^|\s)scontext=(\S+)", line)
-        target = re.search(r"(?:^|\s)tcontext=(\S+)", line)
-        tclass = re.search(r"(?:^|\s)tclass=(\S+)", line)
-        event["avc"] += int(
-            re.search(r"avc:\s+denied\s+\{", line) is not None
-            and source is not None
-            and target is not None
-            and tclass is not None
-            and source.group(1) == source_context
-            and target.group(1) == target_context
-            and tclass.group(1) == "dir"
-            and re.search(r"(?:^|\s)permissive=0(?:\s|$)", line) is not None
-        )
-    if any(
-        event["avc"] > 1 or event["marker"] > 1
-        for event in events.values()
-    ):
-        return None
-    return {
-        event_id
-        for event_id, event in events.items()
-        if event["avc"] == 1 and event["marker"] == 1
-    }
-
-
-audit_stdout, avc_events = acquire_audit_events(
+audit_stdout, selinux_isolation = acquire_audit_events(
     [
         "/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",
         audit_date, audit_time, "-i",
     ],
-    facts["process_b"],
-    facts["storage_a"],
+    process_a=facts["process_a"],
+    process_b=facts["process_b"],
+    storage_a=facts["storage_a"],
 )
-if audit_stdout is None or avc_events is None:
+if audit_stdout is None or selinux_isolation is None:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-if not avc_events:
+isolation_digest = hashlib.sha256(
+    selinux_isolation_contract.canonical_bytes(selinux_isolation)
+).hexdigest()
+if isolation_digest != facts["selinux_isolation_sha256"]:
     reject(
         "qualify-avc-correlation",
         "invariant-failed",
-        "qualification lacks a correlated enforcing AVC",
+        "target and trusted SELinux isolation normalization disagree",
     )
-if len(avc_events) != 1:
+if selinux_isolation["denial"]["pid"] != denial_pid:
     reject(
         "qualify-avc-correlation",
         "invariant-failed",
-        "qualification has ambiguous correlated enforcing AVCs",
+        "target and trusted tested-process identities disagree",
     )
 runtime_identity = admitted_runtime_home()
 if runtime_identity is None:
@@ -598,7 +589,7 @@ cleanup_complete = all(
 if not cleanup_complete:
     reject("qualify-fixture-cleanup", "cleanup-failed", "qualification cleanup is incomplete")
 document = {
-    "schema_version": 1,
+    "schema_version": 2,
     "target_sha": target_sha,
     "native_observation": json.loads(
         Path(native_observation_path).read_text(encoding="utf-8")
@@ -606,11 +597,7 @@ document = {
     "exit_status": int(raw_status),
     "stdout_sha256": hashlib.sha256(payload).hexdigest(),
     "stdout_bytes": len(payload),
-    "process_contexts": [facts.get("process_a", ""), facts.get("process_b", "")],
-    "storage_context": facts.get("storage_a", ""),
-    "mcs_distinct": True,
-    "cross_mcs_denied": True,
-    "avc_observed": True,
+    "selinux_isolation": selinux_isolation,
     "seccomp_enforced": True,
     "cleanup_complete": cleanup_complete,
     "classification": "PASS",

@@ -2040,6 +2040,12 @@ def validate_rocky_control_plane(root: Path) -> None:
     preparation = read(root, "scripts/ci-cloud/prepare-rocky-host.sh")
     target_runner = read(root, "scripts/ci-cloud/run-rocky-target-qualification.sh")
     qualification_harness = read(root, "scripts/qualify-production-host.sh")
+    selinux_isolation_contract = read(
+        root, "scripts/selinux_isolation_contract.py"
+    )
+    qualification_schema = json.loads(
+        read(root, "schemas/rocky-cloud-qualification-evidence.schema.json")
+    )
     target_failure_classifier = read(
         root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
     )
@@ -2132,8 +2138,32 @@ def validate_rocky_control_plane(root: Path) -> None:
         '"$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk \'{print $1}\')" != "$qualification_harness_sha256"'
         in target_runner
         and 'bash "$work_root/scripts/qualify-production-host.sh"' in target_runner
+        and '-f "$work_root/scripts/selinux_isolation_contract.py"' in target_runner
+        and '! -L "$work_root/scripts/selinux_isolation_contract.py"' in target_runner
         and "qualification_harness_base64gzip" not in bootstrap + main,
         "trusted control must bind the exact target qualification workload bytes",
+    )
+    require(
+        "trap cleanup EXIT" in qualification_harness
+        and "trap 'interrupted 129' HUP" in qualification_harness
+        and "trap 'interrupted 130' INT" in qualification_harness
+        and "trap 'interrupted 143' TERM" in qualification_harness
+        and "if ((interrupted_status != 0)); then" in qualification_harness
+        and 'exit_status="$interrupted_status"' in qualification_harness
+        and qualification_harness.count("/usr/bin/timeout --signal=KILL") >= 8
+        and qualification_harness.count(
+            "/usr/bin/timeout --signal=KILL 30s semodule -B"
+        ) == 2
+        and qualification_harness.count(
+            'rm -f -- "$qualification_success_marker"'
+        ) == 2
+        and qualification_harness.index(
+            'install -o 0 -g 0 -m 0600 /dev/null "$qualification_success_marker"'
+        )
+        < qualification_harness.index(
+            "printf 'PASS: Rocky Linux %s target workload contract"
+        ),
+        "qualification interruption must preserve bounded cleanup and non-success",
     )
     require(
         '[[ "$service_uid" =~ ^[1-9][0-9]*$ && "$service_gid" =~ ^[1-9][0-9]*$ ]]'
@@ -2263,37 +2293,48 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and "for attempt in range(12):" in target_runner
         and "time.sleep(0.5)" in target_runner
-        and "if events is None:\n                return None, None" in target_runner
-        and "if events:\n                return stdout, events" in target_runner
-        and "def audit_event_id(" in target_runner
-        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "' in target_runner
-        and 'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")'
+        and "selinux_isolation_contract.admit_selinux_isolation(" in target_runner
+        and "except selinux_isolation_contract.NoMatchingAvc:" in target_runner
+        and "except selinux_isolation_contract.IsolationError:" in target_runner
+        and "process_a=facts[\"process_a\"]" in target_runner
+        and "process_b=facts[\"process_b\"]" in target_runner
+        and "storage_a=facts[\"storage_a\"]" in target_runner
+        and 'selinux_isolation["denial"]["pid"] != denial_pid'
         in target_runner
-        and "def correlated_avc_events(" in target_runner
-        and "for line in audit_text.splitlines():" in target_runner
-        and 'if line in {"", "----"}:\n            continue' in target_runner
-        and "if record is None:\n            return None" in target_runner
-        and "event_id = audit_event_id(line)" in target_runner
-        and "if event_id is None:\n            return None" in target_runner
-        and 'events.setdefault(event_id, {"avc": 0, "marker": 0})'
+        and "selinux_isolation_contract.canonical_bytes(selinux_isolation)"
         in target_runner
-        and 'event["avc"] > 1 or event["marker"] > 1' in target_runner
-        and 'r"avc:\\s+denied\\s+\\{"' in target_runner
-        and 'record_type == "PROCTITLE"' in target_runner
-        and "r'(?:^|\\s)proctitle=[^\\r\\n]*'" in target_runner
-        and "r'(?:^|\\s)/foreign/marker(?:\\s|$)'" in target_runner
-        and 'tclass.group(1) == "dir"' in target_runner
-        and 'r"(?:^|\\s)permissive=0(?:\\s|$)"' in target_runner
-        and 'if event["avc"] == 1 and event["marker"] == 1' in target_runner
-        and 'facts["process_b"],\n    facts["storage_a"],'
+        and 'isolation_digest != facts["selinux_isolation_sha256"]'
         in target_runner
-        and "if not avc_events:" in target_runner
-        and "if len(avc_events) != 1:" in target_runner
         and 'stdout_limit=65536' in target_runner
         and 'stderr_limit=4096' in target_runner
         and 'timeout=5' in target_runner
         and "re.DOTALL" not in target_runner,
-        "AVC admission must correlate one enforcing marker event within one audit serial",
+        "AVC observation must reach the canonical SELinux isolation owner",
+    )
+    isolation_schema = qualification_schema["$defs"]["selinux_isolation"]
+    context_schema = qualification_schema["$defs"]["normalized_context"]
+    require(
+        'RESPONSIBILITY = "normalization,admission"'
+        in selinux_isolation_contract
+        and 'INVARIANT_OWNER = "selinux_isolation_contract.admit_selinux_isolation"'
+        in selinux_isolation_contract
+        and "MCS_CATEGORY_MIN = 0" in selinux_isolation_contract
+        and "MCS_CATEGORY_MAX = 1023" in selinux_isolation_contract
+        and "len(raw_categories) not in {1, 2}" in selinux_isolation_contract
+        and "len(set(categories)) != len(categories)" in selinux_isolation_contract
+        and "events.setdefault(" in selinux_isolation_contract
+        and "_event_id(line)" in selinux_isolation_contract
+        and "len(candidates) != 1" in selinux_isolation_contract
+        and '"permissive": "0"' in selinux_isolation_contract
+        and 'def _syscall_matches(line: str, pid: int)' in selinux_isolation_contract
+        and '_field(line, "pid") == str(pid)' in selinux_isolation_contract
+        and '_field(line, "comm") == "cat"' in selinux_isolation_contract
+        and '"SYSCALL": []' in selinux_isolation_contract
+        and isolation_schema["properties"]["invariant_owner"]["const"]
+        == "selinux_isolation_contract.admit_selinux_isolation"
+        and context_schema["properties"]["mcs_categories"]["items"]["maximum"]
+        == 1023,
+        "canonical SELinux isolation owner and schema projection disagree",
     )
     require(
         'runtime_home == Path("/home/secpal-runtime")' in target_runner

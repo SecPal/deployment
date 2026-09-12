@@ -39,6 +39,10 @@ TARGET_FAILURE_CLASSIFIER_SYMBOL = "validate_admitted_daemon_reload_adjacency"
 TARGET_START_CLASSIFIER_SYMBOL = "validate_admitted_quadlet_start_diagnostic"
 TARGET_ACTIVE_CLASSIFIER_SYMBOL = "validate_admitted_quadlet_active_diagnostic"
 TARGET_PRIMARY_CLASSIFIER_SYMBOL = "validate_admitted_primary_workload_diagnostic"
+SELINUX_ISOLATION_CONTRACT_PATH = ROOT / "scripts/selinux_isolation_contract.py"
+SELINUX_ISOLATION_INVARIANT_OWNER = (
+    "selinux_isolation_contract.admit_selinux_isolation"
+)
 PROFILE_PATH = ROOT / "config/ci-cloud/gcp-rocky-10-2-arm64.json"
 SCHEMAS = {
     "discovery": ROOT / "schemas/rocky-cloud-discovery-evidence.schema.json",
@@ -382,6 +386,44 @@ def validate_native_observation(
     return observation
 
 
+def load_selinux_isolation_contract() -> Any:
+    try:
+        metadata = SELINUX_ISOLATION_CONTRACT_PATH.lstat()
+    except OSError as error:
+        raise ControlError("SELinux isolation contract is unavailable") from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or SELINUX_ISOLATION_CONTRACT_PATH.is_symlink()
+        or not 0 < metadata.st_size <= 65_536
+        or metadata.st_mode & 0o022
+        or (ROOT == Path("/opt/secpal-control") and (metadata.st_uid, metadata.st_gid) != (0, 0))
+    ):
+        raise ControlError("SELinux isolation contract is not trusted")
+    loader = SourceFileLoader(
+        "selinux_isolation_contract", os.fspath(SELINUX_ISOLATION_CONTRACT_PATH)
+    )
+    specification = importlib.util.spec_from_loader(loader.name, loader)
+    if specification is None or specification.loader is None:
+        raise ControlError("SELinux isolation contract cannot be loaded")
+    contract = importlib.util.module_from_spec(specification)
+    write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(contract)
+    except Exception as error:
+        raise ControlError("SELinux isolation contract cannot be loaded") from error
+    finally:
+        sys.dont_write_bytecode = write_bytecode
+    if (
+        getattr(contract, "INVARIANT_OWNER", None)
+        != SELINUX_ISOLATION_INVARIANT_OWNER
+        or not callable(getattr(contract, "validate_isolation_evidence", None))
+        or not callable(getattr(contract, "canonical_bytes", None))
+    ):
+        raise ControlError("SELinux isolation contract surface is invalid")
+    return contract
+
+
 def validate_native_qualification(
     path: Path,
     stdout_path: Path,
@@ -413,6 +455,29 @@ def validate_native_qualification(
         or hashlib.sha256(stdout).hexdigest() != document["stdout_sha256"]
     ):
         raise ControlError("native qualification stdout binding is invalid")
+    try:
+        text = stdout.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ControlError("native qualification stdout is not UTF-8") from error
+    if text.count("PASS: Rocky Linux 10.2 target workload contract") != 1:
+        raise ControlError("native qualification success marker is not singular")
+    isolation_digests = re.findall(
+        r"^selinux_isolation_sha256=([0-9a-f]{64})$", text, re.MULTILINE
+    )
+    if len(isolation_digests) != 1:
+        raise ControlError("native qualification isolation binding is invalid")
+    contract = load_selinux_isolation_contract()
+    try:
+        contract.validate_isolation_evidence(document["selinux_isolation"])
+    except contract.IsolationError as error:
+        raise ControlError("native SELinux isolation evidence is invalid") from error
+    if (
+        hashlib.sha256(
+            contract.canonical_bytes(document["selinux_isolation"])
+        ).hexdigest()
+        != isolation_digests[0]
+    ):
+        raise ControlError("native SELinux isolation normalization binding is invalid")
 
 
 def validate_target_source_failure(

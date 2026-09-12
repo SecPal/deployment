@@ -4134,8 +4134,20 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         self.assertTrue(invalid)
         self.assertLess(__import__("time").monotonic() - started, 4)
         acquire = namespace["acquire_audit_events"]
-        event = {("08/31/26 00:43:39.673", "41")}
-        namespace["correlated_avc_events"] = mock.Mock(return_value=event)
+        event = {"invariant_owner": "owner"}
+        no_avc = type("NoMatchingAvc", (ValueError,), {})
+        invalid_avc = type("IsolationError", (ValueError,), {})
+        contract = types.SimpleNamespace(
+            NoMatchingAvc=no_avc,
+            IsolationError=invalid_avc,
+            admit_selinux_isolation=mock.Mock(return_value=event),
+        )
+        namespace["selinux_isolation_contract"] = contract
+        acquire_arguments = {
+            "process_a": "process-a",
+            "process_b": "process-b",
+            "storage_a": "storage-a",
+        }
         no_match = (1, b"", b"<no matches>\n", False)
         namespace["run_bounded"] = mock.Mock(
             side_effect=(no_match, (0, b"event", b"", False))
@@ -4143,7 +4155,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         with mock.patch.object(namespace["time"], "sleep") as pause:
             self.assertEqual(
                 (b"event", event),
-                acquire(["/usr/sbin/ausearch"], "source", "target"),
+                acquire(["/usr/sbin/ausearch"], **acquire_arguments),
             )
         pause.assert_called_once_with(0.5)
         namespace["run_bounded"] = mock.Mock(
@@ -4152,13 +4164,13 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
                 (0, b"event", b"", False),
             )
         )
-        namespace["correlated_avc_events"] = mock.Mock(
-            side_effect=(set(), event)
+        contract.admit_selinux_isolation = mock.Mock(
+            side_effect=(no_avc(), event)
         )
         with mock.patch.object(namespace["time"], "sleep") as pause:
             self.assertEqual(
                 (b"event", event),
-                acquire(["/usr/sbin/ausearch"], "source", "target"),
+                acquire(["/usr/sbin/ausearch"], **acquire_arguments),
             )
         pause.assert_called_once_with(0.5)
         namespace["run_bounded"] = mock.Mock(
@@ -4166,227 +4178,89 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
         )
         self.assertEqual(
             (None, None),
-            acquire(["/usr/sbin/ausearch"], "source", "target"),
+            acquire(["/usr/sbin/ausearch"], **acquire_arguments),
         )
         namespace["run_bounded"] = mock.Mock(
             return_value=(1, b"", b"warning\n", False)
         )
         self.assertEqual(
             (None, None),
-            acquire(["/usr/sbin/ausearch"], "source", "target"),
+            acquire(["/usr/sbin/ausearch"], **acquire_arguments),
         )
         namespace["run_bounded"] = mock.Mock(
             return_value=(0, b"malformed", b"", False)
         )
-        namespace["correlated_avc_events"] = mock.Mock(return_value=None)
+        contract.admit_selinux_isolation = mock.Mock(side_effect=invalid_avc())
         self.assertEqual(
             (None, None),
-            acquire(["/usr/sbin/ausearch"], "source", "target"),
+            acquire(["/usr/sbin/ausearch"], **acquire_arguments),
         )
         namespace["run_bounded"] = mock.Mock(return_value=no_match)
         with mock.patch.object(namespace["time"], "sleep") as pause:
             self.assertEqual(
-                (b"", set()),
-                acquire(["/usr/sbin/ausearch"], "source", "target"),
+                (b"", None),
+                acquire(["/usr/sbin/ausearch"], **acquire_arguments),
             )
         self.assertEqual(11, pause.call_count)
         self.assertIn('timeout=10,\n        cwd=str(runtime_home)', runner)
 
-    def test_avc_admission_correlates_one_audit_event_without_cross_record_greed(
-        self,
-    ) -> None:
+    def test_avc_admission_uses_the_canonical_isolation_owner(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
-        self.assertIn("date -u '+%m/%d/%y %H:%M:%S'", runner)
+        contract_path = ROOT / "scripts/selinux_isolation_contract.py"
+        specification = importlib.util.spec_from_file_location(
+            "selinux_isolation_contract", contract_path
+        )
+        self.assertIsNotNone(specification)
+        assert specification is not None and specification.loader is not None
+        contract = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(contract)
         self.assertIn(
-            'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")',
+            "/opt/secpal-control/scripts/selinux_isolation_contract.py",
             runner,
         )
-        function = re.search(
-            r"\ndef audit_event_id\(.*?(?=\n\naudit_stdout, avc_events =)",
-            runner,
-            re.DOTALL,
+        self.assertIn(
+            "selinux_isolation_contract.admit_selinux_isolation",
+            (ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json").read_text(
+                encoding="utf-8"
+            ),
         )
-        self.assertIsNotNone(function)
-        namespace = {"datetime": __import__("datetime").datetime, "re": re}
-        exec(function.group(0), namespace)
-        correlate = namespace["correlated_avc_events"]
-        process = "system_u:system_r:container_t:s0:c1,c2"
-        storage = "system_u:object_r:container_file_t:s0:c1,c2"
-        event_41 = ("08/31/26 00:43:39.673", "41")
+        process_a = "system_u:system_r:container_t:s0:c0"
+        process_b = "system_u:system_r:container_t:s0:c1023"
+        storage_a = "system_u:object_r:container_file_t:s0:c0"
+        identity = "msg=audit(08/31/26 00:43:39.673:41) :"
+        audit = "\n".join(
+            (
+                f"type=AVC {identity} avc: denied {{ read }} pid=4242 "
+                f'name="marker" scontext={process_b} tcontext={storage_a} '
+                "tclass=dir permissive=0",
+                f"type=PROCTITLE {identity} proctitle=cat /foreign/marker",
+                f'type=SYSCALL {identity} pid=4242 comm="cat"',
+            )
+        )
+        admitted = contract.admit_selinux_isolation(
+            process_a=process_a,
+            process_b=process_b,
+            storage_a=storage_a,
+            audit_text=audit,
+        )
+        self.assertEqual("41", admitted["denial"]["serial"])
+        for mutation in (
+            audit.replace("{ read }", "{ write }"),
+            audit.replace("pid=4242", "pid=999", 1),
+            audit.replace("permissive=0", "permissive=1"),
+            audit.replace("/foreign/marker", "/foreign/other"),
+            audit.replace(":41) :", ":42) :", 1),
+        ):
+            with self.subTest(mutation=mutation), self.assertRaises(
+                contract.IsolationError
+            ):
+                contract.admit_selinux_isolation(
+                    process_a=process_a,
+                    process_b=process_b,
+                    storage_a=storage_a,
+                    audit_text=mutation,
+                )
 
-        unrelated = (
-            "type=AVC msg=audit(08/31/26 00:43:39.672:40) : "
-            "avc: denied { read } "
-            'name="unrelated" scontext=system_u:system_r:other_t:s0 '
-            "tcontext=system_u:object_r:other_t:s0 tclass=dir permissive=0"
-        )
-        relevant = (
-            "type=AVC msg=audit(08/31/26 00:43:39.673:41) : "
-            "avc: denied { read } "
-            f'name="marker" scontext={process} tcontext={storage} '
-            "tclass=dir permissive=0"
-        )
-        trailing = (
-            "type=AVC msg=audit(08/31/26 00:43:39.674:42) : "
-            "avc: denied { write } "
-            'name="other" scontext=system_u:system_r:third_t:s0 '
-            f"tcontext={storage} tclass=dir permissive=0"
-        )
-        self.assertEqual(set(), correlate(
-            "\n".join((unrelated, relevant, trailing)), process, storage
-        ))
-        self.assertIsNone(correlate(
-            "\n".join((relevant, relevant)), process, storage
-        ))
-        second = relevant.replace(":41) :", ":43) :")
-        self.assertEqual(set(), correlate(
-            "\n".join((relevant, second)), process, storage
-        ))
-        self.assertEqual(set(), correlate(
-            relevant.replace("permissive=0", "permissive=1"), process, storage
-        ))
-        self.assertEqual(set(), correlate(
-            relevant.replace("tclass=dir", "tclass=socket"), process, storage
-        ))
-        event_id = namespace["audit_event_id"]
-        interpreted_avc = relevant.replace(' name="marker"', "")
-        interpreted_proctitle = (
-            "type=PROCTITLE "
-            "msg=audit(08/31/26 00:43:39.673:41) : "
-            "proctitle=cat /foreign/marker"
-        )
-        interpreted_event = "\n".join((interpreted_avc, interpreted_proctitle))
-        self.assertEqual({event_41}, correlate(interpreted_event, process, storage))
-        self.assertEqual(
-            {event_41},
-            correlate(f"----\n\n{interpreted_event}\n----", process, storage),
-        )
-        self.assertIsNone(
-            correlate(f"MALFORMED EVENT\n{interpreted_event}", process, storage)
-        )
-        self.assertIsNone(correlate(
-            "\n".join((interpreted_event, interpreted_proctitle)),
-            process,
-            storage,
-        ))
-        self.assertIsNone(correlate(
-            "\n".join((interpreted_event, interpreted_avc)),
-            process,
-            storage,
-        ))
-        second_proctitle = interpreted_proctitle.replace(":41) :", ":43) :")
-        self.assertEqual({event_41, (event_41[0], "43")}, correlate(
-            "\n".join((interpreted_event, second, second_proctitle)),
-            process,
-            storage,
-        ))
-        valid_second_event = "\n".join((second, second_proctitle))
-        self.assertIsNone(
-            correlate(
-                "\n".join((interpreted_event, interpreted_avc, valid_second_event)),
-                process,
-                storage,
-            )
-        )
-        self.assertIsNone(
-            correlate(
-                "\n".join(
-                    (interpreted_event, interpreted_proctitle, valid_second_event)
-                ),
-                process,
-                storage,
-            )
-        )
-        self.assertEqual(set(), correlate(
-            "\n".join((
-                interpreted_avc,
-                interpreted_proctitle.replace(":41) :", ":42) :"),
-            )),
-            process,
-            storage,
-        ))
-        self.assertEqual(set(), correlate(
-            interpreted_event.replace("type=PROCTITLE", "type=EXECVE"),
-            process,
-            storage,
-        ))
-        self.assertEqual(set(), correlate(
-            interpreted_event.replace(
-                "/foreign/marker",
-                "/unbound/marker",
-            ),
-            process,
-            storage,
-        ))
-        source_only = interpreted_avc.replace(
-            f"tcontext={storage}", "tcontext=system_u:object_r:other_t:s0"
-        )
-        target_only = interpreted_avc.replace(
-            f"scontext={process}", "scontext=system_u:system_r:other_t:s0"
-        )
-        self.assertEqual(set(), correlate(
-            "\n".join((source_only, target_only, interpreted_proctitle)),
-            process,
-            storage,
-        ))
-        path = (
-            "type=PATH msg=audit(08/31/26 00:43:39.673:41) : item=0 "
-            'name="/var/tmp/secpal-host-qualification-Ab12Cd/state-a/marker" '
-            "nametype=NORMAL"
-        )
-        self.assertEqual(set(), correlate(
-            "\n".join((relevant.replace(' name="marker"', ""), path)),
-            process,
-            storage,
-        ))
-        self.assertEqual(event_41, event_id(relevant))
-        self.assertEqual(event_41, event_id(interpreted_avc))
-        raw_event = interpreted_event.replace(
-            "msg=audit(08/31/26 00:43:39.673:41) :",
-            "msg=audit(1.2:41):",
-        )
-        self.assertIsNone(event_id(raw_event.splitlines()[0]))
-        self.assertIsNone(correlate(raw_event, process, storage))
-        self.assertIsNone(correlate(
-            "\n".join((interpreted_event, raw_event)),
-            process,
-            storage,
-        ))
-        self.assertEqual(
-            set(),
-            correlate(
-                interpreted_event.replace("tclass=dir", "tclass=file"),
-                process,
-                storage,
-            ),
-        )
-        self.assertIsNone(event_id(interpreted_avc.replace(".673", "")))
-        self.assertIsNone(event_id(interpreted_avc.replace(") :", "):")))
-        self.assertIsNone(event_id(interpreted_avc.replace("08/31", "99/31")))
-        self.assertIsNone(
-            event_id(interpreted_avc.replace("08/31/26", "08/31/2026"))
-        )
-        cross_timestamp_marker = interpreted_proctitle.replace(
-            "00:43:39.673:41", "00:44:40.000:41"
-        )
-        self.assertEqual(
-            set(),
-            correlate(
-                "\n".join((interpreted_avc, cross_timestamp_marker)),
-                process,
-                storage,
-            ),
-        )
-        self.assertEqual(
-            {event_41, (event_41[0], "43")},
-            correlate(
-                interpreted_event
-                + "\n"
-                + interpreted_event.replace(":41) :", ":43) :"),
-                process,
-                storage,
-            ),
-        )
 
     def test_avc_admission_reads_logs_when_python_stdin_is_a_heredoc(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
