@@ -598,9 +598,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             line_rules=self.classifier.HISTORICAL_LINE_RULES,
         )
 
-    def classify_current(self, trace: str) -> tuple[str, str]:
+    def classify_current(self, trace: str, output: str = "") -> tuple[str, str]:
         return self.classifier.classify_failure(
-            b"", trace.encode(), 1, target_bound=True,
+            output.encode(), trace.encode(), 1, target_bound=True,
             line_rules=self.classifier.LINE_RULES,
         )
 
@@ -634,7 +634,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 mock.patch.object(
                     self.observer,
                     "admitted_fifo",
-                    side_effect=[io.BytesIO(self.reload_event("237,242")), acknowledgement],
+                    side_effect=[io.BytesIO(self.reload_event("522,527")), acknowledgement],
                 ),
                 mock.patch.object(
                     self.observer, "validate_client_identity", create=True
@@ -809,27 +809,111 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 self.observer.validate_client_identity(4242)
 
     def test_current_target_line_map_is_private_relabel_only(self) -> None:
-        cases = ((237, "qualify-quadlet-daemon-reload"), (238, "qualify-quadlet-start"),
-                 (239, "qualify-quadlet-active-state"), (245, "qualify-workload-primary"),
-                 (250, "qualify-seccomp"), (262, "qualify-selinux-storage"))
+        cases = (
+            (522, "qualify-quadlet-daemon-reload"),
+            (538, "qualify-quadlet-start"),
+            (539, "qualify-quadlet-active-state"),
+            (559, "qualify-seccomp"),
+            (570, "qualify-workload-primary"),
+            (580, "qualify-selinux-storage"),
+        )
         for line, operation in cases:
             with self.subTest(line=line):
-                self.assertEqual((operation, "command-failed"), self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}"))
-        for line in (250, 252, 253):
+                self.assertEqual(
+                    (operation, "command-failed"),
+                    self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}"),
+                )
+        for line in (568, 569, 570):
             self.assertNotEqual("qualify-selinux-storage-fcontext-add", self.classifier.operation_for_line(line))
 
-    def test_old_start_boundary_collapses_independent_process_failures(self) -> None:
+    def test_current_target_messages_preserve_invariant_semantics(self) -> None:
+        cases = (
+            (
+                "ERROR: service account must resolve to a non-root runtime identity.\n",
+                396,
+                "qualify-service-account",
+            ),
+            (
+                "ERROR: effective Podman runtime is not the admitted rootless service identity.\n",
+                444,
+                "qualify-rootless-runtime",
+            ),
+            (
+                "ERROR: effective Quadlet runtime identity contradicts the service account.\n",
+                550,
+                "qualify-quadlet-authority",
+            ),
+            (
+                "ERROR: representative workload lacks the effective least-authority process state.\n",
+                562,
+                "qualify-seccomp",
+            ),
+            (
+                "ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n",
+                612,
+                "qualify-avc-correlation",
+            ),
+        )
+        for message, line, operation in cases:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    (operation, "invariant-failed"),
+                    self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}", message),
+                )
+
+    def test_every_current_line_range_is_closed_nonoverlapping_and_reachable(
+        self,
+    ) -> None:
+        previous_last = 0
+        for first, last, operation in self.classifier.LINE_RULES:
+            with self.subTest(first=first, last=last, operation=operation):
+                self.assertGreater(first, previous_last)
+                self.assertLessEqual(first, last)
+                self.assertIn(operation, self.classifier.OPERATIONS)
+                for line in {first, last}:
+                    self.assertEqual(
+                        (operation, "command-failed"),
+                        self.classify_current(
+                            f"SECPAL_TARGET_ERR_V2:1:{line}"
+                        ),
+                    )
+                previous_last = last
+
+        harness_lines = QUALIFICATION_HARNESS.read_text(encoding="utf-8").splitlines()
+        anchors = {
+            365: ("read_os_release_value", "qualify-host-identity"),
+            522: ("user_systemctl daemon-reload", "qualify-quadlet-daemon-reload"),
+            538: ("user_systemctl start", "qualify-quadlet-start"),
+            539: ("user_systemctl is-active", "qualify-quadlet-active-state"),
+            556: ("rootless_podman exec", "qualify-workload-primary"),
+            568: ("install -d", "qualify-selinux-storage-directory-create"),
+            570: ("rootless_podman run", "qualify-workload-primary"),
+            575: ("rootless_podman run", "qualify-workload-secondary"),
+            580: ("rootless_podman top", "qualify-selinux-storage"),
+            590: ("observe_denied_access", "qualify-avc-correlation"),
+            649: ("rootless_podman inspect", "qualify-runtime-fallback-absence"),
+        }
+        for line, (source, operation) in anchors.items():
+            with self.subTest(line=line):
+                self.assertIn(source, harness_lines[line - 1])
+                self.assertEqual(
+                    operation, self.classifier.operation_for_line(line)
+                )
+
+    def test_historical_202_start_boundary_retains_its_original_mapping(self) -> None:
         executable_failures = {
             self.classifier.classify_failure(
                 b"", b"SECPAL_TARGET_ERR_V2:126:51,238\n", 126,
-                target_bound=True, line_rules=self.classifier.LINE_RULES,
+                target_bound=True,
+                line_rules=self.classifier.HISTORICAL_202_LINE_RULES,
             )
             for _producer in ("runuser", "env", "systemctl")
         }
         completed_client_failures = {
             self.classifier.classify_failure(
                 b"", b"SECPAL_TARGET_ERR_V2:1:51,238\n", 1,
-                target_bound=True, line_rules=self.classifier.LINE_RULES,
+                target_bound=True,
+                line_rules=self.classifier.HISTORICAL_202_LINE_RULES,
             )
             for _producer in ("manager-request", "service-exec-main-status-126")
         }
@@ -1365,7 +1449,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 executable = fake_bin / name
                 executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
                 executable.chmod(0o700)
-            lines = ["set -euo pipefail"] + [""] * 236
+            lines = ["set -euo pipefail"] + [""] * 523
             definitions = {
                 52: "user_systemctl() {",
                 53: "  false",
@@ -1377,7 +1461,10 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 66: "}",
                 204: "trap cleanup EXIT",
                 216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
-                237: "user_systemctl daemon-reload",
+                500: "main() {",
+                522: "user_systemctl daemon-reload",
+                523: "}",
+                524: "main",
             }
             for line_number, source in definitions.items():
                 lines[line_number - 1] = source
@@ -2676,6 +2763,18 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
     def test_every_reviewed_message_and_call_site_has_a_closed_mapping(self) -> None:
         for prefix, operation, reason in self.classifier.EXPLICIT_RULES:
             with self.subTest(prefix=prefix):
+                self.assertEqual(
+                    (operation, reason),
+                    self.classifier.classify_failure(
+                        prefix.encode(),
+                        b"",
+                        1,
+                        target_bound=True,
+                        line_rules=self.classifier.LINE_RULES,
+                    ),
+                )
+        for prefix, operation, reason in self.classifier.HISTORICAL_EXPLICIT_RULES:
+            with self.subTest(historical_prefix=prefix):
                 self.assertEqual((operation, reason), self.classify(prefix))
         for first, last, operation in self.classifier.HISTORICAL_LINE_RULES:
             with self.subTest(line=first):
@@ -3342,6 +3441,12 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             },
         )
         self.assertEqual([], list(validator.iter_errors(current_active)))
+        historical_202_active = dict(
+            current_active,
+            target_sha=self.classifier.HISTORICAL_202_TARGET_SHA,
+            harness_sha256=self.classifier.HISTORICAL_202_HARNESS_SHA256,
+        )
+        self.assertEqual([], list(validator.iter_errors(historical_202_active)))
         self.assertTrue(
             list(
                 validator.iter_errors(
@@ -3364,7 +3469,18 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         )
         for mixed_authority in (
             dict(document, harness_sha256=self.classifier.HISTORICAL_HARNESS_SHA256),
-            dict(historical_semanage_document, harness_sha256=self.classifier.EXPECTED_HARNESS_SHA256),
+            dict(
+                document,
+                harness_sha256=self.classifier.HISTORICAL_202_HARNESS_SHA256,
+            ),
+            dict(
+                historical_202_active,
+                harness_sha256=self.classifier.EXPECTED_HARNESS_SHA256,
+            ),
+            dict(
+                historical_semanage_document,
+                harness_sha256=self.classifier.EXPECTED_HARNESS_SHA256,
+            ),
         ):
             with self.subTest(mixed_authority=mixed_authority):
                 self.assertTrue(list(validator.iter_errors(mixed_authority)))

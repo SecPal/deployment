@@ -15,9 +15,26 @@ inputs to Rocky admission.
 The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
 preparation, continuation admission, evidence admission, and cleanup. A target
-revision is accepted only as a full commit SHA. It is fetched by the guest only
-after every GCP service account has been detached and access to the metadata
-credential endpoint has been blocked.
+revision is accepted only when it is the exact signed commit
+`b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` and its
+`scripts/qualify-production-host.sh` bytes have SHA-256
+`918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa`.
+The pair is independently enforced by the trusted workflow, target runner,
+diagnostic classifier, schema, and repository agreement checks. The target is
+fetched by the guest only after every GCP service account has been detached and
+access to the metadata credential endpoint has been blocked.
+
+That target is the first GitHub-verified protected-main commit containing the
+merged #229, #230, and #231 contracts. The harness digest is derived
+reproducibly from its immutable Git bytes with
+`git show b8f5a505d318d06a64a5975cfaba9f1e5ba0041f:scripts/qualify-production-host.sh | sha256sum`.
+The earlier `293977ae93408a7bb812619de58649ab8a92d438` /
+`8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db`
+pair and older retained identities remain historical evidence bindings only;
+they cannot select current qualification. The earlier target SHA may select
+only `destroy` for its exact retained continuation and OpenTofu state. Trusted
+cleanup admits that continuation and its matching target before obtaining
+provider authority, and it never executes target-owned bytes.
 
 The qualification runner job has no environment, `id-token` permission, WIF
 action, provider token, or credential file. It generates an Ed25519 key locally
@@ -116,7 +133,7 @@ failures remain `qualification-harness/unclassified-target-failure`. The
 transport retains only the operation, closed reason, exit status, run bindings,
 and bounded diagnostic-input hash and length—not target stdout or stderr.
 
-For the immutable line-238 Quadlet start, trusted control closes the formerly
+For the immutable line-538 Quadlet start, trusted control closes the formerly
 opaque `runuser -> env -> systemctl --user start` boundary without modifying
 the target harness. The trace redirects only that exact call through
 root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
@@ -149,7 +166,7 @@ or contradictory observations retain the target status as
 `qualify-quadlet-start/diagnostic-unavailable`; no stdout, stderr, environment,
 or journal text enters evidence.
 
-The immutable line-239 active-state check has a separate, identically bounded
+The immutable line-539 active-state check has a separate, identically bounded
 observer. Only the exact `runuser -> env -> systemctl --user is-active --quiet`
 call is redirected through root-owned
 `/opt/secpal-control/libexec/rocky-active-runuser`; absolute, root-owned
@@ -220,17 +237,12 @@ its machine-local cause is `HISTORICAL_INSTANCE_ROOT_CAUSE_UNRECOVERABLE`, not
 a presumed transient failure. A future occurrence identifies the remediable
 owner in one bounded failure artifact.
 
-For the one immutable `qualify-selinux-storage-fcontext-add` call site (line
-250), trusted control recognizes only the Rocky 10.2 `semanage` CLI's exact
-single-line `ValueError` grammar. It publishes the smallest actionable closed
-families: managed-store access, transaction begin, fcontext equivalency, key or
-existence check, record or context creation, type assignment, context
-attachment, local-record add, and transaction commit. Any generated
-qualification path and the full fcontext expression are transient classifier
-inputs only. A near match, another operation, an unbound target/harness, or an
-unrecognized representation retains the existing closed `command-failed` or
-`unclassified-target-failure` diagnostic rather than being guessed as a
-semanage family.
+The historical #118 `qualify-selinux-storage-fcontext-add` call site at line
+250 retains its exact Rocky 10.2 `semanage` diagnostic schema for immutable
+historical evidence. The active target uses private relabeling and has no
+reachable fcontext-add, restorecon, or matchpathcon source mapping. Presenting
+one of those stale mappings as current, mixing a historical target with the
+current harness, or supplying an unrecognized pair therefore fails closed.
 
 The trusted Bash trace uses `SECPAL_TARGET_ERR_V2`: one numeric exit status and
 at most eight numeric `BASH_LINENO` frames. The classifier ignores generic

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
+import re
 import symtable
 import sys
 from pathlib import Path
@@ -27,6 +29,53 @@ DEFAULT_QUALIFICATION_RUNNER = (
     ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
 )
 DEFAULT_ROCKY_CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
+DEFAULT_WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+DEFAULT_TARGET_FAILURE_CLASSIFIER = (
+    ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+)
+DEFAULT_TARGET_FAILURE_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
+)
+DEFAULT_TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+DEFAULT_RELOAD_OBSERVER = (
+    ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+)
+EXPECTED_TARGET_SHA = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+EXPECTED_HARNESS_SHA256 = (
+    "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+)
+HISTORICAL_CLEANUP_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
+EXPECTED_TARGET_LINE_RULES = (
+    (365, 371, "qualify-host-identity"),
+    (373, 376, "qualify-administrator-execution"),
+    (377, 380, "qualify-fixture-reference"),
+    (381, 402, "qualify-service-account"),
+    (406, 409, "qualify-selinux-host"),
+    (411, 424, "qualify-native-architecture"),
+    (426, 429, "qualify-cgroup"),
+    (430, 446, "qualify-rootless-runtime"),
+    (447, 450, "qualify-fixture-presence"),
+    (452, 460, "qualify-fixture-setup"),
+    (462, 521, "qualify-quadlet-authority"),
+    (522, 522, "qualify-quadlet-daemon-reload"),
+    (523, 537, "qualify-quadlet-authority"),
+    (538, 538, "qualify-quadlet-start"),
+    (539, 539, "qualify-quadlet-active-state"),
+    (541, 552, "qualify-quadlet-authority"),
+    (553, 558, "qualify-workload-primary"),
+    (559, 564, "qualify-seccomp"),
+    (568, 568, "qualify-selinux-storage-directory-create"),
+    (570, 574, "qualify-workload-primary"),
+    (575, 578, "qualify-workload-secondary"),
+    (580, 586, "qualify-selinux-storage"),
+    (590, 596, "qualify-avc-correlation"),
+    (599, 605, "qualify-selinux-policy-restoration"),
+    (608, 613, "qualify-avc-correlation"),
+    (615, 623, "qualify-selinux-policy-restoration"),
+    (626, 642, "qualify-avc-correlation"),
+    (649, 652, "qualify-runtime-fallback-absence"),
+    (654, 654, "qualification-harness"),
+)
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
     "asyncio", "datetime", "grp", "http", "os", "pathlib", "pwd", "requests",
@@ -100,6 +149,49 @@ def assignment_string_dict(tree: ast.Module, name: str) -> dict[str, str] | None
             return None
         return dict(pairs)
     return None
+
+
+def assignment_literal(tree: ast.Module, name: str) -> object:
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            try:
+                return ast.literal_eval(node.value)
+            except (TypeError, ValueError) as error:
+                raise ArchitectureError(
+                    f"architecture constant is not literal: {name}"
+                ) from error
+    raise ArchitectureError(f"architecture constant is missing: {name}")
+
+
+def schema_const_pairs(document: object) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    if isinstance(document, dict):
+        properties = document.get("properties")
+        required = document.get("required")
+        if (
+            isinstance(properties, dict)
+            and isinstance(required, list)
+            and all(isinstance(item, str) for item in required)
+        ):
+            target = properties.get("target_sha")
+            harness = properties.get("harness_sha256")
+            if (
+                {"target_sha", "harness_sha256"} <= set(required)
+                and isinstance(target, dict)
+                and isinstance(target.get("const"), str)
+                and isinstance(harness, dict)
+                and isinstance(harness.get("const"), str)
+            ):
+                pairs.append((target["const"], harness["const"]))
+        for value in document.values():
+            pairs.extend(schema_const_pairs(value))
+    elif isinstance(document, list):
+        for value in document:
+            pairs.extend(schema_const_pairs(value))
+    return pairs
 
 
 def validate_pure_contract(path: Path) -> None:
@@ -577,6 +669,107 @@ def validate_selinux_isolation_architecture(
         raise ArchitectureError("SELinux isolation owner performs external observation")
 
 
+def validate_target_qualification_binding(
+    workflow_path: Path,
+    harness_path: Path,
+    runner_path: Path,
+    classifier_path: Path,
+    failure_schema_path: Path,
+    trace_path: Path,
+    reload_observer_path: Path,
+) -> None:
+    """Enforce agreement with the workflow-owned current target identity."""
+
+    try:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        harness = harness_path.read_bytes()
+        runner = runner_path.read_text(encoding="utf-8")
+        classifier = classifier_path.read_text(encoding="utf-8")
+        failure_schema = json.loads(failure_schema_path.read_text(encoding="utf-8"))
+        trace = trace_path.read_text(encoding="utf-8")
+        reload_observer = reload_observer_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ArchitectureError(
+            "target-qualification binding component is unavailable"
+        ) from error
+
+    target_matches = re.findall(
+        r"^\s*readonly expected_target_sha=([0-9a-f]{40})$", workflow, re.MULTILINE
+    )
+    harness_matches = re.findall(
+        r"^\s*readonly expected_harness_sha256=([0-9a-f]{64})$",
+        workflow,
+        re.MULTILINE,
+    )
+    if len(target_matches) != 1 or len(harness_matches) != 1:
+        raise ArchitectureError("workflow must own one exact target/harness pair")
+    expected_target = EXPECTED_TARGET_SHA
+    expected_harness = EXPECTED_HARNESS_SHA256
+    current_target_gate = '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]'
+    cleanup_target_gate = (
+        '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ||\n'
+        '                "${RAW_TARGET_SHA,,}" == '
+        '"$historical_cleanup_target_sha" ]]'
+    )
+    if (
+        target_matches != [expected_target]
+        or harness_matches != [expected_harness]
+        or workflow.count(current_target_gate) != 2
+        or workflow.count(
+            "readonly historical_cleanup_target_sha="
+            + HISTORICAL_CLEANUP_TARGET_SHA
+        )
+        != 1
+        or workflow.count(cleanup_target_gate) != 1
+        or "sha256sum scripts/qualify-production-host.sh" not in workflow
+        or '"$expected_harness_sha256" ]]' not in workflow
+        or hashlib.sha256(harness).hexdigest() != expected_harness
+    ):
+        raise ArchitectureError("workflow target/harness authentication disagrees")
+
+    classifier_tree = parse(classifier_path)
+    if (
+        assignment_string(classifier_tree, "EXPECTED_TARGET_SHA") != expected_target
+        or assignment_string(classifier_tree, "EXPECTED_HARNESS_SHA256")
+        != expected_harness
+    ):
+        raise ArchitectureError("diagnostic classifier target/harness binding disagrees")
+
+    line_rules = assignment_literal(classifier_tree, "LINE_RULES")
+    if line_rules != EXPECTED_TARGET_LINE_RULES:
+        raise ArchitectureError("current diagnostic line map disagrees")
+    reload_line = 522
+    if (
+        f"10#$frame == {reload_line}" not in trace
+        or f"or {reload_line} not in frames" not in reload_observer
+    ):
+        raise ArchitectureError("daemon-reload diagnostic source mapping disagrees")
+
+    runner_target = f"readonly expected_target_sha={expected_target}"
+    runner_harness = f"readonly expected_harness_sha256={expected_harness}"
+    pair_gate = '[[ "$target_sha" != "$expected_target_sha" ||'
+    if (
+        runner_target not in runner
+        or runner_harness not in runner
+        or pair_gate not in runner
+        or '"$qualification_harness_sha256" != "$expected_harness_sha256" ]]'
+        not in runner
+        or runner.index(pair_gate) >= runner.index("[[ -f /var/lib/secpal-rocky/prepared ]]")
+        or runner.index(pair_gate) >= runner.index("getent ahostsv4 github.com")
+        or runner.index(pair_gate)
+        >= runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+    ):
+        raise ArchitectureError("guest target/harness authentication disagrees")
+
+    if (
+        schema_const_pairs(failure_schema).count(
+            (expected_target, expected_harness)
+        )
+        != 3
+    ):
+        raise ArchitectureError("diagnostic schema target/harness binding disagrees")
+
+
 def main(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
@@ -595,6 +788,19 @@ def main(arguments: list[str]) -> int:
         "--qualification-runner", type=Path, default=DEFAULT_QUALIFICATION_RUNNER
     )
     parser.add_argument("--rocky-control", type=Path, default=DEFAULT_ROCKY_CONTROL)
+    parser.add_argument("--workflow", type=Path, default=DEFAULT_WORKFLOW)
+    parser.add_argument(
+        "--target-failure-classifier",
+        type=Path,
+        default=DEFAULT_TARGET_FAILURE_CLASSIFIER,
+    )
+    parser.add_argument(
+        "--target-failure-schema", type=Path, default=DEFAULT_TARGET_FAILURE_SCHEMA
+    )
+    parser.add_argument("--target-trace", type=Path, default=DEFAULT_TARGET_TRACE)
+    parser.add_argument(
+        "--reload-observer", type=Path, default=DEFAULT_RELOAD_OBSERVER
+    )
     options = parser.parse_args(arguments)
     try:
         validate_pure_contract(options.contract)
@@ -608,6 +814,15 @@ def main(arguments: list[str]) -> int:
             options.qualification_harness,
             options.qualification_runner,
             options.rocky_control,
+        )
+        validate_target_qualification_binding(
+            options.workflow,
+            options.qualification_harness,
+            options.qualification_runner,
+            options.target_failure_classifier,
+            options.target_failure_schema,
+            options.target_trace,
+            options.reload_observer,
         )
     except ArchitectureError as error:
         print(f"ERROR: Rocky evidence architecture rejected: {error}", file=sys.stderr)

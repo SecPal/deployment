@@ -25,6 +25,18 @@ COLLECTOR = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
 PREPARATION = ROOT / "scripts/ci-cloud/prepare-rocky-host.sh"
 WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
 CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
+QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
+QUALIFICATION_RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
+TARGET_FAILURE_CLASSIFIER = (
+    ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+)
+TARGET_FAILURE_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
+)
+TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+RELOAD_OBSERVER = (
+    ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+)
 
 
 def load_contract():
@@ -1129,6 +1141,114 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertNotIn("id-token: write", validation_job)
         self.assertNotIn("google-github-actions/auth", validation_job)
         self.assertIn("needs: validate", workflow[discover:])
+
+    def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
+        target = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+        harness = (
+            "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+        )
+        mutations = (
+            (
+                "--workflow",
+                WORKFLOW,
+                f"readonly expected_target_sha={target}",
+                "readonly expected_target_sha=" + "a" * 40,
+            ),
+            (
+                "--qualification-runner",
+                QUALIFICATION_RUNNER,
+                f"readonly expected_harness_sha256={harness}",
+                "readonly expected_harness_sha256=" + "b" * 64,
+            ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                f'EXPECTED_TARGET_SHA = "{target}"',
+                'EXPECTED_TARGET_SHA = "' + "c" * 40 + '"',
+            ),
+            (
+                "--target-failure-schema",
+                TARGET_FAILURE_SCHEMA,
+                f'"const": "{harness}"',
+                '"const": "' + "d" * 64 + '"',
+            ),
+            (
+                "--target-trace",
+                TARGET_TRACE,
+                "10#$frame == 522",
+                "10#$frame == 523",
+            ),
+            (
+                "--reload-observer",
+                RELOAD_OBSERVER,
+                "or 522 not in frames",
+                "or 523 not in frames",
+            ),
+            (
+                "--qualification-harness",
+                QUALIFICATION_HARNESS,
+                'readonly DEFAULT_ACCOUNT="secpal-deploy"',
+                'readonly DEFAULT_ACCOUNT="caller-selected"',
+            ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                '(570, 574, "qualify-workload-primary"),',
+                '(570, 574, "qualify-workload-secondary"),',
+            ),
+        )
+        for option, source_path, old, new in mutations:
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
+                mutated = source_path.read_text(encoding="utf-8").replace(old, new)
+                self.assertNotEqual(
+                    source_path.read_text(encoding="utf-8"), mutated
+                )
+                path = Path(directory) / source_path.name
+                path.write_text(mutated, encoding="utf-8")
+                completed = subprocess.run(
+                    [VALIDATOR, option, path],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("disagree", completed.stderr)
+
+    def test_architecture_gate_rejects_schema_pair_substitution(self) -> None:
+        current = (
+            "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+        )
+        historical = (
+            "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        )
+        source = TARGET_FAILURE_SCHEMA.read_text(encoding="utf-8")
+        mutation = source.replace(current, "x" * 64, 1)
+        mutation = mutation.replace(historical, current, 1)
+        mutation = mutation.replace("x" * 64, historical, 1)
+        self.assertEqual(source.count(current), mutation.count(current))
+        self.assertEqual(source.count(historical), mutation.count(historical))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / TARGET_FAILURE_SCHEMA.name
+            path.write_text(mutation, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--target-failure-schema", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+
+    def test_architecture_gate_pins_corrected_pair_independently(self) -> None:
+        source = VALIDATOR.read_text(encoding="utf-8")
+        self.assertIn(
+            'EXPECTED_TARGET_SHA = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"',
+            source,
+        )
+        self.assertIn(
+            'EXPECTED_HARNESS_SHA256 = (\n    '
+            '"918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"',
+            source,
+        )
 
 
 if __name__ == "__main__":
