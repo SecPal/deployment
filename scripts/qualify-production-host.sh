@@ -14,6 +14,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 readonly SELINUX_ISOLATION_CONTRACT="${SCRIPT_DIR}/selinux_isolation_contract.py"
 readonly SELINUX_ISOLATION_INVARIANT_OWNER="selinux_isolation_contract.admit_selinux_isolation"
+readonly QUADLET_AUTHORITY_CONTRACT="${SCRIPT_DIR}/quadlet_authority_contract.py"
+readonly QUADLET_AUTHORITY_INVARIANT_OWNER="quadlet_authority_contract.admit_quadlet_authority"
 
 image=""
 service_account="$DEFAULT_ACCOUNT"
@@ -153,20 +155,21 @@ runtime_identity_admitted() {
 
 effective_quadlet_service_admitted() {
   local properties_path="$1" expected_fragment="$2" expected_source="$3"
-  local fragment source drop_ins exec_start direct_podman_prefix
-  [[ -f "$properties_path" ]] || return 1
-  [[ "$(awk 'END { print NR }' "$properties_path")" == 4 ]] || return 1
-  fragment="$(awk -F= '$1 == "FragmentPath" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
-  source="$(awk -F= '$1 == "SourcePath" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
-  drop_ins="$(awk -F= '$1 == "DropInPaths" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
-  exec_start="$(awk -F= '$1 == "ExecStart" { count++; value = substr($0, index($0, "=") + 1) } END { if (count != 1) exit 1; print value }' "$properties_path")" || return 1
-  [[ "$fragment" == "$expected_fragment" ]] || return 1
-  [[ "$source" == "$expected_source" ]] || return 1
-  [[ -z "$drop_ins" ]] || return 1
-  direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '
-  [[ "$exec_start" == "$direct_podman_prefix"* && "$exec_start" == *' ; }' ]] || return 1
-  [[ "${exec_start#*\{ path=}" != *'{ path='* ]] || return 1
-  return 0
+  local evidence_path="$4" status
+  [[ -f "$QUADLET_AUTHORITY_CONTRACT" && ! -L "$QUADLET_AUTHORITY_CONTRACT" ]] || return 1
+  if python3 "$QUADLET_AUTHORITY_CONTRACT" "$properties_path" \
+    --expected-fragment "$expected_fragment" \
+    --expected-source "$expected_source" --output "$evidence_path" \
+    >/dev/null 2>&1; then
+    :
+  else
+    status=$?
+    ((status == 1)) && return 1
+    return 125
+  fi
+  grep -Fq \
+    "\"invariant_owner\":\"${QUADLET_AUTHORITY_INVARIANT_OWNER}\"" \
+    "$evidence_path"
 }
 
 least_authority_process_admitted() {
@@ -521,6 +524,7 @@ if grep -En 'AutoUpdate=|Network=host|label=disable|Privileged=true' "$unit_path
 fi
 user_systemctl daemon-reload
 unit_properties="${fixture_root}/quadlet-service.properties"
+quadlet_authority_evidence="${fixture_root}/quadlet-authority.json"
 if ! user_systemctl show "${unit_name}.service" \
   --property=FragmentPath --property=SourcePath \
   --property=DropInPaths --property=ExecStart >"$unit_properties"; then
@@ -528,10 +532,17 @@ if ! user_systemctl show "${unit_name}.service" \
   exit 1
 fi
 chmod 0600 "$unit_properties"
-if ! effective_quadlet_service_admitted \
+if effective_quadlet_service_admitted \
   "$unit_properties" \
   "/run/user/${service_uid}/systemd/generator/${unit_name}.service" \
-  "$unit_path"; then
+  "$unit_path" "$quadlet_authority_evidence"; then
+  :
+else
+  authority_status=$?
+  if ((authority_status == 125)); then
+    printf 'ERROR: unable to evaluate effective Quadlet service authority.\n' >&2
+    exit 1
+  fi
   printf 'ERROR: effective Quadlet service contradicts the admitted administrator configuration.\n' >&2
   exit 1
 fi
@@ -645,6 +656,8 @@ printf 'seccomp_mode=%s\nprocess_a=%s\nprocess_b=%s\nstorage_a=%s\n' \
   "$seccomp_mode" "$process_a" "$process_b" "$storage_a"
 printf 'denial_pid=%s\nselinux_isolation_sha256=%s\n' \
   "$denial_pid" "$selinux_isolation_sha256"
+printf 'quadlet_authority_base64=%s\n' \
+  "$(base64 --wrap=0 "$quadlet_authority_evidence")"
 
 if rootless_podman inspect "$container_a" "$container_b" | grep -Eq 'label=disable|"Privileged": true|"NetworkMode": "host"'; then
   printf 'ERROR: effective runtime facts contain a forbidden security fallback.\n' >&2

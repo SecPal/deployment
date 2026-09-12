@@ -74,9 +74,9 @@ class RockyCloudControlTests(unittest.TestCase):
             'if [[ "$target_sha" != "$expected_target_sha" ||'
         )
         gate_end = runner_source.index("\nfi\n", pair_gate) + len("\nfi\n")
-        current_target = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+        current_target = "539d5faa6549be62060c8e20028caf200e5eca01"
         current_harness = (
-            "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+            "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
         )
         historical_target = "293977ae93408a7bb812619de58649ab8a92d438"
         historical_harness = (
@@ -551,6 +551,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "control_utility_base64gzip": ROOT / "scripts/ci-cloud/rocky-control.py",
             "selinux_isolation_contract_base64gzip": ROOT
             / "scripts/selinux_isolation_contract.py",
+            "quadlet_authority_contract_base64gzip": ROOT
+            / "scripts/quadlet_authority_contract.py",
             "discovery_schema_base64gzip": ROOT / "schemas/rocky-cloud-discovery-evidence.schema.json",
             "continuation_schema_base64gzip": ROOT / "schemas/rocky-cloud-continuation.schema.json",
             "preparation_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json",
@@ -2584,6 +2586,16 @@ class RockyCloudControlTests(unittest.TestCase):
             runner,
         )
         self.assertIn(
+            '-f "$work_root/scripts/quadlet_authority_contract.py" && '
+            '! -L "$work_root/scripts/quadlet_authority_contract.py" &&',
+            runner,
+        )
+        self.assertIn(
+            '/usr/bin/cmp --silent -- "$work_root/scripts/'
+            'quadlet_authority_contract.py" "$trusted_quadlet_authority_contract"',
+            runner,
+        )
+        self.assertIn(
             '"$(sha256sum "$work_root/scripts/qualify-production-host.sh" | '
             "awk '{print $1}')\" != \"$qualification_harness_sha256\"",
             runner,
@@ -2661,6 +2673,10 @@ class RockyCloudControlTests(unittest.TestCase):
             "rocky_preparation_contract.admit_package",
             control.AUTHENTICATED_PACKAGE_INVARIANT_OWNER,
         )
+        self.assertEqual(
+            "quadlet_authority_contract.admit_quadlet_authority",
+            control.QUADLET_AUTHORITY_INVARIANT_OWNER,
+        )
         package_names = [
             branch["contains"]["properties"]["name"]["const"]
             for branch in json.loads(
@@ -2715,12 +2731,39 @@ class RockyCloudControlTests(unittest.TestCase):
         isolation_digest = hashlib.sha256(
             isolation_contract.canonical_bytes(isolation)
         ).hexdigest()
+        authority_spec = importlib.util.spec_from_file_location(
+            "quadlet_authority_contract",
+            ROOT / "scripts/quadlet_authority_contract.py",
+        )
+        assert authority_spec is not None and authority_spec.loader is not None
+        authority_contract = importlib.util.module_from_spec(authority_spec)
+        authority_spec.loader.exec_module(authority_contract)
+        unit_name = "secpal-host-qualification-Ab12Cd"
+        fragment = f"/run/user/991/systemd/generator/{unit_name}.service"
+        source = f"/etc/containers/systemd/users/991/{unit_name}.container"
+        authority = authority_contract.admit_quadlet_authority(
+            "\n".join(
+                (
+                    f"FragmentPath={fragment}",
+                    f"SourcePath={source}",
+                    "DropInPaths=",
+                    f"ExecStart={authority_contract.expected_exec_start(unit_name)}",
+                )
+            )
+            + "\n",
+            fragment,
+            source,
+        )
+        authority_encoded = base64.b64encode(
+            authority_contract.canonical_bytes(authority)
+        ).decode("ascii")
         stdout = (
             f"selinux_isolation_sha256={isolation_digest}\n"
+            f"quadlet_authority_base64={authority_encoded}\n"
             "PASS: Rocky Linux 10.2 target workload contract\n"
         ).encode()
         candidate = {
-            "schema_version": 2,
+            "schema_version": 3,
             "target_sha": "b" * 40,
             "native_observation": {
                 "schema_version": 1,
@@ -2736,6 +2779,7 @@ class RockyCloudControlTests(unittest.TestCase):
                 "podman_version": "5.8.2",
                 "packages": packages,
             },
+            "quadlet_authority": authority,
             "exit_status": 0,
             "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
             "stdout_bytes": len(stdout),
@@ -2805,6 +2849,35 @@ class RockyCloudControlTests(unittest.TestCase):
             duplicate["native_observation"]["packages"][0]
         )
         mutations["duplicate-conflict"] = duplicate
+        wrong_authority_uid = deepcopy(candidate)
+        wrong_authority_uid["quadlet_authority"]["runtime_uid"] = 0
+        mutations["rootful-quadlet-authority"] = wrong_authority_uid
+        drifted_authority = deepcopy(candidate)
+        drifted_authority["quadlet_authority"]["exec_start"]["argv"][10] = "host"
+        mutations["generated-unit-drift"] = drifted_authority
+        mixed_authority = deepcopy(candidate)
+        mixed_unit = "secpal-host-qualification-Zy98Xw"
+        mixed_fragment = f"/run/user/992/systemd/generator/{mixed_unit}.service"
+        mixed_source = (
+            f"/etc/containers/systemd/users/992/{mixed_unit}.container"
+        )
+        mixed_authority["quadlet_authority"] = (
+            authority_contract.admit_quadlet_authority(
+                "\n".join(
+                    (
+                        f"FragmentPath={mixed_fragment}",
+                        f"SourcePath={mixed_source}",
+                        "DropInPaths=",
+                        "ExecStart="
+                        + authority_contract.expected_exec_start(mixed_unit),
+                    )
+                )
+                + "\n",
+                mixed_fragment,
+                mixed_source,
+            )
+        )
+        mutations["mixed-quadlet-authority"] = mixed_authority
         for name, document in mutations.items():
             with self.subTest(rejected=name):
                 self.assertNotEqual(0, validate(document).returncode)

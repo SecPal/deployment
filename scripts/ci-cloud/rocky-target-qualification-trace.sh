@@ -90,7 +90,7 @@ secpal_reload_precall() {
   local block_size=""
   local cursor_output=""
   local timestamp=""
-  if [[ "${BASH_LINENO[0]:-}" == 522 ]] &&
+  if [[ "${BASH_LINENO[0]:-}" == 525 ]] &&
     [[ "$BASH_COMMAND" == "user_systemctl daemon-reload" ]]; then
     trap - DEBUG
     if cursor_output="$(timeout --signal=KILL 2s journalctl --no-pager --quiet --show-cursor --lines=0 2>/dev/null)" &&
@@ -131,7 +131,7 @@ secpal_target_qualification_err() {
       fi
       frames+="$frame"
       frame_count=$((frame_count + 1))
-      if ((10#$frame == 522)); then
+      if ((10#$frame == 525)); then
         daemon_reload_frame=true
       fi
     fi

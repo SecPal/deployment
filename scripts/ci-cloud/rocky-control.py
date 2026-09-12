@@ -43,6 +43,10 @@ SELINUX_ISOLATION_CONTRACT_PATH = ROOT / "scripts/selinux_isolation_contract.py"
 SELINUX_ISOLATION_INVARIANT_OWNER = (
     "selinux_isolation_contract.admit_selinux_isolation"
 )
+QUADLET_AUTHORITY_CONTRACT_PATH = ROOT / "scripts/quadlet_authority_contract.py"
+QUADLET_AUTHORITY_INVARIANT_OWNER = (
+    "quadlet_authority_contract.admit_quadlet_authority"
+)
 ARM64_PROFILE = "gcp-rocky-10-2-arm64"
 X86_64_PROFILE = "gcp-rocky-10-2-x86-64"
 PROFILE_PATHS = {
@@ -553,6 +557,47 @@ def load_selinux_isolation_contract() -> Any:
     return contract
 
 
+def load_quadlet_authority_contract() -> Any:
+    try:
+        metadata = QUADLET_AUTHORITY_CONTRACT_PATH.lstat()
+    except OSError as error:
+        raise ControlError("Quadlet authority contract is unavailable") from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or QUADLET_AUTHORITY_CONTRACT_PATH.is_symlink()
+        or not 0 < metadata.st_size <= 65_536
+        or metadata.st_mode & 0o022
+        or (
+            ROOT == Path("/opt/secpal-control")
+            and (metadata.st_uid, metadata.st_gid) != (0, 0)
+        )
+    ):
+        raise ControlError("Quadlet authority contract is not trusted")
+    loader = SourceFileLoader(
+        "quadlet_authority_contract", os.fspath(QUADLET_AUTHORITY_CONTRACT_PATH)
+    )
+    specification = importlib.util.spec_from_loader(loader.name, loader)
+    if specification is None or specification.loader is None:
+        raise ControlError("Quadlet authority contract cannot be loaded")
+    contract = importlib.util.module_from_spec(specification)
+    write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(contract)
+    except Exception as error:
+        raise ControlError("Quadlet authority contract cannot be loaded") from error
+    finally:
+        sys.dont_write_bytecode = write_bytecode
+    if (
+        getattr(contract, "INVARIANT_OWNER", None)
+        != QUADLET_AUTHORITY_INVARIANT_OWNER
+        or not callable(getattr(contract, "validate_authority_evidence", None))
+        or not callable(getattr(contract, "canonical_bytes", None))
+    ):
+        raise ControlError("Quadlet authority contract surface is invalid")
+    return contract
+
+
 def validate_native_qualification(
     path: Path,
     stdout_path: Path,
@@ -607,6 +652,32 @@ def validate_native_qualification(
         != isolation_digests[0]
     ):
         raise ControlError("native SELinux isolation normalization binding is invalid")
+    authority_encodings = re.findall(
+        r"^quadlet_authority_base64=([A-Za-z0-9+/]+={0,2})$", text, re.MULTILINE
+    )
+    if len(authority_encodings) != 1:
+        raise ControlError("native Quadlet authority binding is invalid")
+    authority_contract = load_quadlet_authority_contract()
+    try:
+        authority_bytes = base64.b64decode(authority_encodings[0], validate=True)
+        if len(authority_bytes) > 16_384:
+            raise ValueError("Quadlet authority evidence exceeds its closed bound")
+        authority = json.loads(authority_bytes)
+        authority_contract.validate_authority_evidence(authority)
+        if authority_contract.canonical_bytes(authority) != authority_bytes:
+            raise ValueError("Quadlet authority evidence is not canonical")
+    except (
+        binascii.Error,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+        authority_contract.AuthorityError,
+    ) as error:
+        raise ControlError("native Quadlet authority binding is invalid") from error
+    if document["quadlet_authority"] != authority:
+        raise ControlError(
+            "target and trusted Quadlet authority normalization disagree"
+        )
 
 
 def validate_target_source_failure(

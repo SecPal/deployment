@@ -8,6 +8,7 @@
     "schema_version",
     "target_sha",
     "native_observation",
+    "quadlet_authority",
     "exit_status",
     "stdout_sha256",
     "stdout_bytes",
@@ -17,7 +18,7 @@
     "classification"
   ],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "const": 3 },
     "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "native_observation": {
       "type": "object",
@@ -69,6 +70,7 @@
         }
       }
     },
+    "quadlet_authority": { "$ref": "#/$defs/quadlet_authority" },
     "exit_status": { "const": 0 },
     "stdout_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "stdout_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
@@ -78,6 +80,104 @@
     "classification": { "const": "PASS" }
   },
   "$defs": {
+    "quadlet_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "invariant_owner",
+        "runtime_uid",
+        "unit_name",
+        "fragment_path",
+        "source_path",
+        "drop_in_paths",
+        "exec_start"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "invariant_owner": {
+          "const": "quadlet_authority_contract.admit_quadlet_authority"
+        },
+        "runtime_uid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967294
+        },
+        "unit_name": {
+          "type": "string",
+          "pattern": "^secpal-host-qualification-[A-Za-z0-9]{6}$"
+        },
+        "fragment_path": {
+          "type": "string",
+          "pattern": "^/run/user/[1-9][0-9]*/systemd/generator/secpal-host-qualification-[A-Za-z0-9]{6}\\.service$"
+        },
+        "source_path": {
+          "type": "string",
+          "pattern": "^/etc/containers/systemd/users/[1-9][0-9]*/secpal-host-qualification-[A-Za-z0-9]{6}\\.container$"
+        },
+        "drop_in_paths": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "exec_start": { "$ref": "#/$defs/quadlet_execution" }
+      }
+    },
+    "quadlet_execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable",
+        "argv",
+        "ignore_errors",
+        "start_time",
+        "stop_time",
+        "pid",
+        "code",
+        "status"
+      ],
+      "properties": {
+        "executable": { "const": "/usr/bin/podman" },
+        "argv": {
+          "type": "array",
+          "minItems": 21,
+          "maxItems": 21,
+          "prefixItems": [
+            { "const": "/usr/bin/podman" },
+            { "const": "run" },
+            { "const": "--name" },
+            {
+              "type": "string",
+              "pattern": "^secpal-host-qualification-[A-Za-z0-9]{6}$"
+            },
+            { "const": "--replace" },
+            { "const": "--rm" },
+            { "const": "--cgroups=split" },
+            { "const": "--pull" },
+            { "const": "never" },
+            { "const": "--network" },
+            { "const": "none" },
+            { "const": "--sdnotify=conmon" },
+            { "const": "-d" },
+            { "const": "--cap-drop" },
+            { "const": "all" },
+            { "const": "--user" },
+            { "const": "65532:65532" },
+            { "const": "--security-opt=no-new-privileges" },
+            {
+              "const": "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
+            },
+            { "const": "sleep" },
+            { "const": "infinity" }
+          ]
+        },
+        "ignore_errors": { "const": false },
+        "start_time": { "type": "null" },
+        "stop_time": { "type": "null" },
+        "pid": { "const": 0 },
+        "code": { "type": "null" },
+        "status": { "const": "0/0" }
+      }
+    },
     "normalized_context": {
       "type": "object",
       "additionalProperties": false,

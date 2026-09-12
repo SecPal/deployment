@@ -93,8 +93,8 @@ jobs:
           RAW_SOURCE_RUN_ATTEMPT: ${{ inputs.continuation_run_attempt }}
           IS_DEFAULT_BRANCH: ${{ github.ref == 'refs/heads/main' }}
         run: |
-          readonly expected_target_sha=b8f5a505d318d06a64a5975cfaba9f1e5ba0041f
-          readonly expected_harness_sha256=918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa
+          readonly expected_target_sha=539d5faa6549be62060c8e20028caf200e5eca01
+          readonly expected_harness_sha256=f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c
           readonly historical_cleanup_target_sha=293977ae93408a7bb812619de58649ab8a92d438
           [[ "$IS_DEFAULT_BRANCH" == true ]]
           [[ "$RAW_TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]

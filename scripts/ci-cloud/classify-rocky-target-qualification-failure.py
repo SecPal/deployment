@@ -14,8 +14,8 @@ import stat
 import tempfile
 from pathlib import Path
 
-EXPECTED_TARGET_SHA = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
-EXPECTED_HARNESS_SHA256 = "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+EXPECTED_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
+EXPECTED_HARNESS_SHA256 = "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
 HISTORICAL_202_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
 HISTORICAL_202_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
 HISTORICAL_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
@@ -170,6 +170,7 @@ EXPLICIT_RULES = (
     ("ERROR: administrator Quadlet search-path policy is not trusted", "qualify-quadlet-authority", "invariant-failed"),
     ("ERROR: effective Quadlet search path is not the admitted administrator directory", "qualify-quadlet-authority", "invariant-failed"),
     ("ERROR: unsafe Quadlet setting detected", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: unable to evaluate effective Quadlet service authority", "qualify-quadlet-authority", "command-failed"),
     ("ERROR: effective Quadlet service contradicts the admitted administrator configuration", "qualify-quadlet-authority", "invariant-failed"),
     ("ERROR: effective Quadlet runtime identity contradicts the service account", "qualify-quadlet-authority", "invariant-failed"),
     ("ERROR: representative workload lacks the effective least-authority process state", "qualify-seccomp", "invariant-failed"),
@@ -239,35 +240,35 @@ HISTORICAL_202_LINE_RULES = (
 )
 
 LINE_RULES = (
-    (365, 371, "qualify-host-identity"),
-    (373, 376, "qualify-administrator-execution"),
-    (377, 380, "qualify-fixture-reference"),
-    (381, 402, "qualify-service-account"),
-    (406, 409, "qualify-selinux-host"),
-    (411, 424, "qualify-native-architecture"),
-    (426, 429, "qualify-cgroup"),
-    (430, 446, "qualify-rootless-runtime"),
-    (447, 450, "qualify-fixture-presence"),
-    (452, 460, "qualify-fixture-setup"),
-    (462, 521, "qualify-quadlet-authority"),
-    (522, 522, "qualify-quadlet-daemon-reload"),
-    (523, 537, "qualify-quadlet-authority"),
-    (538, 538, "qualify-quadlet-start"),
-    (539, 539, "qualify-quadlet-active-state"),
-    (541, 552, "qualify-quadlet-authority"),
-    (553, 558, "qualify-workload-primary"),
-    (559, 564, "qualify-seccomp"),
-    (568, 568, "qualify-selinux-storage-directory-create"),
-    (570, 574, "qualify-workload-primary"),
-    (575, 578, "qualify-workload-secondary"),
-    (580, 586, "qualify-selinux-storage"),
-    (590, 596, "qualify-avc-correlation"),
-    (599, 605, "qualify-selinux-policy-restoration"),
-    (608, 613, "qualify-avc-correlation"),
-    (615, 623, "qualify-selinux-policy-restoration"),
-    (626, 642, "qualify-avc-correlation"),
-    (649, 652, "qualify-runtime-fallback-absence"),
-    (654, 654, "qualification-harness"),
+    (368, 374, "qualify-host-identity"),
+    (376, 379, "qualify-administrator-execution"),
+    (380, 383, "qualify-fixture-reference"),
+    (384, 405, "qualify-service-account"),
+    (409, 412, "qualify-selinux-host"),
+    (414, 427, "qualify-native-architecture"),
+    (429, 432, "qualify-cgroup"),
+    (433, 449, "qualify-rootless-runtime"),
+    (450, 453, "qualify-fixture-presence"),
+    (455, 463, "qualify-fixture-setup"),
+    (465, 524, "qualify-quadlet-authority"),
+    (525, 525, "qualify-quadlet-daemon-reload"),
+    (526, 548, "qualify-quadlet-authority"),
+    (549, 549, "qualify-quadlet-start"),
+    (550, 550, "qualify-quadlet-active-state"),
+    (552, 563, "qualify-quadlet-authority"),
+    (564, 569, "qualify-workload-primary"),
+    (570, 576, "qualify-seccomp"),
+    (579, 579, "qualify-selinux-storage-directory-create"),
+    (581, 585, "qualify-workload-primary"),
+    (586, 589, "qualify-workload-secondary"),
+    (591, 597, "qualify-selinux-storage"),
+    (601, 607, "qualify-avc-correlation"),
+    (610, 616, "qualify-selinux-policy-restoration"),
+    (619, 624, "qualify-avc-correlation"),
+    (626, 634, "qualify-selinux-policy-restoration"),
+    (637, 653, "qualify-avc-correlation"),
+    (662, 665, "qualify-runtime-fallback-absence"),
+    (667, 667, "qualification-harness"),
 )
 
 TRACE_PATTERN = re.compile(

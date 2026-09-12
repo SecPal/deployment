@@ -46,6 +46,7 @@ ACTIVE_SYSTEMCTL = ROOT / "scripts/ci-cloud/rocky-active-systemctl.py"
 PRIMARY_RUNUSER = ROOT / "scripts/ci-cloud/rocky-primary-runuser.py"
 PRIMARY_RUNTIME = ROOT / "scripts/ci-cloud/rocky-primary-runtime.py"
 QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
+QUADLET_AUTHORITY = ROOT / "scripts/quadlet_authority_contract.py"
 
 
 class RetainedBytesIO(io.BytesIO):
@@ -102,6 +103,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.classifier = load_classifier()
         cls.observer = load_observer()
+        cls.quadlet_authority = load_script(
+            QUADLET_AUTHORITY, "quadlet_authority_contract"
+        )
 
     def run_authority_contract(
         self, command: str, *arguments: str, environment: dict[str, str] | None = None
@@ -184,13 +188,15 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
     def test_effective_quadlet_service_admission_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             properties = Path(directory) / "service.properties"
+            evidence_path = Path(directory) / "quadlet-authority.json"
+            unit_name = "secpal-host-qualification-Ab12Cd"
             expected_fragment = (
                 "/run/user/20000/systemd/generator/"
-                "secpal-host-qualification-fixture.service"
+                f"{unit_name}.service"
             )
             expected_source = (
                 "/etc/containers/systemd/users/20000/"
-                "secpal-host-qualification-fixture.container"
+                f"{unit_name}.container"
             )
             baseline = {
                 "FragmentPath": expected_fragment,
@@ -198,24 +204,75 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "DropInPaths": "",
                 "ExecStart": (
                     "{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run "
-                    "--name=secpal-host-qualification-fixture ; }"
+                    f"--name {unit_name} --replace --rm --cgroups=split "
+                    "--pull never --network none --sdnotify=conmon -d "
+                    "--cap-drop all --user 65532:65532 "
+                    "--security-opt=no-new-privileges "
+                    f"{self.quadlet_authority.FIXTURE_IMAGE} sleep infinity ; "
+                    "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; "
+                    "pid=0 ; code=(null) ; status=0/0 }"
                 ),
             }
 
-            def admitted(values: dict[str, str]) -> subprocess.CompletedProcess[str]:
-                properties.write_text(
-                    "".join(f"{name}={value}\n" for name, value in values.items()),
-                    encoding="utf-8",
-                )
-                return self.run_authority_contract(
-                    "effective_quadlet_service_admitted",
-                    properties.as_posix(),
-                    expected_fragment,
-                    expected_source,
+            def representation(values: dict[str, str]) -> str:
+                return "".join(
+                    f"{name}={value}\n" for name, value in values.items()
                 )
 
-            valid = admitted(baseline)
-            self.assertEqual(0, valid.returncode, valid.stderr)
+            admitted = self.quadlet_authority.admit_quadlet_authority(
+                representation(baseline), expected_fragment, expected_source
+            )
+            self.quadlet_authority.validate_authority_evidence(admitted)
+            for path, value in (
+                (("schema_version",), True),
+                (("exec_start", "ignore_errors"), 0),
+                (("exec_start", "pid"), False),
+            ):
+                with self.subTest(closed_type=path):
+                    candidate = json.loads(json.dumps(admitted))
+                    location = candidate
+                    for component in path[:-1]:
+                        location = location[component]
+                    location[path[-1]] = value
+                    with self.assertRaises(self.quadlet_authority.AuthorityError):
+                        self.quadlet_authority.validate_authority_evidence(candidate)
+            properties.write_text(representation(baseline), encoding="utf-8")
+            wrapper = self.run_authority_contract(
+                "effective_quadlet_service_admitted",
+                properties.as_posix(),
+                expected_fragment,
+                expected_source,
+                evidence_path.as_posix(),
+            )
+            self.assertEqual(0, wrapper.returncode, wrapper.stderr)
+            self.assertEqual(
+                admitted,
+                json.loads(evidence_path.read_text(encoding="utf-8")),
+            )
+
+            outside_uid_bound = "4294967295"
+            outside_fragment = expected_fragment.replace("20000", outside_uid_bound)
+            outside_source = expected_source.replace("20000", outside_uid_bound)
+            outside_representation = representation(
+                {
+                    **baseline,
+                    "FragmentPath": outside_fragment,
+                    "SourcePath": outside_source,
+                }
+            )
+            with self.assertRaises(self.quadlet_authority.AuthorityError):
+                self.quadlet_authority.admit_quadlet_authority(
+                    outside_representation, outside_fragment, outside_source
+                )
+
+            missing_properties = self.run_authority_contract(
+                "effective_quadlet_service_admitted",
+                (Path(directory) / "missing.properties").as_posix(),
+                expected_fragment,
+                expected_source,
+                evidence_path.as_posix(),
+            )
+            self.assertEqual(125, missing_properties.returncode)
 
             mutations = {
                 "shadowed fragment": {
@@ -236,14 +293,32 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 "substituted execution": {
                     "ExecStart": "{ path=/usr/bin/sh ; argv[]=/usr/bin/sh -c true ; }"
                 },
+                "generated argv drift": {
+                    "ExecStart": baseline["ExecStart"].replace(
+                        "--network none", "--network host", 1
+                    )
+                },
+                "execution metadata drift": {
+                    "ExecStart": baseline["ExecStart"].replace(
+                        "ignore_errors=no", "ignore_errors=yes", 1
+                    )
+                },
             }
             for name, mutation in mutations.items():
                 with self.subTest(name=name):
-                    self.assertNotEqual(0, admitted({**baseline, **mutation}).returncode)
+                    with self.assertRaises(self.quadlet_authority.AuthorityError):
+                        self.quadlet_authority.admit_quadlet_authority(
+                            representation({**baseline, **mutation}),
+                            expected_fragment,
+                            expected_source,
+                        )
 
             duplicate = dict(baseline)
             duplicate["FragmentPath"] += f"\nFragmentPath={expected_fragment}"
-            self.assertNotEqual(0, admitted(duplicate).returncode)
+            with self.assertRaises(self.quadlet_authority.AuthorityError):
+                self.quadlet_authority.admit_quadlet_authority(
+                    representation(duplicate), expected_fragment, expected_source
+                )
 
     def test_quadlet_authority_rejects_effective_service_account_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -634,7 +709,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 mock.patch.object(
                     self.observer,
                     "admitted_fifo",
-                    side_effect=[io.BytesIO(self.reload_event("522,527")), acknowledgement],
+                    side_effect=[io.BytesIO(self.reload_event("525,531")), acknowledgement],
                 ),
                 mock.patch.object(
                     self.observer, "validate_client_identity", create=True
@@ -810,12 +885,12 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 
     def test_current_target_line_map_is_private_relabel_only(self) -> None:
         cases = (
-            (522, "qualify-quadlet-daemon-reload"),
-            (538, "qualify-quadlet-start"),
-            (539, "qualify-quadlet-active-state"),
-            (559, "qualify-seccomp"),
-            (570, "qualify-workload-primary"),
-            (580, "qualify-selinux-storage"),
+            (525, "qualify-quadlet-daemon-reload"),
+            (549, "qualify-quadlet-start"),
+            (550, "qualify-quadlet-active-state"),
+            (570, "qualify-seccomp"),
+            (581, "qualify-workload-primary"),
+            (591, "qualify-selinux-storage"),
         )
         for line, operation in cases:
             with self.subTest(line=line):
@@ -823,34 +898,34 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                     (operation, "command-failed"),
                     self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}"),
                 )
-        for line in (568, 569, 570):
+        for line in (579, 580, 581):
             self.assertNotEqual("qualify-selinux-storage-fcontext-add", self.classifier.operation_for_line(line))
 
     def test_current_target_messages_preserve_invariant_semantics(self) -> None:
         cases = (
             (
                 "ERROR: service account must resolve to a non-root runtime identity.\n",
-                396,
+                399,
                 "qualify-service-account",
             ),
             (
                 "ERROR: effective Podman runtime is not the admitted rootless service identity.\n",
-                444,
+                447,
                 "qualify-rootless-runtime",
             ),
             (
                 "ERROR: effective Quadlet runtime identity contradicts the service account.\n",
-                550,
+                548,
                 "qualify-quadlet-authority",
             ),
             (
                 "ERROR: representative workload lacks the effective least-authority process state.\n",
-                562,
+                573,
                 "qualify-seccomp",
             ),
             (
                 "ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n",
-                612,
+                623,
                 "qualify-avc-correlation",
             ),
         )
@@ -881,17 +956,17 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 
         harness_lines = QUALIFICATION_HARNESS.read_text(encoding="utf-8").splitlines()
         anchors = {
-            365: ("read_os_release_value", "qualify-host-identity"),
-            522: ("user_systemctl daemon-reload", "qualify-quadlet-daemon-reload"),
-            538: ("user_systemctl start", "qualify-quadlet-start"),
-            539: ("user_systemctl is-active", "qualify-quadlet-active-state"),
-            556: ("rootless_podman exec", "qualify-workload-primary"),
-            568: ("install -d", "qualify-selinux-storage-directory-create"),
-            570: ("rootless_podman run", "qualify-workload-primary"),
-            575: ("rootless_podman run", "qualify-workload-secondary"),
-            580: ("rootless_podman top", "qualify-selinux-storage"),
-            590: ("observe_denied_access", "qualify-avc-correlation"),
-            649: ("rootless_podman inspect", "qualify-runtime-fallback-absence"),
+            368: ("read_os_release_value", "qualify-host-identity"),
+            525: ("user_systemctl daemon-reload", "qualify-quadlet-daemon-reload"),
+            549: ("user_systemctl start", "qualify-quadlet-start"),
+            550: ("user_systemctl is-active", "qualify-quadlet-active-state"),
+            567: ("rootless_podman exec", "qualify-workload-primary"),
+            579: ("install -d", "qualify-selinux-storage-directory-create"),
+            581: ("rootless_podman run", "qualify-workload-primary"),
+            586: ("rootless_podman run", "qualify-workload-secondary"),
+            591: ("rootless_podman top", "qualify-selinux-storage"),
+            601: ("observe_denied_access", "qualify-avc-correlation"),
+            662: ("rootless_podman inspect", "qualify-runtime-fallback-absence"),
         }
         for line, (source, operation) in anchors.items():
             with self.subTest(line=line):
@@ -1449,7 +1524,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 executable = fake_bin / name
                 executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
                 executable.chmod(0o700)
-            lines = ["set -euo pipefail"] + [""] * 523
+            lines = ["set -euo pipefail"] + [""] * 529
             definitions = {
                 52: "user_systemctl() {",
                 53: "  false",
@@ -1462,9 +1537,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 204: "trap cleanup EXIT",
                 216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
                 500: "main() {",
-                522: "user_systemctl daemon-reload",
-                523: "}",
-                524: "main",
+                525: "user_systemctl daemon-reload",
+                529: "}",
+                530: "main",
             }
             for line_number, source in definitions.items():
                 lines[line_number - 1] = source
@@ -2581,6 +2656,12 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 self.assertEqual((operation, reason), result)
                 observed.add(operation)
         self.assertEqual(
+            ("qualify-quadlet-authority", "command-failed"),
+            self.classify_current(
+                "", "ERROR: unable to evaluate effective Quadlet service authority."
+            ),
+        )
+        self.assertEqual(
             ("qualification-harness", "representation-invalid"),
             self.classify(
                 status=0,
@@ -3381,6 +3462,22 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             "diagnostic_input_bytes": 100,
         }
         self.assertEqual([], list(validator.iter_errors(document)))
+        admitted_native_failure = dict(
+            document,
+            target_sha="b8f5a505d318d06a64a5975cfaba9f1e5ba0041f",
+            trusted_control_sha="1a81531cad3a7f1604456799b447815726708168",
+            qualification_run_id="34716784934",
+            harness_sha256=(
+                "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+            ),
+            operation="qualify-quadlet-authority",
+            reason="invariant-failed",
+            diagnostic_input_sha256=(
+                "b41e05e0a6d722b4a824aa71e7c71b5da4dfd3143a4d26033cc59fc4b011bc59"
+            ),
+            diagnostic_input_bytes=162,
+        )
+        self.assertEqual([], list(validator.iter_errors(admitted_native_failure)))
         zero_status_diagnostic = dict(
             document,
             operation="qualification-harness",
