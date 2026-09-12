@@ -4224,6 +4224,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
                 encoding="utf-8"
             ),
         )
+
         process_a = "system_u:system_r:container_t:s0:c0"
         process_b = "system_u:system_r:container_t:s0:c1023"
         storage_a = "system_u:object_r:container_file_t:s0:c0"
@@ -4260,6 +4261,22 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
                     storage_a=storage_a,
                     audit_text=mutation,
                 )
+
+    def test_target_module_is_authenticated_before_root_execution(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        comparison = (
+            '/usr/bin/cmp --silent -- "$work_root/scripts/'
+            'selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"'
+        )
+        self.assertIn(comparison, runner)
+        self.assertLess(
+            runner.index(comparison),
+            runner.index('bash "$work_root/scripts/qualify-production-host.sh"'),
+        )
+
+    def test_outer_timeout_preserves_the_complete_cleanup_bound(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("timeout --signal=TERM --kill-after=180s 45m", runner)
 
 
     def test_avc_admission_reads_logs_when_python_stdin_is_a_heredoc(self) -> None:

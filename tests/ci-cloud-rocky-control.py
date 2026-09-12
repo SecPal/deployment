@@ -2320,7 +2320,12 @@ class RockyCloudControlTests(unittest.TestCase):
         )
         self.assertIn(
             '-f "$work_root/scripts/selinux_isolation_contract.py" && '
-            '! -L "$work_root/scripts/selinux_isolation_contract.py" ]]',
+            '! -L "$work_root/scripts/selinux_isolation_contract.py" &&',
+            runner,
+        )
+        self.assertIn(
+            '/usr/bin/cmp --silent -- "$work_root/scripts/'
+            'selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"',
             runner,
         )
         self.assertIn(

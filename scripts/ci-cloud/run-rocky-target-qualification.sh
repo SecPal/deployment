@@ -13,6 +13,7 @@ readonly qualification_marker="$evidence_root/target-qualification.marker"
 readonly reload_adjacency="$evidence_root/quadlet-reload-adjacency.json"
 readonly native_observation="$evidence_root/native-package-observation.json"
 readonly native_diagnostic="$evidence_root/native-package-collection-diagnostic.json"
+readonly trusted_selinux_isolation_contract=/opt/secpal-control/scripts/selinux_isolation_contract.py
 
 if [[ "$#" -ne 5 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
   ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ||
@@ -153,8 +154,11 @@ if [[ "$(git -C "$work_root" rev-parse HEAD)" != "$target_sha" ]]; then
   exit 84
 fi
 if ! [[ -f "$work_root/scripts/qualify-production-host.sh" && ! -L "$work_root/scripts/qualify-production-host.sh" && -x "$work_root/scripts/qualify-production-host.sh" &&
-  -f "$work_root/scripts/selinux_isolation_contract.py" && ! -L "$work_root/scripts/selinux_isolation_contract.py" ]] ||
-  [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" != "$qualification_harness_sha256" ]]; then
+  -f "$work_root/scripts/selinux_isolation_contract.py" && ! -L "$work_root/scripts/selinux_isolation_contract.py" &&
+  -f "$trusted_selinux_isolation_contract" && ! -L "$trusted_selinux_isolation_contract" &&
+  "$(stat -c '%u:%g:%a' -- "$trusted_selinux_isolation_contract")" == 0:0:700 ]] ||
+  [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" != "$qualification_harness_sha256" ]] ||
+  ! /usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"; then
   write_source_failure verify-target-sha postcondition-failed 1
   exit 84
 fi
@@ -192,7 +196,7 @@ fi
 capture_bounded 4097 "$qualification_trace" <"$trace_fifo" &
 trace_capture_pid=$!
 set +e
-timeout --signal=TERM --kill-after=30s 45m \
+timeout --signal=TERM --kill-after=180s 45m \
   env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
   bash "$work_root/scripts/qualify-production-host.sh" \
   --image "$fixture" --service-account secpal-runtime \

@@ -307,7 +307,10 @@ populated only by the trusted-control copy after byte agreement with the exact
 target revision's harness. `selinux_isolation_contract.admit_selinux_isolation`
 is the single normalization and admission owner consumed by the target harness,
 closed schema projection, and trusted validation; the target and controller
-bind the canonical normalized result by SHA-256.
+bind the canonical normalized result by SHA-256. Before root execution, trusted
+control also requires the fetched target copy of that owner to be byte-identical
+to its root-owned installed copy. The outer harness deadline retains 180 seconds
+after signalling, exceeding the 150-second sum of all cleanup command bounds.
 
 ### Host-evidence responsibility and ownership map
 

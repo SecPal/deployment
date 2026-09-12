@@ -1265,6 +1265,17 @@ class CloudCIContractTests(unittest.TestCase):
                 "False",
             ),
             (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                '/usr/bin/cmp --silent -- "$work_root/scripts/'
+                'selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"',
+                ":",
+            ),
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "timeout --signal=TERM --kill-after=180s 45m",
+                "timeout --signal=TERM --kill-after=30s 45m",
+            ),
+            (
                 "scripts/selinux_isolation_contract.py",
                 "MCS_CATEGORY_MAX = 1023",
                 "MCS_CATEGORY_MAX = 1024",

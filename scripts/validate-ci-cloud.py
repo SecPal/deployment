@@ -2140,6 +2140,19 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'bash "$work_root/scripts/qualify-production-host.sh"' in target_runner
         and '-f "$work_root/scripts/selinux_isolation_contract.py"' in target_runner
         and '! -L "$work_root/scripts/selinux_isolation_contract.py"' in target_runner
+        and "readonly trusted_selinux_isolation_contract=/opt/secpal-control/scripts/selinux_isolation_contract.py"
+        in target_runner
+        and '-f "$trusted_selinux_isolation_contract"' in target_runner
+        and '! -L "$trusted_selinux_isolation_contract"' in target_runner
+        and '"$(stat -c \'%u:%g:%a\' -- "$trusted_selinux_isolation_contract")" == 0:0:700'
+        in target_runner
+        and '/usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"'
+        in target_runner
+        and target_runner.index(
+            '/usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"'
+        )
+        < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+        and "timeout --signal=TERM --kill-after=180s 45m" in target_runner
         and "qualification_harness_base64gzip" not in bootstrap + main,
         "trusted control must bind the exact target qualification workload bytes",
     )
