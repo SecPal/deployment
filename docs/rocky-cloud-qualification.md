@@ -25,9 +25,9 @@ fetched by the guest only after every GCP service account has been detached and
 access to the metadata credential endpoint has been blocked.
 
 That target adds the #254 Quadlet authority correction to the first
-GitHub-verified protected-main commit containing the merged #229, #230, and
-#231 contracts. The harness digest is derived reproducibly from its immutable
-Git bytes with
+GitHub-verified protected-main commit containing the merged contracts for issues
+229, 230, and 231. The harness digest is derived reproducibly from its
+immutable Git bytes with
 `git show cef901390f5decf733ecab1892c7cba98067f0fb:scripts/qualify-production-host.sh | sha256sum`.
 The failed native #234 target/harness pair
 `b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` /
