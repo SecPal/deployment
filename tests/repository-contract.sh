@@ -116,6 +116,7 @@ required_files=(
   scripts/ci-cloud/wait-rocky-qualification-readiness.py
   scripts/ci-cloud/run-rocky-target-qualification.sh
   scripts/qualify-production-host.sh
+  scripts/selinux_isolation_contract.py
   scripts/ci-cloud/classify-rocky-target-qualification-failure.py
   scripts/ci-cloud/rocky-target-qualification-trace.sh
   scripts/ci-cloud/rocky-start-runuser.py
@@ -156,6 +157,8 @@ required_files=(
   tests/ci-cloud-gcp-rocky-janitor.py
   tests/ci-cloud-rocky-control.py
   tests/ci-cloud-rocky-target-diagnostics.py
+  tests/selinux-isolation-contract.py
+  tests/production-host-signal-contract.sh
   tests/ci-cloud-rocky-readiness.py
   tests/ci-cloud-gcp-identity.sh
   tests/ci-cloud-host-setup-failure.py

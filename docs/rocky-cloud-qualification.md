@@ -243,8 +243,9 @@ retain only their already validated input digest and length.
 
 The exact harness helper audit assigns `read_os_release_value` and unconditional
 uses of `run_as_service_account`, `rootless_podman`, and `user_systemctl` to
-their semantic callers through that stack. Negated/conditional helper uses and
-`matching_marker_avc` already emit finite target messages when they reject.
+their semantic callers through that stack. Negated/conditional helper uses
+already emit finite target messages when they reject, as does SELinux isolation
+admission.
 `cleanup` and cleanup-time helper calls are not primary target predicates;
 trusted post-harness admission owns cleanup completeness. A generic helper is
 never mapped directly because the same helper serves runtime, fixture,
@@ -300,10 +301,16 @@ preparation also records the resolved ARM64 child
 
 Discovery, preparation, continuation, and qualification use separate closed
 JSON schemas with `additionalProperties: false`. Preparation is not native
-qualification: SELinux process/storage contexts, MCS separation, negative
-cross-MCS access, AVC, seccomp workload behavior, and cleanup PASS are populated
-only by the trusted-control copy after byte agreement with the exact target
-revision's harness.
+qualification: SELinux process/storage contexts, MCS separation, the unique
+enforcing cross-MCS AVC, seccomp workload behavior, and cleanup PASS are
+populated only by the trusted-control copy after byte agreement with the exact
+target revision's harness. `selinux_isolation_contract.admit_selinux_isolation`
+is the single normalization and admission owner consumed by the target harness,
+closed schema projection, and trusted validation; the target and controller
+bind the canonical normalized result by SHA-256. Before root execution, trusted
+control also requires the fetched target copy of that owner to be byte-identical
+to its root-owned installed copy. The outer harness deadline retains 180 seconds
+after signalling, exceeding the 150-second sum of all cleanup command bounds.
 
 ### Host-evidence responsibility and ownership map
 

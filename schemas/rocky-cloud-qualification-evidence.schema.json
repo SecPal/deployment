@@ -11,17 +11,13 @@
     "exit_status",
     "stdout_sha256",
     "stdout_bytes",
-    "process_contexts",
-    "storage_context",
-    "mcs_distinct",
-    "cross_mcs_denied",
-    "avc_observed",
+    "selinux_isolation",
     "seccomp_enforced",
     "cleanup_complete",
     "classification"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "native_observation": {
       "type": "object",
@@ -76,29 +72,85 @@
     "exit_status": { "const": 0 },
     "stdout_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "stdout_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
-    "process_contexts": {
-      "type": "array",
-      "minItems": 2,
-      "maxItems": 2,
-      "items": {
-        "type": "string",
-        "pattern": "^[^:]+:[^:]+:container_t:s0:c[0-9]+(?:,c[0-9]+)?$",
-        "maxLength": 256
-      }
-    },
-    "storage_context": {
-      "type": "string",
-      "pattern": "^[^:]+:[^:]+:container_file_t:s0:c[0-9]+(?:,c[0-9]+)?$",
-      "maxLength": 256
-    },
-    "mcs_distinct": { "const": true },
-    "cross_mcs_denied": { "const": true },
-    "avc_observed": { "const": true },
+    "selinux_isolation": { "$ref": "#/$defs/selinux_isolation" },
     "seccomp_enforced": { "const": true },
     "cleanup_complete": { "const": true },
     "classification": { "const": "PASS" }
   },
   "$defs": {
+    "normalized_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "selinux_type", "mcs_categories"],
+      "properties": {
+        "raw": {
+          "type": "string",
+          "pattern": "^[^:\\s]+:[^:\\s]+:(?:container_t|container_file_t):s0:c(?:[0-9]|[1-9][0-9]{1,2}|10(?:[01][0-9]|2[0-3]))(?:,c(?:[0-9]|[1-9][0-9]{1,2}|10(?:[01][0-9]|2[0-3])))?$",
+          "maxLength": 256
+        },
+        "selinux_type": { "enum": ["container_t", "container_file_t"] },
+        "mcs_categories": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0, "maximum": 1023 }
+        }
+      }
+    },
+    "selinux_isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invariant_owner",
+        "process_contexts",
+        "storage_context",
+        "denial"
+      ],
+      "properties": {
+        "invariant_owner": {
+          "const": "selinux_isolation_contract.admit_selinux_isolation"
+        },
+        "process_contexts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/normalized_context" }
+        },
+        "storage_context": { "$ref": "#/$defs/normalized_context" },
+        "denial": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "event_time",
+            "serial",
+            "pid",
+            "source_context",
+            "target_context",
+            "permission",
+            "target_class",
+            "target_path",
+            "target_name",
+            "permissive"
+          ],
+          "properties": {
+            "event_time": {
+              "type": "string",
+              "pattern": "^[0-9]{2}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}$"
+            },
+            "serial": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+            "source_context": { "type": "string", "maxLength": 256 },
+            "target_context": { "type": "string", "maxLength": 256 },
+            "permission": { "const": "read" },
+            "target_class": { "const": "dir" },
+            "target_path": { "const": "/foreign/marker" },
+            "target_name": { "const": "marker" },
+            "permissive": { "const": 0 }
+          }
+        }
+      }
+    },
     "package": {
       "type": "object",
       "additionalProperties": false,

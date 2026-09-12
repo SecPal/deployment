@@ -167,6 +167,7 @@ resource "google_compute_instance" "qualification" {
       collector_base64gzip                           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/collect-rocky-preparation.py"))
       preparation_contract_base64gzip                = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky_preparation_contract.py"))
       control_utility_base64gzip                     = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-control.py"))
+      selinux_isolation_contract_base64gzip          = base64gzip(file("${path.module}/../../../scripts/selinux_isolation_contract.py"))
       discovery_schema_base64gzip                    = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-discovery-evidence.schema.json"))
       continuation_schema_base64gzip                 = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-continuation.schema.json"))
       preparation_schema_base64gzip                  = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-preparation-evidence.schema.json"))

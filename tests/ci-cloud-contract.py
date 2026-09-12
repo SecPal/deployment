@@ -950,6 +950,7 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud",
             "scripts/fetch-oci-attestation.py",
             "scripts/qualify-production-host.sh",
+            "scripts/selinux_isolation_contract.py",
             "scripts/quadlet-integration.py",
         ):
             source = ROOT / path
@@ -1025,6 +1026,18 @@ class CloudCIContractTests(unittest.TestCase):
             (
                 "direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '",
                 "direct_podman_prefix='{ path=/usr/bin/sh ; argv[]=/usr/bin/sh -c '",
+            ),
+            ("trap 'interrupted 129' HUP", "trap cleanup HUP"),
+            ("trap 'interrupted 130' INT", "trap cleanup INT"),
+            ("trap 'interrupted 143' TERM", "trap cleanup TERM"),
+            ('exit_status="$interrupted_status"', "exit_status=0"),
+            (
+                "/usr/bin/timeout --signal=KILL 30s semodule -B",
+                "semodule -B",
+            ),
+            (
+                'rm -f -- "$qualification_success_marker"',
+                ": # retain success marker",
             ),
         )
         for old, new in mutations:
@@ -1229,92 +1242,94 @@ class CloudCIContractTests(unittest.TestCase):
             with self.subTest(new=new):
                 self.assert_mutation_rejected(runner, old, new)
 
-    def test_rejects_cross_record_or_unbound_avc_admission(self) -> None:
-        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
-        for old, new in (
-            ("date -u '+%m/%d/%y %H:%M:%S'", "date -u '+%m/%d/%Y %H:%M:%S'"),
+    def test_rejects_weakened_selinux_isolation_admission(self) -> None:
+        mutations = (
             (
-                'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")',
-                'datetime.strptime(audit_baseline, "%m/%d/%Y %H:%M:%S")',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "for attempt in range(12):",
+                "for attempt in range(1):",
             ),
             (
-                'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")',
-                'datetime.strptime(f"{date} {time}", "%m/%d/%Y %H:%M:%S.%f")',
-            ),
-            (
-                "audit_date, audit_time = audit_checkpoint.groups()",
-                'audit_date, audit_time = audit_baseline.split(" ", 1)',
-            ),
-            (
-                '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",',
-                '"/usr/sbin/ausearch", "-m", "AVC", "-ts",',
-            ),
-            (
-                'audit_date, audit_time, "-i",',
-                'audit_baseline, "-i",',
-            ),
-            (
-                'audit_date, audit_time, "-i",',
-                'audit_date, audit_time,',
-            ),
-            ("for attempt in range(12):", "for attempt in range(1):"),
-            (
-                'and not stdout\n                and stderr in {b"", b"<no matches>\\n"}',
-                'and True\n                and stderr in {b"", b"<no matches>\\n"}',
-            ),
-            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
                 'stderr in {b"", b"<no matches>\\n"}',
                 "len(stderr) <= 4096",
             ),
             (
-                'if line in {"", "----"}:',
-                'if not line or line == "ignored":',
-            ),
-            ("if events:", "if True:"),
-            (
-                'event["avc"] > 1 or event["marker"] > 1',
-                'event["avc"] > 99 or event["marker"] > 99',
-            ),
-            ("for line in audit_text.splitlines():", "for line in [audit_text]:"),
-            (
-                "event_id = audit_event_id(line)",
-                'event_id = ("one", "one")',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                'selinux_isolation["denial"]["pid"] != denial_pid',
+                "False",
             ),
             (
-                'events.setdefault(event_id, {"avc": 0, "marker": 0})',
-                'events.setdefault(("one", "one"), {"avc": 0, "marker": 0})',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                'isolation_digest != facts["selinux_isolation_sha256"]',
+                "False",
             ),
             (
-                'record_type == "PROCTITLE"',
-                'record_type in {"PATH", "PROCTITLE", "SYSCALL"}',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                '/usr/bin/cmp --silent -- "$work_root/scripts/'
+                'selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"',
+                ":",
             ),
             (
-                "r'(?:^|\\s)/foreign/marker(?:\\s|$)'",
-                "r'(?:^|\\s)/foreign/[^\\s\"]+(?:\\s|$)'",
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "timeout --signal=TERM --kill-after=180s 45m",
+                "timeout --signal=TERM --kill-after=30s 45m",
             ),
             (
-                'tclass.group(1) == "dir"',
-                'tclass.group(1) in {"file", "dir"}',
+                "scripts/selinux_isolation_contract.py",
+                "MCS_CATEGORY_MAX = 1023",
+                "MCS_CATEGORY_MAX = 1024",
             ),
             (
-                'r"(?:^|\\s)permissive=0(?:\\s|$)"',
-                'r"(?:^|\\s)permissive=[01](?:\\s|$)"',
+                "scripts/selinux_isolation_contract.py",
+                "len(raw_categories) not in {1, 2}",
+                "len(raw_categories) not in {1, 2, 3}",
             ),
             (
-                'if event["avc"] == 1 and event["marker"] == 1',
-                'if event["avc"] >= 1 and event["marker"] >= 1',
+                "scripts/selinux_isolation_contract.py",
+                "len(set(categories)) != len(categories)",
+                "False",
             ),
             (
-                'cwd=str(runtime_home) if name == "podman" else None',
+                "scripts/selinux_isolation_contract.py",
+                '_field(line, "pid") == str(pid)',
+                "True",
+            ),
+            (
+                "scripts/selinux_isolation_contract.py",
+                '"permissive": "0"',
+                '"permissive": _field(line, "permissive")',
+            ),
+            (
+                "scripts/selinux_isolation_contract.py",
+                "_event_id(line), {\"AVC\"",
+                '("one", "one"), {"AVC"',
+            ),
+            (
+                "scripts/selinux_isolation_contract.py",
+                "len(candidates) != 1",
+                "len(candidates) < 1",
+            ),
+            (
+                "schemas/rocky-cloud-qualification-evidence.schema.json",
+                '"maximum": 1023',
+                '"maximum": 1024',
+            ),
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "cwd=str(runtime_home) if name == \"podman\" else None",
                 "cwd=None",
             ),
             (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
                 "home_metadata.st_uid == runtime_account.pw_uid",
                 "False",
             ),
-        ):
-            with self.subTest(new=new):
-                self.assert_mutation_rejected(runner, old, new)
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, new=new):
+                self.assert_mutation_rejected(relative, old, new)
+
 
     def test_rejects_weakened_daemon_reload_failure_adjacency(self) -> None:
         trace = "scripts/ci-cloud/rocky-target-qualification-trace.sh"
