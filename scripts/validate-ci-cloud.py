@@ -1979,38 +1979,38 @@ def validate_gcp_iam_role(root: Path) -> None:
 
 
 def validate_rocky_control_plane(root: Path) -> None:
-    expected_target_sha = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+    expected_target_sha = "cef901390f5decf733ecab1892c7cba98067f0fb"
     expected_harness_sha256 = (
-        "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+        "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
     )
     expected_target_line_rules = (
-        (365, 371, "qualify-host-identity"),
-        (373, 376, "qualify-administrator-execution"),
-        (377, 380, "qualify-fixture-reference"),
-        (381, 402, "qualify-service-account"),
-        (406, 409, "qualify-selinux-host"),
-        (411, 424, "qualify-native-architecture"),
-        (426, 429, "qualify-cgroup"),
-        (430, 446, "qualify-rootless-runtime"),
-        (447, 450, "qualify-fixture-presence"),
-        (452, 460, "qualify-fixture-setup"),
-        (462, 521, "qualify-quadlet-authority"),
-        (522, 522, "qualify-quadlet-daemon-reload"),
-        (523, 537, "qualify-quadlet-authority"),
-        (538, 538, "qualify-quadlet-start"),
-        (539, 539, "qualify-quadlet-active-state"),
-        (541, 552, "qualify-quadlet-authority"),
-        (553, 558, "qualify-workload-primary"),
-        (559, 564, "qualify-seccomp"),
-        (568, 568, "qualify-selinux-storage-directory-create"),
-        (570, 574, "qualify-workload-primary"),
-        (575, 578, "qualify-workload-secondary"),
-        (580, 586, "qualify-selinux-storage"),
-        (590, 596, "qualify-avc-correlation"),
-        (599, 605, "qualify-selinux-policy-restoration"),
-        (608, 613, "qualify-avc-correlation"),
-        (615, 623, "qualify-selinux-policy-restoration"),
-        (626, 642, "qualify-avc-correlation"),
+        (362, 368, "qualify-host-identity"),
+        (370, 373, "qualify-administrator-execution"),
+        (374, 377, "qualify-fixture-reference"),
+        (378, 399, "qualify-service-account"),
+        (403, 406, "qualify-selinux-host"),
+        (408, 421, "qualify-native-architecture"),
+        (423, 426, "qualify-cgroup"),
+        (427, 443, "qualify-rootless-runtime"),
+        (444, 447, "qualify-fixture-presence"),
+        (449, 457, "qualify-fixture-setup"),
+        (459, 518, "qualify-quadlet-authority"),
+        (519, 519, "qualify-quadlet-daemon-reload"),
+        (520, 535, "qualify-quadlet-authority"),
+        (536, 536, "qualify-quadlet-start"),
+        (537, 537, "qualify-quadlet-active-state"),
+        (539, 550, "qualify-quadlet-authority"),
+        (551, 556, "qualify-workload-primary"),
+        (557, 562, "qualify-seccomp"),
+        (566, 566, "qualify-selinux-storage-directory-create"),
+        (568, 572, "qualify-workload-primary"),
+        (573, 576, "qualify-workload-secondary"),
+        (578, 584, "qualify-selinux-storage"),
+        (588, 594, "qualify-avc-correlation"),
+        (597, 603, "qualify-selinux-policy-restoration"),
+        (606, 611, "qualify-avc-correlation"),
+        (613, 621, "qualify-selinux-policy-restoration"),
+        (624, 640, "qualify-avc-correlation"),
         (649, 652, "qualify-runtime-fallback-absence"),
         (654, 654, "qualification-harness"),
     )
@@ -2155,6 +2155,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     preparation = read(root, "scripts/ci-cloud/prepare-rocky-host.sh")
     target_runner = read(root, "scripts/ci-cloud/run-rocky-target-qualification.sh")
     qualification_harness = read(root, "scripts/qualify-production-host.sh")
+    quadlet_authority_contract = read(
+        root, "scripts/quadlet_authority_contract.py"
+    )
     selinux_isolation_contract = read(
         root, "scripts/selinux_isolation_contract.py"
     )
@@ -2298,8 +2301,24 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and '/usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"'
         in target_runner
+        and '-f "$work_root/scripts/quadlet_authority_contract.py"'
+        in target_runner
+        and '! -L "$work_root/scripts/quadlet_authority_contract.py"'
+        in target_runner
+        and "readonly trusted_quadlet_authority_contract=/opt/secpal-control/scripts/quadlet_authority_contract.py"
+        in target_runner
+        and '-f "$trusted_quadlet_authority_contract"' in target_runner
+        and '! -L "$trusted_quadlet_authority_contract"' in target_runner
+        and '"$(stat -c \'%u:%g:%a\' -- "$trusted_quadlet_authority_contract")" == 0:0:700'
+        in target_runner
+        and '/usr/bin/cmp --silent -- "$work_root/scripts/quadlet_authority_contract.py" "$trusted_quadlet_authority_contract"'
+        in target_runner
         and target_runner.index(
             '/usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"'
+        )
+        < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+        and target_runner.index(
+            '/usr/bin/cmp --silent -- "$work_root/scripts/quadlet_authority_contract.py" "$trusted_quadlet_authority_contract"'
         )
         < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
         and "timeout --signal=TERM --kill-after=180s 45m" in target_runner
@@ -2384,15 +2403,41 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     require(
         "effective_quadlet_service_admitted() {" in qualification_harness
-        and '[[ "$fragment" == "$expected_fragment" ]]'
+        and 'readonly QUADLET_AUTHORITY_INVARIANT_OWNER="quadlet_authority_contract.admit_quadlet_authority"'
         in qualification_harness
-        and '[[ "$source" == "$expected_source" ]]'
+        and 'python3 "$QUADLET_AUTHORITY_CONTRACT" "$properties_path"'
         in qualification_harness
-        and '[[ -z "$drop_ins" ]]' in qualification_harness
-        and "direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '"
+        and '"\\"invariant_owner\\":\\"${QUADLET_AUTHORITY_INVARIANT_OWNER}\\""'
         in qualification_harness
         and '--property=FragmentPath --property=SourcePath' in qualification_harness
         and '--property=DropInPaths --property=ExecStart' in qualification_harness
+        and 'INVARIANT_OWNER = "quadlet_authority_contract.admit_quadlet_authority"'
+        in quadlet_authority_contract
+        and 'r"^/run/user/(?P<uid>[1-9][0-9]*)/systemd/generator/"'
+        in quadlet_authority_contract
+        and 'r"^/etc/containers/systemd/users/(?P<uid>[1-9][0-9]*)/"'
+        in quadlet_authority_contract
+        and 'properties["DropInPaths"]' in quadlet_authority_contract
+        and 'properties["ExecStart"] != expected_exec_start(unit_name)'
+        in quadlet_authority_contract
+        and quadlet_authority_contract.count('"executable": "/usr/bin/podman"')
+        == 2
+        and '"--network",\n        "none",' in quadlet_authority_contract
+        and quadlet_authority_contract.count('"ignore_errors": False') == 2
+        and quadlet_authority_contract.count('"status": "0/0"') == 2
+        and qualification_schema["$defs"]["quadlet_authority"]["properties"][
+            "invariant_owner"
+        ]["const"]
+        == "quadlet_authority_contract.admit_quadlet_authority"
+        and 'QUADLET_AUTHORITY_INVARIANT_OWNER = (' in rocky_control
+        and '"quadlet_authority_contract.admit_quadlet_authority"'
+        in rocky_control
+        and "load_quadlet_authority_contract()" in rocky_control
+        and "target and trusted Quadlet authority normalization disagree"
+        in rocky_control
+        and "quadlet_authority_contract_base64gzip" in main
+        and "decode_script '${quadlet_authority_contract_base64gzip}' /opt/secpal-control/scripts/quadlet_authority_contract.py"
+        in bootstrap
         and qualification_harness.index("\nuser_systemctl daemon-reload\n")
         < qualification_harness.index(
             "\nif ! effective_quadlet_service_admitted \\\n"
@@ -2400,7 +2445,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         < qualification_harness.index(
             '\nuser_systemctl start "${unit_name}.service"\n'
         ),
-        "qualification must admit the effective generated service before activation",
+        "the Quadlet authority owner and every enforcement point must agree before activation",
     )
     require(
         "least_authority_process_admitted() {" in qualification_harness
@@ -2606,9 +2651,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"b8f5a505d318d06a64a5975cfaba9f1e5ba0041f\""
+        "EXPECTED_TARGET_SHA = \"cef901390f5decf733ecab1892c7cba98067f0fb\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256 = \"918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa\""
+        and "EXPECTED_HARNESS_SHA256 = \"cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e\""
         in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
@@ -2632,13 +2677,13 @@ def validate_rocky_control_plane(root: Path) -> None:
             for rule in target_line_rules
         )
         and target_line_rules == expected_target_line_rules
-        and [rule for rule in target_line_rules if rule[0] <= 552 and rule[1] >= 522]
+        and [rule for rule in target_line_rules if rule[0] <= 550 and rule[1] >= 519]
         == [
-            (522, 522, "qualify-quadlet-daemon-reload"),
-            (523, 537, "qualify-quadlet-authority"),
-            (538, 538, "qualify-quadlet-start"),
-            (539, 539, "qualify-quadlet-active-state"),
-            (541, 552, "qualify-quadlet-authority"),
+            (519, 519, "qualify-quadlet-daemon-reload"),
+            (520, 535, "qualify-quadlet-authority"),
+            (536, 536, "qualify-quadlet-start"),
+            (537, 537, "qualify-quadlet-active-state"),
+            (539, 550, "qualify-quadlet-authority"),
         ]
         and all(
             operation not in {
@@ -2650,7 +2695,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         and storage_setup_line_rules
         == [
-            (568, 568, "qualify-selinux-storage-directory-create"),
+            (566, 566, "qualify-selinux-storage-directory-create"),
         ]
         and "qualify-quadlet-runtime" not in target_failure_classifier
         and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
@@ -2680,7 +2725,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"${14}" == start' in target_failure_trace
         and "SECPAL_START_OBSERVATION_PATH"
         not in target_failure_trace + target_runner + start_runuser
-        and "10#$frame == 522" in target_failure_trace
+        and "10#$frame == 519" in target_failure_trace
         and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in start_runuser
         and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")'
         in start_runuser
@@ -2839,7 +2884,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_trace
         and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
         in target_failure_trace
-        and "10#$frame == 522" in target_failure_trace
+        and "10#$frame == 519" in target_failure_trace
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
         and "return \"$status\"" in target_failure_trace
@@ -2881,7 +2926,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
         not in bootstrap
         and "pwd.error" not in reload_adjacency_observer
-        and "or 522 not in frames" in reload_adjacency_observer
+        and "or 519 not in frames" in reload_adjacency_observer
         and "or 242 not in frames" not in reload_adjacency_observer,
         "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
     )

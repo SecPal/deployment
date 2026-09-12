@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 import hashlib
 import importlib.util
@@ -20,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = ROOT / "scripts/selinux_isolation_contract.py"
 SCHEMA_PATH = ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json"
 CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
+QUADLET_AUTHORITY_PATH = ROOT / "scripts/quadlet_authority_contract.py"
 
 
 def load_contract():
@@ -197,8 +199,39 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             )
         isolation = admitted_isolation()
         isolation_digest = hashlib.sha256(CONTRACT.canonical_bytes(isolation)).hexdigest()
+        authority_specification = importlib.util.spec_from_file_location(
+            "quadlet_authority_contract", QUADLET_AUTHORITY_PATH
+        )
+        assert (
+            authority_specification is not None
+            and authority_specification.loader is not None
+        )
+        authority_contract = importlib.util.module_from_spec(
+            authority_specification
+        )
+        authority_specification.loader.exec_module(authority_contract)
+        unit_name = "secpal-host-qualification-Ab12Cd"
+        fragment = f"/run/user/991/systemd/generator/{unit_name}.service"
+        source = f"/etc/containers/systemd/users/991/{unit_name}.container"
+        authority = authority_contract.admit_quadlet_authority(
+            "\n".join(
+                (
+                    f"FragmentPath={fragment}",
+                    f"SourcePath={source}",
+                    "DropInPaths=",
+                    f"ExecStart={authority_contract.expected_exec_start(unit_name)}",
+                )
+            )
+            + "\n",
+            fragment,
+            source,
+        )
+        authority_encoded = base64.b64encode(
+            authority_contract.canonical_bytes(authority)
+        ).decode("ascii")
         stdout = (
             f"selinux_isolation_sha256={isolation_digest}\n"
+            f"quadlet_authority_base64={authority_encoded}\n"
             "PASS: Rocky Linux 10.2 target workload contract\n"
         ).encode()
         observation = {
@@ -212,9 +245,10 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             "packages": packages,
         }
         evidence = {
-            "schema_version": 2,
+            "schema_version": 3,
             "target_sha": "b" * 40,
             "native_observation": observation,
+            "quadlet_authority": authority,
             "exit_status": 0,
             "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
             "stdout_bytes": len(stdout),

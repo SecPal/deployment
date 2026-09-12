@@ -16,18 +16,33 @@ The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
 preparation, continuation admission, evidence admission, and cleanup. A target
 revision is accepted only when it is the exact signed commit
-`b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` and its
+`cef901390f5decf733ecab1892c7cba98067f0fb` and its
 `scripts/qualify-production-host.sh` bytes have SHA-256
-`918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa`.
+`cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e`.
 The pair is independently enforced by the trusted workflow, target runner,
 diagnostic classifier, schema, and repository agreement checks. The target is
 fetched by the guest only after every GCP service account has been detached and
 access to the metadata credential endpoint has been blocked.
 
-That target is the first GitHub-verified protected-main commit containing the
-merged #229, #230, and #231 contracts. The harness digest is derived
-reproducibly from its immutable Git bytes with
-`git show b8f5a505d318d06a64a5975cfaba9f1e5ba0041f:scripts/qualify-production-host.sh | sha256sum`.
+That target adds the #254 Quadlet authority correction to the first
+GitHub-verified protected-main commit containing the merged #229, #230, and
+#231 contracts. The harness digest is derived reproducibly from its immutable
+Git bytes with
+`git show cef901390f5decf733ecab1892c7cba98067f0fb:scripts/qualify-production-host.sh | sha256sum`.
+The failed native #234 target/harness pair
+`b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` /
+`918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa`
+remains authenticated historical diagnostic evidence and cannot select a new
+qualification.
+Preparation run `34716436412` passed, and the one authorized qualification run
+`34716784934` failed at `qualify-quadlet-authority / invariant-failed`. Its
+admitted failure artifact has SHA-256
+`d811a190ae6beb48f85562a1536e57910a5f3d2275095e36c76a2aaa178bb2a2`;
+the bound 162 diagnostic bytes have SHA-256
+`b41e05e0a6d722b4a824aa71e7c71b5da4dfd3143a4d26033cc59fc4b011bc59`.
+The matching cleanup completed with empty retained provider state. Repository
+fixtures reproduce the disagreement but do not replace that native evidence,
+and #254 performs no provider qualification.
 The earlier `293977ae93408a7bb812619de58649ab8a92d438` /
 `8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db`
 pair and older retained identities remain historical evidence bindings only;
@@ -302,9 +317,18 @@ absence of group/other write permission, and independently proves that the
 runtime account cannot write any component. It applies the same check to the
 search-path drop-in and observes the effective manager environment, so default
 user-writable Quadlet locations cannot replace the admitted input. After reload
-and before activation, it also admits the generated service's exact fragment
-and source paths, absence of drop-ins, and direct Podman execution; a shadowing
-user unit or user-owned override therefore fails closed.
+and before activation, `quadlet_authority_contract.admit_quadlet_authority` owns
+normalization and admission of the effective service representation. The target
+observes exactly `FragmentPath`, `SourcePath`, `DropInPaths`, and `ExecStart`;
+the owner admits the UID-bound generator and administrator source paths, no
+drop-ins, and Rocky systemd 257's complete direct-Podman execution record,
+including its safe argv and inactive execution metadata. It emits bounded,
+canonical evidence through the closed qualification schema. Trusted control
+loads the same root-owned owner, revalidates that evidence independently, and
+requires byte-identical target and trusted normalization. A shadowing user unit,
+user-owned override, rootful or wrong-UID path, generated argv drift, unsafe
+network or privilege setting, or changed systemd execution metadata therefore
+fails closed.
 
 The account UID/GID must be nonzero before preparation changes it. Qualification
 then admits Podman's effective rootless report and binds both the invoking

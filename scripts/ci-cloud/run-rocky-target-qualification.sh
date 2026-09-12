@@ -14,6 +14,7 @@ readonly reload_adjacency="$evidence_root/quadlet-reload-adjacency.json"
 readonly native_observation="$evidence_root/native-package-observation.json"
 readonly native_diagnostic="$evidence_root/native-package-collection-diagnostic.json"
 readonly trusted_selinux_isolation_contract=/opt/secpal-control/scripts/selinux_isolation_contract.py
+readonly trusted_quadlet_authority_contract=/opt/secpal-control/scripts/quadlet_authority_contract.py
 
 if [[ "$#" -ne 5 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
   ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ||
@@ -26,8 +27,8 @@ readonly control_sha="$2"
 readonly qualification_run_id="$3"
 readonly qualification_run_attempt="$4"
 readonly qualification_harness_sha256="$5"
-readonly expected_target_sha=b8f5a505d318d06a64a5975cfaba9f1e5ba0041f
-readonly expected_harness_sha256=918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa
+readonly expected_target_sha=cef901390f5decf733ecab1892c7cba98067f0fb
+readonly expected_harness_sha256=cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e
 if [[ "$target_sha" != "$expected_target_sha" ||
   "$qualification_harness_sha256" != "$expected_harness_sha256" ]]; then
   printf 'ERROR: target and qualification harness are not the trusted pair.\n' >&2
@@ -163,9 +164,13 @@ fi
 if ! [[ -f "$work_root/scripts/qualify-production-host.sh" && ! -L "$work_root/scripts/qualify-production-host.sh" && -x "$work_root/scripts/qualify-production-host.sh" &&
   -f "$work_root/scripts/selinux_isolation_contract.py" && ! -L "$work_root/scripts/selinux_isolation_contract.py" &&
   -f "$trusted_selinux_isolation_contract" && ! -L "$trusted_selinux_isolation_contract" &&
-  "$(stat -c '%u:%g:%a' -- "$trusted_selinux_isolation_contract")" == 0:0:700 ]] ||
+  "$(stat -c '%u:%g:%a' -- "$trusted_selinux_isolation_contract")" == 0:0:700 &&
+  -f "$work_root/scripts/quadlet_authority_contract.py" && ! -L "$work_root/scripts/quadlet_authority_contract.py" &&
+  -f "$trusted_quadlet_authority_contract" && ! -L "$trusted_quadlet_authority_contract" &&
+  "$(stat -c '%u:%g:%a' -- "$trusted_quadlet_authority_contract")" == 0:0:700 ]] ||
   [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" != "$qualification_harness_sha256" ]] ||
-  ! /usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"; then
+  ! /usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract" ||
+  ! /usr/bin/cmp --silent -- "$work_root/scripts/quadlet_authority_contract.py" "$trusted_quadlet_authority_contract"; then
   write_source_failure verify-target-sha postcondition-failed 1
   exit 84
 fi
@@ -265,6 +270,8 @@ set +e
 python3 - "$target_sha" "$status" "$stdout" "$audit_baseline" \
   "$evidence_root/qualification.json" "$qualification_marker" \
   "$native_observation" <<'PY'
+import base64
+import binascii
 import hashlib
 import importlib.util
 import json
@@ -318,6 +325,33 @@ except Exception:
         "qualify-selinux-storage",
         "command-failed",
         "SELinux isolation contract is unavailable",
+    )
+
+quadlet_contract_path = Path(
+    "/opt/secpal-control/scripts/quadlet_authority_contract.py"
+)
+quadlet_contract_specification = importlib.util.spec_from_file_location(
+    "quadlet_authority_contract", quadlet_contract_path
+)
+if (
+    quadlet_contract_specification is None
+    or quadlet_contract_specification.loader is None
+):
+    reject(
+        "qualify-quadlet-authority",
+        "command-failed",
+        "Quadlet authority contract is unavailable",
+    )
+quadlet_authority_contract = importlib.util.module_from_spec(
+    quadlet_contract_specification
+)
+try:
+    quadlet_contract_specification.loader.exec_module(quadlet_authority_contract)
+except Exception:
+    reject(
+        "qualify-quadlet-authority",
+        "command-failed",
+        "Quadlet authority contract is unavailable",
     )
 
 
@@ -501,7 +535,7 @@ if text.count("PASS: Rocky Linux 10.2 target workload contract") != 1:
 facts = {}
 for key, value in re.findall(
     r"^(process_a|process_b|storage_a|seccomp_mode|denial_pid|"
-    r"selinux_isolation_sha256)=([^\r\n]+)$",
+    r"selinux_isolation_sha256|quadlet_authority_base64)=([^\r\n]+)$",
     text,
     re.MULTILINE,
 ):
@@ -515,6 +549,7 @@ if set(facts) != {
     "seccomp_mode",
     "denial_pid",
     "selinux_isolation_sha256",
+    "quadlet_authority_base64",
 }:
     reject("qualification-harness", "representation-invalid", "qualification facts are incomplete")
 if facts["seccomp_mode"] != "2":
@@ -527,6 +562,31 @@ if str(denial_pid) != facts["denial_pid"] or not 1 <= denial_pid <= 2_147_483_64
     reject("qualify-avc-correlation", "representation-invalid", "qualification process identity is malformed")
 if re.fullmatch(r"[0-9a-f]{64}", facts["selinux_isolation_sha256"]) is None:
     reject("qualify-avc-correlation", "representation-invalid", "qualification isolation digest is malformed")
+try:
+    quadlet_authority_bytes = base64.b64decode(
+        facts["quadlet_authority_base64"], validate=True
+    )
+    if len(quadlet_authority_bytes) > 16_384:
+        raise ValueError("Quadlet authority evidence exceeds its closed bound")
+    quadlet_authority = json.loads(quadlet_authority_bytes)
+    quadlet_authority_contract.validate_authority_evidence(quadlet_authority)
+    if (
+        quadlet_authority_contract.canonical_bytes(quadlet_authority)
+        != quadlet_authority_bytes
+    ):
+        raise ValueError("Quadlet authority evidence is not canonical")
+except (
+    binascii.Error,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    ValueError,
+    quadlet_authority_contract.AuthorityError,
+):
+    reject(
+        "qualify-quadlet-authority",
+        "representation-invalid",
+        "qualification Quadlet authority evidence is invalid",
+    )
 audit_checkpoint = re.fullmatch(
     r"([0-9]{2}/[0-9]{2}/[0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})",
     audit_baseline,
@@ -599,11 +659,12 @@ cleanup_complete = all(
 if not cleanup_complete:
     reject("qualify-fixture-cleanup", "cleanup-failed", "qualification cleanup is incomplete")
 document = {
-    "schema_version": 2,
+    "schema_version": 3,
     "target_sha": target_sha,
     "native_observation": json.loads(
         Path(native_observation_path).read_text(encoding="utf-8")
     ),
+    "quadlet_authority": quadlet_authority,
     "exit_status": int(raw_status),
     "stdout_sha256": hashlib.sha256(payload).hexdigest(),
     "stdout_bytes": len(payload),

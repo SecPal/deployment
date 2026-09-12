@@ -14,8 +14,8 @@ import stat
 import tempfile
 from pathlib import Path
 
-EXPECTED_TARGET_SHA = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
-EXPECTED_HARNESS_SHA256 = "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+EXPECTED_TARGET_SHA = "cef901390f5decf733ecab1892c7cba98067f0fb"
+EXPECTED_HARNESS_SHA256 = "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
 HISTORICAL_202_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
 HISTORICAL_202_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
 HISTORICAL_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
@@ -239,33 +239,33 @@ HISTORICAL_202_LINE_RULES = (
 )
 
 LINE_RULES = (
-    (365, 371, "qualify-host-identity"),
-    (373, 376, "qualify-administrator-execution"),
-    (377, 380, "qualify-fixture-reference"),
-    (381, 402, "qualify-service-account"),
-    (406, 409, "qualify-selinux-host"),
-    (411, 424, "qualify-native-architecture"),
-    (426, 429, "qualify-cgroup"),
-    (430, 446, "qualify-rootless-runtime"),
-    (447, 450, "qualify-fixture-presence"),
-    (452, 460, "qualify-fixture-setup"),
-    (462, 521, "qualify-quadlet-authority"),
-    (522, 522, "qualify-quadlet-daemon-reload"),
-    (523, 537, "qualify-quadlet-authority"),
-    (538, 538, "qualify-quadlet-start"),
-    (539, 539, "qualify-quadlet-active-state"),
-    (541, 552, "qualify-quadlet-authority"),
-    (553, 558, "qualify-workload-primary"),
-    (559, 564, "qualify-seccomp"),
-    (568, 568, "qualify-selinux-storage-directory-create"),
-    (570, 574, "qualify-workload-primary"),
-    (575, 578, "qualify-workload-secondary"),
-    (580, 586, "qualify-selinux-storage"),
-    (590, 596, "qualify-avc-correlation"),
-    (599, 605, "qualify-selinux-policy-restoration"),
-    (608, 613, "qualify-avc-correlation"),
-    (615, 623, "qualify-selinux-policy-restoration"),
-    (626, 642, "qualify-avc-correlation"),
+    (362, 368, "qualify-host-identity"),
+    (370, 373, "qualify-administrator-execution"),
+    (374, 377, "qualify-fixture-reference"),
+    (378, 399, "qualify-service-account"),
+    (403, 406, "qualify-selinux-host"),
+    (408, 421, "qualify-native-architecture"),
+    (423, 426, "qualify-cgroup"),
+    (427, 443, "qualify-rootless-runtime"),
+    (444, 447, "qualify-fixture-presence"),
+    (449, 457, "qualify-fixture-setup"),
+    (459, 518, "qualify-quadlet-authority"),
+    (519, 519, "qualify-quadlet-daemon-reload"),
+    (520, 535, "qualify-quadlet-authority"),
+    (536, 536, "qualify-quadlet-start"),
+    (537, 537, "qualify-quadlet-active-state"),
+    (539, 550, "qualify-quadlet-authority"),
+    (551, 556, "qualify-workload-primary"),
+    (557, 562, "qualify-seccomp"),
+    (566, 566, "qualify-selinux-storage-directory-create"),
+    (568, 572, "qualify-workload-primary"),
+    (573, 576, "qualify-workload-secondary"),
+    (578, 584, "qualify-selinux-storage"),
+    (588, 594, "qualify-avc-correlation"),
+    (597, 603, "qualify-selinux-policy-restoration"),
+    (606, 611, "qualify-avc-correlation"),
+    (613, 621, "qualify-selinux-policy-restoration"),
+    (624, 640, "qualify-avc-correlation"),
     (649, 652, "qualify-runtime-fallback-absence"),
     (654, 654, "qualification-harness"),
 )

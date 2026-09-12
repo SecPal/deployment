@@ -223,6 +223,19 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 representation(baseline), expected_fragment, expected_source
             )
             self.quadlet_authority.validate_authority_evidence(admitted)
+            for path, value in (
+                (("schema_version",), True),
+                (("exec_start", "ignore_errors"), 0),
+                (("exec_start", "pid"), False),
+            ):
+                with self.subTest(closed_type=path):
+                    candidate = json.loads(json.dumps(admitted))
+                    location = candidate
+                    for component in path[:-1]:
+                        location = location[component]
+                    location[path[-1]] = value
+                    with self.assertRaises(self.quadlet_authority.AuthorityError):
+                        self.quadlet_authority.validate_authority_evidence(candidate)
             properties.write_text(representation(baseline), encoding="utf-8")
             wrapper = self.run_authority_contract(
                 "effective_quadlet_service_admitted",
@@ -672,7 +685,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 mock.patch.object(
                     self.observer,
                     "admitted_fifo",
-                    side_effect=[io.BytesIO(self.reload_event("522,527")), acknowledgement],
+                    side_effect=[io.BytesIO(self.reload_event("519,525")), acknowledgement],
                 ),
                 mock.patch.object(
                     self.observer, "validate_client_identity", create=True
@@ -848,12 +861,12 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 
     def test_current_target_line_map_is_private_relabel_only(self) -> None:
         cases = (
-            (522, "qualify-quadlet-daemon-reload"),
-            (538, "qualify-quadlet-start"),
-            (539, "qualify-quadlet-active-state"),
-            (559, "qualify-seccomp"),
-            (570, "qualify-workload-primary"),
-            (580, "qualify-selinux-storage"),
+            (519, "qualify-quadlet-daemon-reload"),
+            (536, "qualify-quadlet-start"),
+            (537, "qualify-quadlet-active-state"),
+            (557, "qualify-seccomp"),
+            (568, "qualify-workload-primary"),
+            (578, "qualify-selinux-storage"),
         )
         for line, operation in cases:
             with self.subTest(line=line):
@@ -861,34 +874,34 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                     (operation, "command-failed"),
                     self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}"),
                 )
-        for line in (568, 569, 570):
+        for line in (566, 567, 568):
             self.assertNotEqual("qualify-selinux-storage-fcontext-add", self.classifier.operation_for_line(line))
 
     def test_current_target_messages_preserve_invariant_semantics(self) -> None:
         cases = (
             (
                 "ERROR: service account must resolve to a non-root runtime identity.\n",
-                396,
+                393,
                 "qualify-service-account",
             ),
             (
                 "ERROR: effective Podman runtime is not the admitted rootless service identity.\n",
-                444,
+                441,
                 "qualify-rootless-runtime",
             ),
             (
                 "ERROR: effective Quadlet runtime identity contradicts the service account.\n",
-                550,
+                548,
                 "qualify-quadlet-authority",
             ),
             (
                 "ERROR: representative workload lacks the effective least-authority process state.\n",
-                562,
+                560,
                 "qualify-seccomp",
             ),
             (
                 "ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n",
-                612,
+                610,
                 "qualify-avc-correlation",
             ),
         )
@@ -919,16 +932,16 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 
         harness_lines = QUALIFICATION_HARNESS.read_text(encoding="utf-8").splitlines()
         anchors = {
-            365: ("read_os_release_value", "qualify-host-identity"),
-            522: ("user_systemctl daemon-reload", "qualify-quadlet-daemon-reload"),
-            538: ("user_systemctl start", "qualify-quadlet-start"),
-            539: ("user_systemctl is-active", "qualify-quadlet-active-state"),
-            556: ("rootless_podman exec", "qualify-workload-primary"),
-            568: ("install -d", "qualify-selinux-storage-directory-create"),
-            570: ("rootless_podman run", "qualify-workload-primary"),
-            575: ("rootless_podman run", "qualify-workload-secondary"),
-            580: ("rootless_podman top", "qualify-selinux-storage"),
-            590: ("observe_denied_access", "qualify-avc-correlation"),
+            362: ("read_os_release_value", "qualify-host-identity"),
+            519: ("user_systemctl daemon-reload", "qualify-quadlet-daemon-reload"),
+            536: ("user_systemctl start", "qualify-quadlet-start"),
+            537: ("user_systemctl is-active", "qualify-quadlet-active-state"),
+            554: ("rootless_podman exec", "qualify-workload-primary"),
+            566: ("install -d", "qualify-selinux-storage-directory-create"),
+            568: ("rootless_podman run", "qualify-workload-primary"),
+            573: ("rootless_podman run", "qualify-workload-secondary"),
+            578: ("rootless_podman top", "qualify-selinux-storage"),
+            588: ("observe_denied_access", "qualify-avc-correlation"),
             649: ("rootless_podman inspect", "qualify-runtime-fallback-absence"),
         }
         for line, (source, operation) in anchors.items():
@@ -1500,7 +1513,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 204: "trap cleanup EXIT",
                 216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
                 500: "main() {",
-                522: "user_systemctl daemon-reload",
+                519: "user_systemctl daemon-reload",
                 523: "}",
                 524: "main",
             }

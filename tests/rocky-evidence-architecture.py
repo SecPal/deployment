@@ -1185,9 +1185,9 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertIn("needs: validate", workflow[discover:])
 
     def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
-        target = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+        target = "cef901390f5decf733ecab1892c7cba98067f0fb"
         harness = (
-            "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+            "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
         )
         mutations = (
             (
@@ -1217,14 +1217,14 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             (
                 "--target-trace",
                 TARGET_TRACE,
-                "10#$frame == 522",
-                "10#$frame == 523",
+                "10#$frame == 519",
+                "10#$frame == 520",
             ),
             (
                 "--reload-observer",
                 RELOAD_OBSERVER,
-                "or 522 not in frames",
-                "or 523 not in frames",
+                "or 519 not in frames",
+                "or 520 not in frames",
             ),
             (
                 "--qualification-harness",
@@ -1235,8 +1235,8 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             (
                 "--target-failure-classifier",
                 TARGET_FAILURE_CLASSIFIER,
-                '(570, 574, "qualify-workload-primary"),',
-                '(570, 574, "qualify-workload-secondary"),',
+                '(568, 572, "qualify-workload-primary"),',
+                '(568, 572, "qualify-workload-secondary"),',
             ),
         )
         for option, source_path, old, new in mutations:
@@ -1258,7 +1258,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
 
     def test_architecture_gate_rejects_schema_pair_substitution(self) -> None:
         current = (
-            "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+            "cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"
         )
         historical = (
             "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
@@ -1283,12 +1283,12 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_architecture_gate_pins_corrected_pair_independently(self) -> None:
         source = VALIDATOR.read_text(encoding="utf-8")
         self.assertIn(
-            'EXPECTED_TARGET_SHA = "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"',
+            'EXPECTED_TARGET_SHA = "cef901390f5decf733ecab1892c7cba98067f0fb"',
             source,
         )
         self.assertIn(
             'EXPECTED_HARNESS_SHA256 = (\n    '
-            '"918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"',
+            '"cb94beb02d7174a9edecee3f3c5e2c1502543ba769b24ef5ada1fcb025f7b38e"',
             source,
         )
 
