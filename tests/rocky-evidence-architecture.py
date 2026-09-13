@@ -1247,6 +1247,18 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 '    "qualification_stdout",\n    "target_qualification_trace",',
                 '    "target_qualification_trace",\n    "qualification_stdout",',
             ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                "object_pairs_hook=unique_json_object",
+                "object_pairs_hook=dict",
+            ),
+            (
+                "--target-replay-verifier",
+                TARGET_REPLAY_VERIFIER,
+                "classifier.replay_start_observation_admitted",
+                "classifier.admit_quadlet_start_observation",
+            ),
         )
         for option, source_path, old, new in mutations:
             with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:

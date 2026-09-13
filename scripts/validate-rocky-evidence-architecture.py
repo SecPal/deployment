@@ -756,6 +756,22 @@ def validate_target_qualification_binding(
         or 'document["diagnostic_input_sha256"]' not in replay_verifier
         or "classifier.classify_failure(" not in replay_verifier
         or "require_available=True" not in replay_verifier
+        or 'payload.endswith(b"\\n")' not in classifier
+        or 'payload[:-1].decode("ascii").split("\\n")' not in classifier
+        or "not 1 <= int(match.group(1)) <= 255" not in classifier
+        or 'payload.endswith(b"\\n")' not in replay_verifier
+        or 'payload[:-1].decode("ascii").split("\\n")' not in replay_verifier
+        or "not 1 <= int(match.group(1)) <= 255" not in replay_verifier
+        or "object_pairs_hook=unique_json_object" not in classifier
+        or "parse_constant=reject_json_constant" not in classifier
+        or "object_pairs_hook=unique_json_object" not in replay_verifier
+        or "parse_constant=reject_json_constant" not in replay_verifier
+        or "replay_start_observation_admitted" not in classifier
+        or "replay_active_observation_admitted" not in classifier
+        or "replay_primary_observation_admitted" not in classifier
+        or "classifier.replay_start_observation_admitted" not in replay_verifier
+        or "classifier.replay_active_observation_admitted" not in replay_verifier
+        or "classifier.replay_primary_observation_admitted" not in replay_verifier
     ):
         raise ArchitectureError("closed replay verifier disagrees with classifier input authority")
 

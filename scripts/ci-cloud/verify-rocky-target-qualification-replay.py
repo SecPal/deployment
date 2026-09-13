@@ -62,27 +62,54 @@ def canonical_json(document: object) -> bytes:
     )
 
 
-def exact_json(payload: bytes) -> object:
-    try:
-        document = json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("replay observation is not closed JSON") from error
-    try:
-        if canonical_json(document) != payload:
-            raise ValueError("replay observation is not canonical JSON")
-    except (UnicodeEncodeError, TypeError, ValueError) as error:
-        raise ValueError("replay observation is not closed JSON") from error
+def unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("replay observation contains a duplicate key")
+        document[key] = value
     return document
 
 
-def validate_trace(payload: bytes, classifier: Any, exit_status: int) -> None:
+def reject_json_constant(value: str) -> object:
+    raise ValueError(f"replay observation contains invalid JSON constant {value}")
+
+
+def exact_json(payload: bytes, *, require_canonical: bool = False) -> object:
     try:
-        lines = payload.decode("ascii").splitlines()
+        document = json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=unique_json_object,
+            parse_constant=reject_json_constant,
+        )
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+    ) as error:
+        raise ValueError("replay observation is not closed JSON") from error
+    if require_canonical:
+        try:
+            if canonical_json(document) != payload:
+                raise ValueError("replay observation is not canonical JSON")
+        except (UnicodeEncodeError, TypeError, ValueError) as error:
+            raise ValueError("replay observation is not closed JSON") from error
+    return document
+
+
+def validate_trace(payload: bytes, classifier: Any) -> None:
+    if not payload:
+        return
+    if not payload.endswith(b"\n"):
+        raise ValueError("replay trace lacks its producer terminator")
+    try:
+        lines = payload[:-1].decode("ascii").split("\n")
     except UnicodeDecodeError as error:
         raise ValueError("replay trace is not ASCII") from error
     for line in lines:
         match = classifier.TRACE_PATTERN.fullmatch(line)
-        if match is None or int(match.group(1)) != exit_status:
+        if match is None or not 1 <= int(match.group(1)) <= 255:
             raise ValueError("replay trace is outside the closed grammar")
         frames = match.group(2).split(",")
         if not 1 <= len(frames) <= classifier.MAX_TRACE_FRAMES:
@@ -110,28 +137,22 @@ def validate_observation(
     classifier: Any,
     stdout: bytes,
 ) -> None:
-    observation = exact_json(payload)
+    observation = exact_json(
+        payload,
+        require_canonical=name == "reload_adjacency",
+    )
     exit_status = document["exit_status"]
     assert type(exit_status) is int
     if name == "start_observation":
-        _operation, _reason, diagnostic = classifier.admit_quadlet_start_observation(
-            observation, exit_status
-        )
-        if not diagnostic.get("observation_complete"):
+        if not classifier.replay_start_observation_admitted(observation):
             raise ValueError("replay start observation is not admitted")
         return
     if name == "active_observation":
-        _operation, _reason, diagnostic = classifier.admit_quadlet_active_observation(
-            observation, exit_status
-        )
-        if not diagnostic.get("observation_complete"):
+        if not classifier.replay_active_observation_admitted(observation):
             raise ValueError("replay active observation is not admitted")
         return
     if name == "primary_observation":
-        _operation, _reason, diagnostic = classifier.admit_primary_workload_observation(
-            observation, exit_status
-        )
-        if not diagnostic.get("observation_complete"):
+        if not classifier.replay_primary_observation_admitted(observation):
             raise ValueError("replay primary observation is not admitted")
         return
     if name != "reload_adjacency":
@@ -166,9 +187,7 @@ def validate_component_payload(
         if payload and payload not in classifier.REPLAYABLE_STDOUT_RECORDS:
             raise ValueError("replay stdout is outside the finite reviewed set")
     elif name == "target_qualification_trace":
-        exit_status = document["exit_status"]
-        assert type(exit_status) is int
-        validate_trace(payload, classifier, exit_status)
+        validate_trace(payload, classifier)
     elif name == "trusted_marker":
         validate_marker(payload, classifier)
     else:

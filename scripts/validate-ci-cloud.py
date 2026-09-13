@@ -3156,6 +3156,22 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'replayed = b"\\0".join(' in target_replay_verifier
         and 'document["diagnostic_input_sha256"]' in target_replay_verifier
         and "classifier.classify_failure(" in target_replay_verifier
+        and 'payload.endswith(b"\\n")' in target_failure_classifier
+        and 'payload[:-1].decode("ascii").split("\\n")'
+        in target_failure_classifier
+        and 'payload.endswith(b"\\n")' in target_replay_verifier
+        and 'payload[:-1].decode("ascii").split("\\n")'
+        in target_replay_verifier
+        and "object_pairs_hook=unique_json_object" in target_failure_classifier
+        and "parse_constant=reject_json_constant" in target_failure_classifier
+        and "object_pairs_hook=unique_json_object" in target_replay_verifier
+        and "parse_constant=reject_json_constant" in target_replay_verifier
+        and "classifier.replay_start_observation_admitted"
+        in target_replay_verifier
+        and "classifier.replay_active_observation_admitted"
+        in target_replay_verifier
+        and "classifier.replay_primary_observation_admitted"
+        in target_replay_verifier
         and "target_replay_verifier_base64gzip" in bootstrap
         and "target_replay_verifier_base64gzip" in main,
         "Rocky replay verifier must independently close exact classifier input",
