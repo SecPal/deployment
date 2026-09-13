@@ -296,14 +296,19 @@ reachable fcontext-add, restorecon, or matchpathcon source mapping. Presenting
 one of those stale mappings as current, mixing a historical target with the
 current harness, or supplying an unrecognized pair therefore fails closed.
 
-The trusted Bash trace uses `SECPAL_TARGET_ERR_V2`: one numeric exit status and
-at most eight numeric `BASH_LINENO` frames. The classifier ignores generic
-helper implementation frames and resolves only immutable reviewed outer call
-sites under the exact target and harness hashes. Repeated frames agreeing on one
-operation are one decision; zero mapped operations, conflicting operations, or
-conflict with an explicit reviewed message remain fail-closed. V1 single-frame
-traces are not a current emission or validation surface; historical artifacts
-retain only their already validated input digest and length.
+The trusted Bash trace uses `SECPAL_TARGET_ERR_V2`: each record carries one
+numeric inner-command status and at most eight numeric `BASH_LINENO` frames.
+The records must agree on that status. It may differ from the final target
+process status only for the reviewed AVC observation path that records an
+expected inner denial with status 1 before its bounded no-finding path returns 3. The classifier binds that transition to its exact immutable outer call
+frames; other status mismatches fail closed. It ignores generic helper
+implementation frames and resolves only immutable reviewed outer call sites
+under the exact target and harness hashes. Repeated frames agreeing on one
+operation are one decision; conflicting statuses, zero mapped operations,
+conflicting operations, or conflict with an explicit reviewed message remain
+fail-closed. V1 single-frame traces are not a current emission or validation
+surface; historical artifacts retain only their already validated input digest
+and length.
 
 The exact harness helper audit assigns `read_os_release_value` and unconditional
 uses of `run_as_service_account`, `rootless_podman`, and `user_systemctl` to

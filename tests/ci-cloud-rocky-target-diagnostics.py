@@ -3413,9 +3413,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         malformed = (
             "SECPAL_TARGET_ERR_V1:183:1",
             "SECPAL_TARGET_ERR_V2:0:183",
-            "SECPAL_TARGET_ERR_V2:2:183",
+            "SECPAL_TARGET_ERR_V2:256:183",
             "SECPAL_TARGET_ERR_V2:1:183,command",
             "SECPAL_TARGET_ERR_V2:1:" + ",".join(["183"] * 9),
+            "SECPAL_TARGET_ERR_V2:1:183\nSECPAL_TARGET_ERR_V2:2:187",
         )
         for trace in malformed:
             with self.subTest(trace=trace):
@@ -3430,6 +3431,22 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 "SECPAL_TARGET_ERR_V1:153:1",
             ),
         )
+
+    def test_inner_status_transition_is_bound_to_the_avc_observation_path(self) -> None:
+        rejected = (
+            (64, b"SECPAL_TARGET_ERR_V2:7:525\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:1:300,601\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:1:300,601,667,674\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:2:300,601,674\n"),
+        )
+        for exit_status, trace in rejected:
+            with self.subTest(exit_status=exit_status, trace=trace):
+                self.assertEqual(
+                    ("qualification-harness", "representation-invalid"),
+                    self.classifier.classify_failure(
+                        b"", trace, exit_status, target_bound=True
+                    ),
+                )
 
     def test_failure_schema_is_closed_bounded_and_run_bound(self) -> None:
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
