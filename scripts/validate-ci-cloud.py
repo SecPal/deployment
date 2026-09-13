@@ -2170,6 +2170,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     target_failure_classifier = read(
         root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
     )
+    target_replay_verifier = read(
+        root, "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
+    )
     rocky_control = read(root, "scripts/ci-cloud/rocky-control.py")
     target_failure_trace = read(
         root, "scripts/ci-cloud/rocky-target-qualification-trace.sh"
@@ -2229,7 +2232,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and schema_const_pairs(target_failure_schema).count(
             (expected_target_sha, expected_harness_sha256)
         )
-        == 3,
+        == 4,
         "active target, harness, classifier, and schema bindings disagree",
     )
     for forbidden in (
@@ -2721,7 +2724,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and target_runner.count("exit 91") == 2
         and 'rm -f -- "$stdout"' in target_runner
         and "qualification_failure_expected" in target_text
-        and "head -c 4097" in target_text
+        and "head -c 16385" in target_text
         and "target-qualification-failure.json" in target_text,
         "target harness failures must retain one bounded negative-only semantic identity",
     )
@@ -3144,6 +3147,18 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "stat.S_IMODE(metadata.st_mode) != 0o700" in rocky_control
         and "spec_from_file_location" not in rocky_control,
         "Rocky control must load only the admitted extensionless installed classifier",
+    )
+    require(
+        'INSTALLED_TARGET_REPLAY_VERIFIER = Path(\n    "/usr/local/sbin/secpal-verify-rocky-target-replay"\n)'
+        in rocky_control
+        and "TARGET_REPLAY_VERIFIER_SYMBOL" in rocky_control
+        and "verifier_path.lstat()" in rocky_control
+        and 'replayed = b"\\0".join(' in target_replay_verifier
+        and 'document["diagnostic_input_sha256"]' in target_replay_verifier
+        and "classifier.classify_failure(" in target_replay_verifier
+        and "target_replay_verifier_base64gzip" in bootstrap
+        and "target_replay_verifier_base64gzip" in main,
+        "Rocky replay verifier must independently close exact classifier input",
     )
     require(
         target_text.index("Retrieve and validate bounded target-qualification failure")

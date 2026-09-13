@@ -120,6 +120,7 @@ required_files=(
   scripts/quadlet_authority_contract.py
   scripts/selinux_isolation_contract.py
   scripts/ci-cloud/classify-rocky-target-qualification-failure.py
+  scripts/ci-cloud/verify-rocky-target-qualification-replay.py
   scripts/ci-cloud/rocky-target-qualification-trace.sh
   scripts/ci-cloud/rocky-start-runuser.py
   scripts/ci-cloud/rocky-start-env.py
@@ -158,6 +159,7 @@ required_files=(
   tests/ci-cloud-gcp-janitor.py
   tests/ci-cloud-gcp-rocky-janitor.py
   tests/ci-cloud-rocky-control.py
+  tests/ci-cloud-rocky-replay-witness.py
   tests/ci-cloud-rocky-target-diagnostics.py
   tests/selinux-isolation-contract.py
   tests/production-host-signal-contract.sh

@@ -64,6 +64,7 @@ python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-rocky-control.py
 python3 tests/ci-cloud-rocky-readiness.py
 python3 tests/ci-cloud-rocky-runtime-user-readiness.py
+python3 tests/ci-cloud-rocky-replay-witness.py
 python3 tests/ci-cloud-rocky-target-diagnostics.py
 python3 tests/selinux-isolation-contract.py
 bash tests/production-host-signal-contract.sh

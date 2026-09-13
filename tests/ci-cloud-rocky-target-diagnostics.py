@@ -4123,8 +4123,8 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         )
         self.assertNotIn("qualification.json", failure["run"])
         self.assertNotIn("target-qualification-failure.json", success["run"])
-        self.assertIn("head -c 4097", failure["run"])
-        self.assertIn("-le 4096", failure["run"])
+        self.assertIn("head -c 16385", failure["run"])
+        self.assertIn("-le 16384", failure["run"])
 
         runner = RUNNER.read_text(encoding="utf-8")
         direct_failure = runner.split(

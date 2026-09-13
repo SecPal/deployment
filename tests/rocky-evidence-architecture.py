@@ -30,6 +30,9 @@ QUALIFICATION_RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.s
 TARGET_FAILURE_CLASSIFIER = (
     ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
 )
+TARGET_REPLAY_VERIFIER = (
+    ROOT / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
+)
 TARGET_FAILURE_SCHEMA = (
     ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
 )
@@ -1237,6 +1240,12 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 TARGET_FAILURE_CLASSIFIER,
                 '(581, 585, "qualify-workload-primary"),',
                 '(581, 585, "qualify-workload-secondary"),',
+            ),
+            (
+                "--target-replay-verifier",
+                TARGET_REPLAY_VERIFIER,
+                '    "qualification_stdout",\n    "target_qualification_trace",',
+                '    "target_qualification_trace",\n    "qualification_stdout",',
             ),
         )
         for option, source_path, old, new in mutations:

@@ -19,7 +19,7 @@
     "diagnostic_input_bytes"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2] },
     "phase": { "const": "target-qualification" },
     "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "trusted_control_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
@@ -113,6 +113,171 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 139520
+    },
+    "replay_witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "available",
+        "representation_invalid",
+        "exit_status",
+        "component_order",
+        "separator",
+        "components"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "available": { "type": "boolean" },
+        "representation_invalid": { "type": "boolean" },
+        "exit_status": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "component_order": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "qualification_stdout" },
+            { "const": "target_qualification_trace" },
+            { "const": "trusted_marker" },
+            { "const": "reload_adjacency" },
+            { "const": "start_observation" },
+            { "const": "active_observation" },
+            { "const": "primary_observation" }
+          ],
+          "items": false,
+          "minItems": 7,
+          "maxItems": 7
+        },
+        "separator": { "const": "NUL" },
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "qualification_stdout",
+            "target_qualification_trace",
+            "trusted_marker",
+            "reload_adjacency",
+            "start_observation",
+            "active_observation",
+            "primary_observation"
+          ],
+          "properties": {
+            "qualification_stdout": { "$ref": "#/$defs/replayComponent" },
+            "target_qualification_trace": { "$ref": "#/$defs/replayComponent" },
+            "trusted_marker": { "$ref": "#/$defs/replayComponent" },
+            "reload_adjacency": { "$ref": "#/$defs/replayComponent" },
+            "start_observation": { "$ref": "#/$defs/replayComponent" },
+            "active_observation": { "$ref": "#/$defs/replayComponent" },
+            "primary_observation": { "$ref": "#/$defs/replayComponent" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "available": { "const": true } },
+            "required": ["available"]
+          },
+          "then": {
+            "properties": {
+              "components": {
+                "properties": {
+                  "qualification_stdout": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "target_qualification_trace": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "trusted_marker": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "reload_adjacency": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "start_observation": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "active_observation": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "primary_observation": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "components": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "qualification_stdout": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "target_qualification_trace": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "trusted_marker": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "reload_adjacency": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "start_observation": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "active_observation": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "primary_observation": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "quadlet_start_diagnostic": {
       "type": "object",
@@ -611,7 +776,94 @@
       }
     }
   },
+  "$defs": {
+    "replayComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "present",
+        "byte_count",
+        "sha256",
+        "replayability",
+        "content_base64"
+      ],
+      "properties": {
+        "present": { "type": "boolean" },
+        "byte_count": { "type": "integer", "minimum": 0, "maximum": 65536 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "replayability": { "enum": ["exact", "unavailable"] },
+        "content_base64": { "type": ["string", "null"], "maxLength": 87384 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "replayability": { "const": "unavailable" } },
+            "required": ["replayability"]
+          },
+          "then": { "properties": { "content_base64": { "const": null } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "replayability": { "const": "exact" },
+              "present": { "const": false }
+            },
+            "required": ["replayability", "present"]
+          },
+          "then": {
+            "properties": {
+              "byte_count": { "const": 0 },
+              "sha256": {
+                "const": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "content_base64": { "const": null }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "replayability": { "const": "exact" },
+              "present": { "const": true }
+            },
+            "required": ["replayability", "present"]
+          },
+          "then": { "properties": { "content_base64": { "type": "string" } } }
+        }
+      ]
+    }
+  },
   "allOf": [
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 2 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": [
+          "replay_witness",
+          "target_sha",
+          "harness_sha256",
+          "trusted_control_sha",
+          "operation",
+          "reason"
+        ],
+        "properties": {
+          "target_sha": {
+            "const": "539d5faa6549be62060c8e20028caf200e5eca01"
+          },
+          "harness_sha256": {
+            "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+          },
+          "trusted_control_sha": {
+            "not": { "const": "f7a298d19bf4a0957d6b3db383a1f1bb2eeb309e" }
+          },
+          "operation": { "const": "qualification-harness" },
+          "reason": { "const": "representation-invalid" }
+        }
+      },
+      "else": { "not": { "required": ["replay_witness"] } }
+    },
     {
       "if": {
         "properties": { "exit_status": { "const": 0 } },

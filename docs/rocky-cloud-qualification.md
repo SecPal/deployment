@@ -253,6 +253,23 @@ parent. Any timeout, overflow, exec failure, residue, or invalid working
 directory prevents PASS. Raw start, active, primary, and reload observations
 are removed on every runner exit after their bounded facts have been admitted.
 
+For a current `qualification-harness / representation-invalid` result, trusted
+control inventories the seven classifier components before that removal:
+stdout, trace, trusted marker, reload adjacency, start observation, active
+observation, and primary observation. The existing diagnostic hash remains the
+authority and continues to cover those components in that order with one NUL
+between each pair; its byte count remains the sum of component bytes without
+the separators. Schema-version-2 failure evidence carries exact bytes only for
+components independently admitted under their finite grammar or canonical
+closed observation schema. If any component is arbitrary, malformed, or
+oversized, the witness records only its presence, length, digest, and
+unavailable state. It never exports that component or presents the partial
+inventory as replayable. The independent verifier recomputes every available
+component digest and length, the aggregate hash, and the classifier result.
+This negative-only witness cannot enter the success evidence path. Historical
+schema-version-1 failures under their exact earlier trusted-control identity
+remain valid without a witness and cannot be mixed with the current family.
+
 The destroyed #118 guest retained only outer target status 126 at line 238.
 That proves neither a service `ExecMainStatus` nor which process produced 126.
 Later native ARM64 and GCP controls passed, and deterministic real-process

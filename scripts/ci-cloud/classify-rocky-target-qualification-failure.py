@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -22,7 +23,7 @@ HISTORICAL_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
 HISTORICAL_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
 MAX_STDOUT_BYTES = 65_536
 MAX_TRACE_BYTES = 4_096
-MAX_ARTIFACT_BYTES = 8_192
+MAX_ARTIFACT_BYTES = 16_384
 MAX_CAPTURE_FILE_BYTES = 65_536
 MAX_ADJACENCY_BYTES = 8_192
 MAX_START_OBSERVATION_BYTES = 2_048
@@ -30,6 +31,30 @@ MAX_ACTIVE_OBSERVATION_BYTES = 2_048
 MAX_PRIMARY_OBSERVATION_BYTES = 2_048
 MAX_TRACE_FRAMES = 8
 MAX_TRACE_LINE = 9_999
+LEGACY_REPLAY_OPTIONAL_CONTROL_SHA = "f7a298d19bf4a0957d6b3db383a1f1bb2eeb309e"
+REPLAY_COMPONENT_ORDER = (
+    "qualification_stdout",
+    "target_qualification_trace",
+    "trusted_marker",
+    "reload_adjacency",
+    "start_observation",
+    "active_observation",
+    "primary_observation",
+)
+REPLAY_COMPONENT_BOUNDS = {
+    "qualification_stdout": MAX_STDOUT_BYTES,
+    "target_qualification_trace": MAX_CAPTURE_FILE_BYTES,
+    "trusted_marker": 256,
+    "reload_adjacency": MAX_ADJACENCY_BYTES,
+    "start_observation": MAX_START_OBSERVATION_BYTES,
+    "active_observation": MAX_ACTIVE_OBSERVATION_BYTES,
+    "primary_observation": MAX_PRIMARY_OBSERVATION_BYTES,
+}
+REPLAYABLE_STDOUT_RECORDS = frozenset(
+    {
+        b"ERROR: SELinux is not Enforcing.\n",
+    }
+)
 
 OPERATIONS = frozenset(
     {
@@ -1779,6 +1804,171 @@ def bounded_bytes(path: Path, maximum: int) -> bytes:
     return payload
 
 
+def canonical_json_bytes(document: object) -> bytes:
+    return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "ascii"
+    )
+
+
+def replay_trace_admitted(payload: bytes) -> bool:
+    if len(payload) > MAX_TRACE_BYTES:
+        return False
+    try:
+        lines = payload.decode("ascii").splitlines()
+    except UnicodeDecodeError:
+        return False
+    for line in lines:
+        match = TRACE_PATTERN.fullmatch(line)
+        if match is None:
+            return False
+        frames = match.group(2).split(",")
+        if not 1 <= len(frames) <= MAX_TRACE_FRAMES:
+            return False
+        if any(not 1 <= int(frame) <= MAX_TRACE_LINE for frame in frames):
+            return False
+    return True
+
+
+def replay_marker_admitted(payload: bytes) -> bool:
+    try:
+        marker = payload.decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    if not marker.endswith("\n"):
+        return False
+    match = MARKER_PATTERN.fullmatch(marker[:-1])
+    return bool(
+        match is not None
+        and match.group(1) in OPERATIONS
+        and match.group(2) in REASONS
+    )
+
+
+def replay_observation_admitted(
+    name: str,
+    payload: bytes,
+    exit_status: int,
+    bindings: dict[str, str],
+    stdout: bytes,
+) -> bool:
+    try:
+        document = json.loads(payload)
+        if canonical_json_bytes(document) != payload:
+            return False
+    except (UnicodeDecodeError, UnicodeEncodeError, json.JSONDecodeError, TypeError):
+        return False
+    if name == "start_observation":
+        return bool(admit_quadlet_start_observation(document, exit_status)[2].get(
+            "observation_complete"
+        ))
+    if name == "active_observation":
+        return bool(admit_quadlet_active_observation(document, exit_status)[2].get(
+            "observation_complete"
+        ))
+    if name == "primary_observation":
+        return bool(admit_primary_workload_observation(document, exit_status)[2].get(
+            "observation_complete"
+        ))
+    if name != "reload_adjacency":
+        return False
+    admitted = admit_daemon_reload_adjacency(
+        document,
+        {
+            **bindings,
+            "failure_status": exit_status,
+        },
+        reload_client_error(stdout),
+    )
+    if admitted == unavailable_daemon_reload_adjacency():
+        return False
+    try:
+        validate_admitted_daemon_reload_adjacency(admitted)
+    except ValueError:
+        return False
+    return True
+
+
+def replay_component_admitted(
+    name: str,
+    payload: bytes,
+    *,
+    exit_status: int,
+    bindings: dict[str, str],
+    stdout: bytes,
+) -> bool:
+    if len(payload) > REPLAY_COMPONENT_BOUNDS[name]:
+        return False
+    if name == "qualification_stdout":
+        return not payload or payload in REPLAYABLE_STDOUT_RECORDS
+    if name == "target_qualification_trace":
+        return replay_trace_admitted(payload)
+    if name == "trusted_marker":
+        return replay_marker_admitted(payload)
+    return replay_observation_admitted(
+        name, payload, exit_status, bindings, stdout
+    )
+
+
+def build_replay_witness(
+    component_sources: dict[str, tuple[bool, bytes]],
+    *,
+    exit_status: int,
+    representation_invalid: bool,
+    bindings: dict[str, str],
+) -> dict[str, object]:
+    if set(component_sources) != set(REPLAY_COMPONENT_ORDER):
+        raise ValueError("replay component inventory is incomplete")
+    stdout = component_sources["qualification_stdout"][1]
+    components: dict[str, object] = {}
+    available = True
+    for name in REPLAY_COMPONENT_ORDER:
+        source = component_sources[name]
+        if (
+            not isinstance(source, tuple)
+            or len(source) != 2
+            or type(source[0]) is not bool
+            or not isinstance(source[1], bytes)
+            or (not source[0] and source[1])
+        ):
+            raise ValueError(f"replay {name} source is invalid")
+        present, payload = source
+        replayable = not present or replay_component_admitted(
+            name,
+            payload,
+            exit_status=exit_status,
+            bindings=bindings,
+            stdout=stdout,
+        )
+        if (
+            name == "reload_adjacency"
+            and present
+            and components["qualification_stdout"]["replayability"]
+            != "exact"
+        ):
+            replayable = False
+        available = available and replayable
+        components[name] = {
+            "present": present,
+            "byte_count": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "replayability": "exact" if replayable else "unavailable",
+            "content_base64": (
+                base64.b64encode(payload).decode("ascii")
+                if present and replayable
+                else None
+            ),
+        }
+    return {
+        "schema_version": 1,
+        "available": available,
+        "representation_invalid": representation_invalid,
+        "exit_status": exit_status,
+        "component_order": list(REPLAY_COMPONENT_ORDER),
+        "separator": "NUL",
+        "components": components,
+    }
+
+
 def write_document(path: Path, document: dict[str, object]) -> None:
     encoded = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
     if len(encoded) > MAX_ARTIFACT_BYTES:
@@ -1916,8 +2106,13 @@ def main() -> int:
             },
             reload_client_error(stdout),
         )
+    replay_required = (
+        target_bound
+        and (operation, reason) == ("qualification-harness", "representation-invalid")
+        and options.control_sha != LEGACY_REPLAY_OPTIONAL_CONTROL_SHA
+    )
     document: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2 if replay_required else 1,
         "phase": "target-qualification",
         "target_sha": options.target_sha,
         "trusted_control_sha": options.control_sha,
@@ -1966,6 +2161,26 @@ def main() -> int:
         document["quadlet_active_state_diagnostic"] = active_diagnostic
     if primary_diagnostic is not None:
         document["primary_workload_diagnostic"] = primary_diagnostic
+    if replay_required:
+        document["replay_witness"] = build_replay_witness(
+            {
+                "qualification_stdout": (True, stdout),
+                "target_qualification_trace": (True, trace),
+                "trusted_marker": (bool(marker_bytes), marker_bytes),
+                "reload_adjacency": (bool(adjacency_bytes), adjacency_bytes),
+                "start_observation": (bool(start_bytes), start_bytes),
+                "active_observation": (bool(active_bytes), active_bytes),
+                "primary_observation": (bool(primary_bytes), primary_bytes),
+            },
+            exit_status=options.exit_status,
+            representation_invalid=options.representation_invalid,
+            bindings={
+                "target_sha": options.target_sha,
+                "trusted_control_sha": options.control_sha,
+                "qualification_run_id": options.run_id,
+                "qualification_run_attempt": options.run_attempt,
+            },
+        )
     write_document(options.output, document)
     return 0
 
