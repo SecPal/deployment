@@ -314,6 +314,9 @@ MARKER_PATTERN = re.compile(
     r"^(qualification-harness|qualify-[a-z0-9-]+) "
     r"(invariant-failed|command-failed|representation-invalid|cleanup-failed)$"
 )
+AVC_OBSERVATION_TRACE_STATUS = 1
+AVC_OBSERVATION_TARGET_STATUS = 3
+AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({300, 601, 674})
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,19}$")
 BOOT_ID = re.compile(
@@ -635,6 +638,7 @@ def trace_operations(
     # eventual status. Repeated trap propagation is coherent only while every
     # retained record agrees on the inner status.
     trace_status: int | None = None
+    trace_frames: list[tuple[int, ...]] = []
     for raw_line in trace_text.splitlines():
         match = TRACE_PATTERN.fullmatch(raw_line)
         if match is None:
@@ -646,16 +650,33 @@ def trace_operations(
             trace_status = status
         elif status != trace_status:
             return set(), False
-        frames = match.group(2).split(",")
-        if not 1 <= len(frames) <= MAX_TRACE_FRAMES:
+        raw_frames = match.group(2).split(",")
+        if not 1 <= len(raw_frames) <= MAX_TRACE_FRAMES:
             return set(), False
-        for raw_frame in frames:
-            line = int(raw_frame)
+        frames = tuple(int(raw_frame) for raw_frame in raw_frames)
+        trace_frames.append(frames)
+        for line in frames:
             if not 1 <= line <= MAX_TRACE_LINE:
                 return set(), False
             operation = operation_for_line(line, line_rules)
             if operation is not None:
                 operations.add(operation)
+    if trace_status != exit_status and not (
+        line_rules is LINE_RULES
+        and trace_status == AVC_OBSERVATION_TRACE_STATUS
+        and exit_status == AVC_OBSERVATION_TARGET_STATUS
+        and all(
+            AVC_OBSERVATION_REQUIRED_FRAMES.issubset(frames)
+            and {
+                operation_for_line(line, line_rules)
+                for line in frames
+                if operation_for_line(line, line_rules) is not None
+            }
+            == {"qualify-avc-correlation"}
+            for frames in trace_frames
+        )
+    ):
+        return set(), False
     return operations, True
 
 

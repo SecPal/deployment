@@ -298,9 +298,10 @@ current harness, or supplying an unrecognized pair therefore fails closed.
 
 The trusted Bash trace uses `SECPAL_TARGET_ERR_V2`: each record carries one
 numeric inner-command status and at most eight numeric `BASH_LINENO` frames.
-The records must agree on that status, but it can differ from the final target
-process status because Bash records an inner failure before the harness
-finishes its bounded failure path. The classifier ignores generic helper
+The records must agree on that status. It may differ from the final target
+process status only for the reviewed AVC observation path that records an
+expected inner denial with status 1 before its bounded no-finding path returns 3. The classifier binds that transition to its exact immutable outer call
+frames; other status mismatches fail closed. It ignores generic helper
 implementation frames and resolves only immutable reviewed outer call sites
 under the exact target and harness hashes. Repeated frames agreeing on one
 operation are one decision; conflicting statuses, zero mapped operations,

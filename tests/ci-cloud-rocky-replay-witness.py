@@ -373,6 +373,15 @@ class RockyReplayWitnessTests(unittest.TestCase):
                 representation_invalid=witness["representation_invalid"],
             ),
         )
+        self.assert_rejected(document)
+        with self.assertRaises(self.control.ControlError):
+            self.control.validate_target_qualification_failure(
+                CURRENT_NATIVE_REPLAY,
+                document["target_sha"],
+                document["trusted_control_sha"],
+                document["qualification_run_id"],
+                document["qualification_run_attempt"],
+            )
 
     def test_current_native_witness_traverses_classifier_and_control(self) -> None:
         source = json.loads(CURRENT_NATIVE_REPLAY.read_bytes())
@@ -499,7 +508,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
                     hashlib.sha256(replayed).hexdigest(),
                 )
 
-    def test_conflicting_trace_statuses_remain_invalid_after_replay(self) -> None:
+    def test_conflicting_statuses_replay_as_semantic_representation_invalid(self) -> None:
         trace = (
             b"SECPAL_TARGET_ERR_V2:3:667,662\n"
             b"SECPAL_TARGET_ERR_V2:1:637,626,619\n"
@@ -515,7 +524,8 @@ class RockyReplayWitnessTests(unittest.TestCase):
             ("qualification-harness", "representation-invalid"), classification
         )
         witness = self.witness(
-            sources=self.sources(target_qualification_trace=(True, trace))
+            sources=self.sources(target_qualification_trace=(True, trace)),
+            representation_invalid=False,
         )
         self.assertTrue(witness["available"])
         document = self.document(witness)
