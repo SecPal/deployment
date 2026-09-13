@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -21,8 +22,9 @@ HISTORICAL_202_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836c
 HISTORICAL_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
 HISTORICAL_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
 MAX_STDOUT_BYTES = 65_536
+MAX_STDOUT_CAPTURE_BYTES = MAX_STDOUT_BYTES + 1
 MAX_TRACE_BYTES = 4_096
-MAX_ARTIFACT_BYTES = 8_192
+MAX_ARTIFACT_BYTES = 16_384
 MAX_CAPTURE_FILE_BYTES = 65_536
 MAX_ADJACENCY_BYTES = 8_192
 MAX_START_OBSERVATION_BYTES = 2_048
@@ -30,6 +32,39 @@ MAX_ACTIVE_OBSERVATION_BYTES = 2_048
 MAX_PRIMARY_OBSERVATION_BYTES = 2_048
 MAX_TRACE_FRAMES = 8
 MAX_TRACE_LINE = 9_999
+LEGACY_REPLAY_OPTIONAL_CONTROL_SHA = "f7a298d19bf4a0957d6b3db383a1f1bb2eeb309e"
+REPLAY_COMPONENT_ORDER = (
+    "qualification_stdout",
+    "target_qualification_trace",
+    "trusted_marker",
+    "reload_adjacency",
+    "start_observation",
+    "active_observation",
+    "primary_observation",
+)
+REPLAY_COMPONENT_BOUNDS = {
+    "qualification_stdout": MAX_STDOUT_CAPTURE_BYTES,
+    "target_qualification_trace": MAX_CAPTURE_FILE_BYTES,
+    "trusted_marker": 257,
+    "reload_adjacency": MAX_ADJACENCY_BYTES + 1,
+    "start_observation": MAX_START_OBSERVATION_BYTES + 1,
+    "active_observation": MAX_ACTIVE_OBSERVATION_BYTES + 1,
+    "primary_observation": MAX_PRIMARY_OBSERVATION_BYTES + 1,
+}
+REPLAY_EXACT_COMPONENT_BOUNDS = {
+    "qualification_stdout": MAX_STDOUT_BYTES,
+    "target_qualification_trace": MAX_TRACE_BYTES,
+    "trusted_marker": 256,
+    "reload_adjacency": MAX_ADJACENCY_BYTES,
+    "start_observation": MAX_START_OBSERVATION_BYTES,
+    "active_observation": MAX_ACTIVE_OBSERVATION_BYTES,
+    "primary_observation": MAX_PRIMARY_OBSERVATION_BYTES,
+}
+REPLAYABLE_STDOUT_RECORDS = frozenset(
+    {
+        b"ERROR: SELinux is not Enforcing.\n",
+    }
+)
 
 OPERATIONS = frozenset(
     {
@@ -1779,6 +1814,177 @@ def bounded_bytes(path: Path, maximum: int) -> bytes:
     return payload
 
 
+def optional_bounded_bytes(path: Path | None, maximum: int) -> tuple[bool, bytes]:
+    if path is None or not path.exists():
+        return False, b""
+    return True, bounded_bytes(path, maximum)
+
+
+def canonical_json_bytes(document: object) -> bytes:
+    return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "ascii"
+    )
+
+
+def replay_trace_admitted(payload: bytes, exit_status: int) -> bool:
+    if len(payload) > MAX_TRACE_BYTES:
+        return False
+    try:
+        lines = payload.decode("ascii").splitlines()
+    except UnicodeDecodeError:
+        return False
+    for line in lines:
+        match = TRACE_PATTERN.fullmatch(line)
+        if match is None or int(match.group(1)) != exit_status:
+            return False
+        frames = match.group(2).split(",")
+        if not 1 <= len(frames) <= MAX_TRACE_FRAMES:
+            return False
+        if any(not 1 <= int(frame) <= MAX_TRACE_LINE for frame in frames):
+            return False
+    return True
+
+
+def replay_marker_admitted(payload: bytes) -> bool:
+    try:
+        marker = payload.decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    if not marker.endswith("\n"):
+        return False
+    match = MARKER_PATTERN.fullmatch(marker[:-1])
+    return bool(
+        match is not None
+        and match.group(1) in OPERATIONS
+        and match.group(2) in REASONS
+    )
+
+
+def replay_observation_admitted(
+    name: str,
+    payload: bytes,
+    exit_status: int,
+    bindings: dict[str, str],
+    stdout: bytes,
+) -> bool:
+    try:
+        document = json.loads(payload)
+        if canonical_json_bytes(document) != payload:
+            return False
+    except (UnicodeDecodeError, UnicodeEncodeError, json.JSONDecodeError, TypeError):
+        return False
+    if name == "start_observation":
+        return bool(admit_quadlet_start_observation(document, exit_status)[2].get(
+            "observation_complete"
+        ))
+    if name == "active_observation":
+        return bool(admit_quadlet_active_observation(document, exit_status)[2].get(
+            "observation_complete"
+        ))
+    if name == "primary_observation":
+        return bool(admit_primary_workload_observation(document, exit_status)[2].get(
+            "observation_complete"
+        ))
+    if name != "reload_adjacency":
+        return False
+    admitted = admit_daemon_reload_adjacency(
+        document,
+        {
+            **bindings,
+            "failure_status": exit_status,
+        },
+        reload_client_error(stdout),
+    )
+    if admitted == unavailable_daemon_reload_adjacency():
+        return False
+    try:
+        validate_admitted_daemon_reload_adjacency(admitted)
+    except ValueError:
+        return False
+    return True
+
+
+def replay_component_admitted(
+    name: str,
+    payload: bytes,
+    *,
+    exit_status: int,
+    bindings: dict[str, str],
+    stdout: bytes,
+) -> bool:
+    if len(payload) > REPLAY_EXACT_COMPONENT_BOUNDS[name]:
+        return False
+    if name == "qualification_stdout":
+        return not payload or payload in REPLAYABLE_STDOUT_RECORDS
+    if name == "target_qualification_trace":
+        return replay_trace_admitted(payload, exit_status)
+    if name == "trusted_marker":
+        return replay_marker_admitted(payload)
+    return replay_observation_admitted(
+        name, payload, exit_status, bindings, stdout
+    )
+
+
+def build_replay_witness(
+    component_sources: dict[str, tuple[bool, bytes]],
+    *,
+    exit_status: int,
+    representation_invalid: bool,
+    bindings: dict[str, str],
+) -> dict[str, object]:
+    if set(component_sources) != set(REPLAY_COMPONENT_ORDER):
+        raise ValueError("replay component inventory is incomplete")
+    stdout = component_sources["qualification_stdout"][1]
+    components: dict[str, object] = {}
+    available = True
+    for name in REPLAY_COMPONENT_ORDER:
+        source = component_sources[name]
+        if (
+            not isinstance(source, tuple)
+            or len(source) != 2
+            or type(source[0]) is not bool
+            or not isinstance(source[1], bytes)
+            or (not source[0] and source[1])
+        ):
+            raise ValueError(f"replay {name} source is invalid")
+        present, payload = source
+        replayable = not present or replay_component_admitted(
+            name,
+            payload,
+            exit_status=exit_status,
+            bindings=bindings,
+            stdout=stdout,
+        )
+        if (
+            name == "reload_adjacency"
+            and present
+            and components["qualification_stdout"]["replayability"]
+            != "exact"
+        ):
+            replayable = False
+        available = available and replayable
+        components[name] = {
+            "present": present,
+            "byte_count": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "replayability": "exact" if replayable else "unavailable",
+            "content_base64": (
+                base64.b64encode(payload).decode("ascii")
+                if present and replayable
+                else None
+            ),
+        }
+    return {
+        "schema_version": 1,
+        "available": available,
+        "representation_invalid": representation_invalid,
+        "exit_status": exit_status,
+        "component_order": list(REPLAY_COMPONENT_ORDER),
+        "separator": "NUL",
+        "components": components,
+    }
+
+
 def write_document(path: Path, document: dict[str, object]) -> None:
     encoded = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
     if len(encoded) > MAX_ARTIFACT_BYTES:
@@ -1826,16 +2032,28 @@ def main() -> int:
     ):
         raise SystemExit("target harness status is outside the closed range")
 
-    stdout = bounded_bytes(options.stdout, MAX_STDOUT_BYTES)
+    stdout = bounded_bytes(
+        options.stdout,
+        MAX_STDOUT_CAPTURE_BYTES
+        if options.representation_invalid
+        else MAX_STDOUT_BYTES,
+    )
     trace = bounded_bytes(options.trace, MAX_CAPTURE_FILE_BYTES)
     harness = bounded_bytes(options.harness, 128 * 1024)
     harness_sha256 = hashlib.sha256(harness).hexdigest()
     target_bound = options.target_sha == EXPECTED_TARGET_SHA and harness_sha256 == EXPECTED_HARNESS_SHA256
+    marker_present = False
     marker = None
     marker_bytes = b""
     if options.trusted_marker is not None and options.trusted_marker.exists():
-        marker_bytes = bounded_bytes(options.trusted_marker, 256)
-        marker = marker_bytes.decode("ascii")
+        marker_present, marker_bytes = optional_bounded_bytes(
+            options.trusted_marker,
+            REPLAY_COMPONENT_BOUNDS["trusted_marker"]
+            if options.representation_invalid
+            else 256,
+        )
+        if not options.representation_invalid:
+            marker = marker_bytes.decode("ascii")
     operation, reason = classify_failure(
         stdout,
         trace,
@@ -1845,19 +2063,23 @@ def main() -> int:
         representation_invalid=options.representation_invalid,
         line_rules=LINE_RULES,
     )
+    adjacency_present = False
     adjacency_bytes = b""
     adjacency: dict[str, object] | None = None
+    start_present = False
     start_bytes = b""
     start_diagnostic: dict[str, object] | None = None
+    active_present = False
     active_bytes = b""
     active_diagnostic: dict[str, object] | None = None
+    primary_present = False
     primary_bytes = b""
     primary_diagnostic: dict[str, object] | None = None
     if operation == "qualify-quadlet-start" and reason == "command-failed":
         raw_start: object = None
         if options.start_observation is not None and options.start_observation.exists():
             try:
-                start_bytes = bounded_bytes(
+                start_present, start_bytes = optional_bounded_bytes(
                     options.start_observation, MAX_START_OBSERVATION_BYTES
                 )
                 raw_start = json.loads(start_bytes)
@@ -1870,7 +2092,7 @@ def main() -> int:
         raw_active: object = None
         if options.active_observation is not None and options.active_observation.exists():
             try:
-                active_bytes = bounded_bytes(
+                active_present, active_bytes = optional_bounded_bytes(
                     options.active_observation, MAX_ACTIVE_OBSERVATION_BYTES
                 )
                 raw_active = json.loads(active_bytes)
@@ -1886,7 +2108,7 @@ def main() -> int:
             and options.primary_observation.exists()
         ):
             try:
-                primary_bytes = bounded_bytes(
+                primary_present, primary_bytes = optional_bounded_bytes(
                     options.primary_observation, MAX_PRIMARY_OBSERVATION_BYTES
                 )
                 raw_primary = json.loads(primary_bytes)
@@ -1899,7 +2121,7 @@ def main() -> int:
         raw_adjacency: object = None
         if options.reload_adjacency is not None and options.reload_adjacency.exists():
             try:
-                adjacency_bytes = bounded_bytes(
+                adjacency_present, adjacency_bytes = optional_bounded_bytes(
                     options.reload_adjacency, MAX_ADJACENCY_BYTES
                 )
                 raw_adjacency = json.loads(adjacency_bytes)
@@ -1916,8 +2138,29 @@ def main() -> int:
             },
             reload_client_error(stdout),
         )
+    replay_required = (
+        target_bound
+        and (operation, reason) == ("qualification-harness", "representation-invalid")
+        and options.control_sha != LEGACY_REPLAY_OPTIONAL_CONTROL_SHA
+    )
+    if replay_required:
+        marker_present, marker_bytes = optional_bounded_bytes(
+            options.trusted_marker, REPLAY_COMPONENT_BOUNDS["trusted_marker"]
+        )
+        adjacency_present, adjacency_bytes = optional_bounded_bytes(
+            options.reload_adjacency, REPLAY_COMPONENT_BOUNDS["reload_adjacency"]
+        )
+        start_present, start_bytes = optional_bounded_bytes(
+            options.start_observation, REPLAY_COMPONENT_BOUNDS["start_observation"]
+        )
+        active_present, active_bytes = optional_bounded_bytes(
+            options.active_observation, REPLAY_COMPONENT_BOUNDS["active_observation"]
+        )
+        primary_present, primary_bytes = optional_bounded_bytes(
+            options.primary_observation, REPLAY_COMPONENT_BOUNDS["primary_observation"]
+        )
     document: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2 if replay_required else 1,
         "phase": "target-qualification",
         "target_sha": options.target_sha,
         "trusted_control_sha": options.control_sha,
@@ -1966,6 +2209,26 @@ def main() -> int:
         document["quadlet_active_state_diagnostic"] = active_diagnostic
     if primary_diagnostic is not None:
         document["primary_workload_diagnostic"] = primary_diagnostic
+    if replay_required:
+        document["replay_witness"] = build_replay_witness(
+            {
+                "qualification_stdout": (True, stdout),
+                "target_qualification_trace": (True, trace),
+                "trusted_marker": (marker_present, marker_bytes),
+                "reload_adjacency": (adjacency_present, adjacency_bytes),
+                "start_observation": (start_present, start_bytes),
+                "active_observation": (active_present, active_bytes),
+                "primary_observation": (primary_present, primary_bytes),
+            },
+            exit_status=options.exit_status,
+            representation_invalid=options.representation_invalid,
+            bindings={
+                "target_sha": options.target_sha,
+                "trusted_control_sha": options.control_sha,
+                "qualification_run_id": options.run_id,
+                "qualification_run_attempt": options.run_attempt,
+            },
+        )
     write_document(options.output, document)
     return 0
 

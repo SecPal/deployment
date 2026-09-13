@@ -33,6 +33,9 @@ DEFAULT_WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
 DEFAULT_TARGET_FAILURE_CLASSIFIER = (
     ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
 )
+DEFAULT_TARGET_REPLAY_VERIFIER = (
+    ROOT / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
+)
 DEFAULT_TARGET_FAILURE_SCHEMA = (
     ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
 )
@@ -676,6 +679,7 @@ def validate_target_qualification_binding(
     harness_path: Path,
     runner_path: Path,
     classifier_path: Path,
+    replay_verifier_path: Path,
     failure_schema_path: Path,
     trace_path: Path,
     reload_observer_path: Path,
@@ -687,6 +691,7 @@ def validate_target_qualification_binding(
         harness = harness_path.read_bytes()
         runner = runner_path.read_text(encoding="utf-8")
         classifier = classifier_path.read_text(encoding="utf-8")
+        replay_verifier = replay_verifier_path.read_text(encoding="utf-8")
         failure_schema = json.loads(failure_schema_path.read_text(encoding="utf-8"))
         trace = trace_path.read_text(encoding="utf-8")
         reload_observer = reload_observer_path.read_text(encoding="utf-8")
@@ -737,6 +742,23 @@ def validate_target_qualification_binding(
     ):
         raise ArchitectureError("diagnostic classifier target/harness binding disagrees")
 
+    verifier_tree = parse(replay_verifier_path)
+    legacy_replay_control = assignment_string(
+        classifier_tree, "LEGACY_REPLAY_OPTIONAL_CONTROL_SHA"
+    )
+    if (
+        legacy_replay_control is None
+        or json.dumps(failure_schema).count(legacy_replay_control) != 1
+        or "classifier.LEGACY_REPLAY_OPTIONAL_CONTROL_SHA" not in replay_verifier
+        or assignment_literal(verifier_tree, "REPLAY_COMPONENT_ORDER")
+        != assignment_literal(classifier_tree, "REPLAY_COMPONENT_ORDER")
+        or 'replayed = b"\\0".join(' not in replay_verifier
+        or 'document["diagnostic_input_sha256"]' not in replay_verifier
+        or "classifier.classify_failure(" not in replay_verifier
+        or "require_available=True" not in replay_verifier
+    ):
+        raise ArchitectureError("closed replay verifier disagrees with classifier input authority")
+
     line_rules = assignment_literal(classifier_tree, "LINE_RULES")
     if line_rules != EXPECTED_TARGET_LINE_RULES:
         raise ArchitectureError("current diagnostic line map disagrees")
@@ -767,7 +789,7 @@ def validate_target_qualification_binding(
         schema_const_pairs(failure_schema).count(
             (expected_target, expected_harness)
         )
-        != 3
+        != 4
     ):
         raise ArchitectureError("diagnostic schema target/harness binding disagrees")
 
@@ -797,6 +819,11 @@ def main(arguments: list[str]) -> int:
         default=DEFAULT_TARGET_FAILURE_CLASSIFIER,
     )
     parser.add_argument(
+        "--target-replay-verifier",
+        type=Path,
+        default=DEFAULT_TARGET_REPLAY_VERIFIER,
+    )
+    parser.add_argument(
         "--target-failure-schema", type=Path, default=DEFAULT_TARGET_FAILURE_SCHEMA
     )
     parser.add_argument("--target-trace", type=Path, default=DEFAULT_TARGET_TRACE)
@@ -822,6 +849,7 @@ def main(arguments: list[str]) -> int:
             options.qualification_harness,
             options.qualification_runner,
             options.target_failure_classifier,
+            options.target_replay_verifier,
             options.target_failure_schema,
             options.target_trace,
             options.reload_observer,

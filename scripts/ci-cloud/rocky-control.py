@@ -32,6 +32,9 @@ ROOT = Path(__file__).resolve().parents[2]
 INSTALLED_TARGET_FAILURE_CLASSIFIER = Path(
     "/usr/local/sbin/secpal-classify-rocky-target-failure"
 )
+INSTALLED_TARGET_REPLAY_VERIFIER = Path(
+    "/usr/local/sbin/secpal-verify-rocky-target-replay"
+)
 CLASSIFIER_TRUSTED_UID = 0
 CLASSIFIER_TRUSTED_GID = 0
 MAX_TARGET_FAILURE_CLASSIFIER_BYTES = 131_072
@@ -39,6 +42,7 @@ TARGET_FAILURE_CLASSIFIER_SYMBOL = "validate_admitted_daemon_reload_adjacency"
 TARGET_START_CLASSIFIER_SYMBOL = "validate_admitted_quadlet_start_diagnostic"
 TARGET_ACTIVE_CLASSIFIER_SYMBOL = "validate_admitted_quadlet_active_diagnostic"
 TARGET_PRIMARY_CLASSIFIER_SYMBOL = "validate_admitted_primary_workload_diagnostic"
+TARGET_REPLAY_VERIFIER_SYMBOL = "validate_replay_witness"
 SELINUX_ISOLATION_CONTRACT_PATH = ROOT / "scripts/selinux_isolation_contract.py"
 SELINUX_ISOLATION_INVARIANT_OWNER = (
     "selinux_isolation_contract.admit_selinux_isolation"
@@ -757,6 +761,52 @@ def load_target_failure_classifier() -> Any:
     return classifier
 
 
+def load_target_replay_verifier() -> Any:
+    """Load the independent exact-path replay verifier without path lookup."""
+    repository_path = (
+        ROOT / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
+    )
+    if repository_path.exists():
+        verifier_path = repository_path
+        installed = False
+    else:
+        verifier_path = INSTALLED_TARGET_REPLAY_VERIFIER
+        installed = True
+    try:
+        metadata = verifier_path.lstat()
+    except OSError as error:
+        raise ControlError("target qualification replay verifier is unavailable") from error
+    if (
+        not verifier_path.is_absolute()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_mode & 0o022
+        or not 0 < metadata.st_size <= MAX_TARGET_FAILURE_CLASSIFIER_BYTES
+    ):
+        raise ControlError("target qualification replay verifier is invalid")
+    if installed and (
+        metadata.st_uid != CLASSIFIER_TRUSTED_UID
+        or metadata.st_gid != CLASSIFIER_TRUSTED_GID
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise ControlError("target qualification replay verifier is invalid")
+    loader = SourceFileLoader("secpal_target_qualification_replay", os.fspath(verifier_path))
+    specification = importlib.util.spec_from_loader(loader.name, loader)
+    if specification is None or specification.loader is None:
+        raise ControlError("target qualification replay verifier cannot be loaded")
+    verifier = importlib.util.module_from_spec(specification)
+    write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(verifier)
+    except Exception as error:
+        raise ControlError("target qualification replay verifier cannot be loaded") from error
+    finally:
+        sys.dont_write_bytecode = write_bytecode
+    if not callable(getattr(verifier, TARGET_REPLAY_VERIFIER_SYMBOL, None)):
+        raise ControlError("target qualification replay verifier cannot be loaded")
+    return verifier
+
+
 def validate_target_qualification_failure(
     path: Path,
     target_sha: str,
@@ -777,6 +827,32 @@ def validate_target_qualification_failure(
     }
     if any(document[key] != value for key, value in expected.items()):
         raise ControlError("target qualification failure is not bound to this exact run")
+    classifier = None
+    if (
+        document["operation"] == "qualification-harness"
+        and document["reason"] == "representation-invalid"
+    ):
+        classifier = load_target_failure_classifier()
+        replay_required = (
+            document["target_sha"] == classifier.EXPECTED_TARGET_SHA
+            and document["harness_sha256"] == classifier.EXPECTED_HARNESS_SHA256
+            and document["trusted_control_sha"]
+            != classifier.LEGACY_REPLAY_OPTIONAL_CONTROL_SHA
+        )
+        if replay_required and document["schema_version"] != 2:
+            raise ControlError(
+                "current representation failure lacks its replay witness"
+            )
+    if document["schema_version"] == 2:
+        if classifier is None:
+            classifier = load_target_failure_classifier()
+        verifier = load_target_replay_verifier()
+        try:
+            getattr(verifier, TARGET_REPLAY_VERIFIER_SYMBOL)(document, classifier)
+        except (AttributeError, ValueError) as error:
+            raise ControlError(
+                "target qualification replay witness contradicts its inputs"
+            ) from error
     adjacency = document.get("daemon_reload_adjacency")
     if adjacency is not None:
         classifier = load_target_failure_classifier()

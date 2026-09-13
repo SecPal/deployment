@@ -523,6 +523,8 @@ class RockyCloudControlTests(unittest.TestCase):
             "target_runner_base64gzip": ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh",
             "target_failure_classifier_base64gzip": ROOT
             / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+            "target_replay_verifier_base64gzip": ROOT
+            / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py",
             "target_trace_base64gzip": ROOT
             / "scripts/ci-cloud/rocky-target-qualification-trace.sh",
             "reload_runuser_base64gzip": ROOT
@@ -577,6 +579,11 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertIn(
             "decode_script '${target_failure_classifier_base64gzip}' "
             "/usr/local/sbin/secpal-classify-rocky-target-failure",
+            template,
+        )
+        self.assertIn(
+            "decode_script '${target_replay_verifier_base64gzip}' "
+            "/usr/local/sbin/secpal-verify-rocky-target-replay",
             template,
         )
         self.assertIn('chmod 0700 "$destination"', template)
