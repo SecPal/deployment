@@ -259,16 +259,26 @@ stdout, trace, trusted marker, reload adjacency, start observation, active
 observation, and primary observation. The existing diagnostic hash remains the
 authority and continues to cover those components in that order with one NUL
 between each pair; its byte count remains the sum of component bytes without
-the separators. Schema-version-2 failure evidence carries exact bytes only for
-components independently admitted under their finite grammar or canonical
-closed observation schema. If any component is arbitrary, malformed, or
-oversized, the witness records only its presence, length, digest, and
-unavailable state. It never exports that component or presents the partial
-inventory as replayable. The independent verifier recomputes every available
-component digest and length, the aggregate hash, and the classifier result.
-This negative-only witness cannot enter the success evidence path. Historical
-schema-version-1 failures under their exact earlier trusted-control identity
-remain valid without a witness and cannot be mixed with the current family.
+the separators. Schema-version-2 failure evidence carries exact original bytes
+only for components independently admitted under their finite producer grammar
+or closed observation schema and semantic state machine. Closed start, active,
+and primary observations may use any legal JSON whitespace, member order, or
+terminal-newline representation; formatting is not authority, and the retained
+digest always covers the original bytes rather than a canonical rewrite.
+Duplicate keys, extra properties, invalid or contradictory states, arbitrary
+payloads, and malformed or oversized inputs remain unavailable. The target
+trace admits only complete newline-terminated records from the bounded numeric
+producer grammar. Each producer record retains its own status; replay admission
+does not relax the classifier's separate aggregate-status coherence rule. If
+any component is unavailable, the witness records only its presence, length,
+digest, and unavailable state. It never exports that component or presents the
+partial inventory as replayable. The independent verifier
+decodes the retained bytes, recomputes every available component digest and
+length, reruns the grammar/schema and semantic admission, then closes the
+aggregate hash and classifier result. This negative-only witness cannot enter
+the success evidence path. Historical schema-version-1 failures and unavailable
+schema-version-2 witnesses under their exact earlier trusted-control identities
+remain immutable and cannot be mixed with the current family.
 
 The destroyed #118 guest retained only outer target status 126 at line 238.
 That proves neither a service `ExecMainStatus` nor which process produced 126.

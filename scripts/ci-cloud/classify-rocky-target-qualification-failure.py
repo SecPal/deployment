@@ -1826,16 +1826,20 @@ def canonical_json_bytes(document: object) -> bytes:
     )
 
 
-def replay_trace_admitted(payload: bytes, exit_status: int) -> bool:
+def replay_trace_admitted(payload: bytes) -> bool:
     if len(payload) > MAX_TRACE_BYTES:
         return False
+    if not payload:
+        return True
+    if not payload.endswith(b"\n"):
+        return False
     try:
-        lines = payload.decode("ascii").splitlines()
+        lines = payload[:-1].decode("ascii").split("\n")
     except UnicodeDecodeError:
         return False
     for line in lines:
         match = TRACE_PATTERN.fullmatch(line)
-        if match is None or int(match.group(1)) != exit_status:
+        if match is None or not 1 <= int(match.group(1)) <= 255:
             return False
         frames = match.group(2).split(",")
         if not 1 <= len(frames) <= MAX_TRACE_FRAMES:
@@ -1860,6 +1864,144 @@ def replay_marker_admitted(payload: bytes) -> bool:
     )
 
 
+def unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("replay observation contains a duplicate key")
+        document[key] = value
+    return document
+
+
+def reject_json_constant(value: str) -> object:
+    raise ValueError(f"replay observation contains invalid JSON constant {value}")
+
+
+def decode_closed_json(payload: bytes) -> object:
+    return json.loads(
+        payload.decode("utf-8"),
+        object_pairs_hook=unique_json_object,
+        parse_constant=reject_json_constant,
+    )
+
+
+# The rocky-*-runuser producers own these closed observation state machines.
+# Failure records are re-admitted through their existing classifier semantics;
+# the exact success records below are the producers' non-causative terminal state.
+def replay_start_observation_admitted(document: object) -> bool:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("stage"), str)
+    ):
+        return False
+    if document == {
+        "schema_version": 1,
+        "stage": "success",
+        "runuser_status": 0,
+        "systemctl_client_status": 0,
+        "service_result": None,
+        "exec_main_code": None,
+        "exec_main_status": None,
+    } and all(
+        type(document[name]) is int
+        for name in ("runuser_status", "systemctl_client_status")
+    ):
+        return True
+    if document.get("stage") in {
+        "diagnostic-unavailable",
+        "success",
+    }:
+        return False
+    statuses = (
+        (126, 127)
+        if document.get("stage") == "runuser-exec-failed"
+        else (document.get("runuser_status"),)
+    )
+    return any(
+        type(status) is int
+        and admit_quadlet_start_observation(document, status)[2].get(
+            "observation_complete"
+        )
+        for status in statuses
+    )
+
+
+def replay_active_observation_admitted(document: object) -> bool:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("stage"), str)
+    ):
+        return False
+    if document == {
+        "schema_version": 1,
+        "stage": "success",
+        "runuser_status": 0,
+        "systemctl_client_status": 0,
+    } and all(
+        type(document[name]) is int
+        for name in ("runuser_status", "systemctl_client_status")
+    ):
+        return True
+    if document.get("stage") in {
+        "diagnostic-unavailable",
+        "success",
+    }:
+        return False
+    statuses = (
+        (126, 127)
+        if document.get("stage") == "runuser-exec-failed"
+        else (document.get("runuser_status"),)
+    )
+    return any(
+        type(status) is int
+        and admit_quadlet_active_observation(document, status)[2].get(
+            "observation_complete"
+        )
+        for status in statuses
+    )
+
+
+def replay_primary_observation_admitted(document: object) -> bool:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("stage"), str)
+    ):
+        return False
+    if document == {
+        "schema_version": 1,
+        "stage": "success",
+        "runuser_status": 0,
+        "podman_status": 0,
+    } and all(
+        type(document[name]) is int
+        for name in ("runuser_status", "podman_status")
+    ):
+        return True
+    if document.get("stage") in {
+        "diagnostic-unavailable",
+        "success",
+    }:
+        return False
+    statuses = (
+        (126, 127)
+        if document.get("stage") == "runuser-exec-failed"
+        else (document.get("runuser_status"),)
+    )
+    return any(
+        type(status) is int
+        and admit_primary_workload_observation(document, status)[2].get(
+            "observation_complete"
+        )
+        for status in statuses
+    )
+
+
 def replay_observation_admitted(
     name: str,
     payload: bytes,
@@ -1868,24 +2010,27 @@ def replay_observation_admitted(
     stdout: bytes,
 ) -> bool:
     try:
-        document = json.loads(payload)
-        if canonical_json_bytes(document) != payload:
-            return False
-    except (UnicodeDecodeError, UnicodeEncodeError, json.JSONDecodeError, TypeError):
+        document = decode_closed_json(payload)
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ):
         return False
     if name == "start_observation":
-        return bool(admit_quadlet_start_observation(document, exit_status)[2].get(
-            "observation_complete"
-        ))
+        return replay_start_observation_admitted(document)
     if name == "active_observation":
-        return bool(admit_quadlet_active_observation(document, exit_status)[2].get(
-            "observation_complete"
-        ))
+        return replay_active_observation_admitted(document)
     if name == "primary_observation":
-        return bool(admit_primary_workload_observation(document, exit_status)[2].get(
-            "observation_complete"
-        ))
+        return replay_primary_observation_admitted(document)
     if name != "reload_adjacency":
+        return False
+    try:
+        if canonical_json_bytes(document) != payload:
+            return False
+    except (UnicodeEncodeError, TypeError, ValueError):
         return False
     admitted = admit_daemon_reload_adjacency(
         document,
@@ -1917,7 +2062,7 @@ def replay_component_admitted(
     if name == "qualification_stdout":
         return not payload or payload in REPLAYABLE_STDOUT_RECORDS
     if name == "target_qualification_trace":
-        return replay_trace_admitted(payload, exit_status)
+        return replay_trace_admitted(payload)
     if name == "trusted_marker":
         return replay_marker_admitted(payload)
     return replay_observation_admitted(

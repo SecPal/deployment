@@ -47,6 +47,15 @@ class RockyReplayWitnessTests(unittest.TestCase):
         cls.classifier = load(CLASSIFIER, "rocky_failure_classifier")
         cls.verifier = load(VERIFIER, "rocky_replay_verifier")
         cls.control = load(ROOT / "scripts/ci-cloud/rocky-control.py", "rocky_control")
+        cls.start_producer = load(
+            ROOT / "scripts/ci-cloud/rocky-start-runuser.py", "rocky_start_producer"
+        )
+        cls.active_producer = load(
+            ROOT / "scripts/ci-cloud/rocky-active-runuser.py", "rocky_active_producer"
+        )
+        cls.primary_producer = load(
+            ROOT / "scripts/ci-cloud/rocky-primary-runuser.py", "rocky_primary_producer"
+        )
         cls.schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
         cls.schema_validator = Draft202012Validator(cls.schema)
 
@@ -107,7 +116,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
             "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
             "operation": "qualification-harness",
             "reason": "representation-invalid",
-            "exit_status": 3,
+            "exit_status": witness["exit_status"],
             "diagnostic_input_sha256": hashlib.sha256(aggregate).hexdigest(),
             "diagnostic_input_bytes": total,
             "replay_witness": witness,
@@ -116,6 +125,57 @@ class RockyReplayWitnessTests(unittest.TestCase):
     def assert_rejected(self, document: dict[str, object]) -> None:
         with self.assertRaises(ValueError):
             self.verifier.verify_replay_witness(document, self.classifier)
+
+    @classmethod
+    def success_observations(cls) -> dict[str, dict[str, object]]:
+        def protocol(*records: dict[str, object]) -> bytes:
+            return b"".join(cls.canonical_json(record) for record in records)
+
+        return {
+            "start_observation": cls.start_producer.parse_protocol(
+                protocol(
+                    {"kind": "env", "schema_version": 1, "stage": "env-entered"},
+                    {
+                        "kind": "systemctl",
+                        "schema_version": 1,
+                        "stage": "success",
+                        "systemctl_client_status": 0,
+                        "service_result": None,
+                        "exec_main_code": None,
+                        "exec_main_status": None,
+                    },
+                ),
+                0,
+            ),
+            "active_observation": cls.active_producer.parse_protocol(
+                protocol(
+                    {"kind": "env", "schema_version": 1, "stage": "env-entered"},
+                    {
+                        "kind": "systemctl",
+                        "schema_version": 1,
+                        "stage": "success",
+                        "systemctl_client_status": 0,
+                    },
+                ),
+                0,
+            ),
+            "primary_observation": cls.primary_producer.parse_protocol(
+                protocol(
+                    {
+                        "kind": "runtime",
+                        "schema_version": 1,
+                        "stage": "runtime-entered",
+                    },
+                    {
+                        "kind": "runtime",
+                        "schema_version": 1,
+                        "stage": "success",
+                        "podman_status": 0,
+                    },
+                ),
+                0,
+            ),
+        }
 
     def test_historical_digest_and_count_cannot_reconstruct_or_authorize_guess(self) -> None:
         historical = {
@@ -164,6 +224,87 @@ class RockyReplayWitnessTests(unittest.TestCase):
         }
         self.assert_rejected(guessed)
 
+    def test_consumed_259_unavailable_witness_remains_immutable_history(self) -> None:
+        metadata = {
+            "qualification_stdout": (
+                True,
+                0,
+                EMPTY_SHA256,
+                "exact",
+                "",
+            ),
+            "target_qualification_trace": (
+                True,
+                85,
+                "046e1ab89605315c3522ee06939db5b41bb6a0920a231df1d1921df9cab22ef2",
+                "unavailable",
+                None,
+            ),
+            "trusted_marker": (False, 0, EMPTY_SHA256, "exact", None),
+            "reload_adjacency": (False, 0, EMPTY_SHA256, "exact", None),
+            "start_observation": (
+                True,
+                154,
+                "34a6ae288bbc737caaac9a85b267effb44cae97568a0c6c2c46aceb4df5c3ec1",
+                "unavailable",
+                None,
+            ),
+            "active_observation": (
+                True,
+                86,
+                "7d080f4a0b4aded43a6b947066b5cbe6c026958ef8920f3265687c2ddcddcdb2",
+                "unavailable",
+                None,
+            ),
+            "primary_observation": (
+                True,
+                76,
+                "b9cf904d71ed3821a6a0dd8571a1b1e91d3b495ad29c0903047ccd8bc6d7190a",
+                "unavailable",
+                None,
+            ),
+        }
+        witness = {
+            "schema_version": 1,
+            "available": False,
+            "representation_invalid": True,
+            "exit_status": 3,
+            "component_order": list(self.classifier.REPLAY_COMPONENT_ORDER),
+            "separator": "NUL",
+            "components": {
+                name: {
+                    "present": values[0],
+                    "byte_count": values[1],
+                    "sha256": values[2],
+                    "replayability": values[3],
+                    "content_base64": values[4],
+                }
+                for name, values in metadata.items()
+            },
+        }
+        document = {
+            "schema_version": 2,
+            "phase": "target-qualification",
+            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "trusted_control_sha": "fbe3ea0b732e46f70202db963e9154e431409e01",
+            "qualification_run_id": "34760025768",
+            "qualification_run_attempt": "1",
+            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
+            "operation": "qualification-harness",
+            "reason": "representation-invalid",
+            "exit_status": 3,
+            "diagnostic_input_sha256": (
+                "e6a7b09efc09d9d2fd312a39dc9da77024cc4dd09389bda72ad8422de935e855"
+            ),
+            "diagnostic_input_bytes": 401,
+            "replay_witness": witness,
+        }
+        self.assertEqual([], list(self.schema_validator.iter_errors(document)))
+        self.assertIsNone(
+            self.verifier.validate_replay_witness(document, self.classifier)
+        )
+        self.assert_rejected(document)
+
     def test_runner_deletes_every_ephemeral_classifier_source(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         for source in (
@@ -181,18 +322,64 @@ class RockyReplayWitnessTests(unittest.TestCase):
             runner.index('rm -f -- "$stdout"'),
         )
 
-    def test_empty_stdout_and_bounded_numeric_trace_replay_exactly(self) -> None:
-        trace = b"SECPAL_TARGET_ERR_V2:3:667\n"
+    def test_bounded_producer_trace_grammar_replays_exactly(self) -> None:
+        traces = (
+            b"SECPAL_TARGET_ERR_V2:3:667\n",
+            (
+                b"SECPAL_TARGET_ERR_V2:3:667,662\n"
+                b"SECPAL_TARGET_ERR_V2:3:637,626,619\n"
+            ),
+            (
+                b"SECPAL_TARGET_ERR_V2:3:667,662\n"
+                b"SECPAL_TARGET_ERR_V2:1:637,626,619\n"
+            ),
+            b"SECPAL_TARGET_ERR_V2:255:1,2,3,4,5,6,7,9999\n",
+        )
+        for trace in traces:
+            with self.subTest(trace=trace):
+                witness = self.witness(
+                    sources=self.sources(target_qualification_trace=(True, trace))
+                )
+                document = self.document(witness)
+                self.assertTrue(witness["available"])
+                replayed = self.verifier.verify_replay_witness(
+                    document, self.classifier
+                )
+                self.assertEqual(b"\0" + trace + b"\0\0\0\0\0", replayed)
+                self.assertEqual(
+                    document["diagnostic_input_sha256"],
+                    hashlib.sha256(replayed).hexdigest(),
+                )
+
+    def test_replay_retention_does_not_relax_trace_classification(self) -> None:
+        trace = (
+            b"SECPAL_TARGET_ERR_V2:3:667,662\n"
+            b"SECPAL_TARGET_ERR_V2:1:637,626,619\n"
+        )
+        before = self.classifier.classify_failure(
+            b"",
+            trace,
+            3,
+            target_bound=True,
+            representation_invalid=False,
+        )
+        self.assertEqual(
+            ("qualification-harness", "representation-invalid"), before
+        )
         witness = self.witness(
             sources=self.sources(target_qualification_trace=(True, trace))
         )
-        document = self.document(witness)
         self.assertTrue(witness["available"])
-        replayed = self.verifier.verify_replay_witness(document, self.classifier)
-        self.assertEqual(b"\0" + trace + b"\0\0\0\0\0", replayed)
-        self.assertEqual(
-            document["diagnostic_input_sha256"], hashlib.sha256(replayed).hexdigest()
+        document = self.document(witness)
+        self.verifier.verify_replay_witness(document, self.classifier)
+        after = self.classifier.classify_failure(
+            b"",
+            trace,
+            3,
+            target_bound=True,
+            representation_invalid=False,
         )
+        self.assertEqual(before, after)
 
     def test_stdout_is_replayable_only_when_complete_bytes_are_finite(self) -> None:
         exact = b"ERROR: SELinux is not Enforcing.\n"
@@ -215,11 +402,19 @@ class RockyReplayWitnessTests(unittest.TestCase):
                     rejected["components"]["qualification_stdout"]["content_base64"]
                 )
 
-    def test_malformed_and_oversized_trace_are_unavailable(self) -> None:
+    def test_malformed_extra_non_ascii_and_oversized_trace_are_unavailable(self) -> None:
         for trace in (
+            b"SECPAL_TARGET_ERR_V2:3:667",
+            b"SECPAL_TARGET_ERR_V2:3:667\r\n",
             b"SECPAL_TARGET_ERR_V1:3:667\n",
-            b"SECPAL_TARGET_ERR_V2:1:667\n",
             b"SECPAL_TARGET_ERR_V2:3:not-a-number\n",
+            b"SECPAL_TARGET_ERR_V2:0:667\n",
+            b"SECPAL_TARGET_ERR_V2:256:667\n",
+            b"SECPAL_TARGET_ERR_V2:3:0\n",
+            b"SECPAL_TARGET_ERR_V2:3:10000\n",
+            b"SECPAL_TARGET_ERR_V2:3:" + b",".join([b"667"] * 9) + b"\n",
+            b"SECPAL_TARGET_ERR_V2:3:667\nextra text\n",
+            b"SECPAL_TARGET_ERR_V2:3:667\n\xff",
             b"SECPAL_TARGET_ERR_V2:3:667\n" * 200,
         ):
             with self.subTest(length=len(trace)):
@@ -247,35 +442,118 @@ class RockyReplayWitnessTests(unittest.TestCase):
                 )
                 self.assertFalse(rejected["available"])
 
-    def test_closed_observation_replays_but_malformed_and_oversized_do_not(self) -> None:
-        observation = self.canonical_json(
-            {
-                "exec_main_code": None,
-                "exec_main_status": None,
-                "runuser_status": 3,
-                "schema_version": 1,
-                "service_result": None,
-                "stage": "systemctl-request-failed",
-                "systemctl_client_status": 3,
-            }
+    def test_noncanonical_closed_failure_observation_is_replayable(self) -> None:
+        facts = {
+            "exec_main_code": None,
+            "exec_main_status": None,
+            "runuser_status": 3,
+            "schema_version": 1,
+            "service_result": None,
+            "stage": "systemctl-request-failed",
+            "systemctl_client_status": 3,
+        }
+        self.assertTrue(
+            self.classifier.admit_quadlet_start_observation(facts, 3)[2][
+                "observation_complete"
+            ]
         )
+        observation = json.dumps(facts, indent=2).encode("ascii")
         witness = self.witness(
             sources=self.sources(start_observation=(True, observation))
         )
         self.assertTrue(witness["available"])
         self.verifier.verify_replay_witness(self.document(witness), self.classifier)
-        malformed = observation.replace(b'"schema_version":1', b'"unknown":"secret"')
-        oversized = observation + b" " * (
-            self.classifier.MAX_START_OBSERVATION_BYTES - len(observation) + 1
+
+    def test_all_closed_success_observations_accept_legal_json_formatting(self) -> None:
+        for name, facts in self.success_observations().items():
+            representations = (
+                self.canonical_json(facts),
+                json.dumps(facts, separators=(",", ":")).encode("ascii"),
+                (json.dumps(facts, indent=2) + "\n").encode("ascii"),
+                ("\t" + json.dumps(dict(reversed(list(facts.items())))) + " \n").encode(
+                    "ascii"
+                ),
+            )
+            for payload in representations:
+                with self.subTest(name=name, payload=payload):
+                    witness = self.witness(
+                        sources=self.sources(**{name: (True, payload)})
+                    )
+                    self.assertTrue(witness["available"])
+                    document = self.document(witness)
+                    replayed = self.verifier.verify_replay_witness(
+                        document, self.classifier
+                    )
+                    component = witness["components"][name]
+                    self.assertEqual(len(payload), component["byte_count"])
+                    self.assertEqual(
+                        hashlib.sha256(payload).hexdigest(), component["sha256"]
+                    )
+                    self.assertIn(payload, replayed)
+
+    def test_observation_schema_semantics_and_bound_remain_closed(self) -> None:
+        for name, facts in self.success_observations().items():
+            invalid_documents = (
+                dict(facts, arbitrary_payload="secret"),
+                dict(facts, stage="caller-selected"),
+                dict(facts, runuser_status=3),
+                dict(facts, runuser_status=False),
+                dict(facts, schema_version=True),
+                dict(facts, stage={"payload": "secret"}),
+            )
+            payloads = [
+                json.dumps(document).encode("ascii")
+                for document in invalid_documents
+            ]
+            payloads.extend(
+                (
+                    b'{"schema_version":1,',
+                    b'{"schema_version":1,"schema_version":1}',
+                    b'{"schema_version":1,"stage":NaN}',
+                    b"[" * 1_001 + b"0" + b"]" * 1_001,
+                    self.canonical_json(facts)
+                    + b" "
+                    * (
+                        self.classifier.REPLAY_EXACT_COMPONENT_BOUNDS[name]
+                        - len(self.canonical_json(facts))
+                        + 1
+                    ),
+                )
+            )
+            for payload in payloads:
+                with self.subTest(name=name, payload=payload[:80]):
+                    rejected = self.witness(
+                        sources=self.sources(**{name: (True, payload)})
+                    )
+                    self.assertFalse(rejected["available"])
+                    self.assertIsNone(
+                        rejected["components"][name]["content_base64"]
+                    )
+
+    def test_changed_json_format_has_its_own_digest_and_cannot_be_substituted(self) -> None:
+        facts = self.success_observations()["active_observation"]
+        compact = self.canonical_json(facts)
+        spaced = (json.dumps(facts, indent=2) + "\n").encode("ascii")
+        self.assertNotEqual(
+            hashlib.sha256(compact).digest(), hashlib.sha256(spaced).digest()
         )
-        for payload in (malformed, oversized):
-            rejected = self.witness(
-                sources=self.sources(start_observation=(True, payload))
+        compact_document = self.document(
+            self.witness(
+                sources=self.sources(active_observation=(True, compact))
             )
-            self.assertFalse(rejected["available"])
-            self.assertIsNone(
-                rejected["components"]["start_observation"]["content_base64"]
+        )
+        spaced_document = self.document(
+            self.witness(
+                sources=self.sources(active_observation=(True, spaced))
             )
+        )
+        self.verifier.verify_replay_witness(compact_document, self.classifier)
+        self.verifier.verify_replay_witness(spaced_document, self.classifier)
+        altered = copy.deepcopy(compact_document)
+        altered["replay_witness"]["components"]["active_observation"][
+            "content_base64"
+        ] = base64.b64encode(spaced).decode("ascii")
+        self.assert_rejected(altered)
 
     def test_partial_witness_and_all_exact_replay_mutations_fail_closed(self) -> None:
         document = self.document(self.witness())
@@ -364,6 +642,15 @@ class RockyReplayWitnessTests(unittest.TestCase):
         self.assertTrue(
             list(self.schema_validator.iter_errors(dict(current, stderr="forbidden")))
         )
+        for forbidden in ("journal", "environment", "provider_output"):
+            with self.subTest(forbidden=forbidden):
+                self.assertTrue(
+                    list(
+                        self.schema_validator.iter_errors(
+                            dict(current, **{forbidden: "forbidden"})
+                        )
+                    )
+                )
         no_witness = dict(current)
         no_witness.pop("replay_witness")
         self.assertTrue(list(self.schema_validator.iter_errors(no_witness)))
