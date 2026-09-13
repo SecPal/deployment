@@ -530,6 +530,32 @@ class RockyReplayWitnessTests(unittest.TestCase):
                         rejected["components"][name]["content_base64"]
                     )
 
+    def test_unhashable_start_service_result_is_unavailable(self) -> None:
+        for service_result in ([], {}):
+            with self.subTest(service_result=service_result):
+                observation = self.canonical_json(
+                    {
+                        "exec_main_code": None,
+                        "exec_main_status": None,
+                        "runuser_status": 3,
+                        "schema_version": 1,
+                        "service_result": service_result,
+                        "stage": "systemctl-request-failed",
+                        "systemctl_client_status": 3,
+                    }
+                )
+                witness = self.witness(
+                    sources=self.sources(start_observation=(True, observation))
+                )
+                self.assertFalse(witness["available"])
+                self.assertEqual(
+                    "unavailable",
+                    witness["components"]["start_observation"]["replayability"],
+                )
+                self.assertIsNone(
+                    witness["components"]["start_observation"]["content_base64"]
+                )
+
     def test_changed_json_format_has_its_own_digest_and_cannot_be_substituted(self) -> None:
         facts = self.success_observations()["active_observation"]
         compact = self.canonical_json(facts)

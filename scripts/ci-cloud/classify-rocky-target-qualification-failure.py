@@ -1894,6 +1894,10 @@ def replay_start_observation_admitted(document: object) -> bool:
         or type(document.get("schema_version")) is not int
         or document.get("schema_version") != 1
         or not isinstance(document.get("stage"), str)
+        or (
+            document.get("service_result") is not None
+            and not isinstance(document.get("service_result"), str)
+        )
     ):
         return False
     if document == {
