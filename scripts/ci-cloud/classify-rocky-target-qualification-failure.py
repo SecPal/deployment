@@ -621,13 +621,30 @@ def operation_for_line(line: int, line_rules: tuple[tuple[int, int, str], ...] =
     return None
 
 
-def trace_operations(trace_text: str, exit_status: int, line_rules: tuple[tuple[int, int, str], ...] = LINE_RULES) -> tuple[set[str], bool]:
+def trace_operations(
+    trace_text: str,
+    exit_status: int,
+    line_rules: tuple[tuple[int, int, str], ...] = LINE_RULES,
+) -> tuple[set[str], bool]:
     operations: set[str] = set()
     if not trace_text:
         return operations, True
+    if type(exit_status) is not int or not 1 <= exit_status <= 255:
+        return set(), False
+    # ERR owns the status of its inner command; the caller owns the target's
+    # eventual status. Repeated trap propagation is coherent only while every
+    # retained record agrees on the inner status.
+    trace_status: int | None = None
     for raw_line in trace_text.splitlines():
         match = TRACE_PATTERN.fullmatch(raw_line)
-        if match is None or int(match.group(1)) != exit_status:
+        if match is None:
+            return set(), False
+        status = int(match.group(1))
+        if not 1 <= status <= 255:
+            return set(), False
+        if trace_status is None:
+            trace_status = status
+        elif status != trace_status:
             return set(), False
         frames = match.group(2).split(",")
         if not 1 <= len(frames) <= MAX_TRACE_FRAMES:

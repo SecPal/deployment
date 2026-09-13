@@ -3413,9 +3413,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
         malformed = (
             "SECPAL_TARGET_ERR_V1:183:1",
             "SECPAL_TARGET_ERR_V2:0:183",
-            "SECPAL_TARGET_ERR_V2:2:183",
+            "SECPAL_TARGET_ERR_V2:256:183",
             "SECPAL_TARGET_ERR_V2:1:183,command",
             "SECPAL_TARGET_ERR_V2:1:" + ",".join(["183"] * 9),
+            "SECPAL_TARGET_ERR_V2:1:183\nSECPAL_TARGET_ERR_V2:2:187",
         )
         for trace in malformed:
             with self.subTest(trace=trace):

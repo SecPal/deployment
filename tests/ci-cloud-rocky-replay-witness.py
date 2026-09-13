@@ -27,6 +27,9 @@ VERIFIER = ROOT / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
 SCHEMA = ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
 RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
 HARNESS = ROOT / "scripts/qualify-production-host.sh"
+CURRENT_NATIVE_REPLAY = (
+    ROOT / "tests/fixtures/rocky-target-qualification-replay-34767598359.json"
+)
 LEGACY_CONTROL = "f7a298d19bf4a0957d6b3db383a1f1bb2eeb309e"
 CURRENT_CONTROL = "c" * 40
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -305,6 +308,151 @@ class RockyReplayWitnessTests(unittest.TestCase):
         )
         self.assert_rejected(document)
 
+    def test_current_native_witness_has_valid_nested_trace_semantics(self) -> None:
+        fixture_bytes = CURRENT_NATIVE_REPLAY.read_bytes()
+        self.assertEqual(
+            "f67bb1f4e431dd08d917895d4976cf724872adfd717240b4041231af34ef4042",
+            hashlib.sha256(fixture_bytes).hexdigest(),
+        )
+        document = json.loads(fixture_bytes)
+        self.assertEqual([], list(self.schema_validator.iter_errors(document)))
+        self.assertEqual(401, document["diagnostic_input_bytes"])
+        self.assertEqual(
+            "e6a7b09efc09d9d2fd312a39dc9da77024cc4dd09389bda72ad8422de935e855",
+            document["diagnostic_input_sha256"],
+        )
+
+        witness = document["replay_witness"]
+        self.assertTrue(witness["available"])
+        self.assertFalse(witness["representation_invalid"])
+        self.assertEqual(
+            list(self.classifier.REPLAY_COMPONENT_ORDER), witness["component_order"]
+        )
+        decoded = {}
+        component_bytes = 0
+        for name in self.classifier.REPLAY_COMPONENT_ORDER:
+            component = witness["components"][name]
+            self.assertEqual("exact", component["replayability"])
+            encoded = component["content_base64"]
+            payload = b"" if encoded is None else base64.b64decode(encoded)
+            decoded[name] = payload
+            component_bytes += len(payload)
+            self.assertEqual(component["byte_count"], len(payload))
+            self.assertEqual(component["sha256"], hashlib.sha256(payload).hexdigest())
+            if component["present"]:
+                self.verifier.validate_component_payload(
+                    name,
+                    payload,
+                    document,
+                    self.classifier,
+                    decoded["qualification_stdout"],
+                )
+
+        replayed = b"\0".join(
+            decoded[name] for name in self.classifier.REPLAY_COMPONENT_ORDER
+        )
+        self.assertEqual(401, component_bytes)
+        self.assertEqual(407, len(replayed))
+        self.assertEqual(
+            document["diagnostic_input_sha256"], hashlib.sha256(replayed).hexdigest()
+        )
+        traced_operations, trace_valid = self.classifier.trace_operations(
+            decoded["target_qualification_trace"].decode("ascii"),
+            document["exit_status"],
+        )
+        self.assertTrue(trace_valid)
+        self.assertEqual({"qualify-avc-correlation"}, traced_operations)
+        self.assertEqual(
+            ("qualify-avc-correlation", "command-failed"),
+            self.classifier.classify_failure(
+                decoded["qualification_stdout"],
+                decoded["target_qualification_trace"],
+                document["exit_status"],
+                target_bound=True,
+                trusted_marker=None,
+                representation_invalid=witness["representation_invalid"],
+            ),
+        )
+
+    def test_current_native_witness_traverses_classifier_and_control(self) -> None:
+        source = json.loads(CURRENT_NATIVE_REPLAY.read_bytes())
+        witness = source["replay_witness"]
+        components = witness["components"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {}
+            for name in self.classifier.REPLAY_COMPONENT_ORDER:
+                component = components[name]
+                if not component["present"]:
+                    continue
+                path = root / name
+                path.write_bytes(base64.b64decode(component["content_base64"]))
+                paths[name] = path
+            output = root / "classified.json"
+            completed = subprocess.run(
+                [
+                    CLASSIFIER,
+                    "--target-sha",
+                    source["target_sha"],
+                    "--control-sha",
+                    source["trusted_control_sha"],
+                    "--run-id",
+                    source["qualification_run_id"],
+                    "--run-attempt",
+                    source["qualification_run_attempt"],
+                    "--harness",
+                    HARNESS,
+                    "--stdout",
+                    paths["qualification_stdout"],
+                    "--trace",
+                    paths["target_qualification_trace"],
+                    "--start-observation",
+                    paths["start_observation"],
+                    "--active-observation",
+                    paths["active_observation"],
+                    "--primary-observation",
+                    paths["primary_observation"],
+                    "--exit-status",
+                    str(source["exit_status"]),
+                    "--output",
+                    output,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            classified = json.loads(output.read_bytes())
+            self.assertEqual(
+                ("qualify-avc-correlation", "command-failed"),
+                (classified["operation"], classified["reason"]),
+            )
+            self.assertEqual(1, classified["schema_version"])
+            self.assertNotIn("replay_witness", classified)
+            self.assertEqual(85, classified["diagnostic_input_bytes"])
+            causative_replay = b"\0".join(
+                (
+                    paths["qualification_stdout"].read_bytes(),
+                    paths["target_qualification_trace"].read_bytes(),
+                    b"",
+                    b"",
+                    b"",
+                    b"",
+                    b"",
+                )
+            )
+            self.assertEqual(
+                hashlib.sha256(causative_replay).hexdigest(),
+                classified["diagnostic_input_sha256"],
+            )
+            self.control.validate_target_qualification_failure(
+                output,
+                source["target_sha"],
+                source["trusted_control_sha"],
+                source["qualification_run_id"],
+                source["qualification_run_attempt"],
+            )
+
     def test_runner_deletes_every_ephemeral_classifier_source(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         for source in (
@@ -351,12 +499,12 @@ class RockyReplayWitnessTests(unittest.TestCase):
                     hashlib.sha256(replayed).hexdigest(),
                 )
 
-    def test_replay_retention_does_not_relax_trace_classification(self) -> None:
+    def test_conflicting_trace_statuses_remain_invalid_after_replay(self) -> None:
         trace = (
             b"SECPAL_TARGET_ERR_V2:3:667,662\n"
             b"SECPAL_TARGET_ERR_V2:1:637,626,619\n"
         )
-        before = self.classifier.classify_failure(
+        classification = self.classifier.classify_failure(
             b"",
             trace,
             3,
@@ -364,7 +512,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
             representation_invalid=False,
         )
         self.assertEqual(
-            ("qualification-harness", "representation-invalid"), before
+            ("qualification-harness", "representation-invalid"), classification
         )
         witness = self.witness(
             sources=self.sources(target_qualification_trace=(True, trace))
@@ -372,14 +520,14 @@ class RockyReplayWitnessTests(unittest.TestCase):
         self.assertTrue(witness["available"])
         document = self.document(witness)
         self.verifier.verify_replay_witness(document, self.classifier)
-        after = self.classifier.classify_failure(
+        after_replay = self.classifier.classify_failure(
             b"",
             trace,
             3,
             target_bound=True,
             representation_invalid=False,
         )
-        self.assertEqual(before, after)
+        self.assertEqual(classification, after_replay)
 
     def test_stdout_is_replayable_only_when_complete_bytes_are_finite(self) -> None:
         exact = b"ERROR: SELinux is not Enforcing.\n"
