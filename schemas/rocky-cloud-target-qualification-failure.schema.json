@@ -112,7 +112,7 @@
     "diagnostic_input_bytes": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 139520
+      "maximum": 145670
     },
     "replay_witness": {
       "type": "object",
@@ -789,7 +789,7 @@
       ],
       "properties": {
         "present": { "type": "boolean" },
-        "byte_count": { "type": "integer", "minimum": 0, "maximum": 65536 },
+        "byte_count": { "type": "integer", "minimum": 0, "maximum": 65537 },
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "replayability": { "enum": ["exact", "unavailable"] },
         "content_base64": { "type": ["string", "null"], "maxLength": 87384 }

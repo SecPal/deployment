@@ -22,6 +22,7 @@ HISTORICAL_202_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836c
 HISTORICAL_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
 HISTORICAL_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
 MAX_STDOUT_BYTES = 65_536
+MAX_STDOUT_CAPTURE_BYTES = MAX_STDOUT_BYTES + 1
 MAX_TRACE_BYTES = 4_096
 MAX_ARTIFACT_BYTES = 16_384
 MAX_CAPTURE_FILE_BYTES = 65_536
@@ -42,8 +43,17 @@ REPLAY_COMPONENT_ORDER = (
     "primary_observation",
 )
 REPLAY_COMPONENT_BOUNDS = {
-    "qualification_stdout": MAX_STDOUT_BYTES,
+    "qualification_stdout": MAX_STDOUT_CAPTURE_BYTES,
     "target_qualification_trace": MAX_CAPTURE_FILE_BYTES,
+    "trusted_marker": 257,
+    "reload_adjacency": MAX_ADJACENCY_BYTES + 1,
+    "start_observation": MAX_START_OBSERVATION_BYTES + 1,
+    "active_observation": MAX_ACTIVE_OBSERVATION_BYTES + 1,
+    "primary_observation": MAX_PRIMARY_OBSERVATION_BYTES + 1,
+}
+REPLAY_EXACT_COMPONENT_BOUNDS = {
+    "qualification_stdout": MAX_STDOUT_BYTES,
+    "target_qualification_trace": MAX_TRACE_BYTES,
     "trusted_marker": 256,
     "reload_adjacency": MAX_ADJACENCY_BYTES,
     "start_observation": MAX_START_OBSERVATION_BYTES,
@@ -1804,13 +1814,19 @@ def bounded_bytes(path: Path, maximum: int) -> bytes:
     return payload
 
 
+def optional_bounded_bytes(path: Path | None, maximum: int) -> tuple[bool, bytes]:
+    if path is None or not path.exists():
+        return False, b""
+    return True, bounded_bytes(path, maximum)
+
+
 def canonical_json_bytes(document: object) -> bytes:
     return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode(
         "ascii"
     )
 
 
-def replay_trace_admitted(payload: bytes) -> bool:
+def replay_trace_admitted(payload: bytes, exit_status: int) -> bool:
     if len(payload) > MAX_TRACE_BYTES:
         return False
     try:
@@ -1819,7 +1835,7 @@ def replay_trace_admitted(payload: bytes) -> bool:
         return False
     for line in lines:
         match = TRACE_PATTERN.fullmatch(line)
-        if match is None:
+        if match is None or int(match.group(1)) != exit_status:
             return False
         frames = match.group(2).split(",")
         if not 1 <= len(frames) <= MAX_TRACE_FRAMES:
@@ -1896,12 +1912,12 @@ def replay_component_admitted(
     bindings: dict[str, str],
     stdout: bytes,
 ) -> bool:
-    if len(payload) > REPLAY_COMPONENT_BOUNDS[name]:
+    if len(payload) > REPLAY_EXACT_COMPONENT_BOUNDS[name]:
         return False
     if name == "qualification_stdout":
         return not payload or payload in REPLAYABLE_STDOUT_RECORDS
     if name == "target_qualification_trace":
-        return replay_trace_admitted(payload)
+        return replay_trace_admitted(payload, exit_status)
     if name == "trusted_marker":
         return replay_marker_admitted(payload)
     return replay_observation_admitted(
@@ -2016,16 +2032,28 @@ def main() -> int:
     ):
         raise SystemExit("target harness status is outside the closed range")
 
-    stdout = bounded_bytes(options.stdout, MAX_STDOUT_BYTES)
+    stdout = bounded_bytes(
+        options.stdout,
+        MAX_STDOUT_CAPTURE_BYTES
+        if options.representation_invalid
+        else MAX_STDOUT_BYTES,
+    )
     trace = bounded_bytes(options.trace, MAX_CAPTURE_FILE_BYTES)
     harness = bounded_bytes(options.harness, 128 * 1024)
     harness_sha256 = hashlib.sha256(harness).hexdigest()
     target_bound = options.target_sha == EXPECTED_TARGET_SHA and harness_sha256 == EXPECTED_HARNESS_SHA256
+    marker_present = False
     marker = None
     marker_bytes = b""
     if options.trusted_marker is not None and options.trusted_marker.exists():
-        marker_bytes = bounded_bytes(options.trusted_marker, 256)
-        marker = marker_bytes.decode("ascii")
+        marker_present, marker_bytes = optional_bounded_bytes(
+            options.trusted_marker,
+            REPLAY_COMPONENT_BOUNDS["trusted_marker"]
+            if options.representation_invalid
+            else 256,
+        )
+        if not options.representation_invalid:
+            marker = marker_bytes.decode("ascii")
     operation, reason = classify_failure(
         stdout,
         trace,
@@ -2035,19 +2063,23 @@ def main() -> int:
         representation_invalid=options.representation_invalid,
         line_rules=LINE_RULES,
     )
+    adjacency_present = False
     adjacency_bytes = b""
     adjacency: dict[str, object] | None = None
+    start_present = False
     start_bytes = b""
     start_diagnostic: dict[str, object] | None = None
+    active_present = False
     active_bytes = b""
     active_diagnostic: dict[str, object] | None = None
+    primary_present = False
     primary_bytes = b""
     primary_diagnostic: dict[str, object] | None = None
     if operation == "qualify-quadlet-start" and reason == "command-failed":
         raw_start: object = None
         if options.start_observation is not None and options.start_observation.exists():
             try:
-                start_bytes = bounded_bytes(
+                start_present, start_bytes = optional_bounded_bytes(
                     options.start_observation, MAX_START_OBSERVATION_BYTES
                 )
                 raw_start = json.loads(start_bytes)
@@ -2060,7 +2092,7 @@ def main() -> int:
         raw_active: object = None
         if options.active_observation is not None and options.active_observation.exists():
             try:
-                active_bytes = bounded_bytes(
+                active_present, active_bytes = optional_bounded_bytes(
                     options.active_observation, MAX_ACTIVE_OBSERVATION_BYTES
                 )
                 raw_active = json.loads(active_bytes)
@@ -2076,7 +2108,7 @@ def main() -> int:
             and options.primary_observation.exists()
         ):
             try:
-                primary_bytes = bounded_bytes(
+                primary_present, primary_bytes = optional_bounded_bytes(
                     options.primary_observation, MAX_PRIMARY_OBSERVATION_BYTES
                 )
                 raw_primary = json.loads(primary_bytes)
@@ -2089,7 +2121,7 @@ def main() -> int:
         raw_adjacency: object = None
         if options.reload_adjacency is not None and options.reload_adjacency.exists():
             try:
-                adjacency_bytes = bounded_bytes(
+                adjacency_present, adjacency_bytes = optional_bounded_bytes(
                     options.reload_adjacency, MAX_ADJACENCY_BYTES
                 )
                 raw_adjacency = json.loads(adjacency_bytes)
@@ -2111,6 +2143,22 @@ def main() -> int:
         and (operation, reason) == ("qualification-harness", "representation-invalid")
         and options.control_sha != LEGACY_REPLAY_OPTIONAL_CONTROL_SHA
     )
+    if replay_required:
+        marker_present, marker_bytes = optional_bounded_bytes(
+            options.trusted_marker, REPLAY_COMPONENT_BOUNDS["trusted_marker"]
+        )
+        adjacency_present, adjacency_bytes = optional_bounded_bytes(
+            options.reload_adjacency, REPLAY_COMPONENT_BOUNDS["reload_adjacency"]
+        )
+        start_present, start_bytes = optional_bounded_bytes(
+            options.start_observation, REPLAY_COMPONENT_BOUNDS["start_observation"]
+        )
+        active_present, active_bytes = optional_bounded_bytes(
+            options.active_observation, REPLAY_COMPONENT_BOUNDS["active_observation"]
+        )
+        primary_present, primary_bytes = optional_bounded_bytes(
+            options.primary_observation, REPLAY_COMPONENT_BOUNDS["primary_observation"]
+        )
     document: dict[str, object] = {
         "schema_version": 2 if replay_required else 1,
         "phase": "target-qualification",
@@ -2166,11 +2214,11 @@ def main() -> int:
             {
                 "qualification_stdout": (True, stdout),
                 "target_qualification_trace": (True, trace),
-                "trusted_marker": (bool(marker_bytes), marker_bytes),
-                "reload_adjacency": (bool(adjacency_bytes), adjacency_bytes),
-                "start_observation": (bool(start_bytes), start_bytes),
-                "active_observation": (bool(active_bytes), active_bytes),
-                "primary_observation": (bool(primary_bytes), primary_bytes),
+                "trusted_marker": (marker_present, marker_bytes),
+                "reload_adjacency": (adjacency_present, adjacency_bytes),
+                "start_observation": (start_present, start_bytes),
+                "active_observation": (active_present, active_bytes),
+                "primary_observation": (primary_present, primary_bytes),
             },
             exit_status=options.exit_status,
             representation_invalid=options.representation_invalid,

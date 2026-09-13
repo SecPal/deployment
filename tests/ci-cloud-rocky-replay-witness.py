@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -181,7 +182,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
         )
 
     def test_empty_stdout_and_bounded_numeric_trace_replay_exactly(self) -> None:
-        trace = b"SECPAL_TARGET_ERR_V2:1:667\n"
+        trace = b"SECPAL_TARGET_ERR_V2:3:667\n"
         witness = self.witness(
             sources=self.sources(target_qualification_trace=(True, trace))
         )
@@ -217,6 +218,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
     def test_malformed_and_oversized_trace_are_unavailable(self) -> None:
         for trace in (
             b"SECPAL_TARGET_ERR_V1:3:667\n",
+            b"SECPAL_TARGET_ERR_V2:1:667\n",
             b"SECPAL_TARGET_ERR_V2:3:not-a-number\n",
             b"SECPAL_TARGET_ERR_V2:3:667\n" * 200,
         ):
@@ -263,7 +265,9 @@ class RockyReplayWitnessTests(unittest.TestCase):
         self.assertTrue(witness["available"])
         self.verifier.verify_replay_witness(self.document(witness), self.classifier)
         malformed = observation.replace(b'"schema_version":1', b'"unknown":"secret"')
-        oversized = observation + b" " * self.classifier.MAX_START_OBSERVATION_BYTES
+        oversized = observation + b" " * (
+            self.classifier.MAX_START_OBSERVATION_BYTES - len(observation) + 1
+        )
         for payload in (malformed, oversized):
             rejected = self.witness(
                 sources=self.sources(start_observation=(True, payload))
@@ -345,6 +349,16 @@ class RockyReplayWitnessTests(unittest.TestCase):
                 self.assert_rejected(mutation)
 
     def test_schema_preserves_history_and_requires_closed_v2_witness(self) -> None:
+        self.assertEqual(
+            sum(self.classifier.REPLAY_COMPONENT_BOUNDS.values()),
+            self.schema["properties"]["diagnostic_input_bytes"]["maximum"],
+        )
+        self.assertEqual(
+            max(self.classifier.REPLAY_COMPONENT_BOUNDS.values()),
+            self.schema["$defs"]["replayComponent"]["properties"]["byte_count"][
+                "maximum"
+            ],
+        )
         current = self.document(self.witness())
         self.assertEqual([], list(self.schema_validator.iter_errors(current)))
         self.assertTrue(
@@ -382,7 +396,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
             stdout = root / "stdout"
             trace = root / "trace"
             stdout.write_bytes(b"")
-            trace.write_bytes(b"SECPAL_TARGET_ERR_V2:1:667\n")
+            trace.write_bytes(b"SECPAL_TARGET_ERR_V2:3:667\n")
             for control, expected_version in (
                 (CURRENT_CONTROL, 2),
                 (LEGACY_CONTROL, 1),
@@ -407,6 +421,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
                         trace,
                         "--exit-status",
                         "3",
+                        "--representation-invalid",
                         "--output",
                         output,
                     ],
@@ -420,6 +435,188 @@ class RockyReplayWitnessTests(unittest.TestCase):
                 self.assertEqual(expected_version == 2, "replay_witness" in document)
                 if expected_version == 2:
                     self.verifier.verify_replay_witness(document, self.classifier)
+
+    def test_representation_failure_reads_existing_observation_sources(self) -> None:
+        observation = self.canonical_json(
+            {
+                "exec_main_code": None,
+                "exec_main_status": None,
+                "runuser_status": 3,
+                "schema_version": 1,
+                "service_result": None,
+                "stage": "systemctl-request-failed",
+                "systemctl_client_status": 3,
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdout = root / "stdout"
+            trace = root / "trace"
+            start = root / "start.json"
+            output = root / "failure.json"
+            stdout.write_bytes(b"")
+            trace.write_bytes(b"SECPAL_TARGET_ERR_V2:3:667\n")
+            start.write_bytes(observation)
+            completed = subprocess.run(
+                [
+                    CLASSIFIER,
+                    "--target-sha",
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "--control-sha",
+                    CURRENT_CONTROL,
+                    "--run-id",
+                    "12345",
+                    "--run-attempt",
+                    "1",
+                    "--harness",
+                    HARNESS,
+                    "--stdout",
+                    stdout,
+                    "--trace",
+                    trace,
+                    "--start-observation",
+                    start,
+                    "--exit-status",
+                    "3",
+                    "--representation-invalid",
+                    "--output",
+                    output,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            document = json.loads(output.read_text(encoding="utf-8"))
+            component = document["replay_witness"]["components"]["start_observation"]
+            self.assertTrue(component["present"])
+            self.assertEqual(len(observation), component["byte_count"])
+            self.assertEqual(
+                hashlib.sha256(observation).hexdigest(), component["sha256"]
+            )
+            self.assertEqual(
+                base64.b64encode(observation).decode("ascii"),
+                component["content_base64"],
+            )
+            self.verifier.verify_replay_witness(document, self.classifier)
+
+    def test_present_empty_observations_make_witness_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdout = root / "stdout"
+            trace = root / "trace"
+            output = root / "failure.json"
+            observations = [root / name for name in ("start", "active", "primary")]
+            stdout.write_bytes(b"")
+            trace.write_bytes(b"SECPAL_TARGET_ERR_V2:3:667\n")
+            for observation in observations:
+                observation.write_bytes(b"")
+            completed = subprocess.run(
+                [
+                    CLASSIFIER,
+                    "--target-sha",
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "--control-sha",
+                    CURRENT_CONTROL,
+                    "--run-id",
+                    "12345",
+                    "--run-attempt",
+                    "1",
+                    "--harness",
+                    HARNESS,
+                    "--stdout",
+                    stdout,
+                    "--trace",
+                    trace,
+                    "--start-observation",
+                    observations[0],
+                    "--active-observation",
+                    observations[1],
+                    "--primary-observation",
+                    observations[2],
+                    "--exit-status",
+                    "3",
+                    "--representation-invalid",
+                    "--output",
+                    output,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            witness = json.loads(output.read_text(encoding="utf-8"))["replay_witness"]
+            self.assertFalse(witness["available"])
+            for name in ("start_observation", "active_observation", "primary_observation"):
+                component = witness["components"][name]
+                self.assertTrue(component["present"])
+                self.assertEqual("unavailable", component["replayability"])
+                self.assertIsNone(component["content_base64"])
+
+    def test_stdout_overflow_sentinel_emits_unavailable_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdout = root / "stdout"
+            trace = root / "trace"
+            output = root / "failure.json"
+            overflow = b"x" * (self.classifier.MAX_STDOUT_BYTES + 1)
+            stdout.write_bytes(overflow)
+            trace.write_bytes(b"SECPAL_TARGET_ERR_V2:3:667\n")
+            completed = subprocess.run(
+                [
+                    CLASSIFIER,
+                    "--target-sha",
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "--control-sha",
+                    CURRENT_CONTROL,
+                    "--run-id",
+                    "12345",
+                    "--run-attempt",
+                    "1",
+                    "--harness",
+                    HARNESS,
+                    "--stdout",
+                    stdout,
+                    "--trace",
+                    trace,
+                    "--exit-status",
+                    "3",
+                    "--representation-invalid",
+                    "--output",
+                    output,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            encoded = output.read_bytes()
+            document = json.loads(encoded)
+            component = document["replay_witness"]["components"][
+                "qualification_stdout"
+            ]
+            self.assertFalse(document["replay_witness"]["available"])
+            self.assertEqual(len(overflow), component["byte_count"])
+            self.assertEqual(hashlib.sha256(overflow).hexdigest(), component["sha256"])
+            self.assertEqual("unavailable", component["replayability"])
+            self.assertIsNone(component["content_base64"])
+            self.assertNotIn(overflow, encoded)
+
+    def test_verifier_cli_loads_extensionless_installed_classifier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            classifier = root / "secpal-classify-rocky-target-failure"
+            shutil.copyfile(CLASSIFIER, classifier)
+            classifier.chmod(0o755)
+            failure = root / "failure.json"
+            failure.write_bytes(self.canonical_json(self.document(self.witness())))
+            completed = subprocess.run(
+                [VERIFIER, failure, "--classifier", classifier],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
 
     def test_unavailable_witness_retains_no_arbitrary_raw_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

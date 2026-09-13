@@ -3497,7 +3497,7 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             dict(document, operation="arbitrary-command"),
             dict(document, reason="some-error-text"),
             dict(document, qualification_run_id="0"),
-            dict(document, diagnostic_input_bytes=139_521),
+            dict(document, diagnostic_input_bytes=145_671),
         ):
             self.assertTrue(list(validator.iter_errors(mutation)))
         historical_semanage_document = dict(

@@ -11,6 +11,7 @@ import binascii
 import hashlib
 import importlib.util
 import json
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from typing import Any
 
@@ -74,14 +75,14 @@ def exact_json(payload: bytes) -> object:
     return document
 
 
-def validate_trace(payload: bytes, classifier: Any) -> None:
+def validate_trace(payload: bytes, classifier: Any, exit_status: int) -> None:
     try:
         lines = payload.decode("ascii").splitlines()
     except UnicodeDecodeError as error:
         raise ValueError("replay trace is not ASCII") from error
     for line in lines:
         match = classifier.TRACE_PATTERN.fullmatch(line)
-        if match is None:
+        if match is None or int(match.group(1)) != exit_status:
             raise ValueError("replay trace is outside the closed grammar")
         frames = match.group(2).split(",")
         if not 1 <= len(frames) <= classifier.MAX_TRACE_FRAMES:
@@ -158,18 +159,16 @@ def validate_component_payload(
     classifier: Any,
     stdout: bytes,
 ) -> None:
-    replay_limit = (
-        classifier.MAX_TRACE_BYTES
-        if name == "target_qualification_trace"
-        else classifier.REPLAY_COMPONENT_BOUNDS[name]
-    )
+    replay_limit = classifier.REPLAY_EXACT_COMPONENT_BOUNDS[name]
     if len(payload) > replay_limit:
         raise ValueError(f"replay {name} exceeds its closed bound")
     if name == "qualification_stdout":
         if payload and payload not in classifier.REPLAYABLE_STDOUT_RECORDS:
             raise ValueError("replay stdout is outside the finite reviewed set")
     elif name == "target_qualification_trace":
-        validate_trace(payload, classifier)
+        exit_status = document["exit_status"]
+        assert type(exit_status) is int
+        validate_trace(payload, classifier, exit_status)
     elif name == "trusted_marker":
         validate_marker(payload, classifier)
     else:
@@ -310,8 +309,9 @@ def verify_replay_witness(document: object, classifier: Any) -> bytes:
 
 
 def load_classifier(path: Path) -> Any:
-    specification = importlib.util.spec_from_file_location(
-        "rocky_target_qualification_failure", path
+    loader = SourceFileLoader("rocky_target_qualification_failure", str(path))
+    specification = importlib.util.spec_from_loader(
+        "rocky_target_qualification_failure", loader
     )
     if specification is None or specification.loader is None:
         raise ValueError("classifier cannot be loaded")
