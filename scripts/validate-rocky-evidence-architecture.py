@@ -43,8 +43,12 @@ DEFAULT_TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace
 DEFAULT_RELOAD_OBSERVER = (
     ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
 )
-EXPECTED_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
+EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
 EXPECTED_HARNESS_SHA256 = (
+    "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+)
+HISTORICAL_PRE_265_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
+HISTORICAL_PRE_265_HARNESS_SHA256 = (
     "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
 )
 HISTORICAL_CLEANUP_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
@@ -648,6 +652,10 @@ def validate_selinux_isolation_architecture(
         raise ArchitectureError("SELinux isolation layered surface is incomplete")
     try:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema_target = schema["properties"]["target_sha"]["const"]
+        native_target = schema["properties"]["native_observation"]["properties"][
+            "target_sha"
+        ]["const"]
         schema_owner = schema["$defs"]["selinux_isolation"]["properties"][
             "invariant_owner"
         ]["const"]
@@ -656,7 +664,12 @@ def validate_selinux_isolation_architecture(
         ]["items"]["maximum"]
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise ArchitectureError("SELinux isolation schema projection is invalid") from error
-    if schema_owner != owner or maximum != 1023:
+    if (
+        schema_target != EXPECTED_TARGET_SHA
+        or native_target != EXPECTED_TARGET_SHA
+        or schema_owner != owner
+        or maximum != 1023
+    ):
         raise ArchitectureError("SELinux isolation schema projection disagrees")
     for path in (harness_path, runner_path, control_path):
         try:
@@ -739,6 +752,10 @@ def validate_target_qualification_binding(
         assignment_string(classifier_tree, "EXPECTED_TARGET_SHA") != expected_target
         or assignment_string(classifier_tree, "EXPECTED_HARNESS_SHA256")
         != expected_harness
+        or assignment_string(classifier_tree, "HISTORICAL_PRE_265_TARGET_SHA")
+        != HISTORICAL_PRE_265_TARGET_SHA
+        or assignment_string(classifier_tree, "HISTORICAL_PRE_265_HARNESS_SHA256")
+        != HISTORICAL_PRE_265_HARNESS_SHA256
     ):
         raise ArchitectureError("diagnostic classifier target/harness binding disagrees")
 
@@ -804,6 +821,10 @@ def validate_target_qualification_binding(
     if (
         schema_const_pairs(failure_schema).count(
             (expected_target, expected_harness)
+        )
+        != 4
+        or schema_const_pairs(failure_schema).count(
+            (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256)
         )
         != 4
     ):

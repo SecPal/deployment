@@ -1979,8 +1979,12 @@ def validate_gcp_iam_role(root: Path) -> None:
 
 
 def validate_rocky_control_plane(root: Path) -> None:
-    expected_target_sha = "539d5faa6549be62060c8e20028caf200e5eca01"
+    expected_target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
     expected_harness_sha256 = (
+        "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+    )
+    historical_265_target_sha = "539d5faa6549be62060c8e20028caf200e5eca01"
+    historical_pre_265_harness_sha256 = (
         "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
     )
     expected_target_line_rules = (
@@ -2219,6 +2223,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_classifier
         and f'EXPECTED_HARNESS_SHA256 = "{expected_harness_sha256}"'
         in target_failure_classifier
+        and f'HISTORICAL_PRE_265_TARGET_SHA = "{historical_265_target_sha}"'
+        in target_failure_classifier
+        and f'HISTORICAL_PRE_265_HARNESS_SHA256 = "{historical_pre_265_harness_sha256}"'
+        in target_failure_classifier
         and f"readonly expected_target_sha={expected_target_sha}" in target_runner
         and f"readonly expected_harness_sha256={expected_harness_sha256}"
         in target_runner
@@ -2232,7 +2240,17 @@ def validate_rocky_control_plane(root: Path) -> None:
         and schema_const_pairs(target_failure_schema).count(
             (expected_target_sha, expected_harness_sha256)
         )
-        == 4,
+        == 4
+        and schema_const_pairs(target_failure_schema).count(
+            (historical_265_target_sha, historical_pre_265_harness_sha256)
+        )
+        == 4
+        and qualification_schema["properties"]["target_sha"]
+        == {"const": expected_target_sha}
+        and qualification_schema["properties"]["native_observation"]["properties"][
+            "target_sha"
+        ]
+        == {"const": expected_target_sha},
         "active target, harness, classifier, and schema bindings disagree",
     )
     for forbidden in (
@@ -2662,7 +2680,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"539d5faa6549be62060c8e20028caf200e5eca01\""
+        "EXPECTED_TARGET_SHA = \"b76c24fe59fbe2406d8b84094fc9e6694c57f0c6\""
         in target_failure_classifier
         and "EXPECTED_HARNESS_SHA256 = \"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c\""
         in target_failure_classifier
