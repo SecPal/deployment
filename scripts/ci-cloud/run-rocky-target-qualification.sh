@@ -624,7 +624,7 @@ if isolation_digest != facts["selinux_isolation_sha256"]:
         "target and trusted SELinux isolation normalization disagree",
     )
 if (
-    selinux_isolation["denial"]["avc_pid"] != denial_pid
+    selinux_isolation["denial"]["pid"] != denial_pid
     or selinux_isolation["denial"]["syscall_pid"] != denial_pid
 ):
     reject(

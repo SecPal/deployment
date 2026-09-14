@@ -113,7 +113,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
 
     def test_unique_enforcing_avc_correlation(self) -> None:
         accepted = admitted_isolation()
-        self.assertEqual(PID, accepted["denial"]["avc_pid"])
+        self.assertEqual(PID, accepted["denial"]["pid"])
         self.assertEqual("41", accepted["denial"]["serial"])
         self.assertEqual("cat /foreign/marker", accepted["denial"]["proctitle"])
         self.assertEqual(PID, accepted["denial"]["syscall_pid"])
@@ -177,7 +177,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
 
         accepted = admitted_isolation(audit_text=retained_projection_shape)
 
-        self.assertEqual(PID, accepted["denial"]["avc_pid"])
+        self.assertEqual(PID, accepted["denial"]["pid"])
         self.assertEqual("41", accepted["denial"]["serial"])
         self.assertEqual(CONTRACT.INVARIANT_OWNER, accepted["invariant_owner"])
 
@@ -415,7 +415,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         historical["denial"] = {
             "event_time": document["denial"]["event_time"],
             "serial": document["denial"]["serial"],
-            "pid": document["denial"]["avc_pid"],
+            "pid": document["denial"]["pid"],
             "source_context": document["denial"]["source_context"],
             "target_context": document["denial"]["target_context"],
             "permission": "read",
@@ -451,6 +451,11 @@ class SelinuxIsolationContractTests(unittest.TestCase):
                 list(Draft202012Validator(historical_root).iter_errors(mixed))
             )
         CONTRACT.validate_isolation_evidence(historical)
+        boolean_syscall_pid = deepcopy(document)
+        boolean_syscall_pid["denial"]["pid"] = 1
+        boolean_syscall_pid["denial"]["syscall_pid"] = True
+        with self.assertRaises(CONTRACT.IsolationError):
+            CONTRACT.validate_isolation_evidence(boolean_syscall_pid)
         contradictory = deepcopy(document)
         contradictory["process_contexts"][0]["mcs_categories"] = [1]
         with self.assertRaisesRegex(CONTRACT.IsolationError, "contradict"):
@@ -588,7 +593,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         historical_isolation["denial"] = {
             "event_time": isolation["denial"]["event_time"],
             "serial": isolation["denial"]["serial"],
-            "pid": isolation["denial"]["avc_pid"],
+            "pid": isolation["denial"]["pid"],
             "source_context": isolation["denial"]["source_context"],
             "target_context": isolation["denial"]["target_context"],
             "permission": "read",
@@ -620,7 +625,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             ("source_context", PROCESS_A),
             ("target_context", "system_u:object_r:container_file_t:s0:c9"),
             ("permissive", 1),
-            ("avc_pid", 999),
+            ("pid", 999),
             ("proctitle", "cat /foreign/other"),
             ("syscall_pid", 999),
             ("syscall_command", "head"),

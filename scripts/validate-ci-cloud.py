@@ -2649,7 +2649,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "process_a=facts[\"process_a\"]" in target_runner
         and "process_b=facts[\"process_b\"]" in target_runner
         and "storage_a=facts[\"storage_a\"]" in target_runner
-        and 'selinux_isolation["denial"]["avc_pid"] != denial_pid'
+        and 'selinux_isolation["denial"]["pid"] != denial_pid'
         in target_runner
         and 'selinux_isolation["denial"]["syscall_pid"] != denial_pid'
         in target_runner

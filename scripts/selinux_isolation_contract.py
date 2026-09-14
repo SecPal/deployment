@@ -1034,7 +1034,7 @@ def normalize_unique_enforcing_avc(
     return {
         "event_time": event_time,
         "serial": serial,
-        "avc_pid": pid,
+        "pid": pid,
         "source_context": source_context,
         "target_context": target_context,
         "permissive": 0,
@@ -1096,7 +1096,7 @@ def validate_isolation_evidence(document: object) -> None:
     current_denial_keys = {
         "event_time",
         "serial",
-        "avc_pid",
+        "pid",
         "source_context",
         "target_context",
         "permissive",
@@ -1135,11 +1135,13 @@ def validate_isolation_evidence(document: object) -> None:
     )
     if set(denial) == current_denial_keys:
         representation_invalid = (
-            not isinstance(denial["avc_pid"], int)
-            or isinstance(denial["avc_pid"], bool)
-            or not 1 <= denial["avc_pid"] <= 2_147_483_647
+            not isinstance(denial["pid"], int)
+            or isinstance(denial["pid"], bool)
+            or not 1 <= denial["pid"] <= 2_147_483_647
             or denial["proctitle"] != f"{EXPECTED_COMMAND} {EXPECTED_TARGET_PATH}"
-            or denial["syscall_pid"] != denial["avc_pid"]
+            or type(denial["syscall_pid"]) is not int
+            or not 1 <= denial["syscall_pid"] <= 2_147_483_647
+            or denial["syscall_pid"] != denial["pid"]
             or denial["syscall_command"] != EXPECTED_COMMAND
         )
     else:
