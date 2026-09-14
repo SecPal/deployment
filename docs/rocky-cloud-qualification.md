@@ -38,11 +38,14 @@ different binding.
 
 The trusted-control SHA for a new lifecycle is the protected-main workflow
 commit itself, derived from `GITHUB_SHA`; it is not a workflow input or an
-unmerged candidate constant. Only the canonical #270 merge commit can form the
-rebound authority triplet with the current target and harness. Continuations
-bind that exact control SHA. The unconsumed #234 authorization bound to control
-`a4a4ff415f01421af4f3ddfe0a3542815df42414`, the pre-extension target, and its
-historical harness therefore cannot be consumed by the current authority.
+unmerged candidate constant. The canonical #270 merge commit establishes the
+initial rebound authority triplet with the current target and harness. A later
+protected-main workflow commit derives its own trusted-control identity and can
+inherit that pair only while the repository agreement gates remain unchanged.
+Continuations bind the exact control SHA that created them. The unconsumed #234
+authorization bound to control `a4a4ff415f01421af4f3ddfe0a3542815df42414`,
+the pre-extension target, and its historical harness therefore cannot be
+consumed by the current authority.
 
 The failed native #234 target/harness pair
 `b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` /
