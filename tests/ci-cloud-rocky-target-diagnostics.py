@@ -4463,7 +4463,7 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             (
                 f"type=AVC {identity} avc: denied {{ read }} pid=4242 "
                 f'name="marker" scontext={process_b} tcontext={storage_a} '
-                "tclass=dir permissive=0",
+                "tclass=file permissive=0",
                 f"type=PROCTITLE {identity} proctitle=cat /foreign/marker",
                 f'type=SYSCALL {identity} pid=4242 comm="cat"',
             )

@@ -241,7 +241,7 @@ only the interpreted audit timestamp grammar, correlates by the full timestamp
 and serial, and requires one unique event containing exactly one matching AVC
 and one decoded PROCTITLE marker. The marker must name the digest-bound harness's
 exact in-container `/foreign/marker` path; the AVC must carry the exact source context,
-target context, `permissive=0`, and `tclass=dir`. Duplicate, malformed,
+target context, `permissive=0`, and `tclass=file`. Duplicate, malformed,
 oversized, unavailable, or ambiguous audit observations fail closed without
 entering evidence.
 

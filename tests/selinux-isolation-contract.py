@@ -50,7 +50,7 @@ def event(
     name: str = "marker",
     source: str = PROCESS_B,
     target: str = STORAGE_A,
-    target_class: str = "dir",
+    target_class: str = "file",
     permissive: int = 0,
     path: str = "/foreign/marker",
 ) -> str:
@@ -113,6 +113,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         accepted = admitted_isolation()
         self.assertEqual(PID, accepted["denial"]["pid"])
         self.assertEqual("41", accepted["denial"]["serial"])
+        self.assertEqual("file", accepted["denial"]["target_class"])
         self.assertEqual(CONTRACT.INVARIANT_OWNER, accepted["invariant_owner"])
 
         rejected = {
@@ -123,7 +124,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             "wrong-path": event(path="/foreign/other"),
             "wrong-operation": event(permission="write"),
             "wrong-process": event(pid=999, syscall_pid=PID),
-            "wrong-class": event(target_class="file"),
+            "wrong-class": event(target_class="dir"),
             "incomplete": event().splitlines()[0],
         }
         for name, audit_text in rejected.items():
