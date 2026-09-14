@@ -1979,7 +1979,7 @@ def validate_gcp_iam_role(root: Path) -> None:
 
 
 def validate_rocky_control_plane(root: Path) -> None:
-    expected_target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+    expected_target_sha = "c76742c828fefd71dda2b2d73fda6a0c43969426"
     expected_harness_sha256 = (
         "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
     )
@@ -2796,7 +2796,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"b76c24fe59fbe2406d8b84094fc9e6694c57f0c6\""
+        "EXPECTED_TARGET_SHA = \"c76742c828fefd71dda2b2d73fda6a0c43969426\""
         in target_failure_classifier
         and "EXPECTED_HARNESS_SHA256 = \"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac\""
         in target_failure_classifier

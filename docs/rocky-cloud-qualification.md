@@ -14,25 +14,20 @@ inputs to Rocky admission.
 
 The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
-preparation, continuation admission, evidence admission, and cleanup. The AVC
-diagnostic extension changes target-owned harness bytes to SHA-256
+preparation, continuation admission, evidence admission, and cleanup. The
+current target is the GitHub-verified protected-main #269 merge
+`c76742c828fefd71dda2b2d73fda6a0c43969426`; its target-owned production
+harness has SHA-256
 `436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac`.
-Until the successor rebind leaf replaces the pre-extension target selector
-`b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` with the canonical merge commit
-that owns those bytes, the deliberately unmatched pair admits no provider
-qualification. The successor must bind its exact target, harness, and trusted
-control before acquiring new provider authority. The pair is independently
-enforced by the trusted workflow, target runner, diagnostic classifier, schema,
-and repository agreement checks. The target is fetched by the guest only after
-every GCP service account has been detached and access to the metadata
-credential endpoint has been blocked.
+The pair is independently enforced by the trusted workflow, target runner,
+diagnostic classifier, schema, and repository agreement checks. The target is
+fetched by the guest only after every GCP service account has been detached and
+access to the metadata credential endpoint has been blocked.
 
-The pre-extension target is the GitHub-verified protected-main merge of #265. It preserves
-the #254 Quadlet authority correction and the merged contracts for issues 229,
-230, and 231 while correcting the target-owned AVC target class to `file`. The
-harness digest is derived reproducibly from its immutable Git bytes with
-`git show b76c24fe59fbe2406d8b84094fc9e6694c57f0c6:scripts/qualify-production-host.sh | sha256sum`.
-Its original harness digest
+The current harness digest is derived reproducibly from immutable Git bytes
+with `git show c76742c828fefd71dda2b2d73fda6a0c43969426:scripts/qualify-production-host.sh | sha256sum`.
+The pre-extension target
+`b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` and its original harness digest
 `f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c`
 remains an exact historical binding, including the #233 failure from run
 `34876534431/1`. The earlier target
@@ -43,10 +38,11 @@ different binding.
 
 The trusted-control SHA for a new lifecycle is the protected-main workflow
 commit itself, derived from `GITHUB_SHA`; it is not a workflow input or an
-unmerged candidate constant. After #266, only its canonical merge commit can
-form the rebound authority triplet with the corrected target and harness.
-Continuations bind that exact control SHA, so an earlier authorization cannot
-be consumed by a later trusted control.
+unmerged candidate constant. Only the canonical #270 merge commit can form the
+rebound authority triplet with the current target and harness. Continuations
+bind that exact control SHA. The unconsumed #234 authorization bound to control
+`a4a4ff415f01421af4f3ddfe0a3542815df42414`, the pre-extension target, and its
+historical harness therefore cannot be consumed by the current authority.
 
 The failed native #234 target/harness pair
 `b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` /

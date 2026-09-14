@@ -184,7 +184,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
         historical = {
             "schema_version": 1,
             "phase": "target-qualification",
-            "target_sha": self.classifier.EXPECTED_TARGET_SHA,
+            "target_sha": self.classifier.HISTORICAL_PRE_269_TARGET_SHA,
             "trusted_control_sha": "a4a4ff415f01421af4f3ddfe0a3542815df42414",
             "qualification_run_id": "34876534431",
             "qualification_run_attempt": "1",
