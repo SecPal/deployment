@@ -1984,6 +1984,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
     )
     historical_265_target_sha = "539d5faa6549be62060c8e20028caf200e5eca01"
+    historical_pre_265_harness_sha256 = (
+        "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+    )
     expected_target_line_rules = (
         (368, 374, "qualify-host-identity"),
         (376, 379, "qualify-administrator-execution"),
@@ -2222,7 +2225,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_classifier
         and f'HISTORICAL_PRE_265_TARGET_SHA = "{historical_265_target_sha}"'
         in target_failure_classifier
-        and f'HISTORICAL_PRE_265_HARNESS_SHA256 = "{expected_harness_sha256}"'
+        and f'HISTORICAL_PRE_265_HARNESS_SHA256 = "{historical_pre_265_harness_sha256}"'
         in target_failure_classifier
         and f"readonly expected_target_sha={expected_target_sha}" in target_runner
         and f"readonly expected_harness_sha256={expected_harness_sha256}"
@@ -2239,7 +2242,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         == 4
         and schema_const_pairs(target_failure_schema).count(
-            (historical_265_target_sha, expected_harness_sha256)
+            (historical_265_target_sha, historical_pre_265_harness_sha256)
         )
         == 4
         and qualification_schema["properties"]["target_sha"]

@@ -1311,6 +1311,19 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn(
             f'EXPECTED_HARNESS_SHA256 = "{harness_sha256}"', classifier_source
         )
+        validator_source = (ROOT / "scripts/validate-ci-cloud.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'historical_pre_265_harness_sha256 = (\n        '
+            f'"{harness_sha256}"',
+            validator_source,
+        )
+        self.assertIn(
+            'HISTORICAL_PRE_265_HARNESS_SHA256 = '
+            '"{historical_pre_265_harness_sha256}"',
+            validator_source,
+        )
         mutations = (
             (
                 ".github/workflows/rocky-cloud-qualification.yml",

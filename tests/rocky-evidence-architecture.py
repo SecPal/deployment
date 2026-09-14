@@ -1321,6 +1321,15 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             '"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"',
             source,
         )
+        self.assertIn(
+            'HISTORICAL_PRE_265_HARNESS_SHA256 = (\n    '
+            '"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"',
+            source,
+        )
+        self.assertNotIn(
+            "HISTORICAL_PRE_265_HARNESS_SHA256 = EXPECTED_HARNESS_SHA256",
+            source,
+        )
 
 
 if __name__ == "__main__":
