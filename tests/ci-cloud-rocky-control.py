@@ -74,10 +74,11 @@ class RockyCloudControlTests(unittest.TestCase):
             'if [[ "$target_sha" != "$expected_target_sha" ||'
         )
         gate_end = runner_source.index("\nfi\n", pair_gate) + len("\nfi\n")
-        current_target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+        current_target = "c76742c828fefd71dda2b2d73fda6a0c43969426"
         current_harness = (
             "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
+        pre_269_target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         pre_269_harness = (
             "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
         )
@@ -93,7 +94,9 @@ class RockyCloudControlTests(unittest.TestCase):
             isolated_gate.chmod(0o700)
             for target, harness in (
                 (historical_target, historical_harness),
+                (pre_269_target, current_harness),
                 (current_target, pre_269_harness),
+                (pre_269_target, pre_269_harness),
                 (current_target, historical_harness),
                 (historical_target, current_harness),
                 ("a" * 40, current_harness),
@@ -689,6 +692,7 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotIn("control_sha", inputs)
         self.assertNotIn("harness_sha256", inputs)
         self.assertGreaterEqual(workflow.count('--control-sha "$GITHUB_SHA"'), 8)
+        self.assertNotIn("a4a4ff415f01421af4f3ddfe0a3542815df42414", workflow)
         self.assertIn("^[0-9a-fA-F]{40}$", workflow)
         self.assertIn('--arg profile "$PROVIDER_PROFILE"', workflow)
         self.assertIn(".run.profile == $profile", workflow)
@@ -2548,7 +2552,7 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_qualification_admission_is_observation_derived_and_pass_only(self) -> None:
         schema = json.loads((ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json").read_text(encoding="utf-8"))
-        current_target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+        current_target = "c76742c828fefd71dda2b2d73fda6a0c43969426"
         self.assertEqual(current_target, schema["properties"]["target_sha"]["const"])
         self.assertEqual(
             current_target,
@@ -2650,7 +2654,7 @@ class RockyCloudControlTests(unittest.TestCase):
     def test_schema_only_qualification_cannot_self_assert_native_success(self) -> None:
         candidate = {
             "schema_version": 1,
-            "target_sha": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
+            "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
             "exit_status": 0,
             "stdout_sha256": "a" * 64,
             "stdout_bytes": 1,
@@ -2785,10 +2789,10 @@ class RockyCloudControlTests(unittest.TestCase):
         ).encode()
         candidate = {
             "schema_version": 3,
-            "target_sha": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
+            "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
             "native_observation": {
                 "schema_version": 1,
-                "target_sha": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
+                "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
                 "trusted_control_sha": "a" * 40,
                 "qualification_run_id": "12345",
                 "qualification_run_attempt": "1",
@@ -2830,7 +2834,7 @@ class RockyCloudControlTests(unittest.TestCase):
                         "--native-observation",
                         binding,
                         "--target-sha",
-                        "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
+                        "c76742c828fefd71dda2b2d73fda6a0c43969426",
                         "--control-sha",
                         "a" * 40,
                         "--run-id",
@@ -2862,7 +2866,7 @@ class RockyCloudControlTests(unittest.TestCase):
         self.assertNotEqual(0, validate(mixed_target).returncode)
         historical_control = deepcopy(candidate)
         historical_control["native_observation"]["trusted_control_sha"] = (
-            "4a66e1f10e855ef88f06ee03d9c0df74789dfadf"
+            "a4a4ff415f01421af4f3ddfe0a3542815df42414"
         )
         self.assertNotEqual(0, validate(historical_control).returncode)
         mutations = {}

@@ -1251,7 +1251,7 @@ class CloudCIContractTests(unittest.TestCase):
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         classifier_source = (ROOT / classifier).read_text(encoding="utf-8")
         self.assertIn(
-            'EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"',
+            'EXPECTED_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"',
             classifier_source,
         )
         self.assertIn(
@@ -1260,7 +1260,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         for old, new in (
             (
-                'EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"',
+                'EXPECTED_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"',
                 'EXPECTED_TARGET_SHA = ""',
             ),
             (
@@ -1280,7 +1280,7 @@ class CloudCIContractTests(unittest.TestCase):
     def test_corrected_target_pair_is_bound_before_provider_authentication(
         self,
     ) -> None:
-        target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+        target_sha = "c76742c828fefd71dda2b2d73fda6a0c43969426"
         harness_sha256 = (
             "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
@@ -2097,7 +2097,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            'EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"',
+            'EXPECTED_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"',
             'EXPECTED_TARGET_SHA = ""',
         )
         self.assert_mutation_rejected(
