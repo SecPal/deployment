@@ -1255,7 +1255,7 @@ class CloudCIContractTests(unittest.TestCase):
             classifier_source,
         )
         self.assertIn(
-            'EXPECTED_HARNESS_SHA256 = "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"',
+            'EXPECTED_HARNESS_SHA256 = "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
             classifier_source,
         )
         for old, new in (
@@ -1264,7 +1264,7 @@ class CloudCIContractTests(unittest.TestCase):
                 'EXPECTED_TARGET_SHA = ""',
             ),
             (
-                'EXPECTED_HARNESS_SHA256 = "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"',
+                'EXPECTED_HARNESS_SHA256 = "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
                 'EXPECTED_HARNESS_SHA256 = ""',
             ),
             ("MAX_TRACE_FRAMES = 8", "MAX_TRACE_FRAMES = 9"),
@@ -1282,7 +1282,7 @@ class CloudCIContractTests(unittest.TestCase):
     ) -> None:
         target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         harness_sha256 = (
-            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
         workflow = (
             ROOT / ".github/workflows/rocky-cloud-qualification.yml"
@@ -1381,7 +1381,7 @@ class CloudCIContractTests(unittest.TestCase):
     ) -> None:
         relative = "schemas/rocky-cloud-target-qualification-failure.schema.json"
         current = (
-            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
         historical = (
             "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
@@ -1651,7 +1651,7 @@ class CloudCIContractTests(unittest.TestCase):
             (trace, "trap - ERR", ":"),
             (
                 runner,
-                "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c",
+                "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac",
                 "",
             ),
             (

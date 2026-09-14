@@ -208,7 +208,7 @@ def load_object(path: Path) -> dict[str, Any]:
     if len(payload) > 1_000_000:
         raise ControlError(f"JSON input is too large: {path}")
     try:
-        document = json.loads(payload)
+        document = json.loads(payload, object_pairs_hook=reject_duplicate_keys)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ControlError(f"invalid JSON: {path}") from error
     if not isinstance(document, dict):

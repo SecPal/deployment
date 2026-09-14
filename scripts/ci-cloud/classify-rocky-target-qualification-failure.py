@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
-EXPECTED_HARNESS_SHA256 = "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+EXPECTED_HARNESS_SHA256 = "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
 HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
 HISTORICAL_PRE_269_HARNESS_SHA256 = "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
 HISTORICAL_PRE_265_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
@@ -222,7 +222,7 @@ EXPLICIT_RULES = (
     ("ERROR: cross-boundary denial observation is invalid", "qualify-avc-correlation", "invariant-failed"),
     ("ERROR: unable to temporarily expose SELinux dontaudit denials", "qualify-selinux-policy-restoration", "command-failed"),
     ("ERROR: SELinux stopped Enforcing while exposing dontaudit denials", "qualify-selinux-policy-restoration", "invariant-failed"),
-    ("ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial", "qualify-avc-correlation", "invariant-failed"),
+    ("ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial", "qualify-avc-correlation", "command-failed"),
     ("ERROR: unable to restore SELinux dontaudit policy", "qualify-selinux-policy-restoration", "command-failed"),
     ("ERROR: SELinux is not Enforcing after restoring dontaudit policy", "qualify-selinux-policy-restoration", "invariant-failed"),
     ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
@@ -338,13 +338,14 @@ LINE_RULES = (
     (670, 674, "qualify-workload-primary"),
     (675, 678, "qualify-workload-secondary"),
     (680, 686, "qualify-selinux-storage"),
-    (690, 696, "qualify-avc-correlation"),
-    (700, 706, "qualify-selinux-policy-restoration"),
-    (709, 715, "qualify-avc-correlation"),
-    (717, 725, "qualify-selinux-policy-restoration"),
-    (728, 744, "qualify-avc-correlation"),
-    (753, 756, "qualify-runtime-fallback-absence"),
-    (758, 758, "qualification-harness"),
+    (690, 694, "qualify-avc-correlation"),
+    (698, 704, "qualify-selinux-policy-restoration"),
+    (707, 711, "qualify-avc-correlation"),
+    (713, 721, "qualify-selinux-policy-restoration"),
+    (724, 740, "qualify-avc-correlation"),
+    (749, 752, "qualify-runtime-fallback-absence"),
+    (754, 754, "qualification-harness"),
+    (760, 768, "qualify-avc-correlation"),
 )
 
 TRACE_PATTERN = re.compile(
@@ -357,7 +358,7 @@ MARKER_PATTERN = re.compile(
 )
 AVC_OBSERVATION_TRACE_STATUS = 1
 AVC_OBSERVATION_TARGET_STATUS = 3
-AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({375, 690, 765})
+AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({375, 690, 772})
 HISTORICAL_PRE_269_AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({300, 601, 674})
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,19}$")

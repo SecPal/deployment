@@ -29,7 +29,7 @@ readonly qualification_run_id="$3"
 readonly qualification_run_attempt="$4"
 readonly qualification_harness_sha256="$5"
 readonly expected_target_sha=b76c24fe59fbe2406d8b84094fc9e6694c57f0c6
-readonly expected_harness_sha256=269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c
+readonly expected_harness_sha256=436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac
 if [[ "$target_sha" != "$expected_target_sha" ||
   "$qualification_harness_sha256" != "$expected_harness_sha256" ]]; then
   printf 'ERROR: target and qualification harness are not the trusted pair.\n' >&2

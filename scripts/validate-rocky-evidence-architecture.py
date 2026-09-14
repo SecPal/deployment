@@ -45,7 +45,7 @@ DEFAULT_RELOAD_OBSERVER = (
 )
 EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
 EXPECTED_HARNESS_SHA256 = (
-    "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+    "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
 )
 HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
 HISTORICAL_PRE_269_HARNESS_SHA256 = (
@@ -79,13 +79,14 @@ EXPECTED_TARGET_LINE_RULES = (
     (670, 674, "qualify-workload-primary"),
     (675, 678, "qualify-workload-secondary"),
     (680, 686, "qualify-selinux-storage"),
-    (690, 696, "qualify-avc-correlation"),
-    (700, 706, "qualify-selinux-policy-restoration"),
-    (709, 715, "qualify-avc-correlation"),
-    (717, 725, "qualify-selinux-policy-restoration"),
-    (728, 744, "qualify-avc-correlation"),
-    (753, 756, "qualify-runtime-fallback-absence"),
-    (758, 758, "qualification-harness"),
+    (690, 694, "qualify-avc-correlation"),
+    (698, 704, "qualify-selinux-policy-restoration"),
+    (707, 711, "qualify-avc-correlation"),
+    (713, 721, "qualify-selinux-policy-restoration"),
+    (724, 740, "qualify-avc-correlation"),
+    (749, 752, "qualify-runtime-fallback-absence"),
+    (754, 754, "qualification-harness"),
+    (760, 768, "qualify-avc-correlation"),
 )
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
@@ -725,10 +726,16 @@ def validate_selinux_isolation_architecture(
         "diagnose_avc_correlation_bytes(" not in harness
         or "capture_avc_correlation_diagnostic(" not in harness
         or "publish_avc_correlation_diagnostic() {" not in harness
+        or "reject_avc_observation() {" not in harness
+        or 'reject_avc_observation "$denial_status"' not in harness
         or 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD:-}" == 6' not in harness
         or 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6' not in runner
         or '--avc-correlation-diagnostic "$avc_correlation_diagnostic"' not in runner
         or "contract.validate_avc_correlation_diagnostic(projection)" not in control
+        or control.count(
+            "json.loads(payload, object_pairs_hook=reject_duplicate_keys)"
+        )
+        != 2
     ):
         raise ArchitectureError("bounded AVC diagnostic ownership or transport disagrees")
     if (

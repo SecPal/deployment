@@ -1981,7 +1981,7 @@ def validate_gcp_iam_role(root: Path) -> None:
 def validate_rocky_control_plane(root: Path) -> None:
     expected_target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
     expected_harness_sha256 = (
-        "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+        "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
     )
     historical_269_target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
     historical_pre_269_harness_sha256 = (
@@ -2014,13 +2014,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         (670, 674, "qualify-workload-primary"),
         (675, 678, "qualify-workload-secondary"),
         (680, 686, "qualify-selinux-storage"),
-        (690, 696, "qualify-avc-correlation"),
-        (700, 706, "qualify-selinux-policy-restoration"),
-        (709, 715, "qualify-avc-correlation"),
-        (717, 725, "qualify-selinux-policy-restoration"),
-        (728, 744, "qualify-avc-correlation"),
-        (753, 756, "qualify-runtime-fallback-absence"),
-        (758, 758, "qualification-harness"),
+        (690, 694, "qualify-avc-correlation"),
+        (698, 704, "qualify-selinux-policy-restoration"),
+        (707, 711, "qualify-avc-correlation"),
+        (713, 721, "qualify-selinux-policy-restoration"),
+        (724, 740, "qualify-avc-correlation"),
+        (749, 752, "qualify-runtime-fallback-absence"),
+        (754, 754, "qualification-harness"),
+        (760, 768, "qualify-avc-correlation"),
     )
 
     def schema_const_pairs(document: object) -> list[tuple[str, str]]:
@@ -2628,7 +2629,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "diagnose_avc_correlation_bytes(" in qualification_harness
         and "capture_avc_correlation_diagnostic(" in qualification_harness
         and "publish_avc_correlation_diagnostic" in qualification_harness
+        and "reject_avc_observation() {" in qualification_harness
+        and 'reject_avc_observation "$denial_status"'
+        in qualification_harness
         and "validate_avc_correlation_diagnostic" in rocky_control
+        and rocky_control.count(
+            "json.loads(payload, object_pairs_hook=reject_duplicate_keys)"
+        )
+        == 2
         and "build_avc_correlation_diagnostic(" in target_failure_classifier
         and "contract.validate_avc_correlation_diagnostic(projection)"
         in target_failure_classifier
@@ -2790,7 +2798,7 @@ def validate_rocky_control_plane(root: Path) -> None:
     require(
         "EXPECTED_TARGET_SHA = \"b76c24fe59fbe2406d8b84094fc9e6694c57f0c6\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256 = \"269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c\""
+        and "EXPECTED_HARNESS_SHA256 = \"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac\""
         in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier

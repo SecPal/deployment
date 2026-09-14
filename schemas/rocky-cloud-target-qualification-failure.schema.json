@@ -1122,7 +1122,7 @@
                 "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
               },
               "harness_sha256": {
-                "const": "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
               },
               "operation": { "const": "qualify-avc-correlation" },
               "reason": { "const": "command-failed" },
@@ -1146,7 +1146,7 @@
             "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
           },
           "harness_sha256": {
-            "const": "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+            "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
           },
           "operation": { "const": "qualify-avc-correlation" },
           "reason": { "const": "command-failed" },
@@ -1176,7 +1176,7 @@
                 "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
               },
               "harness_sha256": {
-                "const": "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
               }
             },
             "required": ["target_sha", "harness_sha256"]
@@ -1528,7 +1528,7 @@
                 "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
               },
               "harness_sha256": {
-                "const": "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
               }
             },
             "required": ["target_sha", "harness_sha256"]
@@ -1584,7 +1584,7 @@
                 "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
               },
               "harness_sha256": {
-                "const": "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
               }
             },
             "required": ["target_sha", "harness_sha256"]
@@ -1678,7 +1678,7 @@
                 "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
               },
               "harness_sha256": {
-                "const": "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
               }
             },
             "required": ["target_sha", "harness_sha256"]

@@ -412,11 +412,11 @@ observe_denied_access() {
     elif [[ "$audit_size" -gt 65536 ]]; then
       write_avc_capture_diagnostic observation-oversized \
         "$audit_status" "$capture_status" "$attempt" || return 2
-      return 2
+      return 3
     elif [[ "$audit_status" -ne 1 || "$capture_status" -ne 0 ]]; then
       write_avc_capture_diagnostic capture-execution-error \
         "$audit_status" "$capture_status" "$attempt" || return 2
-      return 2
+      return 3
     else
       write_avc_capture_diagnostic ausearch-no-result \
         "$audit_status" "$capture_status" "$attempt" || return 2
@@ -691,9 +691,7 @@ observe_denied_access
 denial_status=$?
 set -e
 if [[ "$denial_status" -eq 2 ]]; then
-  publish_avc_correlation_diagnostic || :
-  printf 'ERROR: cross-boundary denial observation is invalid.\n' >&2
-  exit 1
+  reject_avc_observation "$denial_status"
 fi
 if [[ "$denial_status" -ne 0 ]]; then
   dontaudit_disabled=true
@@ -710,9 +708,7 @@ if [[ "$denial_status" -ne 0 ]]; then
   denial_status=$?
   set -e
   if [[ "$denial_status" -ne 0 ]]; then
-    publish_avc_correlation_diagnostic || :
-    printf 'ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n' >&2
-    exit 1
+    reject_avc_observation "$denial_status"
   fi
   if ! /usr/bin/timeout --signal=KILL 30s semodule -B; then
     printf 'ERROR: unable to restore SELinux dontaudit policy.\n' >&2
@@ -759,6 +755,17 @@ install -o 0 -g 0 -m 0600 /dev/null "$qualification_success_marker"
 printf 'PASS: Rocky Linux %s target workload contract (%s); native admission requires trusted control.\n' \
   "$os_version" "$architecture"
 rm -f -- "$qualification_success_marker"
+}
+
+reject_avc_observation() {
+  local status="$1"
+  publish_avc_correlation_diagnostic || :
+  if [[ "$status" -eq 3 ]]; then
+    printf 'ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n' >&2
+    return 3
+  fi
+  printf 'ERROR: cross-boundary denial observation is invalid.\n' >&2
+  return 1
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -1193,7 +1193,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
         target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         harness = (
-            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
         mutations = (
             (
@@ -1320,6 +1320,18 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 "contract.validate_avc_correlation_diagnostic(projection)",
                 "pass",
             ),
+            (
+                "--rocky-control",
+                CONTROL,
+                "json.loads(payload, object_pairs_hook=reject_duplicate_keys)",
+                "json.loads(payload)",
+            ),
+            (
+                "--qualification-harness",
+                QUALIFICATION_HARNESS,
+                "reject_avc_observation() {",
+                "discard_avc_observation() {",
+            ),
         )
         for option, source_path, old, new in mutations:
             with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
@@ -1338,7 +1350,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
 
     def test_architecture_gate_rejects_schema_pair_substitution(self) -> None:
         current = (
-            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
         historical = (
             "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
@@ -1368,7 +1380,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         )
         self.assertIn(
             'EXPECTED_HARNESS_SHA256 = (\n    '
-            '"269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"',
+            '"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
             source,
         )
         self.assertIn(

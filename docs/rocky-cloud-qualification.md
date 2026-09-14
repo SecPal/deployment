@@ -16,7 +16,7 @@ The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
 preparation, continuation admission, evidence admission, and cleanup. The AVC
 diagnostic extension changes target-owned harness bytes to SHA-256
-`269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c`.
+`436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac`.
 Until the successor rebind leaf replaces the pre-extension target selector
 `b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` with the canonical merge commit
 that owns those bytes, the deliberately unmatched pair admits no provider
@@ -282,7 +282,10 @@ version 3. Before writing an artifact, the classifier validates its closed
 shape and semantics with the owner contract. `rocky-control.py` then
 independently checks the target, control, run, and harness bindings; canonical
 projection length and SHA-256; component, event, context, MCS, and event-ID
-bounds; and recomputed rejection, candidate, and final-outcome consistency. A
+bounds; duplicate-key-free outer JSON; and recomputed rejection, candidate,
+and final-outcome consistency. The target publishes the projection and returns
+status 3 through the exact AVC trace stack, keeping the closed
+`qualify-avc-correlation / command-failed / 3` classification reachable. A
 caller-selected final reason or a diagnostic that identifies an admitted
 candidate cannot grant authority. The diagnostic family remains negative-only
 and cannot enter success admission.
