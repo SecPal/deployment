@@ -237,7 +237,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         ).encode()
         observation = {
             "schema_version": 1,
-            "target_sha": "b" * 40,
+            "target_sha": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
             "trusted_control_sha": "a" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
@@ -247,7 +247,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         }
         evidence = {
             "schema_version": 3,
-            "target_sha": "b" * 40,
+            "target_sha": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
             "native_observation": observation,
             "quadlet_authority": authority,
             "exit_status": 0,
@@ -278,7 +278,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
                         "--native-observation",
                         observation_path,
                         "--target-sha",
-                        "b" * 40,
+                        "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
                         "--control-sha",
                         "a" * 40,
                         "--run-id",

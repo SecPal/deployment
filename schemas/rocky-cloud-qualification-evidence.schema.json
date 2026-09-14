@@ -19,7 +19,9 @@
   ],
   "properties": {
     "schema_version": { "const": 3 },
-    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "target_sha": {
+      "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+    },
     "native_observation": {
       "type": "object",
       "additionalProperties": false,
@@ -35,7 +37,9 @@
       ],
       "properties": {
         "schema_version": { "const": 1 },
-        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "target_sha": {
+          "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+        },
         "trusted_control_sha": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$"

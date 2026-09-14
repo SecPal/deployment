@@ -16,7 +16,7 @@ The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
 preparation, continuation admission, evidence admission, and cleanup. A target
 revision is accepted only when it is the exact signed commit
-`539d5faa6549be62060c8e20028caf200e5eca01` and its
+`b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` and its
 `scripts/qualify-production-host.sh` bytes have SHA-256
 `f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c`.
 The pair is independently enforced by the trusted workflow, target runner,
@@ -24,11 +24,24 @@ diagnostic classifier, schema, and repository agreement checks. The target is
 fetched by the guest only after every GCP service account has been detached and
 access to the metadata credential endpoint has been blocked.
 
-That target adds the #254 Quadlet authority correction to the first
-GitHub-verified protected-main commit containing the merged contracts for issues
-229, 230, and 231. The harness digest is derived reproducibly from its
-immutable Git bytes with
-`git show 539d5faa6549be62060c8e20028caf200e5eca01:scripts/qualify-production-host.sh | sha256sum`.
+That target is the GitHub-verified protected-main merge of #265. It preserves
+the #254 Quadlet authority correction and the merged contracts for issues 229,
+230, and 231 while correcting the target-owned AVC target class to `file`. The
+harness digest is derived reproducibly from its immutable Git bytes with
+`git show b76c24fe59fbe2406d8b84094fc9e6694c57f0c6:scripts/qualify-production-host.sh | sha256sum`.
+The earlier target
+`539d5faa6549be62060c8e20028caf200e5eca01` has the same harness digest but
+remains historical authority only. Sharing harness bytes does not allow its
+target identity or trusted-control identity to be mixed with the corrected
+target.
+
+The trusted-control SHA for a new lifecycle is the protected-main workflow
+commit itself, derived from `GITHUB_SHA`; it is not a workflow input or an
+unmerged candidate constant. After #266, only its canonical merge commit can
+form the rebound authority triplet with the corrected target and harness.
+Continuations bind that exact control SHA, so an earlier authorization cannot
+be consumed by a later trusted control.
+
 The failed native #234 target/harness pair
 `b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` /
 `918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa`

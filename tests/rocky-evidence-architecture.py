@@ -25,6 +25,9 @@ COLLECTOR = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
 PREPARATION = ROOT / "scripts/ci-cloud/prepare-rocky-host.sh"
 WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
 CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
+QUALIFICATION_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json"
+)
 QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
 QUALIFICATION_RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
 TARGET_FAILURE_CLASSIFIER = (
@@ -1188,7 +1191,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertIn("needs: validate", workflow[discover:])
 
     def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
-        target = "539d5faa6549be62060c8e20028caf200e5eca01"
+        target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         harness = (
             "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
         )
@@ -1210,6 +1213,12 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 TARGET_FAILURE_CLASSIFIER,
                 f'EXPECTED_TARGET_SHA = "{target}"',
                 'EXPECTED_TARGET_SHA = "' + "c" * 40 + '"',
+            ),
+            (
+                "--qualification-schema",
+                QUALIFICATION_SCHEMA,
+                f'"const": "{target}"',
+                '"const": "' + "a" * 40 + '"',
             ),
             (
                 "--target-failure-schema",
@@ -1304,7 +1313,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_architecture_gate_pins_corrected_pair_independently(self) -> None:
         source = VALIDATOR.read_text(encoding="utf-8")
         self.assertIn(
-            'EXPECTED_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"',
+            'EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"',
             source,
         )
         self.assertIn(

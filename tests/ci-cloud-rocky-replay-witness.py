@@ -27,7 +27,7 @@ VERIFIER = ROOT / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
 SCHEMA = ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
 RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
 HARNESS = ROOT / "scripts/qualify-production-host.sh"
-CURRENT_NATIVE_REPLAY = (
+HISTORICAL_NATIVE_REPLAY = (
     ROOT / "tests/fixtures/rocky-target-qualification-replay-34767598359.json"
 )
 LEGACY_CONTROL = "f7a298d19bf4a0957d6b3db383a1f1bb2eeb309e"
@@ -308,13 +308,20 @@ class RockyReplayWitnessTests(unittest.TestCase):
         )
         self.assert_rejected(document)
 
-    def test_current_native_witness_has_valid_nested_trace_semantics(self) -> None:
-        fixture_bytes = CURRENT_NATIVE_REPLAY.read_bytes()
+    def test_historical_native_witness_has_valid_nested_trace_semantics(self) -> None:
+        fixture_bytes = HISTORICAL_NATIVE_REPLAY.read_bytes()
         self.assertEqual(
             "f67bb1f4e431dd08d917895d4976cf724872adfd717240b4041231af34ef4042",
             hashlib.sha256(fixture_bytes).hexdigest(),
         )
         document = json.loads(fixture_bytes)
+        self.assertEqual(
+            self.classifier.HISTORICAL_PRE_265_TARGET_SHA, document["target_sha"]
+        )
+        self.assertEqual(
+            self.classifier.HISTORICAL_PRE_265_HARNESS_SHA256,
+            document["harness_sha256"],
+        )
         self.assertEqual([], list(self.schema_validator.iter_errors(document)))
         self.assertEqual(401, document["diagnostic_input_bytes"])
         self.assertEqual(
@@ -376,15 +383,17 @@ class RockyReplayWitnessTests(unittest.TestCase):
         self.assert_rejected(document)
         with self.assertRaises(self.control.ControlError):
             self.control.validate_target_qualification_failure(
-                CURRENT_NATIVE_REPLAY,
+                HISTORICAL_NATIVE_REPLAY,
                 document["target_sha"],
                 document["trusted_control_sha"],
                 document["qualification_run_id"],
                 document["qualification_run_attempt"],
             )
 
-    def test_current_native_witness_traverses_classifier_and_control(self) -> None:
-        source = json.loads(CURRENT_NATIVE_REPLAY.read_bytes())
+    def test_historical_native_witness_cannot_acquire_current_classifier_authority(
+        self,
+    ) -> None:
+        source = json.loads(HISTORICAL_NATIVE_REPLAY.read_bytes())
         witness = source["replay_witness"]
         components = witness["components"]
         with tempfile.TemporaryDirectory() as directory:
@@ -433,7 +442,7 @@ class RockyReplayWitnessTests(unittest.TestCase):
             self.assertEqual(0, completed.returncode, completed.stderr)
             classified = json.loads(output.read_bytes())
             self.assertEqual(
-                ("qualify-avc-correlation", "command-failed"),
+                ("qualification-harness", "representation-invalid"),
                 (classified["operation"], classified["reason"]),
             )
             self.assertEqual(1, classified["schema_version"])

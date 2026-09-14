@@ -74,7 +74,7 @@ class RockyCloudControlTests(unittest.TestCase):
             'if [[ "$target_sha" != "$expected_target_sha" ||'
         )
         gate_end = runner_source.index("\nfi\n", pair_gate) + len("\nfi\n")
-        current_target = "539d5faa6549be62060c8e20028caf200e5eca01"
+        current_target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         current_harness = (
             "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
         )
@@ -681,6 +681,10 @@ class RockyCloudControlTests(unittest.TestCase):
             ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"],
             inputs["provider_profile"]["options"],
         )
+        self.assertNotIn("trusted_control_sha", inputs)
+        self.assertNotIn("control_sha", inputs)
+        self.assertNotIn("harness_sha256", inputs)
+        self.assertGreaterEqual(workflow.count('--control-sha "$GITHUB_SHA"'), 8)
         self.assertIn("^[0-9a-fA-F]{40}$", workflow)
         self.assertIn('--arg profile "$PROVIDER_PROFILE"', workflow)
         self.assertIn(".run.profile == $profile", workflow)
@@ -2540,6 +2544,12 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_qualification_admission_is_observation_derived_and_pass_only(self) -> None:
         schema = json.loads((ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json").read_text(encoding="utf-8"))
+        current_target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+        self.assertEqual(current_target, schema["properties"]["target_sha"]["const"])
+        self.assertEqual(
+            current_target,
+            schema["properties"]["native_observation"]["properties"]["target_sha"]["const"],
+        )
         self.assertNotIn("positive_access", schema["required"])
         runner = (ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh").read_text(encoding="utf-8")
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -2636,7 +2646,7 @@ class RockyCloudControlTests(unittest.TestCase):
     def test_schema_only_qualification_cannot_self_assert_native_success(self) -> None:
         candidate = {
             "schema_version": 1,
-            "target_sha": "b" * 40,
+            "target_sha": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
             "exit_status": 0,
             "stdout_sha256": "a" * 64,
             "stdout_bytes": 1,
@@ -2771,10 +2781,10 @@ class RockyCloudControlTests(unittest.TestCase):
         ).encode()
         candidate = {
             "schema_version": 3,
-            "target_sha": "b" * 40,
+            "target_sha": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
             "native_observation": {
                 "schema_version": 1,
-                "target_sha": "b" * 40,
+                "target_sha": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
                 "trusted_control_sha": "a" * 40,
                 "qualification_run_id": "12345",
                 "qualification_run_attempt": "1",
@@ -2816,7 +2826,7 @@ class RockyCloudControlTests(unittest.TestCase):
                         "--native-observation",
                         binding,
                         "--target-sha",
-                        "b" * 40,
+                        "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6",
                         "--control-sha",
                         "a" * 40,
                         "--run-id",
@@ -2830,6 +2840,27 @@ class RockyCloudControlTests(unittest.TestCase):
                 )
 
         self.assertEqual(0, validate(candidate).returncode)
+        historical_target = deepcopy(candidate)
+        historical_target["target_sha"] = (
+            "539d5faa6549be62060c8e20028caf200e5eca01"
+        )
+        historical_target["native_observation"]["target_sha"] = (
+            "539d5faa6549be62060c8e20028caf200e5eca01"
+        )
+        self.assertNotEqual(0, validate(historical_target).returncode)
+        stale_target = deepcopy(candidate)
+        stale_target["target_sha"] = "539d5faa6549be62060c8e20028caf200e5eca01"
+        self.assertNotEqual(0, validate(stale_target).returncode)
+        mixed_target = deepcopy(candidate)
+        mixed_target["native_observation"]["target_sha"] = (
+            "539d5faa6549be62060c8e20028caf200e5eca01"
+        )
+        self.assertNotEqual(0, validate(mixed_target).returncode)
+        historical_control = deepcopy(candidate)
+        historical_control["native_observation"]["trusted_control_sha"] = (
+            "4a66e1f10e855ef88f06ee03d9c0df74789dfadf"
+        )
+        self.assertNotEqual(0, validate(historical_control).returncode)
         mutations = {}
         for version in ("5.8.1", "5.8.02", "6.0.0", "not-a-version"):
             mutated = deepcopy(candidate)
