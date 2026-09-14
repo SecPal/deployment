@@ -76,6 +76,9 @@ class RockyCloudControlTests(unittest.TestCase):
         gate_end = runner_source.index("\nfi\n", pair_gate) + len("\nfi\n")
         current_target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         current_harness = (
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+        )
+        pre_269_harness = (
             "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
         )
         historical_target = "293977ae93408a7bb812619de58649ab8a92d438"
@@ -90,6 +93,7 @@ class RockyCloudControlTests(unittest.TestCase):
             isolated_gate.chmod(0o700)
             for target, harness in (
                 (historical_target, historical_harness),
+                (current_target, pre_269_harness),
                 (current_target, historical_harness),
                 (historical_target, current_harness),
                 ("a" * 40, current_harness),

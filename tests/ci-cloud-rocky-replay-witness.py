@@ -185,19 +185,25 @@ class RockyReplayWitnessTests(unittest.TestCase):
             "schema_version": 1,
             "phase": "target-qualification",
             "target_sha": self.classifier.EXPECTED_TARGET_SHA,
-            "trusted_control_sha": LEGACY_CONTROL,
-            "qualification_run_id": "34726109991",
+            "trusted_control_sha": "a4a4ff415f01421af4f3ddfe0a3542815df42414",
+            "qualification_run_id": "34876534431",
             "qualification_run_attempt": "1",
-            "harness_sha256": self.classifier.EXPECTED_HARNESS_SHA256,
-            "operation": "qualification-harness",
-            "reason": "representation-invalid",
+            "harness_sha256": self.classifier.HISTORICAL_PRE_269_HARNESS_SHA256,
+            "operation": "qualify-avc-correlation",
+            "reason": "command-failed",
             "exit_status": 3,
             "diagnostic_input_sha256": (
                 "d10b32d994b4056611561d93638db15a768122053e25f5d0bae32af45ee8f355"
             ),
             "diagnostic_input_bytes": 85,
         }
+        historical_bytes = self.classifier.canonical_json_bytes(historical)
+        self.assertEqual(
+            "7e19cdf446ed44dde82a45cc6b73fe96e3717f84f7f027788f0d847c124af492",
+            hashlib.sha256(historical_bytes).hexdigest(),
+        )
         self.assertEqual([], list(self.schema_validator.iter_errors(historical)))
+        self.assertNotIn("avc_correlation_diagnostic", historical)
         self.assert_rejected(historical)
         guessed = copy.deepcopy(historical)
         guessed["replay_witness"] = {
@@ -366,6 +372,9 @@ class RockyReplayWitnessTests(unittest.TestCase):
         traced_operations, trace_valid = self.classifier.trace_operations(
             decoded["target_qualification_trace"].decode("ascii"),
             document["exit_status"],
+            self.classifier.replay_line_rules(
+                document["target_sha"], document["harness_sha256"]
+            ),
         )
         self.assertTrue(trace_valid)
         self.assertEqual({"qualify-avc-correlation"}, traced_operations)
@@ -378,6 +387,9 @@ class RockyReplayWitnessTests(unittest.TestCase):
                 target_bound=True,
                 trusted_marker=None,
                 representation_invalid=witness["representation_invalid"],
+                line_rules=self.classifier.replay_line_rules(
+                    document["target_sha"], document["harness_sha256"]
+                ),
             ),
         )
         self.assert_rejected(document)

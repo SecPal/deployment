@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -16,7 +17,9 @@ import tempfile
 from pathlib import Path
 
 EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
-EXPECTED_HARNESS_SHA256 = "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+EXPECTED_HARNESS_SHA256 = "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+HISTORICAL_PRE_269_HARNESS_SHA256 = "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
 HISTORICAL_PRE_265_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
 HISTORICAL_PRE_265_HARNESS_SHA256 = "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
 HISTORICAL_202_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
@@ -32,6 +35,10 @@ MAX_ADJACENCY_BYTES = 8_192
 MAX_START_OBSERVATION_BYTES = 2_048
 MAX_ACTIVE_OBSERVATION_BYTES = 2_048
 MAX_PRIMARY_OBSERVATION_BYTES = 2_048
+MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES = 12_288
+INSTALLED_SELINUX_ISOLATION_CONTRACT = Path(
+    "/opt/secpal-control/scripts/selinux_isolation_contract.py"
+)
 MAX_TRACE_FRAMES = 8
 MAX_TRACE_LINE = 9_999
 LEGACY_REPLAY_OPTIONAL_CONTROL_SHA = "f7a298d19bf4a0957d6b3db383a1f1bb2eeb309e"
@@ -215,7 +222,7 @@ EXPLICIT_RULES = (
     ("ERROR: cross-boundary denial observation is invalid", "qualify-avc-correlation", "invariant-failed"),
     ("ERROR: unable to temporarily expose SELinux dontaudit denials", "qualify-selinux-policy-restoration", "command-failed"),
     ("ERROR: SELinux stopped Enforcing while exposing dontaudit denials", "qualify-selinux-policy-restoration", "invariant-failed"),
-    ("ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial", "qualify-avc-correlation", "invariant-failed"),
+    ("ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial", "qualify-avc-correlation", "command-failed"),
     ("ERROR: unable to restore SELinux dontaudit policy", "qualify-selinux-policy-restoration", "command-failed"),
     ("ERROR: SELinux is not Enforcing after restoring dontaudit policy", "qualify-selinux-policy-restoration", "invariant-failed"),
     ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
@@ -276,7 +283,7 @@ HISTORICAL_202_LINE_RULES = (
     (312, 320, "qualify-selinux-policy-restoration"), (323, 326, "qualify-runtime-fallback-absence"),
 )
 
-LINE_RULES = (
+HISTORICAL_PRE_269_LINE_RULES = (
     (368, 374, "qualify-host-identity"),
     (376, 379, "qualify-administrator-execution"),
     (380, 383, "qualify-fixture-reference"),
@@ -308,6 +315,39 @@ LINE_RULES = (
     (667, 667, "qualification-harness"),
 )
 
+LINE_RULES = (
+    (456, 462, "qualify-host-identity"),
+    (464, 467, "qualify-administrator-execution"),
+    (468, 471, "qualify-fixture-reference"),
+    (472, 493, "qualify-service-account"),
+    (497, 500, "qualify-selinux-host"),
+    (502, 515, "qualify-native-architecture"),
+    (517, 520, "qualify-cgroup"),
+    (521, 537, "qualify-rootless-runtime"),
+    (538, 541, "qualify-fixture-presence"),
+    (543, 552, "qualify-fixture-setup"),
+    (554, 613, "qualify-quadlet-authority"),
+    (614, 614, "qualify-quadlet-daemon-reload"),
+    (615, 637, "qualify-quadlet-authority"),
+    (638, 638, "qualify-quadlet-start"),
+    (639, 639, "qualify-quadlet-active-state"),
+    (641, 652, "qualify-quadlet-authority"),
+    (653, 658, "qualify-workload-primary"),
+    (659, 665, "qualify-seccomp"),
+    (668, 668, "qualify-selinux-storage-directory-create"),
+    (670, 674, "qualify-workload-primary"),
+    (675, 678, "qualify-workload-secondary"),
+    (680, 686, "qualify-selinux-storage"),
+    (690, 694, "qualify-avc-correlation"),
+    (698, 704, "qualify-selinux-policy-restoration"),
+    (707, 711, "qualify-avc-correlation"),
+    (713, 721, "qualify-selinux-policy-restoration"),
+    (724, 740, "qualify-avc-correlation"),
+    (749, 752, "qualify-runtime-fallback-absence"),
+    (754, 754, "qualification-harness"),
+    (760, 768, "qualify-avc-correlation"),
+)
+
 TRACE_PATTERN = re.compile(
     r"^SECPAL_TARGET_ERR_V2:([1-9][0-9]{0,2}):"
     r"([1-9][0-9]{0,3}(?:,[1-9][0-9]{0,3}){0,7})$"
@@ -318,7 +358,8 @@ MARKER_PATTERN = re.compile(
 )
 AVC_OBSERVATION_TRACE_STATUS = 1
 AVC_OBSERVATION_TARGET_STATUS = 3
-AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({300, 601, 674})
+AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({375, 690, 772})
+HISTORICAL_PRE_269_AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({300, 601, 674})
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,19}$")
 BOOT_ID = re.compile(
@@ -663,12 +704,21 @@ def trace_operations(
             operation = operation_for_line(line, line_rules)
             if operation is not None:
                 operations.add(operation)
+    avc_required_frames = (
+        AVC_OBSERVATION_REQUIRED_FRAMES
+        if line_rules is LINE_RULES
+        else (
+            HISTORICAL_PRE_269_AVC_OBSERVATION_REQUIRED_FRAMES
+            if line_rules is HISTORICAL_PRE_269_LINE_RULES
+            else frozenset()
+        )
+    )
     if trace_status != exit_status and not (
-        line_rules is LINE_RULES
+        avc_required_frames
         and trace_status == AVC_OBSERVATION_TRACE_STATUS
         and exit_status == AVC_OBSERVATION_TARGET_STATUS
         and all(
-            AVC_OBSERVATION_REQUIRED_FRAMES.issubset(frames)
+            avc_required_frames.issubset(frames)
             and {
                 operation_for_line(line, line_rules)
                 for line in frames
@@ -741,7 +791,9 @@ def classify_failure(
         return "qualification-harness", "timeout"
 
     explicit_rules = (
-        EXPLICIT_RULES if line_rules is LINE_RULES else HISTORICAL_EXPLICIT_RULES
+        EXPLICIT_RULES
+        if line_rules in (LINE_RULES, HISTORICAL_PRE_269_LINE_RULES)
+        else HISTORICAL_EXPLICIT_RULES
     )
     explicit = {
         (operation, reason)
@@ -770,6 +822,21 @@ def classify_failure(
     if len(traced_operations) == 1:
         return traced_operations.pop(), "command-failed"
     return "qualification-harness", "unclassified-target-failure"
+
+
+def replay_line_rules(
+    target_sha: str, harness_sha256: str
+) -> tuple[tuple[int, int, str], ...]:
+    """Select only the immutable line map owned by an admitted replay pair."""
+    pair = target_sha, harness_sha256
+    if pair == (EXPECTED_TARGET_SHA, EXPECTED_HARNESS_SHA256):
+        return LINE_RULES
+    if pair in {
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+    }:
+        return HISTORICAL_PRE_269_LINE_RULES
+    raise ValueError("replay target/harness pair has no immutable line map")
 
 
 def unavailable_daemon_reload_adjacency() -> dict[str, object]:
@@ -2174,6 +2241,70 @@ def build_replay_witness(
     }
 
 
+def build_avc_correlation_diagnostic(
+    payload: bytes,
+    *,
+    target_sha: str,
+    trusted_control_sha: str,
+    qualification_run_id: str,
+    qualification_run_attempt: str,
+    harness_sha256: str,
+) -> dict[str, object]:
+    """Bind one canonical semantic projection without retaining audit output."""
+    if not payload or len(payload) > MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES:
+        raise ValueError("AVC correlation diagnostic is outside its closed bound")
+    try:
+        projection = decode_closed_json(payload)
+        if canonical_json_bytes(projection) != payload:
+            raise ValueError("AVC correlation diagnostic is not canonical")
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise ValueError("AVC correlation diagnostic is not closed JSON") from error
+    repository_contract = Path(__file__).resolve().parents[1] / "selinux_isolation_contract.py"
+    contract_path = (
+        repository_contract
+        if repository_contract.exists()
+        else INSTALLED_SELINUX_ISOLATION_CONTRACT
+    )
+    try:
+        metadata = contract_path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or contract_path.is_symlink()
+            or metadata.st_mode & 0o022
+            or not 0 < metadata.st_size <= 65_536
+        ):
+            raise ValueError("SELinux isolation contract is not trusted")
+        specification = importlib.util.spec_from_file_location(
+            "selinux_isolation_contract", contract_path
+        )
+        if specification is None or specification.loader is None:
+            raise ValueError("SELinux isolation contract cannot be loaded")
+        contract = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(contract)
+        contract.validate_avc_correlation_diagnostic(projection)
+    except (OSError, AttributeError, ValueError) as error:
+        raise ValueError("AVC correlation diagnostic contradicts its facts") from error
+    if projection.get("correlation_outcome") == "admitted":
+        raise ValueError("AVC failure diagnostic contains an admitted candidate")
+    return {
+        "schema_version": 1,
+        "target_sha": target_sha,
+        "trusted_control_sha": trusted_control_sha,
+        "qualification_run_id": qualification_run_id,
+        "qualification_run_attempt": qualification_run_attempt,
+        "harness_sha256": harness_sha256,
+        "projection_bytes": len(payload),
+        "projection_sha256": hashlib.sha256(payload).hexdigest(),
+        "projection": projection,
+    }
+
+
 def write_document(path: Path, document: dict[str, object]) -> None:
     encoded = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
     if len(encoded) > MAX_ARTIFACT_BYTES:
@@ -2205,6 +2336,7 @@ def main() -> int:
     parser.add_argument("--start-observation", type=Path)
     parser.add_argument("--active-observation", type=Path)
     parser.add_argument("--primary-observation", type=Path)
+    parser.add_argument("--avc-correlation-diagnostic", type=Path)
     parser.add_argument("--exit-status", required=True, type=int)
     parser.add_argument("--trusted-marker", type=Path)
     parser.add_argument("--representation-invalid", action="store_true")
@@ -2264,6 +2396,8 @@ def main() -> int:
     primary_present = False
     primary_bytes = b""
     primary_diagnostic: dict[str, object] | None = None
+    avc_diagnostic_bytes = b""
+    avc_diagnostic: dict[str, object] | None = None
     if operation == "qualify-quadlet-start" and reason == "command-failed":
         raw_start: object = None
         if options.start_observation is not None and options.start_observation.exists():
@@ -2327,6 +2461,25 @@ def main() -> int:
             },
             reload_client_error(stdout),
         )
+    if (
+        operation == "qualify-avc-correlation"
+        and reason == "command-failed"
+        and options.exit_status == 3
+    ):
+        avc_present, avc_diagnostic_bytes = optional_bounded_bytes(
+            options.avc_correlation_diagnostic,
+            MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES,
+        )
+        if not avc_present or not avc_diagnostic_bytes:
+            raise ValueError("AVC correlation failure lacks its closed diagnostic")
+        avc_diagnostic = build_avc_correlation_diagnostic(
+            avc_diagnostic_bytes,
+            target_sha=options.target_sha,
+            trusted_control_sha=options.control_sha,
+            qualification_run_id=options.run_id,
+            qualification_run_attempt=options.run_attempt,
+            harness_sha256=harness_sha256,
+        )
     replay_required = (
         target_bound
         and (operation, reason) == ("qualification-harness", "representation-invalid")
@@ -2348,8 +2501,28 @@ def main() -> int:
         primary_present, primary_bytes = optional_bounded_bytes(
             options.primary_observation, REPLAY_COMPONENT_BOUNDS["primary_observation"]
         )
+    if avc_diagnostic is not None:
+        diagnostic_payload = avc_diagnostic_bytes
+    elif operation == "qualify-selinux-storage-fcontext-add":
+        diagnostic_payload = b"semanage-fcontext-add-v1\0" + trace + b"\0" + reason.encode("ascii")
+    else:
+        diagnostic_payload = (
+            stdout
+            + b"\0"
+            + trace
+            + b"\0"
+            + marker_bytes
+            + b"\0"
+            + adjacency_bytes
+            + b"\0"
+            + start_bytes
+            + b"\0"
+            + active_bytes
+            + b"\0"
+            + primary_bytes
+        )
     document: dict[str, object] = {
-        "schema_version": 2 if replay_required else 1,
+        "schema_version": 3 if avc_diagnostic is not None else (2 if replay_required else 1),
         "phase": "target-qualification",
         "target_sha": options.target_sha,
         "trusted_control_sha": options.control_sha,
@@ -2359,35 +2532,21 @@ def main() -> int:
         "operation": operation,
         "reason": reason,
         "exit_status": options.exit_status,
-        "diagnostic_input_sha256": hashlib.sha256(
-            (
-                b"semanage-fcontext-add-v1\0" + trace + b"\0" + reason.encode("ascii")
-                if operation == "qualify-selinux-storage-fcontext-add"
-                else stdout
-                + b"\0"
-                + trace
-                + b"\0"
-                + marker_bytes
-                + b"\0"
-                + adjacency_bytes
-                + b"\0"
-                + start_bytes
-                + b"\0"
-                + active_bytes
-                + b"\0"
-                + primary_bytes
-            )
-        ).hexdigest(),
+        "diagnostic_input_sha256": hashlib.sha256(diagnostic_payload).hexdigest(),
         "diagnostic_input_bytes": (
-            len(trace) + len(reason)
-            if operation == "qualify-selinux-storage-fcontext-add"
-            else len(stdout)
-            + len(trace)
-            + len(marker_bytes)
-            + len(adjacency_bytes)
-            + len(start_bytes)
-            + len(active_bytes)
-            + len(primary_bytes)
+            len(avc_diagnostic_bytes)
+            if avc_diagnostic is not None
+            else (
+                len(trace) + len(reason)
+                if operation == "qualify-selinux-storage-fcontext-add"
+                else len(stdout)
+                + len(trace)
+                + len(marker_bytes)
+                + len(adjacency_bytes)
+                + len(start_bytes)
+                + len(active_bytes)
+                + len(primary_bytes)
+            )
         ),
     }
     if adjacency is not None:
@@ -2398,6 +2557,8 @@ def main() -> int:
         document["quadlet_active_state_diagnostic"] = active_diagnostic
     if primary_diagnostic is not None:
         document["primary_workload_diagnostic"] = primary_diagnostic
+    if avc_diagnostic is not None:
+        document["avc_correlation_diagnostic"] = avc_diagnostic
     if replay_required:
         document["replay_witness"] = build_replay_witness(
             {

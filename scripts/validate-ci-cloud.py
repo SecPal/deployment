@@ -1981,6 +1981,10 @@ def validate_gcp_iam_role(root: Path) -> None:
 def validate_rocky_control_plane(root: Path) -> None:
     expected_target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
     expected_harness_sha256 = (
+        "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+    )
+    historical_269_target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+    historical_pre_269_harness_sha256 = (
         "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
     )
     historical_265_target_sha = "539d5faa6549be62060c8e20028caf200e5eca01"
@@ -1988,35 +1992,36 @@ def validate_rocky_control_plane(root: Path) -> None:
         "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
     )
     expected_target_line_rules = (
-        (368, 374, "qualify-host-identity"),
-        (376, 379, "qualify-administrator-execution"),
-        (380, 383, "qualify-fixture-reference"),
-        (384, 405, "qualify-service-account"),
-        (409, 412, "qualify-selinux-host"),
-        (414, 427, "qualify-native-architecture"),
-        (429, 432, "qualify-cgroup"),
-        (433, 449, "qualify-rootless-runtime"),
-        (450, 453, "qualify-fixture-presence"),
-        (455, 463, "qualify-fixture-setup"),
-        (465, 524, "qualify-quadlet-authority"),
-        (525, 525, "qualify-quadlet-daemon-reload"),
-        (526, 548, "qualify-quadlet-authority"),
-        (549, 549, "qualify-quadlet-start"),
-        (550, 550, "qualify-quadlet-active-state"),
-        (552, 563, "qualify-quadlet-authority"),
-        (564, 569, "qualify-workload-primary"),
-        (570, 576, "qualify-seccomp"),
-        (579, 579, "qualify-selinux-storage-directory-create"),
-        (581, 585, "qualify-workload-primary"),
-        (586, 589, "qualify-workload-secondary"),
-        (591, 597, "qualify-selinux-storage"),
-        (601, 607, "qualify-avc-correlation"),
-        (610, 616, "qualify-selinux-policy-restoration"),
-        (619, 624, "qualify-avc-correlation"),
-        (626, 634, "qualify-selinux-policy-restoration"),
-        (637, 653, "qualify-avc-correlation"),
-        (662, 665, "qualify-runtime-fallback-absence"),
-        (667, 667, "qualification-harness"),
+        (456, 462, "qualify-host-identity"),
+        (464, 467, "qualify-administrator-execution"),
+        (468, 471, "qualify-fixture-reference"),
+        (472, 493, "qualify-service-account"),
+        (497, 500, "qualify-selinux-host"),
+        (502, 515, "qualify-native-architecture"),
+        (517, 520, "qualify-cgroup"),
+        (521, 537, "qualify-rootless-runtime"),
+        (538, 541, "qualify-fixture-presence"),
+        (543, 552, "qualify-fixture-setup"),
+        (554, 613, "qualify-quadlet-authority"),
+        (614, 614, "qualify-quadlet-daemon-reload"),
+        (615, 637, "qualify-quadlet-authority"),
+        (638, 638, "qualify-quadlet-start"),
+        (639, 639, "qualify-quadlet-active-state"),
+        (641, 652, "qualify-quadlet-authority"),
+        (653, 658, "qualify-workload-primary"),
+        (659, 665, "qualify-seccomp"),
+        (668, 668, "qualify-selinux-storage-directory-create"),
+        (670, 674, "qualify-workload-primary"),
+        (675, 678, "qualify-workload-secondary"),
+        (680, 686, "qualify-selinux-storage"),
+        (690, 694, "qualify-avc-correlation"),
+        (698, 704, "qualify-selinux-policy-restoration"),
+        (707, 711, "qualify-avc-correlation"),
+        (713, 721, "qualify-selinux-policy-restoration"),
+        (724, 740, "qualify-avc-correlation"),
+        (749, 752, "qualify-runtime-fallback-absence"),
+        (754, 754, "qualification-harness"),
+        (760, 768, "qualify-avc-correlation"),
     )
 
     def schema_const_pairs(document: object) -> list[tuple[str, str]]:
@@ -2045,6 +2050,36 @@ def validate_rocky_control_plane(root: Path) -> None:
             for value in document:
                 pairs.extend(schema_const_pairs(value))
         return pairs
+
+    def schema_const_pair_at(
+        document: object, *path: object
+    ) -> tuple[str, str] | None:
+        node = document
+        for component in path:
+            if isinstance(component, str) and isinstance(node, dict):
+                node = node.get(component)
+            elif (
+                isinstance(component, int)
+                and isinstance(node, list)
+                and 0 <= component < len(node)
+            ):
+                node = node[component]
+            else:
+                return None
+        if not isinstance(node, dict):
+            return None
+        properties = node.get("properties")
+        if not isinstance(properties, dict):
+            return None
+        target = properties.get("target_sha")
+        harness = properties.get("harness_sha256")
+        if not isinstance(target, dict) or not isinstance(harness, dict):
+            return None
+        if not isinstance(target.get("const"), str) or not isinstance(
+            harness.get("const"), str
+        ):
+            return None
+        return target["const"], harness["const"]
     relative = ".github/workflows/rocky-cloud-qualification.yml"
     # Historical mutation tests construct a deliberately minimal legacy tree.
     # Repository presence is owned independently by repository-contract.sh.
@@ -2204,6 +2239,51 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
+    target_failure_schema_pair_sequence = [
+        schema_const_pair_at(target_failure_schema, "allOf", 0, "then"),
+        schema_const_pair_at(
+            target_failure_schema, "allOf", 0, "if", "anyOf", 1
+        ),
+        *[
+            schema_const_pair_at(
+                target_failure_schema, "allOf", 1, "then", "anyOf", index
+            )
+            for index in range(3)
+        ],
+        *[
+            schema_const_pair_at(
+                target_failure_schema,
+                "allOf",
+                condition,
+                "if",
+                "anyOf",
+                index,
+            )
+            for condition, length in ((16, 6), (17, 4), (18, 4))
+            for index in range(length)
+        ],
+    ]
+    expected_target_failure_schema_pair_sequence = [
+        (expected_target_sha, expected_harness_sha256),
+        (expected_target_sha, expected_harness_sha256),
+        (expected_target_sha, expected_harness_sha256),
+        (historical_269_target_sha, historical_pre_269_harness_sha256),
+        (historical_265_target_sha, historical_pre_265_harness_sha256),
+        ("83d0c3720d342d0222e8dee9819e28d0c6739f84", "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"),
+        ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        ("b8f5a505d318d06a64a5975cfaba9f1e5ba0041f", "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"),
+        (expected_target_sha, expected_harness_sha256),
+        (historical_269_target_sha, historical_pre_269_harness_sha256),
+        (historical_265_target_sha, historical_pre_265_harness_sha256),
+        ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        (expected_target_sha, expected_harness_sha256),
+        (historical_269_target_sha, historical_pre_269_harness_sha256),
+        (historical_265_target_sha, historical_pre_265_harness_sha256),
+        ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        (expected_target_sha, expected_harness_sha256),
+        (historical_269_target_sha, historical_pre_269_harness_sha256),
+        (historical_265_target_sha, historical_pre_265_harness_sha256),
+    ]
     storage_setup_line_rules = [
         rule
         for rule in target_line_rules
@@ -2223,6 +2303,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_classifier
         and f'EXPECTED_HARNESS_SHA256 = "{expected_harness_sha256}"'
         in target_failure_classifier
+        and f'HISTORICAL_PRE_269_TARGET_SHA = "{historical_269_target_sha}"'
+        in target_failure_classifier
+        and f'HISTORICAL_PRE_269_HARNESS_SHA256 = "{historical_pre_269_harness_sha256}"'
+        in target_failure_classifier
         and f'HISTORICAL_PRE_265_TARGET_SHA = "{historical_265_target_sha}"'
         in target_failure_classifier
         and f'HISTORICAL_PRE_265_HARNESS_SHA256 = "{historical_pre_265_harness_sha256}"'
@@ -2240,11 +2324,17 @@ def validate_rocky_control_plane(root: Path) -> None:
         and schema_const_pairs(target_failure_schema).count(
             (expected_target_sha, expected_harness_sha256)
         )
+        == 5
+        and schema_const_pairs(target_failure_schema).count(
+            (historical_269_target_sha, historical_pre_269_harness_sha256)
+        )
         == 4
         and schema_const_pairs(target_failure_schema).count(
             (historical_265_target_sha, historical_pre_265_harness_sha256)
         )
         == 4
+        and target_failure_schema_pair_sequence
+        == expected_target_failure_schema_pair_sequence
         and qualification_schema["properties"]["target_sha"]
         == {"const": expected_target_sha}
         and qualification_schema["properties"]["native_observation"]["properties"][
@@ -2533,6 +2623,29 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "selinux_isolation_contract.admit_selinux_isolation(" in target_runner
         and "except selinux_isolation_contract.NoMatchingAvc:" in target_runner
         and "except selinux_isolation_contract.IsolationError:" in target_runner
+        and 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6' in target_runner
+        and '--avc-correlation-diagnostic "$avc_correlation_diagnostic"'
+        in target_runner
+        and "diagnose_avc_correlation_bytes(" in qualification_harness
+        and "capture_avc_correlation_diagnostic(" in qualification_harness
+        and "publish_avc_correlation_diagnostic" in qualification_harness
+        and "reject_avc_observation() {" in qualification_harness
+        and 'reject_avc_observation "$denial_status"'
+        in qualification_harness
+        and "validate_avc_correlation_diagnostic" in rocky_control
+        and rocky_control.count(
+            "json.loads(payload, object_pairs_hook=reject_duplicate_keys)"
+        )
+        == 2
+        and "build_avc_correlation_diagnostic(" in target_failure_classifier
+        and "contract.validate_avc_correlation_diagnostic(projection)"
+        in target_failure_classifier
+        and 'projection.get("correlation_outcome") == "admitted"'
+        in target_failure_classifier
+        and target_failure_schema["properties"]["schema_version"]["enum"]
+        == [1, 2, 3]
+        and "avc_correlation_diagnostic"
+        in target_failure_schema["properties"]
         and "process_a=facts[\"process_a\"]" in target_runner
         and "process_b=facts[\"process_b\"]" in target_runner
         and "storage_a=facts[\"storage_a\"]" in target_runner
@@ -2550,6 +2663,9 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     isolation_schema = qualification_schema["$defs"]["selinux_isolation"]
     context_schema = qualification_schema["$defs"]["normalized_context"]
+    normalize_unique_avc_source = selinux_isolation_contract.split(
+        "def normalize_unique_enforcing_avc(", 1
+    )[1].split("\ndef admit_selinux_isolation(", 1)[0]
     require(
         'RESPONSIBILITY = "normalization,admission"'
         in selinux_isolation_contract
@@ -2559,14 +2675,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "MCS_CATEGORY_MAX = 1023" in selinux_isolation_contract
         and "len(raw_categories) not in {1, 2}" in selinux_isolation_contract
         and "len(set(categories)) != len(categories)" in selinux_isolation_contract
-        and "events.setdefault(" in selinux_isolation_contract
-        and "_event_id(line)" in selinux_isolation_contract
-        and "len(candidates) != 1" in selinux_isolation_contract
+        and "events.setdefault(" in normalize_unique_avc_source
+        and "_event_id(line)" in normalize_unique_avc_source
+        and "len(candidates) != 1" in normalize_unique_avc_source
         and '"permissive": "0"' in selinux_isolation_contract
         and 'def _syscall_matches(line: str, pid: int)' in selinux_isolation_contract
         and '_field(line, "pid") == str(pid)' in selinux_isolation_contract
         and '_field(line, "comm") == "cat"' in selinux_isolation_contract
-        and '"SYSCALL": []' in selinux_isolation_contract
+        and '"SYSCALL": []' in normalize_unique_avc_source
         and isolation_schema["properties"]["invariant_owner"]["const"]
         == "selinux_isolation_contract.admit_selinux_isolation"
         and context_schema["properties"]["mcs_categories"]["items"]["maximum"]
@@ -2682,7 +2798,7 @@ def validate_rocky_control_plane(root: Path) -> None:
     require(
         "EXPECTED_TARGET_SHA = \"b76c24fe59fbe2406d8b84094fc9e6694c57f0c6\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256 = \"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c\""
+        and "EXPECTED_HARNESS_SHA256 = \"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac\""
         in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
@@ -2706,13 +2822,13 @@ def validate_rocky_control_plane(root: Path) -> None:
             for rule in target_line_rules
         )
         and target_line_rules == expected_target_line_rules
-        and [rule for rule in target_line_rules if rule[0] <= 563 and rule[1] >= 525]
+        and [rule for rule in target_line_rules if rule[0] <= 652 and rule[1] >= 614]
         == [
-            (525, 525, "qualify-quadlet-daemon-reload"),
-            (526, 548, "qualify-quadlet-authority"),
-            (549, 549, "qualify-quadlet-start"),
-            (550, 550, "qualify-quadlet-active-state"),
-            (552, 563, "qualify-quadlet-authority"),
+            (614, 614, "qualify-quadlet-daemon-reload"),
+            (615, 637, "qualify-quadlet-authority"),
+            (638, 638, "qualify-quadlet-start"),
+            (639, 639, "qualify-quadlet-active-state"),
+            (641, 652, "qualify-quadlet-authority"),
         ]
         and all(
             operation not in {
@@ -2724,7 +2840,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         and storage_setup_line_rules
         == [
-            (579, 579, "qualify-selinux-storage-directory-create"),
+            (668, 668, "qualify-selinux-storage-directory-create"),
         ]
         and "qualify-quadlet-runtime" not in target_failure_classifier
         and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
@@ -2754,7 +2870,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"${14}" == start' in target_failure_trace
         and "SECPAL_START_OBSERVATION_PATH"
         not in target_failure_trace + target_runner + start_runuser
-        and "10#$frame == 525" in target_failure_trace
+        and "10#$frame == 614" in target_failure_trace
         and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in start_runuser
         and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")'
         in start_runuser
@@ -2913,7 +3029,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_trace
         and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
         in target_failure_trace
-        and "10#$frame == 525" in target_failure_trace
+        and "10#$frame == 614" in target_failure_trace
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
         and "return \"$status\"" in target_failure_trace
@@ -2955,7 +3071,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
         not in bootstrap
         and "pwd.error" not in reload_adjacency_observer
-        and "or 525 not in frames" in reload_adjacency_observer
+        and "or 614 not in frames" in reload_adjacency_observer
         and "or 242 not in frames" not in reload_adjacency_observer,
         "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
     )
@@ -3174,6 +3290,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'replayed = b"\\0".join(' in target_replay_verifier
         and 'document["diagnostic_input_sha256"]' in target_replay_verifier
         and "classifier.classify_failure(" in target_replay_verifier
+        and "classifier.replay_line_rules(" in target_replay_verifier
+        and "HISTORICAL_PRE_269_LINE_RULES" in target_failure_classifier
         and 'payload.endswith(b"\\n")' in target_failure_classifier
         and 'payload[:-1].decode("ascii").split("\\n")'
         in target_failure_classifier

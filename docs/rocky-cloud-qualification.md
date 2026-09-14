@@ -14,26 +14,32 @@ inputs to Rocky admission.
 
 The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
-preparation, continuation admission, evidence admission, and cleanup. A target
-revision is accepted only when it is the exact signed commit
-`b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` and its
-`scripts/qualify-production-host.sh` bytes have SHA-256
-`f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c`.
-The pair is independently enforced by the trusted workflow, target runner,
-diagnostic classifier, schema, and repository agreement checks. The target is
-fetched by the guest only after every GCP service account has been detached and
-access to the metadata credential endpoint has been blocked.
+preparation, continuation admission, evidence admission, and cleanup. The AVC
+diagnostic extension changes target-owned harness bytes to SHA-256
+`436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac`.
+Until the successor rebind leaf replaces the pre-extension target selector
+`b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` with the canonical merge commit
+that owns those bytes, the deliberately unmatched pair admits no provider
+qualification. The successor must bind its exact target, harness, and trusted
+control before acquiring new provider authority. The pair is independently
+enforced by the trusted workflow, target runner, diagnostic classifier, schema,
+and repository agreement checks. The target is fetched by the guest only after
+every GCP service account has been detached and access to the metadata
+credential endpoint has been blocked.
 
-That target is the GitHub-verified protected-main merge of #265. It preserves
+The pre-extension target is the GitHub-verified protected-main merge of #265. It preserves
 the #254 Quadlet authority correction and the merged contracts for issues 229,
 230, and 231 while correcting the target-owned AVC target class to `file`. The
 harness digest is derived reproducibly from its immutable Git bytes with
 `git show b76c24fe59fbe2406d8b84094fc9e6694c57f0c6:scripts/qualify-production-host.sh | sha256sum`.
-The earlier target
-`539d5faa6549be62060c8e20028caf200e5eca01` has the same harness digest but
-remains historical authority only. Sharing harness bytes does not allow its
-target identity or trusted-control identity to be mixed with the corrected
-target.
+Its original harness digest
+`f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c`
+remains an exact historical binding, including the #233 failure from run
+`34876534431/1`. The earlier target
+`539d5faa6549be62060c8e20028caf200e5eca01` has that same historical harness
+digest but remains historical authority only. Sharing harness bytes does not
+allow either target identity or trusted-control identity to be mixed with a
+different binding.
 
 The trusted-control SHA for a new lifecycle is the protected-main workflow
 commit itself, derived from `GITHUB_SHA`; it is not a workflow input or an
@@ -171,7 +177,7 @@ failures remain `qualification-harness/unclassified-target-failure`. The
 transport retains only the operation, closed reason, exit status, run bindings,
 and bounded diagnostic-input hash and length—not target stdout or stderr.
 
-For the immutable line-538 Quadlet start, trusted control closes the formerly
+For the immutable line-638 Quadlet start, trusted control closes the formerly
 opaque `runuser -> env -> systemctl --user start` boundary without modifying
 the target harness. The trace redirects only that exact call through
 root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
@@ -204,7 +210,7 @@ or contradictory observations retain the target status as
 `qualify-quadlet-start/diagnostic-unavailable`; no stdout, stderr, environment,
 or journal text enters evidence.
 
-The immutable line-539 active-state check has a separate, identically bounded
+The immutable line-639 active-state check has a separate, identically bounded
 observer. Only the exact `runuser -> env -> systemctl --user is-active --quiet`
 call is redirected through root-owned
 `/opt/secpal-control/libexec/rocky-active-runuser`; absolute, root-owned
@@ -257,6 +263,42 @@ exact in-container `/foreign/marker` path; the AVC must carry the exact source c
 target context, `permissive=0`, and `tclass=file`. Duplicate, malformed,
 oversized, unavailable, or ambiguous audit observations fail closed without
 entering evidence.
+
+When that admission returns no candidate, the target can now emit one
+schema-version-1 AVC-correlation diagnostic projection before cleanup. The
+projection is produced by `selinux_isolation_contract`, the existing admission
+owner, and contains only closed comparison results, bounded record and candidate
+counts, admitted context and MCS values when needed, event identity, PIDs, and
+the observed byte count and digest. It distinguishes absent AVCs, each required
+AVC-field mismatch, invalid PID, absent/mismatched/duplicate PROCTITLE and
+SYSCALL records, event parse or separation failures, multiple candidates,
+malformed or oversized input, normal `ausearch` no-result status, and true
+capture execution error. It contains no audit record bytes, command output,
+journal, environment, provider response, SSH material, or exception string.
+
+Trusted control accepts that projection only for
+`qualify-avc-correlation / command-failed / 3` and wraps it in failure schema
+version 3. Before writing an artifact, the classifier validates its closed
+shape and semantics with the owner contract. `rocky-control.py` then
+independently checks the target, control, run, and harness bindings; canonical
+projection length and SHA-256; component, event, context, MCS, and event-ID
+bounds; duplicate-key-free outer JSON; and recomputed rejection, candidate,
+and final-outcome consistency. The target publishes the projection and returns
+status 3 through the exact AVC trace stack, keeping the closed
+`qualify-avc-correlation / command-failed / 3` classification reachable. A
+caller-selected final reason or a diagnostic that identifies an admitted
+candidate cannot grant authority. The diagnostic family remains negative-only
+and cannot enter success admission.
+
+The exact historical failure artifact from run `34876534431/1`, artifact digest
+`sha256:f461479cd43791aa8c1f31034e1af0ea68c8e7b9687ce6878af6be30ed5a2852`,
+contains schema-version-1 JSON with SHA-256
+`7e19cdf446ed44dde82a45cc6b73fe96e3717f84f7f027788f0d847c124af492`.
+It proves only the bound operation, reason, exit status, and its 85-byte
+diagnostic-input digest. It has no AVC-correlation projection, so the destroyed
+guest's rejecting predicate is unrecoverable. Historical validation preserves
+that artifact exactly; it does not infer or retrofit missing native audit
+bytes.
 
 Post-target cleanup uses only absolute commands with fixed environment,
 ten-second per-command timeouts, and 4,096-byte stdout/stderr drain bounds. The

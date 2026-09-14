@@ -142,6 +142,144 @@ class SelinuxIsolationContractTests(unittest.TestCase):
                 audit_text="\n".join((event(), event(serial="42")))
             )
 
+    def test_closed_diagnostic_identifies_avc_rejection_predicate(self) -> None:
+        diagnostic = CONTRACT.diagnose_avc_correlation(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            audit_text=event(permission="write"),
+            attempt=1,
+        )
+        self.assertEqual("no-match", diagnostic["correlation_outcome"])
+        self.assertIn("permission-mismatch", diagnostic["rejection_facts"])
+        CONTRACT.validate_avc_correlation_diagnostic(diagnostic)
+
+    def test_closed_diagnostic_distinguishes_complete_rejection_family(self) -> None:
+        avc, proctitle, syscall = event().splitlines()
+        cases = {
+            "no-avc-records-observed": "",
+            "permission-mismatch": event(permission="write"),
+            "target-class-mismatch": event(target_class="dir"),
+            "target-name-mismatch": event(name="other"),
+            "source-context-mismatch": event(source=PROCESS_A),
+            "target-context-mismatch": event(
+                target="system_u:object_r:container_file_t:s0:c9"
+            ),
+            "permissive-mismatch": event(permissive=1),
+            "avc-pid-invalid-or-missing": avc.replace("pid=4242 ", "")
+            + "\n"
+            + proctitle
+            + "\n"
+            + syscall,
+            "avc-duplicate": "\n".join((avc, avc, proctitle, syscall)),
+            "proctitle-absent": "\n".join((avc, syscall)),
+            "proctitle-mismatch": event(path="/foreign/other"),
+            "proctitle-duplicate": "\n".join((avc, proctitle, proctitle, syscall)),
+            "syscall-absent": "\n".join((avc, proctitle)),
+            "syscall-mismatch": event(syscall_pid=999),
+            "syscall-duplicate": "\n".join((avc, proctitle, syscall, syscall)),
+            "cross-event-separation": "\n".join(
+                (avc, *event(serial="42").splitlines()[1:])
+            ),
+            "multiple-candidate-events": "\n".join((event(), event(serial="42"))),
+        }
+        for rejection, audit_text in cases.items():
+            with self.subTest(rejection=rejection):
+                diagnostic = CONTRACT.diagnose_avc_correlation(
+                    process_a=PROCESS_A,
+                    process_b=PROCESS_B,
+                    storage_a=STORAGE_A,
+                    audit_text=audit_text,
+                    attempt=12,
+                )
+                self.assertIn(rejection, diagnostic["rejection_facts"])
+                CONTRACT.validate_avc_correlation_diagnostic(diagnostic)
+
+        malformed = CONTRACT.diagnose_avc_correlation(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            audit_text=event().replace("08/31/26", "13/31/26"),
+            attempt=1,
+        )
+        self.assertEqual(
+            ["event-id-parse-mismatch", "observation-malformed"],
+            malformed["rejection_facts"],
+        )
+        malformed_record = CONTRACT.diagnose_avc_correlation(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            audit_text="unrestricted audit record",
+            attempt=1,
+        )
+        self.assertEqual(
+            ["record-representation-malformed", "observation-malformed"],
+            malformed_record["rejection_facts"],
+        )
+        oversized = CONTRACT.diagnose_avc_correlation_bytes(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            payload=b"x" * (CONTRACT.MAX_AUDIT_OBSERVATION_BYTES + 1),
+            attempt=1,
+        )
+        self.assertEqual(["observation-oversized"], oversized["rejection_facts"])
+
+    def test_capture_diagnostics_and_mutations_fail_closed(self) -> None:
+        no_result = CONTRACT.capture_avc_correlation_diagnostic(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            payload=b"",
+            attempt=12,
+            capture_outcome="ausearch-no-result",
+            ausearch_status=1,
+            capture_status=0,
+        )
+        self.assertEqual("no-match", no_result["correlation_outcome"])
+        execution_error = CONTRACT.capture_avc_correlation_diagnostic(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            payload=b"",
+            attempt=1,
+            capture_outcome="capture-execution-error",
+            ausearch_status=125,
+            capture_status=0,
+        )
+        self.assertEqual(
+            ["capture-execution-error"], execution_error["rejection_facts"]
+        )
+        for diagnostic in (no_result, execution_error):
+            CONTRACT.validate_avc_correlation_diagnostic(diagnostic)
+
+        admitted = CONTRACT.diagnose_avc_correlation(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            audit_text=event(),
+            attempt=1,
+        )
+        mutations = []
+        wrong_reason = deepcopy(admitted)
+        wrong_reason["rejection_facts"] = ["permission-mismatch"]
+        mutations.append(wrong_reason)
+        wrong_count = deepcopy(admitted)
+        wrong_count["candidate_event_count"] = 0
+        mutations.append(wrong_count)
+        wrong_mcs = deepcopy(admitted)
+        wrong_mcs["process_contexts"][0]["mcs_categories"] = [1024]
+        mutations.append(wrong_mcs)
+        wrong_event = deepcopy(admitted)
+        wrong_event["events"][0]["serial"] = "0"
+        mutations.append(wrong_event)
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(
+                CONTRACT.IsolationError
+            ):
+                CONTRACT.validate_avc_correlation_diagnostic(mutation)
+
     def test_schema_and_owner_agree_after_normalization(self) -> None:
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         isolation_schema = {

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import hashlib
 import io
@@ -47,6 +48,7 @@ PRIMARY_RUNUSER = ROOT / "scripts/ci-cloud/rocky-primary-runuser.py"
 PRIMARY_RUNTIME = ROOT / "scripts/ci-cloud/rocky-primary-runtime.py"
 QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
 QUADLET_AUTHORITY = ROOT / "scripts/quadlet_authority_contract.py"
+SELINUX_ISOLATION = ROOT / "scripts/selinux_isolation_contract.py"
 
 
 class RetainedBytesIO(io.BytesIO):
@@ -105,6 +107,9 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         cls.observer = load_observer()
         cls.quadlet_authority = load_script(
             QUADLET_AUTHORITY, "quadlet_authority_contract"
+        )
+        cls.selinux_isolation = load_script(
+            SELINUX_ISOLATION, "selinux_isolation_contract"
         )
 
     def run_authority_contract(
@@ -673,11 +678,74 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
             line_rules=self.classifier.HISTORICAL_LINE_RULES,
         )
 
-    def classify_current(self, trace: str, output: str = "") -> tuple[str, str]:
+    def classify_current(
+        self, trace: str, output: str = "", exit_status: int = 1
+    ) -> tuple[str, str]:
         return self.classifier.classify_failure(
-            output.encode(), trace.encode(), 1, target_bound=True,
+            output.encode(), trace.encode(), exit_status, target_bound=True,
             line_rules=self.classifier.LINE_RULES,
         )
+
+    def build_avc_failure(self, root: Path) -> tuple[dict[str, object], Path]:
+        process_a = "system_u:system_r:container_t:s0:c0"
+        process_b = "system_u:system_r:container_t:s0:c1023"
+        storage_a = "system_u:object_r:container_file_t:s0:c0"
+        identity = "msg=audit(08/31/26 00:43:39.673:41) :"
+        audit = "\n".join(
+            (
+                f"type=AVC {identity} avc: denied {{ write }} pid=4242 "
+                f'name="marker" scontext={process_b} tcontext={storage_a} '
+                "tclass=file permissive=0",
+                f"type=PROCTITLE {identity} proctitle=cat /foreign/marker",
+                f'type=SYSCALL {identity} pid=4242 comm="cat"',
+            )
+        )
+        projection = self.selinux_isolation.diagnose_avc_correlation(
+            process_a=process_a,
+            process_b=process_b,
+            storage_a=storage_a,
+            audit_text=audit,
+            attempt=12,
+        )
+        diagnostic = root / "avc-diagnostic.json"
+        diagnostic.write_bytes(self.selinux_isolation.canonical_bytes(projection))
+        stdout = root / "stdout"
+        stdout.write_bytes(b"")
+        trace = root / "trace"
+        trace.write_text(
+            "SECPAL_TARGET_ERR_V2:1:375,690,772\n", encoding="ascii"
+        )
+        output = root / "failure.json"
+        result = subprocess.run(
+            [
+                CLASSIFIER,
+                "--target-sha",
+                self.classifier.EXPECTED_TARGET_SHA,
+                "--control-sha",
+                "c" * 40,
+                "--run-id",
+                "12345",
+                "--run-attempt",
+                "1",
+                "--harness",
+                QUALIFICATION_HARNESS,
+                "--stdout",
+                stdout,
+                "--trace",
+                trace,
+                "--exit-status",
+                "3",
+                "--avc-correlation-diagnostic",
+                diagnostic,
+                "--output",
+                output,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return json.loads(output.read_text(encoding="utf-8")), output
 
     def observer_arguments(self, directory: str) -> types.SimpleNamespace:
         return types.SimpleNamespace(
@@ -709,7 +777,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 mock.patch.object(
                     self.observer,
                     "admitted_fifo",
-                    side_effect=[io.BytesIO(self.reload_event("525,531")), acknowledgement],
+                    side_effect=[io.BytesIO(self.reload_event("614,620")), acknowledgement],
                 ),
                 mock.patch.object(
                     self.observer, "validate_client_identity", create=True
@@ -885,12 +953,12 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 
     def test_current_target_line_map_is_private_relabel_only(self) -> None:
         cases = (
-            (525, "qualify-quadlet-daemon-reload"),
-            (549, "qualify-quadlet-start"),
-            (550, "qualify-quadlet-active-state"),
-            (570, "qualify-seccomp"),
-            (581, "qualify-workload-primary"),
-            (591, "qualify-selinux-storage"),
+            (614, "qualify-quadlet-daemon-reload"),
+            (638, "qualify-quadlet-start"),
+            (639, "qualify-quadlet-active-state"),
+            (659, "qualify-seccomp"),
+            (670, "qualify-workload-primary"),
+            (680, "qualify-selinux-storage"),
         )
         for line, operation in cases:
             with self.subTest(line=line):
@@ -898,43 +966,46 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                     (operation, "command-failed"),
                     self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}"),
                 )
-        for line in (579, 580, 581):
+        for line in (668, 669, 670):
             self.assertNotEqual("qualify-selinux-storage-fcontext-add", self.classifier.operation_for_line(line))
 
     def test_current_target_messages_preserve_invariant_semantics(self) -> None:
-        cases = (
+        invariant_cases = (
             (
                 "ERROR: service account must resolve to a non-root runtime identity.\n",
-                399,
+                487,
                 "qualify-service-account",
             ),
             (
                 "ERROR: effective Podman runtime is not the admitted rootless service identity.\n",
-                447,
+                535,
                 "qualify-rootless-runtime",
             ),
             (
                 "ERROR: effective Quadlet runtime identity contradicts the service account.\n",
-                548,
+                651,
                 "qualify-quadlet-authority",
             ),
             (
                 "ERROR: representative workload lacks the effective least-authority process state.\n",
-                573,
+                662,
                 "qualify-seccomp",
             ),
-            (
-                "ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n",
-                623,
-                "qualify-avc-correlation",
-            ),
         )
-        for message, line, operation in cases:
+        for message, line, operation in invariant_cases:
             with self.subTest(line=line):
                 self.assertEqual(
                     (operation, "invariant-failed"),
                     self.classify_current(f"SECPAL_TARGET_ERR_V2:1:{line}", message),
                 )
+        self.assertEqual(
+            ("qualify-avc-correlation", "command-failed"),
+            self.classify_current(
+                "SECPAL_TARGET_ERR_V2:1:375,690,772",
+                "ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n",
+                exit_status=3,
+            ),
+        )
 
     def test_every_current_line_range_is_closed_nonoverlapping_and_reachable(
         self,
@@ -956,17 +1027,18 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
 
         harness_lines = QUALIFICATION_HARNESS.read_text(encoding="utf-8").splitlines()
         anchors = {
-            368: ("read_os_release_value", "qualify-host-identity"),
-            525: ("user_systemctl daemon-reload", "qualify-quadlet-daemon-reload"),
-            549: ("user_systemctl start", "qualify-quadlet-start"),
-            550: ("user_systemctl is-active", "qualify-quadlet-active-state"),
-            567: ("rootless_podman exec", "qualify-workload-primary"),
-            579: ("install -d", "qualify-selinux-storage-directory-create"),
-            581: ("rootless_podman run", "qualify-workload-primary"),
-            586: ("rootless_podman run", "qualify-workload-secondary"),
-            591: ("rootless_podman top", "qualify-selinux-storage"),
-            601: ("observe_denied_access", "qualify-avc-correlation"),
-            662: ("rootless_podman inspect", "qualify-runtime-fallback-absence"),
+            456: ("read_os_release_value", "qualify-host-identity"),
+            614: ("user_systemctl daemon-reload", "qualify-quadlet-daemon-reload"),
+            638: ("user_systemctl start", "qualify-quadlet-start"),
+            639: ("user_systemctl is-active", "qualify-quadlet-active-state"),
+            656: ("rootless_podman exec", "qualify-workload-primary"),
+            668: ("install -d", "qualify-selinux-storage-directory-create"),
+            670: ("rootless_podman run", "qualify-workload-primary"),
+            675: ("rootless_podman run", "qualify-workload-secondary"),
+            680: ("rootless_podman top", "qualify-selinux-storage"),
+            690: ("observe_denied_access", "qualify-avc-correlation"),
+            749: ("rootless_podman inspect", "qualify-runtime-fallback-absence"),
+            765: ("return 3", "qualify-avc-correlation"),
         }
         for line, (source, operation) in anchors.items():
             with self.subTest(line=line):
@@ -1524,7 +1596,7 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 executable = fake_bin / name
                 executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
                 executable.chmod(0o700)
-            lines = ["set -euo pipefail"] + [""] * 529
+            lines = ["set -euo pipefail"] + [""] * 618
             definitions = {
                 52: "user_systemctl() {",
                 53: "  false",
@@ -1536,10 +1608,10 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
                 66: "}",
                 204: "trap cleanup EXIT",
                 216: 'printf "actual input\\n" >"$FIXTURE_INPUT"',
-                500: "main() {",
-                525: "user_systemctl daemon-reload",
-                529: "}",
-                530: "main",
+                589: "main() {",
+                614: "user_systemctl daemon-reload",
+                618: "}",
+                619: "main",
             }
             for line_number, source in definitions.items():
                 lines[line_number - 1] = source
@@ -3434,10 +3506,10 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
 
     def test_inner_status_transition_is_bound_to_the_avc_observation_path(self) -> None:
         rejected = (
-            (64, b"SECPAL_TARGET_ERR_V2:7:525\n"),
-            (3, b"SECPAL_TARGET_ERR_V2:1:300,601\n"),
-            (3, b"SECPAL_TARGET_ERR_V2:1:300,601,667,674\n"),
-            (3, b"SECPAL_TARGET_ERR_V2:2:300,601,674\n"),
+            (64, b"SECPAL_TARGET_ERR_V2:7:614\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:1:375,690\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:1:375,690,754,772\n"),
+            (3, b"SECPAL_TARGET_ERR_V2:2:375,690,772\n"),
         )
         for exit_status, trace in rejected:
             with self.subTest(exit_status=exit_status, trace=trace):
@@ -3633,6 +3705,347 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             list(validator.iter_errors(daemon_reload)),
             "the exact daemon-reload failure must carry its pre-cleanup adjacency",
         )
+
+    def test_avc_failure_artifact_retains_only_bound_closed_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            document, path = self.build_avc_failure(Path(directory))
+            validator = Draft202012Validator(
+                json.loads(SCHEMA.read_text(encoding="utf-8"))
+            )
+            self.assertEqual([], list(validator.iter_errors(document)))
+            self.assertEqual(3, document["schema_version"])
+            self.assertEqual("qualify-avc-correlation", document["operation"])
+            self.assertEqual("command-failed", document["reason"])
+            diagnostic = document["avc_correlation_diagnostic"]
+            self.assertEqual(
+                document["diagnostic_input_sha256"],
+                diagnostic["projection_sha256"],
+            )
+            self.assertEqual(
+                document["diagnostic_input_bytes"],
+                diagnostic["projection_bytes"],
+            )
+            encoded = json.dumps(document, sort_keys=True)
+            for forbidden in (
+                "avc: denied",
+                "proctitle=",
+                "type=SYSCALL",
+                "stdout",
+                "stderr",
+                "environment",
+                "journal",
+            ):
+                self.assertNotIn(forbidden, encoded)
+            load_rocky_control().validate_target_qualification_failure(
+                path,
+                self.classifier.EXPECTED_TARGET_SHA,
+                "c" * 40,
+                "12345",
+                "1",
+            )
+
+    def test_avc_failure_verifier_recomputes_binding_hash_and_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document, path = self.build_avc_failure(root)
+            control = load_rocky_control()
+            mutations: list[dict[str, object]] = []
+            wrong_binding = copy.deepcopy(document)
+            wrong_binding["avc_correlation_diagnostic"]["qualification_run_id"] = "9"
+            mutations.append(wrong_binding)
+            wrong_hash = copy.deepcopy(document)
+            wrong_hash["avc_correlation_diagnostic"]["projection_sha256"] = "0" * 64
+            mutations.append(wrong_hash)
+            wrong_reason = copy.deepcopy(document)
+            wrong_reason["avc_correlation_diagnostic"]["projection"][
+                "rejection_facts"
+            ] = ["target-class-mismatch"]
+            mutations.append(wrong_reason)
+            wrong_context = copy.deepcopy(document)
+            wrong_context["avc_correlation_diagnostic"]["projection"][
+                "process_contexts"
+            ][0]["mcs_categories"] = [1024]
+            mutations.append(wrong_context)
+            wrong_event = copy.deepcopy(document)
+            wrong_event["avc_correlation_diagnostic"]["projection"]["events"][0][
+                "serial"
+            ] = "0"
+            mutations.append(wrong_event)
+            admitted = copy.deepcopy(document)
+            admitted["avc_correlation_diagnostic"]["projection"][
+                "correlation_outcome"
+            ] = "admitted"
+            mutations.append(admitted)
+            wrong_final = copy.deepcopy(document)
+            wrong_final["exit_status"] = 1
+            mutations.append(wrong_final)
+            for mutation in mutations:
+                with self.subTest(mutation=mutation):
+                    path.write_text(json.dumps(mutation), encoding="utf-8")
+                    with self.assertRaises(control.ControlError):
+                        control.validate_target_qualification_failure(
+                            path,
+                            self.classifier.EXPECTED_TARGET_SHA,
+                            "c" * 40,
+                            "12345",
+                            "1",
+                        )
+
+    def test_avc_failure_verifier_rejects_duplicate_projection_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _document, path = self.build_avc_failure(root)
+            payload = path.read_bytes()
+            marker = b'"projection":'
+            self.assertEqual(1, payload.count(marker))
+            path.write_bytes(
+                payload.replace(
+                    marker,
+                    b'"projection":{"raw_audit":"avc: denied"},"projection":',
+                    1,
+                )
+            )
+            control = load_rocky_control()
+            with self.assertRaisesRegex(
+                control.ControlError, "duplicate object key"
+            ):
+                control.validate_target_qualification_failure(
+                    path,
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "c" * 40,
+                    "12345",
+                    "1",
+                )
+
+    def test_classifier_never_retains_malformed_or_oversized_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdout = root / "stdout"
+            stdout.write_bytes(b"")
+            trace = root / "trace"
+            trace.write_text(
+                "SECPAL_TARGET_ERR_V2:1:375,690,772\n", encoding="ascii"
+            )
+            output = root / "failure.json"
+            diagnostic = root / "diagnostic.json"
+            base = [
+                CLASSIFIER,
+                "--target-sha",
+                self.classifier.EXPECTED_TARGET_SHA,
+                "--control-sha",
+                "c" * 40,
+                "--run-id",
+                "12345",
+                "--run-attempt",
+                "1",
+                "--harness",
+                QUALIFICATION_HARNESS,
+                "--stdout",
+                stdout,
+                "--trace",
+                trace,
+                "--exit-status",
+                "3",
+                "--avc-correlation-diagnostic",
+                diagnostic,
+                "--output",
+                output,
+            ]
+            for payload in (
+                None,
+                b"",
+                b'{"stdout":"unrestricted audit output"}\n',
+                b"x" * (self.classifier.MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES + 1),
+            ):
+                with self.subTest(size=None if payload is None else len(payload)):
+                    if payload is None:
+                        diagnostic.unlink(missing_ok=True)
+                    else:
+                        diagnostic.write_bytes(payload)
+                    output.unlink(missing_ok=True)
+                    result = subprocess.run(
+                        base, check=False, capture_output=True, text=True
+                    )
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertFalse(output.exists())
+
+    def test_target_publishes_only_semantic_avc_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process_a = "system_u:system_r:container_t:s0:c0"
+            process_b = "system_u:system_r:container_t:s0:c1023"
+            storage_a = "system_u:object_r:container_file_t:s0:c0"
+            identity = "msg=audit(08/31/26 00:43:39.673:41) :"
+            raw = (
+                f"type=AVC {identity} avc: denied {{ write }} pid=4242 "
+                f'name="marker" scontext={process_b} tcontext={storage_a} '
+                f"tclass=file permissive=0\n"
+                f"type=PROCTITLE {identity} proctitle=cat /foreign/marker\n"
+                f'type=SYSCALL {identity} pid=4242 comm="cat"\n'
+            )
+            audit = root / "audit"
+            isolation = root / "isolation"
+            diagnostic = root / "diagnostic"
+            published = root / "published"
+            audit.write_text(raw, encoding="utf-8")
+            shell = r'''
+source "$1"
+process_a="$2"
+process_b="$3"
+storage_a="$4"
+avc_correlation_diagnostic="$7"
+set +e
+admit_audit_observation "$5" "$6" "$7" 12
+status=$?
+set -e
+[[ "$status" -eq 2 ]]
+exec 6>"$8"
+SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6
+publish_avc_correlation_diagnostic
+exec 6>&-
+'''
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    shell,
+                    "bash",
+                    QUALIFICATION_HARNESS,
+                    process_a,
+                    process_b,
+                    storage_a,
+                    audit,
+                    isolation,
+                    diagnostic,
+                    published,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse(isolation.exists())
+            self.assertEqual(diagnostic.read_bytes(), published.read_bytes())
+            self.assertNotIn(b"avc: denied", published.read_bytes())
+            projection = json.loads(published.read_text(encoding="utf-8"))
+            self.assertIn("permission-mismatch", projection["rejection_facts"])
+            self.selinux_isolation.validate_avc_correlation_diagnostic(projection)
+
+    def test_avc_no_result_returns_to_caller_before_projection_publication(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            ausearch = fake_bin / "ausearch"
+            ausearch.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            ausearch.chmod(0o700)
+            state = root / "state"
+            state.mkdir()
+            (state / "marker").write_text("marker", encoding="utf-8")
+            published = root / "published"
+            trace = root / "trace"
+            shell_path = root / "exercise-target-path.sh"
+            lines = [""] * 772
+            definitions = {
+                1: 'source "$1"',
+                2: 'PATH="$2:$PATH"',
+                3: 'process_a="system_u:system_r:container_t:s0:c0"',
+                4: 'process_b="system_u:system_r:container_t:s0:c1023"',
+                5: 'storage_a="system_u:object_r:container_file_t:s0:c0"',
+                6: 'container_b="fixture-b"',
+                7: 'state_a="$3"',
+                8: 'audit_observation="$4/audit"',
+                9: 'isolation_document="$4/isolation"',
+                10: 'avc_correlation_diagnostic="$4/diagnostic"',
+                11: 'rootless_podman() { return 1; }',
+                12: 'sleep() { :; }',
+                13: 'exec 6>"$5"',
+                14: 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6',
+                680: "test_main() {",
+                689: "  set +e",
+                690: "  observe_denied_access",
+                691: "  status=$?",
+                692: '  [[ "$-" != *e* ]] || return 90',
+                693: "  set -e",
+                694: '  [[ "$status" -eq 3 ]]',
+                711: '  reject_avc_observation "$status"',
+                712: "}",
+                772: "test_main",
+            }
+            for line_number, source in definitions.items():
+                lines[line_number - 1] = source
+            shell_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with trace.open("wb") as trace_descriptor:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        shell_path,
+                        QUALIFICATION_HARNESS,
+                        fake_bin,
+                        state,
+                        root,
+                        published,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    env={**os.environ, "BASH_ENV": os.fspath(TRACE)},
+                    pass_fds=(trace_descriptor.fileno(),),
+                    close_fds=True,
+                    preexec_fn=lambda: os.dup2(trace_descriptor.fileno(), 3),
+                )
+            self.assertEqual(3, result.returncode, result.stderr.decode())
+            projection = json.loads(published.read_text(encoding="utf-8"))
+            self.assertEqual("ausearch-no-result", projection["capture_outcome"])
+            self.assertEqual(12, projection["attempt"])
+            self.selinux_isolation.validate_avc_correlation_diagnostic(projection)
+            stdout = root / "stdout"
+            stdout.write_bytes(result.stdout + result.stderr)
+            output = root / "failure.json"
+            classified = subprocess.run(
+                [
+                    CLASSIFIER,
+                    "--target-sha",
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "--control-sha",
+                    "c" * 40,
+                    "--run-id",
+                    "12345",
+                    "--run-attempt",
+                    "1",
+                    "--harness",
+                    QUALIFICATION_HARNESS,
+                    "--stdout",
+                    stdout,
+                    "--trace",
+                    trace,
+                    "--exit-status",
+                    "3",
+                    "--avc-correlation-diagnostic",
+                    published,
+                    "--output",
+                    output,
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(0, classified.returncode, classified.stderr.decode())
+            document = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                3,
+                document["schema_version"],
+                (document, trace.read_text(encoding="ascii")),
+            )
+            self.assertEqual("qualify-avc-correlation", document["operation"])
+            self.assertEqual("command-failed", document["reason"])
+            load_rocky_control().validate_target_qualification_failure(
+                output,
+                self.classifier.EXPECTED_TARGET_SHA,
+                "c" * 40,
+                "12345",
+                "1",
+            )
 
     def test_trusted_validator_binds_the_exact_control_target_and_run(self) -> None:
         document = {

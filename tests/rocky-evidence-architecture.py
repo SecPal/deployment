@@ -1193,7 +1193,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
         target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         harness = (
-            "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
         mutations = (
             (
@@ -1229,14 +1229,14 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             (
                 "--target-trace",
                 TARGET_TRACE,
-                "10#$frame == 525",
+            "10#$frame == 614",
                 "10#$frame == 526",
             ),
             (
                 "--reload-observer",
                 RELOAD_OBSERVER,
-                "or 525 not in frames",
-                "or 526 not in frames",
+                "or 614 not in frames",
+                "or 615 not in frames",
             ),
             (
                 "--qualification-harness",
@@ -1247,8 +1247,8 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             (
                 "--target-failure-classifier",
                 TARGET_FAILURE_CLASSIFIER,
-                '(581, 585, "qualify-workload-primary"),',
-                '(581, 585, "qualify-workload-secondary"),',
+                '(653, 658, "qualify-workload-primary"),',
+                '(653, 658, "qualify-workload-secondary"),',
             ),
             (
                 "--target-replay-verifier",
@@ -1286,9 +1286,71 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 self.assertNotEqual(0, completed.returncode)
                 self.assertIn("disagree", completed.stderr)
 
+    def test_architecture_gate_rejects_avc_diagnostic_boundary_mutations(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "--isolation-contract",
+                ROOT / "scripts/selinux_isolation_contract.py",
+                "def validate_avc_correlation_diagnostic(",
+                "def trust_avc_correlation_diagnostic(",
+            ),
+            (
+                "--qualification-harness",
+                QUALIFICATION_HARNESS,
+                "publish_avc_correlation_diagnostic() {",
+                "discard_avc_correlation_diagnostic() {",
+            ),
+            (
+                "--qualification-runner",
+                QUALIFICATION_RUNNER,
+                "SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6",
+                "SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=7",
+            ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                "contract.validate_avc_correlation_diagnostic(projection)",
+                "pass",
+            ),
+            (
+                "--rocky-control",
+                CONTROL,
+                "contract.validate_avc_correlation_diagnostic(projection)",
+                "pass",
+            ),
+            (
+                "--rocky-control",
+                CONTROL,
+                "json.loads(payload, object_pairs_hook=reject_duplicate_keys)",
+                "json.loads(payload)",
+            ),
+            (
+                "--qualification-harness",
+                QUALIFICATION_HARNESS,
+                "reject_avc_observation() {",
+                "discard_avc_observation() {",
+            ),
+        )
+        for option, source_path, old, new in mutations:
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
+                source = source_path.read_text(encoding="utf-8")
+                self.assertIn(old, source)
+                path = Path(directory) / source_path.name
+                path.write_text(source.replace(old, new, 1), encoding="utf-8")
+                completed = subprocess.run(
+                    [VALIDATOR, option, path],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("rejected", completed.stderr)
+
     def test_architecture_gate_rejects_schema_pair_substitution(self) -> None:
         current = (
-            "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
         historical = (
             "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
@@ -1318,16 +1380,16 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         )
         self.assertIn(
             'EXPECTED_HARNESS_SHA256 = (\n    '
-            '"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"',
+            '"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
             source,
         )
         self.assertIn(
-            'HISTORICAL_PRE_265_HARNESS_SHA256 = (\n    '
+            'HISTORICAL_PRE_269_HARNESS_SHA256 = (\n    '
             '"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"',
             source,
         )
         self.assertNotIn(
-            "HISTORICAL_PRE_265_HARNESS_SHA256 = EXPECTED_HARNESS_SHA256",
+            "HISTORICAL_PRE_269_HARNESS_SHA256 = EXPECTED_HARNESS_SHA256",
             source,
         )
 

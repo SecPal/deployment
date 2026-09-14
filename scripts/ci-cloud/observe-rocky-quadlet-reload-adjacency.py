@@ -1093,7 +1093,7 @@ def observe(arguments: argparse.Namespace) -> int:
         if (
             failure_status > 255
             or control_pid > 2**31 - 1
-            or 525 not in frames
+            or 614 not in frames
         ):
             raise ObservationError("daemon-reload event is outside the exact call site")
         run_space_before = (

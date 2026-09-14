@@ -94,7 +94,7 @@ jobs:
           IS_DEFAULT_BRANCH: ${{ github.ref == 'refs/heads/main' }}
         run: |
           readonly expected_target_sha=b76c24fe59fbe2406d8b84094fc9e6694c57f0c6
-          readonly expected_harness_sha256=f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c
+          readonly expected_harness_sha256=436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac
           readonly historical_cleanup_target_sha=293977ae93408a7bb812619de58649ab8a92d438
           [[ "$IS_DEFAULT_BRANCH" == true ]]
           [[ "$RAW_TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
