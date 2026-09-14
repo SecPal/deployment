@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
-EXPECTED_HARNESS_SHA256 = "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"
+EXPECTED_HARNESS_SHA256 = "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
 HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
 HISTORICAL_PRE_269_HARNESS_SHA256 = "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
 HISTORICAL_PRE_265_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
@@ -316,35 +316,35 @@ HISTORICAL_PRE_269_LINE_RULES = (
 )
 
 LINE_RULES = (
-    (450, 456, "qualify-host-identity"),
-    (458, 461, "qualify-administrator-execution"),
-    (462, 465, "qualify-fixture-reference"),
-    (466, 487, "qualify-service-account"),
-    (491, 494, "qualify-selinux-host"),
-    (496, 509, "qualify-native-architecture"),
-    (511, 514, "qualify-cgroup"),
-    (515, 531, "qualify-rootless-runtime"),
-    (532, 535, "qualify-fixture-presence"),
-    (537, 546, "qualify-fixture-setup"),
-    (548, 607, "qualify-quadlet-authority"),
-    (608, 608, "qualify-quadlet-daemon-reload"),
-    (609, 631, "qualify-quadlet-authority"),
-    (632, 632, "qualify-quadlet-start"),
-    (633, 633, "qualify-quadlet-active-state"),
-    (635, 646, "qualify-quadlet-authority"),
-    (647, 652, "qualify-workload-primary"),
-    (653, 659, "qualify-seccomp"),
-    (662, 662, "qualify-selinux-storage-directory-create"),
-    (664, 668, "qualify-workload-primary"),
-    (669, 672, "qualify-workload-secondary"),
-    (674, 680, "qualify-selinux-storage"),
-    (684, 690, "qualify-avc-correlation"),
-    (694, 700, "qualify-selinux-policy-restoration"),
-    (703, 709, "qualify-avc-correlation"),
-    (711, 719, "qualify-selinux-policy-restoration"),
-    (722, 738, "qualify-avc-correlation"),
-    (747, 750, "qualify-runtime-fallback-absence"),
-    (752, 752, "qualification-harness"),
+    (456, 462, "qualify-host-identity"),
+    (464, 467, "qualify-administrator-execution"),
+    (468, 471, "qualify-fixture-reference"),
+    (472, 493, "qualify-service-account"),
+    (497, 500, "qualify-selinux-host"),
+    (502, 515, "qualify-native-architecture"),
+    (517, 520, "qualify-cgroup"),
+    (521, 537, "qualify-rootless-runtime"),
+    (538, 541, "qualify-fixture-presence"),
+    (543, 552, "qualify-fixture-setup"),
+    (554, 613, "qualify-quadlet-authority"),
+    (614, 614, "qualify-quadlet-daemon-reload"),
+    (615, 637, "qualify-quadlet-authority"),
+    (638, 638, "qualify-quadlet-start"),
+    (639, 639, "qualify-quadlet-active-state"),
+    (641, 652, "qualify-quadlet-authority"),
+    (653, 658, "qualify-workload-primary"),
+    (659, 665, "qualify-seccomp"),
+    (668, 668, "qualify-selinux-storage-directory-create"),
+    (670, 674, "qualify-workload-primary"),
+    (675, 678, "qualify-workload-secondary"),
+    (680, 686, "qualify-selinux-storage"),
+    (690, 696, "qualify-avc-correlation"),
+    (700, 706, "qualify-selinux-policy-restoration"),
+    (709, 715, "qualify-avc-correlation"),
+    (717, 725, "qualify-selinux-policy-restoration"),
+    (728, 744, "qualify-avc-correlation"),
+    (753, 756, "qualify-runtime-fallback-absence"),
+    (758, 758, "qualification-harness"),
 )
 
 TRACE_PATTERN = re.compile(
@@ -357,7 +357,7 @@ MARKER_PATTERN = re.compile(
 )
 AVC_OBSERVATION_TRACE_STATUS = 1
 AVC_OBSERVATION_TARGET_STATUS = 3
-AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({373, 684, 759})
+AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({375, 690, 765})
 HISTORICAL_PRE_269_AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({300, 601, 674})
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,19}$")

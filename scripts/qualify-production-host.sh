@@ -367,12 +367,16 @@ publish_avc_correlation_diagnostic() {
 observe_denied_access() {
   local audit_date audit_time access_status audit_status capture_status
   local admission_status audit_size attempt
+  local errexit_was_enabled=false
+  [[ "$-" == *e* ]] && errexit_was_enabled=true
   rm -f -- "$audit_observation" "$isolation_document"
   read -r audit_date audit_time < <(LC_ALL=C date '+%x %T')
   set +e
   rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1
   access_status=$?
-  set -e
+  if [[ "$errexit_was_enabled" == true ]]; then
+    set -e
+  fi
   if [[ "$access_status" -eq 0 ]]; then
     return 2
   fi
@@ -388,7 +392,9 @@ observe_denied_access() {
     pipeline_statuses=("${PIPESTATUS[@]}")
     audit_status="${pipeline_statuses[0]}"
     capture_status="${pipeline_statuses[1]}"
-    set -e
+    if [[ "$errexit_was_enabled" == true ]]; then
+      set -e
+    fi
     audit_size="$(stat -c %s -- "$audit_observation")"
     if [[ "$audit_status" -eq 0 && "$capture_status" -eq 0 &&
       "$audit_size" -le 65536 ]]; then
@@ -397,7 +403,7 @@ observe_denied_access() {
         "$audit_observation" "$isolation_document" \
         "$avc_correlation_diagnostic" "$attempt"
       admission_status=$?
-      set -e
+      if [[ "$errexit_was_enabled" == true ]]; then set -e; fi
       case "$admission_status" in
         0) return 0 ;;
         2) ;;

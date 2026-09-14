@@ -1220,20 +1220,20 @@ class CloudCIContractTests(unittest.TestCase):
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         for old, new in (
             (
-                '(608, 608, "qualify-quadlet-daemon-reload"),',
-                '(608, 608, "qualify-quadlet-runtime"),',
+                '(614, 614, "qualify-quadlet-daemon-reload"),',
+                '(614, 614, "qualify-quadlet-runtime"),',
             ),
             (
-                '(632, 632, "qualify-quadlet-start"),',
-                '(632, 632, "qualify-quadlet-daemon-reload"),',
+                '(638, 638, "qualify-quadlet-start"),',
+                '(638, 638, "qualify-quadlet-daemon-reload"),',
             ),
             (
-                '(633, 633, "qualify-quadlet-active-state"),',
-                '(633, 633, "qualify-quadlet-start"),',
+                '(639, 639, "qualify-quadlet-active-state"),',
+                '(639, 639, "qualify-quadlet-start"),',
             ),
             (
-                '(647, 652, "qualify-workload-primary"),',
-                '(647, 652, "qualify-workload-secondary"),',
+                '(653, 658, "qualify-workload-primary"),',
+                '(653, 658, "qualify-workload-secondary"),',
             ),
         ):
             with self.subTest(new=new):
@@ -1243,8 +1243,8 @@ class CloudCIContractTests(unittest.TestCase):
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         self.assert_mutation_rejected(
             classifier,
-            '(662, 662, "qualify-selinux-storage-directory-create"),',
-            '(664, 664, "qualify-selinux-storage-fcontext-add"),',
+            '(668, 668, "qualify-selinux-storage-directory-create"),',
+            '(670, 670, "qualify-selinux-storage-fcontext-add"),',
         )
 
     def test_rejects_weakened_target_trace_binding_bounds_and_ambiguity(self) -> None:
@@ -1255,7 +1255,7 @@ class CloudCIContractTests(unittest.TestCase):
             classifier_source,
         )
         self.assertIn(
-            'EXPECTED_HARNESS_SHA256 = "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"',
+            'EXPECTED_HARNESS_SHA256 = "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"',
             classifier_source,
         )
         for old, new in (
@@ -1264,7 +1264,7 @@ class CloudCIContractTests(unittest.TestCase):
                 'EXPECTED_TARGET_SHA = ""',
             ),
             (
-                'EXPECTED_HARNESS_SHA256 = "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"',
+                'EXPECTED_HARNESS_SHA256 = "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"',
                 'EXPECTED_HARNESS_SHA256 = ""',
             ),
             ("MAX_TRACE_FRAMES = 8", "MAX_TRACE_FRAMES = 9"),
@@ -1282,7 +1282,7 @@ class CloudCIContractTests(unittest.TestCase):
     ) -> None:
         target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         harness_sha256 = (
-            "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"
+            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
         )
         workflow = (
             ROOT / ".github/workflows/rocky-cloud-qualification.yml"
@@ -1363,7 +1363,7 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 "scripts/ci-cloud/rocky-target-qualification-trace.sh",
-                "10#$frame == 608",
+                "10#$frame == 614",
                 "10#$frame == 237",
             ),
             (
@@ -1381,7 +1381,7 @@ class CloudCIContractTests(unittest.TestCase):
     ) -> None:
         relative = "schemas/rocky-cloud-target-qualification-failure.schema.json"
         current = (
-            "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"
+            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
         )
         historical = (
             "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
@@ -1625,8 +1625,8 @@ class CloudCIContractTests(unittest.TestCase):
                 "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd",
                 "stat --file-system --format='%a %S' -- /run",
             ),
-            (trace, "10#$frame == 608", "10#$frame == 632"),
-            (observer, "or 608 not in frames", "or 237 not in frames"),
+            (trace, "10#$frame == 614", "10#$frame == 638"),
+            (observer, "or 614 not in frames", "or 237 not in frames"),
             (
                 observer,
                 "except (OSError, ObservationError, KeyError, ValueError):",
@@ -1651,7 +1651,7 @@ class CloudCIContractTests(unittest.TestCase):
             (trace, "trap - ERR", ":"),
             (
                 runner,
-                "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0",
+                "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c",
                 "",
             ),
             (
@@ -2086,9 +2086,9 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            'LINE_RULES = (\n    (450, 456, "qualify-host-identity"),',
+            'LINE_RULES = (\n    (456, 462, "qualify-host-identity"),',
             'LINE_RULES = (\n    (48, 50, "qualify-rootless-runtime"),\n'
-            '    (450, 456, "qualify-host-identity"),',
+            '    (456, 462, "qualify-host-identity"),',
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",

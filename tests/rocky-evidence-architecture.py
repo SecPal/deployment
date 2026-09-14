@@ -1193,7 +1193,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
         target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         harness = (
-            "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"
+            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
         )
         mutations = (
             (
@@ -1229,14 +1229,14 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             (
                 "--target-trace",
                 TARGET_TRACE,
-            "10#$frame == 608",
+            "10#$frame == 614",
                 "10#$frame == 526",
             ),
             (
                 "--reload-observer",
                 RELOAD_OBSERVER,
-                "or 608 not in frames",
-                "or 609 not in frames",
+                "or 614 not in frames",
+                "or 615 not in frames",
             ),
             (
                 "--qualification-harness",
@@ -1247,8 +1247,8 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             (
                 "--target-failure-classifier",
                 TARGET_FAILURE_CLASSIFIER,
-                '(647, 652, "qualify-workload-primary"),',
-                '(647, 652, "qualify-workload-secondary"),',
+                '(653, 658, "qualify-workload-primary"),',
+                '(653, 658, "qualify-workload-secondary"),',
             ),
             (
                 "--target-replay-verifier",
@@ -1338,7 +1338,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
 
     def test_architecture_gate_rejects_schema_pair_substitution(self) -> None:
         current = (
-            "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"
+            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
         )
         historical = (
             "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
@@ -1368,7 +1368,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         )
         self.assertIn(
             'EXPECTED_HARNESS_SHA256 = (\n    '
-            '"abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"',
+            '"269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"',
             source,
         )
         self.assertIn(

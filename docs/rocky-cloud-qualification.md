@@ -16,7 +16,7 @@ The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
 preparation, continuation admission, evidence admission, and cleanup. The AVC
 diagnostic extension changes target-owned harness bytes to SHA-256
-`abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0`.
+`269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c`.
 Until the successor rebind leaf replaces the pre-extension target selector
 `b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` with the canonical merge commit
 that owns those bytes, the deliberately unmatched pair admits no provider
@@ -177,7 +177,7 @@ failures remain `qualification-harness/unclassified-target-failure`. The
 transport retains only the operation, closed reason, exit status, run bindings,
 and bounded diagnostic-input hash and length—not target stdout or stderr.
 
-For the immutable line-632 Quadlet start, trusted control closes the formerly
+For the immutable line-638 Quadlet start, trusted control closes the formerly
 opaque `runuser -> env -> systemctl --user start` boundary without modifying
 the target harness. The trace redirects only that exact call through
 root-owned `/opt/secpal-control/libexec/rocky-start-runuser`; the runtime-user
@@ -210,7 +210,7 @@ or contradictory observations retain the target status as
 `qualify-quadlet-start/diagnostic-unavailable`; no stdout, stderr, environment,
 or journal text enters evidence.
 
-The immutable line-633 active-state check has a separate, identically bounded
+The immutable line-639 active-state check has a separate, identically bounded
 observer. Only the exact `runuser -> env -> systemctl --user is-active --quiet`
 call is redirected through root-owned
 `/opt/secpal-control/libexec/rocky-active-runuser`; absolute, root-owned

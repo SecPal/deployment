@@ -45,7 +45,7 @@ DEFAULT_RELOAD_OBSERVER = (
 )
 EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
 EXPECTED_HARNESS_SHA256 = (
-    "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"
+    "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
 )
 HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
 HISTORICAL_PRE_269_HARNESS_SHA256 = (
@@ -57,35 +57,35 @@ HISTORICAL_PRE_265_HARNESS_SHA256 = (
 )
 HISTORICAL_CLEANUP_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
 EXPECTED_TARGET_LINE_RULES = (
-    (450, 456, "qualify-host-identity"),
-    (458, 461, "qualify-administrator-execution"),
-    (462, 465, "qualify-fixture-reference"),
-    (466, 487, "qualify-service-account"),
-    (491, 494, "qualify-selinux-host"),
-    (496, 509, "qualify-native-architecture"),
-    (511, 514, "qualify-cgroup"),
-    (515, 531, "qualify-rootless-runtime"),
-    (532, 535, "qualify-fixture-presence"),
-    (537, 546, "qualify-fixture-setup"),
-    (548, 607, "qualify-quadlet-authority"),
-    (608, 608, "qualify-quadlet-daemon-reload"),
-    (609, 631, "qualify-quadlet-authority"),
-    (632, 632, "qualify-quadlet-start"),
-    (633, 633, "qualify-quadlet-active-state"),
-    (635, 646, "qualify-quadlet-authority"),
-    (647, 652, "qualify-workload-primary"),
-    (653, 659, "qualify-seccomp"),
-    (662, 662, "qualify-selinux-storage-directory-create"),
-    (664, 668, "qualify-workload-primary"),
-    (669, 672, "qualify-workload-secondary"),
-    (674, 680, "qualify-selinux-storage"),
-    (684, 690, "qualify-avc-correlation"),
-    (694, 700, "qualify-selinux-policy-restoration"),
-    (703, 709, "qualify-avc-correlation"),
-    (711, 719, "qualify-selinux-policy-restoration"),
-    (722, 738, "qualify-avc-correlation"),
-    (747, 750, "qualify-runtime-fallback-absence"),
-    (752, 752, "qualification-harness"),
+    (456, 462, "qualify-host-identity"),
+    (464, 467, "qualify-administrator-execution"),
+    (468, 471, "qualify-fixture-reference"),
+    (472, 493, "qualify-service-account"),
+    (497, 500, "qualify-selinux-host"),
+    (502, 515, "qualify-native-architecture"),
+    (517, 520, "qualify-cgroup"),
+    (521, 537, "qualify-rootless-runtime"),
+    (538, 541, "qualify-fixture-presence"),
+    (543, 552, "qualify-fixture-setup"),
+    (554, 613, "qualify-quadlet-authority"),
+    (614, 614, "qualify-quadlet-daemon-reload"),
+    (615, 637, "qualify-quadlet-authority"),
+    (638, 638, "qualify-quadlet-start"),
+    (639, 639, "qualify-quadlet-active-state"),
+    (641, 652, "qualify-quadlet-authority"),
+    (653, 658, "qualify-workload-primary"),
+    (659, 665, "qualify-seccomp"),
+    (668, 668, "qualify-selinux-storage-directory-create"),
+    (670, 674, "qualify-workload-primary"),
+    (675, 678, "qualify-workload-secondary"),
+    (680, 686, "qualify-selinux-storage"),
+    (690, 696, "qualify-avc-correlation"),
+    (700, 706, "qualify-selinux-policy-restoration"),
+    (709, 715, "qualify-avc-correlation"),
+    (717, 725, "qualify-selinux-policy-restoration"),
+    (728, 744, "qualify-avc-correlation"),
+    (753, 756, "qualify-runtime-fallback-absence"),
+    (758, 758, "qualification-harness"),
 )
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
@@ -864,7 +864,7 @@ def validate_target_qualification_binding(
     line_rules = assignment_literal(classifier_tree, "LINE_RULES")
     if line_rules != EXPECTED_TARGET_LINE_RULES:
         raise ArchitectureError("current diagnostic line map disagrees")
-    reload_line = 608
+    reload_line = 614
     if (
         f"10#$frame == {reload_line}" not in trace
         or f"or {reload_line} not in frames" not in reload_observer

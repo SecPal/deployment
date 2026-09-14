@@ -76,7 +76,7 @@ class RockyCloudControlTests(unittest.TestCase):
         gate_end = runner_source.index("\nfi\n", pair_gate) + len("\nfi\n")
         current_target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
         current_harness = (
-            "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"
+            "269c13090f5065bdc344c3a04b17316939b3cc2d2e2e5b28bd1da8efb9f7272c"
         )
         pre_269_harness = (
             "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
