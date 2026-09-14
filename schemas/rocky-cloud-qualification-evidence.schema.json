@@ -18,7 +18,7 @@
     "classification"
   ],
   "properties": {
-    "schema_version": { "const": 3 },
+    "schema_version": { "enum": [3, 4] },
     "target_sha": {
       "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
     },
@@ -78,11 +78,40 @@
     "exit_status": { "const": 0 },
     "stdout_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "stdout_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
-    "selinux_isolation": { "$ref": "#/$defs/selinux_isolation" },
+    "selinux_isolation": {
+      "oneOf": [
+        { "$ref": "#/$defs/selinux_isolation_v3" },
+        { "$ref": "#/$defs/selinux_isolation" }
+      ]
+    },
     "seccomp_enforced": { "const": true },
     "cleanup_complete": { "const": true },
     "classification": { "const": "PASS" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 3 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "selinux_isolation": { "$ref": "#/$defs/selinux_isolation_v3" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 4 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "selinux_isolation": { "$ref": "#/$defs/selinux_isolation" }
+        }
+      }
+    }
+  ],
   "$defs": {
     "quadlet_authority": {
       "type": "object",
@@ -228,6 +257,65 @@
           "required": [
             "event_time",
             "serial",
+            "avc_pid",
+            "source_context",
+            "target_context",
+            "permissive",
+            "proctitle",
+            "syscall_pid",
+            "syscall_command"
+          ],
+          "properties": {
+            "event_time": {
+              "type": "string",
+              "pattern": "^[0-9]{2}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}$"
+            },
+            "serial": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "avc_pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "source_context": { "type": "string", "maxLength": 256 },
+            "target_context": { "type": "string", "maxLength": 256 },
+            "permissive": { "const": 0 },
+            "proctitle": { "const": "cat /foreign/marker" },
+            "syscall_pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "syscall_command": { "const": "cat" }
+          }
+        }
+      }
+    },
+    "selinux_isolation_v3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invariant_owner",
+        "process_contexts",
+        "storage_context",
+        "denial"
+      ],
+      "properties": {
+        "invariant_owner": {
+          "const": "selinux_isolation_contract.admit_selinux_isolation"
+        },
+        "process_contexts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/normalized_context" }
+        },
+        "storage_context": { "$ref": "#/$defs/normalized_context" },
+        "denial": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "event_time",
+            "serial",
             "pid",
             "source_context",
             "target_context",
@@ -243,7 +331,11 @@
               "pattern": "^[0-9]{2}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}$"
             },
             "serial": { "type": "string", "pattern": "^[1-9][0-9]*$" },
-            "pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+            "pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
             "source_context": { "type": "string", "maxLength": 256 },
             "target_context": { "type": "string", "maxLength": 256 },
             "permission": { "const": "read" },

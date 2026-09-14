@@ -2293,7 +2293,7 @@ def build_avc_correlation_diagnostic(
     if projection.get("correlation_outcome") == "admitted":
         raise ValueError("AVC failure diagnostic contains an admitted candidate")
     return {
-        "schema_version": 1,
+        "schema_version": projection["schema_version"],
         "target_sha": target_sha,
         "trusted_control_sha": trusted_control_sha,
         "qualification_run_id": qualification_run_id,
@@ -2522,7 +2522,11 @@ def main() -> int:
             + primary_bytes
         )
     document: dict[str, object] = {
-        "schema_version": 3 if avc_diagnostic is not None else (2 if replay_required else 1),
+        "schema_version": (
+            avc_diagnostic["schema_version"] + 2
+            if avc_diagnostic is not None
+            else (2 if replay_required else 1)
+        ),
         "phase": "target-qualification",
         "target_sha": options.target_sha,
         "trusted_control_sha": options.control_sha,

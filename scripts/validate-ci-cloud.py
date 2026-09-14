@@ -2246,7 +2246,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         ),
         *[
             schema_const_pair_at(
-                target_failure_schema, "allOf", 1, "then", "anyOf", index
+                target_failure_schema, "allOf", 3, "then", "anyOf", index
             )
             for index in range(3)
         ],
@@ -2259,7 +2259,7 @@ def validate_rocky_control_plane(root: Path) -> None:
                 "anyOf",
                 index,
             )
-            for condition, length in ((16, 6), (17, 4), (18, 4))
+            for condition, length in ((18, 6), (19, 4), (20, 4))
             for index in range(length)
         ],
     ]
@@ -2643,13 +2643,15 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'projection.get("correlation_outcome") == "admitted"'
         in target_failure_classifier
         and target_failure_schema["properties"]["schema_version"]["enum"]
-        == [1, 2, 3]
+        == [1, 2, 3, 4]
         and "avc_correlation_diagnostic"
         in target_failure_schema["properties"]
         and "process_a=facts[\"process_a\"]" in target_runner
         and "process_b=facts[\"process_b\"]" in target_runner
         and "storage_a=facts[\"storage_a\"]" in target_runner
-        and 'selinux_isolation["denial"]["pid"] != denial_pid'
+        and 'selinux_isolation["denial"]["avc_pid"] != denial_pid'
+        in target_runner
+        and 'selinux_isolation["denial"]["syscall_pid"] != denial_pid'
         in target_runner
         and "selinux_isolation_contract.canonical_bytes(selinux_isolation)"
         in target_runner
@@ -2681,7 +2683,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"permissive": "0"' in selinux_isolation_contract
         and 'def _syscall_matches(line: str, pid: int)' in selinux_isolation_contract
         and '_field(line, "pid") == str(pid)' in selinux_isolation_contract
-        and '_field(line, "comm") == "cat"' in selinux_isolation_contract
+        and 'EXPECTED_COMMAND = "cat"' in selinux_isolation_contract
+        and '_field(line, "comm") == EXPECTED_COMMAND' in selinux_isolation_contract
         and '"SYSCALL": []' in normalize_unique_avc_source
         and isolation_schema["properties"]["invariant_owner"]["const"]
         == "selinux_isolation_contract.admit_selinux_isolation"
