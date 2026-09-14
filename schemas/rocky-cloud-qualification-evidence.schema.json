@@ -243,7 +243,7 @@
             "source_context": { "type": "string", "maxLength": 256 },
             "target_context": { "type": "string", "maxLength": 256 },
             "permission": { "const": "read" },
-            "target_class": { "const": "dir" },
+            "target_class": { "const": "file" },
             "target_path": { "const": "/foreign/marker" },
             "target_name": { "const": "marker" },
             "permissive": { "const": 0 }

@@ -17,7 +17,7 @@ INVARIANT_OWNER = "selinux_isolation_contract.admit_selinux_isolation"
 MCS_CATEGORY_MIN = 0
 MCS_CATEGORY_MAX = 1023
 EXPECTED_PERMISSION = "read"
-EXPECTED_TARGET_CLASS = "dir"
+EXPECTED_TARGET_CLASS = "file"
 EXPECTED_TARGET_PATH = "/foreign/marker"
 EXPECTED_TARGET_NAME = "marker"
 

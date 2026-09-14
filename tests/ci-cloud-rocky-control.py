@@ -2724,7 +2724,7 @@ class RockyCloudControlTests(unittest.TestCase):
             (
                 f"type=AVC {audit_identity} avc: denied {{ read }} pid=4242 "
                 f'name="marker" scontext={process_b} tcontext={storage_a} '
-                "tclass=dir permissive=0",
+                "tclass=file permissive=0",
                 f"type=PROCTITLE {audit_identity} proctitle=cat /foreign/marker",
                 f'type=SYSCALL {audit_identity} pid=4242 comm="cat"',
             )
