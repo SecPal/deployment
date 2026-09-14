@@ -45,6 +45,10 @@ DEFAULT_RELOAD_OBSERVER = (
 )
 EXPECTED_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
 EXPECTED_HARNESS_SHA256 = (
+    "abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0"
+)
+HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+HISTORICAL_PRE_269_HARNESS_SHA256 = (
     "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
 )
 HISTORICAL_PRE_265_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
@@ -53,35 +57,35 @@ HISTORICAL_PRE_265_HARNESS_SHA256 = (
 )
 HISTORICAL_CLEANUP_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
 EXPECTED_TARGET_LINE_RULES = (
-    (368, 374, "qualify-host-identity"),
-    (376, 379, "qualify-administrator-execution"),
-    (380, 383, "qualify-fixture-reference"),
-    (384, 405, "qualify-service-account"),
-    (409, 412, "qualify-selinux-host"),
-    (414, 427, "qualify-native-architecture"),
-    (429, 432, "qualify-cgroup"),
-    (433, 449, "qualify-rootless-runtime"),
-    (450, 453, "qualify-fixture-presence"),
-    (455, 463, "qualify-fixture-setup"),
-    (465, 524, "qualify-quadlet-authority"),
-    (525, 525, "qualify-quadlet-daemon-reload"),
-    (526, 548, "qualify-quadlet-authority"),
-    (549, 549, "qualify-quadlet-start"),
-    (550, 550, "qualify-quadlet-active-state"),
-    (552, 563, "qualify-quadlet-authority"),
-    (564, 569, "qualify-workload-primary"),
-    (570, 576, "qualify-seccomp"),
-    (579, 579, "qualify-selinux-storage-directory-create"),
-    (581, 585, "qualify-workload-primary"),
-    (586, 589, "qualify-workload-secondary"),
-    (591, 597, "qualify-selinux-storage"),
-    (601, 607, "qualify-avc-correlation"),
-    (610, 616, "qualify-selinux-policy-restoration"),
-    (619, 624, "qualify-avc-correlation"),
-    (626, 634, "qualify-selinux-policy-restoration"),
-    (637, 653, "qualify-avc-correlation"),
-    (662, 665, "qualify-runtime-fallback-absence"),
-    (667, 667, "qualification-harness"),
+    (450, 456, "qualify-host-identity"),
+    (458, 461, "qualify-administrator-execution"),
+    (462, 465, "qualify-fixture-reference"),
+    (466, 487, "qualify-service-account"),
+    (491, 494, "qualify-selinux-host"),
+    (496, 509, "qualify-native-architecture"),
+    (511, 514, "qualify-cgroup"),
+    (515, 531, "qualify-rootless-runtime"),
+    (532, 535, "qualify-fixture-presence"),
+    (537, 546, "qualify-fixture-setup"),
+    (548, 607, "qualify-quadlet-authority"),
+    (608, 608, "qualify-quadlet-daemon-reload"),
+    (609, 631, "qualify-quadlet-authority"),
+    (632, 632, "qualify-quadlet-start"),
+    (633, 633, "qualify-quadlet-active-state"),
+    (635, 646, "qualify-quadlet-authority"),
+    (647, 652, "qualify-workload-primary"),
+    (653, 659, "qualify-seccomp"),
+    (662, 662, "qualify-selinux-storage-directory-create"),
+    (664, 668, "qualify-workload-primary"),
+    (669, 672, "qualify-workload-secondary"),
+    (674, 680, "qualify-selinux-storage"),
+    (684, 690, "qualify-avc-correlation"),
+    (694, 700, "qualify-selinux-policy-restoration"),
+    (703, 709, "qualify-avc-correlation"),
+    (711, 719, "qualify-selinux-policy-restoration"),
+    (722, 738, "qualify-avc-correlation"),
+    (747, 750, "qualify-runtime-fallback-absence"),
+    (752, 752, "qualification-harness"),
 )
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
@@ -199,6 +203,37 @@ def schema_const_pairs(document: object) -> list[tuple[str, str]]:
         for value in document:
             pairs.extend(schema_const_pairs(value))
     return pairs
+
+
+def schema_const_pair_at(document: object, *path: object) -> tuple[str, str] | None:
+    """Return one exact required target/harness pair at a closed schema path."""
+
+    node = document
+    for component in path:
+        if isinstance(component, str) and isinstance(node, dict):
+            node = node.get(component)
+        elif (
+            isinstance(component, int)
+            and isinstance(node, list)
+            and 0 <= component < len(node)
+        ):
+            node = node[component]
+        else:
+            return None
+    if not isinstance(node, dict):
+        return None
+    properties = node.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    target = properties.get("target_sha")
+    harness = properties.get("harness_sha256")
+    if not isinstance(target, dict) or not isinstance(harness, dict):
+        return None
+    if not isinstance(target.get("const"), str) or not isinstance(
+        harness.get("const"), str
+    ):
+        return None
+    return target["const"], harness["const"]
 
 
 def validate_pure_contract(path: Path) -> None:
@@ -648,6 +683,9 @@ def validate_selinux_isolation_architecture(
         "normalize_unique_enforcing_avc",
         "admit_selinux_isolation",
         "validate_isolation_evidence",
+        "diagnose_avc_correlation_bytes",
+        "capture_avc_correlation_diagnostic",
+        "validate_avc_correlation_diagnostic",
     } <= functions:
         raise ArchitectureError("SELinux isolation layered surface is incomplete")
     try:
@@ -671,6 +709,7 @@ def validate_selinux_isolation_architecture(
         or maximum != 1023
     ):
         raise ArchitectureError("SELinux isolation schema projection disagrees")
+    consumers: dict[Path, str] = {}
     for path in (harness_path, runner_path, control_path):
         try:
             consumer = path.read_text(encoding="utf-8")
@@ -678,6 +717,20 @@ def validate_selinux_isolation_architecture(
             raise ArchitectureError("SELinux isolation consumer is unavailable") from error
         if "selinux_isolation_contract" not in consumer:
             raise ArchitectureError("SELinux isolation consumer omits its owner")
+        consumers[path] = consumer
+    harness = consumers[harness_path]
+    runner = consumers[runner_path]
+    control = consumers[control_path]
+    if (
+        "diagnose_avc_correlation_bytes(" not in harness
+        or "capture_avc_correlation_diagnostic(" not in harness
+        or "publish_avc_correlation_diagnostic() {" not in harness
+        or 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD:-}" == 6' not in harness
+        or 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6' not in runner
+        or '--avc-correlation-diagnostic "$avc_correlation_diagnostic"' not in runner
+        or "contract.validate_avc_correlation_diagnostic(projection)" not in control
+    ):
+        raise ArchitectureError("bounded AVC diagnostic ownership or transport disagrees")
     if (
         "subprocess" in source
         or "pathlib" in source
@@ -756,6 +809,10 @@ def validate_target_qualification_binding(
         != HISTORICAL_PRE_265_TARGET_SHA
         or assignment_string(classifier_tree, "HISTORICAL_PRE_265_HARNESS_SHA256")
         != HISTORICAL_PRE_265_HARNESS_SHA256
+        or assignment_string(classifier_tree, "HISTORICAL_PRE_269_TARGET_SHA")
+        != HISTORICAL_PRE_269_TARGET_SHA
+        or assignment_string(classifier_tree, "HISTORICAL_PRE_269_HARNESS_SHA256")
+        != HISTORICAL_PRE_269_HARNESS_SHA256
     ):
         raise ArchitectureError("diagnostic classifier target/harness binding disagrees")
 
@@ -772,6 +829,7 @@ def validate_target_qualification_binding(
         or 'replayed = b"\\0".join(' not in replay_verifier
         or 'document["diagnostic_input_sha256"]' not in replay_verifier
         or "classifier.classify_failure(" not in replay_verifier
+        or "classifier.replay_line_rules(" not in replay_verifier
         or "require_available=True" not in replay_verifier
         or 'payload.endswith(b"\\n")' not in classifier
         or 'payload[:-1].decode("ascii").split("\\n")' not in classifier
@@ -789,13 +847,24 @@ def validate_target_qualification_binding(
         or "classifier.replay_start_observation_admitted" not in replay_verifier
         or "classifier.replay_active_observation_admitted" not in replay_verifier
         or "classifier.replay_primary_observation_admitted" not in replay_verifier
+        or "HISTORICAL_PRE_269_LINE_RULES" not in classifier
     ):
         raise ArchitectureError("closed replay verifier disagrees with classifier input authority")
+    if (
+        "MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES = 12_288" not in classifier
+        or "build_avc_correlation_diagnostic(" not in classifier
+        or "contract.validate_avc_correlation_diagnostic(projection)" not in classifier
+        or 'projection.get("correlation_outcome") == "admitted"' not in classifier
+        or failure_schema.get("properties", {}).get("schema_version", {}).get("enum")
+        != [1, 2, 3]
+        or "avc_correlation_diagnostic" not in failure_schema.get("properties", {})
+    ):
+        raise ArchitectureError("bounded AVC failure diagnostic admission disagrees")
 
     line_rules = assignment_literal(classifier_tree, "LINE_RULES")
     if line_rules != EXPECTED_TARGET_LINE_RULES:
         raise ArchitectureError("current diagnostic line map disagrees")
-    reload_line = 525
+    reload_line = 608
     if (
         f"10#$frame == {reload_line}" not in trace
         or f"or {reload_line} not in frames" not in reload_observer
@@ -818,15 +887,61 @@ def validate_target_qualification_binding(
     ):
         raise ArchitectureError("guest target/harness authentication disagrees")
 
+    schema_pair_sequence = [
+        schema_const_pair_at(failure_schema, "allOf", 0, "then"),
+        schema_const_pair_at(
+            failure_schema, "allOf", 0, "if", "anyOf", 1
+        ),
+        *[
+            schema_const_pair_at(
+                failure_schema, "allOf", 1, "then", "anyOf", index
+            )
+            for index in range(3)
+        ],
+        *[
+            schema_const_pair_at(
+                failure_schema, "allOf", condition, "if", "anyOf", index
+            )
+            for condition, length in ((16, 6), (17, 4), (18, 4))
+            for index in range(length)
+        ],
+    ]
+    expected_schema_pair_sequence = [
+        (expected_target, expected_harness),
+        (expected_target, expected_harness),
+        (expected_target, expected_harness),
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+        ("83d0c3720d342d0222e8dee9819e28d0c6739f84", "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"),
+        (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        ("b8f5a505d318d06a64a5975cfaba9f1e5ba0041f", "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"),
+        (expected_target, expected_harness),
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+        (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        (expected_target, expected_harness),
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+        (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        (expected_target, expected_harness),
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+    ]
+
     if (
         schema_const_pairs(failure_schema).count(
             (expected_target, expected_harness)
+        )
+        != 5
+        or schema_const_pairs(failure_schema).count(
+            (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256)
         )
         != 4
         or schema_const_pairs(failure_schema).count(
             (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256)
         )
         != 4
+        or schema_pair_sequence != expected_schema_pair_sequence
     ):
         raise ArchitectureError("diagnostic schema target/harness binding disagrees")
 

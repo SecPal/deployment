@@ -307,6 +307,9 @@ def validate_replay_witness(
     marker = None
     if components["trusted_marker"]["present"]:
         marker = decoded["trusted_marker"].decode("ascii")
+    line_rules = classifier.replay_line_rules(
+        document["target_sha"], document["harness_sha256"]
+    )
     operation, reason = classifier.classify_failure(
         stdout,
         decoded["target_qualification_trace"],
@@ -314,7 +317,7 @@ def validate_replay_witness(
         target_bound=True,
         trusted_marker=marker,
         representation_invalid=witness["representation_invalid"],
-        line_rules=classifier.LINE_RULES,
+        line_rules=line_rules,
     )
     if (operation, reason) != (document["operation"], document["reason"]):
         raise ValueError("replayed classifier result mismatches")

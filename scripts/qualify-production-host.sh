@@ -28,6 +28,7 @@ dontaudit_disabled=false
 interrupted_status=0
 cleanup_started=false
 qualification_success_marker=""
+avc_correlation_diagnostic=""
 
 usage() {
   printf 'Usage: %s --image REGISTRY/IMAGE@sha256:DIGEST [--service-account NAME]\n' "$0"
@@ -248,12 +249,12 @@ install_cleanup_traps() {
 }
 
 admit_audit_observation() {
-  local audit_path="$1" output_path="$2"
+  local audit_path="$1" output_path="$2" diagnostic_path="$3" attempt="$4"
   python3 - "$SELINUX_ISOLATION_CONTRACT" "$audit_path" "$output_path" \
+    "$diagnostic_path" "$attempt" \
     "$process_a" "$process_b" "$storage_a" \
     "$SELINUX_ISOLATION_INVARIANT_OWNER" <<'PY'
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
@@ -261,6 +262,8 @@ from pathlib import Path
     contract_path,
     audit_path,
     output_path,
+    diagnostic_path,
+    attempt,
     process_a,
     process_b,
     storage_a,
@@ -277,18 +280,88 @@ try:
     specification.loader.exec_module(contract)
     if contract.INVARIANT_OWNER != invariant_owner:
         raise ValueError("SELinux isolation invariant owner mismatch")
-    document = contract.admit_selinux_isolation(
+    payload = Path(audit_path).read_bytes()
+    diagnostic = contract.diagnose_avc_correlation_bytes(
         process_a=process_a,
         process_b=process_b,
         storage_a=storage_a,
-        audit_text=Path(audit_path).read_text(encoding="utf-8"),
+        payload=payload,
+        attempt=int(attempt),
     )
-except contract.NoMatchingAvc:
-    raise SystemExit(2) from None
 except (OSError, UnicodeError, ValueError, contract.IsolationError):
     raise SystemExit(1) from None
+Path(diagnostic_path).write_bytes(contract.canonical_bytes(diagnostic))
+if diagnostic["correlation_outcome"] == "no-match":
+    raise SystemExit(2)
+if diagnostic["correlation_outcome"] != "admitted":
+    raise SystemExit(1)
+document = contract.admit_selinux_isolation(
+    process_a=process_a,
+    process_b=process_b,
+    storage_a=storage_a,
+    audit_text=payload.decode("utf-8"),
+)
 Path(output_path).write_bytes(contract.canonical_bytes(document))
 PY
+}
+
+write_avc_capture_diagnostic() {
+  local outcome="$1" audit_status="$2" capture_status="$3" attempt="$4"
+  python3 - "$SELINUX_ISOLATION_CONTRACT" "$avc_correlation_diagnostic" \
+    "$audit_observation" "$outcome" "$audit_status" "$capture_status" \
+    "$attempt" "$process_a" "$process_b" "$storage_a" \
+    "$SELINUX_ISOLATION_INVARIANT_OWNER" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+(
+    contract_path,
+    diagnostic_path,
+    audit_path,
+    outcome,
+    audit_status,
+    capture_status,
+    attempt,
+    process_a,
+    process_b,
+    storage_a,
+    invariant_owner,
+) = sys.argv[1:]
+specification = importlib.util.spec_from_file_location(
+    "selinux_isolation_contract", contract_path
+)
+if specification is None or specification.loader is None:
+    raise SystemExit(1)
+contract = importlib.util.module_from_spec(specification)
+sys.dont_write_bytecode = True
+try:
+    specification.loader.exec_module(contract)
+    if contract.INVARIANT_OWNER != invariant_owner:
+        raise ValueError("SELinux isolation invariant owner mismatch")
+    payload = Path(audit_path).read_bytes()
+    document = contract.capture_avc_correlation_diagnostic(
+        process_a=process_a,
+        process_b=process_b,
+        storage_a=storage_a,
+        payload=payload,
+        attempt=int(attempt),
+        capture_outcome=outcome,
+        ausearch_status=int(audit_status),
+        capture_status=int(capture_status),
+    )
+except (OSError, UnicodeError, ValueError, contract.IsolationError):
+    raise SystemExit(1) from None
+Path(diagnostic_path).write_bytes(contract.canonical_bytes(document))
+PY
+}
+
+publish_avc_correlation_diagnostic() {
+  [[ "${SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD:-}" == 6 &&
+    -e /proc/self/fd/6 && -f "$avc_correlation_diagnostic" &&
+    ! -L "$avc_correlation_diagnostic" &&
+    "$(stat -c %s -- "$avc_correlation_diagnostic")" -le 12288 ]] || return 1
+  /usr/bin/cat -- "$avc_correlation_diagnostic" >&6
 }
 
 observe_denied_access() {
@@ -321,7 +394,8 @@ observe_denied_access() {
       "$audit_size" -le 65536 ]]; then
       set +e
       admit_audit_observation \
-        "$audit_observation" "$isolation_document"
+        "$audit_observation" "$isolation_document" \
+        "$avc_correlation_diagnostic" "$attempt"
       admission_status=$?
       set -e
       case "$admission_status" in
@@ -329,9 +403,17 @@ observe_denied_access() {
         2) ;;
         *) return 2 ;;
       esac
-    elif [[ "$audit_status" -ne 1 || "$capture_status" -ne 0 ||
-      "$audit_size" -gt 65536 ]]; then
+    elif [[ "$audit_size" -gt 65536 ]]; then
+      write_avc_capture_diagnostic observation-oversized \
+        "$audit_status" "$capture_status" "$attempt" || return 2
       return 2
+    elif [[ "$audit_status" -ne 1 || "$capture_status" -ne 0 ]]; then
+      write_avc_capture_diagnostic capture-execution-error \
+        "$audit_status" "$capture_status" "$attempt" || return 2
+      return 2
+    else
+      write_avc_capture_diagnostic ausearch-no-result \
+        "$audit_status" "$capture_status" "$attempt" || return 2
     fi
     if ((attempt < 12)); then
       sleep 0.5
@@ -460,6 +542,7 @@ container_b="${UNIT_PREFIX}-${fixture_id}-b"
 unit_name="${UNIT_PREFIX}-${fixture_id}"
 unit_path="${quadlet_root}/${unit_name}.container"
 qualification_success_marker="${fixture_root}/qualification.success"
+avc_correlation_diagnostic="${fixture_root}/avc-correlation-diagnostic.json"
 install_cleanup_traps
 
 readonly quadlet_parent="${quadlet_root%/*}"
@@ -602,6 +685,7 @@ observe_denied_access
 denial_status=$?
 set -e
 if [[ "$denial_status" -eq 2 ]]; then
+  publish_avc_correlation_diagnostic || :
   printf 'ERROR: cross-boundary denial observation is invalid.\n' >&2
   exit 1
 fi
@@ -620,6 +704,7 @@ if [[ "$denial_status" -ne 0 ]]; then
   denial_status=$?
   set -e
   if [[ "$denial_status" -ne 0 ]]; then
+    publish_avc_correlation_diagnostic || :
     printf 'ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial.\n' >&2
     exit 1
   fi

@@ -10,6 +10,7 @@ readonly source_failure="$evidence_root/target-source-failure.json"
 readonly qualification_failure="$evidence_root/target-qualification-failure.json"
 readonly qualification_trace="$evidence_root/target-qualification.trace"
 readonly qualification_marker="$evidence_root/target-qualification.marker"
+readonly avc_correlation_diagnostic="$evidence_root/avc-correlation-diagnostic.json"
 readonly reload_adjacency="$evidence_root/quadlet-reload-adjacency.json"
 readonly native_observation="$evidence_root/native-package-observation.json"
 readonly native_diagnostic="$evidence_root/native-package-collection-diagnostic.json"
@@ -28,7 +29,7 @@ readonly qualification_run_id="$3"
 readonly qualification_run_attempt="$4"
 readonly qualification_harness_sha256="$5"
 readonly expected_target_sha=b76c24fe59fbe2406d8b84094fc9e6694c57f0c6
-readonly expected_harness_sha256=f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c
+readonly expected_harness_sha256=abf7ba4af2ef5124a92fab29c9ae913ca7ca3c0056908f4aab7b3898bb497ea0
 if [[ "$target_sha" != "$expected_target_sha" ||
   "$qualification_harness_sha256" != "$expected_harness_sha256" ]]; then
   printf 'ERROR: target and qualification harness are not the trusted pair.\n' >&2
@@ -61,7 +62,8 @@ cleanup() {
     /var/lib/secpal-rocky/evidence/quadlet-active-observation.json \
     /var/lib/secpal-rocky/evidence/primary-workload-observation.json \
     /var/lib/secpal-rocky/evidence/quadlet-reload-adjacency.json \
-    "$qualification_trace" "$qualification_marker"
+    "$qualification_trace" "$qualification_marker" \
+    "$avc_correlation_diagnostic"
   rm -rf -- "$work_root"
 }
 interrupted() {
@@ -101,7 +103,7 @@ write_source_failure() {
 
 rm -f -- "$source_failure" "$qualification_failure" "$qualification_trace" \
   "$qualification_marker" "$reload_adjacency" "$native_observation" \
-  "$native_diagnostic"
+  "$native_diagnostic" "$avc_correlation_diagnostic"
 
 # This controller-owned runner observes and admits the installed RPMDB before
 # fetching or executing candidate target bytes.
@@ -209,8 +211,10 @@ trace_capture_pid=$!
 set +e
 timeout --signal=TERM --kill-after=180s 45m \
   env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
+  SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6 \
   bash "$work_root/scripts/qualify-production-host.sh" \
   --image "$fixture" --service-account secpal-runtime \
+  6>"$avc_correlation_diagnostic" \
   3>"$trace_fifo" 2>&1 | capture_bounded 65537 "$stdout"
 pipeline_statuses=("${PIPESTATUS[@]}")
 status="${pipeline_statuses[0]}"
@@ -244,6 +248,7 @@ if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then
     --start-observation "$start_observation" \
     --active-observation "$active_observation" \
     --primary-observation "$primary_observation" \
+    --avc-correlation-diagnostic "$avc_correlation_diagnostic" \
     "${representation_option[@]}" \
     --output "$qualification_failure"
   classifier_status=$?
@@ -686,6 +691,7 @@ if [[ "$admission_status" -ne 0 ]]; then
     --start-observation "$start_observation" \
     --active-observation "$active_observation" \
     --primary-observation "$primary_observation" \
+    --avc-correlation-diagnostic "$avc_correlation_diagnostic" \
     --exit-status "$status" --trusted-marker "$qualification_marker" \
     --output "$qualification_failure"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \

@@ -555,6 +555,9 @@ def load_selinux_isolation_contract() -> Any:
         getattr(contract, "INVARIANT_OWNER", None)
         != SELINUX_ISOLATION_INVARIANT_OWNER
         or not callable(getattr(contract, "validate_isolation_evidence", None))
+        or not callable(
+            getattr(contract, "validate_avc_correlation_diagnostic", None)
+        )
         or not callable(getattr(contract, "canonical_bytes", None))
     ):
         raise ControlError("SELinux isolation contract surface is invalid")
@@ -853,6 +856,58 @@ def validate_target_qualification_failure(
             raise ControlError(
                 "target qualification replay witness contradicts its inputs"
             ) from error
+    avc_diagnostic = document.get("avc_correlation_diagnostic")
+    if document["schema_version"] == 3 and avc_diagnostic is None:
+        raise ControlError("target AVC-correlation failure lacks its diagnostic")
+    if avc_diagnostic is not None:
+        if (
+            document["schema_version"] != 3
+            or document["operation"] != "qualify-avc-correlation"
+            or document["reason"] != "command-failed"
+            or document["exit_status"] != 3
+            or not isinstance(avc_diagnostic, dict)
+        ):
+            raise ControlError("target AVC-correlation diagnostic is inappropriate")
+        binding_names = (
+            "target_sha",
+            "trusted_control_sha",
+            "qualification_run_id",
+            "qualification_run_attempt",
+            "harness_sha256",
+        )
+        if any(
+            avc_diagnostic.get(name) != document[name] for name in binding_names
+        ):
+            raise ControlError("target AVC-correlation diagnostic binding disagrees")
+        projection = avc_diagnostic.get("projection")
+        try:
+            projection_bytes = (
+                json.dumps(projection, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("ascii")
+        except (TypeError, UnicodeEncodeError, ValueError) as error:
+            raise ControlError(
+                "target AVC-correlation projection is not closed JSON"
+            ) from error
+        if (
+            len(projection_bytes) != avc_diagnostic.get("projection_bytes")
+            or hashlib.sha256(projection_bytes).hexdigest()
+            != avc_diagnostic.get("projection_sha256")
+            or len(projection_bytes) != document["diagnostic_input_bytes"]
+            or hashlib.sha256(projection_bytes).hexdigest()
+            != document["diagnostic_input_sha256"]
+        ):
+            raise ControlError("target AVC-correlation diagnostic hash closure fails")
+        contract = load_selinux_isolation_contract()
+        try:
+            contract.validate_avc_correlation_diagnostic(projection)
+        except contract.IsolationError as error:
+            raise ControlError(
+                "target AVC-correlation diagnostic contradicts its facts"
+            ) from error
+        if projection.get("correlation_outcome") == "admitted":
+            raise ControlError(
+                "target AVC-correlation failure contradicts an admitted candidate"
+            )
     adjacency = document.get("daemon_reload_adjacency")
     if adjacency is not None:
         classifier = load_target_failure_classifier()

@@ -9,6 +9,9 @@ SPDX-License-Identifier: CC0-1.0
 
 ### Added
 
+- A bounded, negative-only AVC-correlation diagnostic projection that preserves
+  closed rejection facts for independent post-cleanup verification without
+  retaining audit records, command output, journals, or host state.
 - The authoritative production persistence matrix, deterministic rootless host
   ownership mapping, fail-closed state/secret preparation, and checked native
   Quadlet bind declarations for PostgreSQL, application storage, and Valkey.
