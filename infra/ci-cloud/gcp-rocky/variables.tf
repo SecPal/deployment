@@ -38,7 +38,10 @@ variable "target_sha" {
 variable "profile" {
   type = string
   validation {
-    condition     = var.profile == "gcp-rocky-10-2-arm64"
+    condition = contains([
+      "gcp-rocky-10-2-arm64",
+      "gcp-rocky-10-2-x86-64",
+    ], var.profile)
     error_message = "profile is outside the closed Rocky allowlist."
   }
 }
@@ -54,8 +57,14 @@ variable "zone" {
 variable "machine_type" {
   type = string
   validation {
-    condition     = var.machine_type == "c4a-standard-4"
-    error_message = "machine_type must be c4a-standard-4."
+    condition = (
+      var.profile == "gcp-rocky-10-2-arm64" &&
+      var.machine_type == "c4a-standard-4"
+      ) || (
+      var.profile == "gcp-rocky-10-2-x86-64" &&
+      var.machine_type == "c3-standard-4"
+    )
+    error_message = "machine_type must exactly match the reviewed profile."
   }
 }
 
@@ -78,11 +87,20 @@ variable "disk_size_gib" {
 variable "exact_image_self_link" {
   type = string
   validation {
-    condition = can(regex(
-      "^https://www\\.googleapis\\.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-[a-z0-9-]{1,50}$",
-      var.exact_image_self_link,
-    ))
-    error_message = "exact_image_self_link must be one immutable official Rocky ARM64 image."
+    condition = (
+      var.profile == "gcp-rocky-10-2-arm64" &&
+      can(regex(
+        "^https://www\\.googleapis\\.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*$",
+        var.exact_image_self_link,
+      ))
+      ) || (
+      var.profile == "gcp-rocky-10-2-x86-64" &&
+      can(regex(
+        "^https://www\\.googleapis\\.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-v[0-9]{8}$",
+        var.exact_image_self_link,
+      ))
+    )
+    error_message = "exact_image_self_link must exactly match the reviewed profile architecture."
   }
 }
 

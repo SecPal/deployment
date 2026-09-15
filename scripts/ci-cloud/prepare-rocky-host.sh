@@ -6,19 +6,17 @@ set -euo pipefail
 
 readonly expected_os_id=rocky
 readonly expected_version='VERSION_ID=10.2'
-readonly expected_architecture=aarch64
 readonly runtime_account=secpal-runtime
 readonly fixture='docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1'
 readonly fixture_digest_metadata_max_bytes=1024
 readonly state_root=/var/lib/secpal-rocky
-readonly profile_path=/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
 readonly final_repositories=(appstream baseos extras)
 readonly failure_evidence_max_bytes=4096
 readonly enabled_repository_max=16
 readonly available_repository_definition_max=64
 
-if [[ "$#" -ne 7 ]]; then
-  printf 'usage: prepare-rocky-host.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT EXPIRES_AT IMAGE_SELF_LINK EVIDENCE_OUTPUT\n' >&2
+if [[ "$#" -ne 8 ]]; then
+  printf 'usage: prepare-rocky-host.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT EXPIRES_AT IMAGE_SELF_LINK PROFILE EVIDENCE_OUTPUT\n' >&2
   exit 64
 fi
 readonly target_sha="$1"
@@ -27,7 +25,23 @@ readonly run_id="$3"
 readonly run_attempt="$4"
 readonly expires_at="$5"
 readonly image_self_link="$6"
-readonly evidence_output="$7"
+readonly profile="$7"
+readonly evidence_output="$8"
+case "$profile" in
+  gcp-rocky-10-2-arm64)
+    readonly expected_architecture=aarch64
+    readonly profile_path=/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-arm64.json
+    readonly fixture_inspect_operation=inspect-resolved-arm64-child
+    readonly fixture_validate_operation=validate-resolved-arm64-child
+    ;;
+  gcp-rocky-10-2-x86-64)
+    readonly expected_architecture=x86_64
+    readonly profile_path=/opt/secpal-control/config/ci-cloud/gcp-rocky-10-2-x86-64.json
+    readonly fixture_inspect_operation=inspect-resolved-amd64-child
+    readonly fixture_validate_operation=validate-resolved-amd64-child
+    ;;
+  *) exit 64 ;;
+esac
 readonly failure_output="$state_root/evidence/preparation-failure.json"
 readonly collection_diagnostic_output="$state_root/evidence/collection-diagnostic.json"
 [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
@@ -290,7 +304,7 @@ set_repository_diagnostic() {
 set_fixture_diagnostic() {
   local operation="$1" reason="$2"
   case "$operation:$reason" in
-    pull-immutable-fixture:command-failed|verify-immutable-fixture-present:command-failed|inspect-resolved-arm64-child:command-failed|validate-resolved-arm64-child:postcondition-failed) ;;
+    pull-immutable-fixture:command-failed|verify-immutable-fixture-present:command-failed|inspect-resolved-arm64-child:command-failed|validate-resolved-arm64-child:postcondition-failed|inspect-resolved-amd64-child:command-failed|validate-resolved-amd64-child:postcondition-failed) ;;
     *) return 1 ;;
   esac
   fixture_diagnostic_evidence="$(printf '{\"operation\":\"%s\",\"reason\":\"%s\"}' "$operation" "$reason")"
@@ -428,7 +442,7 @@ admit_repositories() {
 }
 
 install_policy() {
-  local fixture_digest_metadata runtime_uid
+  local fixture_digest_metadata runtime_uid runtime_gid quadlet_root user_manager_dropin
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="repositories"
@@ -440,6 +454,7 @@ install_policy() {
     container-selinux audit policycoreutils policycoreutils-python-utils \
     selinux-policy-targeted curl dnf git jq nftables openssh-server sudo \
     python3-jsonschema dnf-plugins-core
+  /opt/secpal-control/scripts/ci-cloud/rocky-control.py validate-profile "$profile"
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="selinux"
@@ -455,6 +470,9 @@ install_policy() {
     useradd --system --user-group --create-home \
       --shell /usr/sbin/nologin "$runtime_account"
   fi
+  runtime_uid="$(id -u "$runtime_account")"
+  runtime_gid="$(id -g "$runtime_account")"
+  [[ "$runtime_uid" =~ ^[1-9][0-9]*$ && "$runtime_gid" =~ ^[1-9][0-9]*$ ]]
   usermod --shell /usr/sbin/nologin "$runtime_account"
   [[ "$(id -Gn "$runtime_account")" == "$runtime_account" ]]
   current_phase="subids"
@@ -463,11 +481,17 @@ install_policy() {
   loginctl enable-linger "$runtime_account"
   runtime_uid="$(id -u "$runtime_account")"
   current_phase="quadlet-authority"
-  install -d -o root -g root -m 0755 "/etc/containers/systemd/users/$runtime_uid"
-  if run_as_runtime test -w "/etc/containers/systemd/users/$runtime_uid"; then
+  quadlet_root="/etc/containers/systemd/users/$runtime_uid"
+  user_manager_dropin="/etc/systemd/system/user@${runtime_uid}.service.d"
+  install -d -o root -g root -m 0755 "$quadlet_root" "$user_manager_dropin"
+  printf '[Service]\nEnvironment=QUADLET_UNIT_DIRS=%s\n' "$quadlet_root" |
+    install -o root -g root -m 0644 /dev/stdin \
+      "$user_manager_dropin/50-secpal-quadlet.conf"
+  if run_as_runtime test -w "$quadlet_root"; then
     printf 'ERROR: runtime account can write administrator Quadlet authority.\n' >&2
     exit 1
   fi
+  systemctl daemon-reload
   systemctl start "user@$runtime_uid.service"
   run_as_runtime systemctl --user mask --now podman.socket podman.service
   current_phase="fixture"
@@ -475,21 +499,21 @@ install_policy() {
   run_as_runtime podman pull "$fixture"
   set_fixture_diagnostic verify-immutable-fixture-present command-failed
   run_as_runtime podman image exists "$fixture"
-  set_fixture_diagnostic inspect-resolved-arm64-child command-failed
+  set_fixture_diagnostic "$fixture_inspect_operation" command-failed
   # libimage's singular Digest may identify either the child or its manifest list;
   # RepoDigests carries the complete local digest identities needed for membership.
   fixture_digest_metadata="$(run_as_runtime podman image inspect --format '{{json .RepoDigests}}' "$fixture")"
-  set_fixture_diagnostic validate-resolved-arm64-child postcondition-failed
+  set_fixture_diagnostic "$fixture_validate_operation" postcondition-failed
   [[ -n "$fixture_digest_metadata" ]]
   [[ "$(printf '%s' "$fixture_digest_metadata" | wc -c)" -le "$fixture_digest_metadata_max_bytes" ]]
   printf '%s' "$fixture_digest_metadata" |
     /usr/local/sbin/secpal-collect-rocky-preparation \
-      --admit-fixture-repo-digests
+      --admit-fixture-repo-digests --architecture "$expected_architecture"
   fixture_diagnostic_evidence=''
   current_phase="pre-reboot"
 
   cat >/etc/sudoers.d/secpal-cloud-rocky <<'SECPAL_CLOUD_SUDO'
-secpal-cloud ALL=(root) NOPASSWD: /usr/local/sbin/secpal-run-rocky-target-qualification [0-9a-f]* [0-9a-f]* [1-9]* [1-9]*
+secpal-cloud ALL=(root) NOPASSWD: /usr/local/sbin/secpal-run-rocky-target-qualification [0-9a-f]* [0-9a-f]* [1-9]* [1-9]* [0-9a-f]*
 SECPAL_CLOUD_SUDO
   chown root:root /etc/sudoers.d/secpal-cloud-rocky
   chmod 0440 /etc/sudoers.d/secpal-cloud-rocky
@@ -534,6 +558,7 @@ collect_after_reboot() {
     --control-sha "$control_sha" \
     --run-id "$run_id" \
     --run-attempt "$run_attempt" \
+    --profile "$profile" \
     --expires-at "$expires_at" \
     --image "$image_self_link" \
     --first-boot-id "$(cat "$state_root/first-boot-id")" \

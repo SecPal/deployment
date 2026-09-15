@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
+import re
 import symtable
 import sys
 from pathlib import Path
@@ -18,6 +20,78 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "scripts/ci-cloud/rocky_preparation_contract.py"
 DEFAULT_COLLECTOR = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
 DEFAULT_PREPARATION = ROOT / "scripts/ci-cloud/prepare-rocky-host.sh"
+DEFAULT_ISOLATION_CONTRACT = ROOT / "scripts/selinux_isolation_contract.py"
+DEFAULT_QUALIFICATION_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json"
+)
+DEFAULT_QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
+DEFAULT_QUALIFICATION_RUNNER = (
+    ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
+)
+DEFAULT_ROCKY_CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
+DEFAULT_WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+DEFAULT_TARGET_FAILURE_CLASSIFIER = (
+    ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+)
+DEFAULT_TARGET_REPLAY_VERIFIER = (
+    ROOT / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
+)
+DEFAULT_TARGET_FAILURE_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
+)
+DEFAULT_TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+DEFAULT_RELOAD_OBSERVER = (
+    ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+)
+EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+EXPECTED_HARNESS_SHA256 = (
+    "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+)
+HISTORICAL_273_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+HISTORICAL_273_HARNESS_SHA256 = (
+    "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+)
+HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+HISTORICAL_PRE_269_HARNESS_SHA256 = (
+    "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+)
+HISTORICAL_PRE_265_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
+HISTORICAL_PRE_265_HARNESS_SHA256 = (
+    "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+)
+HISTORICAL_CLEANUP_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
+EXPECTED_TARGET_LINE_RULES = (
+    (456, 462, "qualify-host-identity"),
+    (464, 467, "qualify-administrator-execution"),
+    (468, 471, "qualify-fixture-reference"),
+    (472, 493, "qualify-service-account"),
+    (497, 500, "qualify-selinux-host"),
+    (502, 515, "qualify-native-architecture"),
+    (517, 520, "qualify-cgroup"),
+    (521, 537, "qualify-rootless-runtime"),
+    (538, 541, "qualify-fixture-presence"),
+    (543, 552, "qualify-fixture-setup"),
+    (554, 613, "qualify-quadlet-authority"),
+    (614, 614, "qualify-quadlet-daemon-reload"),
+    (615, 637, "qualify-quadlet-authority"),
+    (638, 638, "qualify-quadlet-start"),
+    (639, 639, "qualify-quadlet-active-state"),
+    (641, 652, "qualify-quadlet-authority"),
+    (653, 658, "qualify-workload-primary"),
+    (659, 665, "qualify-seccomp"),
+    (668, 668, "qualify-selinux-storage-directory-create"),
+    (670, 674, "qualify-workload-primary"),
+    (675, 678, "qualify-workload-secondary"),
+    (680, 686, "qualify-selinux-storage"),
+    (690, 694, "qualify-avc-correlation"),
+    (698, 704, "qualify-selinux-policy-restoration"),
+    (707, 711, "qualify-avc-correlation"),
+    (713, 721, "qualify-selinux-policy-restoration"),
+    (724, 740, "qualify-avc-correlation"),
+    (749, 752, "qualify-runtime-fallback-absence"),
+    (754, 754, "qualification-harness"),
+    (760, 768, "qualify-avc-correlation"),
+)
 FAILURE_SCHEMA = ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json"
 FORBIDDEN_PURE_IMPORTS = {
     "asyncio", "datetime", "grp", "http", "os", "pathlib", "pwd", "requests",
@@ -93,6 +167,80 @@ def assignment_string_dict(tree: ast.Module, name: str) -> dict[str, str] | None
     return None
 
 
+def assignment_literal(tree: ast.Module, name: str) -> object:
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            try:
+                return ast.literal_eval(node.value)
+            except (TypeError, ValueError) as error:
+                raise ArchitectureError(
+                    f"architecture constant is not literal: {name}"
+                ) from error
+    raise ArchitectureError(f"architecture constant is missing: {name}")
+
+
+def schema_const_pairs(document: object) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    if isinstance(document, dict):
+        properties = document.get("properties")
+        required = document.get("required")
+        if (
+            isinstance(properties, dict)
+            and isinstance(required, list)
+            and all(isinstance(item, str) for item in required)
+        ):
+            target = properties.get("target_sha")
+            harness = properties.get("harness_sha256")
+            if (
+                {"target_sha", "harness_sha256"} <= set(required)
+                and isinstance(target, dict)
+                and isinstance(target.get("const"), str)
+                and isinstance(harness, dict)
+                and isinstance(harness.get("const"), str)
+            ):
+                pairs.append((target["const"], harness["const"]))
+        for value in document.values():
+            pairs.extend(schema_const_pairs(value))
+    elif isinstance(document, list):
+        for value in document:
+            pairs.extend(schema_const_pairs(value))
+    return pairs
+
+
+def schema_const_pair_at(document: object, *path: object) -> tuple[str, str] | None:
+    """Return one exact required target/harness pair at a closed schema path."""
+
+    node = document
+    for component in path:
+        if isinstance(component, str) and isinstance(node, dict):
+            node = node.get(component)
+        elif (
+            isinstance(component, int)
+            and isinstance(node, list)
+            and 0 <= component < len(node)
+        ):
+            node = node[component]
+        else:
+            return None
+    if not isinstance(node, dict):
+        return None
+    properties = node.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    target = properties.get("target_sha")
+    harness = properties.get("harness_sha256")
+    if not isinstance(target, dict) or not isinstance(harness, dict):
+        return None
+    if not isinstance(target.get("const"), str) or not isinstance(
+        harness.get("const"), str
+    ):
+        return None
+    return target["const"], harness["const"]
+
+
 def validate_pure_contract(path: Path) -> None:
     tree = parse(path)
     imports: set[str] = set()
@@ -113,8 +261,17 @@ def validate_pure_contract(path: Path) -> None:
     source = path.read_text(encoding="utf-8")
     if '"fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity"' not in source:
         raise ArchitectureError("authoritative fixture invariant owner is absent")
+    if '"fixture-amd64-child": "rocky_preparation_contract.admit_fixture_identity"' not in source:
+        raise ArchitectureError("authoritative amd64 fixture invariant owner is absent")
     if '"rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key"' not in source:
         raise ArchitectureError("authoritative package-signing invariant owner is absent")
+    if (
+        '"authenticated-native-packages": "rocky_preparation_contract.admit_package"'
+        not in source
+    ):
+        raise ArchitectureError(
+            "authoritative authenticated-package invariant owner is absent"
+        )
     invariant_owners = assignment_string_dict(tree, "INVARIANT_OWNERS")
     if invariant_owners is None or any(
         invariant_owners.get(invariant) != owner
@@ -217,6 +374,21 @@ def validate_pure_contract(path: Path) -> None:
         "assemble_preparation_evidence",
     }:
         raise ArchitectureError("pure orchestration crosses an undeclared responsibility surface")
+    native_orchestrator = functions.get("normalize_and_admit_native_packages")
+    if native_orchestrator is None:
+        raise ArchitectureError("authenticated native package orchestration is absent")
+    native_calls = {
+        call.func.id
+        for call in ast.walk(native_orchestrator)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+    }
+    if native_calls != {
+        "normalize_native_package_observations",
+        "admit_native_package_observations",
+    }:
+        raise ArchitectureError(
+            "authenticated native package boundaries are collapsed"
+        )
 
 
 def responsibility_set(tree: ast.Module) -> set[str]:
@@ -230,7 +402,7 @@ def validate_component_complexity(contract_path: Path, collector_path: Path) -> 
         if {"observation", "normalization", "admission", "assembly"} <= responsibilities:
             raise ArchitectureError("evidence component collapses all semantic responsibilities")
     collector = collector_path.read_text(encoding="utf-8")
-    if "INVARIANT_OWNERS" in collector or '"fixture-arm64-child"' in collector:
+    if "INVARIANT_OWNERS" in collector or '"fixture-arm64-child"' in collector or '"fixture-amd64-child"' in collector:
         raise ArchitectureError("duplicate declared invariant ownership")
     if "EXTERNAL_DOMAINS" in collector and "COHERENT_EXTERNAL_CONTRACT" not in collector:
         raise ArchitectureError("multiple external domains lack a reviewed coherent contract")
@@ -447,7 +619,8 @@ def validate_collector(path: Path) -> None:
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "contract"
             and node.func.attr.startswith("normalize_")
-            and node.func.attr != "normalize_and_admit"
+            and node.func.attr
+            not in {"normalize_and_admit", "normalize_and_admit_native_packages"}
         ):
             raise ArchitectureError("collector performs normalization before handoff")
         if isinstance(node.func, ast.Attribute) and node.func.attr == "run":
@@ -472,11 +645,386 @@ def validate_preparation(path: Path) -> None:
         raise ArchitectureError("preparation independently redefines fixture identity")
 
 
+def validate_selinux_isolation_architecture(
+    contract_path: Path,
+    schema_path: Path,
+    harness_path: Path,
+    runner_path: Path,
+    control_path: Path,
+) -> None:
+    tree = parse(contract_path)
+    source = contract_path.read_text(encoding="utf-8")
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module.split(".")[0])
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in FORBIDDEN_PURE_CALLS
+        ):
+            raise ArchitectureError(
+                f"forbidden SELinux isolation capability: {node.func.id}"
+            )
+    forbidden = sorted(imports & (FORBIDDEN_PURE_IMPORTS - {"datetime"}))
+    if forbidden:
+        raise ArchitectureError(
+            "forbidden SELinux isolation capability import: "
+            + ",".join(forbidden)
+        )
+    if assignment_string(tree, "RESPONSIBILITY") != "normalization,admission":
+        raise ArchitectureError("SELinux isolation responsibility is invalid")
+    owner = "selinux_isolation_contract.admit_selinux_isolation"
+    if assignment_string(tree, "INVARIANT_OWNER") != owner:
+        raise ArchitectureError("SELinux isolation invariant owner is invalid")
+    functions = {
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    if not {
+        "normalize_context",
+        "normalize_context_relationship",
+        "normalize_unique_enforcing_avc",
+        "admit_selinux_isolation",
+        "validate_isolation_evidence",
+        "diagnose_avc_correlation_bytes",
+        "capture_avc_correlation_diagnostic",
+        "validate_avc_correlation_diagnostic",
+    } <= functions:
+        raise ArchitectureError("SELinux isolation layered surface is incomplete")
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema_targets = schema["properties"]["target_sha"]["enum"]
+        native_targets = schema["properties"]["native_observation"]["properties"][
+            "target_sha"
+        ]["enum"]
+        historical_schema_target = schema["allOf"][0]["then"]["properties"][
+            "target_sha"
+        ]["const"]
+        historical_native_target = schema["allOf"][0]["then"]["properties"][
+            "native_observation"
+        ]["properties"]["target_sha"]["const"]
+        current_schema_target = schema["allOf"][1]["then"]["properties"][
+            "target_sha"
+        ]["const"]
+        current_native_target = schema["allOf"][1]["then"]["properties"][
+            "native_observation"
+        ]["properties"]["target_sha"]["const"]
+        schema_owner = schema["$defs"]["selinux_isolation"]["properties"][
+            "invariant_owner"
+        ]["const"]
+        maximum = schema["$defs"]["normalized_context"]["properties"][
+            "mcs_categories"
+        ]["items"]["maximum"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ArchitectureError("SELinux isolation schema projection is invalid") from error
+    if (
+        schema_targets != [HISTORICAL_273_TARGET_SHA, EXPECTED_TARGET_SHA]
+        or native_targets != [HISTORICAL_273_TARGET_SHA, EXPECTED_TARGET_SHA]
+        or historical_schema_target != HISTORICAL_273_TARGET_SHA
+        or historical_native_target != HISTORICAL_273_TARGET_SHA
+        or current_schema_target != EXPECTED_TARGET_SHA
+        or current_native_target != EXPECTED_TARGET_SHA
+        or schema_owner != owner
+        or maximum != 1023
+    ):
+        raise ArchitectureError("SELinux isolation schema projection disagrees")
+    consumers: dict[Path, str] = {}
+    for path in (harness_path, runner_path, control_path):
+        try:
+            consumer = path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise ArchitectureError("SELinux isolation consumer is unavailable") from error
+        if "selinux_isolation_contract" not in consumer:
+            raise ArchitectureError("SELinux isolation consumer omits its owner")
+        consumers[path] = consumer
+    harness = consumers[harness_path]
+    runner = consumers[runner_path]
+    control = consumers[control_path]
+    if (
+        "diagnose_avc_correlation_bytes(" not in harness
+        or "capture_avc_correlation_diagnostic(" not in harness
+        or "publish_avc_correlation_diagnostic() {" not in harness
+        or "reject_avc_observation() {" not in harness
+        or 'reject_avc_observation "$denial_status"' not in harness
+        or 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD:-}" == 6' not in harness
+        or 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6' not in runner
+        or '--avc-correlation-diagnostic "$avc_correlation_diagnostic"' not in runner
+        or "contract.validate_avc_correlation_diagnostic(projection)" not in control
+        or control.count(
+            "json.loads(payload, object_pairs_hook=reject_duplicate_keys)"
+        )
+        != 2
+    ):
+        raise ArchitectureError("bounded AVC diagnostic ownership or transport disagrees")
+    if (
+        "subprocess" in source
+        or "pathlib" in source
+        or "open(" in source
+        or any(clock in source for clock in ("datetime.now", "datetime.utcnow", "datetime.today"))
+    ):
+        raise ArchitectureError("SELinux isolation owner performs external observation")
+
+
+def validate_target_qualification_binding(
+    workflow_path: Path,
+    harness_path: Path,
+    runner_path: Path,
+    classifier_path: Path,
+    replay_verifier_path: Path,
+    failure_schema_path: Path,
+    trace_path: Path,
+    reload_observer_path: Path,
+) -> None:
+    """Enforce agreement with the workflow-owned current target identity."""
+
+    try:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        harness = harness_path.read_bytes()
+        runner = runner_path.read_text(encoding="utf-8")
+        classifier = classifier_path.read_text(encoding="utf-8")
+        replay_verifier = replay_verifier_path.read_text(encoding="utf-8")
+        failure_schema = json.loads(failure_schema_path.read_text(encoding="utf-8"))
+        trace = trace_path.read_text(encoding="utf-8")
+        reload_observer = reload_observer_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ArchitectureError(
+            "target-qualification binding component is unavailable"
+        ) from error
+
+    target_matches = re.findall(
+        r"^\s*readonly expected_target_sha=([0-9a-f]{40})$", workflow, re.MULTILINE
+    )
+    harness_matches = re.findall(
+        r"^\s*readonly expected_harness_sha256=([0-9a-f]{64})$",
+        workflow,
+        re.MULTILINE,
+    )
+    if len(target_matches) != 1 or len(harness_matches) != 1:
+        raise ArchitectureError("workflow must own one exact target/harness pair")
+    expected_target = EXPECTED_TARGET_SHA
+    expected_harness = EXPECTED_HARNESS_SHA256
+    current_target_gate = '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]'
+    cleanup_target_gate = (
+        '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ||\n'
+        '                "${RAW_TARGET_SHA,,}" == '
+        '"$historical_cleanup_target_sha" ]]'
+    )
+    if (
+        target_matches != [expected_target]
+        or harness_matches != [expected_harness]
+        or workflow.count(current_target_gate) != 2
+        or workflow.count(
+            "readonly historical_cleanup_target_sha="
+            + HISTORICAL_CLEANUP_TARGET_SHA
+        )
+        != 1
+        or workflow.count(cleanup_target_gate) != 1
+        or "sha256sum scripts/qualify-production-host.sh" not in workflow
+        or '"$expected_harness_sha256" ]]' not in workflow
+        or hashlib.sha256(harness).hexdigest() != expected_harness
+    ):
+        raise ArchitectureError("workflow target/harness authentication disagrees")
+
+    classifier_tree = parse(classifier_path)
+    if (
+        assignment_string(classifier_tree, "EXPECTED_TARGET_SHA") != expected_target
+        or assignment_string(classifier_tree, "EXPECTED_HARNESS_SHA256")
+        != expected_harness
+        or assignment_string(classifier_tree, "HISTORICAL_273_TARGET_SHA")
+        != HISTORICAL_273_TARGET_SHA
+        or assignment_string(classifier_tree, "HISTORICAL_273_HARNESS_SHA256")
+        != HISTORICAL_273_HARNESS_SHA256
+        or assignment_string(classifier_tree, "HISTORICAL_PRE_265_TARGET_SHA")
+        != HISTORICAL_PRE_265_TARGET_SHA
+        or assignment_string(classifier_tree, "HISTORICAL_PRE_265_HARNESS_SHA256")
+        != HISTORICAL_PRE_265_HARNESS_SHA256
+        or assignment_string(classifier_tree, "HISTORICAL_PRE_269_TARGET_SHA")
+        != HISTORICAL_PRE_269_TARGET_SHA
+        or assignment_string(classifier_tree, "HISTORICAL_PRE_269_HARNESS_SHA256")
+        != HISTORICAL_PRE_269_HARNESS_SHA256
+    ):
+        raise ArchitectureError("diagnostic classifier target/harness binding disagrees")
+
+    verifier_tree = parse(replay_verifier_path)
+    legacy_replay_control = assignment_string(
+        classifier_tree, "LEGACY_REPLAY_OPTIONAL_CONTROL_SHA"
+    )
+    if (
+        legacy_replay_control is None
+        or json.dumps(failure_schema).count(legacy_replay_control) != 1
+        or "classifier.LEGACY_REPLAY_OPTIONAL_CONTROL_SHA" not in replay_verifier
+        or assignment_literal(verifier_tree, "REPLAY_COMPONENT_ORDER")
+        != assignment_literal(classifier_tree, "REPLAY_COMPONENT_ORDER")
+        or 'replayed = b"\\0".join(' not in replay_verifier
+        or 'document["diagnostic_input_sha256"]' not in replay_verifier
+        or "classifier.classify_failure(" not in replay_verifier
+        or "classifier.replay_line_rules(" not in replay_verifier
+        or "require_available=True" not in replay_verifier
+        or 'payload.endswith(b"\\n")' not in classifier
+        or 'payload[:-1].decode("ascii").split("\\n")' not in classifier
+        or "not 1 <= int(match.group(1)) <= 255" not in classifier
+        or 'payload.endswith(b"\\n")' not in replay_verifier
+        or 'payload[:-1].decode("ascii").split("\\n")' not in replay_verifier
+        or "not 1 <= int(match.group(1)) <= 255" not in replay_verifier
+        or "object_pairs_hook=unique_json_object" not in classifier
+        or "parse_constant=reject_json_constant" not in classifier
+        or "object_pairs_hook=unique_json_object" not in replay_verifier
+        or "parse_constant=reject_json_constant" not in replay_verifier
+        or "replay_start_observation_admitted" not in classifier
+        or "replay_active_observation_admitted" not in classifier
+        or "replay_primary_observation_admitted" not in classifier
+        or "classifier.replay_start_observation_admitted" not in replay_verifier
+        or "classifier.replay_active_observation_admitted" not in replay_verifier
+        or "classifier.replay_primary_observation_admitted" not in replay_verifier
+        or "HISTORICAL_PRE_269_LINE_RULES" not in classifier
+        or "(HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256)"
+        not in classifier
+    ):
+        raise ArchitectureError("closed replay verifier disagrees with classifier input authority")
+    if (
+        "MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES = 12_288" not in classifier
+        or "build_avc_correlation_diagnostic(" not in classifier
+        or "contract.validate_avc_correlation_diagnostic(projection)" not in classifier
+        or 'projection.get("correlation_outcome") == "admitted"' not in classifier
+        or failure_schema.get("properties", {}).get("schema_version", {}).get("enum")
+        != [1, 2, 3, 4]
+        or "avc_correlation_diagnostic" not in failure_schema.get("properties", {})
+    ):
+        raise ArchitectureError("bounded AVC failure diagnostic admission disagrees")
+
+    line_rules = assignment_literal(classifier_tree, "LINE_RULES")
+    if line_rules != EXPECTED_TARGET_LINE_RULES:
+        raise ArchitectureError("current diagnostic line map disagrees")
+    reload_line = 614
+    if (
+        f"10#$frame == {reload_line}" not in trace
+        or f"or {reload_line} not in frames" not in reload_observer
+    ):
+        raise ArchitectureError("daemon-reload diagnostic source mapping disagrees")
+
+    runner_target = f"readonly expected_target_sha={expected_target}"
+    runner_harness = f"readonly expected_harness_sha256={expected_harness}"
+    pair_gate = '[[ "$target_sha" != "$expected_target_sha" ||'
+    if (
+        runner_target not in runner
+        or runner_harness not in runner
+        or pair_gate not in runner
+        or '"$qualification_harness_sha256" != "$expected_harness_sha256" ]]'
+        not in runner
+        or runner.index(pair_gate) >= runner.index("[[ -f /var/lib/secpal-rocky/prepared ]]")
+        or runner.index(pair_gate) >= runner.index("getent ahostsv4 github.com")
+        or runner.index(pair_gate)
+        >= runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+    ):
+        raise ArchitectureError("guest target/harness authentication disagrees")
+
+    schema_pair_sequence = [
+        schema_const_pair_at(
+            failure_schema, "allOf", 0, "then", "oneOf", 1
+        ),
+        schema_const_pair_at(
+            failure_schema, "allOf", 0, "then", "oneOf", 0
+        ),
+        *[
+            schema_const_pair_at(
+                failure_schema, "allOf", 3, "then", "anyOf", index
+            )
+            for index in range(4)
+        ],
+        *[
+            schema_const_pair_at(
+                failure_schema, "allOf", condition, "if", "anyOf", index
+            )
+            for condition, length in ((18, 7), (19, 5), (20, 5))
+            for index in range(length)
+        ],
+    ]
+    expected_schema_pair_sequence = [
+        (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
+        (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+        ("83d0c3720d342d0222e8dee9819e28d0c6739f84", "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"),
+        (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        ("b8f5a505d318d06a64a5975cfaba9f1e5ba0041f", "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"),
+        (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+        (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+        (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+    ]
+
+    if (
+        schema_const_pairs(failure_schema).count(
+            (expected_target, expected_harness)
+        )
+        != 5
+        or schema_const_pairs(failure_schema).count(
+            (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256)
+        )
+        != 5
+        or schema_const_pairs(failure_schema).count(
+            (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256)
+        )
+        != 4
+        or schema_const_pairs(failure_schema).count(
+            (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256)
+        )
+        != 4
+        or schema_pair_sequence != expected_schema_pair_sequence
+    ):
+        raise ArchitectureError("diagnostic schema target/harness binding disagrees")
+
+
 def main(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--collector", type=Path, default=DEFAULT_COLLECTOR)
     parser.add_argument("--preparation", type=Path, default=DEFAULT_PREPARATION)
+    parser.add_argument(
+        "--isolation-contract", type=Path, default=DEFAULT_ISOLATION_CONTRACT
+    )
+    parser.add_argument(
+        "--qualification-schema", type=Path, default=DEFAULT_QUALIFICATION_SCHEMA
+    )
+    parser.add_argument(
+        "--qualification-harness", type=Path, default=DEFAULT_QUALIFICATION_HARNESS
+    )
+    parser.add_argument(
+        "--qualification-runner", type=Path, default=DEFAULT_QUALIFICATION_RUNNER
+    )
+    parser.add_argument("--rocky-control", type=Path, default=DEFAULT_ROCKY_CONTROL)
+    parser.add_argument("--workflow", type=Path, default=DEFAULT_WORKFLOW)
+    parser.add_argument(
+        "--target-failure-classifier",
+        type=Path,
+        default=DEFAULT_TARGET_FAILURE_CLASSIFIER,
+    )
+    parser.add_argument(
+        "--target-replay-verifier",
+        type=Path,
+        default=DEFAULT_TARGET_REPLAY_VERIFIER,
+    )
+    parser.add_argument(
+        "--target-failure-schema", type=Path, default=DEFAULT_TARGET_FAILURE_SCHEMA
+    )
+    parser.add_argument("--target-trace", type=Path, default=DEFAULT_TARGET_TRACE)
+    parser.add_argument(
+        "--reload-observer", type=Path, default=DEFAULT_RELOAD_OBSERVER
+    )
     options = parser.parse_args(arguments)
     try:
         validate_pure_contract(options.contract)
@@ -484,6 +1032,23 @@ def main(arguments: list[str]) -> int:
         validate_preparation(options.preparation)
         validate_component_complexity(options.contract, options.collector)
         validate_diagnostic_contract(options.contract, options.collector)
+        validate_selinux_isolation_architecture(
+            options.isolation_contract,
+            options.qualification_schema,
+            options.qualification_harness,
+            options.qualification_runner,
+            options.rocky_control,
+        )
+        validate_target_qualification_binding(
+            options.workflow,
+            options.qualification_harness,
+            options.qualification_runner,
+            options.target_failure_classifier,
+            options.target_replay_verifier,
+            options.target_failure_schema,
+            options.target_trace,
+            options.reload_observer,
+        )
     except ArchitectureError as error:
         print(f"ERROR: Rocky evidence architecture rejected: {error}", file=sys.stderr)
         return 1

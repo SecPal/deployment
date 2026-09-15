@@ -21,27 +21,31 @@ Rocky Linux, package-provenance, x86-64-v3, or SELinux evidence.
 
 Host-facts schema version 2 supersedes the historical version 1 Debian fact
 shape without rewriting old evidence. The checked-in positive host documents
-are marked `evidence_class: synthetic`.
-They prove parser and admission behavior only. Native admission requires
-`evidence_class: rocky-native`; the validator rejects a synthetic document in
-native mode. Required Rocky evidence remains **NOT RUN** until the native
-qualification harness executes on each reference architecture.
+are marked `evidence_class: synthetic`. They prove parser and admission
+behavior only. `scripts/validate-production-contract.py` accepts only that
+fixture-validation role; a caller-selected `evidence_class: rocky-native`
+cannot establish native trust. Native acceptance instead requires the bounded
+qualification evidence schema and independent admission by trusted control for
+each reference architecture.
 
-## One authoritative admission path
+## Evidence roles and authority
 
-Host admission has one fact model and one decision owner:
+The provider-neutral host-facts model owns the residual production contract:
 
-1. trusted local system interfaces provide effective facts;
-2. `schemas/production-host-facts.schema.json` rejects unknown or malformed
+1. `schemas/production-host-facts.schema.json` rejects unknown or malformed
    fields and closed values;
-3. `scripts/validate-production-contract.py` applies cross-field rules and
+2. `scripts/validate-production-contract.py` applies cross-field rules and
    compares facts with the reviewed inventory; and
-4. diagnostics identify the first non-conforming fact.
+3. diagnostics identify the first non-conforming fact.
 
+Native qualification is a separate evidence pipeline. The uncredentialed
+target harness observes the running host, while trusted control independently
+admits the bounded preparation, qualification, and cleanup evidence through
+the current closed schemas. The harness cannot grant acceptance to itself.
 Critical missing, unavailable, contradictory, or unknown facts fail closed.
-An operator-supplied distribution string is not evidence. A native collector
-must obtain OS identity from `/etc/os-release`, package and signature facts
-from RPM/DNF state, kernel and architecture facts from the running system, and
+An operator-supplied distribution string is not evidence; native observation
+obtains OS identity from `/etc/os-release`, package and signature facts from
+RPM/DNF state, kernel and architecture facts from the running system, and
 runtime facts from the effective rootless Podman and systemd-user contexts.
 
 ## Rocky Linux version and architecture
@@ -252,7 +256,10 @@ resources. It never prunes Podman, touches production data, loads broad policy,
 changes enforcing mode, provisions a provider, or uses real SecPal secrets.
 
 The native run remains required separately on x86_64 and aarch64. Repository
-preflight on another distribution proves repository behavior only.
+preflight on another distribution proves repository behavior only. Harness
+output is candidate observation, not acceptance: trusted control must bind and
+admit the current schema-v4 success evidence, target, harness digest, native
+package observation, and cleanup result.
 
 ## Managed paths and operator boundary
 
@@ -288,7 +295,8 @@ rootless Podman or Quadlet behavior and must be reported as non-Rocky.
 Runs only on a real Rocky 10.2 host with SELinux Enforcing. Absence of that
 environment is `NOT RUN`, never PASS. A Rocky container on another host,
 altered `/etc/os-release`, simulated SELinux state, or AppArmor behavior is not
-native evidence.
+native evidence. Trusted control, not the target or its caller, owns the final
+native admission decision.
 
 ## Primary references
 

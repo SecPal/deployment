@@ -24,6 +24,28 @@ render_with_generator() {
   chmod 0700 "$output"
 }
 
+render_with_trusted_fixture_generator() {
+  local generator="$1"
+  local output="$2"
+
+  sed \
+    -e "s|^GENERATOR=.*$|GENERATOR=$generator|" \
+    -e '/^admit_native_generator$/i trusted_directory() { return 0; }' \
+    -e "s@\[ \"\$uid\" != 0 \] || \[ \"\$gid\" != 0 \]@[ \"\$uid\" != \"$(id -u)\" ] || [ \"\$gid\" != \"$(id -g)\" ]@" \
+    "$SOURCE" >"$output"
+  chmod 0700 "$output"
+}
+
+write_version_executable() {
+  local path="$1"
+  local version="$2"
+  local quoted_version
+
+  install -m 0755 /dev/null "$path"
+  printf -v quoted_version '%q' "$version"
+  printf '%s\n' '#!/usr/bin/env bash' "printf '%s\\n' $quoted_version" >"$path"
+}
+
 missing_generator="$FIXTURE_ROOT/missing-generator"
 missing_test="$FIXTURE_ROOT/missing.sh"
 missing_output="$FIXTURE_ROOT/missing.out"
@@ -49,6 +71,35 @@ fi
 grep -Fxq \
   'ERROR: Production state native lifecycle requires an admitted native Quadlet user generator.' \
   "$required_missing_output"
+
+unsupported_generator="$FIXTURE_ROOT/unsupported-generator"
+unsupported_podman="$FIXTURE_ROOT/podman"
+unsupported_test="$FIXTURE_ROOT/unsupported.sh"
+unsupported_output="$FIXTURE_ROOT/unsupported.out"
+write_version_executable "$unsupported_generator" '4.9.3'
+write_version_executable "$unsupported_podman" 'podman version 4.9.3'
+render_with_trusted_fixture_generator "$unsupported_generator" "$unsupported_test"
+if ! PATH="$FIXTURE_ROOT:$PATH" "$unsupported_test" >"$unsupported_output" 2>&1; then
+  printf 'ERROR: unsupported clean native capability must skip in optional mode.\n' >&2
+  exit 1
+fi
+grep -Fxq \
+  'SKIP: Production state native lifecycle unavailable: native Quadlet generator and Podman client do not satisfy the supported compatible runtime contract.' \
+  "$unsupported_output"
+if grep -Fq 'passed.' "$unsupported_output"; then
+  printf 'ERROR: unsupported native capability must not be reported as lifecycle evidence.\n' >&2
+  exit 1
+fi
+
+required_unsupported_output="$FIXTURE_ROOT/required-unsupported.out"
+if SECPAL_REQUIRE_NATIVE_LIFECYCLE=1 PATH="$FIXTURE_ROOT:$PATH" "$unsupported_test" \
+  >"$required_unsupported_output" 2>&1; then
+  printf 'ERROR: required native lifecycle must fail an unsupported capability.\n' >&2
+  exit 1
+fi
+grep -Fxq \
+  'ERROR: Production state native lifecycle requires an admitted native Quadlet user generator.' \
+  "$required_unsupported_output"
 
 invalid_generator="$FIXTURE_ROOT/invalid-generator"
 invalid_test="$FIXTURE_ROOT/invalid.sh"

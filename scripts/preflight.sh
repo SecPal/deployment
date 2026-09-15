@@ -64,7 +64,10 @@ python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-rocky-control.py
 python3 tests/ci-cloud-rocky-readiness.py
 python3 tests/ci-cloud-rocky-runtime-user-readiness.py
+python3 tests/ci-cloud-rocky-replay-witness.py
 python3 tests/ci-cloud-rocky-target-diagnostics.py
+python3 tests/selinux-isolation-contract.py
+bash tests/production-host-signal-contract.sh
 python3 tests/rocky-evidence-architecture.py
 python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py
@@ -88,6 +91,8 @@ python3 tests/production-postgres-retirement.py
 python3 tests/production-edge-decision-contract.py
 python3 tests/cloudfront-origin-prefix-lkg.py
 python3 tests/provider-capability-contract.py
+python3 tests/cloudfront-viewer-edge.py
+python3 tests/cloudfront-waf.py
 bash tests/production-state-native-lifecycle-gate.sh
 bash tests/production-state-native-lifecycle.sh
 python3 tests/work-graph-governance.py

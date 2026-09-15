@@ -91,9 +91,14 @@ def assert_qualification_service_account_context() -> None:
         raise AssertionError("rootless Podman must use the service-account context helper")
     if source.count('runuser --user "$service_account"') != 1:
         raise AssertionError("direct service-account switches must use the one context helper")
-    for path in ("$quadlet_root", "$unit_path"):
-        if f'run_as_service_account test -w "{path}"' not in source:
-            raise AssertionError("Quadlet write-authority probes must use service context helper")
+    write_probe_start = source.index("service_account_cannot_write_path() {")
+    write_probe_end = source.index("\n}\n", write_probe_start) + len("\n}\n")
+    write_probe = source[write_probe_start:write_probe_end]
+    if 'run_as_service_account test -w "$component"' not in write_probe:
+        raise AssertionError("Quadlet ancestry probes must use service context helper")
+    for path in ("$quadlet_root", "$unit_path", "$quadlet_search_policy"):
+        if f'service_account_cannot_write_path "{path}" /' not in source:
+            raise AssertionError("complete Quadlet ancestry must reject service writes")
 
 
 def admit_direct_user_manager_control(source: str) -> None:
@@ -112,9 +117,10 @@ def admit_direct_user_manager_control(source: str) -> None:
         'rootless_podman() {\n  run_as_service_account podman "$@"',
         "runuser --user \"$service_account\" -- env -u CONTAINER_HOST -u CONTAINER_CONNECTION",
         'install -d -o 0 -g 0 -m 0755 "$quadlet_root"',
-        'if run_as_service_account test -w "$quadlet_root"; then',
+        '! service_account_cannot_write_path "$quadlet_root" /',
         'chmod 0644 "$unit_path"',
-        'if run_as_service_account test -w "$unit_path"; then',
+        '! service_account_cannot_write_path "$unit_path" /',
+        '! service_account_cannot_write_path "$quadlet_search_policy" /',
         "user_systemctl daemon-reload",
         'user_systemctl start "${unit_name}.service"',
         'user_systemctl is-active --quiet "${unit_name}.service"',
@@ -201,46 +207,39 @@ def assert_qualification_native_evidence_cleanup() -> None:
     """Keep AVC evidence and transient-unit cleanup bounded and observable."""
 
     source = QUALIFICATION_HARNESS.read_text(encoding="utf-8")
-    if "read -r audit_date audit_time < <(LC_ALL=C date '+%x %T')" not in source:
-        raise AssertionError("qualification harness must collect locale-stable AVC date/time")
-    if 'LC_ALL=C ausearch --input-logs -m AVC -ts "$audit_date" "$audit_time" -i' not in source:
-        raise AssertionError("ausearch AVC must use separate start date/time with auditd log input")
-
-    avc_pipeline = (
-        'LC_ALL=C ausearch --input-logs -m AVC -ts "$audit_date" "$audit_time" -i |\n'
-        "    grep -F 'marker' >/dev/null"
+    required_avc_contract = (
+        "read -r audit_date audit_time < <(LC_ALL=C date '+%x %T')",
+        'ausearch --input-logs -m AVC -ts "$audit_date" "$audit_time" -i',
+        '/usr/bin/head -c 65537 >"$audit_observation"',
+        'pipeline_statuses=("${PIPESTATUS[@]}")',
+        '"$audit_size" -le 65536',
+        "diagnose_avc_correlation_bytes(",
+        "admit_selinux_isolation(",
+        "process_a=process_a",
+        "process_b=process_b",
+        "storage_a=storage_a",
+        '"$SELINUX_ISOLATION_INVARIANT_OWNER"',
     )
-    if avc_pipeline not in source:
-        raise AssertionError(
-            "ausearch AVC evidence must force auditd log input and consume its full stream"
-        )
-    avc_pipeline_mutations = {
-        "default-ausearch-input": source.replace(" --input-logs", "", 1),
-        "quiet-grep": source.replace("grep -F 'marker' >/dev/null", "grep -Fq 'marker'", 1),
-    }
-    for name, candidate in avc_pipeline_mutations.items():
-        if candidate == source:
-            raise AssertionError(f"AVC evidence mutation did not apply: {name}")
-        if avc_pipeline in candidate:
-            raise AssertionError(f"unsafe AVC evidence mutation passed: {name}")
+    for representation in required_avc_contract:
+        if representation not in source:
+            raise AssertionError(
+                f"causal AVC admission contract is incomplete: {representation}"
+            )
 
-    if 'ausearch -m AVC -ts "$audit_start" -i' in source:
-        raise AssertionError("qualification harness must not pass combined AVC date/time")
-
-    fallback_start = source.index('if ! matching_marker_avc "$audit_date" "$audit_time"; then')
+    main_start = source.index("main() {")
+    fallback_start = source.index("\nobserve_denied_access\n", main_start)
     dontaudit_start = source.index("semodule -DB", fallback_start)
-    if fallback_start > dontaudit_start:
-        raise AssertionError("dontaudit visibility may only follow a missing normal-policy AVC")
     if source.count("semodule -DB") != 1:
         raise AssertionError("qualification harness must have one bounded dontaudit fallback")
     if "setenforce 0" in source or "permissive" in source:
         raise AssertionError("qualification harness must not weaken SELinux enforcement")
     if source.index('[[ "$(getenforce)" != Enforcing ]]', dontaudit_start) < dontaudit_start:
         raise AssertionError("dontaudit fallback must verify SELinux remains Enforcing")
-    repeated_avc_start = source.index(
-        'if ! matching_marker_avc "$audit_date" "$audit_time"; then', fallback_start + 1
+    repeated_avc_start = source.index("\n  observe_denied_access\n", dontaudit_start)
+    normal_restore_start = source.index(
+        "if ! /usr/bin/timeout --signal=KILL 30s semodule -B; then",
+        repeated_avc_start,
     )
-    normal_restore_start = source.index("if ! semodule -B; then", repeated_avc_start)
     if normal_restore_start < repeated_avc_start:
         raise AssertionError("normal dontaudit fallback must restore policy after AVC evidence")
 
@@ -248,13 +247,13 @@ def assert_qualification_native_evidence_cleanup() -> None:
     cleanup_end = source.index("\nwhile (($#));", cleanup_start)
     cleanup = source[cleanup_start:cleanup_end]
     restore_offset = cleanup.index("semodule -B")
-    stop_offset = cleanup.index('user_systemctl stop "${unit_name}.service"')
+    stop_offset = cleanup.index('systemctl --user stop "${unit_name}.service"')
     if restore_offset > stop_offset:
         raise AssertionError("cleanup must restore dontaudit visibility before other cleanup")
-    if 'user_systemctl reset-failed "${unit_name}.service"' not in cleanup:
+    if 'systemctl --user reset-failed "${unit_name}.service"' not in cleanup:
         raise AssertionError("cleanup must reset only its generated unit's failed state")
-    if cleanup.index('user_systemctl daemon-reload') > cleanup.index(
-        'user_systemctl reset-failed "${unit_name}.service"'
+    if cleanup.index('systemctl --user daemon-reload') > cleanup.index(
+        'systemctl --user reset-failed "${unit_name}.service"'
     ):
         raise AssertionError("cleanup must reload before resetting its generated unit state")
     forbidden_fixture_policy_state = (
@@ -268,8 +267,14 @@ def assert_qualification_native_evidence_cleanup() -> None:
                 "qualification cleanup must not retain fixture fcontext state: "
                 f"{representation}"
             )
-    if "trap cleanup EXIT HUP INT TERM" not in source:
-        raise AssertionError("cleanup must restore dontaudit policy on abnormal exits")
+    for signal_trap in (
+        "trap cleanup EXIT",
+        "trap 'interrupted 129' HUP",
+        "trap 'interrupted 130' INT",
+        "trap 'interrupted 143' TERM",
+    ):
+        if signal_trap not in source:
+            raise AssertionError("cleanup must retain nonzero signal-specific traps")
     if re.search(r"(?<!user_)systemctl\\s+reset-failed(?:\\s|$)", source):
         raise AssertionError("qualification harness must not reset failed state globally")
 
@@ -279,12 +284,6 @@ def assert_qualification_native_evidence_cleanup() -> None:
         label_pipeline = source[label_start:label_end]
         if label_pipeline.index("tr -d '\\000'") > label_pipeline.index("tail -n 1"):
             raise AssertionError("NUL bytes must be removed before label command substitution")
-    evidence_offset = source.index("printf 'seccomp_mode=%s")
-    negative_read_offset = source.index(
-        'if rootless_podman exec "$container_b" cat /foreign/marker'
-    )
-    if evidence_offset > negative_read_offset:
-        raise AssertionError("captured label and seccomp evidence must precede AVC collection")
 
 
 def admit_private_relabel_qualification(source: str) -> None:
@@ -316,12 +315,12 @@ def admit_private_relabel_qualification(source: str) -> None:
         "storage_a=\"$(stat --printf='%C' \"$state_a\")\"",
         "*:container_t:*",
         "*:container_file_t:*",
-        'if [[ "$process_a_mcs" != "$storage_a_mcs" || "$process_a_mcs" == "$process_b_mcs" ]]; then',
-        'if rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1; then',
-        'if ! matching_marker_avc "$audit_date" "$audit_time"; then',
+        'rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1',
+        "diagnose_avc_correlation_bytes(",
+        "admit_selinux_isolation(",
         'if [[ "$(getenforce)" != Enforcing ]]; then',
         "--security-opt no-new-privileges --cap-drop all",
-        "--user 65532:65532 --network pasta",
+        '--user "${WORKLOAD_UID}:${WORKLOAD_GID}" --network pasta',
         "grep -Eq 'label=disable|\"Privileged\": true|\"NetworkMode\": \"host\"'",
     )
     for representation in required:
@@ -353,8 +352,8 @@ def assert_qualification_private_relabel_security() -> None:
     admit_private_relabel_qualification(source)
     mutations = {
         "dynamic-fcontext-add": source.replace(
-            'install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a" "$state_b"',
-            'install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a" "$state_b"\n'
+            'install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a"',
+            'install -d -o "$service_uid" -g "$service_gid" -m 0777 "$state_a"\n'
             'semanage fcontext --add --type container_file_t "${fixture_root}(/.*)?"',
         ),
         "fixture-restorecon": source.replace(
@@ -377,23 +376,12 @@ def assert_qualification_private_relabel_security() -> None:
             "grep -Eq '\"Privileged\": true|\"NetworkMode\": \"host\"'",
         ),
         "wrong-storage-type": source.replace("*:container_file_t:*", "*:default_t:*"),
-        "process-storage-mismatch": source.replace(
-            '"$process_a_mcs" != "$storage_a_mcs"',
-            '"$process_a_mcs" == "$storage_a_mcs"',
-        ),
-        "equal-workload-mcs": source.replace(
-            '"$process_a_mcs" == "$process_b_mcs"',
-            '"$process_a_mcs" != "$process_b_mcs"',
-        ),
         "same-boundary-bypass": source.replace(
             "cat /state/marker'", "true'", 1
         ),
         "cross-boundary-bypass": source.replace(
-            'if rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1; then',
-            "if false; then",
-        ),
-        "avc-bypass": source.replace(
-            'if ! matching_marker_avc "$audit_date" "$audit_time"; then', "if false; then"
+            'rootless_podman exec "$container_b" cat /foreign/marker >/dev/null 2>&1',
+            "false",
         ),
         "permissive-selinux": source.replace("semodule -DB", "setenforce 0"),
         "rootful-podman": source.replace(

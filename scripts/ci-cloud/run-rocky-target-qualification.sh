@@ -10,17 +10,31 @@ readonly source_failure="$evidence_root/target-source-failure.json"
 readonly qualification_failure="$evidence_root/target-qualification-failure.json"
 readonly qualification_trace="$evidence_root/target-qualification.trace"
 readonly qualification_marker="$evidence_root/target-qualification.marker"
+readonly avc_correlation_diagnostic="$evidence_root/avc-correlation-diagnostic.json"
 readonly reload_adjacency="$evidence_root/quadlet-reload-adjacency.json"
+readonly native_observation="$evidence_root/native-package-observation.json"
+readonly native_diagnostic="$evidence_root/native-package-collection-diagnostic.json"
+readonly trusted_selinux_isolation_contract=/opt/secpal-control/scripts/selinux_isolation_contract.py
+readonly trusted_quadlet_authority_contract=/opt/secpal-control/scripts/quadlet_authority_contract.py
 
-if [[ "$#" -ne 4 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
-  ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ]]; then
-  printf 'usage: run-rocky-target-qualification.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT\n' >&2
+if [[ "$#" -ne 5 || ! "$1" =~ ^[0-9a-f]{40}$ || ! "$2" =~ ^[0-9a-f]{40}$ ||
+  ! "$3" =~ ^[1-9][0-9]{0,19}$ || ! "$4" =~ ^[1-9][0-9]{0,2}$ ||
+  ! "$5" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'usage: run-rocky-target-qualification.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT HARNESS_SHA256\n' >&2
   exit 64
 fi
 readonly target_sha="$1"
 readonly control_sha="$2"
 readonly qualification_run_id="$3"
 readonly qualification_run_attempt="$4"
+readonly qualification_harness_sha256="$5"
+readonly expected_target_sha=402c22b0a1d69a5a3dba74ffb68cf016caba606b
+readonly expected_harness_sha256=436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac
+if [[ "$target_sha" != "$expected_target_sha" ||
+  "$qualification_harness_sha256" != "$expected_harness_sha256" ]]; then
+  printf 'ERROR: target and qualification harness are not the trusted pair.\n' >&2
+  exit 64
+fi
 [[ -f /var/lib/secpal-rocky/prepared ]]
 [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]
 [[ -z "${GOOGLE_OAUTH_ACCESS_TOKEN:-}" ]]
@@ -48,10 +62,18 @@ cleanup() {
     /var/lib/secpal-rocky/evidence/quadlet-active-observation.json \
     /var/lib/secpal-rocky/evidence/primary-workload-observation.json \
     /var/lib/secpal-rocky/evidence/quadlet-reload-adjacency.json \
-    "$qualification_trace" "$qualification_marker"
+    "$qualification_trace" "$qualification_marker" \
+    "$avc_correlation_diagnostic"
   rm -rf -- "$work_root"
 }
-trap cleanup EXIT HUP INT TERM
+interrupted() {
+  trap - HUP INT TERM
+  exit "$1"
+}
+trap cleanup EXIT
+trap 'interrupted 129' HUP
+trap 'interrupted 130' INT
+trap 'interrupted 143' TERM
 
 capture_bounded() {
   local maximum="$1" output="$2" head_status=0 drain_status=0
@@ -62,21 +84,58 @@ capture_bounded() {
 
 write_source_failure() {
   local operation="$1" reason="$2" exit_status="$3" temporary
-  [[ "$operation" =~ ^(resolve-target-source|fetch-exact-target|checkout-exact-target|verify-target-sha)$ ]]
+  [[ "$operation" =~ ^(resolve-target-source|fetch-exact-target|checkout-exact-target|verify-target-sha|verify-native-observation)$ ]]
   [[ "$reason" =~ ^(command-failed|postcondition-failed)$ ]]
   [[ "$exit_status" =~ ^[1-9][0-9]{0,2}$ && "$exit_status" -le 255 ]]
   temporary="$(mktemp "$evidence_root/.target-source-failure.XXXXXX")"
-  printf '{"schema_version":1,"phase":"qualify-target","operation":"%s","reason":"%s","exit_status":%s,"source_host":"github.com","target_sha":"%s"}\n' \
-    "$operation" "$reason" "$exit_status" "$target_sha" >"$temporary"
+  printf '{"schema_version":1,"phase":"qualify-target","operation":"%s","reason":"%s","exit_status":%s,"source_host":"github.com","target_sha":"%s","trusted_control_sha":"%s","qualification_run_id":"%s","qualification_run_attempt":"%s"}\n' \
+    "$operation" "$reason" "$exit_status" "$target_sha" "$control_sha" \
+    "$qualification_run_id" "$qualification_run_attempt" >"$temporary"
   chown secpal-cloud:secpal-cloud "$temporary"
   chmod 0400 "$temporary"
   mv -T -- "$temporary" "$source_failure"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
-    validate-target-source-failure "$source_failure" --target-sha "$target_sha"
+    validate-target-source-failure \
+    "$source_failure" --target-sha "$target_sha" \
+    --control-sha "$control_sha" --run-id "$qualification_run_id" \
+    --run-attempt "$qualification_run_attempt"
 }
 
 rm -f -- "$source_failure" "$qualification_failure" "$qualification_trace" \
-  "$qualification_marker" "$reload_adjacency"
+  "$qualification_marker" "$reload_adjacency" "$native_observation" \
+  "$native_diagnostic" "$avc_correlation_diagnostic"
+
+# This controller-owned runner observes and admits the installed RPMDB before
+# fetching or executing candidate target bytes.
+set +e
+/usr/local/sbin/secpal-collect-rocky-preparation \
+  --native-package-admission --target-sha "$target_sha" \
+  --control-sha "$control_sha" --run-id "$qualification_run_id" \
+  --run-attempt "$qualification_run_attempt" --output "$native_observation" \
+  --diagnostic-output "$native_diagnostic"
+native_observation_status=$?
+set -e
+if [[ "$native_observation_status" -ne 0 ]]; then
+  /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+    validate-collection-diagnostic "$native_diagnostic" || :
+  write_source_failure verify-native-observation postcondition-failed \
+    "$native_observation_status"
+  exit 86
+fi
+rm -f -- "$native_diagnostic"
+set +e
+/opt/secpal-control/scripts/ci-cloud/rocky-control.py \
+  validate-native-observation "$native_observation" \
+  --target-sha "$target_sha" --control-sha "$control_sha" \
+  --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
+native_observation_status=$?
+set -e
+if [[ "$native_observation_status" -ne 0 ]]; then
+  write_source_failure verify-native-observation postcondition-failed \
+    "$native_observation_status"
+  exit 86
+fi
+
 if ! getent ahostsv4 github.com >/dev/null 2>&1; then
   write_source_failure resolve-target-source command-failed 1
   exit 81
@@ -104,7 +163,19 @@ if [[ "$(git -C "$work_root" rev-parse HEAD)" != "$target_sha" ]]; then
   write_source_failure verify-target-sha postcondition-failed 1
   exit 84
 fi
-[[ -x "$work_root/scripts/qualify-production-host.sh" ]]
+if ! [[ -f "$work_root/scripts/qualify-production-host.sh" && ! -L "$work_root/scripts/qualify-production-host.sh" && -x "$work_root/scripts/qualify-production-host.sh" &&
+  -f "$work_root/scripts/selinux_isolation_contract.py" && ! -L "$work_root/scripts/selinux_isolation_contract.py" &&
+  -f "$trusted_selinux_isolation_contract" && ! -L "$trusted_selinux_isolation_contract" &&
+  "$(stat -c '%u:%g:%a' -- "$trusted_selinux_isolation_contract")" == 0:0:700 &&
+  -f "$work_root/scripts/quadlet_authority_contract.py" && ! -L "$work_root/scripts/quadlet_authority_contract.py" &&
+  -f "$trusted_quadlet_authority_contract" && ! -L "$trusted_quadlet_authority_contract" &&
+  "$(stat -c '%u:%g:%a' -- "$trusted_quadlet_authority_contract")" == 0:0:700 ]] ||
+  [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" != "$qualification_harness_sha256" ]] ||
+  ! /usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract" ||
+  ! /usr/bin/cmp --silent -- "$work_root/scripts/quadlet_authority_contract.py" "$trusted_quadlet_authority_contract"; then
+  write_source_failure verify-target-sha postcondition-failed 1
+  exit 84
+fi
 
 stdout="$evidence_root/qualification.stdout"
 audit_baseline="$(date -u '+%m/%d/%y %H:%M:%S')"
@@ -123,9 +194,8 @@ install -o root -g root -m 0600 /dev/null "$primary_observation"
 mkfifo -m 0600 "$trace_fifo"
 observer_pid=""
 trace_capture_pid=""
-if [[ "$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438 ]] &&
-  [[ "$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk '{print $1}')" == \
-    8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db ]]; then
+if [[ "$target_sha" == "$expected_target_sha" ]] &&
+  [[ "$qualification_harness_sha256" == "$expected_harness_sha256" ]]; then
   mkfifo -m 0600 "$reload_event" "$reload_ack"
   /opt/secpal-control/scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py \
     --event "$reload_event" --ack "$reload_ack" --output "$reload_adjacency" \
@@ -139,10 +209,12 @@ fi
 capture_bounded 4097 "$qualification_trace" <"$trace_fifo" &
 trace_capture_pid=$!
 set +e
-timeout --signal=TERM --kill-after=30s 45m \
+timeout --signal=TERM --kill-after=180s 45m \
   env BASH_ENV=/opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh \
+  SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6 \
   bash "$work_root/scripts/qualify-production-host.sh" \
   --image "$fixture" --service-account secpal-runtime \
+  6>"$avc_correlation_diagnostic" \
   3>"$trace_fifo" 2>&1 | capture_bounded 65537 "$stdout"
 pipeline_statuses=("${PIPESTATUS[@]}")
 status="${pipeline_statuses[0]}"
@@ -176,6 +248,7 @@ if [[ "$status" -ne 0 || "${#representation_option[@]}" -ne 0 ]]; then
     --start-observation "$start_observation" \
     --active-observation "$active_observation" \
     --primary-observation "$primary_observation" \
+    --avc-correlation-diagnostic "$avc_correlation_diagnostic" \
     "${representation_option[@]}" \
     --output "$qualification_failure"
   classifier_status=$?
@@ -200,8 +273,12 @@ fi
 rm -f -- "$qualification_marker"
 set +e
 python3 - "$target_sha" "$status" "$stdout" "$audit_baseline" \
-  "$evidence_root/qualification.json" "$qualification_marker" <<'PY'
+  "$evidence_root/qualification.json" "$qualification_marker" \
+  "$native_observation" <<'PY'
+import base64
+import binascii
 import hashlib
+import importlib.util
 import json
 import os
 import pwd
@@ -215,12 +292,72 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-target_sha, raw_status, stdout_path, audit_baseline, output_path, marker_path = sys.argv[1:]
-
+(
+    target_sha,
+    raw_status,
+    stdout_path,
+    audit_baseline,
+    output_path,
+    marker_path,
+    native_observation_path,
+) = sys.argv[1:]
 
 def reject(operation: str, reason: str, message: str) -> None:
     Path(marker_path).write_text(f"{operation} {reason}\n", encoding="ascii")
     raise SystemExit(message)
+
+
+contract_path = Path(
+    "/opt/secpal-control/scripts/selinux_isolation_contract.py"
+)
+contract_specification = importlib.util.spec_from_file_location(
+    "selinux_isolation_contract", contract_path
+)
+if contract_specification is None or contract_specification.loader is None:
+    reject(
+        "qualify-selinux-storage",
+        "command-failed",
+        "SELinux isolation contract is unavailable",
+    )
+selinux_isolation_contract = importlib.util.module_from_spec(
+    contract_specification
+)
+sys.dont_write_bytecode = True
+try:
+    contract_specification.loader.exec_module(selinux_isolation_contract)
+except Exception:
+    reject(
+        "qualify-selinux-storage",
+        "command-failed",
+        "SELinux isolation contract is unavailable",
+    )
+
+quadlet_contract_path = Path(
+    "/opt/secpal-control/scripts/quadlet_authority_contract.py"
+)
+quadlet_contract_specification = importlib.util.spec_from_file_location(
+    "quadlet_authority_contract", quadlet_contract_path
+)
+if (
+    quadlet_contract_specification is None
+    or quadlet_contract_specification.loader is None
+):
+    reject(
+        "qualify-quadlet-authority",
+        "command-failed",
+        "Quadlet authority contract is unavailable",
+    )
+quadlet_authority_contract = importlib.util.module_from_spec(
+    quadlet_contract_specification
+)
+try:
+    quadlet_contract_specification.loader.exec_module(quadlet_authority_contract)
+except Exception:
+    reject(
+        "qualify-quadlet-authority",
+        "command-failed",
+        "Quadlet authority contract is unavailable",
+    )
 
 
 def run_bounded(
@@ -307,8 +444,12 @@ def run_bounded(
 
 
 def acquire_audit_events(
-    command: list[str], source_context: str, target_context: str
-) -> tuple[bytes | None, set[tuple[str, str]] | None]:
+    command: list[str],
+    *,
+    process_a: str,
+    process_b: str,
+    storage_a: str,
+) -> tuple[bytes | None, dict[str, object] | None]:
     for attempt in range(12):
         status, stdout, stderr, invalid = run_bounded(
             command,
@@ -321,13 +462,19 @@ def acquire_audit_events(
                 audit_text = stdout.decode("utf-8")
             except UnicodeDecodeError:
                 return None, None
-            events = correlated_avc_events(
-                audit_text, source_context, target_context
-            )
-            if events is None:
+            try:
+                isolation = selinux_isolation_contract.admit_selinux_isolation(
+                    process_a=process_a,
+                    process_b=process_b,
+                    storage_a=storage_a,
+                    audit_text=audit_text,
+                )
+            except selinux_isolation_contract.NoMatchingAvc:
+                isolation = None
+            except selinux_isolation_contract.IsolationError:
                 return None, None
-            if events:
-                return stdout, events
+            if isolation is not None:
+                return stdout, isolation
             no_finding = True
         else:
             no_finding = (
@@ -340,7 +487,7 @@ def acquire_audit_events(
             return None, None
         if attempt < 11:
             time.sleep(0.5)
-    return b"", set()
+    return b"", None
 
 
 def runtime_home_admitted(
@@ -388,28 +535,63 @@ except UnicodeDecodeError as error:
     reject("qualification-harness", "representation-invalid", "qualification stdout is not UTF-8")
 if int(raw_status) != 0:
     reject("qualification-harness", "unclassified-target-failure", "qualification harness returned nonzero")
-if text.count("PASS: Rocky Linux 10.2 native") != 1:
+if text.count("PASS: Rocky Linux 10.2 target workload contract") != 1:
     reject("qualification-harness", "representation-invalid", "qualification PASS marker is not singular")
 facts = {}
-for key, value in re.findall(r"^(process_a|process_b|storage_a|seccomp_mode)=([^\r\n]+)$", text, re.MULTILINE):
+for key, value in re.findall(
+    r"^(process_a|process_b|storage_a|seccomp_mode|denial_pid|"
+    r"selinux_isolation_sha256|quadlet_authority_base64)=([^\r\n]+)$",
+    text,
+    re.MULTILINE,
+):
     if key in facts:
         reject("qualification-harness", "representation-invalid", "qualification facts are duplicated")
     facts[key] = value
-if set(facts) != {"process_a", "process_b", "storage_a", "seccomp_mode"}:
+if set(facts) != {
+    "process_a",
+    "process_b",
+    "storage_a",
+    "seccomp_mode",
+    "denial_pid",
+    "selinux_isolation_sha256",
+    "quadlet_authority_base64",
+}:
     reject("qualification-harness", "representation-invalid", "qualification facts are incomplete")
-context = re.compile(r"^([^:]+):([^:]+):(container_t|container_file_t):(s0(?::c[0-9]+(?:,c[0-9]+)?)?)$")
-parsed = {}
-for key in ("process_a", "process_b", "storage_a"):
-    match = context.fullmatch(facts[key])
-    if match is None:
-        reject("qualify-selinux-storage", "representation-invalid", "qualification SELinux context is malformed")
-    parsed[key] = match.groups()
-if parsed["process_a"][2] != "container_t" or parsed["process_b"][2] != "container_t" or parsed["storage_a"][2] != "container_file_t":
-    reject("qualify-selinux-storage", "invariant-failed", "qualification SELinux types are not admitted")
-if parsed["process_a"][3] != parsed["storage_a"][3] or parsed["process_b"][3] == parsed["process_a"][3]:
-    reject("qualify-mcs-relationship", "invariant-failed", "qualification MCS relationship is not admitted")
 if facts["seccomp_mode"] != "2":
     reject("qualify-seccomp", "invariant-failed", "qualification seccomp mode is not enforcing")
+try:
+    denial_pid = int(facts["denial_pid"])
+except ValueError:
+    reject("qualify-avc-correlation", "representation-invalid", "qualification process identity is malformed")
+if str(denial_pid) != facts["denial_pid"] or not 1 <= denial_pid <= 2_147_483_647:
+    reject("qualify-avc-correlation", "representation-invalid", "qualification process identity is malformed")
+if re.fullmatch(r"[0-9a-f]{64}", facts["selinux_isolation_sha256"]) is None:
+    reject("qualify-avc-correlation", "representation-invalid", "qualification isolation digest is malformed")
+try:
+    quadlet_authority_bytes = base64.b64decode(
+        facts["quadlet_authority_base64"], validate=True
+    )
+    if len(quadlet_authority_bytes) > 16_384:
+        raise ValueError("Quadlet authority evidence exceeds its closed bound")
+    quadlet_authority = json.loads(quadlet_authority_bytes)
+    quadlet_authority_contract.validate_authority_evidence(quadlet_authority)
+    if (
+        quadlet_authority_contract.canonical_bytes(quadlet_authority)
+        != quadlet_authority_bytes
+    ):
+        raise ValueError("Quadlet authority evidence is not canonical")
+except (
+    binascii.Error,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    ValueError,
+    quadlet_authority_contract.AuthorityError,
+):
+    reject(
+        "qualify-quadlet-authority",
+        "representation-invalid",
+        "qualification Quadlet authority evidence is invalid",
+    )
 audit_checkpoint = re.fullmatch(
     r"([0-9]{2}/[0-9]{2}/[0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})",
     audit_baseline,
@@ -421,93 +603,34 @@ try:
     datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")
 except ValueError:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-def audit_event_id(line: str) -> tuple[str, str] | None:
-    interpreted = re.search(
-        r"\bmsg=audit\("
-        r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "
-        r"([0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}):([1-9][0-9]*)"
-        r"\) :",
-        line,
-    )
-    if interpreted is None:
-        return None
-    date, time, serial = interpreted.groups()
-    try:
-        datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")
-    except ValueError:
-        return None
-    return f"{date} {time}", serial
-
-
-def correlated_avc_events(
-    audit_text: str, source_context: str, target_context: str
-) -> set[tuple[str, str]] | None:
-    events = {}
-    for line in audit_text.splitlines():
-        if line in {"", "----"}:
-            continue
-        record = re.match(r"^type=([A-Z][A-Z0-9_]*)\s", line)
-        if record is None:
-            return None
-        event_id = audit_event_id(line)
-        if event_id is None:
-            return None
-        event = events.setdefault(event_id, {"avc": 0, "marker": 0})
-        record_type = record.group(1)
-        if record_type == "PROCTITLE" and re.search(
-            r'(?:^|\s)proctitle=[^\r\n]*'
-            r'(?:^|\s)/foreign/marker(?:\s|$)',
-            line,
-        ) is not None:
-            event["marker"] += 1
-        if record_type != "AVC":
-            continue
-        source = re.search(r"(?:^|\s)scontext=(\S+)", line)
-        target = re.search(r"(?:^|\s)tcontext=(\S+)", line)
-        tclass = re.search(r"(?:^|\s)tclass=(\S+)", line)
-        event["avc"] += int(
-            re.search(r"avc:\s+denied\s+\{", line) is not None
-            and source is not None
-            and target is not None
-            and tclass is not None
-            and source.group(1) == source_context
-            and target.group(1) == target_context
-            and tclass.group(1) == "dir"
-            and re.search(r"(?:^|\s)permissive=0(?:\s|$)", line) is not None
-        )
-    if any(
-        event["avc"] > 1 or event["marker"] > 1
-        for event in events.values()
-    ):
-        return None
-    return {
-        event_id
-        for event_id, event in events.items()
-        if event["avc"] == 1 and event["marker"] == 1
-    }
-
-
-audit_stdout, avc_events = acquire_audit_events(
+audit_stdout, selinux_isolation = acquire_audit_events(
     [
         "/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",
         audit_date, audit_time, "-i",
     ],
-    facts["process_b"],
-    facts["storage_a"],
+    process_a=facts["process_a"],
+    process_b=facts["process_b"],
+    storage_a=facts["storage_a"],
 )
-if audit_stdout is None or avc_events is None:
+if audit_stdout is None or selinux_isolation is None:
     reject("qualify-avc-correlation", "command-failed", "qualification audit observation failed")
-if not avc_events:
+isolation_digest = hashlib.sha256(
+    selinux_isolation_contract.canonical_bytes(selinux_isolation)
+).hexdigest()
+if isolation_digest != facts["selinux_isolation_sha256"]:
     reject(
         "qualify-avc-correlation",
         "invariant-failed",
-        "qualification lacks a correlated enforcing AVC",
+        "target and trusted SELinux isolation normalization disagree",
     )
-if len(avc_events) != 1:
+if (
+    selinux_isolation["denial"]["pid"] != denial_pid
+    or selinux_isolation["denial"]["syscall_pid"] != denial_pid
+):
     reject(
         "qualify-avc-correlation",
         "invariant-failed",
-        "qualification has ambiguous correlated enforcing AVCs",
+        "target and trusted tested-process identities disagree",
     )
 runtime_identity = admitted_runtime_home()
 if runtime_identity is None:
@@ -544,16 +667,16 @@ cleanup_complete = all(
 if not cleanup_complete:
     reject("qualify-fixture-cleanup", "cleanup-failed", "qualification cleanup is incomplete")
 document = {
-    "schema_version": 1,
+    "schema_version": 4,
     "target_sha": target_sha,
+    "native_observation": json.loads(
+        Path(native_observation_path).read_text(encoding="utf-8")
+    ),
+    "quadlet_authority": quadlet_authority,
     "exit_status": int(raw_status),
     "stdout_sha256": hashlib.sha256(payload).hexdigest(),
     "stdout_bytes": len(payload),
-    "process_contexts": [facts.get("process_a", ""), facts.get("process_b", "")],
-    "storage_context": facts.get("storage_a", ""),
-    "mcs_distinct": True,
-    "cross_mcs_denied": True,
-    "avc_observed": True,
+    "selinux_isolation": selinux_isolation,
     "seccomp_enforced": True,
     "cleanup_complete": cleanup_complete,
     "classification": "PASS",
@@ -571,6 +694,7 @@ if [[ "$admission_status" -ne 0 ]]; then
     --start-observation "$start_observation" \
     --active-observation "$active_observation" \
     --primary-observation "$primary_observation" \
+    --avc-correlation-diagnostic "$avc_correlation_diagnostic" \
     --exit-status "$status" --trusted-marker "$qualification_marker" \
     --output "$qualification_failure"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py \
@@ -585,10 +709,14 @@ if [[ "$admission_status" -ne 0 ]]; then
   exit 91
 fi
 chmod 0600 "$evidence_root/qualification.json" "$stdout"
-/opt/secpal-control/scripts/ci-cloud/rocky-control.py validate-evidence qualification \
-  "$evidence_root/qualification.json"
+/opt/secpal-control/scripts/ci-cloud/rocky-control.py validate-native-qualification \
+  "$evidence_root/qualification.json" --stdout "$stdout" \
+  --native-observation "$native_observation" \
+  --target-sha "$target_sha" --control-sha "$control_sha" \
+  --run-id "$qualification_run_id" --run-attempt "$qualification_run_attempt"
 chown secpal-cloud:secpal-cloud "$evidence_root/qualification.json" "$stdout"
-chmod 0400 "$evidence_root/qualification.json" "$stdout"
+chown secpal-cloud:secpal-cloud "$native_observation"
+chmod 0400 "$evidence_root/qualification.json" "$stdout" "$native_observation"
 rm -f -- "$qualification_trace" "$qualification_marker" \
   "$start_observation" "$active_observation" "$primary_observation" \
   "$reload_adjacency"

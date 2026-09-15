@@ -11,7 +11,10 @@
     "reason",
     "exit_status",
     "source_host",
-    "target_sha"
+    "target_sha",
+    "trusted_control_sha",
+    "qualification_run_id",
+    "qualification_run_attempt"
   ],
   "properties": {
     "schema_version": { "const": 1 },
@@ -21,13 +24,26 @@
         "resolve-target-source",
         "fetch-exact-target",
         "checkout-exact-target",
-        "verify-target-sha"
+        "verify-target-sha",
+        "verify-native-observation"
       ]
     },
     "reason": { "enum": ["command-failed", "postcondition-failed"] },
     "exit_status": { "type": "integer", "minimum": 1, "maximum": 255 },
     "source_host": { "const": "github.com" },
-    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+    "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "trusted_control_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "qualification_run_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "qualification_run_attempt": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,2}$"
+    }
   },
   "allOf": [
     {
@@ -45,7 +61,13 @@
       "then": { "properties": { "reason": { "const": "command-failed" } } }
     },
     {
-      "if": { "properties": { "operation": { "const": "verify-target-sha" } } },
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": ["verify-target-sha", "verify-native-observation"]
+          }
+        }
+      },
       "then": {
         "properties": { "reason": { "const": "postcondition-failed" } }
       }

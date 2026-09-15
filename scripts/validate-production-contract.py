@@ -1241,10 +1241,13 @@ def validate_host_facts(
     inventory: dict[str, Any], facts: dict[str, Any], *, synthetic: bool = True
 ) -> None:
     validate_host_facts_schema(facts)
-    expected_evidence_class = "synthetic" if synthetic else "rocky-native"
-    if facts["evidence_class"] != expected_evidence_class:
+    if not synthetic:
         raise ContractViolation(
-            f"host facts evidence_class must be {expected_evidence_class} in this mode"
+            "caller-supplied host facts cannot establish trusted Rocky-native evidence"
+        )
+    if facts["evidence_class"] != "synthetic":
+        raise ContractViolation(
+            "host facts evidence_class must be synthetic in fixture-validation mode"
         )
     validate_platform_facts(inventory, facts)
     validate_kernel_facts(facts["kernel"], facts["architecture"])

@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+# Preserve the authenticated extracted witness document byte-for-byte.
+tests/fixtures/rocky-target-qualification-replay-34767598359.json

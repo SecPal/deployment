@@ -943,12 +943,16 @@ class CloudCIContractTests(unittest.TestCase):
             ".github/workflows/cloud-janitor.yml",
             ".github/workflows/rocky-cloud-qualification.yml",
             "config/ci-cloud/gcp-rocky-10-2-arm64.json",
+            "config/ci-cloud/gcp-rocky-10-2-x86-64.json",
             "infra/ci-cloud/digitalocean",
             "infra/ci-cloud/gcp",
             "infra/ci-cloud/gcp-rocky",
             "schemas",
             "scripts/ci-cloud",
             "scripts/fetch-oci-attestation.py",
+            "scripts/qualify-production-host.sh",
+            "scripts/selinux_isolation_contract.py",
+            "scripts/quadlet_authority_contract.py",
             "scripts/quadlet-integration.py",
         ):
             source = ROOT / path
@@ -975,6 +979,135 @@ class CloudCIContractTests(unittest.TestCase):
     def test_repository_cloud_ci_contract_is_valid(self) -> None:
         result = self.run_validator()
         self.assertEqual(0, result.returncode, result.stdout)
+
+    def test_static_contract_rejects_weakened_runtime_authority_admission(self) -> None:
+        harness = "scripts/qualify-production-host.sh"
+        mutations = (
+            (
+                '[[ "$service_uid" =~ ^[1-9][0-9]*$ && "$service_gid" =~ ^[1-9][0-9]*$ ]]',
+                '[[ "$service_uid" =~ ^[0-9]+$ && "$service_gid" =~ ^[0-9]+$ ]]',
+            ),
+            (
+                'podman_rootless="$(rootless_podman info --format \'{{.Host.Security.Rootless}}\')"',
+                'podman_rootless=true',
+            ),
+            ('[[ -e "$component" && ! -L "$component" ]]', '[[ -e "$component" ]]'),
+            (
+                '[[ "$uid" == "$administrator_uid" && "$gid" == "$administrator_gid" ]]',
+                '[[ "$uid" == "$administrator_uid" ]]',
+            ),
+            ("(((8#$mode & 8#022) == 0))", ":"),
+            (
+                'service_account_cannot_write_path "$quadlet_root" /',
+                'administrator_path_admitted "$quadlet_root" / 0 0',
+            ),
+            ('[[ "$value" == 1 ]]', '[[ "$value" =~ ^[01]$ ]]'),
+            (
+                "for field in CapInh CapPrm CapEff CapBnd CapAmb; do",
+                "for field in CapEff; do",
+            ),
+            ('[[ "$value" == 0000000000000000 ]]', '[[ -n "$value" ]]'),
+            ('[[ "$value" == 2 ]]', '[[ "$value" =~ ^[012]$ ]]'),
+            (
+                'administrator_path_admitted "$quadlet_search_policy" / 0 0 file 644',
+                'administrator_path_admitted "$quadlet_root" / 0 0 directory 755',
+            ),
+            (
+                '[[ "$effective_quadlet_dirs" != "$quadlet_root" ]]',
+                '[[ -z "$effective_quadlet_dirs" ]]',
+            ),
+            (
+                'python3 "$QUADLET_AUTHORITY_CONTRACT" "$properties_path"',
+                'true # bypass "$QUADLET_AUTHORITY_CONTRACT" "$properties_path"',
+            ),
+            ("trap 'interrupted 129' HUP", "trap cleanup HUP"),
+            ("trap 'interrupted 130' INT", "trap cleanup INT"),
+            ("trap 'interrupted 143' TERM", "trap cleanup TERM"),
+            ('exit_status="$interrupted_status"', "exit_status=0"),
+            (
+                "/usr/bin/timeout --signal=KILL 30s semodule -B",
+                "semodule -B",
+            ),
+            (
+                'rm -f -- "$qualification_success_marker"',
+                ": # retain success marker",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(old=old):
+                self.assert_mutation_rejected(harness, old, new)
+
+        authority = "scripts/quadlet_authority_contract.py"
+        for old, new in (
+            (
+                'INVARIANT_OWNER = "quadlet_authority_contract.admit_quadlet_authority"',
+                'INVARIANT_OWNER = "caller.selected.authority"',
+            ),
+            (
+                'r"^/run/user/(?P<uid>[1-9][0-9]*)/systemd/generator/"',
+                'r"^/run/user/(?P<uid>[0-9]*)/systemd/generator/"',
+            ),
+            (
+                'r"^/etc/containers/systemd/users/(?P<uid>[1-9][0-9]*)/"',
+                'r"^/home/runtime/.config/containers/systemd/"',
+            ),
+            ('or properties["DropInPaths"]', 'or False'),
+            (
+                'properties["ExecStart"] != expected_exec_start(unit_name)',
+                'False',
+            ),
+            (
+                '"executable": "/usr/bin/podman"',
+                '"executable": "/usr/bin/sh"',
+            ),
+            ('"--network",\n        "none",', '"--network",\n        "host",'),
+            ('"ignore_errors": False', '"ignore_errors": True'),
+            ('"status": "0/0"', '"status": "1/0"'),
+        ):
+            with self.subTest(old=old):
+                self.assert_mutation_rejected(authority, old, new)
+
+        enforcement_mutations = (
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                '! /usr/bin/cmp --silent -- "$work_root/scripts/quadlet_authority_contract.py" "$trusted_quadlet_authority_contract"',
+                "false",
+            ),
+            (
+                "scripts/ci-cloud/rocky-control.py",
+                '"target and trusted Quadlet authority normalization disagree"',
+                '"target authority accepted without trusted agreement"',
+            ),
+            (
+                "schemas/rocky-cloud-qualification-evidence.schema.json",
+                '"const": "quadlet_authority_contract.admit_quadlet_authority"',
+                '"const": "caller.selected.authority"',
+            ),
+            (
+                "scripts/ci-cloud/bootstrap-rocky-host.tftpl",
+                "decode_script '${quadlet_authority_contract_base64gzip}' /opt/secpal-control/scripts/quadlet_authority_contract.py",
+                ": # omit Quadlet authority owner",
+            ),
+            (
+                "infra/ci-cloud/gcp-rocky/main.tf",
+                "quadlet_authority_contract_base64gzip",
+                "quadlet_authority_contract_unbound",
+            ),
+        )
+        for relative, old, new in enforcement_mutations:
+            with self.subTest(relative=relative):
+                self.assert_mutation_rejected(relative, old, new)
+
+        preparation = "scripts/ci-cloud/prepare-rocky-host.sh"
+        for old, new in (
+            (
+                '[[ "$runtime_uid" =~ ^[1-9][0-9]*$ && "$runtime_gid" =~ ^[1-9][0-9]*$ ]]',
+                '[[ "$runtime_uid" =~ ^[0-9]+$ && "$runtime_gid" =~ ^[0-9]+$ ]]',
+            ),
+            ("Environment=QUADLET_UNIT_DIRS=%s", "Environment=HOME=%s"),
+        ):
+            with self.subTest(old=old):
+                self.assert_mutation_rejected(preparation, old, new)
 
     def test_rejects_weakened_current_boot_runtime_user_readiness(self) -> None:
         publisher = "scripts/ci-cloud/publish-rocky-qualification-readiness.py"
@@ -1087,16 +1220,20 @@ class CloudCIContractTests(unittest.TestCase):
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         for old, new in (
             (
-                '(237, 237, "qualify-quadlet-daemon-reload"),',
-                '(237, 237, "qualify-quadlet-runtime"),',
+                '(614, 614, "qualify-quadlet-daemon-reload"),',
+                '(614, 614, "qualify-quadlet-runtime"),',
             ),
             (
-                '(238, 238, "qualify-quadlet-start"),',
-                '(238, 238, "qualify-quadlet-daemon-reload"),',
+                '(638, 638, "qualify-quadlet-start"),',
+                '(638, 638, "qualify-quadlet-daemon-reload"),',
             ),
             (
-                '(239, 239, "qualify-quadlet-active-state"),',
-                '(239, 239, "qualify-quadlet-start"),',
+                '(639, 639, "qualify-quadlet-active-state"),',
+                '(639, 639, "qualify-quadlet-start"),',
+            ),
+            (
+                '(653, 658, "qualify-workload-primary"),',
+                '(653, 658, "qualify-workload-secondary"),',
             ),
         ):
             with self.subTest(new=new):
@@ -1106,28 +1243,28 @@ class CloudCIContractTests(unittest.TestCase):
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         self.assert_mutation_rejected(
             classifier,
-            '(241, 244, "qualify-selinux-storage-directory-create"),',
-            '(241, 244, "qualify-selinux-storage-fcontext-add"),',
+            '(668, 668, "qualify-selinux-storage-directory-create"),',
+            '(670, 670, "qualify-selinux-storage-fcontext-add"),',
         )
 
     def test_rejects_weakened_target_trace_binding_bounds_and_ambiguity(self) -> None:
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         classifier_source = (ROOT / classifier).read_text(encoding="utf-8")
         self.assertIn(
-            'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
+            'EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"',
             classifier_source,
         )
         self.assertIn(
-            'EXPECTED_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"',
+            'EXPECTED_HARNESS_SHA256 = "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
             classifier_source,
         )
         for old, new in (
             (
-                'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
+                'EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"',
                 'EXPECTED_TARGET_SHA = ""',
             ),
             (
-                'EXPECTED_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"',
+                'EXPECTED_HARNESS_SHA256 = "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
                 'EXPECTED_HARNESS_SHA256 = ""',
             ),
             ("MAX_TRACE_FRAMES = 8", "MAX_TRACE_FRAMES = 9"),
@@ -1139,6 +1276,187 @@ class CloudCIContractTests(unittest.TestCase):
         ):
             with self.subTest(new=new):
                 self.assert_mutation_rejected(classifier, old, new)
+
+    def test_corrected_target_pair_is_bound_before_provider_authentication(
+        self,
+    ) -> None:
+        target_sha = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+        harness_sha256 = (
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+        )
+        workflow = (
+            ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+        ).read_text(encoding="utf-8")
+        validation = workflow.split(
+            "      - name: Validate immutable inputs\n", 1
+        )[1].split("\n  discover:\n", 1)[0]
+        classifier_source = (
+            ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(f"readonly expected_target_sha={target_sha}", validation)
+        self.assertIn(
+            f"readonly expected_harness_sha256={harness_sha256}", validation
+        )
+        self.assertIn(
+            '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]', validation
+        )
+        self.assertIn(
+            '[[ "$(sha256sum scripts/qualify-production-host.sh | '
+            "awk '{print $1}')\" == \\\n"
+            '            "$expected_harness_sha256" ]]',
+            validation,
+        )
+        self.assertIn(f'EXPECTED_TARGET_SHA = "{target_sha}"', classifier_source)
+        self.assertIn(
+            f'EXPECTED_HARNESS_SHA256 = "{harness_sha256}"', classifier_source
+        )
+        validator_source = (ROOT / "scripts/validate-ci-cloud.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'historical_pre_269_harness_sha256 = (\n        '
+            '"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"',
+            validator_source,
+        )
+        self.assertIn(
+            'HISTORICAL_PRE_269_HARNESS_SHA256 = '
+            '"{historical_pre_269_harness_sha256}"',
+            validator_source,
+        )
+        self.assertIn(
+            'historical_273_target_sha = '
+            '"c76742c828fefd71dda2b2d73fda6a0c43969426"',
+            validator_source,
+        )
+        self.assertIn(
+            'HISTORICAL_273_TARGET_SHA = "{historical_273_target_sha}"',
+            validator_source,
+        )
+        mutations = (
+            (
+                ".github/workflows/rocky-cloud-qualification.yml",
+                f"readonly expected_target_sha={target_sha}",
+                "readonly expected_target_sha=293977ae93408a7bb812619de58649ab8a92d438",
+            ),
+            (
+                ".github/workflows/rocky-cloud-qualification.yml",
+                f"readonly expected_harness_sha256={harness_sha256}",
+                "readonly expected_harness_sha256="
+                "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db",
+            ),
+            (
+                ".github/workflows/rocky-cloud-qualification.yml",
+                '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]',
+                '[[ -n "${RAW_TARGET_SHA,,}" ]]',
+            ),
+            (
+                "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
+                f'EXPECTED_TARGET_SHA = "{target_sha}"',
+                'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
+            ),
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                f"readonly expected_target_sha={target_sha}",
+                "readonly expected_target_sha=293977ae93408a7bb812619de58649ab8a92d438",
+            ),
+            (
+                "schemas/rocky-cloud-qualification-evidence.schema.json",
+                f'"const": "{target_sha}"',
+                '"const": "539d5faa6549be62060c8e20028caf200e5eca01"',
+            ),
+            (
+                "schemas/rocky-cloud-target-qualification-failure.schema.json",
+                f'"const": "{target_sha}"',
+                '"const": "293977ae93408a7bb812619de58649ab8a92d438"',
+            ),
+            (
+                "scripts/ci-cloud/rocky-target-qualification-trace.sh",
+                "10#$frame == 614",
+                "10#$frame == 237",
+            ),
+            (
+                "scripts/qualify-production-host.sh",
+                'readonly DEFAULT_ACCOUNT="secpal-deploy"',
+                'readonly DEFAULT_ACCOUNT="caller-selected"',
+            ),
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, new=new):
+                self.assert_mutation_rejected(relative, old, new)
+
+    def test_rejects_schema_pair_substitution_with_unchanged_literal_counts(
+        self,
+    ) -> None:
+        relative = "schemas/rocky-cloud-target-qualification-failure.schema.json"
+        current = (
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+        )
+        historical = (
+            "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        )
+        fixture = self.mutated_root(relative, current, "x" * 64)
+        schema = (fixture / relative).read_text(encoding="utf-8")
+        schema = schema.replace(historical, current, 1).replace(
+            "x" * 64, historical, 1
+        )
+        (fixture / relative).write_text(schema, encoding="utf-8")
+        result = self.run_validator(fixture)
+        self.assertNotEqual(0, result.returncode, result.stdout)
+
+    def test_destroy_cleanup_authenticates_retained_target_before_oidc(self) -> None:
+        workflow = (
+            ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+        ).read_text(encoding="utf-8")
+        validation = workflow.split(
+            "      - name: Validate immutable inputs\n", 1
+        )[1].split("\n  discover:\n", 1)[0]
+        cleanup = workflow.split("\n  cleanup:\n", 1)[1]
+        self.assertIn(
+            'destroy)\n              [[ "${RAW_TARGET_SHA,,}" == '
+            '"$expected_target_sha" ||\n                "${RAW_TARGET_SHA,,}" == '
+            '"$historical_cleanup_target_sha" ]]',
+            validation,
+        )
+        self.assertIn(
+            "readonly historical_cleanup_target_sha="
+            "293977ae93408a7bb812619de58649ab8a92d438",
+            validation,
+        )
+        self.assert_mutation_rejected(
+            ".github/workflows/rocky-cloud-qualification.yml",
+            '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ||\n'
+            '                "${RAW_TARGET_SHA,,}" == '
+            '"$historical_cleanup_target_sha" ]]',
+            '[[ -n "${RAW_TARGET_SHA,,}" ]]',
+        )
+        admission = cleanup.index("Admit continuation before cross-run cleanup")
+        provider_authentication = cleanup.index(
+            "Authenticate separate exact cleanup authority through OIDC"
+        )
+        self.assertLess(admission, provider_authentication)
+        self.assertIn(
+            '--target-sha "$TARGET_SHA"',
+            cleanup[admission:provider_authentication],
+        )
+
+    def test_preprovider_gate_runs_pinned_schema_validator(self) -> None:
+        workflow = (
+            ROOT / ".github/workflows/rocky-cloud-qualification.yml"
+        ).read_text(encoding="utf-8")
+        validation_job = workflow.split("jobs:\n  validate:", 1)[1].split(
+            "\n  discover:", 1
+        )[0]
+        self.assertIn(
+            "jsonschema==4.25.1 PyYAML==6.0.2", validation_job
+        )
+        architecture = validation_job.index(
+            "scripts/validate-rocky-evidence-architecture.py"
+        )
+        schema = validation_job.index("scripts/validate-ci-cloud.py")
+        immutable = validation_job.index("Validate immutable inputs")
+        self.assertLess(architecture, immutable)
+        self.assertLess(schema, immutable)
 
     def test_rejects_process_wide_target_file_limit_and_unbounded_capture(self) -> None:
         runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
@@ -1163,92 +1481,99 @@ class CloudCIContractTests(unittest.TestCase):
             with self.subTest(new=new):
                 self.assert_mutation_rejected(runner, old, new)
 
-    def test_rejects_cross_record_or_unbound_avc_admission(self) -> None:
-        runner = "scripts/ci-cloud/run-rocky-target-qualification.sh"
-        for old, new in (
-            ("date -u '+%m/%d/%y %H:%M:%S'", "date -u '+%m/%d/%Y %H:%M:%S'"),
+    def test_rejects_weakened_selinux_isolation_admission(self) -> None:
+        mutations = (
             (
-                'datetime.strptime(audit_baseline, "%m/%d/%y %H:%M:%S")',
-                'datetime.strptime(audit_baseline, "%m/%d/%Y %H:%M:%S")',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "for attempt in range(12):",
+                "for attempt in range(1):",
             ),
             (
-                'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")',
-                'datetime.strptime(f"{date} {time}", "%m/%d/%Y %H:%M:%S.%f")',
-            ),
-            (
-                "audit_date, audit_time = audit_checkpoint.groups()",
-                'audit_date, audit_time = audit_baseline.split(" ", 1)',
-            ),
-            (
-                '"/usr/sbin/ausearch", "--input-logs", "-m", "AVC", "-ts",',
-                '"/usr/sbin/ausearch", "-m", "AVC", "-ts",',
-            ),
-            (
-                'audit_date, audit_time, "-i",',
-                'audit_baseline, "-i",',
-            ),
-            (
-                'audit_date, audit_time, "-i",',
-                'audit_date, audit_time,',
-            ),
-            ("for attempt in range(12):", "for attempt in range(1):"),
-            (
-                'and not stdout\n                and stderr in {b"", b"<no matches>\\n"}',
-                'and True\n                and stderr in {b"", b"<no matches>\\n"}',
-            ),
-            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
                 'stderr in {b"", b"<no matches>\\n"}',
                 "len(stderr) <= 4096",
             ),
             (
-                'if line in {"", "----"}:',
-                'if not line or line == "ignored":',
-            ),
-            ("if events:", "if True:"),
-            (
-                'event["avc"] > 1 or event["marker"] > 1',
-                'event["avc"] > 99 or event["marker"] > 99',
-            ),
-            ("for line in audit_text.splitlines():", "for line in [audit_text]:"),
-            (
-                "event_id = audit_event_id(line)",
-                'event_id = ("one", "one")',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                'selinux_isolation["denial"]["pid"] != denial_pid',
+                "False",
             ),
             (
-                'events.setdefault(event_id, {"avc": 0, "marker": 0})',
-                'events.setdefault(("one", "one"), {"avc": 0, "marker": 0})',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                'selinux_isolation["denial"]["syscall_pid"] != denial_pid',
+                "False",
             ),
             (
-                'record_type == "PROCTITLE"',
-                'record_type in {"PATH", "PROCTITLE", "SYSCALL"}',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                'isolation_digest != facts["selinux_isolation_sha256"]',
+                "False",
             ),
             (
-                "r'(?:^|\\s)/foreign/marker(?:\\s|$)'",
-                "r'(?:^|\\s)/foreign/[^\\s\"]+(?:\\s|$)'",
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                '/usr/bin/cmp --silent -- "$work_root/scripts/'
+                'selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"',
+                ":",
             ),
             (
-                'tclass.group(1) == "dir"',
-                'tclass.group(1) in {"file", "dir"}',
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "timeout --signal=TERM --kill-after=180s 45m",
+                "timeout --signal=TERM --kill-after=30s 45m",
             ),
             (
-                'r"(?:^|\\s)permissive=0(?:\\s|$)"',
-                'r"(?:^|\\s)permissive=[01](?:\\s|$)"',
+                "scripts/selinux_isolation_contract.py",
+                "MCS_CATEGORY_MAX = 1023",
+                "MCS_CATEGORY_MAX = 1024",
             ),
             (
-                'if event["avc"] == 1 and event["marker"] == 1',
-                'if event["avc"] >= 1 and event["marker"] >= 1',
+                "scripts/selinux_isolation_contract.py",
+                "len(raw_categories) not in {1, 2}",
+                "len(raw_categories) not in {1, 2, 3}",
             ),
             (
-                'cwd=str(runtime_home) if name == "podman" else None',
+                "scripts/selinux_isolation_contract.py",
+                "len(set(categories)) != len(categories)",
+                "False",
+            ),
+            (
+                "scripts/selinux_isolation_contract.py",
+                '_field(line, "pid") == str(pid)',
+                "True",
+            ),
+            (
+                "scripts/selinux_isolation_contract.py",
+                '"permissive": "0"',
+                '"permissive": _field(line, "permissive")',
+            ),
+            (
+                "scripts/selinux_isolation_contract.py",
+                "_event_id(line), {\"AVC\"",
+                '("one", "one"), {"AVC"',
+            ),
+            (
+                "scripts/selinux_isolation_contract.py",
+                "len(candidates) != 1",
+                "len(candidates) < 1",
+            ),
+            (
+                "schemas/rocky-cloud-qualification-evidence.schema.json",
+                '"maximum": 1023',
+                '"maximum": 1024',
+            ),
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                "cwd=str(runtime_home) if name == \"podman\" else None",
                 "cwd=None",
             ),
             (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
                 "home_metadata.st_uid == runtime_account.pw_uid",
                 "False",
             ),
-        ):
-            with self.subTest(new=new):
-                self.assert_mutation_rejected(runner, old, new)
+        )
+        for relative, old, new in mutations:
+            with self.subTest(relative=relative, new=new):
+                self.assert_mutation_rejected(relative, old, new)
+
 
     def test_rejects_weakened_daemon_reload_failure_adjacency(self) -> None:
         trace = "scripts/ci-cloud/rocky-target-qualification-trace.sh"
@@ -1314,8 +1639,8 @@ class CloudCIContractTests(unittest.TestCase):
                 "timeout --signal=KILL 1s stat --file-system --format='%a %S' -- /run/systemd",
                 "stat --file-system --format='%a %S' -- /run",
             ),
-            (trace, "10#$frame == 237", "10#$frame == 238"),
-            (observer, "or 237 not in frames", "or 242 not in frames"),
+            (trace, "10#$frame == 614", "10#$frame == 638"),
+            (observer, "or 614 not in frames", "or 237 not in frames"),
             (
                 observer,
                 "except (OSError, ObservationError, KeyError, ValueError):",
@@ -1340,7 +1665,7 @@ class CloudCIContractTests(unittest.TestCase):
             (trace, "trap - ERR", ":"),
             (
                 runner,
-                "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db",
+                "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac",
                 "",
             ),
             (
@@ -1775,9 +2100,9 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            'LINE_RULES = (\n    (113, 119, "qualify-host-identity"),',
+            'LINE_RULES = (\n    (456, 462, "qualify-host-identity"),',
             'LINE_RULES = (\n    (48, 50, "qualify-rootless-runtime"),\n'
-            '    (113, 119, "qualify-host-identity"),',
+            '    (456, 462, "qualify-host-identity"),',
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
@@ -1786,7 +2111,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            'EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"',
+            'EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"',
             'EXPECTED_TARGET_SHA = ""',
         )
         self.assert_mutation_rejected(

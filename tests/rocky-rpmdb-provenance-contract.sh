@@ -39,22 +39,34 @@ verify_installed_header() {
   local package="$1"
   local expected_repository="$2"
   local nevra repositories
-  nevra="$(rpm -q --qf '%{NEVRA}' "$package")"
+  local -a identity
+  mapfile -t identity < <(
+    rpm -q --qf $'%{NAME}\n%{EPOCHNUM}\n%{VERSION}\n%{RELEASE}\n%{ARCH}\n%{NEVRA}\n' \
+      "$package"
+  )
+  [[ "${#identity[@]}" == 6 ]]
+  [[ "${identity[0]}" == "$package" ]]
+  nevra="${identity[5]}"
   repositories="$(dnf4 --quiet --disablerepo='*' \
     --enablerepo=baseos,appstream,extras \
     repoquery-nevra --qf '%{repoid}' "$nevra")"
   [[ "$repositories" == "$expected_repository" ]]
 
-  rpm -qvv --qf $'%{NEVRA}\n%{PAYLOADDIGEST}\n%{PAYLOADDIGESTALGO}\n%{SHA256HEADER}\n%{RSAHEADER:pgpsig}\n' \
+  rpm -qvv --qf $'%{NAME}\n%{EPOCHNUM}\n%{VERSION}\n%{RELEASE}\n%{ARCH}\n%{NEVRA}\n%{PAYLOADDIGEST}\n%{PAYLOADDIGESTALGO}\n%{SHA256HEADER}\n%{RSAHEADER:pgpsig}\n' \
     "$nevra" >"$temporary_directory/$package.header" \
     2>"$temporary_directory/$package.verification"
   mapfile -t header <"$temporary_directory/$package.header"
-  [[ "${#header[@]}" == 5 ]]
-  [[ "${header[0]}" == "$nevra" ]]
-  [[ "${header[1]}" =~ ^[0-9a-f]{64}$ ]]
-  [[ "${header[2]}" == 8 ]]
-  [[ "${header[3]}" =~ ^[0-9a-f]{64}$ ]]
-  [[ "${header[4]}" =~ ^RSA/SHA256,.+Key\ ID\ [0-9a-f]{16}$ ]]
+  [[ "${#header[@]}" == 10 ]]
+  [[ "${header[0]}" == "$package" ]]
+  [[ "${header[1]}" == "${identity[1]}" ]]
+  [[ "${header[2]}" == "${identity[2]}" ]]
+  [[ "${header[3]}" == "${identity[3]}" ]]
+  [[ "${header[4]}" == "${identity[4]}" ]]
+  [[ "${header[5]}" == "$nevra" ]]
+  [[ "${header[6]}" =~ ^[0-9a-f]{64}$ ]]
+  [[ "${header[7]}" == 8 ]]
+  [[ "${header[8]}" =~ ^[0-9a-f]{64}$ ]]
+  [[ "${header[9]}" =~ ^RSA/SHA256,.+Key\ ID\ [0-9a-f]{16}$ ]]
   grep -Fxq "$verified_signature" "$temporary_directory/$package.verification"
   grep -Fxq "$verified_sha256" "$temporary_directory/$package.verification"
   grep -Fxq "$verified_sha1" "$temporary_directory/$package.verification"
@@ -73,22 +85,36 @@ spec = importlib.util.spec_from_file_location("rocky_preparation_contract", path
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 package, nevra, repository, header, verification, key = sys.argv[1:]
+identity = pathlib.Path(header).read_text().splitlines()[:6]
 signer = module.admit_rocky_signing_key(
     module.normalize_rocky_signing_key(pathlib.Path(key).read_text())
 )
 fact = module.normalize_package(
+    package,
     {
-        "name": package,
+        "name": identity[0],
+        "epoch": identity[1],
+        "version": identity[2],
+        "release": identity[3],
+        "architecture": identity[4],
         "nevra": nevra,
         "repositories": [repository],
         "signed_header": pathlib.Path(header).read_text().strip(),
         "verification": pathlib.Path(verification).read_text().strip(),
-    }
+    },
+    identity[4] if identity[4] != "noarch" else "x86_64",
 )
-admitted = module.admit_package(fact, signer)
+host_architecture = identity[4] if identity[4] != "noarch" else "x86_64"
+admitted = module.admit_package(fact, signer, host_architecture)
 assert admitted["nevra"] == nevra
+assert admitted["name"] == package
+assert admitted["architecture"] == identity[4]
 assert admitted["resolved_repository"] == repository
 assert admitted["signature_verified"] is True
+if package == "podman":
+    runtime = {"packages_admitted": [admitted]}
+    module.admit_runtime_podman_version(runtime)
+    assert runtime["podman_version_admitted"] == identity[2]
 PY
 }
 

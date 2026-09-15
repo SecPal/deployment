@@ -19,7 +19,7 @@
     "diagnostic_input_bytes"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2, 3, 4] },
     "phase": { "const": "target-qualification" },
     "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "trusted_control_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
@@ -112,7 +112,172 @@
     "diagnostic_input_bytes": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 139520
+      "maximum": 145670
+    },
+    "replay_witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "available",
+        "representation_invalid",
+        "exit_status",
+        "component_order",
+        "separator",
+        "components"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "available": { "type": "boolean" },
+        "representation_invalid": { "type": "boolean" },
+        "exit_status": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "component_order": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "qualification_stdout" },
+            { "const": "target_qualification_trace" },
+            { "const": "trusted_marker" },
+            { "const": "reload_adjacency" },
+            { "const": "start_observation" },
+            { "const": "active_observation" },
+            { "const": "primary_observation" }
+          ],
+          "items": false,
+          "minItems": 7,
+          "maxItems": 7
+        },
+        "separator": { "const": "NUL" },
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "qualification_stdout",
+            "target_qualification_trace",
+            "trusted_marker",
+            "reload_adjacency",
+            "start_observation",
+            "active_observation",
+            "primary_observation"
+          ],
+          "properties": {
+            "qualification_stdout": { "$ref": "#/$defs/replayComponent" },
+            "target_qualification_trace": { "$ref": "#/$defs/replayComponent" },
+            "trusted_marker": { "$ref": "#/$defs/replayComponent" },
+            "reload_adjacency": { "$ref": "#/$defs/replayComponent" },
+            "start_observation": { "$ref": "#/$defs/replayComponent" },
+            "active_observation": { "$ref": "#/$defs/replayComponent" },
+            "primary_observation": { "$ref": "#/$defs/replayComponent" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "available": { "const": true } },
+            "required": ["available"]
+          },
+          "then": {
+            "properties": {
+              "components": {
+                "properties": {
+                  "qualification_stdout": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "target_qualification_trace": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "trusted_marker": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "reload_adjacency": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "start_observation": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "active_observation": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  },
+                  "primary_observation": {
+                    "properties": { "replayability": { "const": "exact" } }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "components": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "qualification_stdout": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "target_qualification_trace": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "trusted_marker": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "reload_adjacency": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "start_observation": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "active_observation": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "primary_observation": {
+                        "properties": {
+                          "replayability": { "const": "unavailable" }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "quadlet_start_diagnostic": {
       "type": "object",
@@ -609,9 +774,619 @@
         },
         "selinux_avc_ambiguous": { "type": "boolean" }
       }
+    },
+    "avc_correlation_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "target_sha",
+        "trusted_control_sha",
+        "qualification_run_id",
+        "qualification_run_attempt",
+        "harness_sha256",
+        "projection_bytes",
+        "projection_sha256",
+        "projection"
+      ],
+      "properties": {
+        "schema_version": { "enum": [1, 2] },
+        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "trusted_control_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "qualification_run_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "qualification_run_attempt": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,2}$"
+        },
+        "harness_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "projection_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12288
+        },
+        "projection_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "projection": { "$ref": "#/$defs/avcCorrelationProjection" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "schema_version": { "const": 1 } },
+            "required": ["schema_version"]
+          },
+          "then": {
+            "properties": {
+              "projection": {
+                "properties": { "schema_version": { "const": 1 } }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "schema_version": { "const": 2 } },
+            "required": ["schema_version"]
+          },
+          "then": {
+            "properties": {
+              "projection": {
+                "properties": { "schema_version": { "const": 2 } }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "avcRejectionFacts": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 24,
+      "items": {
+        "enum": [
+          "no-avc-records-observed",
+          "denial-mismatch",
+          "permission-mismatch",
+          "target-class-mismatch",
+          "target-name-mismatch",
+          "source-context-mismatch",
+          "target-context-mismatch",
+          "permissive-mismatch",
+          "avc-pid-invalid-or-missing",
+          "avc-duplicate",
+          "proctitle-absent",
+          "proctitle-mismatch",
+          "proctitle-duplicate",
+          "syscall-absent",
+          "syscall-mismatch",
+          "syscall-duplicate",
+          "event-id-parse-mismatch",
+          "record-representation-malformed",
+          "cross-event-separation",
+          "multiple-candidate-events",
+          "observation-malformed",
+          "observation-oversized",
+          "ausearch-no-result",
+          "capture-execution-error"
+        ]
+      }
+    },
+    "avcRejectionFactsV1": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 23,
+      "items": {
+        "enum": [
+          "no-avc-records-observed",
+          "permission-mismatch",
+          "target-class-mismatch",
+          "target-name-mismatch",
+          "source-context-mismatch",
+          "target-context-mismatch",
+          "permissive-mismatch",
+          "avc-pid-invalid-or-missing",
+          "avc-duplicate",
+          "proctitle-absent",
+          "proctitle-mismatch",
+          "proctitle-duplicate",
+          "syscall-absent",
+          "syscall-mismatch",
+          "syscall-duplicate",
+          "event-id-parse-mismatch",
+          "record-representation-malformed",
+          "cross-event-separation",
+          "multiple-candidate-events",
+          "observation-malformed",
+          "observation-oversized",
+          "ausearch-no-result",
+          "capture-execution-error"
+        ]
+      }
+    },
+    "avcRejectionFactsV2": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 21,
+      "items": {
+        "enum": [
+          "no-avc-records-observed",
+          "denial-mismatch",
+          "source-context-mismatch",
+          "target-context-mismatch",
+          "permissive-mismatch",
+          "avc-pid-invalid-or-missing",
+          "avc-duplicate",
+          "proctitle-absent",
+          "proctitle-mismatch",
+          "proctitle-duplicate",
+          "syscall-absent",
+          "syscall-mismatch",
+          "syscall-duplicate",
+          "event-id-parse-mismatch",
+          "record-representation-malformed",
+          "cross-event-separation",
+          "multiple-candidate-events",
+          "observation-malformed",
+          "observation-oversized",
+          "ausearch-no-result",
+          "capture-execution-error"
+        ]
+      }
+    },
+    "avcNormalizedContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "selinux_type", "mcs_categories"],
+      "properties": {
+        "raw": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[^:\\s]+:[^:\\s]+:(container_t|container_file_t):s0:c(0|[1-9][0-9]{0,2}|10([01][0-9]|2[0-3]))(,c(0|[1-9][0-9]{0,2}|10([01][0-9]|2[0-3])))?$"
+        },
+        "selinux_type": { "enum": ["container_t", "container_file_t"] },
+        "mcs_categories": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0, "maximum": 1023 }
+        }
+      }
+    },
+    "avcRecordProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "permission_match",
+        "target_class_match",
+        "target_name_match",
+        "source_context_match",
+        "target_context_match",
+        "permissive_match",
+        "pid_status",
+        "pid"
+      ],
+      "properties": {
+        "denial_match": { "type": "boolean" },
+        "permission_match": { "type": "boolean" },
+        "target_class_match": { "type": "boolean" },
+        "target_name_match": { "type": "boolean" },
+        "source_context_match": { "type": "boolean" },
+        "target_context_match": { "type": "boolean" },
+        "permissive_match": { "type": "boolean" },
+        "pid_status": {
+          "enum": ["valid", "missing", "duplicate", "malformed", "out-of-range"]
+        },
+        "pid": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "integer", "minimum": 1, "maximum": 2147483647 }
+          ]
+        }
+      }
+    },
+    "avcSyscallProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid_status", "pid", "comm_match"],
+      "properties": {
+        "pid_status": {
+          "enum": ["valid", "missing", "duplicate", "malformed", "out-of-range"]
+        },
+        "pid": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "integer", "minimum": 1, "maximum": 2147483647 }
+          ]
+        },
+        "comm_match": { "type": "boolean" }
+      }
+    },
+    "avcEventProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_time",
+        "serial",
+        "record_count",
+        "avc_records",
+        "proctitle_records",
+        "syscall_records",
+        "candidate",
+        "rejection_facts"
+      ],
+      "properties": {
+        "event_time": {
+          "type": "string",
+          "pattern": "^[0-9]{2}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}$"
+        },
+        "serial": { "type": "string", "pattern": "^[1-9][0-9]{0,63}$" },
+        "record_count": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "avc_records": {
+          "type": "array",
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/avcRecordProjection" }
+        },
+        "proctitle_records": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["target_match"],
+            "properties": { "target_match": { "type": "boolean" } }
+          }
+        },
+        "syscall_records": {
+          "type": "array",
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/avcSyscallProjection" }
+        },
+        "candidate": { "type": "boolean" },
+        "rejection_facts": { "$ref": "#/$defs/avcRejectionFacts" }
+      }
+    },
+    "avcCorrelationProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "invariant_owner",
+        "capture_outcome",
+        "correlation_outcome",
+        "attempt",
+        "ausearch_status",
+        "capture_status",
+        "observation_bytes",
+        "observation_sha256",
+        "process_contexts",
+        "storage_context",
+        "record_count",
+        "event_count",
+        "avc_record_count",
+        "candidate_event_count",
+        "events",
+        "rejection_facts"
+      ],
+      "properties": {
+        "schema_version": { "enum": [1, 2] },
+        "invariant_owner": {
+          "const": "selinux_isolation_contract.admit_selinux_isolation"
+        },
+        "capture_outcome": {
+          "enum": [
+            "records-observed",
+            "ausearch-no-result",
+            "capture-execution-error",
+            "observation-malformed",
+            "observation-oversized"
+          ]
+        },
+        "correlation_outcome": { "enum": ["admitted", "no-match", "invalid"] },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "ausearch_status": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "integer", "minimum": 0, "maximum": 255 }
+          ]
+        },
+        "capture_status": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "integer", "minimum": 0, "maximum": 255 }
+          ]
+        },
+        "observation_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65537
+        },
+        "observation_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "process_contexts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            { "$ref": "#/$defs/avcNormalizedContext" },
+            { "$ref": "#/$defs/avcNormalizedContext" }
+          ],
+          "items": false
+        },
+        "storage_context": { "$ref": "#/$defs/avcNormalizedContext" },
+        "record_count": { "type": "integer", "minimum": 0, "maximum": 48 },
+        "event_count": { "type": "integer", "minimum": 0, "maximum": 8 },
+        "avc_record_count": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "candidate_event_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/avcEventProjection" }
+        },
+        "rejection_facts": { "$ref": "#/$defs/avcRejectionFacts" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "schema_version": { "const": 1 } },
+            "required": ["schema_version"]
+          },
+          "then": {
+            "properties": {
+              "rejection_facts": { "$ref": "#/$defs/avcRejectionFactsV1" },
+              "events": {
+                "items": {
+                  "properties": {
+                    "rejection_facts": {
+                      "$ref": "#/$defs/avcRejectionFactsV1"
+                    },
+                    "avc_records": {
+                      "items": { "not": { "required": ["denial_match"] } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "schema_version": { "const": 2 } },
+            "required": ["schema_version"]
+          },
+          "then": {
+            "properties": {
+              "rejection_facts": { "$ref": "#/$defs/avcRejectionFactsV2" },
+              "events": {
+                "items": {
+                  "properties": {
+                    "rejection_facts": {
+                      "$ref": "#/$defs/avcRejectionFactsV2"
+                    },
+                    "avc_records": {
+                      "items": { "required": ["denial_match"] }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "replayComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "present",
+        "byte_count",
+        "sha256",
+        "replayability",
+        "content_base64"
+      ],
+      "properties": {
+        "present": { "type": "boolean" },
+        "byte_count": { "type": "integer", "minimum": 0, "maximum": 65537 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "replayability": { "enum": ["exact", "unavailable"] },
+        "content_base64": { "type": ["string", "null"], "maxLength": 87384 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "replayability": { "const": "unavailable" } },
+            "required": ["replayability"]
+          },
+          "then": { "properties": { "content_base64": { "const": null } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "replayability": { "const": "exact" },
+              "present": { "const": false }
+            },
+            "required": ["replayability", "present"]
+          },
+          "then": {
+            "properties": {
+              "byte_count": { "const": 0 },
+              "sha256": {
+                "const": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "content_base64": { "const": null }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "replayability": { "const": "exact" },
+              "present": { "const": true }
+            },
+            "required": ["replayability", "present"]
+          },
+          "then": { "properties": { "content_base64": { "type": "string" } } }
+        }
+      ]
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": { "schema_version": { "enum": [3, 4] } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["avc_correlation_diagnostic"],
+        "properties": {
+          "schema_version": { "enum": [3, 4] },
+          "operation": { "const": "qualify-avc-correlation" },
+          "reason": { "const": "command-failed" },
+          "exit_status": { "const": 3 }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "schema_version": { "const": 3 },
+              "target_sha": {
+                "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["schema_version", "target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "schema_version": { "const": 4 },
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["schema_version", "target_sha", "harness_sha256"]
+          }
+        ]
+      },
+      "else": { "not": { "required": ["avc_correlation_diagnostic"] } }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 3 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "avc_correlation_diagnostic": {
+            "properties": { "schema_version": { "const": 1 } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 4 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "avc_correlation_diagnostic": {
+            "properties": { "schema_version": { "const": 2 } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": 2 } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": [
+          "replay_witness",
+          "target_sha",
+          "harness_sha256",
+          "trusted_control_sha",
+          "operation",
+          "reason"
+        ],
+        "anyOf": [
+          {
+            "properties": {
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+              },
+              "harness_sha256": {
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "539d5faa6549be62060c8e20028caf200e5eca01"
+              },
+              "harness_sha256": {
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          }
+        ],
+        "properties": {
+          "trusted_control_sha": {
+            "not": { "const": "f7a298d19bf4a0957d6b3db383a1f1bb2eeb309e" }
+          },
+          "operation": { "const": "qualification-harness" },
+          "reason": { "const": "representation-invalid" }
+        }
+      },
+      "else": { "not": { "required": ["replay_witness"] } }
+    },
     {
       "if": {
         "properties": { "exit_status": { "const": 0 } },
@@ -908,6 +1683,61 @@
               }
             },
             "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "b8f5a505d318d06a64a5975cfaba9f1e5ba0041f"
+              },
+              "harness_sha256": {
+                "const": "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+              },
+              "harness_sha256": {
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "539d5faa6549be62060c8e20028caf200e5eca01"
+              },
+              "harness_sha256": {
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
           }
         ]
       },
@@ -920,13 +1750,63 @@
     },
     {
       "if": {
-        "properties": {
-          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
-          "harness_sha256": {
-            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        "anyOf": [
+          {
+            "properties": {
+              "target_sha": {
+                "const": "293977ae93408a7bb812619de58649ab8a92d438"
+              },
+              "harness_sha256": {
+                "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+              },
+              "harness_sha256": {
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "539d5faa6549be62060c8e20028caf200e5eca01"
+              },
+              "harness_sha256": {
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
           }
-        },
-        "required": ["target_sha", "harness_sha256"]
+        ]
       },
       "else": {
         "not": {
@@ -975,13 +1855,63 @@
     },
     {
       "if": {
-        "properties": {
-          "target_sha": { "const": "293977ae93408a7bb812619de58649ab8a92d438" },
-          "harness_sha256": {
-            "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        "anyOf": [
+          {
+            "properties": {
+              "target_sha": {
+                "const": "293977ae93408a7bb812619de58649ab8a92d438"
+              },
+              "harness_sha256": {
+                "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+              },
+              "harness_sha256": {
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "539d5faa6549be62060c8e20028caf200e5eca01"
+              },
+              "harness_sha256": {
+                "const": "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
           }
-        },
-        "required": ["target_sha", "harness_sha256"]
+        ]
       },
       "then": {
         "not": {

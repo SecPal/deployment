@@ -38,7 +38,9 @@
       "properties": {
         "repository": { "const": "SecPal/deployment" },
         "trusted_control_sha": { "$ref": "#/$defs/sha" },
-        "profile": { "const": "gcp-rocky-10-2-arm64" },
+        "profile": {
+          "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+        },
         "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
         "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
         "expires_at": {
@@ -68,7 +70,7 @@
       "properties": {
         "id": { "const": "rocky" },
         "version_id": { "const": "10.2" },
-        "uname_machine": { "const": "aarch64" }
+        "uname_machine": { "enum": ["aarch64", "x86_64"] }
       }
     },
     "hardware": {
@@ -184,6 +186,10 @@
         "additionalProperties": false,
         "required": [
           "name",
+          "epoch",
+          "version",
+          "release",
+          "architecture",
           "nevra",
           "resolved_repository",
           "signature_verified",
@@ -192,7 +198,23 @@
         ],
         "properties": {
           "name": { "type": "string", "pattern": "^[a-zA-Z0-9+_.-]{1,64}$" },
-          "nevra": { "type": "string", "minLength": 3, "maxLength": 256 },
+          "epoch": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,9})$" },
+          "version": {
+            "type": "string",
+            "pattern": "^[0-9][a-zA-Z0-9+_.~^]*$",
+            "maxLength": 128
+          },
+          "release": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9+_.~^]*$",
+            "maxLength": 128
+          },
+          "architecture": { "enum": ["aarch64", "x86_64", "noarch"] },
+          "nevra": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9+_.-]+-(?:[1-9][0-9]*:)?[0-9][a-zA-Z0-9+_.~^]*-[a-zA-Z0-9][a-zA-Z0-9+_.~^]*\\.(?:aarch64|x86_64|noarch)$",
+            "maxLength": 256
+          },
           "resolved_repository": { "enum": ["baseos", "appstream", "extras"] },
           "signature_verified": { "const": true },
           "signer_fingerprint": {
@@ -236,7 +258,11 @@
         "api_dependency_absent"
       ],
       "properties": {
-        "podman": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "podman": {
+          "type": "string",
+          "pattern": "^5\\.(?:8\\.(?:[2-9]|[1-9][0-9]+)|(?:9|[1-9][0-9]+)\\.[0-9]+)$",
+          "maxLength": 64
+        },
         "rootless": { "const": true },
         "graphroot": {
           "type": "string",
@@ -295,7 +321,7 @@
     "fixture": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["input", "resolved_arm64_child", "pre_staged"],
+      "required": ["input", "pre_staged"],
       "properties": {
         "input": {
           "const": "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
@@ -303,8 +329,15 @@
         "resolved_arm64_child": {
           "const": "sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192"
         },
+        "resolved_amd64_child": {
+          "const": "sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f"
+        },
         "pre_staged": { "const": true }
-      }
+      },
+      "oneOf": [
+        { "required": ["resolved_arm64_child"] },
+        { "required": ["resolved_amd64_child"] }
+      ]
     },
     "persistence": {
       "type": "object",
@@ -333,6 +366,48 @@
       }
     }
   },
+  "oneOf": [
+    {
+      "properties": {
+        "run": {
+          "properties": {
+            "profile": { "const": "gcp-rocky-10-2-arm64" }
+          }
+        },
+        "image": {
+          "properties": {
+            "exact_self_link": {
+              "pattern": "/rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*$"
+            }
+          }
+        },
+        "guest": {
+          "properties": { "uname_machine": { "const": "aarch64" } }
+        },
+        "fixture": { "required": ["resolved_arm64_child"] }
+      }
+    },
+    {
+      "properties": {
+        "run": {
+          "properties": {
+            "profile": { "const": "gcp-rocky-10-2-x86-64" }
+          }
+        },
+        "image": {
+          "properties": {
+            "exact_self_link": {
+              "pattern": "/rocky-linux-10-v[0-9]{8}$"
+            }
+          }
+        },
+        "guest": {
+          "properties": { "uname_machine": { "const": "x86_64" } }
+        },
+        "fixture": { "required": ["resolved_amd64_child"] }
+      }
+    }
+  ],
   "$defs": {
     "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "id": { "type": "integer", "minimum": 1, "maximum": 4294967294 },
