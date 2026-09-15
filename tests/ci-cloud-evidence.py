@@ -73,7 +73,7 @@ def valid_document() -> dict[str, object]:
     }
     packages["dbus-user-session"]["architecture"] = "all"
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "workflow": {
             "repository": "SecPal/deployment",
             "run_id": "12345",
@@ -343,7 +343,7 @@ class EvidenceContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "declared schema"):
                     self.validator.validate_document(invalid)
 
-    def test_d1_and_d1a_results_are_distinct_and_both_required(self) -> None:
+    def test_host_and_workload_results_are_distinct_and_both_required(self) -> None:
         document = valid_document()
         document["host_admission"]["result"] = "failed"
         with self.assertRaisesRegex(ValueError, "host admission"):
@@ -354,7 +354,7 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workload|incomplete|declared schema"):
             self.validator.validate_document(document)
 
-    def test_schema_forbids_passed_d1a_with_invalid_live_or_cleanup_state(self) -> None:
+    def test_schema_forbids_passed_workload_with_invalid_live_or_cleanup_state(self) -> None:
         schema = json.loads(
             (ROOT / "schemas" / "ci-cloud-evidence.schema.json").read_text(
                 encoding="utf-8"
@@ -389,6 +389,19 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workload|incomplete|declared schema"):
             self.validator.validate_document(document)
 
+    def test_workload_evidence_cannot_claim_production_authority(self) -> None:
+        for field, value in (
+            ("claim_scope", "production-installation"),
+            ("database_scope", "production-postgresql-container"),
+        ):
+            with self.subTest(field=field):
+                document = valid_document()
+                document["workload"][field] = value
+                with self.assertRaisesRegex(
+                    ValueError, "declared schema|integration-only authority"
+                ):
+                    self.validator.validate_document(document)
+
     def test_workload_instance_is_bound_to_the_exact_target_sha(self) -> None:
         document = valid_document()
 
@@ -407,7 +420,7 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workload instance"):
             self.validator.validate_document(document)
 
-    def test_phase_failure_is_preserved_and_forces_d1a_failure(self) -> None:
+    def test_phase_failure_is_preserved_and_forces_workload_failure(self) -> None:
         document = valid_document()
         document["test"]["phase_exit_statuses"]["workload_prepare_start"] = 7
         document["test"]["result"] = "failed"
@@ -439,7 +452,7 @@ class EvidenceContractTests(unittest.TestCase):
         document["workload"]["failed_admission_invariants"] = [invariant]
         self.assertEqual(document, self.validator.validate_document(document))
 
-    def test_schema_three_keeps_legacy_normalization_stages_readable(self) -> None:
+    def test_schema_four_rejects_obsolete_normalization_stages(self) -> None:
         from tempfile import TemporaryDirectory
 
         for stage in (
@@ -464,9 +477,8 @@ class EvidenceContractTests(unittest.TestCase):
                 document["test"]["failed_admission_invariants"] = [invariant]
                 document["workload"]["result"] = "failed"
                 document["workload"]["failed_admission_invariants"] = [invariant]
-                self.assertEqual(
-                    document, self.validator.validate_document(document)
-                )
+                with self.assertRaises(ValueError):
+                    self.validator.validate_document(document)
 
                 with TemporaryDirectory() as directory:
                     diagnostic = Path(directory) / "normalization.json"
@@ -478,14 +490,12 @@ class EvidenceContractTests(unittest.TestCase):
                         ),
                         encoding="utf-8",
                     )
-                    self.assertEqual(
-                        document["test"]["normalization_diagnostics"]["cleanup"],
+                    with self.assertRaises(ValueError):
                         load_assembler().read_normalization_diagnostic(
                             diagnostic, "cleanup", 1
-                        ),
-                    )
+                        )
 
-    def test_normalization_stage_sets_match_schema_three(self) -> None:
+    def test_normalization_stage_sets_match_schema_four(self) -> None:
         collector = self.validator.load_trusted_module(
             self.validator.WORKLOAD_COLLECTOR_PATH,
             "ci_cloud_normalization_stage_contract",
@@ -500,12 +510,7 @@ class EvidenceContractTests(unittest.TestCase):
         )
         self.assertEqual(
             schema_stages - {"complete"},
-            set(collector.NORMALIZATION_EVIDENCE_STAGES),
-        )
-        self.assertTrue(
-            collector.NORMALIZATION_STAGES.isdisjoint(
-                collector.LEGACY_NORMALIZATION_STAGES
-            )
+            set(collector.NORMALIZATION_STAGES),
         )
 
     def test_normalization_diagnostic_rejects_open_or_inconsistent_values(self) -> None:
@@ -612,7 +617,7 @@ class EvidenceContractTests(unittest.TestCase):
                     self.validator.validate_document(document)
 
         document = valid_document()
-        exited = document["workload"]["live"]["containers"][3]
+        exited = document["workload"]["live"]["containers"][2]
         exited["user_namespace"]["process_identity"] = "user:[4026540999]"
         with self.assertRaises(jsonschema.ValidationError):
             schema_validator.validate(document)

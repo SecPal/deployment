@@ -60,7 +60,6 @@ REJECTION_CODES = frozenset(
 CONTAINER_ROLES = (
     "secrets-init",
     "postgres",
-    "valkey",
     "migrate",
     "api",
     "worker-general",
