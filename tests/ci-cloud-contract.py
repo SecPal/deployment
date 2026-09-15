@@ -1491,6 +1491,11 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 "scripts/ci-cloud/run-rocky-target-qualification.sh",
+                'selinux_isolation["denial"]["syscall_pid"] != denial_pid',
+                "False",
+            ),
+            (
+                "scripts/ci-cloud/run-rocky-target-qualification.sh",
                 'isolation_digest != facts["selinux_isolation_sha256"]',
                 "False",
             ),

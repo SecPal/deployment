@@ -2788,7 +2788,7 @@ class RockyCloudControlTests(unittest.TestCase):
             "PASS: Rocky Linux 10.2 target workload contract\n"
         ).encode()
         candidate = {
-            "schema_version": 3,
+            "schema_version": 4,
             "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
             "native_observation": {
                 "schema_version": 1,

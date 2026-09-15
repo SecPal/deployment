@@ -623,7 +623,10 @@ if isolation_digest != facts["selinux_isolation_sha256"]:
         "invariant-failed",
         "target and trusted SELinux isolation normalization disagree",
     )
-if selinux_isolation["denial"]["pid"] != denial_pid:
+if (
+    selinux_isolation["denial"]["pid"] != denial_pid
+    or selinux_isolation["denial"]["syscall_pid"] != denial_pid
+):
     reject(
         "qualify-avc-correlation",
         "invariant-failed",
@@ -664,7 +667,7 @@ cleanup_complete = all(
 if not cleanup_complete:
     reject("qualify-fixture-cleanup", "cleanup-failed", "qualification cleanup is incomplete")
 document = {
-    "schema_version": 3,
+    "schema_version": 4,
     "target_sha": target_sha,
     "native_observation": json.loads(
         Path(native_observation_path).read_text(encoding="utf-8")

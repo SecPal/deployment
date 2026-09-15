@@ -53,6 +53,8 @@ def event(
     target_class: str = "file",
     permissive: int = 0,
     path: str = "/foreign/marker",
+    proctitle_command: str = "cat",
+    syscall_command: str = "cat",
 ) -> str:
     if syscall_pid is None:
         syscall_pid = pid
@@ -62,8 +64,8 @@ def event(
             f"type=AVC {identity} avc: denied {{ {permission} }} "
             f'pid={pid} name="{name}" scontext={source} tcontext={target} '
             f"tclass={target_class} permissive={permissive}",
-            f"type=PROCTITLE {identity} proctitle=cat {path}",
-            f'type=SYSCALL {identity} pid={syscall_pid} comm="cat"',
+            f"type=PROCTITLE {identity} proctitle={proctitle_command} {path}",
+            f'type=SYSCALL {identity} pid={syscall_pid} comm="{syscall_command}"',
         )
     )
 
@@ -113,7 +115,9 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         accepted = admitted_isolation()
         self.assertEqual(PID, accepted["denial"]["pid"])
         self.assertEqual("41", accepted["denial"]["serial"])
-        self.assertEqual("file", accepted["denial"]["target_class"])
+        self.assertEqual("cat /foreign/marker", accepted["denial"]["proctitle"])
+        self.assertEqual(PID, accepted["denial"]["syscall_pid"])
+        self.assertEqual("cat", accepted["denial"]["syscall_command"])
         self.assertEqual(CONTRACT.INVARIANT_OWNER, accepted["invariant_owner"])
 
         rejected = {
@@ -122,16 +126,28 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             "wrong-source": event(source=PROCESS_A),
             "wrong-target": event(target="system_u:object_r:container_file_t:s0:c9"),
             "wrong-path": event(path="/foreign/other"),
-            "wrong-operation": event(permission="write"),
             "wrong-process": event(pid=999, syscall_pid=PID),
-            "wrong-class": event(target_class="dir"),
+            "wrong-proctitle-command": event(proctitle_command="head"),
+            "wrong-syscall-command": event(syscall_command="head"),
             "incomplete": event().splitlines()[0],
+            "malformed-observation": "unrestricted audit record",
         }
         for name, audit_text in rejected.items():
             with self.subTest(name=name), self.assertRaises(CONTRACT.IsolationError):
                 admitted_isolation(audit_text=audit_text)
 
         avc, proctitle, syscall = event().splitlines()
+        for name, audit_text in {
+            "duplicate-avc": "\n".join((avc, avc, proctitle, syscall)),
+            "duplicate-proctitle": "\n".join(
+                (avc, proctitle, proctitle, syscall)
+            ),
+            "duplicate-syscall": "\n".join((avc, proctitle, syscall, syscall)),
+        }.items():
+            with self.subTest(name=name), self.assertRaisesRegex(
+                CONTRACT.IsolationError, "duplicated"
+            ):
+                admitted_isolation(audit_text=audit_text)
         cross_serial = "\n".join(
             (avc, proctitle.replace(":41) :", ":42) :"), syscall)
         )
@@ -141,26 +157,68 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             admitted_isolation(
                 audit_text="\n".join((event(), event(serial="42")))
             )
+        for name, changes in {
+            "same-process-mcs": {"process_b": PROCESS_A},
+            "process-storage-contradiction": {
+                "storage_a": "system_u:object_r:container_file_t:s0:c1"
+            },
+        }.items():
+            with self.subTest(name=name), self.assertRaises(CONTRACT.IsolationError):
+                admitted_isolation(**changes)
+
+    def test_causal_correlation_does_not_require_legacy_avc_object_shape(
+        self,
+    ) -> None:
+        retained_projection_shape = event(
+            permission="synthetic-nonlegacy-permission",
+            target_class="synthetic_nonlegacy_class",
+            name="synthetic-nonlegacy-name",
+        )
+
+        accepted = admitted_isolation(audit_text=retained_projection_shape)
+
+        self.assertEqual(PID, accepted["denial"]["pid"])
+        self.assertEqual("41", accepted["denial"]["serial"])
+        self.assertEqual(CONTRACT.INVARIANT_OWNER, accepted["invariant_owner"])
+
+        diagnostic = CONTRACT.diagnose_avc_correlation(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            audit_text=retained_projection_shape,
+            attempt=12,
+        )
+        avc = diagnostic["events"][0]["avc_records"][0]
+        syscall = diagnostic["events"][0]["syscall_records"][0]
+        self.assertEqual(2, diagnostic["schema_version"])
+        self.assertEqual("admitted", diagnostic["correlation_outcome"])
+        self.assertEqual(1, diagnostic["candidate_event_count"])
+        self.assertEqual([], diagnostic["rejection_facts"])
+        self.assertTrue(avc["denial_match"])
+        self.assertFalse(avc["permission_match"])
+        self.assertFalse(avc["target_class_match"])
+        self.assertFalse(avc["target_name_match"])
+        self.assertTrue(syscall["comm_match"])
+        self.assertEqual(PID, syscall["pid"])
 
     def test_closed_diagnostic_identifies_avc_rejection_predicate(self) -> None:
         diagnostic = CONTRACT.diagnose_avc_correlation(
             process_a=PROCESS_A,
             process_b=PROCESS_B,
             storage_a=STORAGE_A,
-            audit_text=event(permission="write"),
+            audit_text=event(source=PROCESS_A),
             attempt=1,
         )
         self.assertEqual("no-match", diagnostic["correlation_outcome"])
-        self.assertIn("permission-mismatch", diagnostic["rejection_facts"])
+        self.assertIn("source-context-mismatch", diagnostic["rejection_facts"])
+        self.assertNotIn("syscall-mismatch", diagnostic["rejection_facts"])
         CONTRACT.validate_avc_correlation_diagnostic(diagnostic)
 
     def test_closed_diagnostic_distinguishes_complete_rejection_family(self) -> None:
         avc, proctitle, syscall = event().splitlines()
         cases = {
             "no-avc-records-observed": "",
-            "permission-mismatch": event(permission="write"),
-            "target-class-mismatch": event(target_class="dir"),
-            "target-name-mismatch": event(name="other"),
+            "denial-mismatch": event().replace("avc: denied { read } ", ""),
             "source-context-mismatch": event(source=PROCESS_A),
             "target-context-mismatch": event(
                 target="system_u:object_r:container_file_t:s0:c9"
@@ -194,6 +252,53 @@ class SelinuxIsolationContractTests(unittest.TestCase):
                 )
                 self.assertIn(rejection, diagnostic["rejection_facts"])
                 CONTRACT.validate_avc_correlation_diagnostic(diagnostic)
+
+        nonlegacy_syscall_mismatch = CONTRACT.diagnose_avc_correlation(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            audit_text=event(
+                permission="synthetic-nonlegacy-permission",
+                target_class="synthetic_nonlegacy_class",
+                name="synthetic-nonlegacy-name",
+                syscall_command="head",
+            ),
+            attempt=12,
+        )
+        self.assertEqual(
+            ["syscall-mismatch"],
+            nonlegacy_syscall_mismatch["rejection_facts"],
+        )
+
+    def test_historical_schema_one_projection_retains_its_original_semantics(
+        self,
+    ) -> None:
+        historical = CONTRACT.diagnose_avc_correlation(
+            process_a=PROCESS_A,
+            process_b=PROCESS_B,
+            storage_a=STORAGE_A,
+            audit_text=event(
+                permission="synthetic-nonlegacy-permission",
+                target_class="synthetic_nonlegacy_class",
+                name="synthetic-nonlegacy-name",
+            ),
+            attempt=12,
+        )
+        historical["schema_version"] = 1
+        historical["correlation_outcome"] = "no-match"
+        historical["candidate_event_count"] = 0
+        historical["rejection_facts"] = [
+            "permission-mismatch",
+            "target-class-mismatch",
+            "target-name-mismatch",
+            "syscall-mismatch",
+        ]
+        historical_event = historical["events"][0]
+        historical_event["candidate"] = False
+        historical_event["rejection_facts"] = historical["rejection_facts"]
+        historical_event["avc_records"][0].pop("denial_match")
+
+        CONTRACT.validate_avc_correlation_diagnostic(historical)
 
         malformed = CONTRACT.diagnose_avc_correlation(
             process_a=PROCESS_A,
@@ -288,6 +393,15 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         }
         document = admitted_isolation()
         self.assertEqual([], list(Draft202012Validator(isolation_schema).iter_errors(document)))
+        self.assertEqual([3, 4], schema["properties"]["schema_version"]["enum"])
+        for legacy_field in ("permission", "target_class", "target_name"):
+            self.assertNotIn(legacy_field, document["denial"])
+            self.assertNotIn(
+                legacy_field,
+                schema["$defs"]["selinux_isolation"]["properties"]["denial"][
+                    "properties"
+                ],
+            )
         self.assertEqual(
             CONTRACT.INVARIANT_OWNER,
             schema["$defs"]["selinux_isolation"]["properties"]
@@ -297,6 +411,51 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             CONTRACT.SCHEMA_CONTEXT_PATTERN,
             schema["$defs"]["normalized_context"]["properties"]["raw"]["pattern"],
         )
+        historical = deepcopy(document)
+        historical["denial"] = {
+            "event_time": document["denial"]["event_time"],
+            "serial": document["denial"]["serial"],
+            "pid": document["denial"]["pid"],
+            "source_context": document["denial"]["source_context"],
+            "target_context": document["denial"]["target_context"],
+            "permission": "read",
+            "target_class": "file",
+            "target_path": "/foreign/marker",
+            "target_name": "marker",
+            "permissive": 0,
+        }
+        historical_evidence = {
+            "schema_version": 3,
+            "selinux_isolation": historical,
+        }
+        historical_root = {
+            "type": "object",
+            "required": ["schema_version", "selinux_isolation"],
+            "properties": schema["properties"],
+            "allOf": schema["allOf"],
+            "$defs": schema["$defs"],
+        }
+        historical_root["properties"] = {
+            "schema_version": schema["properties"]["schema_version"],
+            "selinux_isolation": schema["properties"]["selinux_isolation"],
+        }
+        self.assertEqual(
+            [],
+            list(Draft202012Validator(historical_root).iter_errors(historical_evidence)),
+        )
+        for mixed in (
+            {"schema_version": 3, "selinux_isolation": document},
+            {"schema_version": 4, "selinux_isolation": historical},
+        ):
+            self.assertTrue(
+                list(Draft202012Validator(historical_root).iter_errors(mixed))
+            )
+        CONTRACT.validate_isolation_evidence(historical)
+        boolean_syscall_pid = deepcopy(document)
+        boolean_syscall_pid["denial"]["pid"] = 1
+        boolean_syscall_pid["denial"]["syscall_pid"] = True
+        with self.assertRaises(CONTRACT.IsolationError):
+            CONTRACT.validate_isolation_evidence(boolean_syscall_pid)
         contradictory = deepcopy(document)
         contradictory["process_contexts"][0]["mcs_categories"] = [1]
         with self.assertRaisesRegex(CONTRACT.IsolationError, "contradict"):
@@ -384,7 +543,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             "packages": packages,
         }
         evidence = {
-            "schema_version": 3,
+            "schema_version": 4,
             "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
             "native_observation": observation,
             "quadlet_authority": authority,
@@ -397,14 +556,14 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             "classification": "PASS",
         }
 
-        def validate(candidate):
+        def validate(candidate, observed_stdout=stdout):
             with tempfile.TemporaryDirectory() as directory:
                 temporary = Path(directory)
                 evidence_path = temporary / "qualification.json"
                 stdout_path = temporary / "qualification.stdout"
                 observation_path = temporary / "native.json"
                 evidence_path.write_text(json.dumps(candidate), encoding="utf-8")
-                stdout_path.write_bytes(stdout)
+                stdout_path.write_bytes(observed_stdout)
                 observation_path.write_text(json.dumps(observation), encoding="utf-8")
                 return subprocess.run(
                     [
@@ -430,13 +589,46 @@ class SelinuxIsolationContractTests(unittest.TestCase):
                 )
 
         self.assertEqual(0, validate(evidence).returncode)
+        historical_isolation = deepcopy(isolation)
+        historical_isolation["denial"] = {
+            "event_time": isolation["denial"]["event_time"],
+            "serial": isolation["denial"]["serial"],
+            "pid": isolation["denial"]["pid"],
+            "source_context": isolation["denial"]["source_context"],
+            "target_context": isolation["denial"]["target_context"],
+            "permission": "read",
+            "target_class": "file",
+            "target_path": "/foreign/marker",
+            "target_name": "marker",
+            "permissive": 0,
+        }
+        historical_digest = hashlib.sha256(
+            CONTRACT.canonical_bytes(historical_isolation)
+        ).hexdigest()
+        historical_stdout = stdout.replace(
+            isolation_digest.encode("ascii"), historical_digest.encode("ascii")
+        )
+        historical_evidence = deepcopy(evidence)
+        historical_evidence.update(
+            {
+                "schema_version": 3,
+                "stdout_sha256": hashlib.sha256(historical_stdout).hexdigest(),
+                "stdout_bytes": len(historical_stdout),
+                "selinux_isolation": historical_isolation,
+            }
+        )
+        self.assertEqual(
+            0,
+            validate(historical_evidence, historical_stdout).returncode,
+        )
         for field, value in (
             ("source_context", PROCESS_A),
             ("target_context", "system_u:object_r:container_file_t:s0:c9"),
-            ("permission", "write"),
-            ("target_path", "/foreign/other"),
             ("permissive", 1),
             ("pid", 999),
+            ("proctitle", "cat /foreign/other"),
+            ("syscall_pid", 999),
+            ("syscall_command", "head"),
             ("serial", "0"),
         ):
             mutated = deepcopy(evidence)

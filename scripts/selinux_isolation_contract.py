@@ -17,10 +17,11 @@ RESPONSIBILITY = "normalization,admission"
 INVARIANT_OWNER = "selinux_isolation_contract.admit_selinux_isolation"
 MCS_CATEGORY_MIN = 0
 MCS_CATEGORY_MAX = 1023
-EXPECTED_PERMISSION = "read"
-EXPECTED_TARGET_CLASS = "file"
+LEGACY_PERMISSION = "read"
+LEGACY_TARGET_CLASS = "file"
 EXPECTED_TARGET_PATH = "/foreign/marker"
-EXPECTED_TARGET_NAME = "marker"
+EXPECTED_COMMAND = "cat"
+LEGACY_TARGET_NAME = "marker"
 MAX_AUDIT_OBSERVATION_BYTES = 65_536
 MAX_AVC_DIAGNOSTIC_BYTES = 12_288
 MAX_AUDIT_RECORDS = 48
@@ -30,6 +31,7 @@ MAX_EVENT_COMPONENT_RECORDS = 4
 
 AVC_REJECTION_FACTS = (
     "no-avc-records-observed",
+    "denial-mismatch",
     "permission-mismatch",
     "target-class-mismatch",
     "target-name-mismatch",
@@ -174,7 +176,7 @@ def _proctitle_matches(line: str) -> bool:
         return False
     quoted, bare = matches[0]
     value = quoted if quoted else bare.strip()
-    return value == f"cat {EXPECTED_TARGET_PATH}"
+    return value == f"{EXPECTED_COMMAND} {EXPECTED_TARGET_PATH}"
 
 
 def _avc_matches(
@@ -184,13 +186,11 @@ def _avc_matches(
     target_context: str,
 ) -> int | None:
     denial = _DENIAL.search(line)
-    if denial is None or denial.group(1).split() != [EXPECTED_PERMISSION]:
+    if denial is None or not denial.group(1).split():
         return None
     expected_fields = {
-        "name": EXPECTED_TARGET_NAME,
         "scontext": source_context,
         "tcontext": target_context,
-        "tclass": EXPECTED_TARGET_CLASS,
         "permissive": "0",
     }
     if not all(_field(line, name) == value for name, value in expected_fields.items()):
@@ -203,7 +203,10 @@ def _avc_matches(
 
 
 def _syscall_matches(line: str, pid: int) -> bool:
-    return _field(line, "pid") == str(pid) and _field(line, "comm") == "cat"
+    return (
+        _field(line, "pid") == str(pid)
+        and _field(line, "comm") == EXPECTED_COMMAND
+    )
 
 
 def _ordered_rejections(values: set[str]) -> list[str]:
@@ -259,7 +262,7 @@ def _diagnostic_base(
         raise IsolationError("AVC diagnostic capture facts are outside their bounds")
     processes, storage = _diagnostic_contexts(process_a, process_b, storage_a)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "invariant_owner": INVARIANT_OWNER,
         "capture_outcome": capture_outcome,
         "correlation_outcome": "invalid",
@@ -325,11 +328,12 @@ def _avc_projection(
     denial = _DENIAL.search(line)
     pid_status, pid = _pid_projection(line)
     return {
+        "denial_match": bool(denial is not None and denial.group(1).split()),
         "permission_match": bool(
-            denial is not None and denial.group(1).split() == [EXPECTED_PERMISSION]
+            denial is not None and denial.group(1).split() == [LEGACY_PERMISSION]
         ),
-        "target_class_match": _field(line, "tclass") == EXPECTED_TARGET_CLASS,
-        "target_name_match": _field(line, "name") == EXPECTED_TARGET_NAME,
+        "target_class_match": _field(line, "tclass") == LEGACY_TARGET_CLASS,
+        "target_name_match": _field(line, "name") == LEGACY_TARGET_NAME,
         "source_context_match": _field(line, "scontext") == source_context,
         "target_context_match": _field(line, "tcontext") == target_context,
         "permissive_match": _field(line, "permissive") == "0",
@@ -347,11 +351,11 @@ def _syscall_projection(line: str) -> dict[str, Any]:
     return {
         "pid_status": pid_status,
         "pid": pid,
-        "comm_match": _field(line, "comm") == "cat",
+        "comm_match": _field(line, "comm") == EXPECTED_COMMAND,
     }
 
 
-def _exact_avc(record: dict[str, Any]) -> bool:
+def _legacy_exact_avc(record: dict[str, Any]) -> bool:
     return (
         all(
             type(record[name]) is bool and record[name]
@@ -369,14 +373,39 @@ def _exact_avc(record: dict[str, Any]) -> bool:
     )
 
 
-def _event_decision(event: dict[str, Any]) -> tuple[bool, list[str], list[int]]:
+def _causal_avc(record: dict[str, Any]) -> bool:
+    return (
+        record["denial_match"]
+        and all(
+            type(record[name]) is bool and record[name]
+            for name in (
+                "source_context_match",
+                "target_context_match",
+                "permissive_match",
+            )
+        )
+        and record["pid_status"] == "valid"
+        and type(record["pid"]) is int
+    )
+
+
+def _event_decision(
+    event: dict[str, Any], *, schema_version: int
+) -> tuple[bool, list[str], list[int]]:
     rejections: set[str] = set()
-    exact_avcs: list[dict[str, Any]] = []
+    candidate_avcs: list[dict[str, Any]] = []
     for avc in event["avc_records"]:
+        if schema_version == 1:
+            for field, rejection in (
+                ("permission_match", "permission-mismatch"),
+                ("target_class_match", "target-class-mismatch"),
+                ("target_name_match", "target-name-mismatch"),
+            ):
+                if not avc[field]:
+                    rejections.add(rejection)
+        elif not avc["denial_match"]:
+            rejections.add("denial-mismatch")
         for field, rejection in (
-            ("permission_match", "permission-mismatch"),
-            ("target_class_match", "target-class-mismatch"),
-            ("target_name_match", "target-name-mismatch"),
             ("source_context_match", "source-context-mismatch"),
             ("target_context_match", "target-context-mismatch"),
             ("permissive_match", "permissive-mismatch"),
@@ -385,9 +414,10 @@ def _event_decision(event: dict[str, Any]) -> tuple[bool, list[str], list[int]]:
                 rejections.add(rejection)
         if avc["pid_status"] != "valid":
             rejections.add("avc-pid-invalid-or-missing")
-        if _exact_avc(avc):
-            exact_avcs.append(avc)
-    if len(exact_avcs) > 1:
+        matches = _legacy_exact_avc(avc) if schema_version == 1 else _causal_avc(avc)
+        if matches:
+            candidate_avcs.append(avc)
+    if len(candidate_avcs) > 1:
         rejections.add("avc-duplicate")
 
     matching_proctitles = sum(
@@ -401,8 +431,14 @@ def _event_decision(event: dict[str, Any]) -> tuple[bool, list[str], list[int]]:
         rejections.add("proctitle-duplicate")
 
     matching_syscalls = 0
-    if len(exact_avcs) == 1:
-        pid = exact_avcs[0]["pid"]
+    if schema_version == 1 or len(candidate_avcs) == 1:
+        syscall_pid_avcs = candidate_avcs
+    else:
+        syscall_pid_avcs = [
+            avc for avc in event["avc_records"] if avc["pid_status"] == "valid"
+        ]
+    if len(syscall_pid_avcs) == 1:
+        pid = syscall_pid_avcs[0]["pid"]
         matching_syscalls = sum(
             record["pid_status"] == "valid"
             and record["pid"] == pid
@@ -411,18 +447,20 @@ def _event_decision(event: dict[str, Any]) -> tuple[bool, list[str], list[int]]:
         )
     if not event["syscall_records"]:
         rejections.add("syscall-absent")
-    elif matching_syscalls == 0:
+    elif (
+        schema_version == 1 or len(syscall_pid_avcs) == 1
+    ) and matching_syscalls == 0:
         rejections.add("syscall-mismatch")
     elif matching_syscalls > 1:
         rejections.add("syscall-duplicate")
 
     candidate = (
-        len(exact_avcs) == 1
+        len(candidate_avcs) == 1
         and matching_proctitles == 1
         and matching_syscalls == 1
     )
     return candidate, _ordered_rejections(rejections), [
-        record["pid"] for record in exact_avcs
+        record["pid"] for record in candidate_avcs
     ]
 
 
@@ -433,7 +471,9 @@ def _finalize_record_diagnostic(document: dict[str, Any]) -> None:
     proctitle_events: set[tuple[str, str]] = set()
     syscalls: list[tuple[tuple[str, str], int]] = []
     for event in document["events"]:
-        candidate, rejections, exact_pids = _event_decision(event)
+        candidate, rejections, exact_pids = _event_decision(
+            event, schema_version=document["schema_version"]
+        )
         event["candidate"] = candidate
         event["rejection_facts"] = rejections
         if event["avc_records"]:
@@ -701,7 +741,7 @@ def validate_avc_correlation_diagnostic(document: object) -> None:
     except (TypeError, UnicodeEncodeError, ValueError) as error:
         raise IsolationError("AVC correlation diagnostic is not closed JSON") from error
     if (
-        document["schema_version"] != 1
+        document["schema_version"] not in {1, 2}
         or document["invariant_owner"] != INVARIANT_OWNER
         or document["capture_outcome"] not in _CAPTURE_OUTCOMES
         or document["correlation_outcome"] not in _CORRELATION_OUTCOMES
@@ -836,6 +876,8 @@ def validate_avc_correlation_diagnostic(document: object) -> None:
         "pid_status",
         "pid",
     }
+    if document["schema_version"] == 2:
+        avc_keys.add("denial_match")
     syscall_keys = {"pid_status", "pid", "comm_match"}
     total_records = 0
     total_avcs = 0
@@ -877,6 +919,7 @@ def validate_avc_correlation_diagnostic(document: object) -> None:
             if any(
                 type(avc[name]) is not bool
                 for name in (
+                    *(("denial_match",) if document["schema_version"] == 2 else ()),
                     "permission_match",
                     "target_class_match",
                     "target_name_match",
@@ -994,11 +1037,10 @@ def normalize_unique_enforcing_avc(
         "pid": pid,
         "source_context": source_context,
         "target_context": target_context,
-        "permission": EXPECTED_PERMISSION,
-        "target_class": EXPECTED_TARGET_CLASS,
-        "target_path": EXPECTED_TARGET_PATH,
-        "target_name": EXPECTED_TARGET_NAME,
         "permissive": 0,
+        "proctitle": f"{EXPECTED_COMMAND} {EXPECTED_TARGET_PATH}",
+        "syscall_pid": pid,
+        "syscall_command": EXPECTED_COMMAND,
     }
 
 
@@ -1051,7 +1093,18 @@ def validate_isolation_evidence(document: object) -> None:
         {"processes": normalized_processes, "storage": normalized_storage}
     ):
         raise IsolationError("raw and normalized SELinux MCS facts contradict")
-    if not isinstance(denial, dict) or set(denial) != {
+    current_denial_keys = {
+        "event_time",
+        "serial",
+        "pid",
+        "source_context",
+        "target_context",
+        "permissive",
+        "proctitle",
+        "syscall_pid",
+        "syscall_command",
+    }
+    legacy_denial_keys = {
         "event_time",
         "serial",
         "pid",
@@ -1062,25 +1115,44 @@ def validate_isolation_evidence(document: object) -> None:
         "target_path",
         "target_name",
         "permissive",
+    }
+    if not isinstance(denial, dict) or frozenset(denial) not in {
+        frozenset(current_denial_keys),
+        frozenset(legacy_denial_keys),
     }:
         raise IsolationError("normalized AVC evidence shape is invalid")
     try:
         datetime.strptime(denial["event_time"], "%m/%d/%y %H:%M:%S.%f")
     except (TypeError, ValueError) as error:
         raise IsolationError("normalized AVC event time is invalid") from error
-    if (
+    common_invalid = (
         not isinstance(denial["serial"], str)
         or re.fullmatch(r"[1-9][0-9]*", denial["serial"]) is None
-        or not isinstance(denial["pid"], int)
-        or isinstance(denial["pid"], bool)
-        or not 1 <= denial["pid"] <= 2_147_483_647
         or denial["source_context"] != processes[1]["raw"]
         or denial["target_context"] != storage["raw"]
-        or denial["permission"] != EXPECTED_PERMISSION
-        or denial["target_class"] != EXPECTED_TARGET_CLASS
-        or denial["target_path"] != EXPECTED_TARGET_PATH
-        or denial["target_name"] != EXPECTED_TARGET_NAME
         or type(denial["permissive"]) is not int
         or denial["permissive"] != 0
-    ):
+    )
+    if set(denial) == current_denial_keys:
+        representation_invalid = (
+            not isinstance(denial["pid"], int)
+            or isinstance(denial["pid"], bool)
+            or not 1 <= denial["pid"] <= 2_147_483_647
+            or denial["proctitle"] != f"{EXPECTED_COMMAND} {EXPECTED_TARGET_PATH}"
+            or type(denial["syscall_pid"]) is not int
+            or not 1 <= denial["syscall_pid"] <= 2_147_483_647
+            or denial["syscall_pid"] != denial["pid"]
+            or denial["syscall_command"] != EXPECTED_COMMAND
+        )
+    else:
+        representation_invalid = (
+            not isinstance(denial["pid"], int)
+            or isinstance(denial["pid"], bool)
+            or not 1 <= denial["pid"] <= 2_147_483_647
+            or denial["permission"] != LEGACY_PERMISSION
+            or denial["target_class"] != LEGACY_TARGET_CLASS
+            or denial["target_path"] != EXPECTED_TARGET_PATH
+            or denial["target_name"] != LEGACY_TARGET_NAME
+        )
+    if common_invalid or representation_invalid:
         raise IsolationError("normalized AVC facts contradict the isolation contract")

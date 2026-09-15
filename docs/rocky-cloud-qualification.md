@@ -257,27 +257,35 @@ other status-1 output fails closed. Only blank lines and the interpreted
 format's `----` separator may appear outside typed records. Admission accepts
 only the interpreted audit timestamp grammar, correlates by the full timestamp
 and serial, and requires one unique event containing exactly one matching AVC
-and one decoded PROCTITLE marker. The marker must name the digest-bound harness's
-exact in-container `/foreign/marker` path; the AVC must carry the exact source context,
-target context, `permissive=0`, and `tclass=file`. Duplicate, malformed,
-oversized, unavailable, or ambiguous audit observations fail closed without
-entering evidence.
+decision, one decoded PROCTITLE marker, and one SYSCALL. The AVC must carry the
+exact process-B source context, storage-A target context, `permissive=0`, and a
+valid PID. PROCTITLE must be exactly `cat /foreign/marker`; SYSCALL must have the
+same valid PID and `comm=cat` in that same event. Together with the admitted MCS
+relationship, those records bind the enforcing AVC to the deliberately tested
+cross-container access. AVC permission, target class, and target name remain
+bounded observational diagnostic facts, not admission authority, because the
+kernel may deny the same attempted access at a different object/path lookup
+layer. Duplicate, malformed, oversized, unavailable, or ambiguous audit
+observations fail closed without entering evidence.
 
 When that admission returns no candidate, the target can now emit one
-schema-version-1 AVC-correlation diagnostic projection before cleanup. The
+schema-version-2 AVC-correlation diagnostic projection before cleanup. The
 projection is produced by `selinux_isolation_contract`, the existing admission
 owner, and contains only closed comparison results, bounded record and candidate
 counts, admitted context and MCS values when needed, event identity, PIDs, and
 the observed byte count and digest. It distinguishes absent AVCs, each required
-AVC-field mismatch, invalid PID, absent/mismatched/duplicate PROCTITLE and
+causal AVC-field mismatch, invalid PID, absent/mismatched/duplicate PROCTITLE and
 SYSCALL records, event parse or separation failures, multiple candidates,
 malformed or oversized input, normal `ausearch` no-result status, and true
 capture execution error. It contains no audit record bytes, command output,
 journal, environment, provider response, SSH material, or exception string.
+`syscall-mismatch` is emitted only when the same-event same-PID `comm=cat`
+predicate itself fails; legacy permission/class/name observations cannot
+manufacture it.
 
 Trusted control accepts that projection only for
 `qualify-avc-correlation / command-failed / 3` and wraps it in failure schema
-version 3. Before writing an artifact, the classifier validates its closed
+version 4. Before writing an artifact, the classifier validates its closed
 shape and semantics with the owner contract. `rocky-control.py` then
 independently checks the target, control, run, and harness bindings; canonical
 projection length and SHA-256; component, event, context, MCS, and event-ID
@@ -288,6 +296,20 @@ status 3 through the exact AVC trace stack, keeping the closed
 caller-selected final reason or a diagnostic that identifies an admitted
 candidate cannot grant authority. The diagnostic family remains negative-only
 and cannot enter success admission.
+
+Successful qualification evidence schema version 4 records the AVC PID,
+source/target contexts and enforcing state, the exact PROCTITLE, and the
+same-PID SYSCALL command. It does not report `permission=read`,
+`target_class=file`, or `target_name=marker` as observed denial facts.
+
+Historical failure schema version 3 and AVC diagnostic schema version 1 retain
+their original semantics. In particular, the #273 projection digest
+`bbc8268c665eba8960a4c0b4689cddb4434db5fc0937beacacc16ffebab09f2f`
+continues to validate unchanged with its recorded `permission-mismatch`,
+`target-class-mismatch`, `target-name-mismatch`, and `syscall-mismatch` facts.
+The current reviewed semantics explain that those object-shape mismatches did
+not invalidate the causally bound enforcing cross-MCS denial; they do not
+rewrite or retroactively reclassify the historical bytes.
 
 The exact historical failure artifact from run `34876534431/1`, artifact digest
 `sha256:f461479cd43791aa8c1f31034e1af0ea68c8e7b9687ce6878af6be30ed5a2852`,

@@ -693,11 +693,11 @@ class RockyTargetQualificationDiagnosticTests(unittest.TestCase):
         identity = "msg=audit(08/31/26 00:43:39.673:41) :"
         audit = "\n".join(
             (
-                f"type=AVC {identity} avc: denied {{ write }} pid=4242 "
-                f'name="marker" scontext={process_b} tcontext={storage_a} '
-                "tclass=file permissive=0",
+                f"type=AVC {identity} avc: denied {{ synthetic-permission }} "
+                f'pid=4242 name="synthetic-name" scontext={process_b} '
+                f"tcontext={storage_a} tclass=synthetic_class permissive=0",
                 f"type=PROCTITLE {identity} proctitle=cat /foreign/marker",
-                f'type=SYSCALL {identity} pid=4242 comm="cat"',
+                f'type=SYSCALL {identity} pid=4242 comm="head"',
             )
         )
         projection = self.selinux_isolation.diagnose_avc_correlation(
@@ -3713,10 +3713,16 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 json.loads(SCHEMA.read_text(encoding="utf-8"))
             )
             self.assertEqual([], list(validator.iter_errors(document)))
-            self.assertEqual(3, document["schema_version"])
+            self.assertEqual(4, document["schema_version"])
             self.assertEqual("qualify-avc-correlation", document["operation"])
             self.assertEqual("command-failed", document["reason"])
             diagnostic = document["avc_correlation_diagnostic"]
+            self.assertEqual(2, diagnostic["schema_version"])
+            self.assertEqual(2, diagnostic["projection"]["schema_version"])
+            self.assertEqual(
+                ["syscall-mismatch"],
+                diagnostic["projection"]["rejection_facts"],
+            )
             self.assertEqual(
                 document["diagnostic_input_sha256"],
                 diagnostic["projection_sha256"],
@@ -3736,6 +3742,17 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 "journal",
             ):
                 self.assertNotIn(forbidden, encoded)
+            for mixed in (
+                {**document, "schema_version": 3},
+                {
+                    **document,
+                    "avc_correlation_diagnostic": {
+                        **diagnostic,
+                        "schema_version": 1,
+                    },
+                },
+            ):
+                self.assertTrue(list(validator.iter_errors(mixed)))
             load_rocky_control().validate_target_qualification_failure(
                 path,
                 self.classifier.EXPECTED_TARGET_SHA,
@@ -3877,11 +3894,11 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
             storage_a = "system_u:object_r:container_file_t:s0:c0"
             identity = "msg=audit(08/31/26 00:43:39.673:41) :"
             raw = (
-                f"type=AVC {identity} avc: denied {{ write }} pid=4242 "
-                f'name="marker" scontext={process_b} tcontext={storage_a} '
-                f"tclass=file permissive=0\n"
+                f"type=AVC {identity} avc: denied {{ synthetic-permission }} "
+                f'pid=4242 name="synthetic-name" scontext={process_b} '
+                f"tcontext={storage_a} tclass=synthetic_class permissive=0\n"
                 f"type=PROCTITLE {identity} proctitle=cat /foreign/marker\n"
-                f'type=SYSCALL {identity} pid=4242 comm="cat"\n'
+                f'type=SYSCALL {identity} pid=4242 comm="head"\n'
             )
             audit = root / "audit"
             isolation = root / "isolation"
@@ -3928,7 +3945,7 @@ exec 6>&-
             self.assertEqual(diagnostic.read_bytes(), published.read_bytes())
             self.assertNotIn(b"avc: denied", published.read_bytes())
             projection = json.loads(published.read_text(encoding="utf-8"))
-            self.assertIn("permission-mismatch", projection["rejection_facts"])
+            self.assertEqual(["syscall-mismatch"], projection["rejection_facts"])
             self.selinux_isolation.validate_avc_correlation_diagnostic(projection)
 
     def test_avc_no_result_returns_to_caller_before_projection_publication(
@@ -4033,7 +4050,7 @@ exec 6>&-
             self.assertEqual(0, classified.returncode, classified.stderr.decode())
             document = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(
-                3,
+                4,
                 document["schema_version"],
                 (document, trace.read_text(encoding="ascii")),
             )
@@ -4888,8 +4905,14 @@ test "$(stat -c %s "$1/overflow")" -eq 65537
             audit_text=audit,
         )
         self.assertEqual("41", admitted["denial"]["serial"])
+        nonlegacy = contract.admit_selinux_isolation(
+            process_a=process_a,
+            process_b=process_b,
+            storage_a=storage_a,
+            audit_text=audit.replace("{ read }", "{ write }"),
+        )
+        self.assertEqual("41", nonlegacy["denial"]["serial"])
         for mutation in (
-            audit.replace("{ read }", "{ write }"),
             audit.replace("pid=4242", "pid=999", 1),
             audit.replace("permissive=0", "permissive=1"),
             audit.replace("/foreign/marker", "/foreign/other"),

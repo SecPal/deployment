@@ -863,7 +863,7 @@ def validate_target_qualification_binding(
         or "contract.validate_avc_correlation_diagnostic(projection)" not in classifier
         or 'projection.get("correlation_outcome") == "admitted"' not in classifier
         or failure_schema.get("properties", {}).get("schema_version", {}).get("enum")
-        != [1, 2, 3]
+        != [1, 2, 3, 4]
         or "avc_correlation_diagnostic" not in failure_schema.get("properties", {})
     ):
         raise ArchitectureError("bounded AVC failure diagnostic admission disagrees")
@@ -901,7 +901,7 @@ def validate_target_qualification_binding(
         ),
         *[
             schema_const_pair_at(
-                failure_schema, "allOf", 1, "then", "anyOf", index
+                failure_schema, "allOf", 3, "then", "anyOf", index
             )
             for index in range(3)
         ],
@@ -909,7 +909,7 @@ def validate_target_qualification_binding(
             schema_const_pair_at(
                 failure_schema, "allOf", condition, "if", "anyOf", index
             )
-            for condition, length in ((16, 6), (17, 4), (18, 4))
+            for condition, length in ((18, 6), (19, 4), (20, 4))
             for index in range(length)
         ],
     ]

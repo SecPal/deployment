@@ -857,11 +857,13 @@ def validate_target_qualification_failure(
                 "target qualification replay witness contradicts its inputs"
             ) from error
     avc_diagnostic = document.get("avc_correlation_diagnostic")
-    if document["schema_version"] == 3 and avc_diagnostic is None:
+    if document["schema_version"] in {3, 4} and avc_diagnostic is None:
         raise ControlError("target AVC-correlation failure lacks its diagnostic")
     if avc_diagnostic is not None:
         if (
-            document["schema_version"] != 3
+            document["schema_version"] not in {3, 4}
+            or avc_diagnostic.get("schema_version")
+            != document["schema_version"] - 2
             or document["operation"] != "qualify-avc-correlation"
             or document["reason"] != "command-failed"
             or document["exit_status"] != 3
