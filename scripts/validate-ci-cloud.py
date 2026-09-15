@@ -1979,8 +1979,12 @@ def validate_gcp_iam_role(root: Path) -> None:
 
 
 def validate_rocky_control_plane(root: Path) -> None:
-    expected_target_sha = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+    expected_target_sha = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
     expected_harness_sha256 = (
+        "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+    )
+    historical_273_target_sha = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+    historical_273_harness_sha256 = (
         "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
     )
     historical_269_target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
@@ -2240,15 +2244,17 @@ def validate_rocky_control_plane(root: Path) -> None:
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
     target_failure_schema_pair_sequence = [
-        schema_const_pair_at(target_failure_schema, "allOf", 0, "then"),
         schema_const_pair_at(
-            target_failure_schema, "allOf", 0, "if", "anyOf", 1
+            target_failure_schema, "allOf", 0, "then", "oneOf", 1
+        ),
+        schema_const_pair_at(
+            target_failure_schema, "allOf", 0, "then", "oneOf", 0
         ),
         *[
             schema_const_pair_at(
                 target_failure_schema, "allOf", 3, "then", "anyOf", index
             )
-            for index in range(3)
+            for index in range(4)
         ],
         *[
             schema_const_pair_at(
@@ -2259,28 +2265,32 @@ def validate_rocky_control_plane(root: Path) -> None:
                 "anyOf",
                 index,
             )
-            for condition, length in ((18, 6), (19, 4), (20, 4))
+            for condition, length in ((18, 7), (19, 5), (20, 5))
             for index in range(length)
         ],
     ]
     expected_target_failure_schema_pair_sequence = [
         (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
         (expected_target_sha, expected_harness_sha256),
-        (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
         (historical_269_target_sha, historical_pre_269_harness_sha256),
         (historical_265_target_sha, historical_pre_265_harness_sha256),
         ("83d0c3720d342d0222e8dee9819e28d0c6739f84", "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"),
         ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
         ("b8f5a505d318d06a64a5975cfaba9f1e5ba0041f", "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"),
         (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
         (historical_269_target_sha, historical_pre_269_harness_sha256),
         (historical_265_target_sha, historical_pre_265_harness_sha256),
         ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
         (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
         (historical_269_target_sha, historical_pre_269_harness_sha256),
         (historical_265_target_sha, historical_pre_265_harness_sha256),
         ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
         (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
         (historical_269_target_sha, historical_pre_269_harness_sha256),
         (historical_265_target_sha, historical_pre_265_harness_sha256),
     ]
@@ -2302,6 +2312,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         and f'EXPECTED_TARGET_SHA = "{expected_target_sha}"'
         in target_failure_classifier
         and f'EXPECTED_HARNESS_SHA256 = "{expected_harness_sha256}"'
+        in target_failure_classifier
+        and f'HISTORICAL_273_TARGET_SHA = "{historical_273_target_sha}"'
+        in target_failure_classifier
+        and f'HISTORICAL_273_HARNESS_SHA256 = "{historical_273_harness_sha256}"'
         in target_failure_classifier
         and f'HISTORICAL_PRE_269_TARGET_SHA = "{historical_269_target_sha}"'
         in target_failure_classifier
@@ -2326,6 +2340,10 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         == 5
         and schema_const_pairs(target_failure_schema).count(
+            (historical_273_target_sha, historical_273_harness_sha256)
+        )
+        == 5
+        and schema_const_pairs(target_failure_schema).count(
             (historical_269_target_sha, historical_pre_269_harness_sha256)
         )
         == 4
@@ -2336,10 +2354,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         and target_failure_schema_pair_sequence
         == expected_target_failure_schema_pair_sequence
         and qualification_schema["properties"]["target_sha"]
-        == {"const": expected_target_sha}
+        == {"enum": [historical_273_target_sha, expected_target_sha]}
         and qualification_schema["properties"]["native_observation"]["properties"][
             "target_sha"
         ]
+        == {"enum": [historical_273_target_sha, expected_target_sha]}
+        and qualification_schema["allOf"][0]["then"]["properties"]["target_sha"]
+        == {"const": historical_273_target_sha}
+        and qualification_schema["allOf"][1]["then"]["properties"]["target_sha"]
         == {"const": expected_target_sha},
         "active target, harness, classifier, and schema bindings disagree",
     )
@@ -2799,7 +2821,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"c76742c828fefd71dda2b2d73fda6a0c43969426\""
+        "EXPECTED_TARGET_SHA = \"402c22b0a1d69a5a3dba74ffb68cf016caba606b\""
         in target_failure_classifier
         and "EXPECTED_HARNESS_SHA256 = \"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac\""
         in target_failure_classifier
@@ -3295,6 +3317,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "classifier.classify_failure(" in target_replay_verifier
         and "classifier.replay_line_rules(" in target_replay_verifier
         and "HISTORICAL_PRE_269_LINE_RULES" in target_failure_classifier
+        and "(HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256)"
+        in target_failure_classifier
         and 'payload.endswith(b"\\n")' in target_failure_classifier
         and 'payload[:-1].decode("ascii").split("\\n")'
         in target_failure_classifier

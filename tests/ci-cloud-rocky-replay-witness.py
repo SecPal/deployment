@@ -529,6 +529,16 @@ class RockyReplayWitnessTests(unittest.TestCase):
                     hashlib.sha256(replayed).hexdigest(),
                 )
 
+    def test_retained_273_pair_replays_but_mixed_authority_fails_closed(self) -> None:
+        witness = self.witness()
+        historical = self.document(witness)
+        historical["target_sha"] = self.classifier.HISTORICAL_273_TARGET_SHA
+        self.verifier.verify_replay_witness(historical, self.classifier)
+
+        mixed = copy.deepcopy(historical)
+        mixed["harness_sha256"] = self.classifier.HISTORICAL_PRE_269_HARNESS_SHA256
+        self.assert_rejected(mixed)
+
     def test_conflicting_statuses_replay_as_semantic_representation_invalid(self) -> None:
         trace = (
             b"SECPAL_TARGET_ERR_V2:3:667,662\n"

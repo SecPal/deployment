@@ -201,12 +201,18 @@ def validate_replay_witness(
     require_available: bool = False,
 ) -> bytes | None:
     if not isinstance(document, dict) or set(document) != DOCUMENT_KEYS:
-        raise ValueError("replay failure document is not the exact current shape")
+        raise ValueError("replay failure document is not the exact retained shape")
+    try:
+        line_rules = classifier.replay_line_rules(
+            document["target_sha"], document["harness_sha256"]
+        )
+    except ValueError as error:
+        raise ValueError(
+            "replay failure is outside retained negative authority"
+        ) from error
     if (
         document["schema_version"] != 2
         or document["phase"] != "target-qualification"
-        or document["target_sha"] != classifier.EXPECTED_TARGET_SHA
-        or document["harness_sha256"] != classifier.EXPECTED_HARNESS_SHA256
         or document["trusted_control_sha"]
         == classifier.LEGACY_REPLAY_OPTIONAL_CONTROL_SHA
         or document["operation"] != "qualification-harness"
@@ -307,9 +313,6 @@ def validate_replay_witness(
     marker = None
     if components["trusted_marker"]["present"]:
         marker = decoded["trusted_marker"].decode("ascii")
-    line_rules = classifier.replay_line_rules(
-        document["target_sha"], document["harness_sha256"]
-    )
     operation, reason = classifier.classify_failure(
         stdout,
         decoded["target_qualification_trace"],

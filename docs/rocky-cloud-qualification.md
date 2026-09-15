@@ -15,8 +15,8 @@ inputs to Rocky admission.
 The workflow commit on `main` owns provider authentication, the closed profile,
 image discovery, OpenTofu, resource ownership and TTL, SSH rotation, host
 preparation, continuation admission, evidence admission, and cleanup. The
-current target is the GitHub-verified protected-main #269 merge
-`c76742c828fefd71dda2b2d73fda6a0c43969426`; its target-owned production
+current target is the GitHub-verified protected-main #274 merge
+`402c22b0a1d69a5a3dba74ffb68cf016caba606b`; its target-owned production
 harness has SHA-256
 `436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac`.
 The pair is independently enforced by the trusted workflow, target runner,
@@ -25,8 +25,14 @@ fetched by the guest only after every GCP service account has been detached and
 access to the metadata credential endpoint has been blocked.
 
 The current harness digest is derived reproducibly from immutable Git bytes
-with `git show c76742c828fefd71dda2b2d73fda6a0c43969426:scripts/qualify-production-host.sh | sha256sum`.
-The pre-extension target
+with `git show 402c22b0a1d69a5a3dba74ffb68cf016caba606b:scripts/qualify-production-host.sh | sha256sum`.
+The #273 diagnostic target
+`c76742c828fefd71dda2b2d73fda6a0c43969426` has the same harness digest but
+remains a distinct historical binding. Preparation `34898846204/1`, diagnostic
+`34899406415/1`, and AVC diagnostic digest
+`bbc8268c665eba8960a4c0b4689cddb4434db5fc0937beacacc16ffebab09f2f`
+remain immutable under their recorded target and trusted control. The
+pre-extension target
 `b76c24fe59fbe2406d8b84094fc9e6694c57f0c6` and its original harness digest
 `f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c`
 remains an exact historical binding, including the #233 failure from run
@@ -38,14 +44,17 @@ different binding.
 
 The trusted-control SHA for a new lifecycle is the protected-main workflow
 commit itself, derived from `GITHUB_SHA`; it is not a workflow input or an
-unmerged candidate constant. The canonical #270 merge commit establishes the
-initial rebound authority triplet with the current target and harness. A later
-protected-main workflow commit derives its own trusted-control identity and can
-inherit that pair only while the repository agreement gates remain unchanged.
-Continuations bind the exact control SHA that created them. The unconsumed #234
-authorization bound to control `a4a4ff415f01421af4f3ddfe0a3542815df42414`,
-the pre-extension target, and its historical harness therefore cannot be
-consumed by the current authority.
+unmerged candidate constant. The canonical protected-main merge commit produced
+by this #275 delivery establishes the initial rebound authority triplet with the
+current target and harness. A later protected-main workflow commit derives its
+own trusted-control identity and can inherit that pair only while the repository
+agreement gates remain unchanged.
+Continuations bind the exact control SHA that created them. Every previously
+issued #233 or #234 execution authorization is stale after the #274 correction
+and #275 rebind. In particular, the unconsumed #234 authorization bound to
+control `a4a4ff415f01421af4f3ddfe0a3542815df42414`, the pre-extension target,
+and its historical harness cannot be consumed or revived by the current
+authority.
 
 The failed native #234 target/harness pair
 `b8f5a505d318d06a64a5975cfaba9f1e5ba0041f` /

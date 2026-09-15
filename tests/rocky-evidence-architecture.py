@@ -1191,7 +1191,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertIn("needs: validate", workflow[discover:])
 
     def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
-        target = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+        target = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
         harness = (
             "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
@@ -1375,12 +1375,26 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     def test_architecture_gate_pins_corrected_pair_independently(self) -> None:
         source = VALIDATOR.read_text(encoding="utf-8")
         self.assertIn(
-            'EXPECTED_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"',
+            'EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"',
             source,
         )
         self.assertIn(
             'EXPECTED_HARNESS_SHA256 = (\n    '
             '"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
+            source,
+        )
+        self.assertIn(
+            'HISTORICAL_273_TARGET_SHA = '
+            '"c76742c828fefd71dda2b2d73fda6a0c43969426"',
+            source,
+        )
+        self.assertIn(
+            'HISTORICAL_273_HARNESS_SHA256 = (\n    '
+            '"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
+            source,
+        )
+        self.assertNotIn(
+            "HISTORICAL_273_TARGET_SHA = EXPECTED_TARGET_SHA",
             source,
         )
         self.assertIn(
