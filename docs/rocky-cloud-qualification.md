@@ -44,10 +44,11 @@ different binding.
 
 The trusted-control SHA for a new lifecycle is the protected-main workflow
 commit itself, derived from `GITHUB_SHA`; it is not a workflow input or an
-unmerged candidate constant. The canonical #275 merge commit establishes the
-initial rebound authority triplet with the current target and harness. A later
-protected-main workflow commit derives its own trusted-control identity and can
-inherit that pair only while the repository agreement gates remain unchanged.
+unmerged candidate constant. The canonical protected-main merge commit produced
+by this #275 delivery establishes the initial rebound authority triplet with the
+current target and harness. A later protected-main workflow commit derives its
+own trusted-control identity and can inherit that pair only while the repository
+agreement gates remain unchanged.
 Continuations bind the exact control SHA that created them. Every previously
 issued #233 or #234 execution authorization is stale after the #274 correction
 and #275 rebind. In particular, the unconsumed #234 authorization bound to

@@ -3761,6 +3761,56 @@ type=AVC msg=audit(1.3:4): avc:  denied  { read } for  pid=8 scontext=system_u:s
                 "1",
             )
 
+    def test_retained_273_avc_failure_is_admitted_without_mixed_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            document, path = self.build_avc_failure(Path(directory))
+            historical = copy.deepcopy(document)
+            historical["schema_version"] = 3
+            historical["target_sha"] = self.classifier.HISTORICAL_273_TARGET_SHA
+            diagnostic = historical["avc_correlation_diagnostic"]
+            diagnostic["schema_version"] = 1
+            diagnostic["target_sha"] = self.classifier.HISTORICAL_273_TARGET_SHA
+            projection = diagnostic["projection"]
+            projection["schema_version"] = 1
+            for event in projection["events"]:
+                for record in event["avc_records"]:
+                    record.pop("denial_match")
+                event["candidate"] = False
+                event["rejection_facts"] = []
+            projection["candidate_event_count"] = 0
+            projection["rejection_facts"] = []
+            self.selinux_isolation._finalize_record_diagnostic(projection)
+            projection_bytes = self.selinux_isolation.canonical_bytes(projection)
+            diagnostic["projection_bytes"] = len(projection_bytes)
+            diagnostic["projection_sha256"] = hashlib.sha256(
+                projection_bytes
+            ).hexdigest()
+            historical["diagnostic_input_bytes"] = len(projection_bytes)
+            historical["diagnostic_input_sha256"] = hashlib.sha256(
+                projection_bytes
+            ).hexdigest()
+            path.write_text(json.dumps(historical), encoding="utf-8")
+
+            control = load_rocky_control()
+            control.validate_target_qualification_failure(
+                path,
+                self.classifier.HISTORICAL_273_TARGET_SHA,
+                "c" * 40,
+                "12345",
+                "1",
+            )
+            mixed = copy.deepcopy(historical)
+            mixed["target_sha"] = self.classifier.EXPECTED_TARGET_SHA
+            path.write_text(json.dumps(mixed), encoding="utf-8")
+            with self.assertRaises(control.ControlError):
+                control.validate_target_qualification_failure(
+                    path,
+                    self.classifier.EXPECTED_TARGET_SHA,
+                    "c" * 40,
+                    "12345",
+                    "1",
+                )
+
     def test_avc_failure_verifier_recomputes_binding_hash_and_classification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
