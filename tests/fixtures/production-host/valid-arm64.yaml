@@ -1,28 +1,28 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 ---
-schema_version: 1
+schema_version: 2
+evidence_class: synthetic
 hostname: secpal-arm64.example.invalid
 architecture: arm64
+cpu:
+  admission_method: rocky-aarch64-native
+  x86_64_level: null
+  qualified: true
 os:
-  id: debian
-  version_id: "13"
-  version_codename: trixie
+  id: rocky
+  version_id: "10.2"
   package_provenance:
-    release_origins: [Debian]
-    archive_keyring_package: debian-archive-keyring
-    release_signatures_verified: true
-  debian_release_suites:
-    - trixie
-    - trixie-security
-    - trixie-updates
-  security_updates:
-    mechanism: unattended-upgrades
-    automatic: true
-    release_codename: trixie
-    security_suite: trixie-security
-    normal_updates_automatic: false
-    major_release_upgrades_automatic: false
+    distribution: rocky
+    gpg_key: RPM-GPG-KEY-Rocky-10
+    enabled_repository_ids: [baseos, appstream, extras]
+    rpm_signatures_verified: true
+    external_repositories_enabled: false
+  updates:
+    mechanism: dnf4
+    reviewed: true
+    automatic: false
+    releasever: "10"
     automatic_reboot: false
 service_account:
   name: secpal-deploy
@@ -42,29 +42,54 @@ service_account:
 ssh:
   direct_root_login_permitted: false
 kernel:
-  release: 6.12.38+deb13-arm64
+  release: 6.12.0-211.16.1.el10_2.aarch64
   package_architecture: arm64
-  package_source: debian-archive
-  package_suite: trixie-security
+  package_source: rocky-baseos
+  package_repository_id: baseos
   package_owned: true
   cgroup_version: 2
   overlayfs_supported: true
-  apparmor:
-    enabled: true
-    profiles_loaded: 12
-    profiles_in_enforce_mode: 12
   seccomp_available_to_podman: true
+selinux:
+  enabled: true
+  mode: enforcing
+  policy: targeted
+  container_policy_package:
+    name: container-selinux
+    installed: true
+    source: rocky-appstream
+    repository_id: appstream
+    signature_verified: true
+  workload:
+    process_type: container_t
+    process_mcs: s0:c101,c202
+    storage_type: container_file_t
+    storage_mcs: s0:c101,c202
+    label_disabled: false
+    intended_access_succeeded: true
+    cross_boundary_process_type: container_t
+    cross_boundary_process_mcs: s0:c303,c404
+    cross_boundary_access_denied: true
+    denial_cause: selinux
+    avc_denial_observed: true
+    dac_would_allow_cross_boundary: true
+    target_existed: true
+  persistent_labels:
+    mechanism: semanage-fcontext-restorecon
+    fcontext_rule_present: true
+    restorecon_verified: true
+    chcon_only: false
+  global_policy_weakened: false
 runtime:
   engine: podman
-  version: 5.4.2
+  version: 5.8.2
   effective_oci_runtime: crun
   rootless: true
   owner_uid: 20000
   owner_gid: 20000
   installation:
-    source: debian-archive
-    distribution: debian
-    release_codename: trixie
+    source: rocky-official
+    distribution: rocky
     external_repository: false
     installed_packages:
       podman: podman
@@ -73,17 +98,42 @@ runtime:
       netavark: netavark
       aardvark_dns: aardvark-dns
       passt: passt
-      uidmap: uidmap
-      dbus_user_session: dbus-user-session
-    package_suites:
-      podman: trixie
-      conmon: trixie
-      crun: trixie
-      netavark: trixie
-      aardvark_dns: trixie
-      passt: trixie
-      uidmap: trixie
-      dbus_user_session: trixie
+      shadow_utils_subid: shadow-utils-subid
+      systemd: systemd
+      container_selinux: container-selinux
+      audit: audit
+      policycoreutils: policycoreutils
+      policycoreutils_python_utils: policycoreutils-python-utils
+      selinux_policy_targeted: selinux-policy-targeted
+    installed_nevras:
+      podman: podman-5.8.2-5.el10_2.aarch64
+      conmon: conmon-2.2.1-2.el10.aarch64
+      crun: crun-1.27-2.el10_2.aarch64
+      netavark: netavark-1.17.2-1.el10.aarch64
+      aardvark_dns: aardvark-dns-1.17.1-1.el10_2.aarch64
+      passt: passt-0^20251210.gd04c480-6.el10_2.aarch64
+      shadow_utils_subid: shadow-utils-subid-4.15.0-11.el10.aarch64
+      systemd: systemd-257-23.el10_2.2.rocky.0.1.aarch64
+      container_selinux: container-selinux-2.246.0-1.el10.noarch
+      audit: audit-4.0.3-5.el10.aarch64
+      policycoreutils: policycoreutils-3.10-2.el10_2.aarch64
+      policycoreutils_python_utils: policycoreutils-python-utils-3.10-2.el10_2.noarch
+      selinux_policy_targeted: selinux-policy-targeted-42.1.18-4.el10_2.3.noarch
+    package_repositories:
+      podman: appstream
+      conmon: appstream
+      crun: appstream
+      netavark: appstream
+      aardvark_dns: appstream
+      passt: appstream
+      shadow_utils_subid: baseos
+      systemd: baseos
+      container_selinux: appstream
+      audit: baseos
+      policycoreutils: baseos
+      policycoreutils_python_utils: appstream
+      selinux_policy_targeted: baseos
+    rpm_signatures_verified: true
     forbidden_packages_present: []
   user_namespace:
     account: secpal-deploy
@@ -141,6 +191,9 @@ runtime:
     socket_enabled: false
     tcp_listener: false
     application_dependency: false
+    podman_socket_mounted: false
+    docker_socket_mounted: false
+    docker_api_dependency: false
   updates:
     automatic: false
     automatic_service_restart: false
@@ -154,6 +207,13 @@ runtime:
     ghcr_insecure: false
     fallback_enabled: false
     short_name_resolution_required: false
+  security:
+    privileged: false
+    seccomp_enabled: true
+    seccomp_profile: runtime-default
+    digest_only_images: true
+    non_root_processes: true
+    added_capabilities: []
 clock:
   synchronized: true
   offset_milliseconds: 25
@@ -194,6 +254,7 @@ path_access:
     ancestors_service_account_can_write: false
     local: true
 tools:
+  - ausearch
   - bash
   - curl
   - df
@@ -205,12 +266,17 @@ tools:
   - findmnt
   - getfacl
   - getent
+  - getenforce
   - gh
   - id
   - install
+  - matchpathcon
   - mktemp
   - python3
   - realpath
+  - restorecon
+  - rpm
+  - semanage
   - sha256sum
   - stat
   - timedatectl
