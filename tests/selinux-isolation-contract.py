@@ -534,7 +534,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         ).encode()
         observation = {
             "schema_version": 1,
-            "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
+            "target_sha": "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
             "trusted_control_sha": "a" * 40,
             "qualification_run_id": "12345",
             "qualification_run_attempt": "1",
@@ -544,7 +544,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         }
         evidence = {
             "schema_version": 4,
-            "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
+            "target_sha": "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
             "native_observation": observation,
             "quadlet_authority": authority,
             "exit_status": 0,
@@ -556,7 +556,12 @@ class SelinuxIsolationContractTests(unittest.TestCase):
             "classification": "PASS",
         }
 
-        def validate(candidate, observed_stdout=stdout):
+        def validate(
+            candidate,
+            observed_stdout=stdout,
+            target_sha="402c22b0a1d69a5a3dba74ffb68cf016caba606b",
+            native_observation=observation,
+        ):
             with tempfile.TemporaryDirectory() as directory:
                 temporary = Path(directory)
                 evidence_path = temporary / "qualification.json"
@@ -564,7 +569,9 @@ class SelinuxIsolationContractTests(unittest.TestCase):
                 observation_path = temporary / "native.json"
                 evidence_path.write_text(json.dumps(candidate), encoding="utf-8")
                 stdout_path.write_bytes(observed_stdout)
-                observation_path.write_text(json.dumps(observation), encoding="utf-8")
+                observation_path.write_text(
+                    json.dumps(native_observation), encoding="utf-8"
+                )
                 return subprocess.run(
                     [
                         CONTROL,
@@ -575,7 +582,7 @@ class SelinuxIsolationContractTests(unittest.TestCase):
                         "--native-observation",
                         observation_path,
                         "--target-sha",
-                        "c76742c828fefd71dda2b2d73fda6a0c43969426",
+                        target_sha,
                         "--control-sha",
                         "a" * 40,
                         "--run-id",
@@ -612,14 +619,23 @@ class SelinuxIsolationContractTests(unittest.TestCase):
         historical_evidence.update(
             {
                 "schema_version": 3,
+                "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
                 "stdout_sha256": hashlib.sha256(historical_stdout).hexdigest(),
                 "stdout_bytes": len(historical_stdout),
                 "selinux_isolation": historical_isolation,
             }
         )
+        historical_evidence["native_observation"]["target_sha"] = (
+            "c76742c828fefd71dda2b2d73fda6a0c43969426"
+        )
         self.assertEqual(
             0,
-            validate(historical_evidence, historical_stdout).returncode,
+            validate(
+                historical_evidence,
+                historical_stdout,
+                target_sha="c76742c828fefd71dda2b2d73fda6a0c43969426",
+                native_observation=historical_evidence["native_observation"],
+            ).returncode,
         )
         for field, value in (
             ("source_context", PROCESS_A),

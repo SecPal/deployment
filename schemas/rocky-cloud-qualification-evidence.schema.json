@@ -20,7 +20,10 @@
   "properties": {
     "schema_version": { "enum": [3, 4] },
     "target_sha": {
-      "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+      "enum": [
+        "c76742c828fefd71dda2b2d73fda6a0c43969426",
+        "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+      ]
     },
     "native_observation": {
       "type": "object",
@@ -38,7 +41,10 @@
       "properties": {
         "schema_version": { "const": 1 },
         "target_sha": {
-          "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+          "enum": [
+            "c76742c828fefd71dda2b2d73fda6a0c43969426",
+            "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+          ]
         },
         "trusted_control_sha": {
           "type": "string",
@@ -96,6 +102,16 @@
       },
       "then": {
         "properties": {
+          "target_sha": {
+            "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+          },
+          "native_observation": {
+            "properties": {
+              "target_sha": {
+                "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+              }
+            }
+          },
           "selinux_isolation": { "$ref": "#/$defs/selinux_isolation_v3" }
         }
       }
@@ -107,6 +123,16 @@
       },
       "then": {
         "properties": {
+          "target_sha": {
+            "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+          },
+          "native_observation": {
+            "properties": {
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              }
+            }
+          },
           "selinux_isolation": { "$ref": "#/$defs/selinux_isolation" }
         }
       }

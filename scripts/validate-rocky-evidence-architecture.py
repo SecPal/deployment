@@ -43,8 +43,12 @@ DEFAULT_TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace
 DEFAULT_RELOAD_OBSERVER = (
     ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
 )
-EXPECTED_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
 EXPECTED_HARNESS_SHA256 = (
+    "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+)
+HISTORICAL_273_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+HISTORICAL_273_HARNESS_SHA256 = (
     "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
 )
 HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
@@ -691,10 +695,22 @@ def validate_selinux_isolation_architecture(
         raise ArchitectureError("SELinux isolation layered surface is incomplete")
     try:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        schema_target = schema["properties"]["target_sha"]["const"]
-        native_target = schema["properties"]["native_observation"]["properties"][
+        schema_targets = schema["properties"]["target_sha"]["enum"]
+        native_targets = schema["properties"]["native_observation"]["properties"][
+            "target_sha"
+        ]["enum"]
+        historical_schema_target = schema["allOf"][0]["then"]["properties"][
             "target_sha"
         ]["const"]
+        historical_native_target = schema["allOf"][0]["then"]["properties"][
+            "native_observation"
+        ]["properties"]["target_sha"]["const"]
+        current_schema_target = schema["allOf"][1]["then"]["properties"][
+            "target_sha"
+        ]["const"]
+        current_native_target = schema["allOf"][1]["then"]["properties"][
+            "native_observation"
+        ]["properties"]["target_sha"]["const"]
         schema_owner = schema["$defs"]["selinux_isolation"]["properties"][
             "invariant_owner"
         ]["const"]
@@ -704,8 +720,12 @@ def validate_selinux_isolation_architecture(
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise ArchitectureError("SELinux isolation schema projection is invalid") from error
     if (
-        schema_target != EXPECTED_TARGET_SHA
-        or native_target != EXPECTED_TARGET_SHA
+        schema_targets != [HISTORICAL_273_TARGET_SHA, EXPECTED_TARGET_SHA]
+        or native_targets != [HISTORICAL_273_TARGET_SHA, EXPECTED_TARGET_SHA]
+        or historical_schema_target != HISTORICAL_273_TARGET_SHA
+        or historical_native_target != HISTORICAL_273_TARGET_SHA
+        or current_schema_target != EXPECTED_TARGET_SHA
+        or current_native_target != EXPECTED_TARGET_SHA
         or schema_owner != owner
         or maximum != 1023
     ):
@@ -812,6 +832,10 @@ def validate_target_qualification_binding(
         assignment_string(classifier_tree, "EXPECTED_TARGET_SHA") != expected_target
         or assignment_string(classifier_tree, "EXPECTED_HARNESS_SHA256")
         != expected_harness
+        or assignment_string(classifier_tree, "HISTORICAL_273_TARGET_SHA")
+        != HISTORICAL_273_TARGET_SHA
+        or assignment_string(classifier_tree, "HISTORICAL_273_HARNESS_SHA256")
+        != HISTORICAL_273_HARNESS_SHA256
         or assignment_string(classifier_tree, "HISTORICAL_PRE_265_TARGET_SHA")
         != HISTORICAL_PRE_265_TARGET_SHA
         or assignment_string(classifier_tree, "HISTORICAL_PRE_265_HARNESS_SHA256")
@@ -855,6 +879,8 @@ def validate_target_qualification_binding(
         or "classifier.replay_active_observation_admitted" not in replay_verifier
         or "classifier.replay_primary_observation_admitted" not in replay_verifier
         or "HISTORICAL_PRE_269_LINE_RULES" not in classifier
+        or "(HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256)"
+        not in classifier
     ):
         raise ArchitectureError("closed replay verifier disagrees with classifier input authority")
     if (
@@ -895,42 +921,48 @@ def validate_target_qualification_binding(
         raise ArchitectureError("guest target/harness authentication disagrees")
 
     schema_pair_sequence = [
-        schema_const_pair_at(failure_schema, "allOf", 0, "then"),
         schema_const_pair_at(
-            failure_schema, "allOf", 0, "if", "anyOf", 1
+            failure_schema, "allOf", 0, "then", "oneOf", 1
+        ),
+        schema_const_pair_at(
+            failure_schema, "allOf", 0, "then", "oneOf", 0
         ),
         *[
             schema_const_pair_at(
                 failure_schema, "allOf", 3, "then", "anyOf", index
             )
-            for index in range(3)
+            for index in range(4)
         ],
         *[
             schema_const_pair_at(
                 failure_schema, "allOf", condition, "if", "anyOf", index
             )
-            for condition, length in ((18, 6), (19, 4), (20, 4))
+            for condition, length in ((18, 7), (19, 5), (20, 5))
             for index in range(length)
         ],
     ]
     expected_schema_pair_sequence = [
         (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
         (expected_target, expected_harness),
-        (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
         (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
         (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
         ("83d0c3720d342d0222e8dee9819e28d0c6739f84", "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"),
         (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
         ("b8f5a505d318d06a64a5975cfaba9f1e5ba0041f", "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"),
         (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
         (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
         (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
         (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
         (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
         (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
         (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
         (HISTORICAL_CLEANUP_TARGET_SHA, "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
         (expected_target, expected_harness),
+        (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256),
         (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
         (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
     ]
@@ -938,6 +970,10 @@ def validate_target_qualification_binding(
     if (
         schema_const_pairs(failure_schema).count(
             (expected_target, expected_harness)
+        )
+        != 5
+        or schema_const_pairs(failure_schema).count(
+            (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256)
         )
         != 5
         or schema_const_pairs(failure_schema).count(

@@ -74,11 +74,12 @@ class RockyCloudControlTests(unittest.TestCase):
             'if [[ "$target_sha" != "$expected_target_sha" ||'
         )
         gate_end = runner_source.index("\nfi\n", pair_gate) + len("\nfi\n")
-        current_target = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+        current_target = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
         current_harness = (
             "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
         pre_269_target = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+        historical_273_target = "c76742c828fefd71dda2b2d73fda6a0c43969426"
         pre_269_harness = (
             "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
         )
@@ -94,6 +95,7 @@ class RockyCloudControlTests(unittest.TestCase):
             isolated_gate.chmod(0o700)
             for target, harness in (
                 (historical_target, historical_harness),
+                (historical_273_target, current_harness),
                 (pre_269_target, current_harness),
                 (current_target, pre_269_harness),
                 (pre_269_target, pre_269_harness),
@@ -2552,11 +2554,23 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_qualification_admission_is_observation_derived_and_pass_only(self) -> None:
         schema = json.loads((ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json").read_text(encoding="utf-8"))
-        current_target = "c76742c828fefd71dda2b2d73fda6a0c43969426"
-        self.assertEqual(current_target, schema["properties"]["target_sha"]["const"])
+        current_target = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+        historical_target = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+        self.assertEqual(
+            [historical_target, current_target],
+            schema["properties"]["target_sha"]["enum"],
+        )
+        self.assertEqual(
+            [historical_target, current_target],
+            schema["properties"]["native_observation"]["properties"]["target_sha"]["enum"],
+        )
+        self.assertEqual(
+            historical_target,
+            schema["allOf"][0]["then"]["properties"]["target_sha"]["const"],
+        )
         self.assertEqual(
             current_target,
-            schema["properties"]["native_observation"]["properties"]["target_sha"]["const"],
+            schema["allOf"][1]["then"]["properties"]["target_sha"]["const"],
         )
         self.assertNotIn("positive_access", schema["required"])
         runner = (ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh").read_text(encoding="utf-8")
@@ -2654,7 +2668,7 @@ class RockyCloudControlTests(unittest.TestCase):
     def test_schema_only_qualification_cannot_self_assert_native_success(self) -> None:
         candidate = {
             "schema_version": 1,
-            "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
+            "target_sha": "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
             "exit_status": 0,
             "stdout_sha256": "a" * 64,
             "stdout_bytes": 1,
@@ -2789,10 +2803,10 @@ class RockyCloudControlTests(unittest.TestCase):
         ).encode()
         candidate = {
             "schema_version": 4,
-            "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
+            "target_sha": "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
             "native_observation": {
                 "schema_version": 1,
-                "target_sha": "c76742c828fefd71dda2b2d73fda6a0c43969426",
+                "target_sha": "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
                 "trusted_control_sha": "a" * 40,
                 "qualification_run_id": "12345",
                 "qualification_run_attempt": "1",
@@ -2834,7 +2848,7 @@ class RockyCloudControlTests(unittest.TestCase):
                         "--native-observation",
                         binding,
                         "--target-sha",
-                        "c76742c828fefd71dda2b2d73fda6a0c43969426",
+                        "402c22b0a1d69a5a3dba74ffb68cf016caba606b",
                         "--control-sha",
                         "a" * 40,
                         "--run-id",

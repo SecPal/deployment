@@ -1251,47 +1251,43 @@
   "allOf": [
     {
       "if": {
-        "anyOf": [
-          {
-            "properties": { "schema_version": { "enum": [3, 4] } },
-            "required": ["schema_version"]
-          },
-          {
-            "properties": {
-              "target_sha": {
-                "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
-              },
-              "harness_sha256": {
-                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
-              },
-              "operation": { "const": "qualify-avc-correlation" },
-              "reason": { "const": "command-failed" },
-              "exit_status": { "const": 3 }
-            },
-            "required": [
-              "target_sha",
-              "harness_sha256",
-              "operation",
-              "reason",
-              "exit_status"
-            ]
-          }
-        ]
+        "properties": { "schema_version": { "enum": [3, 4] } },
+        "required": ["schema_version"]
       },
       "then": {
         "required": ["avc_correlation_diagnostic"],
         "properties": {
           "schema_version": { "enum": [3, 4] },
-          "target_sha": {
-            "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
-          },
-          "harness_sha256": {
-            "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
-          },
           "operation": { "const": "qualify-avc-correlation" },
           "reason": { "const": "command-failed" },
           "exit_status": { "const": 3 }
-        }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "schema_version": { "const": 3 },
+              "target_sha": {
+                "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["schema_version", "target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "schema_version": { "const": 4 },
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["schema_version", "target_sha", "harness_sha256"]
+          }
+        ]
       },
       "else": { "not": { "required": ["avc_correlation_diagnostic"] } }
     },
@@ -1336,6 +1332,17 @@
           "reason"
         ],
         "anyOf": [
+          {
+            "properties": {
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
           {
             "properties": {
               "target_sha": {
@@ -1691,6 +1698,17 @@
           {
             "properties": {
               "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
                 "const": "c76742c828fefd71dda2b2d73fda6a0c43969426"
               },
               "harness_sha256": {
@@ -1740,6 +1758,17 @@
               },
               "harness_sha256": {
                 "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
               }
             },
             "required": ["target_sha", "harness_sha256"]
@@ -1834,6 +1863,17 @@
               },
               "harness_sha256": {
                 "const": "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+              }
+            },
+            "required": ["target_sha", "harness_sha256"]
+          },
+          {
+            "properties": {
+              "target_sha": {
+                "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+              },
+              "harness_sha256": {
+                "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
               }
             },
             "required": ["target_sha", "harness_sha256"]

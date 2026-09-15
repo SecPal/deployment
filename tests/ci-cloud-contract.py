@@ -1251,7 +1251,7 @@ class CloudCIContractTests(unittest.TestCase):
         classifier = "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
         classifier_source = (ROOT / classifier).read_text(encoding="utf-8")
         self.assertIn(
-            'EXPECTED_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"',
+            'EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"',
             classifier_source,
         )
         self.assertIn(
@@ -1260,7 +1260,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         for old, new in (
             (
-                'EXPECTED_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"',
+                'EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"',
                 'EXPECTED_TARGET_SHA = ""',
             ),
             (
@@ -1280,7 +1280,7 @@ class CloudCIContractTests(unittest.TestCase):
     def test_corrected_target_pair_is_bound_before_provider_authentication(
         self,
     ) -> None:
-        target_sha = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+        target_sha = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
         harness_sha256 = (
             "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
         )
@@ -1322,6 +1322,15 @@ class CloudCIContractTests(unittest.TestCase):
         self.assertIn(
             'HISTORICAL_PRE_269_HARNESS_SHA256 = '
             '"{historical_pre_269_harness_sha256}"',
+            validator_source,
+        )
+        self.assertIn(
+            'historical_273_target_sha = '
+            '"c76742c828fefd71dda2b2d73fda6a0c43969426"',
+            validator_source,
+        )
+        self.assertIn(
+            'HISTORICAL_273_TARGET_SHA = "{historical_273_target_sha}"',
             validator_source,
         )
         mutations = (
@@ -2102,7 +2111,7 @@ class CloudCIContractTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            'EXPECTED_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"',
+            'EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"',
             'EXPECTED_TARGET_SHA = ""',
         )
         self.assert_mutation_rejected(
