@@ -55,6 +55,17 @@ REQUIRED_TOOLS = {
     "systemctl",
     "timedatectl",
 }
+NOARCH_RPM_PACKAGE_KEYS = frozenset(
+    {
+        "container_selinux",
+        "policycoreutils_python_utils",
+        "selinux_policy_targeted",
+    }
+)
+RPM_ARCHITECTURES = {
+    "amd64": "x86_64",
+    "arm64": "aarch64",
+}
 QUALIFIED_ROCKY_MINORS = frozenset({"10.2"})
 MANAGED_PATH_ROOTS = {
     "runtime_secrets": PurePosixPath("/run/secpal"),
@@ -938,6 +949,24 @@ def validate_runtime_facts(
 ) -> None:
     runtime = facts["runtime"]
     service_account = inventory["service_account"]
+    installation = runtime["installation"]
+    for package_key, package_name in installation["installed_packages"].items():
+        expected_architecture = (
+            "noarch"
+            if package_key in NOARCH_RPM_PACKAGE_KEYS
+            else RPM_ARCHITECTURES[facts["architecture"]]
+        )
+        nevra = installation["installed_nevras"][package_key]
+        if re.fullmatch(
+            rf"{re.escape(package_name)}-(?:[0-9]+:)?"
+            rf"[A-Za-z0-9_.+~^]+-[A-Za-z0-9_.+~^]+\."
+            rf"{re.escape(expected_architecture)}",
+            nevra,
+        ) is None:
+            raise ContractViolation(
+                "installed package NEVRA does not match its package name and "
+                "admitted architecture"
+            )
     podman_version = parse_version(runtime["version"], "host facts.runtime.version")
     if podman_version < (5, 8, 2) or podman_version >= (6, 0, 0):
         raise ContractViolation("Podman must be qualified Rocky 5.x at or above 5.8.2")

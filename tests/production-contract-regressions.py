@@ -1002,6 +1002,45 @@ class ProductionContractRegressionTests(unittest.TestCase):
                     )
                 )
 
+    def test_selinux_mcs_categories_stay_within_container_policy_bounds(self) -> None:
+        for field in (
+            "process_mcs",
+            "storage_mcs",
+            "cross_boundary_process_mcs",
+        ):
+            with self.subTest(field=field):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "selinux", "workload")[field] = (
+                    "s0:c1024,c1025"
+                )
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
+    def test_installed_nevras_bind_package_names_and_architecture(self) -> None:
+        for package_key, value in (
+            ("podman", "xxx"),
+            ("podman", "crun-5.8.2-5.el10_2.x86_64"),
+            ("podman", "podman-5.8.2-5.el10_2.aarch64"),
+            ("podman", "podman-5.8.2-5.el10_2.noarch"),
+            (
+                "container_selinux",
+                "container-selinux-2.246.0-1.el10.x86_64",
+            ),
+        ):
+            with self.subTest(package=package_key, value=value):
+                facts = copy.deepcopy(self.host_facts)
+                nested_mapping(facts, "runtime", "installation", "installed_nevras")[
+                    package_key
+                ] = value
+                self.assert_contract_violation(
+                    lambda facts=facts: self.validator.validate_host_facts(
+                        self.inventory, facts
+                    )
+                )
+
     def test_kernel_series_is_exactly_rocky_10_stable(self) -> None:
         for release in ("6.11.99-1.el10.x86_64", "6.13.0-1.el10.x86_64"):
             with self.subTest(release=release):
