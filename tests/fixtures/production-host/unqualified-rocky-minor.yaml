@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 ---
-path: [os, debian_release_suites]
-value: [stable, trixie-security, trixie-updates]
+path: [os, version_id]
+value: "10.3"
