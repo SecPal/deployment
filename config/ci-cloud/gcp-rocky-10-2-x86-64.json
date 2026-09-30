@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "profile": "gcp-rocky-10-2-x86-64",
+  "provider": "google",
+  "project": "secpal-dev",
+  "region": "europe-west3",
+  "zone": "europe-west3-a",
+  "machine_type": "c3-standard-4",
+  "architecture": "x86_64",
+  "cpu_baseline": "x86-64-v3",
+  "disk": {
+    "type": "hyperdisk-balanced",
+    "size_gib": 120
+  },
+  "instance_count": 1,
+  "image": {
+    "project": "rocky-linux-cloud",
+    "discovery_family": "rocky-linux-10"
+  },
+  "guest": {
+    "id": "rocky",
+    "version_id": "10.2"
+  },
+  "repositories": {
+    "final_enabled_repositories": ["appstream", "baseos", "extras"],
+    "pre_admission_provider_repositories": [
+      "google-cloud-sdk",
+      "google-compute-engine"
+    ]
+  },
+  "ttl_seconds": 10800,
+  "fixture": {
+    "input": "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+    "amd64_child": "sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f"
+  }
+}

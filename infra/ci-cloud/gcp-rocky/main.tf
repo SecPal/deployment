@@ -143,6 +143,7 @@ resource "google_compute_instance" "qualification" {
     secpal-rocky-target-sha              = var.target_sha
     secpal-rocky-trusted-control-sha     = var.trusted_control_sha
     secpal-rocky-exact-image-self-link   = var.exact_image_self_link
+    secpal-rocky-provider-profile        = var.profile
     secpal-rocky-expires-at              = var.expires_at
     secpal-rocky-ssh-public-key          = trimspace(var.ssh_public_key)
     "startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-rocky-host.tftpl", {
@@ -151,6 +152,7 @@ resource "google_compute_instance" "qualification" {
       runtime_user_systemd_base64gzip                = base64gzip(file("${path.module}/../../../scripts/ci-cloud/runtime_user_systemd.py"))
       target_runner_base64gzip                       = base64gzip(file("${path.module}/../../../scripts/ci-cloud/run-rocky-target-qualification.sh"))
       target_failure_classifier_base64gzip           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/classify-rocky-target-qualification-failure.py"))
+      target_replay_verifier_base64gzip              = base64gzip(file("${path.module}/../../../scripts/ci-cloud/verify-rocky-target-qualification-replay.py"))
       target_trace_base64gzip                        = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-target-qualification-trace.sh"))
       reload_runuser_base64gzip                      = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-reload-runuser.py"))
       reload_systemctl_base64gzip                    = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-reload-systemctl.py"))
@@ -167,6 +169,8 @@ resource "google_compute_instance" "qualification" {
       collector_base64gzip                           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/collect-rocky-preparation.py"))
       preparation_contract_base64gzip                = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky_preparation_contract.py"))
       control_utility_base64gzip                     = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-control.py"))
+      selinux_isolation_contract_base64gzip          = base64gzip(file("${path.module}/../../../scripts/selinux_isolation_contract.py"))
+      quadlet_authority_contract_base64gzip          = base64gzip(file("${path.module}/../../../scripts/quadlet_authority_contract.py"))
       discovery_schema_base64gzip                    = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-discovery-evidence.schema.json"))
       continuation_schema_base64gzip                 = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-continuation.schema.json"))
       preparation_schema_base64gzip                  = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-preparation-evidence.schema.json"))
@@ -174,7 +178,8 @@ resource "google_compute_instance" "qualification" {
       qualification_schema_base64gzip                = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-qualification-evidence.schema.json"))
       target_source_failure_schema_base64gzip        = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-target-source-failure.schema.json"))
       target_qualification_failure_schema_base64gzip = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-target-qualification-failure.schema.json"))
-      profile_base64gzip                             = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-arm64.json"))
+      arm64_profile_base64gzip                       = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-arm64.json"))
+      x86_64_profile_base64gzip                      = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-x86-64.json"))
     })
   }
 

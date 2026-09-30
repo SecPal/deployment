@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -14,20 +16,66 @@ import stat
 import tempfile
 from pathlib import Path
 
-EXPECTED_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
-EXPECTED_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+EXPECTED_HARNESS_SHA256 = "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+HISTORICAL_273_TARGET_SHA = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+HISTORICAL_273_HARNESS_SHA256 = "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+HISTORICAL_PRE_269_TARGET_SHA = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+HISTORICAL_PRE_269_HARNESS_SHA256 = "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+HISTORICAL_PRE_265_TARGET_SHA = "539d5faa6549be62060c8e20028caf200e5eca01"
+HISTORICAL_PRE_265_HARNESS_SHA256 = "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+HISTORICAL_202_TARGET_SHA = "293977ae93408a7bb812619de58649ab8a92d438"
+HISTORICAL_202_HARNESS_SHA256 = "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
 HISTORICAL_TARGET_SHA = "83d0c3720d342d0222e8dee9819e28d0c6739f84"
 HISTORICAL_HARNESS_SHA256 = "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"
 MAX_STDOUT_BYTES = 65_536
+MAX_STDOUT_CAPTURE_BYTES = MAX_STDOUT_BYTES + 1
 MAX_TRACE_BYTES = 4_096
-MAX_ARTIFACT_BYTES = 8_192
+MAX_ARTIFACT_BYTES = 16_384
 MAX_CAPTURE_FILE_BYTES = 65_536
 MAX_ADJACENCY_BYTES = 8_192
 MAX_START_OBSERVATION_BYTES = 2_048
 MAX_ACTIVE_OBSERVATION_BYTES = 2_048
 MAX_PRIMARY_OBSERVATION_BYTES = 2_048
+MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES = 12_288
+INSTALLED_SELINUX_ISOLATION_CONTRACT = Path(
+    "/opt/secpal-control/scripts/selinux_isolation_contract.py"
+)
 MAX_TRACE_FRAMES = 8
 MAX_TRACE_LINE = 9_999
+LEGACY_REPLAY_OPTIONAL_CONTROL_SHA = "f7a298d19bf4a0957d6b3db383a1f1bb2eeb309e"
+REPLAY_COMPONENT_ORDER = (
+    "qualification_stdout",
+    "target_qualification_trace",
+    "trusted_marker",
+    "reload_adjacency",
+    "start_observation",
+    "active_observation",
+    "primary_observation",
+)
+REPLAY_COMPONENT_BOUNDS = {
+    "qualification_stdout": MAX_STDOUT_CAPTURE_BYTES,
+    "target_qualification_trace": MAX_CAPTURE_FILE_BYTES,
+    "trusted_marker": 257,
+    "reload_adjacency": MAX_ADJACENCY_BYTES + 1,
+    "start_observation": MAX_START_OBSERVATION_BYTES + 1,
+    "active_observation": MAX_ACTIVE_OBSERVATION_BYTES + 1,
+    "primary_observation": MAX_PRIMARY_OBSERVATION_BYTES + 1,
+}
+REPLAY_EXACT_COMPONENT_BOUNDS = {
+    "qualification_stdout": MAX_STDOUT_BYTES,
+    "target_qualification_trace": MAX_TRACE_BYTES,
+    "trusted_marker": 256,
+    "reload_adjacency": MAX_ADJACENCY_BYTES,
+    "start_observation": MAX_START_OBSERVATION_BYTES,
+    "active_observation": MAX_ACTIVE_OBSERVATION_BYTES,
+    "primary_observation": MAX_PRIMARY_OBSERVATION_BYTES,
+}
+REPLAYABLE_STDOUT_RECORDS = frozenset(
+    {
+        b"ERROR: SELinux is not Enforcing.\n",
+    }
+)
 
 OPERATIONS = frozenset(
     {
@@ -114,9 +162,8 @@ ZERO_STATUS_TRUSTED_DECISIONS = frozenset(
     }
 )
 
-# These are exact reviewed d892 target messages.  Variable suffixes are never
-# copied to evidence; a prefix match selects only the finite semantic identity.
-EXPLICIT_RULES = (
+# Historical rules remain available only with a historical immutable line map.
+HISTORICAL_EXPLICIT_RULES = (
     ("NOT RUN: Rocky Linux ", "qualify-host-identity", "invariant-failed"),
     ("ERROR: native qualification must run as an administrator", "qualify-administrator-execution", "invariant-failed"),
     ("ERROR: --image must be a fully qualified, pre-staged digest reference", "qualify-fixture-reference", "invariant-failed"),
@@ -142,6 +189,42 @@ EXPLICIT_RULES = (
     ("ERROR: unable to temporarily expose SELinux dontaudit denials", "qualify-selinux-policy-restoration", "command-failed"),
     ("ERROR: SELinux stopped Enforcing while exposing dontaudit denials", "qualify-selinux-policy-restoration", "invariant-failed"),
     ("ERROR: cross-boundary failure lacks a matching SELinux AVC denial", "qualify-avc-correlation", "invariant-failed"),
+    ("ERROR: unable to restore SELinux dontaudit policy", "qualify-selinux-policy-restoration", "command-failed"),
+    ("ERROR: SELinux is not Enforcing after restoring dontaudit policy", "qualify-selinux-policy-restoration", "invariant-failed"),
+    ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
+)
+
+# These are exact reviewed current-target messages.  Variable suffixes are never
+# copied to evidence; a prefix match selects only the finite semantic identity.
+EXPLICIT_RULES = (
+    ("NOT RUN: Rocky Linux ", "qualify-host-identity", "invariant-failed"),
+    ("ERROR: native qualification must run as an administrator", "qualify-administrator-execution", "invariant-failed"),
+    ("ERROR: --image must be a fully qualified, pre-staged digest reference", "qualify-fixture-reference", "invariant-failed"),
+    ("ERROR: required service account does not exist", "qualify-service-account", "invariant-failed"),
+    ("ERROR: service-account home must be an existing absolute directory", "qualify-service-account", "invariant-failed"),
+    ("ERROR: service account must resolve to a non-root runtime identity", "qualify-service-account", "invariant-failed"),
+    ("ERROR: service-account home is not usable", "qualify-service-account", "invariant-failed"),
+    ("ERROR: SELinux is not Enforcing.", "qualify-selinux-host", "invariant-failed"),
+    ("ERROR: x86_64 CPU does not satisfy Rocky Linux 10 x86-64-v3", "qualify-native-architecture", "invariant-failed"),
+    ("ERROR: unsupported native architecture", "qualify-native-architecture", "invariant-failed"),
+    ("ERROR: unified cgroup v2 is not effective", "qualify-cgroup", "invariant-failed"),
+    ("ERROR: rootless Podman does not select crun", "qualify-rootless-runtime", "invariant-failed"),
+    ("ERROR: rootless Podman does not select Netavark", "qualify-rootless-runtime", "invariant-failed"),
+    ("ERROR: effective Podman runtime is not the admitted rootless service identity", "qualify-rootless-runtime", "invariant-failed"),
+    ("ERROR: digest-only fixture image is not pre-staged", "qualify-fixture-presence", "invariant-failed"),
+    ("ERROR: administrator Quadlet path ancestry is not trusted", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: administrator Quadlet search-path policy is not trusted", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: effective Quadlet search path is not the admitted administrator directory", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: unsafe Quadlet setting detected", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: unable to evaluate effective Quadlet service authority", "qualify-quadlet-authority", "command-failed"),
+    ("ERROR: effective Quadlet service contradicts the admitted administrator configuration", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: effective Quadlet runtime identity contradicts the service account", "qualify-quadlet-authority", "invariant-failed"),
+    ("ERROR: representative workload lacks the effective least-authority process state", "qualify-seccomp", "invariant-failed"),
+    ("ERROR: representative process or storage label is not container-confined", "qualify-selinux-storage", "invariant-failed"),
+    ("ERROR: cross-boundary denial observation is invalid", "qualify-avc-correlation", "invariant-failed"),
+    ("ERROR: unable to temporarily expose SELinux dontaudit denials", "qualify-selinux-policy-restoration", "command-failed"),
+    ("ERROR: SELinux stopped Enforcing while exposing dontaudit denials", "qualify-selinux-policy-restoration", "invariant-failed"),
+    ("ERROR: cross-boundary failure lacks one correlated enforcing SELinux AVC denial", "qualify-avc-correlation", "command-failed"),
     ("ERROR: unable to restore SELinux dontaudit policy", "qualify-selinux-policy-restoration", "command-failed"),
     ("ERROR: SELinux is not Enforcing after restoring dontaudit policy", "qualify-selinux-policy-restoration", "invariant-failed"),
     ("ERROR: effective runtime facts contain a forbidden security fallback", "qualify-runtime-fallback-absence", "invariant-failed"),
@@ -185,7 +268,7 @@ HISTORICAL_LINE_RULES = (
     (337, 337, "qualification-harness"),
 )
 
-LINE_RULES = (
+HISTORICAL_202_LINE_RULES = (
     (113, 119, "qualify-host-identity"), (121, 124, "qualify-administrator-execution"),
     (125, 128, "qualify-fixture-reference"), (129, 146, "qualify-service-account"),
     (149, 152, "qualify-selinux-host"), (154, 158, "qualify-package-prerequisites"),
@@ -202,6 +285,71 @@ LINE_RULES = (
     (312, 320, "qualify-selinux-policy-restoration"), (323, 326, "qualify-runtime-fallback-absence"),
 )
 
+HISTORICAL_PRE_269_LINE_RULES = (
+    (368, 374, "qualify-host-identity"),
+    (376, 379, "qualify-administrator-execution"),
+    (380, 383, "qualify-fixture-reference"),
+    (384, 405, "qualify-service-account"),
+    (409, 412, "qualify-selinux-host"),
+    (414, 427, "qualify-native-architecture"),
+    (429, 432, "qualify-cgroup"),
+    (433, 449, "qualify-rootless-runtime"),
+    (450, 453, "qualify-fixture-presence"),
+    (455, 463, "qualify-fixture-setup"),
+    (465, 524, "qualify-quadlet-authority"),
+    (525, 525, "qualify-quadlet-daemon-reload"),
+    (526, 548, "qualify-quadlet-authority"),
+    (549, 549, "qualify-quadlet-start"),
+    (550, 550, "qualify-quadlet-active-state"),
+    (552, 563, "qualify-quadlet-authority"),
+    (564, 569, "qualify-workload-primary"),
+    (570, 576, "qualify-seccomp"),
+    (579, 579, "qualify-selinux-storage-directory-create"),
+    (581, 585, "qualify-workload-primary"),
+    (586, 589, "qualify-workload-secondary"),
+    (591, 597, "qualify-selinux-storage"),
+    (601, 607, "qualify-avc-correlation"),
+    (610, 616, "qualify-selinux-policy-restoration"),
+    (619, 624, "qualify-avc-correlation"),
+    (626, 634, "qualify-selinux-policy-restoration"),
+    (637, 653, "qualify-avc-correlation"),
+    (662, 665, "qualify-runtime-fallback-absence"),
+    (667, 667, "qualification-harness"),
+)
+
+LINE_RULES = (
+    (456, 462, "qualify-host-identity"),
+    (464, 467, "qualify-administrator-execution"),
+    (468, 471, "qualify-fixture-reference"),
+    (472, 493, "qualify-service-account"),
+    (497, 500, "qualify-selinux-host"),
+    (502, 515, "qualify-native-architecture"),
+    (517, 520, "qualify-cgroup"),
+    (521, 537, "qualify-rootless-runtime"),
+    (538, 541, "qualify-fixture-presence"),
+    (543, 552, "qualify-fixture-setup"),
+    (554, 613, "qualify-quadlet-authority"),
+    (614, 614, "qualify-quadlet-daemon-reload"),
+    (615, 637, "qualify-quadlet-authority"),
+    (638, 638, "qualify-quadlet-start"),
+    (639, 639, "qualify-quadlet-active-state"),
+    (641, 652, "qualify-quadlet-authority"),
+    (653, 658, "qualify-workload-primary"),
+    (659, 665, "qualify-seccomp"),
+    (668, 668, "qualify-selinux-storage-directory-create"),
+    (670, 674, "qualify-workload-primary"),
+    (675, 678, "qualify-workload-secondary"),
+    (680, 686, "qualify-selinux-storage"),
+    (690, 694, "qualify-avc-correlation"),
+    (698, 704, "qualify-selinux-policy-restoration"),
+    (707, 711, "qualify-avc-correlation"),
+    (713, 721, "qualify-selinux-policy-restoration"),
+    (724, 740, "qualify-avc-correlation"),
+    (749, 752, "qualify-runtime-fallback-absence"),
+    (754, 754, "qualification-harness"),
+    (760, 768, "qualify-avc-correlation"),
+)
+
 TRACE_PATTERN = re.compile(
     r"^SECPAL_TARGET_ERR_V2:([1-9][0-9]{0,2}):"
     r"([1-9][0-9]{0,3}(?:,[1-9][0-9]{0,3}){0,7})$"
@@ -210,6 +358,10 @@ MARKER_PATTERN = re.compile(
     r"^(qualification-harness|qualify-[a-z0-9-]+) "
     r"(invariant-failed|command-failed|representation-invalid|cleanup-failed)$"
 )
+AVC_OBSERVATION_TRACE_STATUS = 1
+AVC_OBSERVATION_TARGET_STATUS = 3
+AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({375, 690, 772})
+HISTORICAL_PRE_269_AVC_OBSERVATION_REQUIRED_FRAMES = frozenset({300, 601, 674})
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]{0,19}$")
 BOOT_ID = re.compile(
@@ -517,24 +669,68 @@ def operation_for_line(line: int, line_rules: tuple[tuple[int, int, str], ...] =
     return None
 
 
-def trace_operations(trace_text: str, exit_status: int, line_rules: tuple[tuple[int, int, str], ...] = LINE_RULES) -> tuple[set[str], bool]:
+def trace_operations(
+    trace_text: str,
+    exit_status: int,
+    line_rules: tuple[tuple[int, int, str], ...] = LINE_RULES,
+) -> tuple[set[str], bool]:
     operations: set[str] = set()
     if not trace_text:
         return operations, True
+    if type(exit_status) is not int or not 1 <= exit_status <= 255:
+        return set(), False
+    # ERR owns the status of its inner command; the caller owns the target's
+    # eventual status. Repeated trap propagation is coherent only while every
+    # retained record agrees on the inner status.
+    trace_status: int | None = None
+    trace_frames: list[tuple[int, ...]] = []
     for raw_line in trace_text.splitlines():
         match = TRACE_PATTERN.fullmatch(raw_line)
-        if match is None or int(match.group(1)) != exit_status:
+        if match is None:
             return set(), False
-        frames = match.group(2).split(",")
-        if not 1 <= len(frames) <= MAX_TRACE_FRAMES:
+        status = int(match.group(1))
+        if not 1 <= status <= 255:
             return set(), False
-        for raw_frame in frames:
-            line = int(raw_frame)
+        if trace_status is None:
+            trace_status = status
+        elif status != trace_status:
+            return set(), False
+        raw_frames = match.group(2).split(",")
+        if not 1 <= len(raw_frames) <= MAX_TRACE_FRAMES:
+            return set(), False
+        frames = tuple(int(raw_frame) for raw_frame in raw_frames)
+        trace_frames.append(frames)
+        for line in frames:
             if not 1 <= line <= MAX_TRACE_LINE:
                 return set(), False
             operation = operation_for_line(line, line_rules)
             if operation is not None:
                 operations.add(operation)
+    avc_required_frames = (
+        AVC_OBSERVATION_REQUIRED_FRAMES
+        if line_rules is LINE_RULES
+        else (
+            HISTORICAL_PRE_269_AVC_OBSERVATION_REQUIRED_FRAMES
+            if line_rules is HISTORICAL_PRE_269_LINE_RULES
+            else frozenset()
+        )
+    )
+    if trace_status != exit_status and not (
+        avc_required_frames
+        and trace_status == AVC_OBSERVATION_TRACE_STATUS
+        and exit_status == AVC_OBSERVATION_TARGET_STATUS
+        and all(
+            avc_required_frames.issubset(frames)
+            and {
+                operation_for_line(line, line_rules)
+                for line in frames
+                if operation_for_line(line, line_rules) is not None
+            }
+            == {"qualify-avc-correlation"}
+            for frames in trace_frames
+        )
+    ):
+        return set(), False
     return operations, True
 
 
@@ -596,9 +792,14 @@ def classify_failure(
     if exit_status in (124, 137):
         return "qualification-harness", "timeout"
 
+    explicit_rules = (
+        EXPLICIT_RULES
+        if line_rules in (LINE_RULES, HISTORICAL_PRE_269_LINE_RULES)
+        else HISTORICAL_EXPLICIT_RULES
+    )
     explicit = {
         (operation, reason)
-        for prefix, operation, reason in EXPLICIT_RULES
+        for prefix, operation, reason in explicit_rules
         if any(line.startswith(prefix) for line in text.splitlines())
     }
     if len(explicit) > 1:
@@ -623,6 +824,23 @@ def classify_failure(
     if len(traced_operations) == 1:
         return traced_operations.pop(), "command-failed"
     return "qualification-harness", "unclassified-target-failure"
+
+
+def replay_line_rules(
+    target_sha: str, harness_sha256: str
+) -> tuple[tuple[int, int, str], ...]:
+    """Select only the immutable line map owned by an admitted replay pair."""
+    pair = target_sha, harness_sha256
+    if pair == (EXPECTED_TARGET_SHA, EXPECTED_HARNESS_SHA256):
+        return LINE_RULES
+    if pair == (HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256):
+        return LINE_RULES
+    if pair in {
+        (HISTORICAL_PRE_269_TARGET_SHA, HISTORICAL_PRE_269_HARNESS_SHA256),
+        (HISTORICAL_PRE_265_TARGET_SHA, HISTORICAL_PRE_265_HARNESS_SHA256),
+    }:
+        return HISTORICAL_PRE_269_LINE_RULES
+    raise ValueError("replay target/harness pair has no immutable line map")
 
 
 def unavailable_daemon_reload_adjacency() -> dict[str, object]:
@@ -1707,6 +1925,390 @@ def bounded_bytes(path: Path, maximum: int) -> bytes:
     return payload
 
 
+def optional_bounded_bytes(path: Path | None, maximum: int) -> tuple[bool, bytes]:
+    if path is None or not path.exists():
+        return False, b""
+    return True, bounded_bytes(path, maximum)
+
+
+def canonical_json_bytes(document: object) -> bytes:
+    return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "ascii"
+    )
+
+
+def replay_trace_admitted(payload: bytes) -> bool:
+    if len(payload) > MAX_TRACE_BYTES:
+        return False
+    if not payload:
+        return True
+    if not payload.endswith(b"\n"):
+        return False
+    try:
+        lines = payload[:-1].decode("ascii").split("\n")
+    except UnicodeDecodeError:
+        return False
+    for line in lines:
+        match = TRACE_PATTERN.fullmatch(line)
+        if match is None or not 1 <= int(match.group(1)) <= 255:
+            return False
+        frames = match.group(2).split(",")
+        if not 1 <= len(frames) <= MAX_TRACE_FRAMES:
+            return False
+        if any(not 1 <= int(frame) <= MAX_TRACE_LINE for frame in frames):
+            return False
+    return True
+
+
+def replay_marker_admitted(payload: bytes) -> bool:
+    try:
+        marker = payload.decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    if not marker.endswith("\n"):
+        return False
+    match = MARKER_PATTERN.fullmatch(marker[:-1])
+    return bool(
+        match is not None
+        and match.group(1) in OPERATIONS
+        and match.group(2) in REASONS
+    )
+
+
+def unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("replay observation contains a duplicate key")
+        document[key] = value
+    return document
+
+
+def reject_json_constant(value: str) -> object:
+    raise ValueError(f"replay observation contains invalid JSON constant {value}")
+
+
+def decode_closed_json(payload: bytes) -> object:
+    return json.loads(
+        payload.decode("utf-8"),
+        object_pairs_hook=unique_json_object,
+        parse_constant=reject_json_constant,
+    )
+
+
+# The rocky-*-runuser producers own these closed observation state machines.
+# Failure records are re-admitted through their existing classifier semantics;
+# the exact success records below are the producers' non-causative terminal state.
+def replay_start_observation_admitted(document: object) -> bool:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("stage"), str)
+        or (
+            document.get("service_result") is not None
+            and not isinstance(document.get("service_result"), str)
+        )
+    ):
+        return False
+    if document == {
+        "schema_version": 1,
+        "stage": "success",
+        "runuser_status": 0,
+        "systemctl_client_status": 0,
+        "service_result": None,
+        "exec_main_code": None,
+        "exec_main_status": None,
+    } and all(
+        type(document[name]) is int
+        for name in ("runuser_status", "systemctl_client_status")
+    ):
+        return True
+    if document.get("stage") in {
+        "diagnostic-unavailable",
+        "success",
+    }:
+        return False
+    statuses = (
+        (126, 127)
+        if document.get("stage") == "runuser-exec-failed"
+        else (document.get("runuser_status"),)
+    )
+    return any(
+        type(status) is int
+        and admit_quadlet_start_observation(document, status)[2].get(
+            "observation_complete"
+        )
+        for status in statuses
+    )
+
+
+def replay_active_observation_admitted(document: object) -> bool:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("stage"), str)
+    ):
+        return False
+    if document == {
+        "schema_version": 1,
+        "stage": "success",
+        "runuser_status": 0,
+        "systemctl_client_status": 0,
+    } and all(
+        type(document[name]) is int
+        for name in ("runuser_status", "systemctl_client_status")
+    ):
+        return True
+    if document.get("stage") in {
+        "diagnostic-unavailable",
+        "success",
+    }:
+        return False
+    statuses = (
+        (126, 127)
+        if document.get("stage") == "runuser-exec-failed"
+        else (document.get("runuser_status"),)
+    )
+    return any(
+        type(status) is int
+        and admit_quadlet_active_observation(document, status)[2].get(
+            "observation_complete"
+        )
+        for status in statuses
+    )
+
+
+def replay_primary_observation_admitted(document: object) -> bool:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("stage"), str)
+    ):
+        return False
+    if document == {
+        "schema_version": 1,
+        "stage": "success",
+        "runuser_status": 0,
+        "podman_status": 0,
+    } and all(
+        type(document[name]) is int
+        for name in ("runuser_status", "podman_status")
+    ):
+        return True
+    if document.get("stage") in {
+        "diagnostic-unavailable",
+        "success",
+    }:
+        return False
+    statuses = (
+        (126, 127)
+        if document.get("stage") == "runuser-exec-failed"
+        else (document.get("runuser_status"),)
+    )
+    return any(
+        type(status) is int
+        and admit_primary_workload_observation(document, status)[2].get(
+            "observation_complete"
+        )
+        for status in statuses
+    )
+
+
+def replay_observation_admitted(
+    name: str,
+    payload: bytes,
+    exit_status: int,
+    bindings: dict[str, str],
+    stdout: bytes,
+) -> bool:
+    try:
+        document = decode_closed_json(payload)
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+    if name == "start_observation":
+        return replay_start_observation_admitted(document)
+    if name == "active_observation":
+        return replay_active_observation_admitted(document)
+    if name == "primary_observation":
+        return replay_primary_observation_admitted(document)
+    if name != "reload_adjacency":
+        return False
+    try:
+        if canonical_json_bytes(document) != payload:
+            return False
+    except (UnicodeEncodeError, TypeError, ValueError):
+        return False
+    admitted = admit_daemon_reload_adjacency(
+        document,
+        {
+            **bindings,
+            "failure_status": exit_status,
+        },
+        reload_client_error(stdout),
+    )
+    if admitted == unavailable_daemon_reload_adjacency():
+        return False
+    try:
+        validate_admitted_daemon_reload_adjacency(admitted)
+    except ValueError:
+        return False
+    return True
+
+
+def replay_component_admitted(
+    name: str,
+    payload: bytes,
+    *,
+    exit_status: int,
+    bindings: dict[str, str],
+    stdout: bytes,
+) -> bool:
+    if len(payload) > REPLAY_EXACT_COMPONENT_BOUNDS[name]:
+        return False
+    if name == "qualification_stdout":
+        return not payload or payload in REPLAYABLE_STDOUT_RECORDS
+    if name == "target_qualification_trace":
+        return replay_trace_admitted(payload)
+    if name == "trusted_marker":
+        return replay_marker_admitted(payload)
+    return replay_observation_admitted(
+        name, payload, exit_status, bindings, stdout
+    )
+
+
+def build_replay_witness(
+    component_sources: dict[str, tuple[bool, bytes]],
+    *,
+    exit_status: int,
+    representation_invalid: bool,
+    bindings: dict[str, str],
+) -> dict[str, object]:
+    if set(component_sources) != set(REPLAY_COMPONENT_ORDER):
+        raise ValueError("replay component inventory is incomplete")
+    stdout = component_sources["qualification_stdout"][1]
+    components: dict[str, object] = {}
+    available = True
+    for name in REPLAY_COMPONENT_ORDER:
+        source = component_sources[name]
+        if (
+            not isinstance(source, tuple)
+            or len(source) != 2
+            or type(source[0]) is not bool
+            or not isinstance(source[1], bytes)
+            or (not source[0] and source[1])
+        ):
+            raise ValueError(f"replay {name} source is invalid")
+        present, payload = source
+        replayable = not present or replay_component_admitted(
+            name,
+            payload,
+            exit_status=exit_status,
+            bindings=bindings,
+            stdout=stdout,
+        )
+        if (
+            name == "reload_adjacency"
+            and present
+            and components["qualification_stdout"]["replayability"]
+            != "exact"
+        ):
+            replayable = False
+        available = available and replayable
+        components[name] = {
+            "present": present,
+            "byte_count": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "replayability": "exact" if replayable else "unavailable",
+            "content_base64": (
+                base64.b64encode(payload).decode("ascii")
+                if present and replayable
+                else None
+            ),
+        }
+    return {
+        "schema_version": 1,
+        "available": available,
+        "representation_invalid": representation_invalid,
+        "exit_status": exit_status,
+        "component_order": list(REPLAY_COMPONENT_ORDER),
+        "separator": "NUL",
+        "components": components,
+    }
+
+
+def build_avc_correlation_diagnostic(
+    payload: bytes,
+    *,
+    target_sha: str,
+    trusted_control_sha: str,
+    qualification_run_id: str,
+    qualification_run_attempt: str,
+    harness_sha256: str,
+) -> dict[str, object]:
+    """Bind one canonical semantic projection without retaining audit output."""
+    if not payload or len(payload) > MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES:
+        raise ValueError("AVC correlation diagnostic is outside its closed bound")
+    try:
+        projection = decode_closed_json(payload)
+        if canonical_json_bytes(projection) != payload:
+            raise ValueError("AVC correlation diagnostic is not canonical")
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise ValueError("AVC correlation diagnostic is not closed JSON") from error
+    repository_contract = Path(__file__).resolve().parents[1] / "selinux_isolation_contract.py"
+    contract_path = (
+        repository_contract
+        if repository_contract.exists()
+        else INSTALLED_SELINUX_ISOLATION_CONTRACT
+    )
+    try:
+        metadata = contract_path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or contract_path.is_symlink()
+            or metadata.st_mode & 0o022
+            or not 0 < metadata.st_size <= 65_536
+        ):
+            raise ValueError("SELinux isolation contract is not trusted")
+        specification = importlib.util.spec_from_file_location(
+            "selinux_isolation_contract", contract_path
+        )
+        if specification is None or specification.loader is None:
+            raise ValueError("SELinux isolation contract cannot be loaded")
+        contract = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(contract)
+        contract.validate_avc_correlation_diagnostic(projection)
+    except (OSError, AttributeError, ValueError) as error:
+        raise ValueError("AVC correlation diagnostic contradicts its facts") from error
+    if projection.get("correlation_outcome") == "admitted":
+        raise ValueError("AVC failure diagnostic contains an admitted candidate")
+    return {
+        "schema_version": projection["schema_version"],
+        "target_sha": target_sha,
+        "trusted_control_sha": trusted_control_sha,
+        "qualification_run_id": qualification_run_id,
+        "qualification_run_attempt": qualification_run_attempt,
+        "harness_sha256": harness_sha256,
+        "projection_bytes": len(payload),
+        "projection_sha256": hashlib.sha256(payload).hexdigest(),
+        "projection": projection,
+    }
+
+
 def write_document(path: Path, document: dict[str, object]) -> None:
     encoded = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
     if len(encoded) > MAX_ARTIFACT_BYTES:
@@ -1738,6 +2340,7 @@ def main() -> int:
     parser.add_argument("--start-observation", type=Path)
     parser.add_argument("--active-observation", type=Path)
     parser.add_argument("--primary-observation", type=Path)
+    parser.add_argument("--avc-correlation-diagnostic", type=Path)
     parser.add_argument("--exit-status", required=True, type=int)
     parser.add_argument("--trusted-marker", type=Path)
     parser.add_argument("--representation-invalid", action="store_true")
@@ -1754,16 +2357,28 @@ def main() -> int:
     ):
         raise SystemExit("target harness status is outside the closed range")
 
-    stdout = bounded_bytes(options.stdout, MAX_STDOUT_BYTES)
+    stdout = bounded_bytes(
+        options.stdout,
+        MAX_STDOUT_CAPTURE_BYTES
+        if options.representation_invalid
+        else MAX_STDOUT_BYTES,
+    )
     trace = bounded_bytes(options.trace, MAX_CAPTURE_FILE_BYTES)
     harness = bounded_bytes(options.harness, 128 * 1024)
     harness_sha256 = hashlib.sha256(harness).hexdigest()
     target_bound = options.target_sha == EXPECTED_TARGET_SHA and harness_sha256 == EXPECTED_HARNESS_SHA256
+    marker_present = False
     marker = None
     marker_bytes = b""
     if options.trusted_marker is not None and options.trusted_marker.exists():
-        marker_bytes = bounded_bytes(options.trusted_marker, 256)
-        marker = marker_bytes.decode("ascii")
+        marker_present, marker_bytes = optional_bounded_bytes(
+            options.trusted_marker,
+            REPLAY_COMPONENT_BOUNDS["trusted_marker"]
+            if options.representation_invalid
+            else 256,
+        )
+        if not options.representation_invalid:
+            marker = marker_bytes.decode("ascii")
     operation, reason = classify_failure(
         stdout,
         trace,
@@ -1773,19 +2388,25 @@ def main() -> int:
         representation_invalid=options.representation_invalid,
         line_rules=LINE_RULES,
     )
+    adjacency_present = False
     adjacency_bytes = b""
     adjacency: dict[str, object] | None = None
+    start_present = False
     start_bytes = b""
     start_diagnostic: dict[str, object] | None = None
+    active_present = False
     active_bytes = b""
     active_diagnostic: dict[str, object] | None = None
+    primary_present = False
     primary_bytes = b""
     primary_diagnostic: dict[str, object] | None = None
+    avc_diagnostic_bytes = b""
+    avc_diagnostic: dict[str, object] | None = None
     if operation == "qualify-quadlet-start" and reason == "command-failed":
         raw_start: object = None
         if options.start_observation is not None and options.start_observation.exists():
             try:
-                start_bytes = bounded_bytes(
+                start_present, start_bytes = optional_bounded_bytes(
                     options.start_observation, MAX_START_OBSERVATION_BYTES
                 )
                 raw_start = json.loads(start_bytes)
@@ -1798,7 +2419,7 @@ def main() -> int:
         raw_active: object = None
         if options.active_observation is not None and options.active_observation.exists():
             try:
-                active_bytes = bounded_bytes(
+                active_present, active_bytes = optional_bounded_bytes(
                     options.active_observation, MAX_ACTIVE_OBSERVATION_BYTES
                 )
                 raw_active = json.loads(active_bytes)
@@ -1814,7 +2435,7 @@ def main() -> int:
             and options.primary_observation.exists()
         ):
             try:
-                primary_bytes = bounded_bytes(
+                primary_present, primary_bytes = optional_bounded_bytes(
                     options.primary_observation, MAX_PRIMARY_OBSERVATION_BYTES
                 )
                 raw_primary = json.loads(primary_bytes)
@@ -1827,7 +2448,7 @@ def main() -> int:
         raw_adjacency: object = None
         if options.reload_adjacency is not None and options.reload_adjacency.exists():
             try:
-                adjacency_bytes = bounded_bytes(
+                adjacency_present, adjacency_bytes = optional_bounded_bytes(
                     options.reload_adjacency, MAX_ADJACENCY_BYTES
                 )
                 raw_adjacency = json.loads(adjacency_bytes)
@@ -1844,8 +2465,72 @@ def main() -> int:
             },
             reload_client_error(stdout),
         )
+    if (
+        operation == "qualify-avc-correlation"
+        and reason == "command-failed"
+        and options.exit_status == 3
+    ):
+        avc_present, avc_diagnostic_bytes = optional_bounded_bytes(
+            options.avc_correlation_diagnostic,
+            MAX_AVC_CORRELATION_DIAGNOSTIC_BYTES,
+        )
+        if not avc_present or not avc_diagnostic_bytes:
+            raise ValueError("AVC correlation failure lacks its closed diagnostic")
+        avc_diagnostic = build_avc_correlation_diagnostic(
+            avc_diagnostic_bytes,
+            target_sha=options.target_sha,
+            trusted_control_sha=options.control_sha,
+            qualification_run_id=options.run_id,
+            qualification_run_attempt=options.run_attempt,
+            harness_sha256=harness_sha256,
+        )
+    replay_required = (
+        target_bound
+        and (operation, reason) == ("qualification-harness", "representation-invalid")
+        and options.control_sha != LEGACY_REPLAY_OPTIONAL_CONTROL_SHA
+    )
+    if replay_required:
+        marker_present, marker_bytes = optional_bounded_bytes(
+            options.trusted_marker, REPLAY_COMPONENT_BOUNDS["trusted_marker"]
+        )
+        adjacency_present, adjacency_bytes = optional_bounded_bytes(
+            options.reload_adjacency, REPLAY_COMPONENT_BOUNDS["reload_adjacency"]
+        )
+        start_present, start_bytes = optional_bounded_bytes(
+            options.start_observation, REPLAY_COMPONENT_BOUNDS["start_observation"]
+        )
+        active_present, active_bytes = optional_bounded_bytes(
+            options.active_observation, REPLAY_COMPONENT_BOUNDS["active_observation"]
+        )
+        primary_present, primary_bytes = optional_bounded_bytes(
+            options.primary_observation, REPLAY_COMPONENT_BOUNDS["primary_observation"]
+        )
+    if avc_diagnostic is not None:
+        diagnostic_payload = avc_diagnostic_bytes
+    elif operation == "qualify-selinux-storage-fcontext-add":
+        diagnostic_payload = b"semanage-fcontext-add-v1\0" + trace + b"\0" + reason.encode("ascii")
+    else:
+        diagnostic_payload = (
+            stdout
+            + b"\0"
+            + trace
+            + b"\0"
+            + marker_bytes
+            + b"\0"
+            + adjacency_bytes
+            + b"\0"
+            + start_bytes
+            + b"\0"
+            + active_bytes
+            + b"\0"
+            + primary_bytes
+        )
     document: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": (
+            avc_diagnostic["schema_version"] + 2
+            if avc_diagnostic is not None
+            else (2 if replay_required else 1)
+        ),
         "phase": "target-qualification",
         "target_sha": options.target_sha,
         "trusted_control_sha": options.control_sha,
@@ -1855,35 +2540,21 @@ def main() -> int:
         "operation": operation,
         "reason": reason,
         "exit_status": options.exit_status,
-        "diagnostic_input_sha256": hashlib.sha256(
-            (
-                b"semanage-fcontext-add-v1\0" + trace + b"\0" + reason.encode("ascii")
-                if operation == "qualify-selinux-storage-fcontext-add"
-                else stdout
-                + b"\0"
-                + trace
-                + b"\0"
-                + marker_bytes
-                + b"\0"
-                + adjacency_bytes
-                + b"\0"
-                + start_bytes
-                + b"\0"
-                + active_bytes
-                + b"\0"
-                + primary_bytes
-            )
-        ).hexdigest(),
+        "diagnostic_input_sha256": hashlib.sha256(diagnostic_payload).hexdigest(),
         "diagnostic_input_bytes": (
-            len(trace) + len(reason)
-            if operation == "qualify-selinux-storage-fcontext-add"
-            else len(stdout)
-            + len(trace)
-            + len(marker_bytes)
-            + len(adjacency_bytes)
-            + len(start_bytes)
-            + len(active_bytes)
-            + len(primary_bytes)
+            len(avc_diagnostic_bytes)
+            if avc_diagnostic is not None
+            else (
+                len(trace) + len(reason)
+                if operation == "qualify-selinux-storage-fcontext-add"
+                else len(stdout)
+                + len(trace)
+                + len(marker_bytes)
+                + len(adjacency_bytes)
+                + len(start_bytes)
+                + len(active_bytes)
+                + len(primary_bytes)
+            )
         ),
     }
     if adjacency is not None:
@@ -1894,6 +2565,28 @@ def main() -> int:
         document["quadlet_active_state_diagnostic"] = active_diagnostic
     if primary_diagnostic is not None:
         document["primary_workload_diagnostic"] = primary_diagnostic
+    if avc_diagnostic is not None:
+        document["avc_correlation_diagnostic"] = avc_diagnostic
+    if replay_required:
+        document["replay_witness"] = build_replay_witness(
+            {
+                "qualification_stdout": (True, stdout),
+                "target_qualification_trace": (True, trace),
+                "trusted_marker": (marker_present, marker_bytes),
+                "reload_adjacency": (adjacency_present, adjacency_bytes),
+                "start_observation": (start_present, start_bytes),
+                "active_observation": (active_present, active_bytes),
+                "primary_observation": (primary_present, primary_bytes),
+            },
+            exit_status=options.exit_status,
+            representation_invalid=options.representation_invalid,
+            bindings={
+                "target_sha": options.target_sha,
+                "trusted_control_sha": options.control_sha,
+                "qualification_run_id": options.run_id,
+                "qualification_run_attempt": options.run_attempt,
+            },
+        )
     write_document(options.output, document)
     return 0
 

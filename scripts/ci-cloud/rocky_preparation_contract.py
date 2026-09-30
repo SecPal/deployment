@@ -22,6 +22,7 @@ RESPONSIBILITY = "normalization,admission,assembly"
 INVARIANT_OWNERS = {
     "authenticated-native-packages": "rocky_preparation_contract.admit_package",
     "fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity",
+    "fixture-amd64-child": "rocky_preparation_contract.admit_fixture_identity",
     "rocky-package-signing-key": "rocky_preparation_contract.admit_rocky_signing_key",
     "runtime-cgroup": "rocky_preparation_contract.admit_runtime_cgroup",
     "runtime-container-host-absence": "rocky_preparation_contract.admit_runtime_container_host_absence",
@@ -48,6 +49,12 @@ FIXTURE = (
     "4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
 )
 ARM_CHILD = "sha256:4562b419adf48c5f3c763995d6014c123b3ce1d2e0ef2613b189779caa787192"
+AMD64_CHILD = "sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f"
+PROFILE_ARCHITECTURES = {
+    "gcp-rocky-10-2-arm64": "aarch64",
+    "gcp-rocky-10-2-x86-64": "x86_64",
+}
+FIXTURE_CHILDREN = {"aarch64": ARM_CHILD, "x86_64": AMD64_CHILD}
 FIXTURE_REPOSITORY = FIXTURE.partition("@")[0]
 FIXTURE_DIGEST_IDENTITY_MAX = 8
 FIXTURE_DIGEST_METADATA_MAX_BYTES = 1024
@@ -186,23 +193,39 @@ def normalize_fixture_repo_digests(raw: str) -> tuple[str, ...]:
     return tuple(identities)
 
 
-def admit_fixture_identity(identities: tuple[str, ...]) -> str:
-    expected = f"{FIXTURE_REPOSITORY}@{ARM_CHILD}"
+def admit_fixture_identity(identities: tuple[str, ...], architecture: str) -> str:
+    child = FIXTURE_CHILDREN.get(architecture)
+    operation = (
+        "admit-fixture-arm64-child"
+        if architecture == "aarch64"
+        else "admit-fixture-amd64-child"
+    )
+    if child is None:
+        reject("admission", operation, "invariant-failed")
+    expected = f"{FIXTURE_REPOSITORY}@{child}"
     if expected not in identities:
-        reject("admission", "admit-fixture-arm64-child", "invariant-failed")
-    return ARM_CHILD
+        reject("admission", operation, "invariant-failed")
+    return child
 
 
-def admit_fixture_repo_digests(raw: str) -> str:
-    return admit_fixture_identity(normalize_fixture_repo_digests(raw))
+def admit_fixture_repo_digests(raw: str, architecture: str) -> str:
+    return admit_fixture_identity(normalize_fixture_repo_digests(raw), architecture)
 
 
-def assemble_fixture_evidence(resolved_child: str) -> dict[str, Any]:
-    return {"input": FIXTURE, "resolved_arm64_child": resolved_child, "pre_staged": True}
+def assemble_fixture_evidence(
+    resolved_child: str, architecture: str
+) -> dict[str, Any]:
+    field = (
+        "resolved_arm64_child"
+        if architecture == "aarch64"
+        else "resolved_amd64_child"
+    )
+    return {"input": FIXTURE, field: resolved_child, "pre_staged": True}
 
 
-def validate_fixture_evidence(document: dict[str, Any]) -> None:
-    if document != assemble_fixture_evidence(ARM_CHILD):
+def validate_fixture_evidence(document: dict[str, Any], architecture: str) -> None:
+    child = FIXTURE_CHILDREN.get(architecture)
+    if child is None or document != assemble_fixture_evidence(child, architecture):
         reject("admission", "validate-fixture-evidence", "invariant-failed")
 
 
@@ -669,9 +692,13 @@ def admit_facts(facts: dict[str, Any], options: dict[str, Any]) -> dict[str, Any
         or not 1_600_000_000 <= options["expires_at"] <= 4_102_444_800
     ):
         reject("admission", "admit-run-identity", "invariant-failed")
-    if facts["release"] != {"ID": "rocky", "VERSION_ID": "10.2"} or facts[
-        "architecture"
-    ] != "aarch64":
+    profile = str(options.get("profile", ""))
+    expected_architecture = PROFILE_ARCHITECTURES.get(profile)
+    if (
+        facts["release"] != {"ID": "rocky", "VERSION_ID": "10.2"}
+        or expected_architecture is None
+        or facts["architecture"] != expected_architecture
+    ):
         reject("admission", "admit-guest-identity", "invariant-failed")
     dnf_lines = facts["dnf_version"].splitlines()
     if (
@@ -714,7 +741,9 @@ def admit_facts(facts: dict[str, Any], options: dict[str, Any]) -> dict[str, Any
         or not graphroot.startswith(home.rstrip("/") + "/")
     ):
         reject("admission", "admit-rootless-graphroot", "invariant-failed")
-    resolved_fixture = admit_fixture_identity(facts["fixture_identities"])
+    resolved_fixture = admit_fixture_identity(
+        facts["fixture_identities"], facts["architecture"]
+    )
     if not facts["fixture_present"]:
         reject("admission", "admit-fixture-present", "invariant-failed")
     if facts["boot_id"] == options["first_boot_id"]:
@@ -784,7 +813,7 @@ def assemble_preparation_evidence(
         "run": {
             "repository": "SecPal/deployment",
             "trusted_control_sha": options["control_sha"],
-            "profile": "gcp-rocky-10-2-arm64",
+            "profile": options["profile"],
             "run_id": options["run_id"],
             "run_attempt": options["run_attempt"],
             "expires_at": options["expires_at"],
@@ -817,7 +846,9 @@ def assemble_preparation_evidence(
             "subids_non_overlapping": True, "linger": True,
             "quadlet_authority_writable": False,
         },
-        "fixture": assemble_fixture_evidence(facts["resolved_fixture"]),
+        "fixture": assemble_fixture_evidence(
+            facts["resolved_fixture"], facts["architecture"]
+        ),
         "persistence": {"rebooted": True, "boot_id_changed": True, "survived_reboot": True},
         "cloud_identity": {
             "control_service_account_absent": True,

@@ -28,5 +28,5 @@ output "initial_ipv4_address" {
 
 output "machine_type" {
   value       = google_compute_instance.qualification.machine_type
-  description = "Effective fixed C4A machine type."
+  description = "Effective machine type bound to the reviewed profile."
 }

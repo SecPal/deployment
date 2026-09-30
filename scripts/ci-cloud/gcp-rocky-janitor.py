@@ -39,6 +39,7 @@ LABEL_KEYS = {
     "expires_at",
 }
 DESCRIPTION_KEYS = {"o", "r", "i", "a", "t", "c", "p", "n", "x"}
+PROFILES = {"gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"}
 SCOPES = {
     "instance": f"zones/{ZONE}/instances",
     "disk": f"zones/{ZONE}/disks",
@@ -189,7 +190,7 @@ def parse_candidate(component: str, resource: dict[str, Any], now: int) -> Candi
     if (
         labels["secpal_ci_owner"] != "rocky-host-qualification"
         or labels["repository"] != "secpal-deployment"
-        or labels["provider_profile"] != "gcp-rocky-10-2-arm64"
+        or labels["provider_profile"] not in PROFILES
         or RUN_ID.fullmatch(run_id) is None
         or RUN_ATTEMPT.fullmatch(attempt) is None
         or SHA.fullmatch(labels["target_sha"]) is None

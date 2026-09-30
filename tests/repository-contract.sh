@@ -80,6 +80,7 @@ required_files=(
   schemas/rocky-cloud-qualification-readiness.schema.json
   schemas/rocky-cloud-target-qualification-failure.schema.json
   config/ci-cloud/gcp-rocky-10-2-arm64.json
+  config/ci-cloud/gcp-rocky-10-2-x86-64.json
   config/production/inventory.example.yaml
   config/production/state-contract.json
   config/quadlet/Caddyfile
@@ -116,7 +117,10 @@ required_files=(
   scripts/ci-cloud/wait-rocky-qualification-readiness.py
   scripts/ci-cloud/run-rocky-target-qualification.sh
   scripts/qualify-production-host.sh
+  scripts/quadlet_authority_contract.py
+  scripts/selinux_isolation_contract.py
   scripts/ci-cloud/classify-rocky-target-qualification-failure.py
+  scripts/ci-cloud/verify-rocky-target-qualification-replay.py
   scripts/ci-cloud/rocky-target-qualification-trace.sh
   scripts/ci-cloud/rocky-start-runuser.py
   scripts/ci-cloud/rocky-start-env.py
@@ -155,7 +159,10 @@ required_files=(
   tests/ci-cloud-gcp-janitor.py
   tests/ci-cloud-gcp-rocky-janitor.py
   tests/ci-cloud-rocky-control.py
+  tests/ci-cloud-rocky-replay-witness.py
   tests/ci-cloud-rocky-target-diagnostics.py
+  tests/selinux-isolation-contract.py
+  tests/production-host-signal-contract.sh
   tests/ci-cloud-rocky-readiness.py
   tests/ci-cloud-gcp-identity.sh
   tests/ci-cloud-host-setup-failure.py
