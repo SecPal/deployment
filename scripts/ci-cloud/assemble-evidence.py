@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Assemble independently collected D.1 and D.1a evidence."""
+"""Assemble independently collected host and application-workload evidence."""
 
 from __future__ import annotations
 
@@ -42,17 +42,17 @@ def read_document(path: Path) -> object:
 
 
 def read_observation(
-    path: Path, phase: str, collection_status: int
+    path: Path, phase: str, collection_status: int, target_sha: str
 ) -> dict[str, object]:
     module = load_workload_collector()
     if collection_status != 0:
-        return module.incomplete_observation(phase)
+        return module.incomplete_observation(phase, target_sha)
     try:
         document = read_document(path)
     except (OSError, ValueError):
-        return module.incomplete_observation(phase)
+        return module.incomplete_observation(phase, target_sha)
     if not isinstance(document, dict) or document.get("phase") != phase:
-        return module.incomplete_observation(phase)
+        return module.incomplete_observation(phase, target_sha)
     return document
 
 
@@ -114,7 +114,7 @@ def read_normalization_diagnostic(
             raise ValueError("successful normalization diagnostic is inconsistent")
     elif (
         phase_status == 0
-        or stage not in module.NORMALIZATION_EVIDENCE_STAGES
+        or stage not in module.NORMALIZATION_STAGES
         or failure_reason not in module.NORMALIZATION_FAILURE_REASONS
         or (failure_reason == "command-exit") != (command_status is not None)
     ):
@@ -164,6 +164,9 @@ def assemble(
     host_failures = list(dict.fromkeys(host_failures))
     workload = {
         "protocol_version": 1,
+        "claim_scope": "disposable-rootless-application-integration",
+        "database_scope": "disposable-postgresql-18-fixture",
+        "target_sha": target_sha,
         "instance": target_sha[:12],
         "result": "failed",
         "failed_admission_invariants": [],
@@ -199,7 +202,7 @@ def assemble(
     test["collection_exit_statuses"] = collection_statuses
     test["failed_admission_invariants"] = overall_failures
     test["result"] = "passed" if not overall_failures else "failed"
-    host_document["schema_version"] = 3
+    host_document["schema_version"] = 4
     host_document["host_admission"] = {
         "result": "passed" if not host_failures else "failed",
         "failed_admission_invariants": host_failures,
@@ -254,16 +257,37 @@ def main() -> int:
                 phase_statuses["trusted_quadlet_normalize_cleanup"],
             ),
         }
+        host_document = read_document(arguments.host)
+        host_workflow = (
+            host_document.get("workflow")
+            if isinstance(host_document, dict)
+            else None
+        )
+        document_target_sha = (
+            host_workflow.get("target_sha")
+            if isinstance(host_workflow, dict)
+            else None
+        )
+        if (
+            not isinstance(document_target_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", document_target_sha) is None
+        ):
+            raise ValueError("host evidence target SHA is malformed")
         document = assemble(
-            read_document(arguments.host),
+            host_document,
             read_observation(
-                arguments.baseline, "baseline", collection_statuses["baseline"]
+                arguments.baseline, "baseline", collection_statuses["baseline"],
+                str(document_target_sha),
             ),
-            read_observation(arguments.live, "live", collection_statuses["live"]),
+            read_observation(
+                arguments.live, "live", collection_statuses["live"],
+                document_target_sha,
+            ),
             read_observation(
                 arguments.post_cleanup,
                 "post-cleanup",
                 collection_statuses["post_cleanup"],
+                document_target_sha,
             ),
             normalization_diagnostics,
             phase_statuses,

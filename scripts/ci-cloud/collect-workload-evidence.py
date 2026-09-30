@@ -27,6 +27,12 @@ CI_UID = 20000
 CI_GID = 20000
 PROTOCOL_VERSION = 1
 MAX_OUTPUT = 256 * 1024
+# Trusted-control copies of the canonical #126 image contract. Agreement with
+# integration_runtime_contract.py is executable repository evidence; target
+# bytes are not imported as admission authority on the guest.
+API_DIGEST = "sha256:5a095b27105691139b161ac0578ceae86e68b6821afadf7cb455fb86c8009c0e"
+FRONTEND_DIGEST = "sha256:cdccded2eade53d9300aafff3a2663a779d3d158cfa74f1e9c182e5786285077"
+POSTGRES_DIGEST = "sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af"
 CHECKOUT = Path("/home/secpal-ci/deployment-target")
 QUADLET_ROOT = Path("/etc/containers/systemd/users/20000")
 SYSTEMD_ROOT = Path("/etc/systemd/user")
@@ -98,50 +104,24 @@ TRUSTED_USER_SOCKET_UNITS = {
     )
     for name, service in {
         "dbus.socket": "dbus.service",
-        "dirmngr.socket": "dirmngr.service",
-        "gpg-agent-browser.socket": "gpg-agent.service",
-        "gpg-agent-extra.socket": "gpg-agent.service",
-        "gpg-agent-ssh.socket": "gpg-agent.service",
-        "gpg-agent.socket": "gpg-agent.service",
-        "keyboxd.socket": "keyboxd.service",
-        "ssh-agent.socket": "ssh-agent.service",
     }.items()
 }
 TRUSTED_USER_SERVICE_UNITS = {
-    name: frozenset(
+    "dbus.service": frozenset(
         {
-            Path("/usr/lib/systemd/user") / name,
-            Path("/lib/systemd/user") / name,
+            Path("/usr/lib/systemd/user/dbus-broker.service"),
+            Path("/lib/systemd/user/dbus-broker.service"),
         }
-    )
-    for name in {
-        "dbus.service",
-        "dirmngr.service",
-        "gpg-agent.service",
-        "keyboxd.service",
-        "ssh-agent.service",
-    }
+    ),
 }
 TRUSTED_USER_UNIT_PACKAGES = {
-    "dbus.socket": "dbus-user-session",
-    "dbus.service": "dbus-user-session",
-    "dirmngr.socket": "dirmngr",
-    "dirmngr.service": "dirmngr",
-    "gpg-agent-browser.socket": "gpg-agent",
-    "gpg-agent-extra.socket": "gpg-agent",
-    "gpg-agent-ssh.socket": "gpg-agent",
-    "gpg-agent.socket": "gpg-agent",
-    "gpg-agent.service": "gpg-agent",
-    # Debian 13 (trixie) ships Keyboxd and both user units in binary package gpg.
-    "keyboxd.socket": "gpg",
-    "keyboxd.service": "gpg",
-    "ssh-agent.socket": "openssh-client",
-    "ssh-agent.service": "openssh-client",
+    "dbus.socket": "dbus-common",
+    "dbus.service": "dbus-broker",
 }
 CONTROL_NETWORK = "secpal-ci-unrelated-control-network"
 CONTROL_VOLUME = "secpal-ci-unrelated-control-volume"
 ROLES = (
-    "secrets-init", "postgres", "valkey", "migrate", "api",
+    "secrets-init", "postgres", "migrate", "api",
     "worker-general", "worker-hash-chain", "scheduler", "frontend", "gateway",
 )
 NETWORK_KINDS = ("application", "edge")
@@ -153,8 +133,7 @@ GENERATED_LOGICAL_NAMES = (
 )
 ROLE_PREDECESSORS = {
     "postgres": ("secrets-init",),
-    "valkey": ("secrets-init",),
-    "migrate": ("postgres", "valkey"),
+    "migrate": ("postgres",),
     "api": ("migrate",),
     "worker-general": ("migrate",),
     "worker-hash-chain": ("migrate",),
@@ -195,10 +174,9 @@ SERVICE_ACTIVATION_PROPERTIES = (
     "After",
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
-HEALTHY_ROLES = frozenset({"postgres", "valkey", "api", "frontend", "gateway"})
+HEALTHY_ROLES = frozenset({"postgres", "api", "frontend", "gateway"})
 HEALTH_INTERVAL_USEC = {
     "postgres": 5_000_000,
-    "valkey": 5_000_000,
     "api": 10_000_000,
     "frontend": 10_000_000,
     "gateway": 10_000_000,
@@ -317,13 +295,6 @@ ROLE_CONTRACTS = {
         ),
         tmpfs=(("/tmp", 32, "0700", True), ("/run/postgresql", 16, "0750", True)),
     ),
-    "valkey": RoleContract(
-        (10002, 10002),
-        networks=("application",),
-        volumes=(("secrets", "/run/secpal-secrets", False),),
-        binds=(("valkey-entrypoint.sh", "/run/secpal/valkey-entrypoint.sh"),),
-        tmpfs=(("/tmp", 16, "0700", True), ("/data", 32, "0700", True)),
-    ),
     "migrate": RoleContract(
         (10001, 10001),
         networks=("application",),
@@ -389,14 +360,14 @@ ROLE_CONTRACTS = {
 }
 BASELINE_OBSERVATION_FIELDS = frozenset(
     {
-        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
+        "phase", "target_sha", "target_admitted", "collector_uid", "collector_gid", "complete",
         "containers", "networks", "volumes", "migration_invocation_count",
         "podman_api", "user_work", "processes", "control_resources",
     }
 )
 LIVE_OBSERVATION_FIELDS = frozenset(
     {
-        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
+        "phase", "target_sha", "target_admitted", "collector_uid", "collector_gid", "complete",
         "quadlet_search_paths", "installed_units", "generated_services",
         "containers", "networks", "volumes", "all_containers",
         "all_networks", "all_volumes",
@@ -406,7 +377,7 @@ LIVE_OBSERVATION_FIELDS = frozenset(
 )
 CLEANUP_OBSERVATION_FIELDS = frozenset(
     {
-        "phase", "target_admitted", "collector_uid", "collector_gid", "complete",
+        "phase", "target_sha", "target_admitted", "collector_uid", "collector_gid", "complete",
         "owned_units", "generated_services", "containers", "networks", "volumes",
         "all_containers", "all_networks", "all_volumes",
         "migration_invocation_count", "podman_api", "user_work",
@@ -465,14 +436,6 @@ NORMALIZATION_STAGES = frozenset(
         "unreported",
     }
 )
-LEGACY_NORMALIZATION_STAGES = frozenset(
-    {
-        "manager-environment-admission",
-        "post-manager-environment-read",
-        "user-environment-generator-admission",
-    }
-)
-NORMALIZATION_EVIDENCE_STAGES = NORMALIZATION_STAGES | LEGACY_NORMALIZATION_STAGES
 NORMALIZATION_FAILURE_REASONS = frozenset(
     {"command-exit", "contract-rejected", "unexpected-error"}
 )
@@ -497,9 +460,10 @@ class NormalizationAdmissionFailure(NamedTuple):
     failure_reason: str
 
 
-def incomplete_observation(phase: str) -> dict[str, object]:
+def incomplete_observation(phase: str, target_sha: str) -> dict[str, object]:
     common: dict[str, object] = {
         "phase": phase,
+        "target_sha": target_sha,
         "target_admitted": False,
         "collector_uid": CI_UID,
         "collector_gid": CI_GID,
@@ -712,6 +676,48 @@ def expected_gateway_port(instance: str) -> int:
     if re.fullmatch(r"[0-9a-f]{12}", instance) is None:
         raise ValueError("fixture instance is outside the closed contract")
     return 20_000 + int(instance[:8], 16) % 40_000
+
+
+def expected_image_identity(
+    instance: str,
+    role: str,
+    container: object,
+    installed_reference: object,
+) -> bool:
+    if not isinstance(container, dict):
+        return False
+    api_roles = {
+        "secrets-init", "migrate", "api", "worker-general",
+        "worker-hash-chain", "scheduler",
+    }
+    exact_references = {
+        **{name: f"localhost/secpal-ci-api@{API_DIGEST}" for name in api_roles},
+        "postgres": f"localhost/secpal-ci-postgres@{POSTGRES_DIGEST}",
+        "frontend": f"localhost/secpal-ci-frontend@{FRONTEND_DIGEST}",
+    }
+    exact_digests = {
+        **{name: API_DIGEST for name in api_roles},
+        "postgres": POSTGRES_DIGEST,
+        "frontend": FRONTEND_DIGEST,
+    }
+    image_id = container.get("image_id")
+    image_digest = container.get("image_digest")
+    image_reference = container.get("image")
+    if image_reference != installed_reference:
+        return False
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_id)) is None:
+        return False
+    if role == "gateway":
+        return (
+            re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_digest))
+            is not None
+            and image_reference
+            == f"localhost/secpal-ci-gateway-{instance}@{image_digest}"
+        )
+    return (
+        image_reference == exact_references.get(role)
+        and image_digest == exact_digests.get(role)
+    )
 
 
 def expected_generated_source(instance: str, logical_name: str) -> Path:
@@ -1198,6 +1204,22 @@ def installed_unit_facts(instance: str) -> tuple[list[dict[str, object]], bool]:
         if fact is None:
             complete = False
         else:
+            image_reference = ""
+            if name.endswith(".container"):
+                observation = bounded_regular_file(path)
+                matches = (
+                    re.findall(rb"(?m)^Image=([^\r\n]+)$", observation[0])
+                    if observation is not None
+                    else []
+                )
+                if len(matches) != 1:
+                    complete = False
+                else:
+                    try:
+                        image_reference = matches[0].decode("utf-8")
+                    except UnicodeDecodeError:
+                        complete = False
+            fact["image"] = image_reference
             facts.append(fact)
     prefix = f"secpal-int-{instance}"
     expected_paths = {
@@ -2540,6 +2562,33 @@ def process_status_identity(
     return uid, gid, complete
 
 
+def process_security_facts(pid: int) -> tuple[str, int, bool]:
+    if pid <= 0 or pid > 4_194_304:
+        return "", -1, False
+    try:
+        status_content = Path(f"/proc/{pid}/status").read_bytes()
+        label_content = Path(f"/proc/{pid}/attr/current").read_bytes()
+    except OSError:
+        return "", -1, False
+    if len(status_content) > 16_384 or len(label_content) > 512:
+        return "", -1, False
+    try:
+        status_lines = status_content.decode("utf-8").splitlines()
+        process_label = label_content.decode("utf-8").removesuffix("\n")
+    except UnicodeDecodeError:
+        return "", -1, False
+    seccomp_lines = [line for line in status_lines if line.startswith("Seccomp:\t")]
+    if (
+        len(seccomp_lines) != 1
+        or len(seccomp_lines[0].split()) != 2
+        or not seccomp_lines[0].split()[1].isdigit()
+        or not process_label
+        or "\x00" in process_label
+    ):
+        return "", -1, False
+    return process_label, int(seccomp_lines[0].split()[1]), True
+
+
 def container_facts(
     instance: str,
     *,
@@ -2579,6 +2628,7 @@ def container_facts(
         required_item = {
             "Id", "Name", "State", "Config", "HostConfig", "NetworkSettings",
             "Mounts", "OCIRuntime", "EffectiveCaps", "BoundingCaps",
+            "ProcessLabel", "MountLabel", "Image", "ImageDigest", "ImageName",
         }
         required_state = {"Status", "ExitCode", "Pid"}
         required_config = {
@@ -2601,6 +2651,12 @@ def container_facts(
             or not isinstance(item["Id"], str)
             or re.fullmatch(r"[0-9a-f]{64}", item["Id"]) is None
             or not isinstance(item["Mounts"], list)
+            or not isinstance(item["ProcessLabel"], str)
+            or not isinstance(item["MountLabel"], str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", str(item["Image"])) is None
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", str(item["ImageDigest"])) is None
+            or not isinstance(item["ImageName"], str)
+            or config.get("Image") != item["ImageName"]
             or (
                 item["EffectiveCaps"] is not None
                 and not isinstance(item["EffectiveCaps"], list)
@@ -2727,9 +2783,16 @@ def container_facts(
                 effective_groups,
                 identity_complete,
             ) = effective_user_namespace_facts(state["Pid"])
+            (
+                effective_process_label,
+                effective_seccomp_mode,
+                security_complete,
+            ) = process_security_facts(state["Pid"])
         else:
             user_namespace, identity_complete = collector_user_namespace_facts()
             effective_uid, effective_gid, effective_groups = -1, -1, []
+            effective_process_label, effective_seccomp_mode = "", -1
+            security_complete = True
         user_namespace.update(
             {
                 "compat_mode": host_config["UsernsMode"],
@@ -2756,6 +2819,7 @@ def container_facts(
                 healthcheck_complete,
                 identity_complete, create_options_complete,
                 configured_maps_complete, network_endpoints_complete,
+                security_complete,
             )
         )
         remote_api_environment = any(
@@ -2801,6 +2865,10 @@ def container_facts(
                     f"CAP_{str(value).upper().removeprefix('CAP_')}"
                     for value in bounding_caps
                 ),
+                "selinux_process_label": item["ProcessLabel"],
+                "selinux_mount_label": item["MountLabel"],
+                "effective_process_label": effective_process_label,
+                "effective_seccomp_mode": effective_seccomp_mode,
                 "devices_present": bool(devices),
                 "mounts": mount_facts,
                 "tmpfs": tmpfs_facts,
@@ -2811,7 +2879,9 @@ def container_facts(
                 "published_ports": sorted(published),
                 "auto_update": "io.containers.autoupdate" in labels,
                 "systemd_unit": str(labels.get("PODMAN_SYSTEMD_UNIT", "")),
-                "image": str(item.get("ImageName", config.get("Image", ""))),
+                "image": item["ImageName"],
+                "image_id": item["Image"],
+                "image_digest": item["ImageDigest"],
             }
         )
     return ContainerCollection(
@@ -2943,12 +3013,12 @@ def systemd_unit_owned_by_package(path: Path, package: str) -> bool:
         return False
     canonical = Path("/usr/lib/systemd/user") / path.name
     status_code, output, complete = command_result(
-        ["dpkg-query", "-S", str(canonical)]
+        ["rpm", "-qf", "--qf", "%{NAME}", str(canonical)]
     )
     return (
         status_code == 0
         and complete
-        and output == f"{package}: {canonical}"
+        and output == package
     )
 
 
@@ -4799,10 +4869,34 @@ def service_environment_names_are_trusted(service: object) -> bool:
     return environment == expected
 
 
+def selinux_labels_match(container: dict[str, object]) -> bool:
+    process_label = container.get("selinux_process_label")
+    mount_label = container.get("selinux_mount_label")
+    if not isinstance(process_label, str) or not isinstance(mount_label, str):
+        return False
+    process_pattern = (
+        r"[^:]{1,64}:[^:]{1,64}:container_t:"
+        r"s0:c[0-9]{1,4},c[0-9]{1,4}"
+    )
+    mount_pattern = (
+        r"[^:]{1,64}:[^:]{1,64}:container_file_t:"
+        r"s0:c[0-9]{1,4},c[0-9]{1,4}"
+    )
+    if (
+        re.fullmatch(process_pattern, process_label) is None
+        or re.fullmatch(mount_pattern, mount_label) is None
+        or process_label.split(":", 3)[3] != mount_label.split(":", 3)[3]
+    ):
+        return False
+    if container.get("state") == "running":
+        return container.get("effective_process_label") == process_label
+    return container.get("effective_process_label") == ""
+
+
 def workload_admission_failures(observations: object) -> list[str]:
     failures: list[str] = []
     if not isinstance(observations, dict):
-        return ["D1A_OBSERVATION_SCHEMA"]
+        return ["WORKLOAD_OBSERVATION_SCHEMA"]
     baseline_value = observations.get("baseline")
     live_value = observations.get("live")
     cleanup_value = observations.get("post_cleanup")
@@ -4810,11 +4904,11 @@ def workload_admission_failures(observations: object) -> list[str]:
     live = exact_keys(live_value, set(LIVE_OBSERVATION_FIELDS))
     cleanup = exact_keys(cleanup_value, set(CLEANUP_OBSERVATION_FIELDS))
     if baseline is None:
-        failures.append("D1A_BASELINE_OBSERVATION")
+        failures.append("WORKLOAD_BASELINE_OBSERVATION")
     if live is None:
-        failures.append("D1A_LIVE_OBSERVATION")
+        failures.append("WORKLOAD_LIVE_OBSERVATION")
     if cleanup is None:
-        failures.append("D1A_POST_CLEANUP_OBSERVATION")
+        failures.append("WORKLOAD_POST_CLEANUP_OBSERVATION")
     if baseline is None or live is None or cleanup is None:
         return failures
     if any(
@@ -4824,31 +4918,44 @@ def workload_admission_failures(observations: object) -> list[str]:
         or observation.get("complete") is not True
         for observation in (baseline, live, cleanup)
     ):
-        failures.append("D1A_OBSERVATION_INCOMPLETE")
+        failures.append("WORKLOAD_OBSERVATION_INCOMPLETE")
     if (
         baseline["phase"] != "baseline"
         or live["phase"] != "live"
         or cleanup["phase"] != "post-cleanup"
     ):
-        failures.append("D1A_PHASE_CONSISTENCY")
+        failures.append("WORKLOAD_PHASE_CONSISTENCY")
     if baseline.get("migration_invocation_count") != 0:
-        failures.append("D1A_BASELINE_MIGRATION")
+        failures.append("WORKLOAD_BASELINE_MIGRATION")
     if baseline.get("podman_api") is not False:
-        failures.append("D1A_PODMAN_API_DISABLED")
+        failures.append("WORKLOAD_PODMAN_API_DISABLED")
     instance = observations.get("instance")
+    target_sha = observations.get("target_sha")
+    if (
+        not isinstance(target_sha, str)
+        or re.fullmatch(r"[0-9a-f]{40}", target_sha) is None
+        or instance != target_sha[:12]
+        or any(
+            observation.get("target_sha") != target_sha
+            for observation in (baseline, live, cleanup)
+        )
+    ):
+        failures.append("WORKLOAD_TARGET_BINDING")
     try:
         names = expected_unit_names(str(instance))
         gateway_port = expected_gateway_port(str(instance))
     except ValueError:
         names = ()
         gateway_port = None
-        failures.append("D1A_OBSERVATION_SCHEMA")
+        failures.append("WORKLOAD_OBSERVATION_SCHEMA")
     units = live.get("installed_units")
-    if not isinstance(units, list) or len(units) != 16 or {
+    if not isinstance(units, list) or len(units) != len(names) or {
         unit.get("name") for unit in units if isinstance(unit, dict)
     } != set(names) or any(
         not isinstance(unit, dict)
-        or set(unit) != {"name", "path", "uid", "gid", "mode", "sha256"}
+        or set(unit) != {
+            "name", "path", "uid", "gid", "mode", "sha256", "image",
+        }
         or unit["uid"] != 0 or unit["gid"] != 0 or unit["mode"] != "0644"
         or re.fullmatch(r"[0-9a-f]{64}", str(unit["sha256"])) is None
         or unit["path"] != str(
@@ -4857,13 +4964,13 @@ def workload_admission_failures(observations: object) -> list[str]:
         )
         for unit in units if isinstance(unit, dict)
     ):
-        failures.append("D1A_QUADLET_SNAPSHOT")
+        failures.append("WORKLOAD_QUADLET_SNAPSHOT")
     if live.get("quadlet_search_paths") != [str(QUADLET_ROOT)]:
-        failures.append("D1A_QUADLET_SEARCH_PATH")
+        failures.append("WORKLOAD_QUADLET_SEARCH_PATH")
     if live.get("podman_rootless") is not True:
-        failures.append("D1A_ROOTLESS")
+        failures.append("WORKLOAD_ROOTLESS")
     if live.get("oci_runtime") != "crun":
-        failures.append("D1A_OCI_RUNTIME")
+        failures.append("WORKLOAD_OCI_RUNTIME")
     services = live.get("generated_services")
     if not isinstance(services, list) or len(services) != len(GENERATED_LOGICAL_NAMES) or {
         service.get("logical_name") for service in services if isinstance(service, dict)
@@ -4890,7 +4997,7 @@ def workload_admission_failures(observations: object) -> list[str]:
         )
         for service in services if isinstance(service, dict)
     ):
-        failures.append("D1A_GENERATED_UNITS")
+        failures.append("WORKLOAD_GENERATED_UNITS")
     if isinstance(services, list) and any(
         not isinstance(service, dict)
         or not generated_source_matches(str(instance), service)
@@ -4907,12 +5014,12 @@ def workload_admission_failures(observations: object) -> list[str]:
         )
         for service in services
     ):
-        failures.append("D1A_GENERATED_PROVENANCE")
+        failures.append("WORKLOAD_GENERATED_PROVENANCE")
     if isinstance(services, list) and any(
         not service_environment_names_are_trusted(service)
         for service in services
     ):
-        failures.append("D1A_HOST_NAMESPACES")
+        failures.append("WORKLOAD_HOST_NAMESPACES")
     if isinstance(services, list):
         for service in services:
             if not isinstance(service, dict):
@@ -4920,13 +5027,18 @@ def workload_admission_failures(observations: object) -> list[str]:
             if not service_state_matches_role(
                 service, str(service.get("logical_name", ""))
             ):
-                failures.append("D1A_SERVICE_STATE")
+                failures.append("WORKLOAD_SERVICE_STATE")
     containers = live.get("containers")
+    installed_images = {
+        str(unit.get("name")): unit.get("image")
+        for unit in units
+        if isinstance(unit, dict)
+    } if isinstance(units, list) else {}
     container_roles = [
         item.get("role") for item in containers if isinstance(item, dict)
     ] if isinstance(containers, list) else []
     if len(container_roles) != len(ROLES) or set(container_roles) != set(ROLES):
-        failures.append("D1A_CONTAINER_SET")
+        failures.append("WORKLOAD_CONTAINER_SET")
     if isinstance(containers, list):
         services_by_role = {
             str(service.get("logical_name")): service
@@ -4937,9 +5049,9 @@ def workload_admission_failures(observations: object) -> list[str]:
             if not isinstance(item, dict):
                 continue
             if item.get("rootless") is not True:
-                failures.append("D1A_ROOTLESS")
+                failures.append("WORKLOAD_ROOTLESS")
             if item.get("oci_runtime") != "crun":
-                failures.append("D1A_OCI_RUNTIME")
+                failures.append("WORKLOAD_OCI_RUNTIME")
             role_contract = ROLE_CONTRACTS.get(str(item.get("role")))
             expected_caps = (
                 list(role_contract.capabilities) if role_contract is not None else []
@@ -4951,9 +5063,9 @@ def workload_admission_failures(observations: object) -> list[str]:
                 or item.get("effective_caps") != expected_caps
                 or item.get("bounding_caps") != expected_caps
             ):
-                failures.append("D1A_PRIVILEGE_BOUNDARY")
+                failures.append("WORKLOAD_PRIVILEGE_BOUNDARY")
             if role_contract is None:
-                failures.append("D1A_RUNTIME_IDENTITY")
+                failures.append("WORKLOAD_RUNTIME_IDENTITY")
             else:
                 expected_uid, expected_gid = role_contract.identity
                 running = item.get("state") == "running"
@@ -4965,7 +5077,7 @@ def workload_admission_failures(observations: object) -> list[str]:
                     or item.get("effective_gid")
                     != (expected_gid if running else -1)
                 ):
-                    failures.append("D1A_RUNTIME_IDENTITY")
+                    failures.append("WORKLOAD_RUNTIME_IDENTITY")
                 effective_groups = item.get("effective_supplementary_gids")
                 groups_valid = isinstance(effective_groups, list) and (
                     effective_groups in ([], [expected_gid])
@@ -4973,9 +5085,9 @@ def workload_admission_failures(observations: object) -> list[str]:
                     else effective_groups == []
                 )
                 if not groups_valid:
-                    failures.append("D1A_PRIVILEGE_BOUNDARY")
+                    failures.append("WORKLOAD_PRIVILEGE_BOUNDARY")
             if item.get("read_only_rootfs") is not True:
-                failures.append("D1A_READ_ONLY_ROOTFS")
+                failures.append("WORKLOAD_READ_ONLY_ROOTFS")
             if role_contract is not None and any(
                 expected is not None and item.get(field) != list(expected)
                 for field, expected in (
@@ -4984,7 +5096,7 @@ def workload_admission_failures(observations: object) -> list[str]:
                     ("healthcheck_command", role_contract.healthcheck),
                 )
             ):
-                failures.append("D1A_EXECUTION_CONTRACT")
+                failures.append("WORKLOAD_EXECUTION_CONTRACT")
             if str(item.get("role")) != "migrate" and any(
                 "migrat" in argument.casefold()
                 for field in ("entrypoint", "command", "healthcheck_command")
@@ -4993,9 +5105,9 @@ def workload_admission_failures(observations: object) -> list[str]:
                 )
                 if isinstance(argument, str)
             ):
-                failures.append("D1A_EXECUTION_CONTRACT")
+                failures.append("WORKLOAD_EXECUTION_CONTRACT")
             if item.get("devices_present") is not False:
-                failures.append("D1A_PRIVILEGE_BOUNDARY")
+                failures.append("WORKLOAD_PRIVILEGE_BOUNDARY")
             mounts = item.get("mounts")
             if (
                 not isinstance(mounts, list)
@@ -5014,7 +5126,7 @@ def workload_admission_failures(observations: object) -> list[str]:
                 )
                 or item.get("remote_api_environment") is not False
             ):
-                failures.append("D1A_PODMAN_API_DISABLED")
+                failures.append("WORKLOAD_PODMAN_API_DISABLED")
             if any(
                 item.get(field) != "private"
                 for field in ("pid_mode", "ipc_mode", "uts_mode")
@@ -5024,19 +5136,33 @@ def workload_admission_failures(observations: object) -> list[str]:
                     item, *role_contract.identity
                 )
             ):
-                failures.append("D1A_HOST_NAMESPACES")
+                failures.append("WORKLOAD_HOST_NAMESPACES")
             network_mode = str(item.get("network_mode", ""))
             if re.match(r"^(?:host$|container(?::|$)|ns:)", network_mode):
-                failures.append("D1A_HOST_NETWORK")
+                failures.append("WORKLOAD_HOST_NETWORK")
             if item.get("auto_update") is not False:
-                failures.append("D1A_AUTO_UPDATE_DISABLED")
+                failures.append("WORKLOAD_AUTO_UPDATE_DISABLED")
             security_options = item.get("security_opt", [])
             if security_options != ["no-new-privileges"]:
-                failures.append("D1A_SECURITY_OPTIONS")
-            if re.fullmatch(r"localhost/secpal-ci-[a-z0-9-]+@sha256:[0-9a-f]{64}", str(item.get("image"))) is None:
-                failures.append("D1A_IMAGE_PROVENANCE")
+                failures.append("WORKLOAD_SECURITY_OPTIONS")
+            if not selinux_labels_match(item):
+                failures.append("WORKLOAD_SELINUX_ISOLATION")
+            if (
+                item.get("effective_seccomp_mode")
+                != (2 if item.get("state") == "running" else -1)
+            ):
+                failures.append("WORKLOAD_SECCOMP_ISOLATION")
+            if not expected_image_identity(
+                str(instance),
+                str(item.get("role")),
+                item,
+                installed_images.get(
+                    f"secpal-int-{instance}-{item.get('role')}.container"
+                ),
+            ):
+                failures.append("WORKLOAD_IMAGE_PROVENANCE")
             if any(network == "host" for network in item.get("networks", [])):
-                failures.append("D1A_HOST_NETWORK")
+                failures.append("WORKLOAD_HOST_NETWORK")
             role = str(item.get("role"))
             expected_service = f"secpal-int-{instance}-{role}.service"
             expected_service_fact = services_by_role.get(role, {})
@@ -5068,7 +5194,7 @@ def workload_admission_failures(observations: object) -> list[str]:
                 or not service_binding_matches
                 or not container_pid_matches_state(item)
             ):
-                failures.append("D1A_SERVICE_BINDING")
+                failures.append("WORKLOAD_SERVICE_BINDING")
             expected_networks = [
                 f"secpal-int-{instance}-{kind}"
                 for kind in (
@@ -5093,13 +5219,13 @@ def workload_admission_failures(observations: object) -> list[str]:
                 item.get("networks") != expected_networks
                 and not reviewed_exited_network_omission
             ):
-                failures.append("D1A_CONTAINER_NETWORKS")
+                failures.append("WORKLOAD_CONTAINER_NETWORKS")
             if mounts != expected_role_mounts(instance, role):
-                failures.append("D1A_VOLUME_TOPOLOGY")
+                failures.append("WORKLOAD_VOLUME_TOPOLOGY")
             tmpfs = item.get("tmpfs")
             expected_tmpfs = expected_role_tmpfs(role)
             if not tmpfs_contract_matches(tmpfs, expected_tmpfs):
-                failures.append("D1A_TMPFS_TOPOLOGY")
+                failures.append("WORKLOAD_TMPFS_TOPOLOGY")
             lifecycle_events = item.get("lifecycle_events")
             expected_lifecycle = (
                 ["create", "start"]
@@ -5115,7 +5241,7 @@ def workload_admission_failures(observations: object) -> list[str]:
                 ] != expected_lifecycle
                 or len(lifecycle_events) != len(expected_lifecycle)
             ):
-                failures.append("D1A_CONTAINER_LIFECYCLE")
+                failures.append("WORKLOAD_CONTAINER_LIFECYCLE")
             published_ports = item.get("published_ports")
             if role == "gateway":
                 valid_ports = published_ports == [
@@ -5124,34 +5250,31 @@ def workload_admission_failures(observations: object) -> list[str]:
             else:
                 valid_ports = published_ports == []
             if not valid_ports:
-                failures.append("D1A_PUBLISHED_PORTS")
+                failures.append("WORKLOAD_PUBLISHED_PORTS")
         images_by_role = {
-            str(item.get("role")): item.get("image")
+            str(item.get("role")): item.get("image_digest")
             for item in containers
             if isinstance(item, dict)
         }
-        api_identity = str(images_by_role.get("api", "")).rsplit("@sha256:", 1)
-        frontend_identity = str(images_by_role.get("frontend", "")).rsplit(
-            "@sha256:", 1
-        )
+        api_identity = images_by_role.get("api")
+        frontend_identity = images_by_role.get("frontend")
         if (
-            len(api_identity) != 2
-            or len(frontend_identity) != 2
-            or api_identity[1] == frontend_identity[1]
+            api_identity != API_DIGEST
+            or frontend_identity != FRONTEND_DIGEST
+            or api_identity == frontend_identity
         ):
-            failures.append("D1A_IMAGE_ROLE_SEPARATION")
+            failures.append("WORKLOAD_IMAGE_ROLE_SEPARATION")
         api_family = {
-            role: str(images_by_role.get(role, "")).rsplit("@sha256:", 1)
+            role: images_by_role.get(role)
             for role in (
                 "secrets-init", "migrate", "api", "worker-general",
                 "worker-hash-chain", "scheduler",
             )
         }
         if (
-            any(len(identity) != 2 for identity in api_family.values())
-            or len({identity[1] for identity in api_family.values()}) != 1
+            set(api_family.values()) != {API_DIGEST}
         ):
-            failures.append("D1A_EXECUTION_CONTRACT")
+            failures.append("WORKLOAD_EXECUTION_CONTRACT")
     if isinstance(containers, list) and any(
         sum(
             isinstance(item, dict) and item.get("role") == role
@@ -5159,11 +5282,11 @@ def workload_admission_failures(observations: object) -> list[str]:
         ) != 1
         for role in ("scheduler", "worker-hash-chain")
     ):
-        failures.append("D1A_SINGLETON_ROLES")
+        failures.append("WORKLOAD_SINGLETON_ROLES")
     if live.get("podman_api") is not False:
-        failures.append("D1A_PODMAN_API_DISABLED")
+        failures.append("WORKLOAD_PODMAN_API_DISABLED")
     if cleanup.get("podman_api") is not False:
-        failures.append("D1A_PODMAN_API_DISABLED")
+        failures.append("WORKLOAD_PODMAN_API_DISABLED")
     baseline_user_work = exact_keys(
         baseline.get("user_work"),
         {"active_units", "jobs", "podman_health_timers"},
@@ -5196,7 +5319,7 @@ def workload_admission_failures(observations: object) -> list[str]:
         or cleanup_units - {PODMAN_NETWORK_ONLINE_UNIT} != baseline_units
         or cleanup_user_work.get("jobs") != baseline_user_work.get("jobs")
     ):
-        failures.append("D1A_PENDING_USER_WORK")
+        failures.append("WORKLOAD_PENDING_USER_WORK")
     live_user_work = exact_keys(
         live.get("user_work"),
         {"active_units", "jobs", "podman_health_timers"},
@@ -5237,7 +5360,7 @@ def workload_admission_failures(observations: object) -> list[str]:
         or live_user_work.get("jobs")
         != (baseline_user_work.get("jobs") if baseline_user_work else None)
     ):
-        failures.append("D1A_LIVE_USER_WORK")
+        failures.append("WORKLOAD_LIVE_USER_WORK")
     baseline_processes = exact_process_map(baseline.get("processes"))
     live_processes = exact_process_map(live.get("processes"))
     cleanup_processes = exact_process_map(cleanup.get("processes"))
@@ -5276,7 +5399,7 @@ def workload_admission_failures(observations: object) -> list[str]:
         or not process_delta_valid
         or sorted(helper_kinds) != ["dns", "rootless-network"]
     ):
-        failures.append("D1A_PROCESS_DELTA")
+        failures.append("WORKLOAD_PROCESS_DELTA")
     migrate = next(
         (
             item for item in containers
@@ -5289,9 +5412,9 @@ def workload_admission_failures(observations: object) -> list[str]:
         or migrate.get("exit_code") != 0
         or cleanup.get("migration_invocation_count") != 1
     ):
-        failures.append("D1A_MIGRATION")
+        failures.append("WORKLOAD_MIGRATION")
     if cleanup.get("migration_invocation_count") != 1:
-        failures.append("D1A_CLEANUP_MIGRATION")
+        failures.append("WORKLOAD_CLEANUP_MIGRATION")
     secrets_init = next(
         (
             item for item in containers
@@ -5300,7 +5423,7 @@ def workload_admission_failures(observations: object) -> list[str]:
         {},
     ) if isinstance(containers, list) else {}
     if secrets_init.get("state") != "exited" or secrets_init.get("exit_code") != 0:
-        failures.append("D1A_LIFECYCLE")
+        failures.append("WORKLOAD_LIFECYCLE")
     by_role = {
         str(item.get("role")): item
         for item in containers
@@ -5315,20 +5438,20 @@ def workload_admission_failures(observations: object) -> list[str]:
         )
         for role in READY_ROLES
     ):
-        failures.append("D1A_READINESS")
+        failures.append("WORKLOAD_READINESS")
     prefix = f"secpal-int-{instance}-"
     if len(live.get("networks", [])) != len(NETWORK_KINDS) or set(
         live.get("networks", [])
     ) != {f"{prefix}{kind}" for kind in NETWORK_KINDS}:
-        failures.append("D1A_NETWORK_SET")
+        failures.append("WORKLOAD_NETWORK_SET")
     if len(live.get("volumes", [])) != len(VOLUME_KINDS) or set(
         live.get("volumes", [])
     ) != {f"{prefix}{kind}" for kind in VOLUME_KINDS}:
-        failures.append("D1A_VOLUME_SET")
+        failures.append("WORKLOAD_VOLUME_SET")
     if any(cleanup.get(name) for name in (
         "owned_units", "generated_services", "containers", "networks", "volumes"
     )):
-        failures.append("D1A_CLEANUP_ABSENCE")
+        failures.append("WORKLOAD_CLEANUP_ABSENCE")
     baseline_inventory = {
         kind: exact_string_set(baseline.get(kind))
         for kind in ("containers", "networks", "volumes")
@@ -5361,14 +5484,14 @@ def workload_admission_failures(observations: object) -> list[str]:
         or baseline_inventory["volumes"] is not None
         and CONTROL_VOLUME not in baseline_inventory["volumes"]
     ):
-        failures.append("D1A_BASELINE_INVENTORY")
+        failures.append("WORKLOAD_BASELINE_INVENTORY")
     if any(
         baseline_inventory[kind] is None
         or live_inventory[kind] != baseline_inventory[kind] | expected_live_additions[kind]
         or cleanup_inventory[kind] != baseline_inventory[kind]
         for kind in ("containers", "networks", "volumes")
     ):
-        failures.append("D1A_RESOURCE_INVENTORY")
+        failures.append("WORKLOAD_RESOURCE_INVENTORY")
     baseline_controls = baseline.get("control_resources")
     if (
         not isinstance(baseline_controls, dict)
@@ -5388,7 +5511,7 @@ def workload_admission_failures(observations: object) -> list[str]:
         or live.get("control_resources") != baseline_controls
         or cleanup.get("control_resources") != baseline_controls
     ):
-        failures.append("D1A_CONTROL_RESOURCES_PRESERVED")
+        failures.append("WORKLOAD_CONTROL_RESOURCES_PRESERVED")
     return list(dict.fromkeys(failures))
 
 
@@ -5431,6 +5554,7 @@ def main() -> int:
     except ValueError as error:
         print(f"ERROR: workload collection refused: {error}", file=sys.stderr)
         return 1
+    observation["target_sha"] = arguments.target_sha
     json.dump(observation, sys.stdout, sort_keys=True, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0
