@@ -10,6 +10,7 @@ import ast
 import base64
 import gzip
 import hashlib
+import importlib.util
 import json
 import re
 import sys
@@ -3760,7 +3761,7 @@ def validate(root: Path) -> None:
         and {"host_admission", "workload"}.issubset(
             set(evidence_schema.get("required", []))
         )
-        and "workload_admission_failures" in evidence_assembler
+        and "guarded_decision(module, workload)" in evidence_assembler
         and "load_workload_admission()" in evidence_assembler
         and "WORKLOAD_ADMISSION_PATH" in evidence_validator
         and "TARGET_WORKLOAD_PREPARE_START" in evidence_assembler
@@ -3898,7 +3899,17 @@ def main(arguments: list[str]) -> int:
     root = Path(arguments[0]).resolve() if arguments else Path.cwd()
     try:
         validate(root)
+        purity_path = root / "scripts" / "ci-cloud" / "workload-purity.py"
+        spec = importlib.util.spec_from_file_location("ci_cloud_purity", purity_path)
+        if spec is None or spec.loader is None:
+            raise ContractError("PURITY_SOURCE_INVALID")
+        purity = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(purity)
+        purity.check_files(purity_path.parent)
     except (ContractError, OSError, UnicodeError) as error:
+        print(f"FAIL: cloud CI contract: {error}", file=sys.stderr)
+        return 1
+    except ValueError as error:
         print(f"FAIL: cloud CI contract: {error}", file=sys.stderr)
         return 1
     print("Cloud CI static trust-boundary contract passed.")

@@ -23,6 +23,8 @@ MAX_EVIDENCE_BYTES = 262_144
 COLLECTOR_PATH = Path(__file__).with_name("collect-host-evidence.py")
 WORKLOAD_COLLECTOR_PATH = Path(__file__).with_name("collect-workload-evidence.py")
 WORKLOAD_ADMISSION_PATH = Path(__file__).with_name("workload-admission.py")
+WORKLOAD_PURITY_PATH = Path(__file__).with_name("workload-purity.py")
+_PURITY_MODULE = None
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "ci-cloud-evidence.schema.json"
 RUNTIME_PACKAGE_NAMES = {
     "podman", "conmon", "crun", "catatonit", "netavark", "aardvark-dns", "passt",
@@ -105,11 +107,28 @@ def validate_declared_schema(document: object) -> None:
 
 
 def load_trusted_module(path: Path, name: str):
+    if path in {WORKLOAD_COLLECTOR_PATH, WORKLOAD_ADMISSION_PATH}:
+        load_workload_purity().check_files(path.parent)
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         fail("trusted admission implementation is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def load_workload_purity():
+    global _PURITY_MODULE
+    if _PURITY_MODULE is not None:
+        return _PURITY_MODULE
+    spec = importlib.util.spec_from_file_location(
+        "trusted_workload_purity", WORKLOAD_PURITY_PATH
+    )
+    if spec is None or spec.loader is None:
+        fail("PURITY_SOURCE_INVALID")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _PURITY_MODULE = module
     return module
 
 
@@ -132,8 +151,8 @@ def recompute_admission(
         WORKLOAD_ADMISSION_PATH, "ci_cloud_workload_admission"
     )
     try:
-        workload_failures = workload_module.workload_admission_failures(
-            document["workload"]
+        workload_failures = load_workload_purity().guarded_decision(
+            workload_module, document["workload"]
         )
         phase_statuses = test["phase_exit_statuses"]
         collection_statuses = test["collection_exit_statuses"]

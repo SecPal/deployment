@@ -17,6 +17,23 @@ from pathlib import Path
 MAX_INPUT_BYTES = 256 * 1024
 WORKLOAD_COLLECTOR = Path(__file__).with_name("collect-workload-evidence.py")
 WORKLOAD_ADMISSION = Path(__file__).with_name("workload-admission.py")
+WORKLOAD_PURITY = Path(__file__).with_name("workload-purity.py")
+_PURITY_MODULE = None
+
+
+def load_workload_purity():
+    global _PURITY_MODULE
+    if _PURITY_MODULE is not None:
+        return _PURITY_MODULE
+    spec = importlib.util.spec_from_file_location(
+        "trusted_workload_purity", WORKLOAD_PURITY
+    )
+    if spec is None or spec.loader is None:
+        raise ValueError("PURITY_SOURCE_INVALID")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _PURITY_MODULE = module
+    return module
 
 
 class DuplicateKey(ValueError):
@@ -124,6 +141,7 @@ def read_normalization_diagnostic(
 
 
 def load_workload_collector():
+    load_workload_purity().check_files(WORKLOAD_COLLECTOR.parent)
     spec = importlib.util.spec_from_file_location(
         "trusted_workload_collector", WORKLOAD_COLLECTOR
     )
@@ -135,14 +153,7 @@ def load_workload_collector():
 
 
 def load_workload_admission():
-    spec = importlib.util.spec_from_file_location(
-        "trusted_workload_admission", WORKLOAD_ADMISSION
-    )
-    if spec is None or spec.loader is None:
-        raise ValueError("trusted workload admission implementation is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_workload_purity().load_checked_admission(WORKLOAD_ADMISSION.parent)
 
 
 def assemble(
@@ -187,7 +198,7 @@ def assemble(
         "post_cleanup": post_cleanup,
     }
     module = load_workload_admission()
-    workload_failures = module.workload_admission_failures(workload)
+    workload_failures = load_workload_purity().guarded_decision(module, workload)
     status_invariants = {
         ("phase", "workload_prepare_start"): "TARGET_WORKLOAD_PREPARE_START",
         ("phase", "workload_cleanup"): "TARGET_WORKLOAD_CLEANUP",
