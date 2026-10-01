@@ -11,6 +11,7 @@ import copy
 import importlib.util
 import json
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
@@ -92,6 +93,25 @@ class WorkloadLayerTests(unittest.TestCase):
         self.assertEqual({name: name for name in collector.ADMISSION_CONTRACT}, bindings)
         with self.assertRaises(TypeError):
             collector.ADMISSION_CONTRACT["unreviewed"] = object()
+        for name, key in (
+            ("HEALTH_INTERVAL_USEC", "api"),
+            ("ROLE_CONTRACTS", "api"),
+            ("TRUSTED_SERVICE_CONFIG_ENVIRONMENT", "PODMAN_USERNS"),
+        ):
+            with self.subTest(export=name), self.assertRaises(TypeError):
+                exported = collector.ADMISSION_CONTRACT[name]
+                exported[key] = exported[key]
+
+        def assert_immutable(value):
+            self.assertNotIsInstance(value, (dict, list, set, bytearray))
+            if isinstance(value, Mapping):
+                for nested in value.values():
+                    assert_immutable(nested)
+            elif isinstance(value, tuple):
+                for nested in value:
+                    assert_immutable(nested)
+
+        assert_immutable(collector.ADMISSION_CONTRACT)
         self.assertEqual([], self.admission.workload_admission_failures(
             self.workload_fixture.valid_observations()
         ))

@@ -176,12 +176,12 @@ SERVICE_ACTIVATION_PROPERTIES = (
 )
 READY_ROLES = frozenset(ROLES) - {"secrets-init", "migrate"}
 HEALTHY_ROLES = frozenset({"postgres", "api", "frontend", "gateway"})
-HEALTH_INTERVAL_USEC = {
+HEALTH_INTERVAL_USEC = MappingProxyType({
     "postgres": 5_000_000,
     "api": 10_000_000,
     "frontend": 10_000_000,
     "gateway": 10_000_000,
-}
+})
 # Podman 5.4 formats a non-negative 64-bit rand.Int() with "%x" for this
 # suffix: no leading zeroes, at most 16 hex digits, and a 16th digit <= 7.
 PODMAN_54_HEALTH_TIMER_SUFFIX = (
@@ -262,7 +262,7 @@ API_TMPFS = (
     ("/app/storage/logs", 32, "0750", True),
     ("/app/bootstrap/cache", 16, "0750", True),
 )
-ROLE_CONTRACTS = {
+ROLE_CONTRACTS = MappingProxyType({
     "secrets-init": RoleContract(
         (0, 0),
         networks=(),
@@ -358,7 +358,7 @@ ROLE_CONTRACTS = {
             ("/data", 32, "0700", True),
         ),
     ),
-}
+})
 BASELINE_OBSERVATION_FIELDS = frozenset(
     {
         "phase", "target_sha", "target_admitted", "collector_uid", "collector_gid", "complete",
@@ -398,12 +398,12 @@ TRUSTED_MANAGER_ENVIRONMENT = (
     "USER=secpal-ci",
     "XDG_RUNTIME_DIR=/run/user/20000",
 )
-TRUSTED_SERVICE_CONFIG_ENVIRONMENT = {
+TRUSTED_SERVICE_CONFIG_ENVIRONMENT = MappingProxyType({
     "CONTAINERS_CONF": "/dev/null",
     "CONTAINERS_CONF_OVERRIDE": "/dev/null",
     "CONTAINERS_CONF_MODULES": "",
     "PODMAN_USERNS": "",
-}
+})
 TRUSTED_CONTAINER_SERVICE_ENVIRONMENT_NAMES = frozenset(
     {*TRUSTED_SERVICE_CONFIG_ENVIRONMENT, "PODMAN_SYSTEMD_UNIT"}
 )
