@@ -1208,6 +1208,28 @@ closed singleton role, not application-internal leader-election semantics.
 Three successful representative hosts demonstrate independent reproducibility;
 they do not prove that all hardware is compatible.
 
+## Current workload purity boundary
+
+`workload-purity.py` checks the accepted #121 normalization export and the
+frozen admission contract before the controller loads either workload module.
+Closed import, imported-member, module-attribute, builtin, and global surfaces
+cover the declared pure functions and their reachable local helpers. Python's
+`symtable` determines which names are global across nested scopes and
+comprehensions. The controller also scopes a Python audit hook to the actual
+workload admission call; process, filesystem, network, and other audited system
+capabilities produce named workload failures. Evidence reading and summary
+writing occur outside that guarded call. Static mutations and adversarial
+controller tests run in repository preflight. The current #121 admission
+decisions and workload invariants remain the authority for valid and invalid
+evidence; no provider run is part of this purity check.
+
+These controls protect against accidental architectural drift, reachable
+impurity, capability growth, and boundary bypasses during normal development.
+They are not a Python sandbox, a defense against a hostile committer who can
+change both the checker and checked code, or a replacement for code review,
+signed commits, and branch protection. PR #74 was a historical design reference
+only; its superseded workload assumptions are not part of this contract.
+
 ## Historical dispatch status
 
 The Debian 13/AppArmor workflow is retained only as auditable historical
