@@ -3445,6 +3445,7 @@ def validate(root: Path) -> None:
     workload_collector = read(
         root, "scripts/ci-cloud/collect-workload-evidence.py"
     )
+    workload_admission = read(root, "scripts/ci-cloud/workload-admission.py")
     evidence_assembler = read(root, "scripts/ci-cloud/assemble-evidence.py")
     evidence_validator = read(root, "scripts/ci-cloud/validate-evidence.py")
     evidence_schema_text = read(root, "schemas/ci-cloud-evidence.schema.json")
@@ -3664,7 +3665,11 @@ def validate(root: Path) -> None:
         and "failure_reason: str | None" in workload_collector
         and "command_status: int | None" in workload_collector
         and "outcome.document()" in workload_collector
-        and "workload_admission_failures" in workload_collector
+        and "workload_admission_failures" not in workload_collector
+        and "def workload_admission_failures(" in workload_admission
+        and "ADMISSION_CONTRACT" in workload_collector
+        and "NORMALIZATION_SURFACE" in workload_collector
+        and "COLLECTION_SURFACE" in workload_collector
         and "shell=True" not in workload_collector
         and "os.system" not in workload_collector
         and "eval(" not in workload_collector,
@@ -3694,13 +3699,13 @@ def validate(root: Path) -> None:
         in workload_collector
         and '"rootless": rootless' in workload_collector
         and 'item["Rootless"]' not in workload_collector
-        and 'security_options != ["no-new-privileges"]' in workload_collector
-        and "WORKLOAD_RESOURCE_INVENTORY" in workload_collector
-        and "WORKLOAD_VOLUME_TOPOLOGY" in workload_collector
-        and "WORKLOAD_TMPFS_TOPOLOGY" in workload_collector
-        and "WORKLOAD_CONTAINER_LIFECYCLE" in workload_collector
+        and 'security_options != ["no-new-privileges"]' in workload_admission
+        and "WORKLOAD_RESOURCE_INVENTORY" in workload_admission
+        and "WORKLOAD_VOLUME_TOPOLOGY" in workload_admission
+        and "WORKLOAD_TMPFS_TOPOLOGY" in workload_admission
+        and "WORKLOAD_CONTAINER_LIFECYCLE" in workload_admission
         and "container_lifecycle_events" in workload_collector
-        and 'item.get("effective_caps") != expected_caps' in workload_collector
+        and 'item.get("effective_caps") != expected_caps' in workload_admission
         and "PODMAN_HEALTH_TIMER_PROPERTIES" in workload_collector
         and "PODMAN_HEALTH_SERVICE_PROPERTIES" in workload_collector
         and "podman_health_exec_is_trusted" in workload_collector
@@ -3712,7 +3717,7 @@ def validate(root: Path) -> None:
         and "elif reviewed_opaque:" in workload_collector
         and "if role not in READY_ROLES:" in workload_collector
         and 'item.get("cap_add") not in ([], expected_caps)'
-        in workload_collector,
+        in workload_admission,
         "Podman evidence must use admitted v5 fields and exact inventory/security facts",
     )
     require(
@@ -3756,6 +3761,8 @@ def validate(root: Path) -> None:
             set(evidence_schema.get("required", []))
         )
         and "workload_admission_failures" in evidence_assembler
+        and "load_workload_admission()" in evidence_assembler
+        and "WORKLOAD_ADMISSION_PATH" in evidence_validator
         and "TARGET_WORKLOAD_PREPARE_START" in evidence_assembler
         and "TRUSTED_POST_CLEANUP_COLLECTION" in evidence_assembler,
         "host and application-workload evidence must remain separate and jointly fail closed",

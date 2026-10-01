@@ -25,6 +25,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 COLLECTOR_PATH = ROOT / "scripts" / "ci-cloud" / "collect-workload-evidence.py"
+ADMISSION_PATH = ROOT / "scripts" / "ci-cloud" / "workload-admission.py"
 ASSEMBLER_PATH = ROOT / "scripts" / "ci-cloud" / "assemble-evidence.py"
 RUNNER_PATH = ROOT / "scripts" / "ci-cloud" / "run-remote-conformance.sh"
 TARGET_PATH = ROOT / "scripts" / "ci-cloud" / "target-conformance.sh"
@@ -259,6 +260,17 @@ def load_collector():
     )
     if spec is None or spec.loader is None:
         raise RuntimeError("unable to load workload collector")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_admission():
+    spec = importlib.util.spec_from_file_location(
+        "ci_cloud_workload_admission", ADMISSION_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load workload admission")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -736,6 +748,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.collector = load_collector()
+        cls.admission = load_admission()
         cls.assembler = load_assembler()
 
     def setUp(self) -> None:
@@ -990,13 +1003,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
     def assert_failure(self, mutation, expected: str) -> None:
         observations = valid_observations()
         mutation(observations)
-        self.assertIn(expected, self.collector.workload_admission_failures(observations))
+        self.assertIn(expected, self.admission.workload_admission_failures(observations))
 
     def test_exact_snapshot_contains_fifteen_root_owned_units(self) -> None:
         live = valid_observations()["live"]
         self.assertEqual(15, len(live["installed_units"]))
         self.assertEqual(
-            [], self.collector.workload_admission_failures(valid_observations())
+            [], self.admission.workload_admission_failures(valid_observations())
         )
 
     def test_collection_requires_exact_sha_and_rootless_identity_admission(self) -> None:
@@ -1195,7 +1208,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             item for item in containers if item["role"] == "secrets-init"
         )
         secrets_init["cap_add"] = []
-        failures = self.collector.workload_admission_failures(observations)
+        failures = self.admission.workload_admission_failures(observations)
         for invariant in (
             "WORKLOAD_SERVICE_STATE", "WORKLOAD_HOST_NAMESPACES",
             "WORKLOAD_PRIVILEGE_BOUNDARY", "WORKLOAD_SERVICE_BINDING",
@@ -1207,7 +1220,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )["control_group"] += "/attacker.scope"
         self.assertIn(
             "WORKLOAD_SERVICE_STATE",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         wrong_prefix = valid_observations()
@@ -1222,7 +1235,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "WORKLOAD_SERVICE_STATE",
-            self.collector.workload_admission_failures(wrong_prefix),
+            self.admission.workload_admission_failures(wrong_prefix),
         )
 
     def test_each_container_is_bound_to_its_generated_systemd_service(self) -> None:
@@ -1995,7 +2008,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "count": 1,
             }
         )
-        self.assertEqual([], self.collector.workload_admission_failures(observations))
+        self.assertEqual([], self.admission.workload_admission_failures(observations))
 
     def test_exited_default_rootless_user_namespace_uses_podman_mapping(self) -> None:
         observations = valid_observations()
@@ -2009,14 +2022,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         namespace["configured_gid_map"] = []
         self.assertNotIn(
             "WORKLOAD_HOST_NAMESPACES",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
         namespace["podman_uid_map"] = [
             {"container_id": 0, "host_id": 200_000, "size": 10}
         ]
         self.assertIn(
             "WORKLOAD_HOST_NAMESPACES",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_exited_user_namespace_rejects_unreviewed_mapping_and_lifecycle(self) -> None:
@@ -2081,7 +2094,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 namespace["gid_map"] = copy.deepcopy(auto_map)
             self.assertNotIn(
                 "WORKLOAD_HOST_NAMESPACES",
-                self.collector.workload_admission_failures(observations),
+                self.admission.workload_admission_failures(observations),
             )
 
     def test_id_map_parser_rejects_malformed_and_incomplete_kernel_maps(self) -> None:
@@ -2217,19 +2230,19 @@ class WorkloadEvidenceTests(unittest.TestCase):
         secrets_init["image_digest"] = api["image_digest"]
         self.assertNotIn(
             "WORKLOAD_EXECUTION_CONTRACT",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
         secrets_init["image_digest"] = "sha256:" + "f" * 64
         self.assertIn(
             "WORKLOAD_EXECUTION_CONTRACT",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_secrets_initializer_requires_exact_bounded_capabilities(self) -> None:
         observations = valid_observations()
         self.assertNotIn(
             "WORKLOAD_PRIVILEGE_BOUNDARY",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
         for field in ("cap_add", "effective_caps", "bounding_caps"):
             with self.subTest(field=field):
@@ -2249,12 +2262,12 @@ class WorkloadEvidenceTests(unittest.TestCase):
         secrets_init["cap_add"] = []
         self.assertNotIn(
             "WORKLOAD_PRIVILEGE_BOUNDARY",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
         secrets_init["bounding_caps"] = ["CAP_CHOWN"]
         self.assertIn(
             "WORKLOAD_PRIVILEGE_BOUNDARY",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_each_container_requires_its_exact_fixture_network(self) -> None:
@@ -2276,7 +2289,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         migrate["network_mode"] = "bridge"
         self.assertNotIn(
             "WORKLOAD_CONTAINER_NETWORKS",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         for field, value in (
@@ -2304,7 +2317,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(
                     "WORKLOAD_CONTAINER_NETWORKS",
-                    self.collector.workload_admission_failures(candidate),
+                    self.admission.workload_admission_failures(candidate),
                 )
 
     def test_only_gateway_may_publish_its_exact_loopback_port(self) -> None:
@@ -2968,7 +2981,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 mutate(mounts)
                 self.assertIn(
                     "WORKLOAD_VOLUME_TOPOLOGY",
-                    self.collector.workload_admission_failures(observations),
+                    self.admission.workload_admission_failures(observations),
                 )
 
         observations = valid_observations()
@@ -2980,7 +2993,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         api_bind["source"] = "/tmp/target-selected-entrypoint.sh"
         self.assertIn(
             "WORKLOAD_VOLUME_TOPOLOGY",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_role_tmpfs_topology_is_closed(self) -> None:
@@ -2997,7 +3010,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 mutate(tmpfs)
                 self.assertIn(
                     "WORKLOAD_TMPFS_TOPOLOGY",
-                    self.collector.workload_admission_failures(observations),
+                    self.admission.workload_admission_failures(observations),
                 )
 
         observations = valid_observations()
@@ -3005,7 +3018,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations["live"]["containers"][3]["tmpfs"][0]["flags"].sort()
         self.assertNotIn(
             "WORKLOAD_TMPFS_TOPOLOGY",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_tmpfs_options_are_typed_and_reject_unknown_flags(self) -> None:
@@ -3043,7 +3056,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 mutate(events)
                 self.assertIn(
                     "WORKLOAD_CONTAINER_LIFECYCLE",
-                    self.collector.workload_admission_failures(observations),
+                    self.admission.workload_admission_failures(observations),
                 )
 
     def test_lifecycle_event_collection_is_bounded_and_exact(self) -> None:
@@ -3107,7 +3120,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations["live"]["podman_api"] = True
         self.assertIn(
             "WORKLOAD_PODMAN_API_DISABLED",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
         self.assert_failure(
             lambda evidence: evidence["live"]["containers"][3]["mounts"].append(
@@ -3433,14 +3446,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         identity["live"]["containers"][7]["effective_gid"] = 0
         self.assertIn(
             "WORKLOAD_RUNTIME_IDENTITY",
-            self.collector.workload_admission_failures(identity),
+            self.admission.workload_admission_failures(identity),
         )
 
         writable = valid_observations()
         writable["live"]["containers"][7]["read_only_rootfs"] = False
         self.assertIn(
             "WORKLOAD_READ_ONLY_ROOTFS",
-            self.collector.workload_admission_failures(writable),
+            self.admission.workload_admission_failures(writable),
         )
 
     def test_migration_admission_binds_the_exact_configured_command(self) -> None:
@@ -3453,7 +3466,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             container[field] = value
             self.assertIn(
                 "WORKLOAD_EXECUTION_CONTRACT",
-                self.collector.workload_admission_failures(observations),
+                self.admission.workload_admission_failures(observations),
             )
 
         mutate_role("migrate", "command", ["true"])
@@ -3470,14 +3483,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "WORKLOAD_GENERATED_PROVENANCE",
-            self.collector.workload_admission_failures(wrong_source),
+            self.admission.workload_admission_failures(wrong_source),
         )
 
         wrong_digest = valid_observations()
         wrong_digest["live"]["generated_services"][0]["fragment_sha256"] = ""
         self.assertIn(
             "WORKLOAD_GENERATED_PROVENANCE",
-            self.collector.workload_admission_failures(wrong_digest),
+            self.admission.workload_admission_failures(wrong_digest),
         )
 
         contradictory_drop_ins = valid_observations()
@@ -3486,20 +3499,20 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ] = ["a" * 64]
         self.assertIn(
             "WORKLOAD_GENERATED_PROVENANCE",
-            self.collector.workload_admission_failures(contradictory_drop_ins),
+            self.admission.workload_admission_failures(contradictory_drop_ins),
         )
 
     def test_live_user_work_rejects_unrelated_target_services(self) -> None:
         observations = valid_observations()
         self.assertEqual(
-            [], self.collector.workload_admission_failures(observations)
+            [], self.admission.workload_admission_failures(observations)
         )
         observations["live"]["user_work"]["active_units"].append(
             "hidden-scheduler.service"
         )
         self.assertIn(
             "WORKLOAD_LIVE_USER_WORK",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_live_user_work_includes_the_active_fixture_target(self) -> None:
@@ -3511,14 +3524,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertNotIn(
             "WORKLOAD_LIVE_USER_WORK",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
         observations["live"]["user_work"]["active_units"].remove(
             fixture_target
         )
         self.assertIn(
             "WORKLOAD_LIVE_USER_WORK",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_reviewed_podman_auxiliary_units_and_processes_are_exact(self) -> None:
@@ -3542,7 +3555,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
         observations = valid_observations()
         live = observations["live"]
-        failures = self.collector.workload_admission_failures(observations)
+        failures = self.admission.workload_admission_failures(observations)
         for invariant in (
             "WORKLOAD_PENDING_USER_WORK", "WORKLOAD_LIVE_USER_WORK",
             "WORKLOAD_PROCESS_DELTA",
@@ -3556,7 +3569,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             replace_health_timer_suffix(candidate, suffix)
             self.assertNotIn(
                 "WORKLOAD_LIVE_USER_WORK",
-                self.collector.workload_admission_failures(candidate),
+                self.admission.workload_admission_failures(candidate),
             )
 
         for suffix in ("00", "0a", "8" + "0" * 15, "g" * 12):
@@ -3564,13 +3577,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
             replace_health_timer_suffix(candidate, suffix)
             self.assertIn(
                 "WORKLOAD_LIVE_USER_WORK",
-                self.collector.workload_admission_failures(candidate),
+                self.admission.workload_admission_failures(candidate),
             )
 
         live["processes"][0]["executable"] = "/usr/bin/attacker"
         self.assertIn(
             "WORKLOAD_PROCESS_DELTA",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         wrong_scope = valid_observations()
@@ -3580,7 +3593,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "WORKLOAD_PROCESS_DELTA",
-            self.collector.workload_admission_failures(wrong_scope),
+            self.admission.workload_admission_failures(wrong_scope),
         )
         live["processes"][0]["executable"] = "/usr/bin/pasta.avx2"
         live["user_work"]["active_units"].append(
@@ -3588,7 +3601,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "WORKLOAD_LIVE_USER_WORK",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_podman_health_timers_reject_duplicate_container_ids(self) -> None:
@@ -3615,14 +3628,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
         self.assertIn(
             "WORKLOAD_LIVE_USER_WORK",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_podman_health_timers_require_collected_provenance(self) -> None:
         observations = valid_observations()
         self.assertNotIn(
             "WORKLOAD_LIVE_USER_WORK",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         observations["live"]["user_work"]["podman_health_timers"][0][
@@ -3630,14 +3643,14 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ] = "attacker.service"
         self.assertIn(
             "WORKLOAD_LIVE_USER_WORK",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         missing = valid_observations()
         missing["live"]["user_work"]["podman_health_timers"].pop()
         self.assertIn(
             "WORKLOAD_LIVE_USER_WORK",
-            self.collector.workload_admission_failures(missing),
+            self.admission.workload_admission_failures(missing),
         )
 
     def test_live_process_delta_is_confined_to_generated_service_cgroups(self) -> None:
@@ -3666,7 +3679,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
             },
         ]
         self.assertEqual(
-            [], self.collector.workload_admission_failures(observations)
+            [], self.admission.workload_admission_failures(observations)
         )
         observations["live"]["processes"].append(
             {
@@ -3682,7 +3695,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "WORKLOAD_PROCESS_DELTA",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         wrong_identity = valid_observations()
@@ -3698,7 +3711,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         })
         self.assertIn(
             "WORKLOAD_PROCESS_DELTA",
-            self.collector.workload_admission_failures(wrong_identity),
+            self.admission.workload_admission_failures(wrong_identity),
         )
 
         cleanup_leak = valid_observations()
@@ -3711,7 +3724,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         }]
         self.assertIn(
             "WORKLOAD_PROCESS_DELTA",
-            self.collector.workload_admission_failures(cleanup_leak),
+            self.admission.workload_admission_failures(cleanup_leak),
         )
 
     def test_opaque_process_facts_remain_in_exact_census_comparisons(self) -> None:
@@ -3730,13 +3743,13 @@ class WorkloadEvidenceTests(unittest.TestCase):
         observations["post_cleanup"]["processes"] = [opaque]
         self.assertNotIn(
             "WORKLOAD_PROCESS_DELTA",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         observations["live"]["processes"].remove(opaque)
         self.assertIn(
             "WORKLOAD_PROCESS_DELTA",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         malformed = valid_observations()
@@ -3745,7 +3758,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "WORKLOAD_PROCESS_DELTA",
-            self.collector.workload_admission_failures(malformed),
+            self.admission.workload_admission_failures(malformed),
         )
 
     def test_exited_oneshot_cgroups_cannot_retain_live_processes(self) -> None:
@@ -3773,7 +3786,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 )
                 self.assertIn(
                     "WORKLOAD_PROCESS_DELTA",
-                    self.collector.workload_admission_failures(observations),
+                    self.admission.workload_admission_failures(observations),
                 )
 
     def test_runner_reestablishes_trusted_quadlet_activation_before_live_observation(self) -> None:
@@ -6442,18 +6455,18 @@ class WorkloadEvidenceTests(unittest.TestCase):
         api["effective_supplementary_gids"] = [10001]
         self.assertNotIn(
             "WORKLOAD_PRIVILEGE_BOUNDARY",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
         api["group_add"] = ["0"]
         self.assertIn(
             "WORKLOAD_PRIVILEGE_BOUNDARY",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
         api["group_add"] = []
         api["effective_supplementary_gids"] = [0, 10001]
         self.assertIn(
             "WORKLOAD_PRIVILEGE_BOUNDARY",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
     def test_post_cleanup_rechecks_migration_count_and_podman_api(self) -> None:
@@ -6488,7 +6501,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         }
         self.assertIn(
             "WORKLOAD_PENDING_USER_WORK",
-            self.collector.workload_admission_failures(observations),
+            self.admission.workload_admission_failures(observations),
         )
 
         missing_reviewed_service = valid_observations()
@@ -6497,7 +6510,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ].remove("podman-user-wait-network-online.service")
         self.assertIn(
             "WORKLOAD_PENDING_USER_WORK",
-            self.collector.workload_admission_failures(
+            self.admission.workload_admission_failures(
                 missing_reviewed_service
             ),
         )
@@ -6630,7 +6643,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
         ):
             observations = valid_observations()
             mutate(observations)
-            self.assertTrue(self.collector.workload_admission_failures(observations))
+            self.assertTrue(self.admission.workload_admission_failures(observations))
 
     def test_runner_uses_only_literal_target_phases_and_always_collects_cleanup(self) -> None:
         runner = RUNNER_PATH.read_text(encoding="utf-8")

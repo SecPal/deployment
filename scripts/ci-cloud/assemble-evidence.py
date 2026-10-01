@@ -16,6 +16,7 @@ from pathlib import Path
 
 MAX_INPUT_BYTES = 256 * 1024
 WORKLOAD_COLLECTOR = Path(__file__).with_name("collect-workload-evidence.py")
+WORKLOAD_ADMISSION = Path(__file__).with_name("workload-admission.py")
 
 
 class DuplicateKey(ValueError):
@@ -127,6 +128,17 @@ def load_workload_collector():
         "trusted_workload_collector", WORKLOAD_COLLECTOR
     )
     if spec is None or spec.loader is None:
+        raise ValueError("trusted workload collection contract is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_workload_admission():
+    spec = importlib.util.spec_from_file_location(
+        "trusted_workload_admission", WORKLOAD_ADMISSION
+    )
+    if spec is None or spec.loader is None:
         raise ValueError("trusted workload admission implementation is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -174,7 +186,7 @@ def assemble(
         "live": live,
         "post_cleanup": post_cleanup,
     }
-    module = load_workload_collector()
+    module = load_workload_admission()
     workload_failures = module.workload_admission_failures(workload)
     status_invariants = {
         ("phase", "workload_prepare_start"): "TARGET_WORKLOAD_PREPARE_START",
