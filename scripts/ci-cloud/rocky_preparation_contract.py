@@ -338,7 +338,18 @@ def canonical_nevra(
 def normalize_package(
     package_key: str, raw: dict[str, Any], host_architecture: str
 ) -> dict[str, Any]:
-    if package_key not in PACKAGES or not isinstance(raw, dict):
+    if package_key not in PACKAGES:
+        reject(
+            "normalization", "normalize-package-evidence", "subject-invalid", package_key
+        )
+    return normalize_installed_package(package_key, raw, host_architecture)
+
+
+def normalize_installed_package(
+    package_key: str, raw: dict[str, Any], host_architecture: str
+) -> dict[str, Any]:
+    """Shared signed-RPM representation; each consumer owns its closed inventory."""
+    if not isinstance(package_key, str) or RPM_NAME.fullmatch(package_key) is None or not isinstance(raw, dict):
         reject(
             "normalization", "normalize-package-evidence", "subject-invalid", package_key
         )

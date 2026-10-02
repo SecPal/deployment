@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/postgresql-qualification-diagnostic.schema.json",
+  "title": "Bounded PostgreSQL qualification failure, never PASS authority",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "claim",
+    "operation",
+    "reason",
+    "authorization",
+    "resource",
+    "qualification_run_id",
+    "qualification_run_attempt",
+    "host_evidence_sha256",
+    "cleanup_complete"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "claim": {
+      "const": "native-postgresql-18"
+    },
+    "operation": {
+      "enum": [
+        "admit-candidate-data",
+        "admit-qualification",
+        "cleanup-test-material",
+        "configure-loopback-policy",
+        "configure-postgresql",
+        "initialize-postgresql",
+        "install-postgresql",
+        "issue-test-material",
+        "observe-data-directory",
+        "observe-listeners",
+        "observe-native-service",
+        "observe-packages",
+        "observe-roles",
+        "observe-selinux",
+        "probe-network",
+        "probe-privileges",
+        "probe-readiness",
+        "probe-semantics",
+        "probe-transport",
+        "read-candidate-data",
+        "resolve-candidate",
+        "start-postgresql",
+        "validate-authorization",
+        "write-evidence"
+      ]
+    },
+    "reason": {
+      "enum": [
+        "command-failed",
+        "expired",
+        "identity-mismatch",
+        "invariant-failed",
+        "observation-limit-exceeded",
+        "representation-invalid",
+        "source-drift"
+      ]
+    },
+    "authorization": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema_version",
+            "selector",
+            "repository",
+            "issue",
+            "pull_request",
+            "candidate_sha",
+            "candidate_blob",
+            "declaration_sha256",
+            "control_sha",
+            "probe_sha256",
+            "profile",
+            "run_id",
+            "run_attempt",
+            "issued_at",
+            "expires_at",
+            "candidate_tree",
+            "consumer_blob"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 1
+            },
+            "selector": {
+              "const": "native-postgresql-18"
+            },
+            "repository": {
+              "const": "SecPal/deployment"
+            },
+            "issue": {
+              "const": 81
+            },
+            "pull_request": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "candidate_sha": {
+              "type": "string",
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "candidate_blob": {
+              "type": "string",
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "declaration_sha256": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "control_sha": {
+              "type": "string",
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "probe_sha256": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "profile": {
+              "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+            },
+            "run_id": {
+              "type": "string",
+              "maxLength": 20,
+              "pattern": "^[1-9][0-9]{0,19}$"
+            },
+            "run_attempt": {
+              "type": "string",
+              "maxLength": 3,
+              "pattern": "^[1-9][0-9]{0,2}$"
+            },
+            "issued_at": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "candidate_tree": {
+              "type": "string",
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "consumer_blob": {
+              "type": "string",
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "control_sha",
+            "profile",
+            "access_run_id",
+            "access_run_attempt",
+            "instance_id",
+            "instance_name"
+          ],
+          "properties": {
+            "control_sha": {
+              "type": "string",
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "profile": {
+              "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+            },
+            "access_run_id": {
+              "type": "string",
+              "maxLength": 20,
+              "pattern": "^[1-9][0-9]{0,19}$"
+            },
+            "access_run_attempt": {
+              "type": "string",
+              "maxLength": 3,
+              "pattern": "^[1-9][0-9]{0,2}$"
+            },
+            "instance_id": {
+              "type": "string",
+              "maxLength": 20,
+              "pattern": "^[1-9][0-9]{0,19}$"
+            },
+            "instance_name": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^sprk-[a-z0-9-]{1,55}-instance$"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "qualification_run_id": {
+      "type": "string",
+      "maxLength": 20,
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "qualification_run_attempt": {
+      "type": "string",
+      "maxLength": 3,
+      "pattern": "^[1-9][0-9]{0,2}$"
+    },
+    "host_evidence_sha256": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cleanup_complete": {
+      "type": "boolean"
+    }
+  }
+}

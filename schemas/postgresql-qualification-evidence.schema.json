@@ -1,0 +1,922 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/deployment/schemas/postgresql-qualification-evidence.schema.json",
+  "title": "Independent native PostgreSQL qualification composed with frozen Rocky host admission",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "claim",
+    "authorization",
+    "qualification_run_id",
+    "qualification_run_attempt",
+    "instance_id",
+    "instance_name",
+    "architecture",
+    "host_admission",
+    "packages",
+    "signer_fingerprint",
+    "observations",
+    "cleanup"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "claim": {
+      "const": "native-postgresql-18"
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "selector",
+        "repository",
+        "issue",
+        "pull_request",
+        "candidate_sha",
+        "candidate_blob",
+        "declaration_sha256",
+        "control_sha",
+        "probe_sha256",
+        "profile",
+        "run_id",
+        "run_attempt",
+        "issued_at",
+        "expires_at",
+        "candidate_tree",
+        "consumer_blob"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "selector": {
+          "const": "native-postgresql-18"
+        },
+        "repository": {
+          "const": "SecPal/deployment"
+        },
+        "issue": {
+          "const": 81
+        },
+        "pull_request": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "candidate_sha": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "candidate_blob": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "declaration_sha256": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "control_sha": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "probe_sha256": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "profile": {
+          "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+        },
+        "run_id": {
+          "type": "string",
+          "maxLength": 20,
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "run_attempt": {
+          "type": "string",
+          "maxLength": 3,
+          "pattern": "^[1-9][0-9]{0,2}$"
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidate_tree": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "consumer_blob": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "qualification_run_id": {
+      "type": "string",
+      "maxLength": 20,
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "qualification_run_attempt": {
+      "type": "string",
+      "maxLength": 3,
+      "pattern": "^[1-9][0-9]{0,2}$"
+    },
+    "instance_id": {
+      "type": "string",
+      "maxLength": 20,
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "instance_name": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^sprk-[a-z0-9-]{1,55}-instance$"
+    },
+    "architecture": {
+      "enum": ["x86_64", "aarch64"]
+    },
+    "host_admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_sha", "harness_sha256", "evidence_sha256"],
+      "properties": {
+        "target_sha": {
+          "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+        },
+        "harness_sha256": {
+          "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+        },
+        "evidence_sha256": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "packages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "postgresql18-server",
+        "postgresql18",
+        "postgresql18-private-libs"
+      ],
+      "properties": {
+        "postgresql18-server": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "epoch",
+            "version",
+            "release",
+            "architecture",
+            "nevra",
+            "signed_header",
+            "verification",
+            "repositories"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "epoch": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "release": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "architecture": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "nevra": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "signed_header": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "verification": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "repositories": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "const": "appstream"
+              }
+            }
+          }
+        },
+        "postgresql18": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "epoch",
+            "version",
+            "release",
+            "architecture",
+            "nevra",
+            "signed_header",
+            "verification",
+            "repositories"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "epoch": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "release": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "architecture": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "nevra": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "signed_header": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "verification": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "repositories": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "const": "appstream"
+              }
+            }
+          }
+        },
+        "postgresql18-private-libs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "epoch",
+            "version",
+            "release",
+            "architecture",
+            "nevra",
+            "signed_header",
+            "verification",
+            "repositories"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "epoch": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "release": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "architecture": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "nevra": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "signed_header": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "verification": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "repositories": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "const": "appstream"
+              }
+            }
+          }
+        }
+      }
+    },
+    "signer_fingerprint": {
+      "const": "fc226859c0860bf0ddb95b085b106c736fedfc85"
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_servers",
+        "data_directory",
+        "hba",
+        "listeners",
+        "locking",
+        "loopback_sentinel_host",
+        "memberships",
+        "native_cgroup",
+        "password_algorithms",
+        "probes",
+        "process_label",
+        "restart_row_count",
+        "roles",
+        "rootless_liveness",
+        "server_version_num",
+        "service",
+        "settings",
+        "tls_material",
+        "issued_logins"
+      ],
+      "properties": {
+        "container_servers": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "data_directory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["owner", "group", "mode", "type"],
+          "properties": {
+            "owner": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "group": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "mode": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "type": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
+        "hba": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "array",
+            "minItems": 7,
+            "maxItems": 7
+          }
+        },
+        "listeners": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "locking": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["row_sqlstate", "advisory_held", "advisory_released"],
+          "properties": {
+            "row_sqlstate": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "advisory_held": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "advisory_released": {
+              "type": "string",
+              "maxLength": 32
+            }
+          }
+        },
+        "loopback_sentinel_host": {
+          "type": "integer"
+        },
+        "memberships": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5
+          }
+        },
+        "native_cgroup": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "password_algorithms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtime", "migration"],
+          "properties": {
+            "runtime": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "migration": {
+              "type": "string",
+              "maxLength": 32
+            }
+          }
+        },
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verified-tls",
+            "wrong-hostname",
+            "wrong-ca",
+            "plaintext",
+            "wrong-password",
+            "runtime-ddl",
+            "runtime-role-escalation",
+            "migration-ddl",
+            "backup-read",
+            "backup-ddl",
+            "rootless-verified-tls",
+            "rootless-unmapped",
+            "other-loopback-port",
+            "ready-up",
+            "ready-down",
+            "liveness-down",
+            "jsonb-uuid-constraints-rollback",
+            "row-locks",
+            "transaction-advisory-locks",
+            "persistence-restart",
+            "server-key-runtime-denied"
+          ],
+          "properties": {
+            "verified-tls": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "wrong-hostname": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "wrong-ca": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "plaintext": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "wrong-password": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "runtime-ddl": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "runtime-role-escalation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "migration-ddl": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "backup-read": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "backup-ddl": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "rootless-verified-tls": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "rootless-unmapped": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "other-loopback-port": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "ready-up": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "ready-down": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "liveness-down": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "jsonb-uuid-constraints-rollback": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "row-locks": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "transaction-advisory-locks": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "persistence-restart": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "server-key-runtime-denied": {
+              "const": 1
+            }
+          }
+        },
+        "process_label": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "restart_row_count": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "secpal_owner",
+            "secpal_runtime",
+            "secpal_migration",
+            "secpal_backup",
+            "secpal_replication"
+          ],
+          "properties": {
+            "secpal_owner": {
+              "type": "array",
+              "minItems": 7,
+              "maxItems": 7,
+              "items": {
+                "type": "boolean"
+              }
+            },
+            "secpal_runtime": {
+              "type": "array",
+              "minItems": 7,
+              "maxItems": 7,
+              "items": {
+                "type": "boolean"
+              }
+            },
+            "secpal_migration": {
+              "type": "array",
+              "minItems": 7,
+              "maxItems": 7,
+              "items": {
+                "type": "boolean"
+              }
+            },
+            "secpal_backup": {
+              "type": "array",
+              "minItems": 7,
+              "maxItems": 7,
+              "items": {
+                "type": "boolean"
+              }
+            },
+            "secpal_replication": {
+              "type": "array",
+              "minItems": 7,
+              "maxItems": 7,
+              "items": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "rootless_liveness": {
+          "type": "boolean"
+        },
+        "server_version_num": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "User",
+            "Group",
+            "ActiveState",
+            "UnitFileState",
+            "FragmentPath"
+          ],
+          "properties": {
+            "User": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "Group": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "ActiveState": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "UnitFileState": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "FragmentPath": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "listen_addresses",
+            "port",
+            "ssl",
+            "ssl_min_protocol_version",
+            "password_encryption",
+            "data_directory",
+            "ssl_cert_file",
+            "ssl_key_file",
+            "ssl_ca_file"
+          ],
+          "properties": {
+            "listen_addresses": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "port": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "ssl": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "ssl_min_protocol_version": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "password_encryption": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "data_directory": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "ssl_cert_file": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "ssl_key_file": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "ssl_ca_file": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
+        "tls_material": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["server.crt", "server.key", "ca.crt"],
+          "properties": {
+            "server.crt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["owner", "group", "mode", "type"],
+              "properties": {
+                "owner": {
+                  "const": "postgres"
+                },
+                "group": {
+                  "const": "postgres"
+                },
+                "mode": {
+                  "const": "600"
+                },
+                "type": {
+                  "const": "postgresql_db_t"
+                }
+              }
+            },
+            "server.key": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["owner", "group", "mode", "type"],
+              "properties": {
+                "owner": {
+                  "const": "postgres"
+                },
+                "group": {
+                  "const": "postgres"
+                },
+                "mode": {
+                  "const": "600"
+                },
+                "type": {
+                  "const": "postgresql_db_t"
+                }
+              }
+            },
+            "ca.crt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["owner", "group", "mode", "type"],
+              "properties": {
+                "owner": {
+                  "const": "postgres"
+                },
+                "group": {
+                  "const": "postgres"
+                },
+                "mode": {
+                  "const": "600"
+                },
+                "type": {
+                  "const": "postgresql_db_t"
+                }
+              }
+            }
+          }
+        },
+        "issued_logins": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtime", "migration"],
+          "properties": {
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "attributes", "expires_at"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 63,
+                  "pattern": "^secpal_qualification_(runtime|migration)_[1-9][0-9]{0,19}_[1-9][0-9]{0,2}$"
+                },
+                "attributes": {
+                  "type": "array",
+                  "minItems": 7,
+                  "maxItems": 7,
+                  "items": {
+                    "type": "boolean"
+                  }
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 253402300799
+                }
+              }
+            },
+            "migration": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "attributes", "expires_at"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 63,
+                  "pattern": "^secpal_qualification_(runtime|migration)_[1-9][0-9]{0,19}_[1-9][0-9]{0,2}$"
+                },
+                "attributes": {
+                  "type": "array",
+                  "minItems": 7,
+                  "maxItems": 7,
+                  "items": {
+                    "type": "boolean"
+                  }
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 253402300799
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service_stopped",
+        "nft_table_absent",
+        "client_container_absent",
+        "client_material_absent",
+        "server_material_absent",
+        "test_authority_absent",
+        "credentials_forgotten",
+        "database_material_absent"
+      ],
+      "properties": {
+        "service_stopped": {
+          "const": true
+        },
+        "nft_table_absent": {
+          "const": true
+        },
+        "client_container_absent": {
+          "const": true
+        },
+        "client_material_absent": {
+          "const": true
+        },
+        "server_material_absent": {
+          "const": true
+        },
+        "test_authority_absent": {
+          "const": true
+        },
+        "credentials_forgotten": {
+          "const": true
+        },
+        "database_material_absent": {
+          "const": true
+        }
+      }
+    }
+  }
+}

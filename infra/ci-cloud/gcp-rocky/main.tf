@@ -147,6 +147,15 @@ resource "google_compute_instance" "qualification" {
     secpal-rocky-expires-at              = var.expires_at
     secpal-rocky-ssh-public-key          = trimspace(var.ssh_public_key)
     "startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-rocky-host.tftpl", {
+      postgresql_candidate_base64gzip                = base64gzip(var.postgresql_candidate_json)
+      postgresql_consumer_base64gzip                 = base64gzip(file("${path.module}/../../../scripts/render-native-postgresql.py"))
+      postgresql_contract_base64gzip                 = base64gzip(file("${path.module}/../../../scripts/ci-cloud/postgresql_qualification_contract.py"))
+      postgresql_control_base64gzip                  = base64gzip(file("${path.module}/../../../scripts/ci-cloud/postgresql-qualification-control.py"))
+      postgresql_runner_base64gzip                   = base64gzip(file("${path.module}/../../../scripts/ci-cloud/qualify-native-postgresql.py"))
+      postgresql_wrapper_base64gzip                  = base64gzip(file("${path.module}/../../../scripts/ci-cloud/run-native-postgresql-qualification.sh"))
+      postgresql_diagnostic_schema_base64gzip        = base64gzip(file("${path.module}/../../../schemas/postgresql-qualification-diagnostic.schema.json"))
+      postgresql_schema_base64gzip                   = base64gzip(file("${path.module}/../../../schemas/postgresql-qualification-evidence.schema.json"))
+      integration_runtime_contract_base64gzip        = base64gzip(file("${path.module}/../../../scripts/integration_runtime_contract.py"))
       prepare_script_base64gzip                      = base64gzip(file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh"))
       readiness_publisher_base64gzip                 = base64gzip(file("${path.module}/../../../scripts/ci-cloud/publish-rocky-qualification-readiness.py"))
       runtime_user_systemd_base64gzip                = base64gzip(file("${path.module}/../../../scripts/ci-cloud/runtime_user_systemd.py"))

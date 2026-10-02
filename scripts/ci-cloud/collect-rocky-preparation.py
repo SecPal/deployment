@@ -280,6 +280,12 @@ class Observer:
     def package(self, name: str) -> dict[str, Any]:
         if name not in PACKAGES:
             raise ObservationError(ObservationOperation.PACKAGE_NEVRA, "subject-invalid")
+        return self.installed_package(name)
+
+    def installed_package(self, name: str) -> dict[str, Any]:
+        """Shared RPM observer; closed consumer inventories admit package names."""
+        if not isinstance(name, str) or contract.RPM_NAME.fullmatch(name) is None:
+            raise ObservationError(ObservationOperation.PACKAGE_NEVRA, "subject-invalid")
         _, identity, _ = self.run(
             ObservationOperation.PACKAGE_NEVRA,
             [
