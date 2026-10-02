@@ -5,9 +5,12 @@
 """Adversarial contract evidence for the trusted PostgreSQL data boundary."""
 
 import copy
+import base64
+import gzip
 import json
 import importlib.util
 import os
+import re
 from pathlib import Path
 import sys
 import shutil
@@ -26,6 +29,63 @@ class CandidateData(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    def test_guest_staged_probe_closure_matches_controller_identity(self):
+        control = self.load_module('pg_guest_probe_closure', 'scripts/ci-cloud/postgresql-qualification-control.py')
+        terraform = (ROOT / 'infra/ci-cloud/gcp-rocky/main.tf').read_text()
+        template = (ROOT / 'scripts/ci-cloud/bootstrap-rocky-host.tftpl').read_text()
+        sources = dict(re.findall(
+            r'(\w+_base64gzip)\s*=\s*base64gzip\(file\("\$\{path.module\}/\.\./\.\./\.\./([^"\n]+)"\)\)', terraform))
+        destinations = re.findall(
+            r"decode_script '\$\{(\w+_base64gzip)\}' /opt/secpal-control/([^\s]+)", template)
+        expected = control.probe_digest()
+        with tempfile.TemporaryDirectory() as directory:
+            guest = Path(directory)
+            for variable, destination in destinations:
+                if destination not in control.PROBE_PATHS:
+                    continue
+                payload = base64.b64encode(gzip.compress((ROOT / sources[variable]).read_bytes(), mtime=0))
+                path = guest / destination
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(gzip.decompress(base64.b64decode(payload)))
+            with mock.patch.object(control, 'ROOT', guest):
+                self.assertEqual(control.probe_digest(), expected)
+
+    def test_failed_image_pull_cleanup_accepts_absence_but_requires_readback(self):
+        module = self.load_module('pg_failed_image_pull_cleanup', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        observer = module.Observer.__new__(module.Observer)
+        observer.children = []
+        observer.passwords = {}
+        observer.data_created = False
+        observer.application_image_created = True
+        image_still_present = False
+
+        def system(operation, arguments, *, accepted=(0,), **options):
+            status, output = 0, ''
+            if arguments[:2] == ['podman', 'rmi']:
+                status = 0 if '--ignore' in arguments else 1
+            elif arguments[:2] == ['systemctl', 'is-active']:
+                status, output = 3, 'inactive'
+            elif arguments[:2] == ['nft', 'list'] or arguments[:3] == ['podman', 'container', 'exists']:
+                status = 1
+            elif arguments[:3] == ['podman', 'image', 'exists']:
+                status = 0 if image_still_present else 1
+            if status not in accepted:
+                raise contract.QualificationError(operation, 'command-failed')
+            return status, output, ''
+
+        observer.run = mock.Mock(side_effect=system)
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            with mock.patch.multiple(module, DATA=base/'data', CLIENT=base/'client',
+                                     MATERIAL=base/'material', STATE=base/'state', APPLICATION_IMAGE_STATE=base/'image-state'):
+                self.assertEqual(observer.cleanup(), contract.CLEANUP_POSTCONDITIONS)
+                observer.run.assert_any_call('cleanup-test-material',
+                    ['podman', 'image', 'exists', contract.APPLICATION_RUNTIME['image']],
+                    user='secpal-runtime', accepted=(1,))
+                image_still_present = True
+                with self.assertRaises(contract.QualificationError):
+                    observer.cleanup()
 
     def test_psql_only_evidence_cannot_establish_application_readiness(self):
         evidence, options = self.system_fixture('gcp-rocky-10-2-arm64')

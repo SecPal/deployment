@@ -28,6 +28,10 @@ install -d -o root -g root -m 0700 /opt/secpal-control/libexec
 decode_script '${postgresql_contract_base64gzip}' /opt/secpal-control/scripts/ci-cloud/postgresql_qualification_contract.py
 decode_script '${postgresql_control_base64gzip}' /opt/secpal-control/scripts/ci-cloud/postgresql-qualification-control.py
 decode_script '${postgresql_runner_base64gzip}' /opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py
+decode_script '${postgresql_application_bootstrap_base64gzip}' /opt/secpal-control/scripts/ci-cloud/postgresql-application-bootstrap.php
+decode_script '${postgresql_application_probe_base64gzip}' /opt/secpal-control/scripts/ci-cloud/postgresql-application-probe.php
+decode_script '${image_attestation_runtime_base64gzip}' /opt/secpal-control/scripts/image_attestation_runtime.py
+decode_script '${fetch_oci_attestation_base64gzip}' /opt/secpal-control/scripts/fetch-oci-attestation.py
 decode_script '${postgresql_wrapper_base64gzip}' /opt/secpal-control/scripts/ci-cloud/run-native-postgresql-qualification.sh
 decode_script '${postgresql_wrapper_base64gzip}' /usr/local/sbin/secpal-qualify-native-postgresql
 decode_script '${postgresql_diagnostic_schema_base64gzip}' /opt/secpal-control/schemas/postgresql-qualification-diagnostic.schema.json

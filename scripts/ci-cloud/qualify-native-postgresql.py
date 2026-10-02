@@ -634,7 +634,7 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
         self.children.clear()
         self.run('cleanup-test-material', ['podman', 'rm', '--force', '--ignore', CONTAINER, APPLICATION_PROBE], user='secpal-runtime')
         if self.application_image_created:
-            self.run('cleanup-test-material', ['podman', 'rmi', contract.APPLICATION_RUNTIME['image']], user='secpal-runtime')
+            self.run('cleanup-test-material', ['podman', 'rmi', '--ignore', '--no-prune', contract.APPLICATION_RUNTIME['image']], user='secpal-runtime')
         self.run('cleanup-test-material', ['systemctl', 'stop', 'postgresql.service'], accepted=(0, 5))
         self.run('cleanup-test-material', ['nft', 'delete', 'table', 'inet', 'secpal_postgresql'], accepted=(0, 1))
         # All paths are fixed root-created directories in this exact ephemeral run.
