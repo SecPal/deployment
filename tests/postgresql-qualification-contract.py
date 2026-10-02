@@ -238,6 +238,148 @@ class CandidateData(unittest.TestCase):
             observer.request('/graphql', {'query': control.QUERY})
         self.assertEqual(request.call_args.args[0].get_header('Content-type'), 'application/json')
 
+    def github_candidate_fixture(self, timeline, *, draft=True):
+        # Reviewed GitHub timeline representations are fixtures, never PASS authority.
+        head = '23f04d218ec299fd933353fd438e921da6ff2694'
+        pull = {'number': 286, 'state': 'OPEN', 'isDraft': draft,
+                'body': 'Fixes #81\n\nPart of: #134', 'headRefOid': head,
+                'baseRefName': 'main', 'headRepository': {'nameWithOwner': 'SecPal/deployment'},
+                'repository': {'nameWithOwner': 'SecPal/deployment'}, 'commits': {'totalCount': 1},
+                'closingIssuesReferences': {'totalCount': 1, 'pageInfo': {'hasNextPage': False},
+                    'nodes': [{'number': 81, 'repository': {'nameWithOwner': 'SecPal/deployment'}}]},
+                'timelineItems': timeline}
+        result = {'data': {'repository': {'nameWithOwner': 'SecPal/deployment',
+            'defaultBranchRef': {'name': 'main'}, 'pullRequests': {
+                'totalCount': 1, 'pageInfo': {'hasNextPage': False}, 'nodes': [pull]}}}}
+        commits = [{'sha': head, 'commit': {'verification': {'verified': True, 'reason': 'valid'}}}]
+        return result, commits
+
+    def test_complete_selected_lifecycle_representation_reaches_admission(self):
+        control = self.load_module('pg_lifecycle', 'scripts/ci-cloud/postgresql-qualification-control.py')
+        # #286 and #193 had 3/0 and 20/0; fresh #286 is 4/0. Ready #247 is 9/1.
+        for total, events, draft in ((3, [], True), (20, [], True), (4, [], True),
+                                    (9, ['ReadyForReviewEvent'], False),
+                                    (0, ['ReadyForReviewEvent'], False)):
+            with self.subTest(total=total, events=events):
+                timeline = {'totalCount': total, 'pageInfo': {'hasNextPage': False},
+                            'nodes': [{'__typename': event} for event in events]}
+                result, commits = self.github_candidate_fixture(timeline, draft=draft)
+                # An unrelated open PR must use the same reviewed representation.
+                unrelated = copy.deepcopy(result['data']['repository']['pullRequests']['nodes'][0])
+                unrelated['number'] = 193
+                unrelated['closingIssuesReferences'] = {
+                    'totalCount': 0, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
+                unrelated['timelineItems'] = {
+                    'totalCount': 20, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
+                result['data']['repository']['pullRequests']['nodes'].append(unrelated)
+                result['data']['repository']['pullRequests']['totalCount'] = 2
+                observer = control.GitHubObserver()
+                with mock.patch.object(observer, 'request', side_effect=[result, commits]) as request:
+                    candidate = observer.candidate()
+                self.assertEqual(candidate['head'], commits[0]['sha'])
+                self.assertEqual((candidate['ready_events'], candidate['draft_events']), (len(events), 0))
+                self.assertEqual(candidate['draft'], draft)
+                self.assertEqual(contract.select_candidate([candidate]), candidate)
+                request.assert_any_call('/graphql', {'query': control.QUERY})
+
+    def test_lifecycle_representation_and_candidate_fail_closed(self):
+        control = self.load_module('pg_lifecycle_reject', 'scripts/ci-cloud/postgresql-qualification-control.py')
+        timeline = {'totalCount': 3, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
+        result, commits = self.github_candidate_fixture(timeline)
+        pull_path = ('data', 'repository', 'pullRequests', 'nodes', 0)
+        cases = [
+            (('timelineItems', 'pageInfo', 'hasNextPage'), True),
+            (('timelineItems', 'pageInfo', 'hasNextPage'), 0),
+            (('timelineItems', 'pageInfo'), {}),
+            (('timelineItems', 'pageInfo', 'endCursor'), 'caller-cursor'),
+            (('timelineItems', 'totalCount'), True),
+            (('timelineItems', 'totalCount'), -1),
+            (('timelineItems', 'totalCount'), '3'),
+            (('timelineItems', 'nodes'), [{'__typename': 'ReadyForReviewEvent'}] * 101),
+            (('timelineItems', 'nodes'), {}),
+            (('timelineItems', 'nodes'), [None]),
+            (('timelineItems', 'nodes'), [{}]),
+            (('timelineItems', 'nodes'), [{'__typename': 'UnknownEvent'}]),
+            (('timelineItems', 'nodes'), [{'__typename': ['ReadyForReviewEvent']}]),
+            (('timelineItems', 'nodes'), [{'__typename': 'ReadyForReviewEvent', 'createdAt': 'invalid'}]),
+            (('timelineItems', 'PASS'), True),
+            (('timelineItems',), None),
+            (('timelineItems', 'nodes'), [{'__typename': 'ReadyForReviewEvent'}]),
+            (('timelineItems', 'nodes'), [{'__typename': 'ConvertToDraftEvent'}]),
+            (('isDraft',), False),
+            (('headRefOid',), 'a' * 40),
+            (('baseRefName',), 'other'),
+            (('repository', 'nameWithOwner'), 'attacker/deployment'),
+            (('headRepository', 'nameWithOwner'), 'attacker/deployment'),
+            (('closingIssuesReferences', 'totalCount'), 2),
+        ]
+        for path, value in cases:
+            changed = copy.deepcopy(result)
+            owner = changed
+            for key in pull_path + path[:-1]:
+                owner = owner[key]
+            owner[path[-1]] = value
+            with self.subTest(path=path, value=value), \
+                 mock.patch.object(control.GitHubObserver, 'request', side_effect=[changed, commits]), \
+                 self.assertRaises(contract.QualificationError):
+                control.GitHubObserver().candidate()
+        for events in (['ReadyForReviewEvent'] * 2,
+                       ['ReadyForReviewEvent', 'ConvertToDraftEvent'],
+                       ['ReadyForReviewEvent', 'ConvertToDraftEvent', 'ReadyForReviewEvent']):
+            changed, signatures = self.github_candidate_fixture(dict(timeline,
+                nodes=[{'__typename': event} for event in events]), draft=False)
+            with self.subTest(events=events), \
+                 mock.patch.object(control.GitHubObserver, 'request', side_effect=[changed, signatures]), \
+                 self.assertRaises(contract.QualificationError):
+                control.GitHubObserver().candidate()
+        for count in (0, 2):
+            changed = copy.deepcopy(result)
+            connection = changed['data']['repository']['pullRequests']
+            connection['nodes'] *= count
+            connection['totalCount'] = count
+            with self.subTest(deliveries=count), \
+                 mock.patch.object(control.GitHubObserver, 'request', side_effect=[changed] + [commits] * count), \
+                 self.assertRaises(contract.QualificationError):
+                control.GitHubObserver().candidate()
+        commits[0]['commit']['verification']['verified'] = False
+        with mock.patch.object(control.GitHubObserver, 'request', side_effect=[result, commits]), \
+             self.assertRaises(contract.QualificationError):
+            control.GitHubObserver().candidate()
+        # Strict connection semantics elsewhere must not inherit the timeline exception.
+        with self.assertRaises(contract.QualificationError):
+            control.GitHubObserver.connection(timeline)
+
+    def test_lifecycle_resolution_reconfirms_source_and_closed_authorization(self):
+        from types import SimpleNamespace
+        from jsonschema import Draft202012Validator
+        control = self.load_module('pg_lifecycle_resolve', 'scripts/ci-cloud/postgresql-qualification-control.py')
+        timeline = {'totalCount': 3, 'pageInfo': {'hasNextPage': False}, 'nodes': []}
+        result, commits = self.github_candidate_fixture(timeline)
+        options = SimpleNamespace(control_sha='c' * 40, profile='gcp-rocky-10-2-x86-64',
+                                  run_id='100', run_attempt='1')
+        schema = json.loads((ROOT/'schemas/postgresql-qualification-evidence.schema.json').read_text())
+        for drift in (False, True):
+            current, current_commits = copy.deepcopy(result), copy.deepcopy(commits)
+            if drift:
+                current['data']['repository']['pullRequests']['nodes'][0]['headRefOid'] = 'a' * 40
+                current_commits[0]['sha'] = 'a' * 40
+            with self.subTest(drift=drift), \
+                 mock.patch.object(control.GitHubObserver, 'request',
+                    side_effect=[result, commits, current, current_commits]), \
+                 mock.patch.object(control.GitHubObserver, 'declaration',
+                    return_value=('f' * 40, 'b' * 40, 'e' * 40, contract.DECLARATION)):
+                if drift:
+                    with self.assertRaises(contract.QualificationError) as error:
+                        control.resolve(options)
+                    self.assertEqual(error.exception.reason, 'source-drift')
+                else:
+                    resolved = control.resolve(options)
+                    authorization = resolved['authorization']
+                    Draft202012Validator(schema['properties']['authorization']).validate(authorization)
+                    self.assertEqual(authorization['candidate_sha'], commits[0]['sha'])
+                    self.assertEqual(authorization['selector'], 'native-postgresql-18')
+                    self.assertEqual(authorization['probe_sha256'], control.probe_digest())
+
     def test_stable_privilege_roles_cannot_authenticate(self):
         bundle = contract.render_configuration(contract.DECLARATION, 1234)
         for name in contract.ROLE_POLICY:
