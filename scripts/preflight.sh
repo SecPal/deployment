@@ -51,6 +51,8 @@ fi
 
 bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
+php -l scripts/production-secret-bootstrap.php
+php -l scripts/production-migrate.php
 php -l scripts/phase-b-runtime-probe.php
 php -l scripts/ci-cloud/postgresql-application-bootstrap.php
 php -l scripts/ci-cloud/postgresql-application-probe.php
@@ -90,6 +92,7 @@ bash tests/ci-cloud-workload-orchestration.sh
 bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
+python3 tests/native-postgresql-production-contract.py
 python3 tests/production-state-contract.py
 python3 tests/production-postgres-retirement.py
 python3 tests/production-edge-decision-contract.py

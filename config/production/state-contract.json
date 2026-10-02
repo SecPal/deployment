@@ -53,27 +53,48 @@
         "tenant-kek": {
           "mode": "0600",
           "type": "tenant-kek"
+        }
+      }
+    },
+    "runtime": {
+      "directory": "/run/secpal/secrets/runtime",
+      "container_uid": 10001,
+      "container_gid": 10001,
+      "directory_mode": "0710",
+      "consumers": ["api", "scheduler", "worker-general", "worker-hash-chain"],
+      "files": {
+        "postgres-username": {
+          "mode": "0400",
+          "type": "postgres-username"
         },
         "postgres-password": {
           "mode": "0400",
           "type": "password"
         },
-        "valkey-password": {
+        "postgres-ca.crt": {
           "mode": "0400",
-          "type": "password"
+          "type": "postgres-ca"
         }
       }
     },
-    "valkey": {
-      "consumers": ["valkey"],
-      "container_uid": 10002,
-      "container_gid": 10002,
-      "directory": "/run/secpal/secrets/valkey",
+    "migration": {
+      "directory": "/run/secpal/secrets/migration",
+      "container_uid": 10001,
+      "container_gid": 10001,
       "directory_mode": "0710",
+      "consumers": ["migrate"],
       "files": {
-        "password": {
+        "postgres-username": {
+          "mode": "0400",
+          "type": "postgres-username"
+        },
+        "postgres-password": {
           "mode": "0400",
           "type": "password"
+        },
+        "postgres-ca.crt": {
+          "mode": "0400",
+          "type": "postgres-ca"
         }
       }
     }
@@ -88,18 +109,18 @@
       "backup": "required-d7",
       "confidentiality": "restricted-business-data",
       "integrity": "business-critical",
-      "location": "/srv/secpal/postgresql",
-      "consumers": ["postgres"],
-      "container_identity": "999:999",
-      "host_ownership": "mapped-postgres",
+      "location": "/var/lib/pgsql/data",
+      "consumers": ["host-postgresql"],
+      "container_identity": "none-host-native",
+      "host_ownership": "native-postgres",
       "type": "directory",
-      "owner": "mapped-container-uid-999",
-      "group": "mapped-container-gid-999",
+      "owner": "postgres",
+      "group": "postgres",
       "mode": "0700",
       "acl": "access-only-base-entries-no-default-acl",
-      "initialization_authority": "operator-state-preparation",
-      "rotation_migration_authority": "reviewed-postgresql-migration",
-      "destruction_authority": "explicit-operator-data-destruction"
+      "initialization_authority": "native-postgresql-first-install",
+      "rotation_migration_authority": "native-postgresql-owned-lifecycle",
+      "destruction_authority": "explicit-operator-after-verified-recovery"
     },
     "private_application_storage": {
       "authority": "secpal-api",
@@ -242,7 +263,7 @@
       "destruction_authority": "security-operator-after-verified-rewrap-recovery"
     },
     "postgresql_credentials": {
-      "authority": "security-operator",
+      "authority": "SecPal/deployment#100",
       "durability": "stable-external-secret",
       "reconstructable": false,
       "loss_acceptable": false,
@@ -250,40 +271,18 @@
       "backup": "external-secret-recovery-required",
       "confidentiality": "secret",
       "integrity": "authentication-critical",
-      "location": "external-authority://data/postgresql-password",
-      "consumers": ["api-roles"],
+      "location": "external-authority://postgresql/issued-roles",
+      "consumers": ["runtime-api-roles", "migration-only"],
       "container_identity": "per-consumer-copy",
       "host_ownership": "mapped-exact-consumer",
-      "type": "password-file",
+      "type": "issued-client-identity-and-trust",
       "owner": "mapped-exact-consumer",
       "group": "mapped-exact-consumer",
       "mode": "0400",
       "acl": "access-only-base-entries-no-default-acl",
-      "initialization_authority": "external-security-operator",
-      "rotation_migration_authority": "reviewed-database-credential-rotation",
-      "destruction_authority": "security-operator-after-cutover"
-    },
-    "valkey_credentials": {
-      "authority": "security-operator",
-      "durability": "stable-external-secret",
-      "reconstructable": false,
-      "loss_acceptable": false,
-      "restore_required": true,
-      "backup": "external-secret-recovery-required",
-      "confidentiality": "secret",
-      "integrity": "authentication-critical",
-      "location": "external-authority://data/valkey-password",
-      "consumers": ["api-roles", "valkey"],
-      "container_identity": "per-consumer-copy",
-      "host_ownership": "mapped-exact-consumer",
-      "type": "password-file",
-      "owner": "mapped-exact-consumer",
-      "group": "mapped-exact-consumer",
-      "mode": "0400",
-      "acl": "access-only-base-entries-no-default-acl",
-      "initialization_authority": "external-security-operator",
-      "rotation_migration_authority": "reviewed-valkey-credential-rotation",
-      "destruction_authority": "security-operator-after-cutover"
+      "initialization_authority": "SecPal/deployment#100",
+      "rotation_migration_authority": "SecPal/deployment#100",
+      "destruction_authority": "SecPal/deployment#100"
     },
     "external_service_credentials": {
       "authority": "feature-owner",
@@ -306,28 +305,6 @@
       "initialization_authority": "reviewed-feature-enablement",
       "rotation_migration_authority": "feature-owner",
       "destruction_authority": "feature-owner-after-disablement"
-    },
-    "valkey_state": {
-      "authority": "valkey",
-      "durability": "durable-aof-everysec",
-      "reconstructable": "partially-from-postgresql",
-      "loss_acceptable": "bounded-crash-window-only",
-      "restore_required": "continuity-required",
-      "backup": "required-d7-coordinated",
-      "confidentiality": "restricted-operational-data",
-      "integrity": "queue-continuity",
-      "location": "/srv/secpal/valkey",
-      "consumers": ["valkey"],
-      "container_identity": "10002:10002",
-      "host_ownership": "mapped-valkey",
-      "type": "directory",
-      "owner": "mapped-container-uid-10002",
-      "group": "mapped-container-gid-10002",
-      "mode": "0700",
-      "acl": "access-only-base-entries-no-default-acl",
-      "initialization_authority": "operator-state-preparation",
-      "rotation_migration_authority": "reviewed-valkey-migration",
-      "destruction_authority": "explicit-operator-queue-recovery-decision"
     },
     "acme_state": {
       "authority": "future-edge-tls-operator",
@@ -548,6 +525,28 @@
       "initialization_authority": "prohibited-in-d2",
       "rotation_migration_authority": "future-reviewed-registry-contract",
       "destruction_authority": "registry-operator"
+    },
+    "postgresql_transport_material": {
+      "authority": "SecPal/deployment#100",
+      "durability": "stable-external-secret",
+      "reconstructable": false,
+      "loss_acceptable": false,
+      "restore_required": true,
+      "backup": "external-secret-recovery-required",
+      "confidentiality": "highest-secret",
+      "integrity": "transport-identity-critical",
+      "location": "/etc/secpal/postgresql/current",
+      "consumers": ["host-postgresql"],
+      "container_identity": "none-host-native",
+      "host_ownership": "native-postgres",
+      "type": "issued-server-material-directory",
+      "owner": "postgres",
+      "group": "postgres",
+      "mode": "0700",
+      "acl": "access-only-base-entries-no-default-acl",
+      "initialization_authority": "SecPal/deployment#100",
+      "rotation_migration_authority": "SecPal/deployment#100",
+      "destruction_authority": "SecPal/deployment#100"
     }
   }
 }
