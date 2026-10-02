@@ -190,3 +190,10 @@ transport/roles/network and application availability. Candidate executables
 never gain root, provider credentials or evidence authority during qualification.
 Retain candidate/control identity, actual observations and guest/provider
 cleanup plus absence read-back. See [qualification authority](../postgresql-qualification.md).
+
+The [primary #81 delivery PR](https://github.com/SecPal/deployment/pull/286)
+is the evidence index for the exact candidate. It records both admitted Rocky
+architecture runs, candidate/control bindings, artifact digests, guest cleanup,
+provider cleanup and authoritative absence read-back. The underlying closed
+non-secret artifacts are retained with the workflow and workspace evidence;
+a caller-authored index cannot grant qualification PASS.
