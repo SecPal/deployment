@@ -12,6 +12,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - Treat sibling repositories as read-only references by default.
 - Preserve existing worktrees and changes; never overwrite work you do not own.
 - Never use destructive Git commands, force-push, or bypass hooks.
+- `SECPAL_SIGNING_FORMAT: SSH`; apply the [canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority).
+  Preserve existing SSH keys and signing configuration. GitHub-generated
+  signatures are provider evidence, not SecPal OpenPGP signing authority.
+  Every PR commit must have GitHub `verification.verified == true`.
 - Keep one coherent topic per branch and pull request.
 
 ## Canonical work graph
@@ -104,6 +108,15 @@ not a second review contract.
 - A new explicit operator instruction that stops, narrows, prohibits, or pauses
   work supersedes unfinished agent and delegated work. The coordinator must stop
   delegated work when it cannot propagate that instruction reliably.
+
+### Initial Automated Review
+
+Apply the [canonical review-acquisition rule](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#531-initial-automated-review).
+These runtime assertions consume that owner; they define no separate lifecycle.
+
+- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
+- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
+- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
 
 ## Validator and evidence design
 
