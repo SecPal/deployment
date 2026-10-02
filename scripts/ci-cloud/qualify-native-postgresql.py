@@ -336,7 +336,8 @@ INSERT INTO qualification_state VALUES ('00000000-0000-0000-0000-000000000081', 
         architecture = 'amd64' if os.uname().machine == 'x86_64' else 'arm64'
         if (not isinstance(inspected, list) or len(inspected) != 1
                 or inspected[0]['Os'] != 'linux' or inspected[0]['Architecture'] != architecture
-                or identity['image'] not in inspected[0]['RepoDigests']
+                or not isinstance(inspected[0]['RepoDigests'], list)
+                or any(not isinstance(reference, str) for reference in inspected[0]['RepoDigests'])
                 or image + '@' + identity['platform_digests'][architecture] not in inspected[0]['RepoDigests']):
             raise contract.QualificationError('admit-application-image', 'identity-mismatch')
 

@@ -87,6 +87,59 @@ class CandidateData(unittest.TestCase):
                 with self.assertRaises(contract.QualificationError):
                     observer.cleanup()
 
+    def test_attested_application_index_accepts_exact_platform_child_representation(self):
+        import hashlib
+        from types import SimpleNamespace
+        module = self.load_module('pg_application_child_identity', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        repository = contract.APPLICATION_RUNTIME['image'].split('@')[0]
+        index = json.dumps({'manifests': [
+            {'platform': {'os': 'linux', 'architecture': architecture}, 'digest': digest}
+            for architecture, digest in contract.APPLICATION_RUNTIME['platform_digests'].items()
+        ]}).encode()
+        identity = copy.deepcopy(contract.APPLICATION_RUNTIME)
+        identity['image'] = repository + '@sha256:' + hashlib.sha256(index).hexdigest()
+        tooling = SimpleNamespace(CLOUD_GH_RELEASES={'x86_64': {}, 'aarch64': {}},
+                                  stage_gh_cli=mock.Mock(return_value='/trusted-fixture/gh'))
+        for machine, architecture in [('x86_64', 'amd64'), ('aarch64', 'arm64')]:
+            child = repository + '@' + identity['platform_digests'][architecture]
+            for digests, os_name, observed_arch, valid in [
+                ([child], 'linux', architecture, True),
+                ([identity['image'], child], 'linux', architecture, True),
+                ([identity['image']], 'linux', architecture, False),
+                ([repository + '@sha256:' + '0'*64], 'linux', architecture, False),
+                ([child], 'windows', architecture, False),
+                ([child], 'linux', 'other', False),
+                (child, 'linux', architecture, False),
+            ]:
+                with self.subTest(machine=machine, digests=digests, os=os_name, architecture=observed_arch), \
+                     tempfile.TemporaryDirectory() as directory:
+                    base = Path(directory)
+                    client = base / 'client'
+                    client.mkdir()
+                    observer = module.Observer.__new__(module.Observer)
+                    observer.environment = {'PATH': '/usr/bin:/bin'}
+                    observer.runtime = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+                    def command(operation, arguments, **options):
+                        if arguments[0] == 'python3':
+                            Path(arguments[2]).write_bytes(index)
+                            Path(arguments[3]).write_text('{}')
+                        if arguments[:3] == ['podman', 'image', 'inspect']:
+                            return 0, json.dumps([{'Os': os_name, 'Architecture': observed_arch, 'RepoDigests': digests}]), ''
+                        return (1, '', '') if arguments[:3] == ['podman', 'image', 'exists'] else (0, '', '')
+                    observer.run = mock.Mock(side_effect=command)
+                    with mock.patch.multiple(module, APPLICATION_IMAGE_STATE=base/'image-state', CLIENT=client), \
+                         mock.patch.object(module, 'trusted_module', return_value=tooling), \
+                         mock.patch.object(module.os, 'uname', return_value=SimpleNamespace(machine=machine)), \
+                         mock.patch.object(contract, 'APPLICATION_RUNTIME', identity):
+                        if valid:
+                            observer.admit_application_image()
+                        else:
+                            with self.assertRaises(contract.QualificationError):
+                                observer.admit_application_image()
+                    observer.run.assert_any_call('admit-application-image',
+                        ['podman', 'pull', '--authfile=' + str(client/'anonymous-auth.json'), identity['image']],
+                        user='secpal-runtime', timeout=300)
+
     def test_psql_only_evidence_cannot_establish_application_readiness(self):
         evidence, options = self.system_fixture('gcp-rocky-10-2-arm64')
         # The historical contract has only psql readiness and sleep-container
