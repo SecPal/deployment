@@ -61,6 +61,9 @@ are authoritative for their current delivery state.
 The public [portable provider capability contract](docs/provider-capability-contract.md)
 defines bounded create, inspect, rebuild, and delete adapter mechanics without
 embedding provider selection, customer/fleet state, or commercial policy.
+The [PROTECTED provider-firewall adapter contract](docs/provider-firewall-contract.md)
+consumes #214 accepted CloudFront Origin state and defines #169-correlated,
+ownership-scoped planning, verification, and fresh-state-bound semantic rollback.
 The [PROTECTED CloudFront Viewer Edge contract](docs/cloudfront-viewer-edge.md)
 implements the bounded Multi-Tenant Distribution, Distribution Tenant, and
 managed Viewer-certificate lifecycle without performing provider mutation.
