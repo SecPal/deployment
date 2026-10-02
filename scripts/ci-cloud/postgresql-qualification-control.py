@@ -112,7 +112,7 @@ class GitHubObserver:
         for pull in self.connection(repository['pullRequests']):
             closing = [f"{issue['repository']['nameWithOwner']}#{issue['number']}"
                        for issue in self.connection(pull['closingIssuesReferences'])]
-            events = self.connection(pull['timelineItems'])
+            lifecycle = contract.normalize_lifecycle_timeline(pull['timelineItems'])
             commits = []
             if 'SecPal/deployment#81' in closing:
                 total = pull['commits']['totalCount']
@@ -132,8 +132,7 @@ class GitHubObserver:
                 'head_repository': None if pull['headRepository'] is None else pull['headRepository']['nameWithOwner'],
                 'base': pull['baseRefName'], 'head': pull['headRefOid'], 'body': pull['body'],
                 'closing_issues': closing, 'draft': pull['isDraft'],
-                'ready_events': sum(event['__typename'] == 'ReadyForReviewEvent' for event in events),
-                'draft_events': sum(event['__typename'] == 'ConvertToDraftEvent' for event in events),
+                **lifecycle,
                 'commits': commits,
             })
         return contract.select_candidate(pulls)
