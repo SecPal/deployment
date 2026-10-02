@@ -229,13 +229,13 @@ def select_candidate(pulls: object) -> dict[str, Any]:
 ROLE_ATTRIBUTES = ('superuser', 'create_db', 'create_role', 'inherit', 'replication', 'bypass_rls', 'login')
 ROLE_POLICY = {
     'secpal_owner': [False, False, False, False, False, False, False],
-    'secpal_runtime': [False, False, False, False, False, False, True],
-    'secpal_migration': [False, False, False, False, False, False, True],
+    'secpal_runtime': [False, False, False, False, False, False, False],
+    'secpal_migration': [False, False, False, False, False, False, False],
     'secpal_backup': [False, False, False, False, False, False, False],
     'secpal_replication': [False, False, False, False, True, False, False],
 }
 OBSERVATION_FIELDS = {'server_version_num', 'service', 'data_directory', 'process_label',
-                      'listeners', 'settings', 'roles', 'memberships', 'password_algorithms',
+                      'listeners', 'settings', 'roles', 'issued_logins', 'memberships', 'password_algorithms',
                       'hba', 'probes', 'locking', 'rootless_liveness', 'container_servers',
                       'loopback_sentinel_host', 'native_cgroup', 'restart_row_count', 'tls_material'}
 
@@ -277,9 +277,28 @@ def normalize_listeners(raw: str) -> list[str]:
     return sorted(row[3] for row in rows)
 
 
-def admit_observations(raw: object) -> dict[str, Any]:
+def qualification_logins(run_id: str, run_attempt: str, expires_at: int) -> dict[str, Any]:
+    """Bounded test identities, never production Secret Authority issuance."""
+    if (not isinstance(run_id, str) or RUN.fullmatch(run_id) is None
+            or not isinstance(run_attempt, str) or ATTEMPT.fullmatch(run_attempt) is None
+            or type(expires_at) is not int or not 1 <= expires_at <= 253402300799):
+        raise QualificationError('validate-authorization', 'representation-invalid')
+    return {kind: {'name': f'secpal_qualification_{kind}_{run_id}_{run_attempt}',
+                   'attributes': [False, False, False, kind == 'runtime', False, False, True],
+                   'expires_at': expires_at} for kind in ('runtime', 'migration')}
+
+
+def qualification_memberships(logins: dict[str, Any]) -> list[list[Any]]:
+    # Explicit ADMIN/INHERIT/SET observations prevent authority inheritance drift.
+    return [['secpal_migration', logins['migration']['name'], False, True, True],
+            ['secpal_owner', 'secpal_migration', False, False, True],
+            ['secpal_runtime', logins['runtime']['name'], False, True, False]]
+
+
+def admit_observations(raw: object, *, run_id: str, run_attempt: str, expires_at: int) -> dict[str, Any]:
     if not isinstance(raw, dict) or set(raw) != OBSERVATION_FIELDS:
         raise QualificationError('admit-qualification', 'representation-invalid')
+    logins = qualification_logins(run_id, run_attempt, expires_at)
     expected = {
         'service': {'User': 'postgres', 'Group': 'postgres', 'ActiveState': 'active',
                     'UnitFileState': 'enabled', 'FragmentPath': '/usr/lib/systemd/system/postgresql.service'},
@@ -294,13 +313,14 @@ def admit_observations(raw: object) -> dict[str, Any]:
                      'ssl_key_file': '/etc/secpal/postgresql/current/server.key',
                      'ssl_ca_file': '/etc/secpal/postgresql/current/ca.crt'},
         'roles': ROLE_POLICY,
-        'memberships': [['secpal_owner', 'secpal_migration', False, True]],
-        'password_algorithms': {'secpal_runtime': 'SCRAM-SHA-256', 'secpal_migration': 'SCRAM-SHA-256'},
+        'issued_logins': logins,
+        'memberships': qualification_memberships(logins),
+        'password_algorithms': {'runtime': 'SCRAM-SHA-256', 'migration': 'SCRAM-SHA-256'},
         'hba': [
             ['local', ['all'], ['postgres'], None, None, 'peer', None],
             ['local', ['all'], ['all'], None, None, 'reject', None],
-            ['hostssl', ['secpal'], ['secpal_runtime', 'secpal_migration'], '127.0.0.1', '255.255.255.255', 'scram-sha-256', None],
-            ['hostssl', ['secpal'], ['secpal_runtime', 'secpal_migration'], '::1', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'scram-sha-256', None],
+            ['hostssl', ['secpal'], ['+secpal_runtime', '+secpal_migration'], '127.0.0.1', '255.255.255.255', 'scram-sha-256', None],
+            ['hostssl', ['secpal'], ['+secpal_runtime', '+secpal_migration'], '::1', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'scram-sha-256', None],
             ['host', ['all'], ['all'], '0.0.0.0', '0.0.0.0', 'reject', None],
             ['host', ['all'], ['all'], '::', '::', 'reject', None],
         ],
@@ -330,8 +350,8 @@ def policy_configuration(runtime_uid: int | str) -> dict[str, str]:
     }
     hba = (
         'local all postgres peer\nlocal all all reject\n'
-        'hostssl secpal secpal_runtime,secpal_migration 127.0.0.1/32 scram-sha-256\n'
-        'hostssl secpal secpal_runtime,secpal_migration ::1/128 scram-sha-256\n'
+        'hostssl secpal +secpal_runtime,+secpal_migration 127.0.0.1/32 scram-sha-256\n'
+        'hostssl secpal +secpal_runtime,+secpal_migration ::1/128 scram-sha-256\n'
         'host all all 0.0.0.0/0 reject\nhost all all ::/0 reject\n'
     )
     rules = f'''table inet secpal_postgresql {{
@@ -345,11 +365,11 @@ def policy_configuration(runtime_uid: int | str) -> dict[str, str]:
 }}
 '''
     roles = '''CREATE ROLE secpal_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
-CREATE ROLE secpal_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
-CREATE ROLE secpal_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+CREATE ROLE secpal_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+CREATE ROLE secpal_migration NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
 CREATE ROLE secpal_backup NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
 CREATE ROLE secpal_replication NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT REPLICATION NOBYPASSRLS;
-GRANT secpal_owner TO secpal_migration WITH INHERIT FALSE, SET TRUE;
+GRANT secpal_owner TO secpal_migration WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 CREATE DATABASE secpal OWNER secpal_owner;
 REVOKE ALL ON DATABASE secpal FROM PUBLIC;
 GRANT CONNECT ON DATABASE secpal TO secpal_runtime, secpal_migration;
@@ -383,7 +403,8 @@ def render_configuration(declaration: object, runtime_uid: int) -> dict[str, str
 
 CLEANUP_POSTCONDITIONS = {'service_stopped': True, 'nft_table_absent': True,
     'client_container_absent': True, 'client_material_absent': True,
-    'server_material_absent': True, 'test_authority_absent': True, 'credentials_forgotten': True}
+    'server_material_absent': True, 'test_authority_absent': True, 'credentials_forgotten': True,
+    'database_material_absent': True}
 
 
 def bound_diagnostic(operation: str, reason: str, *, authorization: object,
@@ -422,6 +443,11 @@ def admit_diagnostic(raw: object, *, authorization: dict[str, Any], binding: dic
     for name in ('authorization', 'host_evidence_sha256'):
         if raw[name] is None:
             expected[name] = None
+    if raw['resource'] is None:
+        if (raw['operation'] != 'validate-authorization' or raw['authorization'] is not None
+                or raw['host_evidence_sha256'] is not None or raw['cleanup_complete'] is not False):
+            raise QualificationError('admit-qualification', 'identity-mismatch')
+        expected['resource'] = None
     if type(raw['cleanup_complete']) is not bool or canonical_bytes(raw) != canonical_bytes(expected):
         raise QualificationError('admit-qualification', 'identity-mismatch')
     return dict(raw)
@@ -457,7 +483,8 @@ def admit_evidence(document: object, *, authorization: dict[str, Any], instance_
         pinned = admit_declaration(declaration)
         if package['version'] != pinned['package_version'] or package['release'] != pinned['package_release']:
             raise QualificationError('observe-packages', 'identity-mismatch')
-    observations = admit_observations(document['observations'])
+    observations = admit_observations(document['observations'], run_id=qualification_run_id,
+        run_attempt=qualification_run_attempt, expires_at=authorization['expires_at'])
     minor = int(admit_declaration(declaration)['package_version'].split('.')[1])
     if observations['server_version_num'] != str(180000 + minor):
         raise QualificationError('admit-qualification', 'identity-mismatch')

@@ -88,17 +88,28 @@ Synthetic certificates/passwords belong only to this exact ephemeral run.
 Product containers receive a client CA and runtime credential, never a server
 key or CA private key. Private test signing material is deleted after issuance.
 Production generation, delivery, rotation and recovery remain #100.
+The five stable privilege roles are `NOLOGIN`. Qualification issues separate
+run-bound, expiring runtime and migration test logins with SCRAM credentials.
+HBA matches membership in the stable runtime/migration groups. Runtime inherits
+only runtime privileges; migration must explicitly `SET ROLE secpal_owner` for
+DDL. Membership admission includes the `ADMIN`, `INHERIT` and `SET` options;
+test identities and expiration are independently observed from PostgreSQL.
+See [PostgreSQL role grants](https://www.postgresql.org/docs/18/sql-grant.html)
+and [HBA group matching](https://www.postgresql.org/docs/18/auth-pg-hba-conf.html).
 
 Subprocess output is bounded while it is collected, both streams are drained,
 and timeout/overflow terminates the exact command group. Evidence contains
 fixed non-secret facts and statuses, not arbitrary process output or passwords.
 Failure artifacts have closed semantic operation/reason plus observed source,
 resource, host and run bindings; unobserved source/host facts are explicitly
-null and cannot establish PASS. Trusted transport retrieves and independently
+null and cannot establish PASS. A failure before observer construction still
+emits a diagnostic; a null resource is admitted only for an initial admission
+failure with no observed source/host binding or completed guest cleanup.
+Trusted transport retrieves and independently
 admits failures before enforcing the unsuccessful outcome.
 
 Guest cleanup verifies the exact client container and nft table absent, native
-service stopped, test/server/client material absent and in-memory credentials
+service stopped, run-created PGDATA and test/server/client material absent and in-memory credentials
 forgotten. The existing control-plane cleanup then destroys only exact
 run-owned ephemeral resources and verifies provider absence. Guest cleanup is
 not provider cleanup. Both architecture runs must succeed and complete their

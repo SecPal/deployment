@@ -371,7 +371,8 @@
         "server_version_num",
         "service",
         "settings",
-        "tls_material"
+        "tls_material",
+        "issued_logins"
       ],
       "properties": {
         "container_servers": {
@@ -445,8 +446,8 @@
           "maxItems": 32,
           "items": {
             "type": "array",
-            "minItems": 4,
-            "maxItems": 4
+            "minItems": 5,
+            "maxItems": 5
           }
         },
         "native_cgroup": {
@@ -456,13 +457,13 @@
         "password_algorithms": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["secpal_runtime", "secpal_migration"],
+          "required": ["runtime", "migration"],
           "properties": {
-            "secpal_runtime": {
+            "runtime": {
               "type": "string",
               "maxLength": 32
             },
-            "secpal_migration": {
+            "migration": {
               "type": "string",
               "maxLength": 32
             }
@@ -817,6 +818,63 @@
               }
             }
           }
+        },
+        "issued_logins": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtime", "migration"],
+          "properties": {
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "attributes", "expires_at"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 63,
+                  "pattern": "^secpal_qualification_(runtime|migration)_[1-9][0-9]{0,19}_[1-9][0-9]{0,2}$"
+                },
+                "attributes": {
+                  "type": "array",
+                  "minItems": 7,
+                  "maxItems": 7,
+                  "items": {
+                    "type": "boolean"
+                  }
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 253402300799
+                }
+              }
+            },
+            "migration": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "attributes", "expires_at"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 63,
+                  "pattern": "^secpal_qualification_(runtime|migration)_[1-9][0-9]{0,19}_[1-9][0-9]{0,2}$"
+                },
+                "attributes": {
+                  "type": "array",
+                  "minItems": 7,
+                  "maxItems": 7,
+                  "items": {
+                    "type": "boolean"
+                  }
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 253402300799
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -830,7 +888,8 @@
         "client_material_absent",
         "server_material_absent",
         "test_authority_absent",
-        "credentials_forgotten"
+        "credentials_forgotten",
+        "database_material_absent"
       ],
       "properties": {
         "service_stopped": {
@@ -852,6 +911,9 @@
           "const": true
         },
         "credentials_forgotten": {
+          "const": true
+        },
+        "database_material_absent": {
           "const": true
         }
       }

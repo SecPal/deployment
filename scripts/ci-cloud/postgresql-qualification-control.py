@@ -77,6 +77,8 @@ class GitHubObserver:
         headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json',
                    'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'SecPal-PostgreSQL-Qualification'}
         payload = None if document is None else contract.canonical_bytes(document)
+        if document is not None:
+            headers['Content-Type'] = 'application/json'
         request = urllib.request.Request('https://api.github.com' + path, data=payload, headers=headers)
         try:
             with self.opener.open(request, timeout=20) as response:

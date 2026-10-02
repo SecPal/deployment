@@ -21,6 +21,87 @@ import postgresql_qualification_contract as contract
 
 
 class CandidateData(unittest.TestCase):
+    def load_module(self, name, filename):
+        spec = importlib.util.spec_from_file_location(name, ROOT / filename)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_graphql_document_uses_json_media_type(self):
+        control = self.load_module('pg_request', 'scripts/ci-cloud/postgresql-qualification-control.py')
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.read.return_value = b'{}'
+        observer = control.GitHubObserver()
+        with mock.patch.dict(os.environ, {'GH_TOKEN': 'synthetic-test-only'}), \
+             mock.patch.object(observer.opener, 'open', return_value=response) as request:
+            observer.request('/graphql', {'query': control.QUERY})
+        self.assertEqual(request.call_args.args[0].get_header('Content-type'), 'application/json')
+
+    def test_stable_privilege_roles_cannot_authenticate(self):
+        bundle = contract.render_configuration(contract.DECLARATION, 1234)
+        for name in contract.ROLE_POLICY:
+            self.assertFalse(contract.ROLE_POLICY[name][-1])
+            self.assertIn(f'CREATE ROLE {name} NOLOGIN ', bundle['roles.sql'])
+        self.assertIn('+secpal_runtime,+secpal_migration', bundle['pg_hba.conf'])
+        self.assertIn('WITH ADMIN FALSE, INHERIT FALSE, SET TRUE', bundle['roles.sql'])
+
+    def test_cleanup_removes_only_run_created_database_material(self):
+        module = self.load_module('pg_cleanup', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        observer = module.Observer.__new__(module.Observer)
+        observer.children = []
+        observer.passwords = {'synthetic': 'synthetic-test-only'}
+        observer.data_created = True
+        observer.run = mock.Mock(return_value=(3, 'inactive', ''))
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            with mock.patch.multiple(module, DATA=base/'data', CLIENT=base/'client',
+                                     MATERIAL=base/'material', STATE=base/'state'):
+                module.DATA.mkdir()
+                (module.DATA/'PG_VERSION').write_text('18')
+                (module.DATA/'synthetic-verifier').write_text('synthetic-test-only')
+                cleanup = observer.cleanup()
+                self.assertFalse(module.DATA.exists())
+                self.assertTrue(cleanup['database_material_absent'])
+                module.DATA.mkdir()
+                (module.DATA/'unowned').write_text('preserve')
+                observer.data_created = False
+                with self.assertRaises(contract.QualificationError):
+                    observer.prepare(contract.DECLARATION)
+                self.assertEqual((module.DATA/'unowned').read_text(), 'preserve')
+
+    def test_pre_observer_failure_still_writes_admissible_diagnostic(self):
+        from jsonschema import Draft202012Validator
+        module = self.load_module('pg_early_failure', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        evidence, options = self.system_fixture('gcp-rocky-10-2-arm64')
+        auth = evidence['authorization']
+        binding = dict(control_sha=auth['control_sha'], profile=auth['profile'], access_run_id='200',
+                       access_run_attempt='1', instance_id=evidence['instance_id'], instance_name=evidence['instance_name'])
+        schema = json.loads((ROOT/'schemas/postgresql-qualification-diagnostic.schema.json').read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            (base/'prepared').touch()
+            with mock.patch.multiple(module, __file__='/opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py',
+                                     STATE=base, AUTHORIZATION=base/'missing', DIAGNOSTIC=base/'diagnostic.json'), \
+                 mock.patch.object(module.os, 'geteuid', return_value=0), \
+                 mock.patch.object(module.os, 'fchown'), \
+                 mock.patch.object(module.pwd, 'getpwnam', return_value=mock.Mock(pw_gid=os.getgid())), \
+                 mock.patch.object(module, 'Observer', side_effect=AssertionError('must not construct observer')), \
+                 mock.patch.object(sys, 'argv', ['qualify', '--run-id', '200', '--run-attempt', '1']):
+                self.assertEqual(module.main(), 1)
+            document = json.loads((base/'diagnostic.json').read_text())
+            Draft202012Validator(schema).validate(document)
+            self.assertIsNone(document['resource'])
+            self.assertFalse(document['cleanup_complete'])
+            self.assertEqual(contract.admit_diagnostic(document, authorization=auth, binding=binding,
+                qualification_run_id='200', qualification_run_attempt='1', host_evidence_sha256='0'*64), document)
+
+    def test_qualification_runner_installs_its_own_pinned_schema_dependency(self):
+        import yaml
+        job = yaml.safe_load((ROOT/'.github/workflows/rocky-cloud-qualification.yml').read_text())['jobs']['qualify_target']
+        self.assertTrue(any('jsonschema==4.25.1' in step.get('run', '') for step in job['steps']))
+
     def test_workflow_composes_pg_data_with_frozen_host_authority(self):
         source = (ROOT / '.github/workflows/rocky-cloud-qualification.yml').read_text()
         self.assertIn('native-postgresql-18', source)
@@ -58,16 +139,17 @@ class CandidateData(unittest.TestCase):
                 'data_directory': '/var/lib/pgsql/data', 'ssl_cert_file': '/etc/secpal/postgresql/current/server.crt',
                 'ssl_key_file': '/etc/secpal/postgresql/current/server.key', 'ssl_ca_file': '/etc/secpal/postgresql/current/ca.crt'},
             'roles': {'secpal_owner': [False,False,False,False,False,False,False],
-                      'secpal_runtime': [False,False,False,False,False,False,True],
-                      'secpal_migration': [False,False,False,False,False,False,True],
+                      'secpal_runtime': [False,False,False,False,False,False,False],
+                      'secpal_migration': [False,False,False,False,False,False,False],
                       'secpal_backup': [False,False,False,False,False,False,False],
                       'secpal_replication': [False,False,False,False,True,False,False]},
-            'memberships': [['secpal_owner','secpal_migration',False,True]],
-            'password_algorithms': {'secpal_runtime': 'SCRAM-SHA-256','secpal_migration':'SCRAM-SHA-256'},
+            'issued_logins': contract.qualification_logins('200','1',auth['expires_at']),
+            'memberships': contract.qualification_memberships(contract.qualification_logins('200','1',auth['expires_at'])),
+            'password_algorithms': {'runtime': 'SCRAM-SHA-256','migration':'SCRAM-SHA-256'},
             'hba': [['local',['all'],['postgres'],None,None,'peer',None],
                     ['local',['all'],['all'],None,None,'reject',None],
-                    ['hostssl',['secpal'],['secpal_runtime','secpal_migration'],'127.0.0.1','255.255.255.255','scram-sha-256',None],
-                    ['hostssl',['secpal'],['secpal_runtime','secpal_migration'],'::1','ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff','scram-sha-256',None],
+                    ['hostssl',['secpal'],['+secpal_runtime','+secpal_migration'],'127.0.0.1','255.255.255.255','scram-sha-256',None],
+                    ['hostssl',['secpal'],['+secpal_runtime','+secpal_migration'],'::1','ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff','scram-sha-256',None],
                     ['host',['all'],['all'],'0.0.0.0','0.0.0.0','reject',None],
                     ['host',['all'],['all'],'::','::','reject',None]],
             'probes': dict(contract.PROBES), 'locking': {'row_sqlstate':'55P03','advisory_held':'f','advisory_released':'t'},
@@ -100,12 +182,16 @@ class CandidateData(unittest.TestCase):
                                 (('observations','process_label'),'unconfined_t'),
                                 (('observations','roles','secpal_runtime'),[True]*7),
                                 (('observations','memberships'),[['secpal_owner','secpal_runtime',True,True]]),
+                                (('observations','issued_logins','runtime','expires_at'),11801),
+                                (('observations','issued_logins','migration','name'),'secpal_qualification_migration_201_1'),
+                                (('observations','issued_logins','runtime','attributes'),[True]*7),
                                 (('observations','probes','wrong-hostname'),0),
                                 (('observations','probes','ready-down'),0),
                                 (('observations','hba'),[['host',['all'],['all'],'0.0.0.0','0.0.0.0','trust',None]]),
-                                (('observations','password_algorithms','secpal_runtime'),'md5'),
+                                (('observations','password_algorithms','runtime'),'md5'),
                                 (('observations','tls_material','server.key','mode'),'644'),
                                 (('cleanup','client_material_absent'),False),
+                                (('cleanup','database_material_absent'),False),
                                 (('packages','postgresql18','repositories'),['untrusted']),
                                 (('packages','postgresql18','release'),'2.el10_2')):
                 changed = copy.deepcopy(evidence)
@@ -270,7 +356,7 @@ class CandidateData(unittest.TestCase):
     def test_shared_configuration_rendering_preserves_narrow_policy(self):
         result = contract.render_configuration(contract.DECLARATION, 1234)
         self.assertIn("listen_addresses = '127.0.0.1,::1'", result['postgresql.conf'])
-        self.assertIn('hostssl secpal secpal_runtime,secpal_migration 127.0.0.1/32 scram-sha-256', result['pg_hba.conf'])
+        self.assertIn('hostssl secpal +secpal_runtime,+secpal_migration 127.0.0.1/32 scram-sha-256', result['pg_hba.conf'])
         self.assertIn('meta skuid 1234 ip daddr 127.0.0.0/8 tcp dport 5432 accept', result['loopback.nft'])
         self.assertIn('meta skuid 1234 ip daddr 127.0.0.0/8 reject', result['loopback.nft'])
         self.assertIn('NOINHERIT', result['roles.sql'])
@@ -283,7 +369,7 @@ class CandidateData(unittest.TestCase):
     def test_observer_claims_cannot_substitute_for_native_facts(self):
         for raw in ({'PASS': True}, {'probes': contract.PROBES}, dict.fromkeys(contract.OBSERVATION_FIELDS, True)):
             with self.assertRaises(contract.QualificationError):
-                contract.admit_observations(raw)
+                contract.admit_observations(raw, run_id='200', run_attempt='1', expires_at=11800)
 
     def test_unique_signed_primary_candidate(self):
         pr = {'number': 400, 'state': 'OPEN', 'repository': 'SecPal/deployment',

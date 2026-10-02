@@ -103,6 +103,17 @@ def bounded_process(arguments, *, environment, text=None, timeout=60, limit=2621
             process.stderr.close()
 
 
+def write_evidence(path: Path, content: str, *, owner=0, group=0, mode=0o600):
+    """Fixed root-owned output, independent of observer initialization."""
+    if path.is_symlink():
+        raise contract.QualificationError('write-evidence', 'identity-mismatch')
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    with os.fdopen(descriptor, 'w') as stream:
+        stream.write(content)
+        os.fchmod(stream.fileno(), mode)
+        os.fchown(stream.fileno(), owner, group)
+
+
 class Observer:
     """All host mutations/observations are fixed accepted-main operations."""
     def __init__(self):
@@ -112,6 +123,8 @@ class Observer:
         self.passwords = {}
         self.children = []
         self.mutated = False
+        self.data_created = False
+        self.logins = {}
         self.environment = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'HOME': '/root'}
 
     def run(self, operation, arguments, *, user=None, sql=None, accepted=(0,), timeout=60):
@@ -137,11 +150,11 @@ class Observer:
                           '-v', 'VERBOSITY=sqlstate', '-d', database], user='postgres',
                         sql=prefix + statement, accepted=accepted)
 
-    def tcp(self, statement='SELECT 1;', *, role='secpal_runtime', host='db.secpal.internal',
+    def tcp(self, statement='SELECT 1;', *, role='runtime', host='db.secpal.internal',
             address='127.0.0.1', ca=None, password=None, accepted=(0, 2, 3)):
         self.operation = 'probe-transport'
         env = dict(self.environment, PGHOST=host, PGHOSTADDR=address, PGDATABASE='secpal',
-                   PGUSER=role, PGPORT='5432', PGSSLMODE='verify-full', PGCONNECT_TIMEOUT='3',
+                   PGUSER=self.logins[role]['name'], PGPORT='5432', PGSSLMODE='verify-full', PGCONNECT_TIMEOUT='3',
                    PGSSLROOTCERT=str(ca or MATERIAL / 'ca.crt'),
                    PGPASSWORD=password if password is not None else self.passwords[role])
         result = bounded_process(['psql', '-X', '-qAt', '-v', 'ON_ERROR_STOP=1',
@@ -153,17 +166,11 @@ class Observer:
 
     def write(self, path: Path, content: str, *, owner=0, group=0, mode=0o600):
         self.operation = 'configure-postgresql'
-        if path.is_symlink():
-            raise contract.QualificationError(self.operation, 'identity-mismatch')
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
-        with os.fdopen(descriptor, 'w') as stream:
-            stream.write(content)
-            os.fchmod(stream.fileno(), mode)
-            os.fchown(stream.fileno(), owner, group)
+        write_evidence(path, content, owner=owner, group=group, mode=mode)
 
     def prepare(self, declaration):
         # No destructive operation is reachable against an existing database.
-        if (DATA.is_symlink() or (DATA / 'PG_VERSION').exists()
+        if (DATA.is_symlink() or (DATA.exists() and (not DATA.is_dir() or any(DATA.iterdir())))
                 or MATERIAL.exists() or MATERIAL.is_symlink() or CLIENT.exists() or CLIENT.is_symlink()):
             raise contract.QualificationError('initialize-postgresql', 'identity-mismatch')
         self.run('configure-loopback-policy', ['nft', 'list', 'table', 'inet', 'secpal_postgresql'], accepted=(1,))
@@ -176,9 +183,10 @@ class Observer:
         self.run('install-postgresql', ['dnf4', '-y', '--disablerepo=*',
                  '--enablerepo=baseos,appstream,extras', 'upgrade', *pins], timeout=300)
         self.postgres = pwd.getpwnam('postgres')
-        if DATA.is_symlink() or (DATA / 'PG_VERSION').exists():
+        if DATA.is_symlink() or (DATA.exists() and (not DATA.is_dir() or any(DATA.iterdir()))):
             raise contract.QualificationError('initialize-postgresql', 'identity-mismatch')
         DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.data_created = True
         os.chown(DATA, self.postgres.pw_uid, self.postgres.pw_gid)
         DATA.chmod(0o700)
         self.run('initialize-postgresql', ['initdb', '-D', str(DATA), '--encoding=UTF8',
@@ -202,14 +210,22 @@ class Observer:
         self.run('start-postgresql', ['systemctl', 'daemon-reload'])
         self.run('start-postgresql', ['systemctl', 'enable', '--now', 'postgresql.service'])
         self.sql(rendered['roles.sql'], database='postgres')
-        for role in ('secpal_runtime', 'secpal_migration'):
-            self.passwords[role] = secrets.token_hex(32)
-            self.sql(f"ALTER ROLE {role} PASSWORD '{self.passwords[role]}';")
+        for kind, identity in self.logins.items():
+            name = identity['name']
+            self.passwords[kind] = secrets.token_hex(32)
+            expiry = time.strftime('%Y-%m-%d %H:%M:%S+00', time.gmtime(identity['expires_at']))
+            inherit = 'INHERIT' if kind == 'runtime' else 'NOINHERIT'
+            can_set = 'FALSE' if kind == 'runtime' else 'TRUE'
+            # Only this bounded ephemeral test authority issues these identities.
+            # Explicit membership inheritance grants CONNECT without inheriting owner DDL.
+            self.sql(f"CREATE ROLE {name} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE {inherit} "
+                     f"NOREPLICATION NOBYPASSRLS PASSWORD '{self.passwords[kind]}' VALID UNTIL '{expiry}';\n"
+                     f"GRANT secpal_{kind} TO {name} WITH ADMIN FALSE, INHERIT TRUE, SET {can_set};")
         self.sql('''SET ROLE secpal_owner;
 CREATE TABLE qualification_state (id uuid PRIMARY KEY, value jsonb NOT NULL, sequence integer UNIQUE CHECK (sequence > 0));
 INSERT INTO qualification_state VALUES ('00000000-0000-0000-0000-000000000081', '{"persistent":true}', 1);
 ''')
-        self.write(CLIENT / '.pgpass', f'db.secpal.internal:5432:secpal:secpal_runtime:{self.passwords["secpal_runtime"]}\n',
+        self.write(CLIENT / '.pgpass', f'db.secpal.internal:5432:secpal:{self.logins["runtime"]["name"]}:{self.passwords["runtime"]}\n',
                    owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
 
     def issue_material(self):
@@ -246,7 +262,7 @@ INSERT INTO qualification_state VALUES ('00000000-0000-0000-0000-000000000081', 
                      '--network=' + network, '--add-host=db.secpal.internal:169.254.81.1',
                      '--volume=' + str(CLIENT) + ':/run/secpal-pg:ro,Z',
                      '--env=PGHOST=db.secpal.internal', '--env=PGPORT=5432', '--env=PGDATABASE=secpal',
-                     '--env=PGUSER=secpal_runtime', '--env=PGSSLMODE=verify-full',
+                     '--env=PGUSER=' + self.logins['runtime']['name'], '--env=PGSSLMODE=verify-full',
                      '--env=PGSSLROOTCERT=/run/secpal-pg/ca.crt', '--env=PGPASSFILE=/run/secpal-pg/.pgpass',
                      '--env=PGCONNECT_TIMEOUT=3', '--entrypoint=' + command[0]]
         arguments += ['--detach', '--name=' + CONTAINER] if detached else ['--rm']
@@ -265,14 +281,14 @@ INSERT INTO qualification_state VALUES ('00000000-0000-0000-0000-000000000081', 
         p['wrong-password'] = self.tcp(password='wrong-qualification-password')[0]
         p['server-key-runtime-denied'] = self.run('probe-transport', ['test', '-r', str(MATERIAL / 'server.key')],
                                                  user='secpal-runtime', accepted=(0, 1))[0]
-        environment = dict(self.environment, PGHOST='127.0.0.1', PGDATABASE='secpal', PGUSER='secpal_runtime',
-                           PGPASSWORD=self.passwords['secpal_runtime'], PGSSLMODE='disable', PGCONNECT_TIMEOUT='3')
+        environment = dict(self.environment, PGHOST='127.0.0.1', PGDATABASE='secpal', PGUSER=self.logins['runtime']['name'],
+                           PGPASSWORD=self.passwords['runtime'], PGSSLMODE='disable', PGCONNECT_TIMEOUT='3')
         plain = bounded_process(['psql', '-X', '-qAt', '-c', 'SELECT 1;'], environment=environment,
                                 timeout=10, limit=8192, operation='probe-transport')
         p['plaintext'] = plain.returncode
         p['runtime-ddl'] = self.tcp('CREATE TABLE forbidden (id integer);')[0]
         p['runtime-role-escalation'] = self.tcp('SET ROLE secpal_owner;')[0]
-        p['migration-ddl'] = self.tcp('SET ROLE secpal_owner; CREATE TABLE migration_probe (id integer);', role='secpal_migration')[0]
+        p['migration-ddl'] = self.tcp('SET ROLE secpal_owner; CREATE TABLE migration_probe (id integer);', role='migration')[0]
         p['backup-read'] = self.sql('SELECT count(*) FROM qualification_state;', role='secpal_backup')[0]
         p['backup-ddl'] = self.sql('CREATE TABLE forbidden_backup (id integer);', role='secpal_backup', accepted=(0, 3))[0]
         status, output, _ = self.tcp('''BEGIN;
@@ -378,10 +394,19 @@ SELECT 1 / (CASE WHEN count(*)=1 THEN 1 ELSE 0 END) FROM qualification_state;
             if self.sql('SHOW ' + setting + ';')[1] != '':
                 raise contract.QualificationError('observe-native-service', 'invariant-failed')
         roles = contract.normalize_json_fact(self.sql("""SELECT json_object_agg(rolname, json_build_array(rolsuper, rolcreatedb,
-rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolcanlogin)) FROM pg_roles WHERE rolname LIKE 'secpal_%';""")[1])
-        memberships = contract.normalize_json_fact(self.sql("""SELECT coalesce(json_agg(json_build_array(r.rolname,m.rolname,a.inherit_option,a.set_option) ORDER BY r.rolname,m.rolname),'[]')
+rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolcanlogin)) FROM pg_roles WHERE rolname LIKE 'secpal_%' AND rolname NOT LIKE 'secpal_qualification_%';""")[1])
+        issued = contract.normalize_json_fact(self.sql("""SELECT coalesce(json_object_agg(rolname, json_build_object('name',rolname,
+'attributes',json_build_array(rolsuper,rolcreatedb,rolcreaterole,rolinherit,rolreplication,rolbypassrls,rolcanlogin),
+'expires_at',extract(epoch FROM rolvaliduntil)::bigint)), '{}') FROM pg_roles WHERE rolname LIKE 'secpal_qualification_%';""")[1])
+        if set(issued) != {identity['name'] for identity in self.logins.values()}:
+            raise contract.QualificationError('probe-semantics', 'invariant-failed')
+        issued_logins = {kind: issued[identity['name']] for kind, identity in self.logins.items()}
+        memberships = contract.normalize_json_fact(self.sql("""SELECT coalesce(json_agg(json_build_array(r.rolname,m.rolname,a.admin_option,a.inherit_option,a.set_option) ORDER BY r.rolname,m.rolname),'[]')
 FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oid=a.member WHERE m.rolname LIKE 'secpal_%';""")[1])
-        algorithms = contract.normalize_json_fact(self.sql("""SELECT json_object_agg(rolname,split_part(rolpassword,'$',1)) FROM pg_authid WHERE rolname IN ('secpal_runtime','secpal_migration');""")[1])
+        passwords = contract.normalize_json_fact(self.sql("""SELECT json_object_agg(rolname,split_part(rolpassword,'$',1)) FROM pg_authid WHERE rolname LIKE 'secpal_%';""")[1])
+        if set(passwords) != set(roles) | set(issued) or any(passwords[name] is not None for name in roles):
+            raise contract.QualificationError('probe-semantics', 'invariant-failed')
+        algorithms = {kind: passwords[identity['name']] for kind, identity in self.logins.items()}
         hba = contract.normalize_json_fact(self.sql("""SELECT json_agg(json_build_array(type,database,user_name,address,netmask,auth_method,error) ORDER BY rule_number) FROM pg_hba_file_rules;""")[1])
         _, containers, _ = self.run('observe-native-service', ['podman', 'ps', '--all', '--format=json'], user='secpal-runtime')
         # Only clients ran. No persistent container may own a PostgreSQL server.
@@ -397,11 +422,13 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
                 'type': os.getxattr(MATERIAL / name, 'security.selinux').decode().rstrip('\0').split(':')[2]}
         raw = {'tls_material': tls_material, 'server_version_num': self.sql('SHOW server_version_num;')[1],
                'service': service, 'data_directory': data, 'process_label': label,
-               'listeners': listeners, 'settings': settings, 'roles': roles, 'memberships': memberships,
+               'listeners': listeners, 'settings': settings, 'roles': roles, 'issued_logins': issued_logins, 'memberships': memberships,
                'password_algorithms': algorithms, 'hba': hba, 'probes': probes, 'locking': locks,
                'rootless_liveness': live, 'container_servers': servers,
                'loopback_sentinel_host': sentinel, 'native_cgroup': cgroup, 'restart_row_count': count}
-        return contract.admit_observations(raw)
+        runtime = self.logins['runtime']
+        return contract.admit_observations(raw, run_id=self.run_id, run_attempt=self.run_attempt,
+                                            expires_at=runtime['expires_at'])
 
     def cleanup(self):
         self.operation = 'cleanup-test-material'
@@ -417,7 +444,10 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
         self.run('cleanup-test-material', ['systemctl', 'stop', 'postgresql.service'], accepted=(0, 5))
         self.run('cleanup-test-material', ['nft', 'delete', 'table', 'inet', 'secpal_postgresql'], accepted=(0, 1))
         # All paths are fixed root-created directories in this exact ephemeral run.
-        for path in (CLIENT, MATERIAL, STATE / 'postgresql-test-authority'):
+        paths = [CLIENT, MATERIAL, STATE / 'postgresql-test-authority']
+        if self.data_created:
+            paths.append(DATA)
+        for path in paths:
             if path.is_symlink():
                 raise contract.QualificationError('cleanup-test-material', 'identity-mismatch')
             if path.exists():
@@ -428,7 +458,7 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
         self.run('cleanup-test-material', ['nft', 'list', 'table', 'inet', 'secpal_postgresql'], accepted=(1,))
         self.run('cleanup-test-material', ['podman', 'container', 'exists', CONTAINER], user='secpal-runtime', accepted=(1,))
         if stopped != 'inactive' or any(path.exists() or path.is_symlink()
-                for path in (CLIENT, MATERIAL, STATE / 'postgresql-test-authority')) or self.passwords:
+                for path in (CLIENT, MATERIAL, STATE / 'postgresql-test-authority', DATA)) or self.passwords:
             raise contract.QualificationError('cleanup-test-material', 'invariant-failed')
         return dict(contract.CLEANUP_POSTCONDITIONS)
 
@@ -455,10 +485,14 @@ def main():
     binding = None
     host_digest = None
     cleanup_complete = False
+    safe_context = False
     try:
         # This program never doubles as a local/development or production installer.
         if (os.geteuid() != 0 or Path(__file__).resolve() != Path('/opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py')
-                or not (STATE / 'prepared').is_file() or AUTHORIZATION.is_symlink()
+                or STATE.is_symlink() or not STATE.is_dir()):
+            raise contract.QualificationError('validate-authorization', 'identity-mismatch')
+        safe_context = True
+        if (not (STATE / 'prepared').is_file() or AUTHORIZATION.is_symlink()
                 or AUTHORIZATION.stat().st_uid != 0 or stat.S_IMODE(AUTHORIZATION.stat().st_mode) != 0o600
                 or AUTHORIZATION.stat().st_size > 16384):
             raise contract.QualificationError('validate-authorization', 'identity-mismatch')
@@ -473,6 +507,9 @@ def main():
         profile = binding['profile']
         admitted_auth = contract.admit_authorization(auth, control_sha=control_sha, profile=profile,
              run_id=auth['run_id'], run_attempt=auth['run_attempt'], now=int(time.time()), declaration=declaration)
+        observer.run_id = options.run_id
+        observer.run_attempt = options.run_attempt
+        observer.logins = contract.qualification_logins(options.run_id, options.run_attempt, auth['expires_at'])
         for field, value in (('access_run_id', options.run_id), ('access_run_attempt', options.run_attempt)):
             if binding[field] != value:
                 raise contract.QualificationError('validate-authorization', 'identity-mismatch')
@@ -524,16 +561,16 @@ def main():
                 cleanup_complete = True
                 if document is not None:
                     document['cleanup'] = cleanup
-            except (contract.QualificationError, OSError):
+            except (contract.QualificationError, OSError, subprocess.SubprocessError):
                 failure = contract.diagnostic('cleanup-test-material', 'command-failed')
     if failure is not None:
         failure = contract.bound_diagnostic(failure['operation'], failure['reason'],
             authorization=admitted_auth, binding=binding, qualification_run_id=options.run_id,
             qualification_run_attempt=options.run_attempt, host_evidence_sha256=host_digest,
             cleanup_complete=cleanup_complete)
-        if observer is not None:
+        if safe_context:
             try:
-                observer.write(DIAGNOSTIC, json.dumps(failure) + '\n', owner=0,
+                write_evidence(DIAGNOSTIC, json.dumps(failure) + '\n', owner=0,
                                group=pwd.getpwnam('secpal-cloud').pw_gid, mode=0o440)
             except (OSError, KeyError, contract.QualificationError):
                 failure = contract.diagnostic('write-evidence', 'command-failed')

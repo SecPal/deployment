@@ -168,46 +168,53 @@
       ]
     },
     "resource": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "control_sha",
-        "profile",
-        "access_run_id",
-        "access_run_attempt",
-        "instance_id",
-        "instance_name"
-      ],
-      "properties": {
-        "control_sha": {
-          "type": "string",
-          "maxLength": 40,
-          "pattern": "^[0-9a-f]{40}$"
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "control_sha",
+            "profile",
+            "access_run_id",
+            "access_run_attempt",
+            "instance_id",
+            "instance_name"
+          ],
+          "properties": {
+            "control_sha": {
+              "type": "string",
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "profile": {
+              "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+            },
+            "access_run_id": {
+              "type": "string",
+              "maxLength": 20,
+              "pattern": "^[1-9][0-9]{0,19}$"
+            },
+            "access_run_attempt": {
+              "type": "string",
+              "maxLength": 3,
+              "pattern": "^[1-9][0-9]{0,2}$"
+            },
+            "instance_id": {
+              "type": "string",
+              "maxLength": 20,
+              "pattern": "^[1-9][0-9]{0,19}$"
+            },
+            "instance_name": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^sprk-[a-z0-9-]{1,55}-instance$"
+            }
+          }
         },
-        "profile": {
-          "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
-        },
-        "access_run_id": {
-          "type": "string",
-          "maxLength": 20,
-          "pattern": "^[1-9][0-9]{0,19}$"
-        },
-        "access_run_attempt": {
-          "type": "string",
-          "maxLength": 3,
-          "pattern": "^[1-9][0-9]{0,2}$"
-        },
-        "instance_id": {
-          "type": "string",
-          "maxLength": 20,
-          "pattern": "^[1-9][0-9]{0,19}$"
-        },
-        "instance_name": {
-          "type": "string",
-          "maxLength": 63,
-          "pattern": "^sprk-[a-z0-9-]{1,55}-instance$"
+        {
+          "type": "null"
         }
-      }
+      ]
     },
     "qualification_run_id": {
       "type": "string",
