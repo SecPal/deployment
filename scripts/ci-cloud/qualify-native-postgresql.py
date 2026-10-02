@@ -11,6 +11,7 @@ root-owned authorization arrives through the existing trusted startup script.
 from __future__ import annotations
 
 import argparse
+import base64
 import grp
 import hashlib
 import importlib.util
@@ -43,6 +44,9 @@ CLIENT = Path('/var/lib/secpal-postgresql-qualification-client')
 HOST_TARGET = '402c22b0a1d69a5a3dba74ffb68cf016caba606b'
 HOST_HARNESS = '436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac'
 CONTAINER = 'secpal-native-postgresql-readiness'
+APPLICATION_PROBE = 'secpal-native-postgresql-application-probe'
+PSQL_CLIENT = CLIENT / 'psql'
+APPLICATION_IMAGE_STATE = STATE / 'application-image'
 
 
 def trusted_module(name: str, path: Path):
@@ -125,6 +129,7 @@ class Observer:
         self.mutated = False
         self.data_created = False
         self.logins = {}
+        self.application_image_created = False
         self.environment = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'HOME': '/root'}
 
     def run(self, operation, arguments, *, user=None, sql=None, accepted=(0,), timeout=60):
@@ -171,7 +176,8 @@ class Observer:
     def prepare(self, declaration):
         # No destructive operation is reachable against an existing database.
         if (DATA.is_symlink() or (DATA.exists() and (not DATA.is_dir() or any(DATA.iterdir())))
-                or MATERIAL.exists() or MATERIAL.is_symlink() or CLIENT.exists() or CLIENT.is_symlink()):
+                or MATERIAL.exists() or MATERIAL.is_symlink() or CLIENT.exists() or CLIENT.is_symlink()
+                or APPLICATION_IMAGE_STATE.exists() or APPLICATION_IMAGE_STATE.is_symlink()):
             raise contract.QualificationError('initialize-postgresql', 'identity-mismatch')
         self.run('configure-loopback-policy', ['nft', 'list', 'table', 'inet', 'secpal_postgresql'], accepted=(1,))
         self.mutated = True
@@ -225,7 +231,12 @@ class Observer:
 CREATE TABLE qualification_state (id uuid PRIMARY KEY, value jsonb NOT NULL, sequence integer UNIQUE CHECK (sequence > 0));
 INSERT INTO qualification_state VALUES ('00000000-0000-0000-0000-000000000081', '{"persistent":true}', 1);
 ''')
-        self.write(CLIENT / '.pgpass', f'db.secpal.internal:5432:secpal:{self.logins["runtime"]["name"]}:{self.passwords["runtime"]}\n',
+        PSQL_CLIENT.mkdir(mode=0o700)
+        os.chown(PSQL_CLIENT, self.runtime.pw_uid, self.runtime.pw_gid)
+        shutil.copyfile(CLIENT / 'ca.crt', PSQL_CLIENT / 'ca.crt')
+        os.chown(PSQL_CLIENT / 'ca.crt', self.runtime.pw_uid, self.runtime.pw_gid)
+        (PSQL_CLIENT / 'ca.crt').chmod(0o600)
+        self.write(PSQL_CLIENT / '.pgpass', f'db.secpal.internal:5432:secpal:{self.logins["runtime"]["name"]}:{self.passwords["runtime"]}\n',
                    owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
 
     def issue_material(self):
@@ -260,7 +271,7 @@ INSERT INTO qualification_state VALUES ('00000000-0000-0000-0000-000000000081', 
         arguments = ['podman', 'run', '--pull=never', '--read-only', '--cap-drop=all',
                      '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=128m', '--cpus=1',
                      '--network=' + network, '--add-host=db.secpal.internal:169.254.81.1',
-                     '--volume=' + str(CLIENT) + ':/run/secpal-pg:ro,Z',
+                     '--volume=' + str(PSQL_CLIENT) + ':/run/secpal-pg:ro,Z',
                      '--env=PGHOST=db.secpal.internal', '--env=PGPORT=5432', '--env=PGDATABASE=secpal',
                      '--env=PGUSER=' + self.logins['runtime']['name'], '--env=PGSSLMODE=verify-full',
                      '--env=PGSSLROOTCERT=/run/secpal-pg/ca.crt', '--env=PGPASSFILE=/run/secpal-pg/.pgpass',
@@ -268,6 +279,191 @@ INSERT INTO qualification_state VALUES ('00000000-0000-0000-0000-000000000081', 
         arguments += ['--detach', '--name=' + CONTAINER] if detached else ['--rm']
         return self.run('probe-network', [*arguments, fixture.image, *command[1:]],
                         user='secpal-runtime', accepted=(0, 1, 2, 3), timeout=30)
+
+    def admit_application_image(self):
+        self.operation = 'admit-application-image'
+        if APPLICATION_IMAGE_STATE.exists() or APPLICATION_IMAGE_STATE.is_symlink():
+            raise contract.QualificationError(self.operation, 'identity-mismatch')
+        APPLICATION_IMAGE_STATE.mkdir(mode=0o700)
+        tooling = trusted_module('image_attestation_runtime', ROOT / 'scripts/image_attestation_runtime.py')
+        release = tooling.CLOUD_GH_RELEASES.get(os.uname().machine)
+        if release is None:
+            raise contract.QualificationError(self.operation, 'identity-mismatch')
+
+        def command(arguments, *, environment):
+            if environment != self.environment:
+                raise contract.QualificationError('admit-application-image', 'identity-mismatch')
+            return self.run('admit-application-image', arguments, timeout=180)
+
+        gh = tooling.stage_gh_cli(APPLICATION_IMAGE_STATE, release, command, self.environment)
+        self.run('admit-application-image', [gh, 'version'])
+        subject = APPLICATION_IMAGE_STATE / 'index.json'
+        bundle = APPLICATION_IMAGE_STATE / 'bundle.json'
+        gh_config = APPLICATION_IMAGE_STATE / 'gh-config'
+        gh_config.mkdir(mode=0o700)
+        # Root observer starts from a closed empty environment, no provider token.
+        previous = self.environment
+        self.environment = dict(previous, GH_CONFIG_DIR=str(gh_config), GH_PROMPT_DISABLED='1',
+                                GH_NO_UPDATE_NOTIFIER='1', GH_NO_EXTENSION_UPDATE_NOTIFIER='1', GH_TELEMETRY='false')
+        identity = contract.APPLICATION_RUNTIME
+        image, digest = identity['image'].split('@')
+        try:
+            self.run('admit-application-image', ['python3', str(ROOT / 'scripts/fetch-oci-attestation.py'),
+                str(subject), str(bundle), image, digest, 'secpal/api'], timeout=300)
+            self.run('admit-application-image', [gh, 'attestation', 'verify', str(subject), '--bundle', str(bundle),
+                '--repo', identity['repository'], '--signer-workflow', identity['workflow'],
+                '--signer-digest', identity['source_commit'], '--source-ref', identity['source_ref'],
+                '--source-digest', identity['source_commit'], '--deny-self-hosted-runners', '--hostname', 'github.com'], timeout=180)
+        finally:
+            self.environment = previous
+        raw = subject.read_bytes()
+        if len(raw) > 1048576 or 'sha256:' + hashlib.sha256(raw).hexdigest() != digest:
+            raise contract.QualificationError('admit-application-image', 'identity-mismatch')
+        index = contract.normalize_json_fact(raw.decode())
+        platforms = {item['platform']['architecture']: item['digest'] for item in index['manifests']
+                     if item.get('platform', {}).get('os') == 'linux'}
+        if platforms != identity['platform_digests']:
+            raise contract.QualificationError('admit-application-image', 'identity-mismatch')
+        self.run('admit-application-image', ['podman', 'image', 'exists', identity['image']],
+                 user='secpal-runtime', accepted=(1,))
+        # Mark ownership before a possibly partial pull, so cleanup still owns it.
+        self.application_image_created = True
+        self.write(CLIENT / 'anonymous-auth.json', '{}\n', owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
+        self.run('admit-application-image', ['podman', 'pull', '--authfile=' + str(CLIENT / 'anonymous-auth.json'),
+                 identity['image']], user='secpal-runtime', timeout=300)
+        _, observed, _ = self.run('admit-application-image', ['podman', 'image', 'inspect', identity['image']], user='secpal-runtime')
+        inspected = contract.normalize_json_fact(observed)
+        architecture = 'amd64' if os.uname().machine == 'x86_64' else 'arm64'
+        if (not isinstance(inspected, list) or len(inspected) != 1
+                or inspected[0]['Os'] != 'linux' or inspected[0]['Architecture'] != architecture
+                or identity['image'] not in inspected[0]['RepoDigests']
+                or image + '@' + identity['platform_digests'][architecture] not in inspected[0]['RepoDigests']):
+            raise contract.QualificationError('admit-application-image', 'identity-mismatch')
+
+    def application_material(self):
+        code = CLIENT / 'application-code'
+        code.mkdir(mode=0o700)
+        os.chown(code, self.runtime.pw_uid, self.runtime.pw_gid)
+        for label in ('bootstrap', 'probe'):
+            self.write(code / (label + '.php'), (ROOT / ('scripts/ci-cloud/postgresql-application-' + label + '.php')).read_text(),
+                       owner=self.runtime.pw_uid, group=self.runtime.pw_gid, mode=0o644)
+        key = 'base64:' + base64.b64encode(secrets.token_bytes(32)).decode()
+        kek = secrets.token_bytes(32)
+        for role, directory in (('runtime', 'application'), ('migration', 'application-migration')):
+            path = CLIENT / directory
+            path.mkdir(mode=0o700)
+            os.chown(path, self.runtime.pw_uid, self.runtime.pw_gid)
+            self.write(path / 'credentials.json', json.dumps({'APP_KEY': key, 'DB_PASSWORD': self.passwords[role]}),
+                       owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
+            for name in ('ca.crt', 'wrong-ca.crt'):
+                self.write(path / name, (CLIENT / name).read_text(), owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
+            self.write(path / 'php.ini', 'auto_prepend_file=/run/secpal-qualification/bootstrap.php\n',
+                       owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
+            # Same ephemeral app/KEK material; migration password is never mounted
+            # into the runtime process or the psql client container.
+            descriptor = os.open(path / 'kek', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(kek)
+                os.fchown(stream.fileno(), self.runtime.pw_uid, self.runtime.pw_gid)
+
+    def application_command(self, operation, *, scenario='normal', role='runtime', detached=False):
+        if (operation not in ('pdo', 'initialize', 'seed', 'serve')
+                or scenario not in ('normal', 'wrong-hostname', 'wrong-ca', 'wrong-password',
+                                     'plaintext', 'insecure-verification', 'environment-substitution')
+                or role not in ('runtime', 'migration')
+                or (role == 'migration') != (operation == 'initialize')
+                or (detached is not (operation == 'serve'))
+                or (operation != 'pdo' and scenario != 'normal')):
+            raise contract.QualificationError('probe-application', 'representation-invalid')
+        directory = CLIENT / ('application-migration' if role == 'migration' else 'application')
+        network = 'pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1'
+        runtime = trusted_module('integration_runtime_contract', ROOT / 'scripts/integration_runtime_contract.py')
+        arguments = ['podman', 'run', '--pull=never', '--read-only', '--cap-drop=all',
+                     '--security-opt=no-new-privileges', '--pids-limit=256', '--memory=512m', '--cpus=1',
+                     '--user=10001:10001', '--userns=keep-id:uid=10001,gid=10001', '--network=' + network,
+                     '--add-host=db.secpal.internal:169.254.81.1', '--add-host=wrong.secpal.internal:169.254.81.1',
+                     '--volume=' + str(directory) + ':/run/secpal-pg/application:ro,Z',
+                     '--volume=' + str(directory / 'php.ini') + ':/usr/local/etc/php/conf.d/zz-secpal-qualification.ini:ro,Z',
+                     '--volume=' + str(CLIENT / 'application-code/bootstrap.php') + ':/run/secpal-qualification/bootstrap.php:ro,z',
+                     '--volume=' + str(CLIENT / 'application-code/probe.php') + ':/run/secpal-qualification/probe.php:ro,z']
+        for destination, mount in runtime.role_spec('api').tmpfs.items():
+            arguments.append('--tmpfs=' + destination + ':size=' + str(mount.size)
+                + ',mode=' + format(mount.mode, '04o') + ',uid=10001,gid=10001,nosuid,nodev'
+                + (',noexec' if mount.noexec else ''))
+        environment = {'APP_ENV': 'production', 'APP_DEBUG': 'false', 'LOG_CHANNEL': 'stderr',
+            'DB_CONNECTION': 'pgsql', 'DB_HOST': 'wrong.secpal.internal' if scenario == 'wrong-hostname' else 'db.secpal.internal',
+            'DB_PORT': '5432', 'DB_DATABASE': 'secpal', 'DB_USERNAME': self.logins[role]['name'],
+            'DB_SSLMODE': 'disable' if scenario == 'plaintext' else 'require' if scenario == 'insecure-verification' else 'verify-full',
+            'DB_SSLROOTCERT': '/run/secpal-pg/application/' + ('wrong-ca.crt' if scenario == 'wrong-ca' else 'ca.crt'),
+            'CACHE_STORE': 'database', 'QUEUE_CONNECTION': 'database', 'SESSION_DRIVER': 'database',
+            'KEK_PATH': '/run/secpal-pg/application/kek'}
+        if scenario == 'environment-substitution':
+            environment.update(PGSSLMODE='disable', PGSSLROOTCERT='/nonexistent', PGHOST='wrong.secpal.internal',
+                               PGSERVICE='untrusted', PGSERVICEFILE='/nonexistent', PGOPTIONS='-c role=secpal_owner')
+        arguments.extend('--env=' + name + '=' + value for name, value in environment.items())
+        arguments.extend(['--detach', '--name=' + CONTAINER, '--entrypoint=/usr/local/bin/frankenphp'] if detached else
+                         ['--rm', '--name=' + APPLICATION_PROBE, '--entrypoint=/usr/local/bin/php'])
+        arguments.append(contract.APPLICATION_RUNTIME['image'])
+        arguments.extend(['run', '--config', '/etc/frankenphp/Caddyfile'] if detached else
+                         ['/run/secpal-qualification/probe.php', operation])
+        return arguments
+
+    def application_http(self, operation):
+        if operation not in ('ready', 'live'):
+            raise contract.QualificationError('probe-readiness', 'representation-invalid')
+        _, raw, _ = self.run('probe-readiness', ['podman', 'exec', CONTAINER, '/usr/local/bin/php',
+            '/run/secpal-qualification/probe.php', operation], user='secpal-runtime', timeout=20)
+        return contract.normalize_application_http(raw)
+
+    def application_pid(self):
+        _, raw, _ = self.run('probe-readiness', ['podman', 'inspect', '--format', '{{.State.Pid}}', CONTAINER], user='secpal-runtime')
+        if not raw.isdecimal() or not 1 < int(raw) <= 2147483647:
+            raise contract.QualificationError('probe-readiness', 'identity-mismatch')
+        return raw
+
+    def application_probes(self):
+        self.admit_application_image()
+        self.application_material()
+        self.run('initialize-application', self.application_command('initialize', role='migration'),
+                 user='secpal-runtime', timeout=120)
+        self.run('initialize-application', self.application_command('seed'), user='secpal-runtime', timeout=60)
+        probes = {}
+        for name in contract.APPLICATION_PROBES:
+            if name == 'wrong-password':
+                file = CLIENT / 'application/credentials.json'
+                original = file.read_text()
+                changed = json.loads(original)
+                changed['DB_PASSWORD'] = '0' * 64
+                self.write(file, json.dumps(changed), owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
+            try:
+                _, raw, _ = self.run('probe-application', self.application_command('pdo', scenario='normal' if name == 'pdo' else name),
+                                     user='secpal-runtime', timeout=30)
+                probes[name] = contract.normalize_json_fact(raw)
+            finally:
+                if name == 'wrong-password':
+                    self.write(file, original, owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
+        self.run('probe-readiness', self.application_command('serve', detached=True), user='secpal-runtime')
+        for _ in range(20):
+            try:
+                live = self.application_http('live')
+                if live == contract.APPLICATION_HEALTH['live-up']:
+                    break
+            except contract.QualificationError:
+                pass
+            time.sleep(0.5)
+        else:
+            raise contract.QualificationError('probe-readiness', 'invariant-failed')
+        pid = self.application_pid()
+        health = {'live-up': live, 'ready-up': self.application_http('ready')}
+        self.run('start-postgresql', ['systemctl', 'stop', 'postgresql.service'])
+        health.update({'ready-down': self.application_http('ready'), 'live-down': self.application_http('live')})
+        same = self.application_pid() == pid
+        self.run('start-postgresql', ['systemctl', 'start', 'postgresql.service'])
+        health['ready-restored'] = self.application_http('ready')
+        application = {'runtime': dict(contract.APPLICATION_RUNTIME), 'probes': probes, 'health': health, 'same_process': same}
+        contract.admit_application(application)
+        self.run('probe-readiness', ['podman', 'rm', '--force', CONTAINER], user='secpal-runtime')
+        return application, same
 
     def probes(self):
         p = {}
@@ -321,18 +517,14 @@ SELECT 1 / (CASE WHEN count(*)=1 THEN 1 ELSE 0 END) FROM qualification_state;
             with socket.create_connection(('127.0.0.1', 5433), timeout=2):
                 sentinel_status = 0
             p['other-loopback-port'] = self.container(['bash', '-c', 'timeout 3 bash -c "exec 3<>/dev/tcp/169.254.81.1/5433"'])[0]
-        self.container(['sleep', '120'], detached=True)
-        execute = ['podman', 'exec', CONTAINER, 'psql', '-X', '-qAt', '-c', 'SELECT 1;']
-        p['ready-up'] = self.run('probe-readiness', execute, user='secpal-runtime', accepted=(0, 2))[0]
-        self.run('start-postgresql', ['systemctl', 'stop', 'postgresql.service'])
-        p['ready-down'] = self.run('probe-readiness', execute, user='secpal-runtime', accepted=(0, 2))[0]
-        _, live, _ = self.run('probe-readiness', ['podman', 'inspect', '--format', '{{.State.Running}}', CONTAINER], user='secpal-runtime')
-        p['liveness-down'] = 0 if live == 'true' else 1
-        self.run('start-postgresql', ['systemctl', 'start', 'postgresql.service'])
+        application, live = self.application_probes()
+        p['ready-up'] = 0 if application['health']['ready-up']['http_status'] == 200 else 1
+        p['ready-down'] = 1 if application['health']['ready-down']['http_status'] == 503 else 0
+        p['liveness-down'] = 0 if application['health']['live-down']['http_status'] == 200 else 1
         _, count, _ = self.sql('SELECT count(*) FROM qualification_state;')
         p['persistence-restart'] = 0 if count == '1' else 3
-        self.run('probe-readiness', ['podman', 'rm', '--force', CONTAINER], user='secpal-runtime')
-        return p, locks, live == 'true', sentinel_status, count
+        self.application = application
+        return p, locks, live, sentinel_status, count
 
     def locking(self):
         result = {}
@@ -420,7 +612,7 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
             tls_material[name] = {'owner': pwd.getpwuid(facts.st_uid).pw_name,
                 'group': grp.getgrgid(facts.st_gid).gr_name, 'mode': format(stat.S_IMODE(facts.st_mode), 'o'),
                 'type': os.getxattr(MATERIAL / name, 'security.selinux').decode().rstrip('\0').split(':')[2]}
-        raw = {'tls_material': tls_material, 'server_version_num': self.sql('SHOW server_version_num;')[1],
+        raw = {'application': self.application, 'tls_material': tls_material, 'server_version_num': self.sql('SHOW server_version_num;')[1],
                'service': service, 'data_directory': data, 'process_label': label,
                'listeners': listeners, 'settings': settings, 'roles': roles, 'issued_logins': issued_logins, 'memberships': memberships,
                'password_algorithms': algorithms, 'hba': hba, 'probes': probes, 'locking': locks,
@@ -440,11 +632,13 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
                 process.kill()
                 process.wait(timeout=5)
         self.children.clear()
-        self.run('cleanup-test-material', ['podman', 'rm', '--force', '--ignore', CONTAINER], user='secpal-runtime')
+        self.run('cleanup-test-material', ['podman', 'rm', '--force', '--ignore', CONTAINER, APPLICATION_PROBE], user='secpal-runtime')
+        if self.application_image_created:
+            self.run('cleanup-test-material', ['podman', 'rmi', contract.APPLICATION_RUNTIME['image']], user='secpal-runtime')
         self.run('cleanup-test-material', ['systemctl', 'stop', 'postgresql.service'], accepted=(0, 5))
         self.run('cleanup-test-material', ['nft', 'delete', 'table', 'inet', 'secpal_postgresql'], accepted=(0, 1))
         # All paths are fixed root-created directories in this exact ephemeral run.
-        paths = [CLIENT, MATERIAL, STATE / 'postgresql-test-authority']
+        paths = [CLIENT, MATERIAL, STATE / 'postgresql-test-authority', APPLICATION_IMAGE_STATE]
         if self.data_created:
             paths.append(DATA)
         for path in paths:
@@ -457,8 +651,11 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
         stopped = self.run('cleanup-test-material', ['systemctl', 'is-active', 'postgresql.service'], accepted=(3,))[1]
         self.run('cleanup-test-material', ['nft', 'list', 'table', 'inet', 'secpal_postgresql'], accepted=(1,))
         self.run('cleanup-test-material', ['podman', 'container', 'exists', CONTAINER], user='secpal-runtime', accepted=(1,))
+        self.run('cleanup-test-material', ['podman', 'container', 'exists', APPLICATION_PROBE], user='secpal-runtime', accepted=(1,))
+        if self.application_image_created:
+            self.run('cleanup-test-material', ['podman', 'image', 'exists', contract.APPLICATION_RUNTIME['image']], user='secpal-runtime', accepted=(1,))
         if stopped != 'inactive' or any(path.exists() or path.is_symlink()
-                for path in (CLIENT, MATERIAL, STATE / 'postgresql-test-authority', DATA)) or self.passwords:
+                for path in (CLIENT, MATERIAL, STATE / 'postgresql-test-authority', APPLICATION_IMAGE_STATE, DATA)) or self.passwords:
             raise contract.QualificationError('cleanup-test-material', 'invariant-failed')
         return dict(contract.CLEANUP_POSTCONDITIONS)
 

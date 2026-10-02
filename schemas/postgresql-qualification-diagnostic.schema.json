@@ -25,11 +25,13 @@
     },
     "operation": {
       "enum": [
+        "admit-application-image",
         "admit-candidate-data",
         "admit-qualification",
         "cleanup-test-material",
         "configure-loopback-policy",
         "configure-postgresql",
+        "initialize-application",
         "initialize-postgresql",
         "install-postgresql",
         "issue-test-material",
@@ -39,6 +41,7 @@
         "observe-packages",
         "observe-roles",
         "observe-selinux",
+        "probe-application",
         "probe-network",
         "probe-privileges",
         "probe-readiness",

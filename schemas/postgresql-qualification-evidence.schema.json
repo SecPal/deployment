@@ -372,7 +372,8 @@
         "service",
         "settings",
         "tls_material",
-        "issued_logins"
+        "issued_logins",
+        "application"
       ],
       "properties": {
         "container_servers": {
@@ -569,7 +570,8 @@
             "ready-down": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 255
+              "maximum": 255,
+              "const": 1
             },
             "liveness-down": {
               "type": "integer",
@@ -873,6 +875,261 @@
                   "maximum": 253402300799
                 }
               }
+            }
+          }
+        },
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runtime", "probes", "health", "same_process"],
+          "properties": {
+            "runtime": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "image",
+                "source_commit",
+                "repository",
+                "workflow",
+                "source_ref",
+                "platform_digests"
+              ],
+              "properties": {
+                "image": {
+                  "const": "ghcr.io/secpal/api@sha256:ac97416f3feac5c57204421059105389c9add2cfbcda1b063eadf4c6ad7647ab"
+                },
+                "source_commit": {
+                  "const": "7da77556e7a4896940b6c50ccf6ba2c3fb9a8653"
+                },
+                "repository": {
+                  "const": "SecPal/api"
+                },
+                "workflow": {
+                  "const": "SecPal/api/.github/workflows/publish-container.yml"
+                },
+                "source_ref": {
+                  "const": "refs/heads/main"
+                },
+                "platform_digests": {
+                  "const": {
+                    "amd64": "sha256:8d0d960306c6989be55a9c7bc41937699e55dbdbc6193bff870f38a1b19605a3",
+                    "arm64": "sha256:ed91caa822e189187d57e0ff322c54e3b9837aa679cc087015933dcda9a3be7e"
+                  }
+                }
+              }
+            },
+            "probes": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pdo",
+                "wrong-hostname",
+                "wrong-ca",
+                "wrong-password",
+                "plaintext",
+                "insecure-verification",
+                "environment-substitution"
+              ],
+              "properties": {
+                "pdo": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "connected",
+                    "stage",
+                    "driver",
+                    "host",
+                    "sslmode",
+                    "sslrootcert",
+                    "tls"
+                  ],
+                  "properties": {
+                    "connected": {
+                      "const": true
+                    },
+                    "stage": {
+                      "const": "connection"
+                    },
+                    "driver": {
+                      "const": "pgsql"
+                    },
+                    "host": {
+                      "const": "db.secpal.internal"
+                    },
+                    "sslmode": {
+                      "const": "verify-full"
+                    },
+                    "sslrootcert": {
+                      "const": "/run/secpal-pg/application/ca.crt"
+                    },
+                    "tls": {
+                      "enum": ["TLSv1.2", "TLSv1.3"]
+                    }
+                  }
+                },
+                "wrong-hostname": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["connected", "stage", "reason"],
+                  "properties": {
+                    "connected": {
+                      "const": false
+                    },
+                    "stage": {
+                      "const": "connection"
+                    },
+                    "reason": {
+                      "const": "hostname"
+                    }
+                  }
+                },
+                "wrong-ca": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["connected", "stage", "reason"],
+                  "properties": {
+                    "connected": {
+                      "const": false
+                    },
+                    "stage": {
+                      "const": "connection"
+                    },
+                    "reason": {
+                      "const": "certificate"
+                    }
+                  }
+                },
+                "wrong-password": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["connected", "stage", "reason"],
+                  "properties": {
+                    "connected": {
+                      "const": false
+                    },
+                    "stage": {
+                      "const": "connection"
+                    },
+                    "reason": {
+                      "const": "authentication"
+                    }
+                  }
+                },
+                "plaintext": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["connected", "stage", "reason"],
+                  "properties": {
+                    "connected": {
+                      "const": false
+                    },
+                    "stage": {
+                      "const": "configuration"
+                    },
+                    "reason": {
+                      "const": "tls-policy"
+                    }
+                  }
+                },
+                "insecure-verification": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["connected", "stage", "reason"],
+                  "properties": {
+                    "connected": {
+                      "const": false
+                    },
+                    "stage": {
+                      "const": "configuration"
+                    },
+                    "reason": {
+                      "const": "tls-policy"
+                    }
+                  }
+                },
+                "environment-substitution": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "connected",
+                    "stage",
+                    "driver",
+                    "host",
+                    "sslmode",
+                    "sslrootcert",
+                    "tls"
+                  ],
+                  "properties": {
+                    "connected": {
+                      "const": true
+                    },
+                    "stage": {
+                      "const": "connection"
+                    },
+                    "driver": {
+                      "const": "pgsql"
+                    },
+                    "host": {
+                      "const": "db.secpal.internal"
+                    },
+                    "sslmode": {
+                      "const": "verify-full"
+                    },
+                    "sslrootcert": {
+                      "const": "/run/secpal-pg/application/ca.crt"
+                    },
+                    "tls": {
+                      "enum": ["TLSv1.2", "TLSv1.3"]
+                    }
+                  }
+                }
+              }
+            },
+            "health": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ready-up",
+                "live-up",
+                "ready-down",
+                "live-down",
+                "ready-restored"
+              ],
+              "properties": {
+                "ready-up": {
+                  "const": {
+                    "http_status": 200,
+                    "body_status": "ready"
+                  }
+                },
+                "live-up": {
+                  "const": {
+                    "http_status": 200,
+                    "body_status": "alive"
+                  }
+                },
+                "ready-down": {
+                  "const": {
+                    "http_status": 503,
+                    "body_status": "not_ready"
+                  }
+                },
+                "live-down": {
+                  "const": {
+                    "http_status": 200,
+                    "body_status": "alive"
+                  }
+                },
+                "ready-restored": {
+                  "const": {
+                    "http_status": 200,
+                    "body_status": "ready"
+                  }
+                }
+              }
+            },
+            "same_process": {
+              "const": true
             }
           }
         }
