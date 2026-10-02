@@ -51,12 +51,79 @@ DECLARATION = {
     },
     'state': {'sessions': 'database', 'queues': 'database', 'cache': 'database'},
 }
+# Reviewed SecPal publisher authority; this identity is fixed by trusted main,
+# never dispatch/candidate data. The older #119 application fixture stays separate.
+APPLICATION_RUNTIME = {
+    'image': 'ghcr.io/secpal/api@sha256:ac97416f3feac5c57204421059105389c9add2cfbcda1b063eadf4c6ad7647ab',
+    'source_commit': '7da77556e7a4896940b6c50ccf6ba2c3fb9a8653',
+    'repository': 'SecPal/api',
+    'workflow': 'SecPal/api/.github/workflows/publish-container.yml',
+    'source_ref': 'refs/heads/main',
+    'platform_digests': {
+        'amd64': 'sha256:8d0d960306c6989be55a9c7bc41937699e55dbdbc6193bff870f38a1b19605a3',
+        'arm64': 'sha256:ed91caa822e189187d57e0ff322c54e3b9837aa679cc087015933dcda9a3be7e',
+    },
+}
+DECLARATION['application_runtime'] = APPLICATION_RUNTIME
+APPLICATION_PROBES = {
+    'pdo': {'connected': True, 'stage': 'connection', 'driver': 'pgsql',
+            'host': 'db.secpal.internal', 'sslmode': 'verify-full',
+            'sslrootcert': '/run/secpal-pg/application/ca.crt',
+            'tls': 'TLSv1.3'},
+    'wrong-hostname': {'connected': False, 'stage': 'connection', 'reason': 'hostname'},
+    'wrong-ca': {'connected': False, 'stage': 'connection', 'reason': 'certificate'},
+    'wrong-password': {'connected': False, 'stage': 'connection', 'reason': 'authentication'},
+    'plaintext': {'connected': False, 'stage': 'configuration', 'reason': 'tls-policy'},
+    'insecure-verification': {'connected': False, 'stage': 'configuration', 'reason': 'tls-policy'},
+    'environment-substitution': {'connected': True, 'stage': 'connection', 'driver': 'pgsql',
+            'host': 'db.secpal.internal', 'sslmode': 'verify-full',
+            'sslrootcert': '/run/secpal-pg/application/ca.crt',
+            'tls': 'TLSv1.3'},
+}
+APPLICATION_HEALTH = {
+    'ready-up': {'http_status': 200, 'body_status': 'ready'},
+    'live-up': {'http_status': 200, 'body_status': 'alive'},
+    'ready-down': {'http_status': 503, 'body_status': 'not_ready'},
+    'live-down': {'http_status': 200, 'body_status': 'alive'},
+    'ready-restored': {'http_status': 200, 'body_status': 'ready'},
+}
+
+
+def normalize_application_http(raw: str) -> dict[str, Any]:
+    document = normalize_json_fact(raw)
+    if (not isinstance(document, dict) or set(document) != {'http_status', 'body_status'}
+            or type(document['http_status']) is not int
+            or document['http_status'] not in (200, 503)
+            or document['body_status'] not in ('ready', 'not_ready', 'alive')):
+        raise QualificationError('probe-readiness', 'representation-invalid')
+    return document
+
+
+def admit_application(raw: object) -> dict[str, Any]:
+    if (not isinstance(raw, dict) or set(raw) != {'runtime', 'probes', 'health', 'same_process'}
+            or canonical_bytes(raw['runtime']) != canonical_bytes(APPLICATION_RUNTIME)
+            or raw['same_process'] is not True
+            or canonical_bytes(raw['health']) != canonical_bytes(APPLICATION_HEALTH)
+            or not isinstance(raw['probes'], dict) or set(raw['probes']) != set(APPLICATION_PROBES)):
+        raise QualificationError('probe-application', 'invariant-failed')
+    for name, expected in APPLICATION_PROBES.items():
+        observed = raw['probes'][name]
+        if name in ('pdo', 'environment-substitution'):
+            if (not isinstance(observed, dict) or observed.get('tls') not in ('TLSv1.2', 'TLSv1.3')):
+                raise QualificationError('probe-application', 'invariant-failed')
+            observed = dict(observed, tls='TLSv1.3')
+        if canonical_bytes(observed) != canonical_bytes(expected):
+            raise QualificationError('probe-application', 'invariant-failed')
+    return json.loads(canonical_bytes(raw))
+
+
 OPERATIONS = frozenset({
     'resolve-candidate', 'read-candidate-data', 'admit-candidate-data',
     'validate-authorization', 'install-postgresql', 'initialize-postgresql',
     'configure-postgresql', 'configure-loopback-policy', 'issue-test-material',
     'start-postgresql', 'observe-native-service', 'observe-data-directory',
     'observe-packages', 'observe-listeners', 'observe-selinux', 'observe-roles',
+    'admit-application-image', 'initialize-application', 'probe-application',
     'probe-transport', 'probe-privileges', 'probe-network', 'probe-readiness',
     'probe-semantics', 'admit-qualification', 'write-evidence', 'cleanup-test-material',
 })
@@ -75,7 +142,7 @@ PROBES = {
     'backup-read': 0, 'backup-ddl': 3,
     'rootless-verified-tls': 0, 'rootless-unmapped': 2,
     'other-loopback-port': 1,
-    'ready-up': 0, 'ready-down': 2, 'liveness-down': 0,
+    'ready-up': 0, 'ready-down': 1, 'liveness-down': 0,
     'server-key-runtime-denied': 1, 'jsonb-uuid-constraints-rollback': 0, 'row-locks': 0,
     'transaction-advisory-locks': 0, 'persistence-restart': 0,
 }
@@ -237,7 +304,7 @@ ROLE_POLICY = {
 OBSERVATION_FIELDS = {'server_version_num', 'service', 'data_directory', 'process_label',
                       'listeners', 'settings', 'roles', 'issued_logins', 'memberships', 'password_algorithms',
                       'hba', 'probes', 'locking', 'rootless_liveness', 'container_servers',
-                      'loopback_sentinel_host', 'native_cgroup', 'restart_row_count', 'tls_material'}
+                      'loopback_sentinel_host', 'native_cgroup', 'restart_row_count', 'tls_material', 'application'}
 
 
 def normalize_json_fact(raw: str) -> Any:
@@ -298,6 +365,7 @@ def qualification_memberships(logins: dict[str, Any]) -> list[list[Any]]:
 def admit_observations(raw: object, *, run_id: str, run_attempt: str, expires_at: int) -> dict[str, Any]:
     if not isinstance(raw, dict) or set(raw) != OBSERVATION_FIELDS:
         raise QualificationError('admit-qualification', 'representation-invalid')
+    admit_application(raw['application'])
     logins = qualification_logins(run_id, run_attempt, expires_at)
     expected = {
         'service': {'User': 'postgres', 'Group': 'postgres', 'ActiveState': 'active',

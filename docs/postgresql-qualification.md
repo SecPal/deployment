@@ -33,6 +33,9 @@ is not an arbitrary text execution interface. The sole substitution is a
 validated local numeric runtime UID. Package version/release are bounded PG18
 Rocky Application Stream values and subsequently re-admitted against installed,
 signed RPM observations.
+The declaration also binds the fixed `application_runtime` identity owned by
+accepted qualification authority. It cannot select another image or executable;
+The #81 delivery consumes that same runtime for its native PostgreSQL application path.
 
 `render-native-postgresql.py` consumes those same admitted bytes without host
 mutation. Invoke it with isolated Python (`python3 -I`) and a numeric
@@ -71,10 +74,58 @@ ownership/labels, SCRAM password algorithms, role attributes/memberships and
 positive/negative protocol, privilege, readiness and database semantics probes.
 Only successful trusted execution and independent workflow admission support
 PASS. Caller-authored JSON passing a local schema is never real-system proof.
-Server TLS cannot detect a client that skips certificate verification. The
-negative insecure-client-mode evidence therefore belongs to candidate data
-admission; protocol observations prove verified TLS and actual rejection of
-plaintext, wrong hostname, wrong CA and incorrect credentials.
+Server TLS cannot detect a client that skips certificate verification.
+Application observations therefore exercise the real PHP/PDO/libpq path,
+including the application's production transport guard and actual failures for
+wrong hostname, wrong CA and incorrect credentials. Plaintext and insecure
+verification modes must be rejected by the application. Successful `psql`
+connections cannot substitute for these client observations.
+
+## Application identity and availability
+
+The native qualifier fixes the existing SecPal API publication at source
+`7da77556e7a4896940b6c50ccf6ba2c3fb9a8653` and immutable multi-architecture image
+`ghcr.io/secpal/api@sha256:ac97416f3feac5c57204421059105389c9add2cfbcda1b063eadf4c6ad7647ab`.
+Its accepted source already supports production `DB_SSLMODE=verify-full` and
+`DB_SSLROOTCERT`, PostgreSQL-backed runtime state, and separate readiness and
+liveness HTTP routes. The older #119 fixture image remains a separate accepted
+fixture identity; it does not establish native application transport claims.
+
+Before execution, the qualifier reuses the canonical anonymous OCI bundle
+retriever and digest-pinned GitHub CLI. It verifies the signed index against
+`SecPal/api/.github/workflows/publish-container.yml`, the exact source commit,
+`refs/heads/main`, and GitHub-hosted execution. Both platform descriptors must
+match the reviewed index; the pulled image must match the index, child digest,
+OS and guest architecture. Caller-selected images, tags, PHP code and probes are
+absent from the interface. Probe, bootstrap and verifier bytes are included in
+the trusted harness digest.
+
+Trusted probe construction boots the immutable application's actual Laravel
+configuration and obtains its PDO connection. It records only closed transport
+facts. Hostname and CA failures must come from certificate verification rather
+than DNS or unrelated startup failure. Libpq defaults, service files, `PGOPTIONS`
+and URI/test overrides are cleared before application boot; an adversarial
+environment scenario verifies that they cannot replace the intended policy.
+
+Readiness setup runs only the immutable application's cache, queue and tenant
+key migrations, once under separate migration authority. Its real tenant setup
+and scheduler heartbeat establish the prerequisites for `/health/ready` using
+runtime DML authority. This minimal run-bound state qualifies readiness; it is
+not production setup or the broader application integration fixture.
+
+The qualifier starts the real FrankenPHP application with the reviewed API UID,
+tmpfs, read-only filesystem and narrow pasta mapping. Independently collected
+HTTP status/body observations require readiness and liveness with PostgreSQL
+available, readiness `503/not_ready` during PostgreSQL loss, retained
+`200/alive` liveness, and restored readiness after PostgreSQL restarts. The
+application PID must remain unchanged. A `sleep` process or container-running
+flag cannot satisfy the HTTP observations.
+
+Synthetic application keys, KEK and DB passwords are private, run-owned test
+inputs. Passwords and application keys enter PHP process memory through a fixed
+read-only bootstrap, not environment variables, command arguments or evidence.
+Runtime containers never mount migration credentials. No production #100
+material is generated or consumed.
 
 The rootless client uses the maintained digest-pinned disposable PostgreSQL
 fixture image only for client commands. No database server container runs.
@@ -109,8 +160,10 @@ Trusted transport retrieves and independently
 admits failures before enforcing the unsuccessful outcome.
 
 Guest cleanup verifies the exact client container and nft table absent, native
-service stopped, run-created PGDATA and test/server/client material absent and in-memory credentials
-forgotten. The existing control-plane cleanup then destroys only exact
+service stopped, run-created PGDATA and test/server/client material absent and
+in-memory credentials forgotten. It also removes the exact application probe
+container, its run-owned image and private image-verification state, and verifies
+their absence. The existing control-plane cleanup then destroys only exact
 run-owned ephemeral resources and verifies provider absence. Guest cleanup is
 not provider cleanup. Both architecture runs must succeed and complete their
 provider cleanup before #81 claims real-system acceptance.

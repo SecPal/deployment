@@ -5,9 +5,12 @@
 """Adversarial contract evidence for the trusted PostgreSQL data boundary."""
 
 import copy
+import base64
+import gzip
 import json
 import importlib.util
 import os
+import re
 from pathlib import Path
 import sys
 import shutil
@@ -26,6 +29,202 @@ class CandidateData(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    def test_guest_staged_probe_closure_matches_controller_identity(self):
+        control = self.load_module('pg_guest_probe_closure', 'scripts/ci-cloud/postgresql-qualification-control.py')
+        terraform = (ROOT / 'infra/ci-cloud/gcp-rocky/main.tf').read_text()
+        template = (ROOT / 'scripts/ci-cloud/bootstrap-rocky-host.tftpl').read_text()
+        sources = dict(re.findall(
+            r'(\w+_base64gzip)\s*=\s*base64gzip\(file\("\$\{path.module\}/\.\./\.\./\.\./([^"\n]+)"\)\)', terraform))
+        destinations = re.findall(
+            r"decode_script '\$\{(\w+_base64gzip)\}' /opt/secpal-control/([^\s]+)", template)
+        expected = control.probe_digest()
+        with tempfile.TemporaryDirectory() as directory:
+            guest = Path(directory)
+            for variable, destination in destinations:
+                if destination not in control.PROBE_PATHS:
+                    continue
+                payload = base64.b64encode(gzip.compress((ROOT / sources[variable]).read_bytes(), mtime=0))
+                path = guest / destination
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(gzip.decompress(base64.b64decode(payload)))
+            with mock.patch.object(control, 'ROOT', guest):
+                self.assertEqual(control.probe_digest(), expected)
+
+    def test_failed_image_pull_cleanup_accepts_absence_but_requires_readback(self):
+        module = self.load_module('pg_failed_image_pull_cleanup', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        observer = module.Observer.__new__(module.Observer)
+        observer.children = []
+        observer.passwords = {}
+        observer.data_created = False
+        observer.application_image_created = True
+        image_still_present = False
+
+        def system(operation, arguments, *, accepted=(0,), **options):
+            status, output = 0, ''
+            if arguments[:2] == ['podman', 'rmi']:
+                status = 0 if '--ignore' in arguments else 1
+            elif arguments[:2] == ['systemctl', 'is-active']:
+                status, output = 3, 'inactive'
+            elif arguments[:2] == ['nft', 'list'] or arguments[:3] == ['podman', 'container', 'exists']:
+                status = 1
+            elif arguments[:3] == ['podman', 'image', 'exists']:
+                status = 0 if image_still_present else 1
+            if status not in accepted:
+                raise contract.QualificationError(operation, 'command-failed')
+            return status, output, ''
+
+        observer.run = mock.Mock(side_effect=system)
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            with mock.patch.multiple(module, DATA=base/'data', CLIENT=base/'client',
+                                     MATERIAL=base/'material', STATE=base/'state', APPLICATION_IMAGE_STATE=base/'image-state'):
+                self.assertEqual(observer.cleanup(), contract.CLEANUP_POSTCONDITIONS)
+                observer.run.assert_any_call('cleanup-test-material',
+                    ['podman', 'image', 'exists', contract.APPLICATION_RUNTIME['image']],
+                    user='secpal-runtime', accepted=(1,))
+                image_still_present = True
+                with self.assertRaises(contract.QualificationError):
+                    observer.cleanup()
+
+    def test_attested_application_index_accepts_exact_platform_child_representation(self):
+        import hashlib
+        from types import SimpleNamespace
+        module = self.load_module('pg_application_child_identity', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        repository = contract.APPLICATION_RUNTIME['image'].split('@')[0]
+        index = json.dumps({'manifests': [
+            {'platform': {'os': 'linux', 'architecture': architecture}, 'digest': digest}
+            for architecture, digest in contract.APPLICATION_RUNTIME['platform_digests'].items()
+        ]}).encode()
+        identity = copy.deepcopy(contract.APPLICATION_RUNTIME)
+        identity['image'] = repository + '@sha256:' + hashlib.sha256(index).hexdigest()
+        tooling = SimpleNamespace(CLOUD_GH_RELEASES={'x86_64': {}, 'aarch64': {}},
+                                  stage_gh_cli=mock.Mock(return_value='/trusted-fixture/gh'))
+        for machine, architecture in [('x86_64', 'amd64'), ('aarch64', 'arm64')]:
+            child = repository + '@' + identity['platform_digests'][architecture]
+            for digests, os_name, observed_arch, valid in [
+                ([child], 'linux', architecture, True),
+                ([identity['image'], child], 'linux', architecture, True),
+                ([identity['image']], 'linux', architecture, False),
+                ([repository + '@sha256:' + '0'*64], 'linux', architecture, False),
+                ([child], 'windows', architecture, False),
+                ([child], 'linux', 'other', False),
+                (child, 'linux', architecture, False),
+            ]:
+                with self.subTest(machine=machine, digests=digests, os=os_name, architecture=observed_arch), \
+                     tempfile.TemporaryDirectory() as directory:
+                    base = Path(directory)
+                    client = base / 'client'
+                    client.mkdir()
+                    observer = module.Observer.__new__(module.Observer)
+                    observer.environment = {'PATH': '/usr/bin:/bin'}
+                    observer.runtime = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+                    def command(operation, arguments, **options):
+                        if arguments[0] == 'python3':
+                            Path(arguments[2]).write_bytes(index)
+                            Path(arguments[3]).write_text('{}')
+                        if arguments[:3] == ['podman', 'image', 'inspect']:
+                            return 0, json.dumps([{'Os': os_name, 'Architecture': observed_arch, 'RepoDigests': digests}]), ''
+                        return (1, '', '') if arguments[:3] == ['podman', 'image', 'exists'] else (0, '', '')
+                    observer.run = mock.Mock(side_effect=command)
+                    with mock.patch.multiple(module, APPLICATION_IMAGE_STATE=base/'image-state', CLIENT=client), \
+                         mock.patch.object(module, 'trusted_module', return_value=tooling), \
+                         mock.patch.object(module.os, 'uname', return_value=SimpleNamespace(machine=machine)), \
+                         mock.patch.object(contract, 'APPLICATION_RUNTIME', identity):
+                        if valid:
+                            observer.admit_application_image()
+                        else:
+                            with self.assertRaises(contract.QualificationError):
+                                observer.admit_application_image()
+                    observer.run.assert_any_call('admit-application-image',
+                        ['podman', 'pull', '--authfile=' + str(client/'anonymous-auth.json'), identity['image']],
+                        user='secpal-runtime', timeout=300)
+
+    def test_psql_only_evidence_cannot_establish_application_readiness(self):
+        evidence, options = self.system_fixture('gcp-rocky-10-2-arm64')
+        # The historical contract has only psql readiness and sleep-container
+        # liveness. It must fail after actual application observations are required.
+        evidence['observations'].pop('application', None)
+        with self.assertRaises(contract.QualificationError):
+            contract.admit_evidence(evidence, **options)
+
+    def test_application_evidence_rejects_identity_policy_and_health_substitution(self):
+        app = {'runtime': copy.deepcopy(contract.APPLICATION_RUNTIME),
+               'probes': copy.deepcopy(contract.APPLICATION_PROBES),
+               'health': copy.deepcopy(contract.APPLICATION_HEALTH), 'same_process': True}
+        self.assertEqual(contract.admit_application(app), app)
+        for path, value in ((('runtime','image'), 'ghcr.io/secpal/api:main'),
+                            (('runtime','source_commit'), '1'*40),
+                            (('runtime','platform_digests','arm64'), 'sha256:'+'1'*64),
+                            (('probes','pdo','sslmode'), 'prefer'),
+                            (('probes','pdo','host'), 'host.containers.internal'),
+                            (('probes','pdo','sslrootcert'), '/caller/root.crt'),
+                            (('probes','wrong-ca','reason'), 'hostname'),
+                            (('probes','plaintext','connected'), True),
+                            (('probes','environment-substitution','tls'), False),
+                            (('health','ready-down','http_status'), 200),
+                            (('health','live-down','body_status'), 'not_ready'),
+                            (('same_process',), False)):
+            changed = copy.deepcopy(app)
+            owner = changed
+            for key in path[:-1]:
+                owner = owner[key]
+            owner[path[-1]] = value
+            with self.subTest(path=path), self.assertRaises(contract.QualificationError):
+                contract.admit_application(changed)
+        app['probes']['pdo']['tls'] = 'TLSv1.2'
+        self.assertEqual(contract.admit_application(app), app)
+        for key in ('PASS', 'credentials', 'php', 'grader'):
+            with self.subTest(key=key), self.assertRaises(contract.QualificationError):
+                contract.admit_application(dict(app, **{key: 'caller bytes'}))
+
+    def test_actual_application_http_representation_is_closed(self):
+        good = {'http_status': 503, 'body_status': 'not_ready'}
+        self.assertEqual(contract.normalize_application_http(json.dumps(good)), good)
+        for raw in ('true', '{"http_status":true,"body_status":"ready"}',
+                    '{"http_status":503,"body_status":"not_ready","PASS":true}',
+                    '{"http_status":200,"body_status":"sleep-running"}',
+                    '{"http_status":200,"http_status":503,"body_status":"ready"}'):
+            with self.subTest(raw=raw), self.assertRaises(contract.QualificationError):
+                contract.normalize_application_http(raw)
+
+    def test_application_commands_have_fixed_runtime_code_and_role_authority(self):
+        module = self.load_module('pg_application_commands', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        observer = module.Observer.__new__(module.Observer)
+        observer.logins = contract.qualification_logins('200', '1', 11800)
+        observer.run = mock.Mock(side_effect=AssertionError('construction must not execute'))
+        normal = observer.application_command('pdo')
+        self.assertIn(contract.APPLICATION_RUNTIME['image'], normal)
+        self.assertIn('--userns=keep-id:uid=10001,gid=10001', normal)
+        self.assertIn('--env=DB_SSLMODE=verify-full', normal)
+        self.assertFalse(any('DB_PASSWORD=' in a or 'APP_KEY=' in a for a in normal))
+        self.assertFalse(any('application-migration' in a for a in normal))
+        self.assertNotIn('psql', normal)
+        serve = observer.application_command('serve', detached=True)
+        self.assertIn('--entrypoint=/usr/local/bin/frankenphp', serve)
+        self.assertEqual(serve[-3:], ['run', '--config', '/etc/frankenphp/Caddyfile'])
+        self.assertNotIn('sleep', serve)
+        for arguments in (('php -r caller', {}), ('pdo', {'scenario': '$(caller)'}),
+                          ('pdo', {'role': 'migration'}), ('initialize', {}),
+                          ('serve', {'detached': False})):
+            with self.subTest(arguments=arguments), self.assertRaises(contract.QualificationError):
+                observer.application_command(arguments[0], **arguments[1])
+
+    def test_readiness_is_http_not_database_client_and_tracks_same_process(self):
+        module = self.load_module('pg_application_http', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        observer = module.Observer.__new__(module.Observer)
+        observer.run = mock.Mock(return_value=(0, '{"http_status":503,"body_status":"not_ready"}', ''))
+        self.assertEqual(observer.application_http('ready'), {'http_status':503,'body_status':'not_ready'})
+        argv = observer.run.call_args.args[1]
+        self.assertEqual(argv[-2:], ['/run/secpal-qualification/probe.php','ready'])
+        self.assertNotIn('psql', argv)
+        observer.run.return_value = (0, '12000', '')
+        self.assertEqual(observer.application_pid(), '12000')
+        observer.run.return_value = (0, '0', '')
+        with self.assertRaises(contract.QualificationError):
+            observer.application_pid()
+        with self.assertRaises(contract.QualificationError):
+            observer.application_http('caller-selected')
 
     def test_graphql_document_uses_json_media_type(self):
         control = self.load_module('pg_request', 'scripts/ci-cloud/postgresql-qualification-control.py')
@@ -53,11 +252,12 @@ class CandidateData(unittest.TestCase):
         observer.children = []
         observer.passwords = {'synthetic': 'synthetic-test-only'}
         observer.data_created = True
+        observer.application_image_created = False
         observer.run = mock.Mock(return_value=(3, 'inactive', ''))
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             with mock.patch.multiple(module, DATA=base/'data', CLIENT=base/'client',
-                                     MATERIAL=base/'material', STATE=base/'state'):
+                                     MATERIAL=base/'material', STATE=base/'state', APPLICATION_IMAGE_STATE=base/'image-state'):
                 module.DATA.mkdir()
                 (module.DATA/'PG_VERSION').write_text('18')
                 (module.DATA/'synthetic-verifier').write_text('synthetic-test-only')
@@ -154,7 +354,10 @@ class CandidateData(unittest.TestCase):
                     ['host',['all'],['all'],'::','::','reject',None]],
             'probes': dict(contract.PROBES), 'locking': {'row_sqlstate':'55P03','advisory_held':'f','advisory_released':'t'},
             'rootless_liveness':True, 'container_servers':[], 'loopback_sentinel_host':0,
-            'native_cgroup':'0::/system.slice/postgresql.service', 'restart_row_count':'1'}
+            'native_cgroup':'0::/system.slice/postgresql.service', 'restart_row_count':'1',
+            'application': {'runtime': dict(contract.APPLICATION_RUNTIME),
+                'probes': copy.deepcopy(contract.APPLICATION_PROBES),
+                'health': copy.deepcopy(contract.APPLICATION_HEALTH), 'same_process': True}}
         evidence = {'schema_version':1,'claim':contract.SELECTOR,'authorization':auth,
                     'qualification_run_id':'200','qualification_run_attempt':'1',
                     'instance_id':'123456789','instance_name':'sprk-100-1-instance','architecture':architecture,

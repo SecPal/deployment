@@ -20,7 +20,6 @@ import socket
 import stat
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import tomllib
@@ -30,6 +29,8 @@ sys.dont_write_bytecode = True
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 if os.fspath(SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, os.fspath(SCRIPT_DIRECTORY))
+
+from image_attestation_runtime import CLOUD_GH_RELEASES, EXPECTED_GH_VERSION, stage_gh_cli
 
 from integration_runtime_contract import (
     API_DIGEST,
@@ -70,7 +71,6 @@ ONESHOT_SYSTEMD_PROPERTIES = (
     "InvocationID",
     "ExecMainStartTimestampMonotonic",
 )
-EXPECTED_GH_VERSION = "2.97.0"
 INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 SAFE_PATH_PATTERN = re.compile(r"/[A-Za-z0-9._@+/-]*\Z")
 QUADLET_USER_GENERATOR = Path(
@@ -170,16 +170,7 @@ CLOUD_IMAGE_TAGS = {
     "frontend": "localhost/secpal-ci-frontend:verified",
     "postgres": "localhost/secpal-ci-postgres:verified",
 }
-CLOUD_GH_RELEASES = {
-    "x86_64": (
-        "amd64",
-        "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
-    ),
-    "aarch64": (
-        "arm64",
-        "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
-    ),
-}
+
 
 
 class IntegrationError(RuntimeError):
@@ -2005,57 +1996,13 @@ class IntegrationLifecycle:
         if release is None:
             raise IntegrationError("cloud GitHub CLI architecture is unsupported")
         release_arch, expected_sha256 = release
-        archive_name = f"gh_{EXPECTED_GH_VERSION}_linux_{release_arch}.tar.gz"
-        archive = self.fixture_root / archive_name
-        executable = self.fixture_root / "tools" / "gh"
-        executable.parent.mkdir(mode=0o700)
-        self.command(
-            [
-                "curl",
-                "--disable",
-                "--proto",
-                "=https",
-                "--tlsv1.2",
-                "--fail",
-                "--location",
-                "--silent",
-                "--show-error",
-                "--max-time",
-                "180",
-                "--max-filesize",
-                "67108864",
-                "--output",
-                os.fspath(archive),
-                (
-                    "https://github.com/cli/cli/releases/download/"
-                    f"v{EXPECTED_GH_VERSION}/{archive_name}"
-                ),
-            ],
-            environment=self.anonymous_environment(),
-        )
         try:
-            if hashlib.sha256(archive.read_bytes()).hexdigest() != expected_sha256:
-                raise IntegrationError("cloud GitHub CLI archive digest differs")
-            member_name = (
-                f"gh_{EXPECTED_GH_VERSION}_linux_{release_arch}/bin/gh"
+            self.gh_executable = stage_gh_cli(
+                self.fixture_root, (release_arch, expected_sha256), self.command,
+                self.anonymous_environment(),
             )
-            with tarfile.open(archive, mode="r:gz") as bundle:
-                member = bundle.getmember(member_name)
-                if not member.isfile() or not 0 < member.size <= 64 * 1024 * 1024:
-                    raise IntegrationError("cloud GitHub CLI archive member is invalid")
-                source = bundle.extractfile(member)
-                if source is None:
-                    raise IntegrationError("cloud GitHub CLI archive member is missing")
-                content = source.read(64 * 1024 * 1024 + 1)
-                if len(content) != member.size:
-                    raise IntegrationError("cloud GitHub CLI archive member is truncated")
-            executable.write_bytes(content)
-            executable.chmod(0o700)
-        except (KeyError, OSError, tarfile.TarError) as error:
-            raise IntegrationError("cloud GitHub CLI staging failed") from error
-        finally:
-            archive.unlink(missing_ok=True)
-        self.gh_executable = os.fspath(executable)
+        except ValueError as error:
+            raise IntegrationError(str(error)) from error
         version_line = required_first_line(
             self.captured([self.gh_executable, "version"]), "GitHub CLI"
         )
