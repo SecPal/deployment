@@ -2124,12 +2124,27 @@ def validate_rocky_control_plane(root: Path) -> None:
         set(inputs)
         == {
             "operation",
+            "qualification",
             "target_sha",
             "provider_profile",
             "continuation_run_id",
             "continuation_run_attempt",
         },
         "Rocky workflow input set changed",
+    )
+    qualification = inputs.get("qualification")
+    require(
+        isinstance(qualification, dict)
+        and qualification.get("type") == "choice"
+        and qualification.get("default") == "rocky-host"
+        and qualification.get("options") == ["rocky-host", "native-postgresql-18"],
+        "Rocky/PostgreSQL qualification selector must remain closed",
+    )
+    require(
+        inputs["target_sha"].get("required") == "false"
+        and '[[ -z "$RAW_TARGET_SHA" ]]' in text
+        and 'RAW_TARGET_SHA="$expected_target_sha"' in text,
+        "PostgreSQL source identity must be trusted-derived, not dispatch-selected",
     )
     operation = inputs.get("operation")
     profile = inputs.get("provider_profile")
@@ -2208,6 +2223,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         == {
             "validate",
             "discover",
+            "confirm_postgresql",
             "provision",
             "resume_control",
             "qualify_target",

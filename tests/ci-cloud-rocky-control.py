@@ -524,6 +524,14 @@ class RockyCloudControlTests(unittest.TestCase):
             encoding="utf-8"
         )
         sources = {
+            "postgresql_consumer_base64gzip": ROOT / "scripts/render-native-postgresql.py",
+            "postgresql_contract_base64gzip": ROOT / "scripts/ci-cloud/postgresql_qualification_contract.py",
+            "postgresql_control_base64gzip": ROOT / "scripts/ci-cloud/postgresql-qualification-control.py",
+            "postgresql_runner_base64gzip": ROOT / "scripts/ci-cloud/qualify-native-postgresql.py",
+            "postgresql_wrapper_base64gzip": ROOT / "scripts/ci-cloud/run-native-postgresql-qualification.sh",
+            "postgresql_diagnostic_schema_base64gzip": ROOT / "schemas/postgresql-qualification-diagnostic.schema.json",
+            "postgresql_schema_base64gzip": ROOT / "schemas/postgresql-qualification-evidence.schema.json",
+            "integration_runtime_contract_base64gzip": ROOT / "scripts/integration_runtime_contract.py",
             "prepare_script_base64gzip": ROOT / "scripts/ci-cloud/prepare-rocky-host.sh",
             "readiness_publisher_base64gzip": ROOT
             / "scripts/ci-cloud/publish-rocky-qualification-readiness.py",
@@ -582,6 +590,7 @@ class RockyCloudControlTests(unittest.TestCase):
                 "ascii"
             )
             rendered = rendered.replace("${" + name + "}", encoded)
+        rendered = rendered.replace("${postgresql_candidate_base64gzip}", base64.b64encode(gzip.compress(b"", mtime=0)).decode("ascii"))
         rendered = rendered.replace("$${", "${")
         self.assertLessEqual(len(rendered.encode("utf-8")), (256 * 1024) - 256)
         self.assertNotRegex(rendered, r"\$\{[a-z_]+_base64gzip\}")

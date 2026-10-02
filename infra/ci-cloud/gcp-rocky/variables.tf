@@ -158,3 +158,20 @@ variable "expires_at" {
     error_message = "expires_at must bind a positive TTL of no more than three hours."
   }
 }
+
+variable "postgresql_candidate_json" {
+  description = "Optional non-secret data bundle resolved by accepted-main deployment#81 control."
+  type        = string
+  default     = ""
+  validation {
+    condition = var.postgresql_candidate_json == "" || (
+      length(var.postgresql_candidate_json) <= 16384 &&
+      try(jsondecode(var.postgresql_candidate_json).authorization.selector == "native-postgresql-18", false) &&
+      try(jsondecode(var.postgresql_candidate_json).authorization.control_sha == var.trusted_control_sha, false) &&
+      try(jsondecode(var.postgresql_candidate_json).authorization.run_id == var.run_id, false) &&
+      try(jsondecode(var.postgresql_candidate_json).authorization.run_attempt == var.run_attempt, false) &&
+      try(jsondecode(var.postgresql_candidate_json).authorization.profile == var.profile, false)
+    )
+    error_message = "PostgreSQL qualification data must be bounded and bound to this accepted-main host run."
+  }
+}
