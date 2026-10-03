@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: MIT",
+  "title": "Trusted Rocky GCP provider observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operation",
+    "component",
+    "project",
+    "region",
+    "zone",
+    "expected_name",
+    "ownership",
+    "outcome"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "operation": {
+      "enum": [
+        "ambiguous-create-read-back",
+        "cleanup-read-back",
+        "cleanup-failed-read-back",
+        "final-provider-absence"
+      ]
+    },
+    "component": {
+      "enum": [
+        "instance",
+        "disk",
+        "ssh",
+        "egress-allow",
+        "egress-deny",
+        "subnet",
+        "network"
+      ]
+    },
+    "project": {
+      "const": "secpal-dev"
+    },
+    "region": {
+      "const": "europe-west3"
+    },
+    "zone": {
+      "const": "europe-west3-a"
+    },
+    "expected_name": {
+      "type": "string",
+      "pattern": "^sprk-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}-(instance|disk|ssh|egress-allow|egress-deny|subnet|network)$"
+    },
+    "ownership": {
+      "type": "object",
+      "required": [
+        "secpal_ci_owner",
+        "repository",
+        "github_run_id",
+        "github_run_attempt",
+        "target_sha",
+        "control_sha",
+        "provider_profile",
+        "created_at",
+        "expires_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "secpal_ci_owner": {
+          "const": "rocky-host-qualification"
+        },
+        "repository": {
+          "const": "secpal-deployment"
+        },
+        "github_run_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "github_run_attempt": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,2}$"
+        },
+        "target_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "control_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "provider_profile": {
+          "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+        },
+        "created_at": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{9}$"
+        },
+        "expires_at": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{9}$"
+        }
+      }
+    },
+    "outcome": {
+      "enum": [
+        "ABSENT",
+        "EXACT_RUN_OWNED_INSTANCE_PRESENT",
+        "EXACT_RUN_OWNED_RESOURCE_PRESENT",
+        "INCOMPATIBLE_OR_AMBIGUOUS_RESOURCE",
+        "UNKNOWN_PROVIDER_STATE"
+      ]
+    }
+  }
+}

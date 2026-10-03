@@ -77,6 +77,7 @@ python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py
 python3 tests/ci-cloud-gcp-janitor.py
 python3 tests/ci-cloud-gcp-rocky-janitor.py
+python3 tests/ci-cloud-rocky-cleanup.py
 bash tests/ci-cloud-gcp-identity.sh
 python3 tests/ci-cloud-host-setup-failure.py
 python3 tests/ci-cloud-janitor.py

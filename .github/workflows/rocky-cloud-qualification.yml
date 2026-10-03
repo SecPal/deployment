@@ -541,6 +541,19 @@ jobs:
           tofu output -raw instance_id >"$RUNNER_TEMP/rocky-cloud/instance_id"
           tofu output -raw instance_name >"$RUNNER_TEMP/rocky-cloud/instance_name"
 
+      - name: Reconcile failed instance creation without continuing qualification
+        if: ${{ steps.apply.outcome == 'failure' }}
+        continue-on-error: true
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
+        run: |
+          scripts/ci-cloud/gcp-rocky-janitor.py \
+            --project secpal-dev --region europe-west3 --zone europe-west3-a \
+            --now "$(date -u +%s)" --exact-action reconcile \
+            --variables infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
+
       - name: Preserve exact state before identity transition
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1285,7 +1298,7 @@ jobs:
         run: rm -f -- "$RUNNER_TEMP/rocky-target/id_ed25519" "$RUNNER_TEMP/rocky-target/id_ed25519.pub"
 
   cleanup:
-    name: Destroy only exact retained OpenTofu state
+    name: Destroy exact retained state and verify provider absence
     needs: [validate, provision, resume_control, qualify_target]
     if: >-
       ${{ always() && (
@@ -1295,6 +1308,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: ci-cloud-gcp-cleanup
+    env:
+      TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+      PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
+      SOURCE_RUN_ID: ${{ needs.validate.outputs.source_run_id }}
+      SOURCE_RUN_ATTEMPT: ${{ needs.validate.outputs.source_run_attempt }}
     permissions:
       actions: read
       contents: read
@@ -1370,6 +1388,12 @@ jobs:
             "$(jq -er .exact_image_self_link "$variables")" ]]
           [[ "$(jq -er .profile "$continuation")" == \
             "$(jq -er .profile "$variables")" ]]
+          [[ "$(jq -er .created_at "$continuation")" == \
+            "$(jq -er .created_at "$variables")" ]]
+          [[ "$(jq -er .expires_at "$continuation")" == \
+            "$(jq -er .expires_at "$variables")" ]]
+          printf 'SOURCE_CONTROL_SHA=%s\n' \
+            "$(jq -er .trusted_control_sha "$continuation")" >>"$GITHUB_ENV"
 
       - name: Restore exact state into the locked root
         run: |
@@ -1407,9 +1431,20 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
-          access_token_lifetime: 1200s
+          # Cover the full 25-minute job even after bounded exact cleanup.
+          access_token_lifetime: 1800s
           create_credentials_file: false
           export_environment_variables: false
+
+      - name: Reconcile and remove only independently admitted exact run resources
+        id: provider_cleanup
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.cleanup_auth.outputs.access_token }}
+        run: |
+          scripts/ci-cloud/gcp-rocky-janitor.py \
+            --project secpal-dev --region europe-west3 --zone europe-west3-a \
+            --now "$(date -u +%s)" --exact-action cleanup \
+            --variables infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
 
       - name: Destroy exact state and prove it empty
         working-directory: infra/ci-cloud/gcp-rocky
@@ -1418,3 +1453,14 @@ jobs:
         run: |
           tofu destroy --auto-approve --input=false
           test -z "$(tofu state list)"
+
+      - name: Independently prove complete provider run resource absence
+        id: provider_absence
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.cleanup_auth.outputs.access_token }}
+        run: |
+          scripts/ci-cloud/gcp-rocky-janitor.py \
+            --project secpal-dev --region europe-west3 --zone europe-west3-a \
+            --now "$(date -u +%s)" --exact-action verify \
+            --variables infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
+          printf '%s\n' OPEN_TOFU_STATE_EMPTY PROVIDER_RUN_RESOURCE_SET_ABSENT
