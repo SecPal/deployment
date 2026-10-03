@@ -428,6 +428,9 @@ jobs:
           tofu init -input=false -lockfile=readonly
           tofu validate
 
+      - name: Admit actual Rocky metadata before provider authentication
+        run: python3 scripts/ci-cloud/admit-rocky-metadata.py
+
       - name: Authenticate trusted provisioning through OIDC
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}

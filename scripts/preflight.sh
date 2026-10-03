@@ -16,7 +16,7 @@ fi
 
 scripts/validate-origin.sh "$(git remote get-url origin)"
 
-required_tools=(actionlint markdownlint php prettier python3 reuse shellcheck yamllint)
+required_tools=(tofu actionlint markdownlint php prettier python3 reuse shellcheck yamllint)
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -65,6 +65,7 @@ python3 tests/ci-cloud-bootstrap-failure.py
 python3 tests/ci-cloud-config.py
 python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-rocky-control.py
+python3 tests/ci-cloud-rocky-metadata.py
 python3 tests/ci-cloud-rocky-readiness.py
 python3 tests/ci-cloud-rocky-runtime-user-readiness.py
 python3 tests/ci-cloud-rocky-replay-witness.py
