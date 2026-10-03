@@ -167,26 +167,32 @@ def service(*, oneshot: bool = False, backend: bool = False) -> str:
 def build_native_lifecycle_fixture_unit(
     contract: dict, fixture_root: Path, instance: str
 ) -> str:
-    """Render a fixture-only probe from the production private-storage seam."""
-    private = contract["objects"]["private_application_storage"]
+    """Render disposable runtime evidence, independent of #99 Object Storage."""
     identity = role_spec("api")
-    source = fixture_root / private["location"].lstrip("/")
+    source = fixture_root / "state"
     lines = common_container(contract, "api", FRONTEND_IMAGE, instance=instance)
-    lines = [line for line in lines if not line.startswith(("LogDriver=", "LogOpt="))]
+    lines = [
+        line for line in lines
+        if not line.startswith(("LogDriver=", "LogOpt="))
+        and line != "Label=org.secpal.production=true"
+    ]
     lines.append("LogDriver=journald")
     lines.extend(
         (
             "Network=none",
-            f"Mount=type=bind,source={source},target=/app/storage/app/private,rw=true,relabel=private",
+            # One fixture container owns this disposable source; private MCS
+            # relabeling is appropriate. Production paths never use this probe.
+            f"Mount=type=bind,source={source},target=/fixture-state,rw=true,relabel=private",
             'Entrypoint=["/bin/sh"]',
-            'Exec=-c "if [ ! -f /app/storage/app/private/proof ]; then '
-            "printf persistence > /app/storage/app/private/proof; fi; exec sleep 300\"",
+            'Exec=-c "set -eu; if [ ! -f /fixture-state/proof ]; then '
+            "printf persistence > /fixture-state/proof; fi; exec sleep 300\"",
         )
     )
-    # This fixture deliberately omits state-ready: host-side fixture admission is
-    # separate, while the mounted path, target and API identity come from the
-    # production contract and role registry.
-    content = unit("SecPal D.2 native private-storage persistence proof")
+    # Only the reviewed non-root identity comes from the role registry. This
+    # POSIX bind lifecycle does not qualify a Self-Hosted Object Storage adapter.
+    content = unit("SecPal native rootless runtime lifecycle proof").replace(
+        "PartOf=secpal.target\n", ""
+    )
     content += section("Container", lines)
     content += section("Service", ["Restart=no", "TimeoutStartSec=60"])
     if f"User={identity.uid}" not in content or f"Group={identity.gid}" not in content:
