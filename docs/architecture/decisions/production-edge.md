@@ -12,7 +12,7 @@ SPDX-License-Identifier: CC0-1.0
 > [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
 > supersedes its universal Edge decision with the DIRECT and PROTECTED modes.
 > [Deployment #89](https://github.com/SecPal/deployment/issues/89) owns the
-> DIRECT HAProxy Viewer-Edge decision, and
+> [accepted DIRECT HAProxy Viewer-Edge decision](direct-viewer-edge.md), and
 > [#209](https://github.com/SecPal/deployment/issues/209) coordinates portable
 > PROTECTED implementation. The historical contract below is preserved as it
 > was accepted at the time.
