@@ -177,7 +177,17 @@ PRODUCTION_GENERATED="$FIXTURE_ROOT/production-generated"
 install -d -m 0700 "$PRODUCTION_GENERATED"
 QUADLET_UNIT_DIRS="$ROOT_DIR/config/production/quadlet" "$GENERATOR" \
   "$PRODUCTION_GENERATED" "$PRODUCTION_GENERATED" "$PRODUCTION_GENERATED"
-test "$(find "$PRODUCTION_GENERATED" -maxdepth 1 -type f | wc -l)" -eq 9
+mapfile -t generated_services < <(find "$PRODUCTION_GENERATED" -maxdepth 1 -type f -printf '%f\n' | sort)
+expected_services=(
+  secpal-api.service
+  secpal-edge-network.service
+  secpal-frontend.service
+  secpal-migrate.service
+  secpal-scheduler.service
+  secpal-worker-general.service
+  secpal-worker-hash-chain.service
+)
+test "${generated_services[*]}" = "${expected_services[*]}"
 
 if ! podman image exists "$FRONTEND_IMAGE"; then
   if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then

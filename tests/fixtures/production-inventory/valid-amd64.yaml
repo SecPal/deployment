@@ -59,16 +59,6 @@ paths:
     mode: "0710"
     lifecycle: reconstructable
     decision_issue: null
-  postgresql_data:
-    path: /srv/secpal/postgresql
-    owner_role: state-contract
-    uid: 100998
-    gid: 200998
-    container_uid: 999
-    container_gid: 999
-    mode: "0700"
-    lifecycle: persistent
-    decision_issue: null
   private_application_storage:
     path: /srv/secpal/private-storage
     owner_role: state-contract
@@ -87,16 +77,6 @@ paths:
     container_uid: 10001
     container_gid: 10001
     mode: "0750"
-    lifecycle: persistent
-    decision_issue: null
-  valkey_data:
-    path: /srv/secpal/valkey
-    owner_role: state-contract
-    uid: 110001
-    gid: 210001
-    container_uid: 10002
-    container_gid: 10002
-    mode: "0700"
     lifecycle: persistent
     decision_issue: null
   edge_state:
@@ -180,7 +160,6 @@ resources:
       minimum_free_percent: 20
       minimum_free_inodes: 200000
       minimum_free_inode_percent: 20
-    postgresql_data: *large-headroom
     private_application_storage:
       minimum_free_bytes: 10737418240
       minimum_free_percent: 20
@@ -188,11 +167,6 @@ resources:
       minimum_free_inode_percent: 20
     public_application_storage:
       minimum_free_bytes: 1073741824
-      minimum_free_percent: 20
-      minimum_free_inodes: 20000
-      minimum_free_inode_percent: 20
-    valkey_data:
-      minimum_free_bytes: 2147483648
       minimum_free_percent: 20
       minimum_free_inodes: 20000
       minimum_free_inode_percent: 20

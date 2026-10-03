@@ -3,7 +3,7 @@
 
 [Unit]
 Description=Validate SecPal production state before product startup
-Before=secpal-valkey.service secpal-migrate.service
+Before=secpal-migrate.service
 PartOf=secpal.target
 [Service]
 Type=oneshot

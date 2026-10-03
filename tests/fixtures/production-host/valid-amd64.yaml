@@ -307,19 +307,6 @@ filesystems:
     mount_read_only: false
     d_type: true
     xfs_ftype: null
-  postgresql_data:
-    access:
-      path: /srv/secpal/postgresql
-      uid: 100998
-      gid: 200998
-      mode: "0700"
-      service_account_can_write: false
-      ancestors_service_account_can_write: false
-      local: true
-    filesystem: ext4
-    mount_read_only: false
-    d_type: true
-    xfs_ftype: null
   private_application_storage:
     access:
       path: /srv/secpal/private-storage
@@ -339,19 +326,6 @@ filesystems:
       uid: 110000
       gid: 210000
       mode: "0750"
-      service_account_can_write: false
-      ancestors_service_account_can_write: false
-      local: true
-    filesystem: ext4
-    mount_read_only: false
-    d_type: true
-    xfs_ftype: null
-  valkey_data:
-    access:
-      path: /srv/secpal/valkey
-      uid: 110001
-      gid: 210001
-      mode: "0700"
       service_account_can_write: false
       ancestors_service_account_can_write: false
       local: true
@@ -450,13 +424,6 @@ resources:
       filesystem_total_inodes: 1333333
       free_inodes: 400000
       free_inode_percent: 30
-    postgresql_data:
-      filesystem_total_bytes: 229064922453
-      free_bytes: 68719476736
-      free_percent: 30
-      filesystem_total_inodes: 1333333
-      free_inodes: 400000
-      free_inode_percent: 30
     private_application_storage:
       filesystem_total_bytes: 114532461226
       free_bytes: 34359738368
@@ -465,13 +432,6 @@ resources:
       free_inodes: 200000
       free_inode_percent: 30
     public_application_storage:
-      filesystem_total_bytes: 28633115306
-      free_bytes: 8589934592
-      free_percent: 30
-      filesystem_total_inodes: 333333
-      free_inodes: 100000
-      free_inode_percent: 30
-    valkey_data:
       filesystem_total_bytes: 28633115306
       free_bytes: 8589934592
       free_percent: 30

@@ -806,10 +806,8 @@
       "required": [
         "configuration",
         "deployment_state",
-        "postgresql_data",
         "private_application_storage",
         "public_application_storage",
-        "valkey_data",
         "edge_state",
         "acme_state",
         "crowdsec_state",
@@ -824,16 +822,10 @@
         "deployment_state": {
           "$ref": "#/$defs/filesystemFact"
         },
-        "postgresql_data": {
-          "$ref": "#/$defs/filesystemFact"
-        },
         "private_application_storage": {
           "$ref": "#/$defs/filesystemFact"
         },
         "public_application_storage": {
-          "$ref": "#/$defs/filesystemFact"
-        },
-        "valkey_data": {
           "$ref": "#/$defs/filesystemFact"
         },
         "edge_state": {
@@ -884,10 +876,8 @@
           "additionalProperties": false,
           "required": [
             "podman_graph_root",
-            "postgresql_data",
             "private_application_storage",
             "public_application_storage",
-            "valkey_data",
             "logs",
             "edge_state",
             "acme_state",
@@ -898,16 +888,10 @@
             "podman_graph_root": {
               "$ref": "#/$defs/headroomFact"
             },
-            "postgresql_data": {
-              "$ref": "#/$defs/headroomFact"
-            },
             "private_application_storage": {
               "$ref": "#/$defs/headroomFact"
             },
             "public_application_storage": {
-              "$ref": "#/$defs/headroomFact"
-            },
-            "valkey_data": {
               "$ref": "#/$defs/headroomFact"
             },
             "logs": {
