@@ -738,3 +738,14 @@ result requires both maintained accepted-main preparation profiles, exact
 run/control/candidate identities, mandatory cleanup and authoritative empty
 state. The accepted-main-only workflow cannot use feature-branch control to
 supply that evidence.
+
+## Product backend policy proof
+
+The closed `product-backend-policy` selector proves the host policy owned by
+[#101](https://github.com/SecPal/deployment/issues/101). Its implementation and
+trust boundary are documented in [Product backends](product-backends.md).
+The real privileged execution, both reviewed architecture profiles, mandatory
+cleanup and authoritative empty-state evidence belong to evidence-only
+[#294](https://github.com/SecPal/deployment/issues/294), after accepted-main source
+delivery. It uses the same Rocky control plane and frozen host qualification pair;
+no candidate PR can supply privileged commands or executable paths.

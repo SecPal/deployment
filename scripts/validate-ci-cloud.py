@@ -2137,7 +2137,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         isinstance(qualification, dict)
         and qualification.get("type") == "choice"
         and qualification.get("default") == "rocky-host"
-        and qualification.get("options") == ["rocky-host", "native-postgresql-18"],
+        and qualification.get("options") == ["rocky-host", "native-postgresql-18", "product-backend-policy"],
         "Rocky/PostgreSQL qualification selector must remain closed",
     )
     require(
@@ -2283,7 +2283,7 @@ def validate_rocky_control_plane(root: Path) -> None:
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     main += read(root, "infra/ci-cloud/gcp-rocky/metadata.tf")
     source_names = set(re.findall(
-        r"^\s+(\w+)\s*=\s*(?:file\(|var\.postgresql_candidate_json)",
+        r"^\s+(\w+)\s*=\s*(?:file\(|var\.(?:postgresql_candidate_json|product_backend_policy_json)\s*$)",
         read(root, "infra/ci-cloud/gcp-rocky/metadata.tf"), re.MULTILINE,
     ))
     installer_names = {

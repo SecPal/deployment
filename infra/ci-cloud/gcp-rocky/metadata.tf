@@ -4,20 +4,9 @@
 # Canonical provider-bound representation. The workflow and credential-free tests
 # evaluate these exact locals with pinned OpenTofu; no second renderer owns it.
 locals {
-  rocky_bootstrap_sources = {
+  product_backend_policy_enabled = var.product_backend_policy_json != ""
+  rocky_bootstrap_sources = merge({
     postgresql_candidate                = var.postgresql_candidate_json
-    postgresql_consumer                 = file("${path.module}/../../../scripts/render-native-postgresql.py")
-    postgresql_contract                 = file("${path.module}/../../../scripts/ci-cloud/postgresql_qualification_contract.py")
-    postgresql_control                  = file("${path.module}/../../../scripts/ci-cloud/postgresql-qualification-control.py")
-    postgresql_runner                   = file("${path.module}/../../../scripts/ci-cloud/qualify-native-postgresql.py")
-    postgresql_application_bootstrap    = file("${path.module}/../../../scripts/ci-cloud/postgresql-application-bootstrap.php")
-    postgresql_application_probe        = file("${path.module}/../../../scripts/ci-cloud/postgresql-application-probe.php")
-    image_attestation_runtime           = file("${path.module}/../../../scripts/image_attestation_runtime.py")
-    fetch_oci_attestation               = file("${path.module}/../../../scripts/fetch-oci-attestation.py")
-    postgresql_wrapper                  = file("${path.module}/../../../scripts/ci-cloud/run-native-postgresql-qualification.sh")
-    postgresql_diagnostic_schema        = file("${path.module}/../../../schemas/postgresql-qualification-diagnostic.schema.json")
-    postgresql_schema                   = file("${path.module}/../../../schemas/postgresql-qualification-evidence.schema.json")
-    integration_runtime_contract        = file("${path.module}/../../../scripts/integration_runtime_contract.py")
     prepare_script                      = file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh")
     readiness_publisher                 = file("${path.module}/../../../scripts/ci-cloud/publish-rocky-qualification-readiness.py")
     runtime_user_systemd                = file("${path.module}/../../../scripts/ci-cloud/runtime_user_systemd.py")
@@ -51,13 +40,41 @@ locals {
     target_qualification_failure_schema = file("${path.module}/../../../schemas/rocky-cloud-target-qualification-failure.schema.json")
     arm64_profile                       = file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-arm64.json")
     x86_64_profile                      = file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-x86-64.json")
-  }
+    }, local.product_backend_policy_enabled ? {
+    backend_authorization          = var.product_backend_policy_json
+    backend_policy                 = file("${path.module}/../../../scripts/product-backend-policy.py")
+    backend_contract               = file("${path.module}/../../../scripts/product_backend_contract.py")
+    backend_service                = file("${path.module}/../../../config/production/host-systemd/secpal-product-backend-policy.service")
+    backend_qualifier              = file("${path.module}/../../../scripts/ci-cloud/qualify-product-backends.py")
+    backend_qualification_contract = file("${path.module}/../../../scripts/ci-cloud/product_backend_qualification_contract.py")
+    backend_control                = file("${path.module}/../../../scripts/ci-cloud/product-backend-qualification-control.py")
+    backend_wrapper                = file("${path.module}/../../../scripts/ci-cloud/run-product-backend-qualification.sh")
+    backend_api                    = file("${path.module}/../../../config/production/quadlet/secpal-api.container")
+    backend_frontend               = file("${path.module}/../../../config/production/quadlet/secpal-frontend.container")
+    backend_edge_network           = file("${path.module}/../../../config/production/quadlet/secpal-edge.network")
+    backend_state_contract         = file("${path.module}/../../../config/production/state-contract.json")
+    backend_application_network    = file("${path.module}/../../../config/production/quadlet/secpal-application.network")
+    } : {
+    postgresql_consumer              = file("${path.module}/../../../scripts/render-native-postgresql.py")
+    postgresql_contract              = file("${path.module}/../../../scripts/ci-cloud/postgresql_qualification_contract.py")
+    postgresql_control               = file("${path.module}/../../../scripts/ci-cloud/postgresql-qualification-control.py")
+    postgresql_runner                = file("${path.module}/../../../scripts/ci-cloud/qualify-native-postgresql.py")
+    postgresql_application_bootstrap = file("${path.module}/../../../scripts/ci-cloud/postgresql-application-bootstrap.php")
+    postgresql_application_probe     = file("${path.module}/../../../scripts/ci-cloud/postgresql-application-probe.php")
+    image_attestation_runtime        = file("${path.module}/../../../scripts/image_attestation_runtime.py")
+    fetch_oci_attestation            = file("${path.module}/../../../scripts/fetch-oci-attestation.py")
+    postgresql_wrapper               = file("${path.module}/../../../scripts/ci-cloud/run-native-postgresql-qualification.sh")
+    postgresql_diagnostic_schema     = file("${path.module}/../../../schemas/postgresql-qualification-diagnostic.schema.json")
+    postgresql_schema                = file("${path.module}/../../../schemas/postgresql-qualification-evidence.schema.json")
+    integration_runtime_contract     = file("${path.module}/../../../scripts/integration_runtime_contract.py")
+  })
   rocky_bootstrap_payload = jsonencode(local.rocky_bootstrap_sources)
   rocky_startup = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-rocky-host.tftpl", {
-    payload_base64gzip     = base64gzip(local.rocky_bootstrap_payload)
-    payload_sha256         = sha256(local.rocky_bootstrap_payload)
-    payload_bytes          = length(base64encode(local.rocky_bootstrap_payload)) * 3 / 4 - length(regexall("=", base64encode(local.rocky_bootstrap_payload)))
-    component_names_base64 = base64encode(jsonencode(sort(keys(local.rocky_bootstrap_sources))))
+    product_backend_policy_enabled = local.product_backend_policy_enabled
+    payload_base64gzip             = base64gzip(local.rocky_bootstrap_payload)
+    payload_sha256                 = sha256(local.rocky_bootstrap_payload)
+    payload_bytes                  = length(base64encode(local.rocky_bootstrap_payload)) * 3 / 4 - length(regexall("=", base64encode(local.rocky_bootstrap_payload)))
+    component_names_base64         = base64encode(jsonencode(sort(keys(local.rocky_bootstrap_sources))))
   })
   rocky_metadata = {
     block-project-ssh-keys               = "true"

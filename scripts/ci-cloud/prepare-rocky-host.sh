@@ -15,8 +15,8 @@ readonly failure_evidence_max_bytes=4096
 readonly enabled_repository_max=16
 readonly available_repository_definition_max=64
 
-if [[ "$#" -ne 8 ]]; then
-  printf 'usage: prepare-rocky-host.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT EXPIRES_AT IMAGE_SELF_LINK PROFILE EVIDENCE_OUTPUT\n' >&2
+if [[ "$#" -ne 8 && "$#" -ne 9 ]]; then
+  printf 'usage: prepare-rocky-host.sh TARGET_SHA CONTROL_SHA RUN_ID RUN_ATTEMPT EXPIRES_AT IMAGE_SELF_LINK PROFILE EVIDENCE_OUTPUT [product-backend-policy]\n' >&2
   exit 64
 fi
 readonly target_sha="$1"
@@ -27,6 +27,8 @@ readonly expires_at="$5"
 readonly image_self_link="$6"
 readonly profile="$7"
 readonly evidence_output="$8"
+readonly qualification="${9:-runtime}"
+[[ "$qualification" == runtime || "$qualification" == product-backend-policy ]]
 case "$profile" in
   gcp-rocky-10-2-arm64)
     readonly expected_architecture=aarch64
@@ -443,6 +445,10 @@ admit_repositories() {
 
 install_policy() {
   local fixture_digest_metadata runtime_uid runtime_gid quadlet_root user_manager_dropin
+  local backend_packages=()
+  if [[ "$qualification" == product-backend-policy ]]; then
+    backend_packages=(haproxy setools-console)
+  fi
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="repositories"
@@ -453,11 +459,14 @@ install_policy() {
     podman conmon crun netavark aardvark-dns passt shadow-utils-subid systemd \
     container-selinux audit policycoreutils policycoreutils-python-utils \
     selinux-policy-targeted curl dnf git jq nftables openssh-server sudo \
-    python3-jsonschema dnf-plugins-core
+    python3-jsonschema dnf-plugins-core "${backend_packages[@]}"
   /opt/secpal-control/scripts/ci-cloud/rocky-control.py validate-profile "$profile"
   current_phase="guest-identity"
   assert_guest_identity
   current_phase="selinux"
+  if [[ "$qualification" == product-backend-policy ]]; then
+    systemctl enable --now nftables.service
+  fi
   [[ "$(getenforce)" == Enforcing ]]
   sestatus | grep -Eq '^Loaded policy name:[[:space:]]+targeted$'
 

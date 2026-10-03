@@ -92,6 +92,8 @@ bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
 python3 tests/production-state-contract.py
+python3 tests/product-backend-contract.py
+python3 tests/product-backend-qualification.py
 python3 tests/production-postgres-retirement.py
 python3 tests/production-edge-decision-contract.py
 python3 tests/cloudfront-origin-prefix-lkg.py
@@ -111,6 +113,7 @@ bash tests/workflow-action-pin-contract.sh
 python3 scripts/validate-ci-cloud.py
 scripts/validate-rocky-evidence-architecture.py
 scripts/validate-postgresql-qualification.py
+scripts/validate-product-backend-qualification.py
 
 mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context -o -name .terraform -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"

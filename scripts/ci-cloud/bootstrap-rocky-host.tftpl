@@ -66,7 +66,29 @@ install -d -o root -g root -m 0755 /opt/secpal-control/scripts/ci-cloud \
   /opt/secpal-control/config/ci-cloud /opt/secpal-control/schemas \
   /usr/local/libexec/secpal-control
 install -d -o root -g root -m 0700 /opt/secpal-control/libexec
+%{ if product_backend_policy_enabled ~}
+# #101 proof executes the accepted-control byte closure, never target PR code.
+install -d -o root -g root -m 0755 /opt/secpal-control/config/production/quadlet \
+  /opt/secpal-control/config/production/host-systemd
+decode_script 'backend_policy' /opt/secpal-control/scripts/product-backend-policy.py
+decode_script 'backend_contract' /opt/secpal-control/scripts/product_backend_contract.py
+decode_script 'backend_service' /opt/secpal-control/config/production/host-systemd/secpal-product-backend-policy.service
+decode_script 'backend_qualifier' /opt/secpal-control/scripts/ci-cloud/qualify-product-backends.py
+decode_script 'backend_qualification_contract' /opt/secpal-control/scripts/ci-cloud/product_backend_qualification_contract.py
+decode_script 'backend_control' /opt/secpal-control/scripts/ci-cloud/product-backend-qualification-control.py
+decode_script 'backend_wrapper' /opt/secpal-control/scripts/ci-cloud/run-product-backend-qualification.sh
+decode_script 'backend_api' /opt/secpal-control/config/production/quadlet/secpal-api.container
+decode_script 'backend_frontend' /opt/secpal-control/config/production/quadlet/secpal-frontend.container
+decode_script 'backend_edge_network' /opt/secpal-control/config/production/quadlet/secpal-edge.network
+decode_script 'backend_application_network' /opt/secpal-control/config/production/quadlet/secpal-application.network
+decode_script 'backend_state_contract' /opt/secpal-control/config/production/state-contract.json
+decode_script 'prepare_script' /opt/secpal-control/scripts/ci-cloud/prepare-rocky-host.sh
+decode_script backend_authorization /var/lib/secpal-rocky/product-backend-policy.json
+chmod 0600 /var/lib/secpal-rocky/product-backend-policy.json
+decode_script backend_wrapper /usr/local/sbin/secpal-qualify-product-backends
+%{ endif ~}
 # Separate PostgreSQL authority; the frozen host harness/claim remains intact.
+%{ if !product_backend_policy_enabled ~}
 decode_script 'postgresql_contract' /opt/secpal-control/scripts/ci-cloud/postgresql_qualification_contract.py
 decode_script 'postgresql_control' /opt/secpal-control/scripts/ci-cloud/postgresql-qualification-control.py
 decode_script 'postgresql_runner' /opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py
@@ -80,6 +102,7 @@ decode_script 'postgresql_diagnostic_schema' /opt/secpal-control/schemas/postgre
 decode_script 'postgresql_schema' /opt/secpal-control/schemas/postgresql-qualification-evidence.schema.json
 decode_script 'postgresql_consumer' /opt/secpal-control/scripts/render-native-postgresql.py
 decode_script 'integration_runtime_contract' /opt/secpal-control/scripts/integration_runtime_contract.py
+%{ endif ~}
 decode_script 'preparation_contract' /opt/secpal-control/scripts/ci-cloud/rocky_preparation_contract.py
 decode_script 'collector' /opt/secpal-control/scripts/ci-cloud/collect-rocky-preparation.py
 decode_script postgresql_candidate /var/lib/secpal-rocky/postgresql-candidate.json
@@ -216,9 +239,31 @@ pathlib.Path('/var/lib/secpal-rocky/postgresql-resource-binding.json').write_tex
 PYTHON
 fi
 
+%{ if product_backend_policy_enabled ~}
+if [[ -s /var/lib/secpal-rocky/product-backend-policy.json ]]; then
+  instance_id="$(metadata_value instance/id)"
+  instance_name="$(metadata_value instance/name)"
+  [[ "$instance_id" =~ ^[1-9][0-9]{0,19}$ && "$instance_name" == "$hostname_value" ]]
+  python3 - "$control_sha" "$profile" "$access_run_id" "$access_run_attempt" \
+    "$instance_id" "$instance_name" <<'PYTHON_BACKEND_BINDING'
+import json
+import pathlib
+import sys
+names = ('control_sha', 'profile', 'run_id', 'run_attempt', 'instance_id', 'instance_name')
+path = pathlib.Path('/var/lib/secpal-rocky/product-backend-policy-binding.json')
+path.write_text(json.dumps(dict(zip(names, sys.argv[1:]))) + '\n')
+path.chmod(0o600)
+PYTHON_BACKEND_BINDING
+fi
+%{ endif ~}
+
+qualification_arguments=()
+%{ if product_backend_policy_enabled ~}
+qualification_arguments=(product-backend-policy)
+%{ endif ~}
 /usr/local/sbin/secpal-prepare-rocky-host \
   "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$expires_at" "$image" \
-  "$profile" /var/lib/secpal-rocky/evidence/preparation.json
+  "$profile" /var/lib/secpal-rocky/evidence/preparation.json "$${qualification_arguments[@]}"
 
 # The initial preparation phase deliberately reboots before the admitted state
 # exists.  Only a completed current-boot startup may publish qualification
@@ -230,6 +275,15 @@ if [[ -s /var/lib/secpal-rocky/postgresql-candidate.json ]]; then
   chmod 0440 /etc/sudoers.d/secpal-cloud-postgresql
   visudo --check --file=/etc/sudoers.d/secpal-cloud-postgresql
 fi
+%{ if product_backend_policy_enabled ~}
+if [[ -s /var/lib/secpal-rocky/product-backend-policy.json ]]; then
+  printf '%s\n' 'secpal-cloud ALL=(root) NOPASSWD: /usr/local/sbin/secpal-qualify-product-backends [1-9]* [1-9]*' \
+    >/etc/sudoers.d/secpal-cloud-product-backends
+  chown root:root /etc/sudoers.d/secpal-cloud-product-backends
+  chmod 0440 /etc/sudoers.d/secpal-cloud-product-backends
+  visudo --check --file=/etc/sudoers.d/secpal-cloud-product-backends
+fi
+%{ endif ~}
 [[ -f /var/lib/secpal-rocky/prepared ]]
 [[ ! -e /var/lib/secpal-rocky/reboot-pending ]]
 boot_id="$(cat /proc/sys/kernel/random/boot_id)"

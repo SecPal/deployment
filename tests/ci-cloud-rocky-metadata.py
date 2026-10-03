@@ -79,8 +79,17 @@ class RockyMetadata(unittest.TestCase):
             'postgresql_candidate_json': data['candidate_json'] if candidate is None else candidate,
         }
 
-    def render(self, architecture='amd64', candidate=None):
-        (self.module / 'run.auto.tfvars.json').write_text(json.dumps(self.variables(architecture, candidate)))
+    def render(self, architecture='amd64', candidate=None, backend=False):
+        variables = self.variables(architecture, candidate)
+        if backend:
+            import sys
+            sys.path[:0] = [str(ROOT / 'scripts'), str(ROOT / 'scripts/ci-cloud')]
+            import product_backend_qualification_contract as contract
+            sources = {name: (ROOT / relative).read_bytes() for name, relative in contract.SOURCES.items()}
+            variables['postgresql_candidate_json'] = ''
+            variables['product_backend_policy_json'] = json.dumps(contract.manifest(
+                variables['trusted_control_sha'], variables['profile'], variables['run_id'], variables['run_attempt'], sources))
+        (self.module / 'run.auto.tfvars.json').write_text(json.dumps(variables))
         result = subprocess.run([self.tofu, '-chdir=' + str(self.module), 'console', '-no-color'],
             input='nonsensitive(jsonencode({metadata=local.rocky_metadata, report=local.rocky_metadata_admission, sources=local.rocky_bootstrap_sources}))\n',
             text=True, capture_output=True, check=True)
@@ -126,8 +135,11 @@ locals {
         for architecture in ('amd64', 'arm64'):
             with self.subTest(architecture=architecture):
                 rendered = self.render(architecture)
-                self.assertEqual(fixture(architecture)['startup_bytes'],
-                                 len(rendered['metadata']['startup-script'].encode()))
+                # Historical measurement remains immutable. Common accepted
+                # preparation source can grow; the legacy layout must still
+                # reproduce provider rejection with the current bytes.
+                self.assertGreaterEqual(len(rendered['metadata']['startup-script'].encode()),
+                                        fixture(architecture)['startup_bytes'])
                 self.assertFalse(rendered['report']['admitted'])
                 self.assert_rejected_before_provisioning('ROCKY_METADATA_VALUE_TOO_LARGE')
 
@@ -145,6 +157,9 @@ locals {
                 self.assertTrue({k: v.encode() for k, v in rendered['sources'].items()} == files, 'source bytes differ')
                 paths = re.findall(r'(\w+)\s*=\s*file\("\$\{path.module\}/../../../([^"\n]+)"\)', self.canonical)
                 for name, relative in paths:
+                    if name not in files:
+                        self.assertTrue(name.startswith('backend_'))
+                        continue
                     self.assertTrue((ROOT / relative).read_bytes() == files[name], name)
 
                 self.assertTrue(fixture(architecture)['candidate_json'].encode() == files['postgresql_candidate'], 'candidate bytes differ')
@@ -152,6 +167,28 @@ locals {
                 self.assertEqual(0, parsed.returncode, parsed.stderr)
                 self.assertLessEqual(len(script.encode()), 237568)
                 self.assertLessEqual(rendered['report']['aggregate_bytes'], 499712)
+
+    def test_backend_profile_authenticates_selected_bytes_and_fits_both_profiles(self):
+        import sys
+        sys.path[:0] = [str(ROOT / 'scripts'), str(ROOT / 'scripts/ci-cloud')]
+        import product_backend_qualification_contract as contract
+        for architecture in ('amd64', 'arm64'):
+            with self.subTest(architecture=architecture):
+                rendered = self.render(architecture, backend=True)
+                self.assertTrue(rendered['report']['admitted'])
+                script = rendered['metadata']['startup-script']
+                result, files = self.reconstruct(script)
+                self.assertEqual(0, result.returncode)
+                self.assertTrue({k: v.encode() for k,v in rendered['sources'].items()} == files)
+                sources = {name: files[name] for name in contract.SOURCES}
+                for name, relative in contract.SOURCES.items():
+                    self.assertTrue((ROOT / relative).read_bytes() == sources[name], name)
+                contract.admit_manifest(json.loads(files['backend_authorization']), sources)
+                self.assertNotIn('postgresql_runner', files)
+                self.assertNotIn('postgresql_application_probe', files)
+                self.assertNotIn("decode_script 'postgresql_runner'", script)
+                self.assertIn('secpal-cloud-product-backends', script)
+                self.assertEqual(0, subprocess.run(['bash', '-n'], input=script, text=True, capture_output=True).returncode)
 
     def test_maximum_candidate_envelope_fits_both_profiles(self):
         # High entropy at the Terraform ceiling is conservative; closed source

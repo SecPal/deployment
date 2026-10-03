@@ -26,6 +26,8 @@ from integration_runtime_contract import (  # noqa: E402
     tmpfs_mounts,
 )
 
+from product_backend_contract import POLICY_CHECK_COMMAND, publish_lines  # noqa: E402
+
 # Production Valkey remains owned by the production state contract. The active
 # disposable integration intentionally exports no Valkey image authority.
 VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
@@ -142,7 +144,7 @@ def common_container(
     ]
 
 
-def service(*, oneshot: bool = False) -> str:
+def service(*, oneshot: bool = False, backend: bool = False) -> str:
     validation = f"ExecStartPre={STATE_READY_COMMAND}"
     if oneshot:
         return section(
@@ -157,7 +159,8 @@ def service(*, oneshot: bool = False) -> str:
         )
     return section(
         "Service",
-        [validation, "Restart=on-failure", "RestartSec=2", "TimeoutStartSec=180"],
+        [*((f"ExecStartPre={POLICY_CHECK_COMMAND}",) if backend else ()),
+         validation, "Restart=on-failure", "RestartSec=2", "TimeoutStartSec=180"],
     )
 
 
@@ -174,7 +177,7 @@ def build_native_lifecycle_fixture_unit(
     lines.extend(
         (
             "Network=none",
-            f"Mount=type=bind,source={source},target=/app/storage/app/private,rw=true",
+            f"Mount=type=bind,source={source},target=/app/storage/app/private,rw=true,relabel=private",
             'Entrypoint=["/bin/sh"]',
             'Exec=-c "if [ ! -f /app/storage/app/private/proof ]; then '
             "printf persistence > /app/storage/app/private/proof; fi; exec sleep 300\"",
@@ -240,13 +243,14 @@ def api_container(contract: dict, role: str) -> str:
         )
     )
     if role == "api":
+        lines.extend(publish_lines(role))
         health = role_spec(role).health
         if health is None:
             raise ValueError("API health contract is missing")
         lines.extend(health.quadlet_lines())
     return unit(
         f"SecPal production {role}", dependencies, oneshot=role == "migrate"
-    ) + section("Container", lines) + service(oneshot=role == "migrate")
+    ) + section("Container", lines) + service(oneshot=role == "migrate", backend=role == "api")
 
 
 def build_units(contract: dict) -> dict[str, str]:
@@ -308,12 +312,13 @@ def build_units(contract: dict) -> dict[str, str]:
         (
             *tmpfs_mounts("frontend"),
             "Network=secpal-edge.network",
+            *publish_lines("frontend"),
             *role_spec("frontend").health.quadlet_lines(),
         )
     )
     units["secpal-frontend.container"] = unit(
         "SecPal production frontend", ("secpal-state-ready.service",)
-    ) + section("Container", frontend) + service()
+    ) + section("Container", frontend) + service(backend=True)
 
     units["secpal-state-ready.service"] = section(
         "Unit",
