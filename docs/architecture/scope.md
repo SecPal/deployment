@@ -19,10 +19,11 @@ cache as well as relational persistence; the current baseline has no Valkey.
 [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
 owns the normative DIRECT/PROTECTED Edge architecture.
 
-- In **DIRECT**, HAProxy is the Viewer Edge. ADR-019 and
-  [deployment #89](https://github.com/SecPal/deployment/issues/89) own the
-  decision; [#90](https://github.com/SecPal/deployment/issues/90) descendants
-  own implementation.
+- In **DIRECT**, host-native HAProxy is the Viewer Edge. The
+  [accepted DIRECT decision](decisions/direct-viewer-edge.md) records
+  [#89](https://github.com/SecPal/deployment/issues/89) under ADR-019;
+  [#90](https://github.com/SecPal/deployment/issues/90) descendants own
+  implementation.
 - In **PROTECTED**, CloudFront Multi-Tenant is the Viewer Edge and HAProxy is the
   Origin/backend boundary. [#209](https://github.com/SecPal/deployment/issues/209)
   descendants own portable implementation.
