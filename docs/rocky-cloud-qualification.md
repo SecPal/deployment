@@ -405,10 +405,48 @@ trusted post-harness admission owns cleanup completeness. A generic helper is
 never mapped directly because the same helper serves runtime, fixture,
 Quadlet, workload, SELinux, AVC, fallback, and cleanup boundaries.
 
-Normal and failure cleanup use `tofu destroy` against the saved state. The Rocky
-janitor independently revalidates the complete ownership description or label
-set immediately before each ordered deletion. A prefix is never ownership, and
-ambiguous or changed metadata results in no deletion.
+Normal and failure cleanup use the existing Rocky GCP janitor's exact-run mode
+before `tofu destroy` against saved state. Failed apply is conservatively treated
+as an ambiguous create result: accepted-main control reads the exact derived
+instance name and fails the attempt, even when the resource exists. Only the
+cleanup environment can remove it. No ambiguous instance resumes qualification.
+
+The exact-run authority binds the trusted workflow repository/ref/control SHA,
+original run/attempt, selected profile and target SHA to the retained trusted
+variables. Cross-run cleanup first admits the originating continuation and its
+creation/expiry timestamps. Every deletion requires the shared janitor ownership
+predicate plus exact provider self-link, kind, immutable resource ID and creation
+timestamp within the original three-hour interval. Instance labels and ownership
+description must both agree; the immutable ID is read again before deletion.
+The returned delete operation must independently agree on operation kind,
+operation type, exact target self-link and immutable target ID before terminal
+completion can be admitted. GCP's documented deletion is addressed by name and
+has no conditional-ID precondition. The existing workflow serializes trusted
+mutations by original run ID, and different run attempts use different names.
+A foreign replacement after the final ownership GET cannot be prevented
+atomically by this API; a mismatching operation fails closed after dispatch and
+cannot produce cleanup success. No atomic compare-and-delete claim is made.
+A prefix or name alone never authorizes deletion. Unknown, incompatible or
+changed ownership stops cleanup without broad inventory or deletion.
+
+After exact cleanup and OpenTofu destruction, a separate bounded exact GET for
+each instance, disk, network, subnet and three firewall names must independently
+verify absence. `OPEN_TOFU_STATE_EMPTY` alone cannot produce cleanup success;
+`PROVIDER_RUN_RESOURCE_SET_ABSENT` is also required. Only exact GET HTTP 404 is
+`ABSENT`. A transport timeout, forbidden read or malformed response is
+`UNKNOWN_PROVIDER_STATE`; a mismatching representation is
+`INCOMPATIBLE_OR_AMBIGUOUS_RESOURCE`. Exact present instances are
+`EXACT_RUN_OWNED_INSTANCE_PRESENT`. Each result is independently admitted by the
+closed `rocky-cloud-provider-result` schema, including the complete trusted run
+binding; arbitrary provider bodies, startup metadata and credentials are omitted.
+
+Provider observations establish absence at their bounded read-back boundary;
+they do not turn an ambiguous create into successful transport evidence or prove
+that a still-pending server request can never complete later. The existing hourly
+TTL janitor remains the recovery owner for expired resources outside local state.
+Its shared ownership predicates and ambiguous-group refusal remain in effect.
+Repository and local HTTP adapter evidence prove control behavior; accepted-main
+real transport and cleanup evidence for both architectures remains owned by #292.
 
 ## Rocky preparation and evidence
 
@@ -749,3 +787,46 @@ cleanup and authoritative empty-state evidence belong to evidence-only
 [#294](https://github.com/SecPal/deployment/issues/294), after accepted-main source
 delivery. It uses the same Rocky control plane and frozen host qualification pair;
 no candidate PR can supply privileged commands or executable paths.
+
+## Ambiguous instance insertion diagnosis
+
+At accepted control `af171bd301dbc6e7efe470087d5bf6d50b59158a`, runs
+`37120628494/1`, `37121117238/1` and `37121646748/1` passed metadata admission
+and created six supporting resources. Their retained states contain no instance.
+The instance-create intervals were 330.044, 330.049 and 330.049 seconds, each
+ending in `Client.Timeout exceeded while awaiting headers`. The sanitized
+retained-state fixture records the exact source identities and supporting
+provider IDs; it contains no startup payload or candidate body.
+
+The pinned Google provider remains `7.40.0` and OpenTofu remains `1.12.5`.
+The root sets no `request_timeout`. The provider's
+[synchronous HTTP client](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/config.go)
+therefore uses 120 seconds. Its
+[request layer](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/transport.go)
+has a separate five-minute retry budget;
+[transport retries](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/retry_transport.go)
+use bounded context and Fibonacci backoff starting at 500 milliseconds.
+Timeout errors are retryable in the pinned provider. The
+[instance create path](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/services/compute/resource_compute_instance.go)
+stores its ID only after the synchronous insertion returns. Its separate
+20-minute resource create timeout applies to subsequent operation waiting and
+cannot explain an insert failing before that ID is stored.
+
+The common elapsed boundary is consistent with bounded provider client/retry
+handling, but retained non-debug logs establish neither the exact request count
+nor why headers did not arrive. Changing `request_timeout` would change the
+synchronous HTTP bound and could delay failure; no deterministic evidence proves
+that configuration is the earliest defect or would produce a successful insert.
+Request timeout is unchanged. No GCP outage, machine capacity, PostgreSQL or
+metadata cause is inferred, and no new retry policy is introduced.
+
+Exact provider actions share a 600-second monotonic request budget, including
+all inventory reads, deletion dispatches and operation polls. A deletion's
+120-second budget begins before dispatch and clips each request to the remaining
+action/operation time; deadline exhaustion is unknown, never absence. An already
+completed admitted deletion needs no extra operation poll. Cleanup assembles its
+final diagnostics from one complete absence snapshot; the separate post-OpenTofu
+verification observes a fresh snapshot. The cleanup token lasts 1,800 seconds,
+covering the existing 25-minute job limit. This bounds the existing cleanup owner
+and avoids credential expiry within that job; it adds no retry or provider role
+and leaves the Google provider's `request_timeout` unchanged.
