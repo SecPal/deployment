@@ -161,11 +161,13 @@ variable "expires_at" {
 
 variable "postgresql_candidate_json" {
   description = "Optional non-secret data bundle resolved by accepted-main deployment#81 control."
-  type        = string
-  default     = ""
+  # Suppress candidate bodies in OpenTofu variable/plan diagnostics.
+  sensitive = true
+  type      = string
+  default   = ""
   validation {
     condition = var.postgresql_candidate_json == "" || (
-      length(var.postgresql_candidate_json) <= 16384 &&
+      length(base64encode(var.postgresql_candidate_json)) * 3 / 4 - length(regexall("=", base64encode(var.postgresql_candidate_json))) <= 16384 &&
       try(jsondecode(var.postgresql_candidate_json).authorization.selector == "native-postgresql-18", false) &&
       try(jsondecode(var.postgresql_candidate_json).authorization.control_sha == var.trusted_control_sha, false) &&
       try(jsondecode(var.postgresql_candidate_json).authorization.run_id == var.run_id, false) &&

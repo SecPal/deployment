@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import re
 import base64
-import gzip
 import hashlib
 import importlib.util
 import os
@@ -519,106 +518,15 @@ class RockyCloudControlTests(unittest.TestCase):
             completed.stderr,
         )
 
-    def test_rendered_rocky_startup_script_is_bounded_valid_bash(self) -> None:
-        template = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text(
-            encoding="utf-8"
-        )
-        sources = {
-            "postgresql_consumer_base64gzip": ROOT / "scripts/render-native-postgresql.py",
-            "postgresql_contract_base64gzip": ROOT / "scripts/ci-cloud/postgresql_qualification_contract.py",
-            "postgresql_control_base64gzip": ROOT / "scripts/ci-cloud/postgresql-qualification-control.py",
-            "postgresql_runner_base64gzip": ROOT / "scripts/ci-cloud/qualify-native-postgresql.py",
-            "postgresql_application_bootstrap_base64gzip": ROOT / "scripts/ci-cloud/postgresql-application-bootstrap.php",
-            "postgresql_application_probe_base64gzip": ROOT / "scripts/ci-cloud/postgresql-application-probe.php",
-            "image_attestation_runtime_base64gzip": ROOT / "scripts/image_attestation_runtime.py",
-            "fetch_oci_attestation_base64gzip": ROOT / "scripts/fetch-oci-attestation.py",
-            "postgresql_wrapper_base64gzip": ROOT / "scripts/ci-cloud/run-native-postgresql-qualification.sh",
-            "postgresql_diagnostic_schema_base64gzip": ROOT / "schemas/postgresql-qualification-diagnostic.schema.json",
-            "postgresql_schema_base64gzip": ROOT / "schemas/postgresql-qualification-evidence.schema.json",
-            "integration_runtime_contract_base64gzip": ROOT / "scripts/integration_runtime_contract.py",
-            "prepare_script_base64gzip": ROOT / "scripts/ci-cloud/prepare-rocky-host.sh",
-            "readiness_publisher_base64gzip": ROOT
-            / "scripts/ci-cloud/publish-rocky-qualification-readiness.py",
-            "runtime_user_systemd_base64gzip": ROOT
-            / "scripts/ci-cloud/runtime_user_systemd.py",
-            "target_runner_base64gzip": ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh",
-            "target_failure_classifier_base64gzip": ROOT
-            / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py",
-            "target_replay_verifier_base64gzip": ROOT
-            / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py",
-            "target_trace_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-target-qualification-trace.sh",
-            "reload_runuser_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-reload-runuser.py",
-            "reload_systemctl_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-reload-systemctl.py",
-            "start_runuser_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-start-runuser.py",
-            "start_env_base64gzip": ROOT / "scripts/ci-cloud/rocky-start-env.py",
-            "start_systemctl_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-start-systemctl.py",
-            "active_runuser_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-active-runuser.py",
-            "active_env_base64gzip": ROOT / "scripts/ci-cloud/rocky-active-env.py",
-            "active_systemctl_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-active-systemctl.py",
-            "primary_runuser_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-primary-runuser.py",
-            "primary_runtime_base64gzip": ROOT
-            / "scripts/ci-cloud/rocky-primary-runtime.py",
-            "reload_observer_base64gzip": ROOT
-            / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py",
-            "allocator_base64gzip": ROOT / "scripts/ci-cloud/allocate-rocky-subids.py",
-            "collector_base64gzip": ROOT / "scripts/ci-cloud/collect-rocky-preparation.py",
-            "preparation_contract_base64gzip": ROOT / "scripts/ci-cloud/rocky_preparation_contract.py",
-            "control_utility_base64gzip": ROOT / "scripts/ci-cloud/rocky-control.py",
-            "selinux_isolation_contract_base64gzip": ROOT
-            / "scripts/selinux_isolation_contract.py",
-            "quadlet_authority_contract_base64gzip": ROOT
-            / "scripts/quadlet_authority_contract.py",
-            "discovery_schema_base64gzip": ROOT / "schemas/rocky-cloud-discovery-evidence.schema.json",
-            "continuation_schema_base64gzip": ROOT / "schemas/rocky-cloud-continuation.schema.json",
-            "preparation_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-evidence.schema.json",
-            "preparation_failure_schema_base64gzip": ROOT / "schemas/rocky-cloud-preparation-failure-evidence.schema.json",
-            "qualification_schema_base64gzip": ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json",
-            "target_source_failure_schema_base64gzip": ROOT
-            / "schemas/rocky-cloud-target-source-failure.schema.json",
-            "target_qualification_failure_schema_base64gzip": ROOT
-            / "schemas/rocky-cloud-target-qualification-failure.schema.json",
-            "arm64_profile_base64gzip": PROFILE,
-            "x86_64_profile_base64gzip": X86_PROFILE,
-        }
-        rendered = template
-        for name, path in sources.items():
-            encoded = base64.b64encode(gzip.compress(path.read_bytes(), mtime=0)).decode(
-                "ascii"
-            )
-            rendered = rendered.replace("${" + name + "}", encoded)
-        rendered = rendered.replace("${postgresql_candidate_base64gzip}", base64.b64encode(gzip.compress(b"", mtime=0)).decode("ascii"))
-        rendered = rendered.replace("$${", "${")
-        self.assertLessEqual(len(rendered.encode("utf-8")), (256 * 1024) - 256)
-        self.assertNotRegex(rendered, r"\$\{[a-z_]+_base64gzip\}")
-        self.assertIn(
-            "decode_script '${target_failure_classifier_base64gzip}' "
-            "/usr/local/sbin/secpal-classify-rocky-target-failure",
-            template,
-        )
-        self.assertIn(
-            "decode_script '${target_replay_verifier_base64gzip}' "
-            "/usr/local/sbin/secpal-verify-rocky-target-replay",
-            template,
-        )
-        self.assertIn('chmod 0700 "$destination"', template)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as script:
-            script.write(rendered)
-            script.flush()
-            completed = subprocess.run(
-                ["bash", "-n", script.name],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        self.assertEqual(0, completed.returncode, completed.stderr)
+    def test_rocky_bootstrap_preserves_fixed_guest_entrypoints(self) -> None:
+        # Exact rendering/size/Bash/integrity evidence lives in
+        # ci-cloud-rocky-metadata.py, using the pinned provider renderer.
+        template = (ROOT / "scripts/ci-cloud/bootstrap-rocky-host.tftpl").read_text()
+        self.assertIn("decode_script 'target_failure_classifier' "
+                      "/usr/local/sbin/secpal-classify-rocky-target-failure", template)
+        self.assertIn("decode_script 'target_replay_verifier' "
+                      "/usr/local/sbin/secpal-verify-rocky-target-replay", template)
+        self.assertIn('install -o root -g root -m 0700 --', template)
 
     def test_profile_is_one_closed_reviewed_arm64_contract(self) -> None:
         profile = json.loads(PROFILE.read_text(encoding="utf-8"))
@@ -814,6 +722,7 @@ class RockyCloudControlTests(unittest.TestCase):
 
     def test_opentofu_consumes_only_exact_image_identity(self) -> None:
         main = (TF_ROOT / "main.tf").read_text(encoding="utf-8")
+        main += (TF_ROOT / "metadata.tf").read_text(encoding="utf-8")
         variables = (TF_ROOT / "variables.tf").read_text(encoding="utf-8")
         self.assertNotIn("data \"google_compute_image\"", main)
         self.assertNotIn("family", main)
