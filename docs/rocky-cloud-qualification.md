@@ -830,3 +830,6 @@ verification observes a fresh snapshot. The cleanup token lasts 1,800 seconds,
 covering the existing 25-minute job limit. This bounds the existing cleanup owner
 and avoids credential expiry within that job; it adds no retry or provider role
 and leaves the Google provider's `request_timeout` unchanged.
+
+Transport diagnostics for instance insertion are described in
+[the transport evidence contract](instance-insert-transport.md).
