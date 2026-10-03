@@ -1085,12 +1085,12 @@ class CloudCIContractTests(unittest.TestCase):
             ),
             (
                 "scripts/ci-cloud/bootstrap-rocky-host.tftpl",
-                "decode_script '${quadlet_authority_contract_base64gzip}' /opt/secpal-control/scripts/quadlet_authority_contract.py",
+                "decode_script 'quadlet_authority_contract' /opt/secpal-control/scripts/quadlet_authority_contract.py",
                 ": # omit Quadlet authority owner",
             ),
             (
-                "infra/ci-cloud/gcp-rocky/main.tf",
-                "quadlet_authority_contract_base64gzip",
+                "infra/ci-cloud/gcp-rocky/metadata.tf",
+                "quadlet_authority_contract",
                 "quadlet_authority_contract_unbound",
             ),
         )
@@ -1175,8 +1175,8 @@ class CloudCIContractTests(unittest.TestCase):
                 '"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus"',
             ),
             (
-                "infra/ci-cloud/gcp-rocky/main.tf",
-                "runtime_user_systemd_base64gzip",
+                "infra/ci-cloud/gcp-rocky/metadata.tf",
+                "runtime_user_systemd",
                 "runtime_user_systemd_unbound",
             ),
             (publisher, "WAIT_SECONDS = 60", "WAIT_SECONDS = 0"),
