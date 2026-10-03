@@ -71,6 +71,7 @@ Mount=type=tmpfs,destination=/app/bootstrap/cache,tmpfs-size=16m,tmpfs-mode=0750
 Network=secpal-application.network
 Network=secpal-edge.network
 NetworkAlias=api
+PublishPort=127.0.0.1:18081:8080/tcp
 HealthCmd=/usr/local/bin/secpal-http-live
 HealthInterval=10s
 HealthTimeout=5s
@@ -79,6 +80,7 @@ HealthStartPeriod=15s
 HealthOnFailure=kill
 Notify=healthy
 [Service]
+ExecStartPre=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check
 ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
 Restart=on-failure
 RestartSec=2

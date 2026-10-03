@@ -91,6 +91,7 @@ bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
 python3 tests/production-state-contract.py
+python3 tests/product-backend-contract.py
 python3 tests/production-postgres-retirement.py
 python3 tests/production-edge-decision-contract.py
 python3 tests/cloudfront-origin-prefix-lkg.py
