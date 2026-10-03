@@ -3940,10 +3940,71 @@ def validate(root: Path) -> None:
     )
 
 
+
+def validate_instance_transport_workflow(root: Path) -> None:
+    """Diagnostic failure never replaces apply, reconciliation or exact cleanup."""
+    workflow = yaml.safe_load(read(root, ".github/workflows/rocky-cloud-qualification.yml"))
+    provision = workflow["jobs"]["provision"]
+    steps = provision["steps"]
+    ids = {step.get("id"): step for step in steps if "id" in step}
+    apply = ids["apply"]
+    admission = ids.get("transport_admission", {})
+    fresh = next((step for step in steps if step["name"] ==
+                  "Freshly authenticate protected main before diagnostic and provider authority"), {})
+    fresh_run = fresh.get("run", "")
+    require(all(fragment in fresh_run for fragment in (
+        '"$GITHUB_REPOSITORY" == SecPal/deployment', '"$GITHUB_REF" == refs/heads/main',
+        'gh api repos/SecPal/deployment/branches/main', '.protected',
+        '.commit.sha', '.commit.commit.verification.verified',
+        '"$(git rev-parse HEAD)" == "$GITHUB_SHA"',
+        '"$accepted_control" == "$(printf',
+    )), "transport observation requires freshly authenticated protected main")
+    require(steps.index(fresh) < steps.index(ids["provision_auth"]) < steps.index(apply),
+            "fresh transport control authentication must precede provider credentials")
+    run = apply["run"]
+    require('python3 "$GITHUB_WORKSPACE/scripts/ci-cloud/observe-instance-transport.py"' in run
+            and run.count("tofu apply --auto-approve --input=false") == 1
+            and "--output \"$RUNNER_TEMP/rocky-cloud/instance-transport.json\"" in run
+            and '--trusted-control-sha "$GITHUB_SHA"' in run
+            and '--target-sha "$TARGET_SHA"' in run
+            and '--workflow-run-id "$GITHUB_RUN_ID"' in run
+            and '--workflow-run-attempt "$GITHUB_RUN_ATTEMPT"' in run,
+            "existing apply must use bounded trusted transport observation with exact identities")
+    require(apply.get("continue-on-error") is True
+            and admission.get("if") == "${{ always() }}"
+            and admission.get("continue-on-error") is True
+            and "--admit" in admission.get("run", "")
+            and not CREDENTIAL_KEYS & set(admission.get("env", {})),
+            "independent transport admission must not block cleanup or receive provider credentials")
+    artifact = next((step for step in steps if step["name"] ==
+                     "Retain admitted diagnostic transport evidence"), {})
+    require(artifact.get("if") == "${{ always() && steps.transport_admission.outcome == 'success' }}"
+            and artifact.get("continue-on-error") is True
+            and artifact.get("with", {}).get("path") == "${{ runner.temp }}/rocky-cloud/instance-transport.json",
+            "transport publication admits only the sanitized document and cannot suppress cleanup")
+    transition = ids["identity_transition"].get("if", "")
+    require(all(fragment in transition for fragment in (
+        "steps.apply.outcome == 'success'", "steps.transport_admission.outcome == 'success'",
+        "steps.transport_publication.outcome == 'success'")),
+        "diagnostic failure must stop continuation without authorizing provider success")
+    reconcile = next(step for step in steps if step["name"] ==
+                     "Reconcile failed instance creation without continuing qualification")
+    require(reconcile.get("if") == "${{ steps.apply.outcome == 'failure' }}"
+            and reconcile.get("continue-on-error") is True
+            and "gcp-rocky-janitor.py" in reconcile["run"]
+            and "--exact-action reconcile" in reconcile["run"],
+            "transport evidence cannot replace exact ambiguous-create reconciliation")
+    require(steps.index(apply) < steps.index(admission) < steps.index(reconcile)
+            and "needs.provision.result == 'failure'" in workflow["jobs"]["cleanup"]["if"]
+            and "always()" in workflow["jobs"]["cleanup"]["if"],
+            "collector failure must retain independent mandatory cleanup reachability")
+
+
 def main(arguments: list[str]) -> int:
     root = Path(arguments[0]).resolve() if arguments else Path.cwd()
     try:
         validate(root)
+        validate_instance_transport_workflow(root)
     except (ContractError, OSError, UnicodeError) as error:
         print(f"FAIL: cloud CI contract: {error}", file=sys.stderr)
         return 1

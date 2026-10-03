@@ -508,6 +508,17 @@ jobs:
       - name: Admit actual Rocky metadata before provider authentication
         run: python3 scripts/ci-cloud/admit-rocky-metadata.py
 
+      - name: Freshly authenticate protected main before diagnostic and provider authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$GITHUB_REPOSITORY" == SecPal/deployment ]]
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          accepted_control="$(gh api repos/SecPal/deployment/branches/main \
+            --jq '[.protected, .commit.sha, .commit.commit.verification.verified] | @tsv')"
+          [[ "$accepted_control" == "$(printf 'true\t%s\ttrue' "$GITHUB_SHA")" ]]
+
       - name: Authenticate trusted provisioning through OIDC
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -536,10 +547,46 @@ jobs:
         working-directory: infra/ci-cloud/gcp-rocky
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
         run: |
+          python3 "$GITHUB_WORKSPACE/scripts/ci-cloud/observe-instance-transport.py" \
+            --output "$RUNNER_TEMP/rocky-cloud/instance-transport.json" \
+            --repository "$GITHUB_REPOSITORY" --trusted-control-sha "$GITHUB_SHA" \
+            --target-sha "$TARGET_SHA" --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --provider-profile "$PROVIDER_PROFILE" \
+            --project secpal-dev --zone europe-west3-a \
+            --expected-instance-name "sprk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-instance" -- \
           tofu apply --auto-approve --input=false
           tofu output -raw instance_id >"$RUNNER_TEMP/rocky-cloud/instance_id"
           tofu output -raw instance_name >"$RUNNER_TEMP/rocky-cloud/instance_name"
+
+      - name: Independently admit bounded diagnostic transport evidence
+        id: transport_admission
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
+        run: |
+          python3 scripts/ci-cloud/observe-instance-transport.py --admit \
+            --output "$RUNNER_TEMP/rocky-cloud/instance-transport.json" \
+            --repository "$GITHUB_REPOSITORY" --trusted-control-sha "$GITHUB_SHA" \
+            --target-sha "$TARGET_SHA" --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --provider-profile "$PROVIDER_PROFILE" \
+            --project secpal-dev --zone europe-west3-a \
+            --expected-instance-name "sprk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-instance"
+
+      - name: Retain admitted diagnostic transport evidence
+        id: transport_publication
+        if: ${{ always() && steps.transport_admission.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-instance-transport-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-cloud/instance-transport.json
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Reconcile failed instance creation without continuing qualification
         if: ${{ steps.apply.outcome == 'failure' }}
@@ -567,7 +614,10 @@ jobs:
 
       - name: Remove cloud identity and restart trusted preparation
         id: identity_transition
-        if: ${{ steps.apply.outcome == 'success' }}
+        if: >-
+          ${{ steps.apply.outcome == 'success' &&
+          steps.transport_admission.outcome == 'success' &&
+          steps.transport_publication.outcome == 'success' }}
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
@@ -718,10 +768,14 @@ jobs:
         if: ${{ always() }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          TRANSPORT_ADMISSION_OUTCOME: ${{ steps.transport_admission.outcome }}
+          TRANSPORT_PUBLICATION_OUTCOME: ${{ steps.transport_publication.outcome }}
           IDENTITY_OUTCOME: ${{ steps.identity_transition.outcome }}
           PREPARATION_OUTCOME: ${{ steps.preparation.outcome }}
         run: |
           [[ "$APPLY_OUTCOME" == success ]]
+          [[ "$TRANSPORT_ADMISSION_OUTCOME" == success ]]
+          [[ "$TRANSPORT_PUBLICATION_OUTCOME" == success ]]
           [[ "$IDENTITY_OUTCOME" == success ]]
           [[ "$PREPARATION_OUTCOME" == success ]]
 
