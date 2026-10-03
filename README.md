@@ -129,6 +129,8 @@ Run deterministic repository checks without starting the integration stack:
 ```
 
 The preflight installs nothing and does not access production infrastructure.
+Install the pinned OpenTofu 1.12.5 alongside the existing validation tools;
+Rocky metadata tests evaluate the actual provider-bound representation locally.
 
 ## Repository boundary
 
