@@ -135,8 +135,11 @@ locals {
         for architecture in ('amd64', 'arm64'):
             with self.subTest(architecture=architecture):
                 rendered = self.render(architecture)
-                self.assertEqual(fixture(architecture)['startup_bytes'],
-                                 len(rendered['metadata']['startup-script'].encode()))
+                # Historical measurement remains immutable. Common accepted
+                # preparation source can grow; the legacy layout must still
+                # reproduce provider rejection with the current bytes.
+                self.assertGreaterEqual(len(rendered['metadata']['startup-script'].encode()),
+                                        fixture(architecture)['startup_bytes'])
                 self.assertFalse(rendered['report']['admitted'])
                 self.assert_rejected_before_provisioning('ROCKY_METADATA_VALUE_TOO_LARGE')
 

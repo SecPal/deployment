@@ -28,7 +28,9 @@ def observation_fixture(contract):
     cleanup = dict(remaining_paths=[], remaining_containers=[], remaining_networks=[], remaining_images=[],
         service_states=['inactive'] * 2, runtime_unit_states=['inactive'] * 4, nft_table_status=1,
         module_names=[], netns_names=[], link_names=[], listeners=[], haproxy_config_sha256='d' * 64,
-        original_haproxy_config_sha256='d' * 64, pasta_boolean='pasta_bind_all_ports --> off', original_pasta_boolean='pasta_bind_all_ports --> off')
+        original_haproxy_config_sha256='d' * 64, pasta_boolean='pasta_bind_all_ports --> off', original_pasta_boolean='pasta_bind_all_ports --> off', nftables_state='active',
+        host_baseline=dict(rpm_sha256='a'*64,passwd_sha256='b'*64,group_sha256='c'*64),
+        original_host_baseline=dict(rpm_sha256='a'*64,passwd_sha256='b'*64,group_sha256='c'*64))
     raw = dict(enforcing='Enforcing', booleans=['haproxy_connect_any --> off', 'pasta_bind_all_ports --> off'],
         portcons={role: f'portcon tcp {backend.host_port} system_u:object_r:secpal_backend_port_t:s0' for role, backend in contract.BACKENDS.items()},
         av=[], nftables={'nftables': contract.nft_projection(993)}, recreations=[],
@@ -40,6 +42,7 @@ def observation_fixture(contract):
         unrelated=dict(local_statuses=[7,7],ipv6_statuses=[7,7],positive_http_code='200',
             avc='type=AVC pid=123 avc: denied { name_connect } dest=18082 scontext=system_u:system_r:haproxy_t:s0 tcontext=system_u:object_r:unreserved_port_t:s0'),
         external={role:dict(positive_http_code='200',ingress_status=7) for role in contract.BACKENDS},
+        withdrawal=dict(unit_states=['inactive','inactive'],listeners=[],marker_exists=False,nft_table_status=1,nftables_state='active',policy_state='inactive'),
         barrier=dict(missing_start_status=1,stale_start_status=1,missing_pre_status=1,stale_pre_status=1),cleanup=cleanup)
     for source,target,permission,allowed in (('haproxy_t','secpal_backend_port_t','name_connect',True),('container_runtime_t','secpal_backend_port_t','name_bind',True),('haproxy_t','unreserved_port_t','name_connect',False)):
         raw['av'].append(dict(source=source,target=target,permission=permission,decision=dict(result=0,flags=0,**{'class':3},requested=1,decided=1,allowed=int(allowed))))
@@ -48,7 +51,7 @@ def observation_fixture(contract):
         for role,backend in contract.BACKENDS.items():
             products[role]=dict(listeners=[backend.endpoint],forwarder_context='system_u:system_r:container_runtime_t:s0',container_context='system_u:system_r:container_t:s0:c1,c2',
                 network_mode='bridge',networks=['secpal-backend101-edge'],environment_keys=['PATH'],mount_types=['tmpfs'],
-                unit=f'FragmentPath=/run/user/992/systemd/generator/secpal-backend101-{role}.service\nSourcePath=/etc/containers/systemd/users/992/secpal-backend101-{role}.container\nDropInPaths=\nExecStart={{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run --publish {backend.endpoint}:8080/tcp ; }}\nExecStartPre={{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check ; }}')
+                unit=f'FragmentPath=/run/user/992/systemd/generator/secpal-{role}.service\nSourcePath=/etc/containers/systemd/users/992/secpal-{role}.container\nDropInPaths=\nExecStart={{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run --publish {backend.endpoint}:8080/tcp ; }}\nExecStartPre={{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check ; }}')
         raw['recreations'].append(dict(products=products,runtime=dict(host={'security':{'rootless':True},'serviceIsRemote':False},unit_states=['inactive']*4,manager_override_keys=[],enforcing='Enforcing',booleans=['haproxy_connect_any --> off','pasta_bind_all_ports --> off']),
             http_stats='# pxname,svname,status,check_status,check_code\nsecpal_frontend,frontend,UP,L7OK,200\nsecpal_api,api,UP,L7OK,200\n'))
     return raw
@@ -138,6 +141,10 @@ class QualificationContract(unittest.TestCase):
         change(lambda r:r['cleanup'].update(remaining_containers=['secpal-backend101-api']))
         change(lambda r:r['cleanup'].update(remaining_images=['sha256:'+'a'*64]))
         change(lambda r:r['cleanup'].update(pasta_boolean='pasta_bind_all_ports --> on'))
+        change(lambda r:r['withdrawal'].update(unit_states=['active','active']))
+        change(lambda r:r['withdrawal'].update(listeners=['127.0.0.1:18080']))
+        change(lambda r:r['cleanup']['host_baseline'].update(rpm_sha256='e'*64))
+        change(lambda r:r['cleanup']['host_baseline'].update(passwd_sha256='e'*64))
         for raw in variants:
             with self.assertRaises((ValueError,KeyError,TypeError)):
                 contract.normalize_observations(raw,993,992,991)
@@ -205,10 +212,21 @@ class QualificationContract(unittest.TestCase):
                 target=root/relative;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/relative,target)
             cases=(('scripts/ci-cloud/product_backend_qualification_contract.py','\nimport subprocess\n'),
                    ('scripts/ci-cloud/qualify-product-backends.py','\nos.system("id")\n'),
-                   ('scripts/ci-cloud/qualify-product-backends.py','\nobserver.run("unclassified", ["id"])\n'))
+                   ('scripts/ci-cloud/qualify-product-backends.py','\nobserver.run("unclassified", ["id"])\n'),
+                   ('scripts/ci-cloud/qualify-product-backends.py','\nsubprocess.Popen(["/bin/sh", "-c", "id"])\n'),
+                   ('scripts/ci-cloud/qualify-product-backends.py','\nprocess(["/bin/sh", "-c", "id"])\n'),
+                   ('scripts/ci-cloud/qualify-product-backends.py','\nsubprocess = fake\n'),
+                   ('scripts/ci-cloud/qualify-product-backends.py','\ngetattr(subprocess, "Popen")(["id"])\n'))
             for relative,appendix in cases:
                 target=root/relative;original=target.read_text();target.write_text(original+appendix)
                 self.assertRaises(ValueError,guard.validate,root);target.write_text(original)
+
+    def test_qualification_does_not_install_packages(self):
+        text = (ROOT / 'scripts/ci-cloud/qualify-product-backends.py').read_text()
+        self.assertNotIn("['dnf4'", text)
+        preparation = (ROOT / 'scripts/ci-cloud/prepare-rocky-host.sh').read_text()
+        self.assertIn('product-backend-policy', preparation)
+        self.assertIn('haproxy setools-console', preparation)
 
     def test_pure_admission_has_no_external_authority(self):
         path = ROOT / 'scripts/ci-cloud/product_backend_qualification_contract.py'

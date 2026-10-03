@@ -81,6 +81,8 @@ decode_script 'backend_api' /opt/secpal-control/config/production/quadlet/secpal
 decode_script 'backend_frontend' /opt/secpal-control/config/production/quadlet/secpal-frontend.container
 decode_script 'backend_edge_network' /opt/secpal-control/config/production/quadlet/secpal-edge.network
 decode_script 'backend_application_network' /opt/secpal-control/config/production/quadlet/secpal-application.network
+decode_script 'backend_state_contract' /opt/secpal-control/config/production/state-contract.json
+decode_script 'prepare_script' /opt/secpal-control/scripts/ci-cloud/prepare-rocky-host.sh
 decode_script backend_authorization /var/lib/secpal-rocky/product-backend-policy.json
 chmod 0600 /var/lib/secpal-rocky/product-backend-policy.json
 decode_script backend_wrapper /usr/local/sbin/secpal-qualify-product-backends
@@ -255,9 +257,13 @@ PYTHON_BACKEND_BINDING
 fi
 %{ endif ~}
 
+qualification_arguments=()
+%{ if product_backend_policy_enabled ~}
+qualification_arguments=(product-backend-policy)
+%{ endif ~}
 /usr/local/sbin/secpal-prepare-rocky-host \
   "$target_sha" "$control_sha" "$run_id" "$run_attempt" "$expires_at" "$image" \
-  "$profile" /var/lib/secpal-rocky/evidence/preparation.json
+  "$profile" /var/lib/secpal-rocky/evidence/preparation.json "$${qualification_arguments[@]}"
 
 # The initial preparation phase deliberately reboots before the admitted state
 # exists.  Only a completed current-boot startup may publish qualification

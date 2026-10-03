@@ -41,6 +41,7 @@ LIBRARY = HELPER.parent / 'product_backend_contract.py'
 SERVICE = Path('/etc/systemd/system/secpal-product-backend-policy.service')
 READY = Path('/run/secpal-product-backends/ready.json')
 HAPROXY_CONFIG = Path('/etc/haproxy/haproxy.cfg')
+RUNTIME_CONTRACT = Path('/srv/secpal/config/state-contract.json')
 STATS = Path('/run/haproxy/secpal-backend101.sock')
 NETNS = 'secpal-backend101'
 HOST_LINK = 'spbackend101h'
@@ -128,6 +129,7 @@ class Observer:
         self.netns_owned = False
         self.original_config = None
         self.original_boolean = None
+        self.host_baseline = None
         self.files = []
         self.images = []
         self.runtime = None
@@ -161,6 +163,22 @@ class Observer:
             raise Failure(operation, 'command-failed')
         return status, stdout.strip()
 
+    def start_child(self, operation, arguments):
+        if operation not in contract.OPERATIONS:
+            raise Failure('validate-authorization', 'identity-mismatch')
+        self.operation = operation
+        child = subprocess.Popen(arguments, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=ENVIRONMENT, start_new_session=True)
+        self.children.append(child)
+        return child
+
+    def observe_host_baseline(self):
+        catalog = self.run('observe-host-baseline', ['rpm', '-qa', '--qf', '%{NEVRA}\\n'])[1]
+        return dict(rpm_sha256=hashlib.sha256(('\n'.join(sorted(catalog.splitlines())) + '\n').encode()).hexdigest(),
+            passwd_sha256=hashlib.sha256(Path('/etc/passwd').read_bytes()).hexdigest(),
+            group_sha256=hashlib.sha256(Path('/etc/group').read_bytes()).hexdigest())
+
     def require(self, condition):
         if not condition:
             raise Failure(self.operation)
@@ -189,7 +207,7 @@ class Observer:
         self.host_digest = hashlib.sha256((STATE / 'evidence/qualification.json').read_bytes()).hexdigest()
         self.authorized = True
         self.operation = 'require-clean-host'
-        for path in (HELPER, LIBRARY, SERVICE, READY, RESULT, FAILURE, STATS):
+        for path in (HELPER, LIBRARY, SERVICE, READY, RESULT, FAILURE, STATS, RUNTIME_CONTRACT):
             self.require(not path.exists() and not path.is_symlink())
         self.require(self.run('require-clean-host', ['nft', 'list', 'table', 'inet', 'secpal_product_backends'], accepted=(0, 1))[0] == 1)
         modules = self.run('require-clean-host', ['semodule', '-l'])[1]
@@ -205,6 +223,13 @@ class Observer:
         trusted(self.quadlets)
         self.require(not list(self.quadlets.glob('secpal-backend101-*')))
         for role in BACKENDS:
+            path = self.quadlets / ('secpal-' + role + '.container')
+            self.require(not path.exists() and not path.is_symlink())
+            unit = self.run('require-clean-host', ['systemctl', '--user', 'show', 'secpal-' + role + '.service', '-p', 'LoadState', '--value'], user=self.runtime.pw_name)[1]
+            self.require(unit == 'not-found')
+        self.require(self.run('require-clean-host', ['systemctl', 'is-active', 'nftables.service'])[1] == 'active')
+        self.host_baseline = self.observe_host_baseline()
+        for role in BACKENDS:
             self.require(self.run('require-clean-host', ['podman', '--remote=false', 'container', 'exists', 'secpal-backend101-' + role], user=self.runtime.pw_name, accepted=(0, 1))[0] == 1)
         for network in ('edge', 'application'):
             self.require(self.run('require-clean-host', ['podman', '--remote=false', 'network', 'exists', 'secpal-backend101-' + network], user=self.runtime.pw_name, accepted=(0, 1))[0] == 1)
@@ -215,7 +240,6 @@ class Observer:
 
     def install(self):
         self.mutated = True
-        self.run('install-packages', ['dnf4', '--assumeyes', '--releasever=10', '--disablerepo=*', '--enablerepo=baseos,appstream,extras', 'install', 'haproxy', 'setools-console'], timeout=300)
         self.operation = 'observe-packages'
         spec = importlib.util.spec_from_file_location('backend_rpm_observer', ROOT / 'scripts/ci-cloud/collect-rocky-preparation.py')
         module = importlib.util.module_from_spec(spec)
@@ -231,6 +255,16 @@ class Observer:
             fact = contract.rpm.normalize_installed_package(package['name'], package, architecture)
             contract.rpm.admit_package(fact, signer, architecture)
         self.operation = 'install-policy'
+        for directory in reversed((RUNTIME_CONTRACT.parent, RUNTIME_CONTRACT.parent.parent)):
+            if not directory.exists():
+                directory.mkdir(mode=0o755)
+                self.created_directories.append(directory)
+            trusted(directory)
+        state = json.loads((ROOT / contract.SOURCES['backend_state_contract']).read_bytes(), object_pairs_hook=contract.unique_keys)
+        state['rootless_mapping']['service_uid'] = self.runtime.pw_uid
+        state['rootless_mapping']['service_gid'] = self.runtime.pw_gid
+        self.files.append(RUNTIME_CONTRACT)
+        write(RUNTIME_CONTRACT, contract.canonical(state), mode=0o444)
         account = pwd.getpwnam('haproxy')
         self.uid = admit_policy_account(account, self.runtime.pw_uid)
         self.records['accounts'] = dict(haproxy=dict(name=account.pw_name, uid=account.pw_uid, gid=account.pw_gid, shell=account.pw_shell),
@@ -302,7 +336,7 @@ class Observer:
                 self.run('pull-product-images', ['podman', '--remote=false', 'pull', '--authfile', str(authfile), image], user=runtime, timeout=300)
             text = contract.fixture_unit(source, role)
             self.operation = 'install-quadlets'
-            path = self.quadlets / ('secpal-backend101-' + role + '.container')
+            path = self.quadlets / ('secpal-' + role + '.container')
             self.files.append(path)
             write(path, text.encode())
         for name in ('edge', 'application'):
@@ -349,7 +383,7 @@ class Observer:
             networks = self.run('observe-products', ['podman', '--remote=false', 'inspect', '--format', '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}', 'secpal-backend101-' + role], user=self.runtime.pw_name)[1].split()
             env_keys = [item.split('=', 1)[0] for item in json.loads(self.run('observe-products', ['podman', '--remote=false', 'inspect', '--format', '{{json .Config.Env}}', 'secpal-backend101-' + role], user=self.runtime.pw_name)[1])]
             mount_types = [item.get('Type') for item in json.loads(self.run('observe-products', ['podman', '--remote=false', 'inspect', '--format', '{{json .Mounts}}', 'secpal-backend101-' + role], user=self.runtime.pw_name)[1])]
-            unit = self.run('observe-products', ['systemctl', '--user', 'show', 'secpal-backend101-' + role + '.service', '-p', 'FragmentPath,SourcePath,DropInPaths,ExecStart,ExecStartPre'], user=self.runtime.pw_name)[1]
+            unit = self.run('observe-products', ['systemctl', '--user', 'show', 'secpal-' + role + '.service', '-p', 'FragmentPath,SourcePath,DropInPaths,ExecStart,ExecStartPre'], user=self.runtime.pw_name)[1]
             self.current_iteration['products'][role] = dict(listeners=[row.split()[3] for row in rows], forwarder_context=context,
                 container_context=label, network_mode=mode, networks=networks, environment_keys=env_keys, mount_types=mount_types, unit=unit)
         self.facts.update(wildcard_product_bind=False, host_networking=False)
@@ -461,9 +495,7 @@ class Observer:
                     '  self.send_response(200); self.end_headers()\n'
                     ' def log_message(self, *args): pass\n'
                     f"HTTPServer(('192.0.2.1', {backend.host_port}), Handler).serve_forever()\n")
-            server = subprocess.Popen(['/usr/bin/python3', '-I', '-c', code], env=ENVIRONMENT,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            self.children.append(server)
+            self.start_child('configure-external-probe', ['/usr/bin/python3', '-I', '-c', code])
             time.sleep(1)
             positive = self.run('probe-external-interface', ['curl', '--noproxy', '*', '--silent', '--fail', '--max-time', '2', '--output', '/dev/null', '--write-out', '%{http_code}', f'http://192.0.2.1:{backend.host_port}/health/live'])[1]
             self.require(positive == '200')
@@ -474,8 +506,7 @@ class Observer:
         # Actual unrelated listener is healthy to root, while haproxy_t is
         # refused by SELinux (this port is outside the nft backend port set).
         self.operation = 'observe-unrelated-selinux-denial'
-        server = subprocess.Popen(['/usr/bin/python3', '-I', '-m', 'http.server', '18082', '--bind', '127.0.0.1'], env=ENVIRONMENT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        self.children.append(server)
+        self.start_child('observe-unrelated-selinux-denial', ['/usr/bin/python3', '-I', '-m', 'http.server', '18082', '--bind', '127.0.0.1'])
         time.sleep(3)
         positive = self.run('observe-unrelated-selinux-denial', ['curl', '--noproxy', '*', '--fail', '--silent', '--max-time', '3', '--output', '/dev/null', '--write-out', '%{http_code}', 'http://127.0.0.1:18082/'])[1]
         self.require(positive == '200')
@@ -505,13 +536,32 @@ class Observer:
                 READY.unlink(missing_ok=True)
                 write(READY, saved, mode=0o444)
         self.facts['startup_barrier_refusal'] = True
+        for child in self.children:
+            os.killpg(child.pid, signal.SIGTERM)
+            child.wait(timeout=5)
+        self.children.clear()
+        self.run('start-products', ['systemctl', '--user', 'start', *self.units], user=self.runtime.pw_name, timeout=200)
+        self.readiness()
+        # Exercise actual ExecStop with live products, then withdraw only our
+        # table. The control-plane metadata firewall is outside this profile.
+        # Unit After/PartOf also orders this ExecStop before nftables teardown.
+        self.run('probe-policy-withdrawal', ['systemctl', 'stop', 'secpal-product-backend-policy.service'])
+        self.run('probe-policy-withdrawal', ['nft', 'delete', 'table', 'inet', 'secpal_product_backends'])
+        states = [self.run('probe-policy-withdrawal', ['systemctl', '--user', 'is-active', unit], user=self.runtime.pw_name, accepted=(0, 3, 4))[1] for unit in self.units]
+        listeners = [line.split()[3] for line in self.run('probe-policy-withdrawal', ['ss', '-H', '-lnt'])[1].splitlines() if line.split()[3].rsplit(':', 1)[-1] in {'18080', '18081'}]
+        self.records['withdrawal'] = dict(unit_states=states, listeners=listeners,
+            marker_exists=READY.exists(), nft_table_status=self.run('probe-policy-withdrawal', ['nft', 'list', 'table', 'inet', 'secpal_product_backends'], accepted=(0, 1))[0], nftables_state=self.run('probe-policy-withdrawal', ['systemctl', 'is-active', 'nftables.service'], accepted=(0, 3, 4))[1],
+            policy_state=self.run('probe-policy-withdrawal', ['systemctl', 'is-active', 'secpal-product-backend-policy.service'], accepted=(0, 3, 4))[1])
+        self.require(states == ['inactive', 'inactive'] and not listeners and not READY.exists())
+        self.require(self.records['withdrawal']['policy_state'] == 'inactive')
+        self.facts['policy_withdrawal_quiescence'] = True
         self.facts['root_excluded_from_isolation'] = True
 
     def execute(self):
         self.authorize()
         self.install()
         self.products()
-        self.units = ['secpal-backend101-' + role + '.service' for role in BACKENDS]
+        self.units = ['secpal-' + role + '.service' for role in BACKENDS]
         for iteration in range(3):
             if iteration:
                 self.run('start-products', ['systemctl', '--user', 'stop', *self.units], user=self.runtime.pw_name)
@@ -549,7 +599,9 @@ class Observer:
                     remaining_images=images, service_states=services, runtime_unit_states=runtime['unit_states'],
                     nft_table_status=table_status, module_names=modules, netns_names=netns, link_names=links, listeners=listeners,
                     haproxy_config_sha256=current_hash, original_haproxy_config_sha256=original_hash,
-                    pasta_boolean=boolean, original_pasta_boolean=self.original_boolean or boolean)
+                    pasta_boolean=boolean, original_pasta_boolean=self.original_boolean or boolean,
+                    host_baseline=self.observe_host_baseline(), original_host_baseline=self.host_baseline,
+                    nftables_state=self.run('observe-cleanup', ['systemctl', 'is-active', 'nftables.service'])[1])
 
     def cleanup(self):
         if not self.mutated:
@@ -567,7 +619,7 @@ class Observer:
         attempt(lambda: self.run('cleanup-host', ['systemctl', 'stop', 'haproxy.service', 'secpal-product-backend-policy.service'], accepted=(0, 5)))
         if self.runtime:
             for role in BACKENDS:
-                unit = 'secpal-backend101-' + role + '.service'
+                unit = 'secpal-' + role + '.service'
                 attempt(lambda unit=unit: self.run('cleanup-host', ['systemctl', '--user', 'stop', unit], user=self.runtime.pw_name, accepted=(0, 5)))
                 attempt(lambda unit=unit: self.run('cleanup-host', ['systemctl', '--user', 'reset-failed', unit], user=self.runtime.pw_name, accepted=(0, 1)))
             for role in BACKENDS:
@@ -594,6 +646,7 @@ class Observer:
             value = 'on' if self.original_boolean.endswith(' --> on') else 'off'
             attempt(lambda: self.run('cleanup-host', ['setsebool', 'pasta_bind_all_ports', value]))
         attempt(lambda: self.run('cleanup-host', ['systemctl', 'daemon-reload']))
+        attempt(lambda: self.run('cleanup-host', ['systemctl', 'start', 'nftables.service']))
         attempt(lambda: self.run('cleanup-host', ['systemctl', '--user', 'daemon-reload'], user=self.runtime.pw_name))
         self.operation = 'observe-cleanup'
         attempt(lambda: self.require(all(not path.exists() and not path.is_symlink() for path in [READY, STATS, *self.files])))

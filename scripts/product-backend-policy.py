@@ -153,14 +153,58 @@ def check() -> None:
     check_effective_policy()
 
 
-def activate() -> None:
+def administrator_authority() -> None:
     if os.getuid() != 0 or Path(__file__).resolve() != HELPER:
-        raise ValueError("activation requires the installed administrator helper")
+        raise ValueError("operation requires the installed administrator helper")
     trusted_path(HELPER, regular=True)
     trusted_path(LIBRARY, regular=True)
+
+
+def runtime_identity():
+    # Consume the existing inventory identity; no new runtime account owner.
+    path = Path("/srv/secpal/config/state-contract.json")
+    for current in (path, *path.parents):
+        info = current.lstat()
+        if info.st_uid != 0 or info.st_mode & 0o022 or stat.S_ISLNK(info.st_mode):
+            raise ValueError("runtime identity must be administrator-owned")
+    if not path.is_file() or not 0 < path.stat().st_size <= 65536:
+        raise ValueError("runtime identity contract is invalid")
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate runtime contract key")
+            result[key] = value
+        return result
+    document = json.loads(path.read_bytes(), object_pairs_hook=unique)
+    uid = document["rootless_mapping"]["service_uid"]
+    if type(uid) is not int or not 0 < uid < 2**32 or uid == current_identity():
+        raise ValueError("runtime identity is invalid")
+    return pwd.getpwuid(uid)
+
+
+def withdraw() -> None:
+    administrator_authority()
+    # Synchronous ExecStop runs before nftables stops (reverse After ordering).
+    # First prevent restart; then quiesce only the two fixed backend units.
+    READY.unlink(missing_ok=True)
+    account = runtime_identity()
+    observe("stop-product-backends", ["/usr/sbin/runuser", "-u", account.pw_name,
+        "--", "/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin",
+        "HOME=" + account.pw_dir, f"XDG_RUNTIME_DIR=/run/user/{account.pw_uid}",
+        f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{account.pw_uid}/bus",
+        "/usr/bin/systemctl", "--user", "stop", "secpal-frontend.service", "secpal-api.service"], accepted=(0, 5))
+    listeners = observe("verify-backend-withdrawal", ["/usr/sbin/ss", "-H", "-lnt"])
+    if any(row.split()[3].rsplit(":", 1)[-1] in {"18080", "18081"} for row in listeners.splitlines()):
+        raise ValueError("product backend listeners survived withdrawal")
+
+
+def activate() -> None:
+    administrator_authority()
     STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
     trusted_path(STATE)
     READY.unlink(missing_ok=True)
+    runtime_identity()
     uid = current_identity()
     if observe("observe-enforcing", ["/usr/sbin/getenforce"]).strip() != "Enforcing":
         raise ValueError("SELinux is not Enforcing")
@@ -197,9 +241,12 @@ def main() -> None:
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--check", action="store_true")
     actions.add_argument("--activate", action="store_true")
+    actions.add_argument("--withdraw", action="store_true")
     args = parser.parse_args()
     if args.activate:
         activate()
+    elif args.withdraw:
+        withdraw()
     else:
         check()
 
@@ -210,6 +257,6 @@ if __name__ == "__main__":
     except ValueError as error:
         print(f"FAIL: {error}", file=sys.stderr)
         raise SystemExit(1)
-    except (OSError, KeyError, subprocess.SubprocessError):
+    except (OSError, KeyError, TypeError, subprocess.SubprocessError):
         print("FAIL: product backend policy authority is unavailable or invalid", file=sys.stderr)
         raise SystemExit(1)

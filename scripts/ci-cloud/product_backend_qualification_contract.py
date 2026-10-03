@@ -21,6 +21,8 @@ import rocky_preparation_contract as rpm
 SELECTOR = 'product-backend-policy'
 PROFILES = {'gcp-rocky-10-2-x86-64': 'x86_64', 'gcp-rocky-10-2-arm64': 'aarch64'}
 SOURCES = {
+    'prepare_script': 'scripts/ci-cloud/prepare-rocky-host.sh',
+    'backend_state_contract': 'config/production/state-contract.json',
     'backend_policy': 'scripts/product-backend-policy.py',
     'backend_contract': 'scripts/product_backend_contract.py',
     'backend_service': 'config/production/host-systemd/secpal-product-backend-policy.service',
@@ -37,14 +39,14 @@ SOURCES = {
 }
 OPERATIONS = (
     'validate-authorization', 'require-clean-host', 'observe-cloud-identity',
-    'install-packages', 'observe-packages', 'install-policy', 'observe-booleans',
+    'observe-packages', 'install-policy', 'observe-booleans',
     'configure-booleans', 'activate-policy', 'observe-selinux', 'observe-port-labels',
     'observe-effective-policy', 'observe-nftables', 'observe-runtime',
     'pull-product-images', 'install-quadlets', 'start-products', 'observe-products',
     'configure-haproxy', 'start-haproxy', 'observe-haproxy-identity',
     'observe-http-readiness', 'observe-unrelated-selinux-denial',
     'probe-unrelated-uid', 'configure-external-probe', 'probe-external-interface',
-    'probe-startup-barrier', 'cleanup-host', 'observe-cleanup', 'write-evidence',
+    'probe-startup-barrier', 'probe-policy-withdrawal', 'observe-host-baseline', 'cleanup-host', 'observe-cleanup', 'write-evidence',
     'admit-evidence',
 )
 SHA = re.compile(r'^[0-9a-f]{40}$')
@@ -101,7 +103,7 @@ def required_observations():
         'ipv6_backend_access': False, 'fixed_endpoint_recreation': True,
         'wildcard_product_bind': False, 'host_networking': False,
         'runtime_api_dependency': False, 'frontend_private_authority': False,
-        'startup_barrier_refusal': True, 'host_cleanup_complete': True,
+        'policy_withdrawal_quiescence': True, 'startup_barrier_refusal': True, 'host_cleanup_complete': True,
         'root_excluded_from_isolation': True,
     }
 
@@ -219,7 +221,7 @@ def properties(text):
 def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
     """Independently admit bounded observed representations, never PASS flags."""
     fields = {'enforcing', 'booleans', 'portcons', 'av', 'nftables', 'recreations', 'haproxy',
-              'unrelated', 'external', 'barrier', 'cleanup', 'accounts'}
+              'unrelated', 'external', 'barrier', 'cleanup', 'accounts', 'withdrawal'}
     if not isinstance(raw, dict) or set(raw) != fields or len(canonical(raw)) > 100000:
         raise ValueError('closed effective observations')
     accounts = raw['accounts']
@@ -300,7 +302,7 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
                 raise ValueError('exact rootless product listener')
             generated = properties(product['unit'])
             if (set(generated) != {'FragmentPath', 'SourcePath', 'DropInPaths', 'ExecStart', 'ExecStartPre'}
-                    or generated['SourcePath'] != f'/etc/containers/systemd/users/{runtime_uid}/secpal-backend101-{role}.container'
+                    or generated['SourcePath'] != f'/etc/containers/systemd/users/{runtime_uid}/secpal-{role}.container'
                     or not generated['FragmentPath'].startswith(f'/run/user/{runtime_uid}/systemd/generator/')
                     or generated['DropInPaths'] or 'path=/usr/bin/podman ;' not in generated['ExecStart']
                     or backend.endpoint + ':8080/tcp' not in generated['ExecStart']
@@ -330,6 +332,8 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
             raise ValueError('effective external nft denial')
     if raw['barrier'] != {'missing_start_status': 1, 'stale_start_status': 1, 'missing_pre_status': 1, 'stale_pre_status': 1}:
         raise ValueError('mandatory missing/stale startup barrier')
+    if raw['withdrawal'] != dict(unit_states=['inactive', 'inactive'], listeners=[], marker_exists=False, nft_table_status=1, nftables_state='active', policy_state='inactive'):
+        raise ValueError('effective backend quiescence before nftables withdrawal')
     admit_cleanup(raw['cleanup'])
     return required_observations()
 
@@ -337,7 +341,7 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
 def admit_cleanup(raw):
     fields = {'remaining_paths', 'remaining_containers', 'remaining_networks', 'remaining_images', 'service_states',
               'runtime_unit_states', 'nft_table_status', 'module_names', 'netns_names', 'link_names', 'listeners',
-              'haproxy_config_sha256', 'original_haproxy_config_sha256', 'pasta_boolean', 'original_pasta_boolean'}
+              'haproxy_config_sha256', 'original_haproxy_config_sha256', 'pasta_boolean', 'original_pasta_boolean', 'host_baseline', 'original_host_baseline', 'nftables_state'}
     if (not isinstance(raw, dict) or set(raw) != fields
             or any(raw[key] != [] for key in ('remaining_paths', 'remaining_containers', 'remaining_networks', 'remaining_images', 'module_names', 'netns_names', 'link_names', 'listeners'))
             or raw['service_states'] != ['inactive', 'inactive'] or raw['runtime_unit_states'] != ['inactive'] * 4
@@ -345,6 +349,10 @@ def admit_cleanup(raw):
             or not isinstance(raw['haproxy_config_sha256'], str) or not DIGEST.fullmatch(raw['haproxy_config_sha256'])
             or raw['haproxy_config_sha256'] != raw['original_haproxy_config_sha256']
             or raw['pasta_boolean'] not in ('pasta_bind_all_ports --> on', 'pasta_bind_all_ports --> off')
-            or raw['pasta_boolean'] != raw['original_pasta_boolean']):
+            or raw['pasta_boolean'] != raw['original_pasta_boolean']
+            or raw['nftables_state'] != 'active'
+            or not isinstance(raw['host_baseline'], dict) or set(raw['host_baseline']) != {'rpm_sha256', 'passwd_sha256', 'group_sha256'}
+            or any(not isinstance(value, str) or not DIGEST.fullmatch(value) for value in raw['host_baseline'].values())
+            or raw['host_baseline'] != raw['original_host_baseline']):
         raise ValueError('effective complete host cleanup')
     return True

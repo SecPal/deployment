@@ -12,6 +12,7 @@ import subprocess
 from types import SimpleNamespace
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import product_backend_contract as contract
@@ -26,6 +27,25 @@ def policy_helper():
 
 
 class BackendContractTest(unittest.TestCase):
+    def test_withdrawal_removes_barrier_before_stopping_exact_backends(self):
+        policy = policy_helper()
+        calls = []
+        account = SimpleNamespace(pw_name="secpal-runtime", pw_uid=20000, pw_dir="/srv/secpal")
+        with mock.patch.object(policy, "administrator_authority"), mock.patch.object(policy, "runtime_identity", return_value=account), mock.patch.object(policy, "READY") as ready, mock.patch.object(policy, "observe", side_effect=lambda operation, args, **kw: calls.append((operation, args, ready.unlink.called)) or ""):
+            policy.withdraw()
+        self.assertTrue(calls)
+        self.assertTrue(all(call[2] for call in calls))
+        self.assertEqual(calls[0][1][-2:], ["secpal-frontend.service", "secpal-api.service"])
+        service = (Path(__file__).resolve().parents[1] / "config/production/host-systemd/secpal-product-backend-policy.service").read_text()
+        self.assertIn("ExecStop=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --withdraw", service)
+        self.assertIn("After=nftables.service", service)
+
+    def test_withdrawal_rejects_surviving_backend_listener(self):
+        policy = policy_helper()
+        account = SimpleNamespace(pw_name="secpal-runtime", pw_uid=20000, pw_dir="/srv/secpal")
+        with mock.patch.object(policy, "administrator_authority"), mock.patch.object(policy, "runtime_identity", return_value=account), mock.patch.object(policy, "READY"), mock.patch.object(policy, "observe", side_effect=["", "LISTEN 0 128 127.0.0.1:18080 0.0.0.0:*"]):
+            self.assertRaisesRegex(ValueError, "survived withdrawal", policy.withdraw)
+
     def test_effective_access_uses_the_platform_policy_decision(self):
         # Validate the libselinux observation against the installed distribution
         # policy. This does not qualify our not-yet-installed custom port type.

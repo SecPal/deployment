@@ -11,6 +11,7 @@ Before=haproxy.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --activate
+ExecStop=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --withdraw
 ExecStopPost=/usr/bin/rm --force /run/secpal-product-backends/ready.json
 RemainAfterExit=yes
 UMask=0077

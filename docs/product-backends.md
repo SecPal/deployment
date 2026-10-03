@@ -70,14 +70,19 @@ local-process isolation claim.
 Only successful policy activation publishes the root-owned configuration-bound
 startup barrier under `/run/secpal-product-backends`. Both product units check
 it before Podman starts. Missing, writable, symlinked or stale authority, changed
-identity, non-enforcing SELinux and broad booleans refuse startup. Stopping or
-failing the host policy service removes the barrier. Restarting nftables also
+identity, non-enforcing SELinux and broad booleans refuse startup. Stopping the host policy service first removes the barrier and synchronously
+stops only `secpal-frontend.service` and `secpal-api.service` in the existing
+inventory-owned runtime user manager. The helper reads the administrator-owned
+`/srv/secpal/config/state-contract.json` for its runtime UID; it accepts no caller
+account, path or unit. Reverse `After=nftables.service` ordering completes this
+withdrawal before nftables stops. A failed activation removes the barrier.
+Restarting nftables also
 restarts the policy service through `PartOf`. Root-controlled policy changes
 outside that service require explicit maintenance and requalification; the
 marker is a privileged activation attestation, not a firewall discovery API.
 
 Host construction must activate this policy before starting product units.
-The system and user managers do not acquire control over each other. #219 can
+The administrator helper has only this fixed backend withdrawal operation. #219 can
 consume the emitted backend fragment once this capability has been qualified;
 the fragment contains no public listener, TLS material or routing decision.
 
@@ -149,6 +154,10 @@ reports HTTP 200 health; no public HAProxy routing is constructed here.
 The same run exercises unrelated local UID, IPv6-loopback and external-veth
 access denial, an actual unrelated-port HAProxy SELinux denial, and mandatory
 startup refusal when the policy barrier is missing or has a stale digest.
+Stopping the actual policy service and withdrawing its dedicated nftables table
+must leave both previously running product units inactive, their listeners absent
+and the barrier withdrawn. The host control-plane metadata firewall is preserved;
+unit ordering binds the same synchronous withdrawal to nftables service stop.
 External denial includes a healthy private-address listener as its positive control. Frontend has only the edge
 network and no private credentials or bind mounts. Product images remain digest
 pinned, rootless and separate; local Podman uses no runtime API/socket or IP
@@ -160,11 +169,17 @@ Accepted-main control independently authenticates source hashes, preparation and
 resource identities, the frozen host evidence digest and all required effective
 facts from raw access decisions, installed rules, service/cgroup/process identity,
 HTTP statistics and network results. Guest output has no self-authorizing PASS
-field. Host cleanup stops only
+field. The closed backend preparation profile installs `haproxy` and
+`setools-console` through the existing reviewed DNF preparation transaction.
+These packages, their dependencies and package-created accounts belong to the
+prepared VM baseline; the observer performs no package transaction. It compares
+before/after RPM catalog and public account-file digests, which control admits
+independently. Provider destruction removes the entire prepared baseline.
+Host cleanup stops only
 qualification services, removes owned policy/module/rules/units/networks/test
 state and restores the original HAProxy configuration and pasta boolean. Exact
 container, image, network, listener, service, file and policy absence is read back
-and independently admitted. The
+and independently admitted; nftables is restored active. The
 existing unconditional provider cleanup destroys the exact continuation state.
 The proof leaf also requires authoritative provider empty-state read-back.
 
