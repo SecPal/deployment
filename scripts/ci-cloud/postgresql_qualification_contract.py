@@ -252,6 +252,30 @@ def admit_postgresql_package(name: str, raw: dict[str, Any], architecture: str,
     return result
 
 
+def normalize_lifecycle_timeline(document: object) -> dict[str, int]:
+    """Normalize the fixed GitHub Ready/Draft selection for select_candidate.
+
+    GitHub totalCount describes provider-wide timeline metadata, not the
+    selected nodes. Completeness and the selected-event bound are independent.
+    """
+    if (not isinstance(document, dict) or set(document) != {'totalCount', 'pageInfo', 'nodes'}
+            or type(document['totalCount']) is not int or document['totalCount'] < 0
+            or not isinstance(document['pageInfo'], dict)
+            or set(document['pageInfo']) != {'hasNextPage'}
+            or not isinstance(document['nodes'], list)):
+        raise QualificationError('resolve-candidate', 'representation-invalid')
+    nodes = document['nodes']
+    if document['pageInfo']['hasNextPage'] is not False or len(nodes) > 100:
+        raise QualificationError('resolve-candidate', 'observation-limit-exceeded')
+    counts = {'ready_events': 0, 'draft_events': 0}
+    for node in nodes:
+        if (not isinstance(node, dict) or set(node) != {'__typename'}
+                or node['__typename'] not in ('ReadyForReviewEvent', 'ConvertToDraftEvent')):
+            raise QualificationError('resolve-candidate', 'representation-invalid')
+        counts['ready_events' if node['__typename'] == 'ReadyForReviewEvent' else 'draft_events'] += 1
+    return counts
+
+
 def select_candidate(pulls: object) -> dict[str, Any]:
     """Admit bounded trusted GitHub observations, never caller dispatch selectors."""
     if not isinstance(pulls, list) or len(pulls) > 100:

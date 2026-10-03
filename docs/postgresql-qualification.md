@@ -25,6 +25,14 @@ GitHub verification (`verified=true`, `reason=valid`), and binds the exact HEAD,
 tree, configuration blob and consumer blob. Ambiguous, missing, forked, changed
 or incorrectly linked sources fail before provider authority.
 
+The fixed GitHub query selects only Ready and Draft lifecycle events. Pure
+`normalize_lifecycle_timeline` treats timeline `totalCount` as provider metadata,
+independently requires `hasNextPage=false`, and bounds returned selected nodes at 100. It rejects unknown fields, malformed nodes and other event types before
+`select_candidate` enforces zero Draft transitions and zero Ready events for a
+Draft candidate or exactly one for a Ready candidate. Other connections retain
+their strict count checks. Reviewed GitHub representations in tests remain
+fixtures; they establish no qualification PASS.
+
 The candidate supplies `config/production/postgresql-contract.json`, including
 its actual `configuration` file bytes. The accepted pure contract rejects
 unknown/duplicate keys and admits only the reviewed canonical configuration
