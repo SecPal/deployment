@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 
+sys.dont_write_bytecode = True
 DIRECTORY = Path(__file__).resolve().parent
 sys.path.insert(0, str(DIRECTORY))
 from product_backend_contract import admit_policy_account, host_policy, policy_digest
@@ -91,7 +92,7 @@ class AccessDecision(ctypes.Structure):
                 ("allowed", "decided", "auditallow", "auditdeny", "seqno", "flags")]
 
 
-def effective_access(source: str, target: str, permission: str) -> bool:
+def effective_decision(source: str, target: str, permission: str) -> dict[str, int]:
     library = ctypes.util.find_library("selinux")
     if library is None:
         raise ValueError("observe-effective-selinux")
@@ -114,10 +115,16 @@ def effective_access(source: str, target: str, permission: str) -> bool:
             ctypes.byref(decision))
     except (OSError, AttributeError) as error:
         raise ValueError("observe-effective-selinux") from error
-    if (not kind or not requested or result != 0
-            or decision.decided & requested != requested or decision.flags):
+    return {"class": kind, "requested": requested, "result": result,
+            "allowed": decision.allowed, "decided": decision.decided, "flags": decision.flags}
+
+
+def effective_access(source: str, target: str, permission: str) -> bool:
+    decision = effective_decision(source, target, permission)
+    if (not decision["class"] or not decision["requested"] or decision["result"] != 0
+            or decision["decided"] & decision["requested"] != decision["requested"] or decision["flags"]):
         raise ValueError("observe-effective-selinux")
-    return decision.allowed & requested == requested
+    return decision["allowed"] & decision["requested"] == decision["requested"]
 
 
 def check_effective_policy() -> None:

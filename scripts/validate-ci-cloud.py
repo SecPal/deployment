@@ -2137,7 +2137,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         isinstance(qualification, dict)
         and qualification.get("type") == "choice"
         and qualification.get("default") == "rocky-host"
-        and qualification.get("options") == ["rocky-host", "native-postgresql-18"],
+        and qualification.get("options") == ["rocky-host", "native-postgresql-18", "product-backend-policy"],
         "Rocky/PostgreSQL qualification selector must remain closed",
     )
     require(
@@ -2281,6 +2281,36 @@ def validate_rocky_control_plane(root: Path) -> None:
         root, "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
     )
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
+    main += read(root, "infra/ci-cloud/gcp-rocky/metadata.tf")
+    source_names = set(re.findall(
+        r"^\s+(\w+)\s*=\s*(?:file\(|var\.(?:postgresql_candidate_json|product_backend_policy_json)\s*$)",
+        read(root, "infra/ci-cloud/gcp-rocky/metadata.tf"), re.MULTILINE,
+    ))
+    installer_names = {
+        quoted or bare for quoted, bare in re.findall(
+            r"^\s*decode_script (?:'([a-z0-9_]+)'|([a-z0-9_]+)) ",
+            bootstrap, re.MULTILINE,
+        )
+    }
+    require(source_names == installer_names,
+            "Rocky transport must preserve the exact fixed installed component inventory")
+    require(
+        "metadata = local.rocky_metadata" in main
+        and main.count("terraform_data.rocky_metadata_admission]") == 2
+        and "rocky_metadata_values_admitted" in main
+        and "rocky_metadata_aggregate_admitted" in main
+        and "rocky_bootstrap_expansion_admitted" in main
+        and "ROCKY_BOOTSTRAP_TRANSPORT_INTEGRITY_FAILED" in bootstrap
+        and "decoder.unconsumed_tail or decoder.unused_data" in bootstrap
+        and "hashlib.sha256(payload).hexdigest()" in bootstrap
+        and "object_pairs_hook=unique_object" in bootstrap
+        and "sorted(sources) != names" in bootstrap
+        and text.count("python3 scripts/ci-cloud/admit-rocky-metadata.py") == 1
+        and text.index("python3 scripts/ci-cloud/admit-rocky-metadata.py")
+        < text.index("      - name: Authenticate trusted provisioning through OIDC")
+        < text.index("          tofu apply --auto-approve --input=false"),
+        "Rocky metadata must admit the actual bounded transport before provider credentials and resources",
+    )
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
     target_failure_schema_pair_sequence = [
         schema_const_pair_at(
@@ -2494,7 +2524,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
         and "timeout --signal=TERM --kill-after=180s 45m" in target_runner
-        and "qualification_harness_base64gzip" not in bootstrap + main,
+        and "qualification_harness" not in bootstrap + main,
         "trusted control must bind the exact target qualification workload bytes",
     )
     require(
@@ -2615,8 +2645,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "load_quadlet_authority_contract()" in rocky_control
         and "target and trusted Quadlet authority normalization disagree"
         in rocky_control
-        and "quadlet_authority_contract_base64gzip" in main
-        and "decode_script '${quadlet_authority_contract_base64gzip}' /opt/secpal-control/scripts/quadlet_authority_contract.py"
+        and "quadlet_authority_contract" in main
+        and "decode_script 'quadlet_authority_contract' /opt/secpal-control/scripts/quadlet_authority_contract.py"
         in bootstrap
         and qualification_harness.index("\nuser_systemctl daemon-reload\n")
         < qualification_harness.index(
@@ -2845,8 +2875,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         "qualification admission must preserve each closed runtime-user boundary",
     )
     require(
-        "readiness_publisher_base64gzip" in main
-        and "runtime_user_systemd_base64gzip" in main
+        "readiness_publisher" in main
+        and "runtime_user_systemd" in main
         and "secpal-publish-rocky-qualification-readiness" in bootstrap
         and "runtime_user_systemd.py" in bootstrap
         and '--boot-id "$boot_id"' in bootstrap
@@ -2960,9 +2990,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and 'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json'
         in target_failure_trace
-        and "start_runuser_base64gzip" in main
-        and "start_env_base64gzip" in main
-        and "start_systemctl_base64gzip" in main
+        and "start_runuser" in main
+        and "start_env" in main
+        and "start_systemctl" in main
         and "rocky-start-runuser" in bootstrap
         and "rocky-start-env" in bootstrap
         and "rocky-start-systemctl" in bootstrap
@@ -3004,9 +3034,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and 'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json'
         in target_failure_trace
-        and "active_runuser_base64gzip" in main
-        and "active_env_base64gzip" in main
-        and "active_systemctl_base64gzip" in main
+        and "active_runuser" in main
+        and "active_env" in main
+        and "active_systemctl" in main
         and "rocky-active-runuser" in bootstrap
         and "rocky-active-env" in bootstrap
         and "rocky-active-systemctl" in bootstrap,
@@ -3049,8 +3079,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'OBSERVATION_PATH = Path(' in primary_runuser
         and '"/var/lib/secpal-rocky/evidence/primary-workload-observation.json"'
         in primary_runuser
-        and "primary_runuser_base64gzip" in main
-        and "primary_runtime_base64gzip" in main
+        and "primary_runuser" in main
+        and "primary_runtime" in main
         and "rocky-primary-runuser" in bootstrap
         and "rocky-primary-runtime" in bootstrap
         and not (root / "scripts/ci-cloud/rocky-primary-env.py").exists()
@@ -3113,9 +3143,9 @@ def validate_rocky_control_plane(root: Path) -> None:
             target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
         )
         and "--reload-adjacency \"$reload_adjacency\"" in target_runner
-        and "reload_observer_base64gzip" in main
-        and "reload_runuser_base64gzip" in main
-        and "reload_systemctl_base64gzip" in main
+        and "reload_observer" in main
+        and "reload_runuser" in main
+        and "reload_systemctl" in main
         and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap
         and "rocky-reload-runuser" in bootstrap
         and "/usr/local/libexec/secpal-control/rocky-reload-systemctl" in bootstrap
@@ -3374,8 +3404,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_replay_verifier
         and "classifier.replay_primary_observation_admitted"
         in target_replay_verifier
-        and "target_replay_verifier_base64gzip" in bootstrap
-        and "target_replay_verifier_base64gzip" in main,
+        and "target_replay_verifier" in bootstrap
+        and "target_replay_verifier" in main,
         "Rocky replay verifier must independently close exact classifier input",
     )
     require(
@@ -3402,7 +3432,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         "Rocky OpenTofu and Google provider versions must be exact",
     )
     require(
-        'image  = var.exact_image_self_link' in main
+        re.search(r'image\s*=\s*var\.exact_image_self_link', main) is not None
         and 'data "google_compute_image"' not in main
         and "discovery_family" not in main,
         "OpenTofu may consume only the pre-resolved exact image identity",

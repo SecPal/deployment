@@ -109,13 +109,67 @@ runtime overrides from generated services. An inactive stale socket pathname
 is not a runtime API dependency. It creates only its own named units/networks
 and removes them after the test.
 
-These tests do not substitute for privileged host qualification. Before Ready
-or issue closure, a reviewed Rocky host must prove the actual installed custom
-port labels/rules with Enforcing effective process labels, host-native HAProxy
-HTTP access across product recreation, external-interface and unrelated UID
-denial, a representative denied HAProxy connection to an unrelated port,
-and startup refusal with missing/stale policy authority. Keep the smallest
-non-redundant real-system record, including exact commands, package versions,
-architecture, candidate identity and results. Preserve #80's amd64/arm64 host
-and rootless authority contracts. Authored policy text or a fixture PASS does
-not qualify the installed HAProxy/SELinux path.
+These tests prove the source contract; privileged proof belongs to evidence-only
+[#294](https://github.com/SecPal/deployment/issues/294). It was extracted from
+issue #101 by explicit graph-first replanning because privileged execution trusts only
+accepted protected main. PR #293 cannot be its own cloud/root authority. #101
+owns the implementation, local/native evidence and maintained qualification path;
+Issue #294 owns the real host result, cleanup and provider empty-state evidence. #219
+remains blocked by #294. A post-merge defect requires a new corrective leaf,
+rather than reopening #101 or adding another primary delivery PR to it.
+
+The existing Rocky workflow has the closed `product-backend-policy` selector.
+Its fixed entrypoint is
+`scripts/ci-cloud/run-product-backend-qualification.sh`; it executes
+`qualify-product-backends.py` from accepted control installed under
+`/opt/secpal-control`, using only two bounded numeric run arguments. The selector
+rejects caller target SHAs and retains the authenticated frozen #80 host pair.
+It adds no PR resolver, executable-path input, provider, workflow family or
+arbitrary privileged command facility.
+
+Preparation publishes a closed source manifest binding accepted control SHA,
+profile, preparation run/attempt and the exact fixed executable/import/policy
+closure. Qualification retrieves it from that exact preparation and reconfirms
+it before provider authority. A plain host or PostgreSQL preparation cannot
+supply this capability. Aggregate-hashed bootstrap transport installs the closure
+and manifest as root-owned immutable files. The product profile carries its own
+optional payload in place of the PostgreSQL optional payload; both reuse the
+existing host preparation, identity-free handoff, continuation and cleanup.
+OpenTofu metadata admission and exact reconstruction tests cover both profiles.
+
+The qualifier installs the actual administrator helper/contract and service,
+requires Enforcing, disables only the qualification host's pasta bind-all
+boolean, and requires HAProxy connect-any already off. It activates the actual
+policy, queries loaded kernel SELinux port mappings and access decisions, reads
+live nftables rules, and uses the packaged host-native `haproxy.service` with its
+real non-login UID and `haproxy_t` worker context. Backend-only HTTP health checks
+run across three native rootless product recreations. A local Unix stats socket
+reports HTTP 200 health; no public HAProxy routing is constructed here.
+
+The same run exercises unrelated local UID, IPv6-loopback and external-veth
+access denial, an actual unrelated-port HAProxy SELinux denial, and mandatory
+startup refusal when the policy barrier is missing or has a stale digest.
+External denial includes a healthy private-address listener as its positive control. Frontend has only the edge
+network and no private credentials or bind mounts. Product images remain digest
+pinned, rootless and separate; local Podman uses no runtime API/socket or IP
+lookup. Synthetic HTTP fixture initialization is never production secret material.
+
+Observations and diagnostic identities are closed and bounded. Pure admission
+reuses the existing Rocky signed-RPM owner and the backend policy owner.
+Accepted-main control independently authenticates source hashes, preparation and
+resource identities, the frozen host evidence digest and all required effective
+facts from raw access decisions, installed rules, service/cgroup/process identity,
+HTTP statistics and network results. Guest output has no self-authorizing PASS
+field. Host cleanup stops only
+qualification services, removes owned policy/module/rules/units/networks/test
+state and restores the original HAProxy configuration and pasta boolean. Exact
+container, image, network, listener, service, file and policy absence is read back
+and independently admitted. The
+existing unconditional provider cleanup destroys the exact continuation state.
+The proof leaf also requires authoritative provider empty-state read-back.
+
+Both `gcp-rocky-10-2-x86-64` and `gcp-rocky-10-2-arm64` are required for #294:
+Issue #80 supports both qualified architectures, and no maintained architecture-neutral
+waiver exists for this new host policy/runtime seam. Fixture and source PASS do
+not qualify the privileged installed boundary. Real privileged execution is
+intentionally not performed within #101.

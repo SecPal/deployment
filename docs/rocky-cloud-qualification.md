@@ -678,3 +678,74 @@ represented the reviewed empty bootstrap scope set as an omitted/null field,
 while the original Rocky validator required literal object equality. Exact-state
 cleanup destroyed all seven resources. That run produced neither preparation
 PASS nor native ARM qualification PASS.
+
+## Rocky bootstrap metadata transport
+
+`infra/ci-cloud/gcp-rocky/metadata.tf` owns the exact instance metadata map,
+startup rendering, UTF-8 byte sizes and admission predicates. The maintained
+workflow evaluates that same map with OpenTofu 1.12.5 before provisioning OIDC
+credentials. Both independent resource roots also depend on its blocking
+creation guard, so skipping the workflow admission cannot create partial cloud
+resources with an oversized payload. Destroy remains available for historical
+state and for an existing state whose creation admission now fails.
+
+The complete trusted source map uses one deterministic gzip/base64 encoding.
+This shares compression across related files and represents each source once,
+while retaining every original installation destination. Before any component
+is installed or executed, the guest requires exact decoded length and SHA-256,
+one complete gzip member with no trailing material, duplicate-free JSON and
+the exact fixed component inventory. Decompression stops at the expected
+length plus one and has an absolute 1 MiB decoded bound. A private temporary
+directory holds the admitted material and is removed on exit. The startup emits
+only `ROCKY_BOOTSTRAP_TRANSPORT_INTEGRITY_FAILED` for reconstruction rejection.
+No caller-selected metadata inventory, URL, remote script or new trust root is
+introduced. Candidate identity, accepted-control/probe binding, identity-free
+handoff, grader/PASS authority and cloud cleanup retain their existing owners.
+
+[Google's metadata contract](https://docs.cloud.google.com/compute/docs/metadata/setting-custom-metadata)
+limits keys to 128 bytes, values to 256 KiB (262,144 bytes), and aggregate key
+plus value material to 512 KiB (524,288 bytes). Admission counts the actual
+encoded startup and all fixed metadata values, including template overhead.
+The safe maxima are 237,568 bytes per value and 499,712 aggregate bytes. Both
+reserve 24 KiB: the existing 16 KiB maximum candidate-sized growth allowance
+requires less than 24 KiB after worst-case gzip/base64 expansion, rounded up to
+the next 8 KiB. This reserve also exceeds the bounded metadata added by the
+identity/access transition. It is a minimum provider safety reserve, separate
+from the maximum candidate input already exercised by transport validation.
+The candidate ceiling counts UTF-8 bytes rather than characters. OpenTofu
+suppresses candidate/source bodies; only numeric sizes are declassified for
+bounded key/actual/safe/provider-limit diagnostics. The admission helper never
+relays OpenTofu stderr.
+
+The regression uses the provider's pinned renderer with the canonical locals,
+without a Google provider or credentials. Historical non-secret candidate
+artifacts from runs `37112453593` and `37112463800` retain exact representation,
+HEAD `c3283ae9e750ab532ba14bae8e6ddced7f98f517`, tree
+`48969c2e4bd1c6f82afd1de7c91fe395f97eb86b`, and accepted control
+`4571a9b2653cb73c743a7812f0c4bfcad599d45d`. The retained pre-#289 template and
+complete source closure reproduce 265,188/265,184-byte rejected startup values.
+The corrected historical candidates render to 221,122 bytes on both profiles.
+Conservative high-entropy 16,384-byte envelopes render to 236,730/236,726 bytes,
+leaving 25,414/25,418 bytes below the absolute provider value limit. These
+measurements characterize that accepted closure; admission always evaluates
+the current complete representation instead of trusting those historical sizes.
+
+Run `python3 tests/ci-cloud-rocky-metadata.py` for the exact rendering, limits,
+maximum-input, reconstruction, byte-integrity and negative boundary evidence.
+The older conformance bootstrap keeps its existing independent transport.
+Repository fixtures do not establish GCP acceptance. A real promised transport
+result requires both maintained accepted-main preparation profiles, exact
+run/control/candidate identities, mandatory cleanup and authoritative empty
+state. The accepted-main-only workflow cannot use feature-branch control to
+supply that evidence.
+
+## Product backend policy proof
+
+The closed `product-backend-policy` selector proves the host policy owned by
+[#101](https://github.com/SecPal/deployment/issues/101). Its implementation and
+trust boundary are documented in [Product backends](product-backends.md).
+The real privileged execution, both reviewed architecture profiles, mandatory
+cleanup and authoritative empty-state evidence belong to evidence-only
+[#294](https://github.com/SecPal/deployment/issues/294), after accepted-main source
+delivery. It uses the same Rocky control plane and frozen host qualification pair;
+no candidate PR can supply privileged commands or executable paths.

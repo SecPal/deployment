@@ -30,6 +30,7 @@ locals {
 }
 
 resource "google_compute_network" "qualification" {
+  depends_on              = [terraform_data.rocky_metadata_admission]
   name                    = "sprk-${local.run_suffix}-network"
   description             = local.ownership_description
   auto_create_subnetworks = false
@@ -95,12 +96,13 @@ resource "google_compute_firewall" "egress_deny" {
 }
 
 resource "google_compute_disk" "qualification" {
-  name   = "sprk-${local.run_suffix}-disk"
-  zone   = var.zone
-  type   = var.disk_type
-  size   = var.disk_size_gib
-  image  = var.exact_image_self_link
-  labels = local.labels
+  depends_on = [terraform_data.rocky_metadata_admission]
+  name       = "sprk-${local.run_suffix}-disk"
+  zone       = var.zone
+  type       = var.disk_type
+  size       = var.disk_size_gib
+  image      = var.exact_image_self_link
+  labels     = local.labels
 }
 
 resource "google_compute_instance" "qualification" {
@@ -134,67 +136,7 @@ resource "google_compute_instance" "qualification" {
     scopes = []
   }
 
-  metadata = {
-    block-project-ssh-keys               = "true"
-    disable-legacy-endpoints             = "true"
-    enable-oslogin                       = "FALSE"
-    secpal-rocky-cloud-identity-admitted = "false"
-    secpal-rocky-qualification-request   = "prepare"
-    secpal-rocky-target-sha              = var.target_sha
-    secpal-rocky-trusted-control-sha     = var.trusted_control_sha
-    secpal-rocky-exact-image-self-link   = var.exact_image_self_link
-    secpal-rocky-provider-profile        = var.profile
-    secpal-rocky-expires-at              = var.expires_at
-    secpal-rocky-ssh-public-key          = trimspace(var.ssh_public_key)
-    "startup-script" = templatefile("${path.module}/../../../scripts/ci-cloud/bootstrap-rocky-host.tftpl", {
-      postgresql_candidate_base64gzip                = base64gzip(var.postgresql_candidate_json)
-      postgresql_consumer_base64gzip                 = base64gzip(file("${path.module}/../../../scripts/render-native-postgresql.py"))
-      postgresql_contract_base64gzip                 = base64gzip(file("${path.module}/../../../scripts/ci-cloud/postgresql_qualification_contract.py"))
-      postgresql_control_base64gzip                  = base64gzip(file("${path.module}/../../../scripts/ci-cloud/postgresql-qualification-control.py"))
-      postgresql_runner_base64gzip                   = base64gzip(file("${path.module}/../../../scripts/ci-cloud/qualify-native-postgresql.py"))
-      postgresql_application_bootstrap_base64gzip    = base64gzip(file("${path.module}/../../../scripts/ci-cloud/postgresql-application-bootstrap.php"))
-      postgresql_application_probe_base64gzip        = base64gzip(file("${path.module}/../../../scripts/ci-cloud/postgresql-application-probe.php"))
-      image_attestation_runtime_base64gzip           = base64gzip(file("${path.module}/../../../scripts/image_attestation_runtime.py"))
-      fetch_oci_attestation_base64gzip               = base64gzip(file("${path.module}/../../../scripts/fetch-oci-attestation.py"))
-      postgresql_wrapper_base64gzip                  = base64gzip(file("${path.module}/../../../scripts/ci-cloud/run-native-postgresql-qualification.sh"))
-      postgresql_diagnostic_schema_base64gzip        = base64gzip(file("${path.module}/../../../schemas/postgresql-qualification-diagnostic.schema.json"))
-      postgresql_schema_base64gzip                   = base64gzip(file("${path.module}/../../../schemas/postgresql-qualification-evidence.schema.json"))
-      integration_runtime_contract_base64gzip        = base64gzip(file("${path.module}/../../../scripts/integration_runtime_contract.py"))
-      prepare_script_base64gzip                      = base64gzip(file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh"))
-      readiness_publisher_base64gzip                 = base64gzip(file("${path.module}/../../../scripts/ci-cloud/publish-rocky-qualification-readiness.py"))
-      runtime_user_systemd_base64gzip                = base64gzip(file("${path.module}/../../../scripts/ci-cloud/runtime_user_systemd.py"))
-      target_runner_base64gzip                       = base64gzip(file("${path.module}/../../../scripts/ci-cloud/run-rocky-target-qualification.sh"))
-      target_failure_classifier_base64gzip           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/classify-rocky-target-qualification-failure.py"))
-      target_replay_verifier_base64gzip              = base64gzip(file("${path.module}/../../../scripts/ci-cloud/verify-rocky-target-qualification-replay.py"))
-      target_trace_base64gzip                        = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-target-qualification-trace.sh"))
-      reload_runuser_base64gzip                      = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-reload-runuser.py"))
-      reload_systemctl_base64gzip                    = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-reload-systemctl.py"))
-      start_runuser_base64gzip                       = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-start-runuser.py"))
-      start_env_base64gzip                           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-start-env.py"))
-      start_systemctl_base64gzip                     = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-start-systemctl.py"))
-      active_runuser_base64gzip                      = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-active-runuser.py"))
-      active_env_base64gzip                          = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-active-env.py"))
-      active_systemctl_base64gzip                    = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-active-systemctl.py"))
-      primary_runuser_base64gzip                     = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-primary-runuser.py"))
-      primary_runtime_base64gzip                     = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-primary-runtime.py"))
-      reload_observer_base64gzip                     = base64gzip(file("${path.module}/../../../scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"))
-      allocator_base64gzip                           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/allocate-rocky-subids.py"))
-      collector_base64gzip                           = base64gzip(file("${path.module}/../../../scripts/ci-cloud/collect-rocky-preparation.py"))
-      preparation_contract_base64gzip                = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky_preparation_contract.py"))
-      control_utility_base64gzip                     = base64gzip(file("${path.module}/../../../scripts/ci-cloud/rocky-control.py"))
-      selinux_isolation_contract_base64gzip          = base64gzip(file("${path.module}/../../../scripts/selinux_isolation_contract.py"))
-      quadlet_authority_contract_base64gzip          = base64gzip(file("${path.module}/../../../scripts/quadlet_authority_contract.py"))
-      discovery_schema_base64gzip                    = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-discovery-evidence.schema.json"))
-      continuation_schema_base64gzip                 = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-continuation.schema.json"))
-      preparation_schema_base64gzip                  = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-preparation-evidence.schema.json"))
-      preparation_failure_schema_base64gzip          = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-preparation-failure-evidence.schema.json"))
-      qualification_schema_base64gzip                = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-qualification-evidence.schema.json"))
-      target_source_failure_schema_base64gzip        = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-target-source-failure.schema.json"))
-      target_qualification_failure_schema_base64gzip = base64gzip(file("${path.module}/../../../schemas/rocky-cloud-target-qualification-failure.schema.json"))
-      arm64_profile_base64gzip                       = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-arm64.json"))
-      x86_64_profile_base64gzip                      = base64gzip(file("${path.module}/../../../config/ci-cloud/gcp-rocky-10-2-x86-64.json"))
-    })
-  }
+  metadata = local.rocky_metadata
 
   scheduling {
     automatic_restart   = false
