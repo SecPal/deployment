@@ -64,8 +64,9 @@ class QualificationContract(unittest.TestCase):
     def test_http_qualification_survives_production_application_network_retirement(self):
         """Real renderer -> source closure -> fixture, with DB authority removed.
 
-        #81 owns the production TCP mapping. This transport-only successor
-        projection retires its old bridge without implementing that mapping.
+        #81 owns the production TCP mapping. The successor's Network/AddHost
+        source shape is from authenticated PR #286 head c3283ae9e750ab532ba14bae8e6ddced7f98f517;
+        these are candidate test inputs, never a production implementation.
         """
         import product_backend_qualification_contract as contract
         spec = importlib.util.spec_from_file_location('renderer', ROOT / 'scripts/render-production-quadlets.py')
@@ -92,6 +93,10 @@ class QualificationContract(unittest.TestCase):
                         continue
                     if retired:
                         text = text.replace('Network=secpal-application.network\n', '')
+                        if name == 'secpal-api.container':
+                            text = text.replace('Network=secpal-edge.network\n',
+                                'Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1\n'
+                                'AddHost=db.secpal.internal:169.254.81.1\n')
                     (root / 'config/production/quadlet' / name).write_text(text)
                 if retired:
                     (root / 'config/production/quadlet/secpal-application.network').unlink(missing_ok=True)
@@ -109,6 +114,8 @@ class QualificationContract(unittest.TestCase):
                     self.assertNotIn('application', fixture)
                     self.assertNotIn('Mount=type=bind,', fixture)
                     self.assertNotIn('Environment=DB_', fixture)
+                    self.assertNotIn('AddHost=', fixture)
+                    self.assertNotIn('map-host-loopback', fixture)
                 raw = observation_fixture(contract)
                 contract.normalize_observations(raw, 993, 992, 991)
                 qualifier_spec = importlib.util.spec_from_file_location('qualifier', ROOT / 'scripts/ci-cloud/qualify-product-backends.py')
@@ -157,6 +164,8 @@ class QualificationContract(unittest.TestCase):
         source = (ROOT / contract.SOURCES['backend_frontend']).read_text()
         with self.assertRaises(ValueError):
             contract.fixture_unit(source + 'Network=database.network\n', 'frontend')
+        with self.assertRaises(ValueError):
+            contract.fixture_unit(source + 'AddHost=db.secpal.internal:169.254.81.1\n', 'frontend')
 
     def test_fixture_rejects_additional_or_random_publications(self):
         import product_backend_qualification_contract as contract
@@ -169,7 +178,9 @@ class QualificationContract(unittest.TestCase):
     def test_admission_rejects_extra_effective_publications_and_surviving_fixture_units(self):
         import product_backend_qualification_contract as contract
         original = observation_fixture(contract)
-        for flag in ('--publish 0.0.0.0:19000:8080/tcp', '--publish=8080', '-p 8080', '--publish-all', '-P'):
+        for flag in ('--publish 0.0.0.0:19000:8080/tcp', '--publish=8080', '-p 8080',
+                     '-p8082:8080', '-p127.0.0.1:19000:8080/tcp', '--publish-all',
+                     '--publish-all=true', '-P', '-dp8082:8080', '-dP'):
             raw = copy.deepcopy(original)
             product = raw['recreations'][0]['products']['api']
             product['unit'] = product['unit'].replace('--publish 127.0.0.1:18081:8080/tcp',
@@ -180,6 +191,15 @@ class QualificationContract(unittest.TestCase):
         raw['cleanup']['fixture_unit_states'] = ['inactive', 'inactive', 'active']
         with self.assertRaises(ValueError):
             contract.admit_cleanup(raw['cleanup'])
+        for option in ('--publish=', '-p ', '-p'):
+            raw = copy.deepcopy(original)
+            for iteration in raw['recreations']:
+                for role, backend in contract.BACKENDS.items():
+                    product = iteration['products'][role]
+                    product['unit'] = product['unit'].replace('--publish ' + backend.endpoint,
+                                                            option + backend.endpoint)
+            with self.subTest(option=option):
+                contract.normalize_observations(raw, 993, 992, 991)
 
     def test_closed_selector_is_dispatchable_only_from_main(self):
         import yaml
@@ -359,7 +379,7 @@ class QualificationContract(unittest.TestCase):
     def test_pure_admission_has_no_external_authority(self):
         path = ROOT / 'scripts/ci-cloud/product_backend_qualification_contract.py'
         tree = ast.parse(path.read_text())
-        allowed = {'hashlib', 'json', 're', 'product_backend_contract', 'rocky_preparation_contract', 'csv', 'io', 'types'}
+        allowed = {'hashlib', 'json', 're', 'shlex', 'product_backend_contract', 'rocky_preparation_contract', 'csv', 'io', 'types'}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 self.assertTrue({a.name for a in node.names} <= allowed)

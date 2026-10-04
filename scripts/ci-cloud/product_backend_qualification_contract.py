@@ -13,6 +13,7 @@ import csv
 import io
 import json
 import re
+import shlex
 
 from product_backend_contract import BACKENDS, admit_policy_account
 from types import SimpleNamespace
@@ -152,11 +153,12 @@ def fixture_unit(source, role):
         raise ValueError('reviewed product publication')
     networks = [line for line in source.splitlines() if line.startswith('Network=')]
     if (any(line in ('Network=host', 'Network=host:') for line in networks)
-            or role == 'frontend' and networks != ['Network=secpal-edge.network']):
+            or role == 'frontend' and (networks != ['Network=secpal-edge.network']
+                                       or any(line.startswith('AddHost=') for line in source.splitlines()))):
         raise ValueError('reviewed product network authority')
     lines = [line for line in source.splitlines() if not line.startswith((
         'Requires=', 'After=', 'PartOf=', 'ExecStartPre=', 'Environment=',
-        'Mount=type=bind,', 'Health', 'Notify=', 'LogDriver=', 'LogOpt=', 'Network='))]
+        'Mount=type=bind,', 'Health', 'Notify=', 'LogDriver=', 'LogOpt=', 'Network=', 'AddHost='))]
     lines.insert(lines.index('Pull=never'), 'Network=secpal-edge.network')
     lines.insert(lines.index('Pull=never'), 'Notify=conmon')
     lines.insert(lines.index('Pull=never'), 'LogDriver=none')
@@ -169,6 +171,33 @@ def fixture_unit(source, role):
     for value in environment:
         lines.insert(lines.index('Pull=never'), 'Environment=' + value)
     return ('\n'.join(lines) + '\n').replace('secpal-', 'secpal-backend101-')
+
+
+def effective_publications(exec_start):
+    """Read the effective systemd argv, including attached Podman short values."""
+    commands = re.findall(r'(?:^|[ ;])argv\[\]=([^;]*)(?:;|$)', exec_start)
+    if len(commands) != 1:
+        raise ValueError('effective command representation')
+    arguments = shlex.split(commands[0])
+    publications = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in ('--publish', '-p'):
+            index += 1
+            if index == len(arguments):
+                raise ValueError('effective publication argument absent')
+            publications.append(arguments[index])
+        elif argument.startswith('--publish='):
+            publications.append(argument.removeprefix('--publish='))
+        elif argument.startswith('-p'):
+            publications.append(argument[2:].removeprefix('='))
+        elif argument.startswith('--publish-all') or argument.startswith('-') and not argument.startswith('--') and argument != '-d':
+            # Quadlet emits only -d. Reject other short options rather than
+            # admitting bundled -P/-p forms whose authority is ambiguous.
+            raise ValueError('unreviewed effective short/publication option')
+        index += 1
+    return publications
 
 
 def admit_nftables(raw, uid):
@@ -309,7 +338,7 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
                     or product['networks'] != ['secpal-backend101-edge']):
                 raise ValueError('exact rootless product listener')
             generated = properties(product['unit'])
-            publications = re.findall(r'(?:^|\s)(?:--publish(?:=|\s+)|-p(?:=|\s+))(\S+)', generated.get('ExecStart', ''))
+            publications = effective_publications(generated.get('ExecStart', ''))
             if (set(generated) != {'FragmentPath', 'SourcePath', 'DropInPaths', 'ExecStart', 'ExecStartPre'}
                     or generated['SourcePath'] != f'/etc/containers/systemd/users/{runtime_uid}/secpal-{role}.container'
                     or not generated['FragmentPath'].startswith(f'/run/user/{runtime_uid}/systemd/generator/')
