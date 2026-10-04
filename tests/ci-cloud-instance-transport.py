@@ -9,6 +9,7 @@ import copy
 import contextlib
 import io
 import importlib.util
+import hashlib
 import json
 import os
 import socket
@@ -256,12 +257,85 @@ class TransportContract(unittest.TestCase):
                 time.sleep(0.05)
                 raise RuntimeError('oauth-SYNTHETIC_SECRET')
             producer.wait.side_effect=lambda: (time.sleep(0.1),1)[1]
-            with patch.object(observer,'launch_apply',return_value=producer), patch.object(observer.Observer,'sample',side_effect=fail_during_apply):
+            with patch.object(observer,'PinnedGoogleProvider'), patch.object(observer,'launch_apply',return_value=producer), patch.object(observer.Observer,'sample',side_effect=fail_during_apply):
                 self.assertEqual(observer.observe_apply(self.identity(),output),1)
             producer.terminate.assert_not_called(); producer.kill.assert_not_called()
             doc=contract.decode_document(output.read_bytes()); contract.admit(doc,self.identity())
             self.assertEqual(doc['terminal_provider_result'],'OTHER')
             self.assertEqual(doc['provider_exit_code'],1)
+
+    def provider_fixture(self,root):
+        package = root/observer.GOOGLE_INSTALL
+        package.mkdir(parents=True)
+        executable = package/observer.GOOGLE_EXECUTABLE
+        executable.write_bytes(b'synthetic unit-test executable')
+        executable.chmod(0o755)
+        (root/'.terraform.lock.hcl').write_bytes((ROOT/'infra/ci-cloud/gcp-rocky/.terraform.lock.hcl').read_bytes())
+        return executable
+
+    def test_pinned_installation_substitutions_fail_closed(self):
+        # Unit mutations use a synthetic content pin; the separate real-provider
+        # regression authenticates the production pin against readonly tofu init.
+        digest = hashlib.sha256(b'synthetic unit-test executable').hexdigest()
+        for mutation in ('missing','nonexecutable','ambiguous','content','version','source',
+                         'lock','lock_symlink','file_symlink','directory_symlink','writable'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); executable = self.provider_fixture(root)
+                lock = root/'.terraform.lock.hcl'
+                if mutation=='missing': executable.unlink()
+                if mutation=='nonexecutable': executable.chmod(0o644)
+                if mutation=='ambiguous':
+                    extra=executable.with_name('terraform-provider-google_v7.40.0_x5')
+                    extra.write_bytes(b'unrelated'); extra.chmod(0o755)
+                if mutation=='content': executable.write_bytes(b'unrelated same-basename executable')
+                if mutation=='version': executable.parent.parent.rename(executable.parent.parent.with_name('7.40.1'))
+                if mutation=='source':
+                    source=root/'.terraform/providers/registry.opentofu.org/hashicorp'
+                    source.rename(source.with_name('unrelated'))
+                if mutation=='lock': lock.write_text(lock.read_text().replace('7.40.0','7.40.1'))
+                if mutation in ('lock_symlink','file_symlink'):
+                    path=lock if mutation=='lock_symlink' else executable
+                    external=root/'external'; path.rename(external); path.symlink_to(external)
+                if mutation=='directory_symlink':
+                    external=root/'external'; executable.parent.rename(external); executable.parent.symlink_to(external,target_is_directory=True)
+                if mutation=='writable': executable.parent.chmod(0o777)
+                with patch.object(observer,'GOOGLE_EXECUTABLE_SHA256',digest):
+                    with self.assertRaises((OSError,contract.TransportError)):
+                        observer.PinnedGoogleProvider(root)
+
+    def test_authenticated_installation_cannot_change_during_observation(self):
+        digest = hashlib.sha256(b'synthetic unit-test executable').hexdigest()
+        for mutation in ('replace','overwrite','inventory','directory','lock'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory); executable=self.provider_fixture(root)
+                with patch.object(observer,'GOOGLE_EXECUTABLE_SHA256',digest):
+                    installation=observer.PinnedGoogleProvider(root)
+                try:
+                    installation.verify()
+                    if mutation=='replace':
+                        executable.rename(root/'original')
+                        executable.write_bytes(b'synthetic unit-test executable'); executable.chmod(0o755)
+                    if mutation=='overwrite': executable.write_bytes(b'substituted')
+                    if mutation=='inventory': (executable.parent/'extra').write_bytes(b'unrelated')
+                    if mutation=='directory':
+                        external=root/'external'; executable.parent.rename(external); executable.parent.symlink_to(external,target_is_directory=True)
+                    if mutation=='lock': (root/'.terraform.lock.hcl').write_text('unverified')
+                    collect=observer.Observer(os.getpid(),{installation.path})
+                    collect.installation=installation
+                    with self.assertRaises((OSError,contract.TransportError)): collect.sample()
+                    self.assertEqual(collect.operation,'VERIFY_PROCESS_IDENTITY')
+                finally: installation.close()
+
+    def test_missing_installation_has_earliest_closed_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/'transport.json'
+            with patch.object(observer.Path,'cwd',return_value=Path(directory)),patch.object(observer,'launch_apply') as launch:
+                self.assertEqual(observer.observe_apply(self.identity(),output),1)
+                launch.assert_not_called()
+            doc=contract.decode_document(output.read_bytes()); contract.admit(doc,self.identity())
+            self.assertEqual(doc['collection_status'],'FAILED_STARTUP')
+            self.assertEqual(doc['failure_operation'],'VERIFY_PROCESS_IDENTITY')
+            self.assertEqual(doc['terminal_provider_result'],'NOT_RUN')
 
     def test_normalizer_purity(self):
         # These surfaces must consume supplied values, never reach back into a system.
