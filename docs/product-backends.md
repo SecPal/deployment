@@ -95,7 +95,14 @@ python3 tests/product-backend-contract.py
 python3 tests/production-state-contract.py
 python3 tests/product-backend-network.py
 python3 tests/product-backend-quadlet-lifecycle.py
+python3 tests/product-backend-qualification.py
+python3 scripts/validate-product-backend-qualification.py
 ```
+
+The qualification regression exercises the real production renderer, closed
+source manifest, HTTP fixture installation and bounded cleanup both before and
+after application-network retirement. Metadata tests independently reconstruct
+the selected closure with pinned OpenTofu for both maintained Rocky profiles.
 
 The namespace test applies the actual nftables policy in a disposable user and
 network namespace. It exercises intended and unrelated UIDs, exact loopback
