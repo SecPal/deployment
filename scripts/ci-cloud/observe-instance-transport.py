@@ -13,11 +13,14 @@ import argparse
 import copy
 import ctypes
 import errno
+import hashlib
 import ipaddress
+import itertools
 import json
 import os
 from pathlib import Path
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -32,6 +35,107 @@ MAX_PROC_BYTES = 1_048_576
 MAX_PROCESSES = 128
 MAX_FDS = 4096
 SAMPLE_INTERVAL = 0.2
+
+# Authority: accepted gcp-rocky lock and its readonly OpenTofu 1.12.5
+# installation of registry.opentofu.org/hashicorp/google 7.40.0 linux_amd64.
+# The signed, lock-admitted package installs this exact filename and content.
+GOOGLE_INSTALL = Path('.terraform/providers/registry.opentofu.org/hashicorp/google/7.40.0/linux_amd64')
+GOOGLE_EXECUTABLE = 'terraform-provider-google'
+GOOGLE_EXECUTABLE_SHA256 = '70351ed626f69ac84315e8ed5149986eafd7628c8d4b0eda4422f82665ec41e9'
+GOOGLE_LOCK_SHA256 = '76f52a817f68fcb058bf499482070b4ff39098628c497a95ff8de2b42363e94c'
+
+
+def file_identity(metadata):
+    return (metadata.st_dev,metadata.st_ino,metadata.st_mode,metadata.st_uid,
+            metadata.st_gid,metadata.st_size,metadata.st_mtime_ns,metadata.st_ctime_ns)
+
+
+class PinnedGoogleProvider:
+    """Authenticate one closed installation, retaining its executable inode.
+
+No cache/mirror symlink, executable override or alternative package layout is
+authority here. Content pins originate in the accepted lock-admitted package;
+they are independent of process names and any caller-selected executable.
+"""
+    def __init__(self,root):
+        self.path = root/GOOGLE_INSTALL/GOOGLE_EXECUTABLE
+        self.fd = None
+        self.directories = {}
+        self.files = {}
+        try:
+            current = root
+            for component in GOOGLE_INSTALL.parts:
+                current = current/component
+                metadata = current.lstat()
+                if not stat.S_ISDIR(metadata.st_mode) or metadata.st_mode & 0o022:
+                    raise contract.TransportError('provider installation directory rejected')
+                self.directories[current] = (metadata.st_dev,metadata.st_ino,metadata.st_mode,
+                                             metadata.st_uid,metadata.st_gid)
+            self.package_identity = file_identity(current.lstat())
+            entries = list(itertools.islice((root/GOOGLE_INSTALL).iterdir(),33))
+            if len(entries)>32:
+                raise contract.TransportError('provider installation bound exceeded')
+            executables = []
+            for entry in entries:
+                metadata = entry.lstat()
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o022:
+                    raise contract.TransportError('provider package entry rejected')
+                if metadata.st_mode & 0o111:
+                    executables.append(entry)
+            if executables != [self.path]:
+                raise contract.TransportError('provider executable missing or ambiguous')
+            lock = root/'.terraform.lock.hcl'
+            metadata = lock.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o022:
+                raise contract.TransportError('provider dependency lock rejected')
+            self.files[lock] = file_identity(metadata)
+            with os.fdopen(os.open(lock,os.O_RDONLY|os.O_NOFOLLOW),'rb') as source:
+                if file_identity(os.fstat(source.fileno()))!=self.files[lock]:
+                    raise contract.TransportError('provider dependency lock changed')
+                if hashlib.sha256(source.read(16385)).hexdigest()!=GOOGLE_LOCK_SHA256:
+                    raise contract.TransportError('provider dependency lock unverified')
+            self.fd = os.open(self.path,os.O_RDONLY|os.O_NOFOLLOW)
+            metadata = os.fstat(self.fd)
+            if not stat.S_ISREG(metadata.st_mode) or not 0<metadata.st_size<=256*1024*1024:
+                raise contract.TransportError('provider executable bounds rejected')
+            self.files[self.path] = file_identity(metadata)
+            with os.fdopen(os.dup(self.fd),'rb') as source:
+                digest = hashlib.sha256()
+                remaining = metadata.st_size
+                while remaining:
+                    block = source.read(min(remaining,1_048_576))
+                    if not block:
+                        raise contract.TransportError('provider executable truncated')
+                    digest.update(block)
+                    remaining -= len(block)
+                if source.read(1) or digest.hexdigest()!=GOOGLE_EXECUTABLE_SHA256:
+                    raise contract.TransportError('provider executable unverified')
+            self.verify()
+        except Exception:
+            self.close()
+            raise
+
+    def verify(self):
+        for path,expected in self.directories.items():
+            metadata = path.lstat()
+            if (metadata.st_dev,metadata.st_ino,metadata.st_mode,metadata.st_uid,metadata.st_gid)!=expected:
+                raise contract.TransportError('provider installation substituted')
+        for path,expected in self.files.items():
+            if file_identity(path.lstat())!=expected:
+                raise contract.TransportError('provider installation identity changed')
+        if file_identity(self.path.parent.lstat())!=self.package_identity:
+            raise contract.TransportError('provider package inventory changed')
+        if file_identity(os.fstat(self.fd))!=self.files[self.path]:
+            raise contract.TransportError('provider executable content changed')
+
+    def verify_process(self,pid):
+        if file_identity(os.stat(f'/proc/{pid}/exe'))!=self.files[self.path]:
+            raise contract.TransportError('provider process executable substituted')
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
 
 
 class Filter(ctypes.Structure):
@@ -155,7 +259,7 @@ def exact_query(row):
     return normalized | normalized['snapshot']
 
 
-def provider_processes(root_pid,provider_paths):
+def provider_processes(root_pid,provider_paths,installation=None):
     """Follow children of every thread: Go may fork the provider off the main thread."""
     pending = [root_pid]
     visited = set()
@@ -170,6 +274,8 @@ def provider_processes(root_pid,provider_paths):
         try:
             ticks = process_ticks(pid)
             if Path(os.readlink(f'/proc/{pid}/exe')) in provider_paths:
+                if installation is not None:
+                    installation.verify_process(pid)
                 providers.append((pid,ticks))
             tasks = list(Path(f'/proc/{pid}/task').iterdir())
             if len(tasks)>1024:
@@ -192,6 +298,7 @@ class Observer:
         self.root_pid = root_pid
         self.root_ticks = process_ticks(root_pid)
         self.provider_paths = provider_paths
+        self.installation = None
         self.ports = ports
         self.connections = {}
         self.cookies = {}
@@ -217,10 +324,12 @@ class Observer:
 
     def sample(self):
         self.operation = 'VERIFY_PROCESS_IDENTITY'
+        if self.installation is not None:
+            self.installation.verify()
         if process_ticks(self.root_pid)!=self.root_ticks:
             raise contract.TransportError('root process identity changed')
         self.operation = 'CORRELATE_PROVIDER_PROCESS'
-        for pid,ticks in provider_processes(self.root_pid,self.provider_paths):
+        for pid,ticks in provider_processes(self.root_pid,self.provider_paths,self.installation):
             try:
                 self.operation = 'VERIFY_NETWORK_NAMESPACE'
                 if os.readlink(f'/proc/{pid}/ns/net')!=os.readlink('/proc/self/ns/net'):
@@ -303,6 +412,8 @@ class Observer:
                 self.operation = 'FINALIZE_OBSERVATION'
         if self.listener is not None:
             self.listener.close()
+        if self.installation is not None:
+            self.installation.close()
         with self.lock:
             connections = copy.deepcopy(list(self.connections.values()))
         for connection in connections:
@@ -341,10 +452,11 @@ def persist(path,document,identity):
 def observe_apply(identity,output):
     # Metadata and credentials remain consumed solely by the unchanged producer.
     root = Path.cwd()
-    provider = root/'.terraform/providers/registry.opentofu.org/hashicorp/google/7.40.0/linux_amd64/terraform-provider-google_v7.40.0_x5'
-    collector = Observer(os.getpid(),{provider.resolve()})
+    collector = Observer(os.getpid(),set())
     code = None
     try:
+        collector.installation = PinnedGoogleProvider(root)
+        collector.provider_paths = {collector.installation.path}
         collector.prepare()
         collector.start_thread()
     except (OSError,ValueError):
