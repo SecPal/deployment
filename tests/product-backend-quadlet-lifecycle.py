@@ -23,7 +23,9 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "scripts/ci-cloud"))
 from product_backend_contract import BACKENDS
+from product_backend_qualification_contract import FIXTURE_NETWORKS, fixture_unit
 
 
 def command(operation: str, arguments: list[str], *, environment=None, accepted=(0,)) -> str:
@@ -73,13 +75,14 @@ def main() -> None:
         generated.mkdir()
         services = []
         for name, content in production.items():
-            if name not in {"secpal-api.container", "secpal-frontend.container",
-                            "secpal-application.network", "secpal-edge.network"}:
+            if name not in {"secpal-api.container", "secpal-frontend.container", "secpal-edge.network"}:
                 continue
-            # Fixture-only adaptation of the same product role/network model.
-            # HTTP liveness requires none of production's data/secret authority.
+            # Share the qualification's HTTP-only role/network projection.
+            if name.endswith(".container"):
+                role = "frontend" if "frontend" in name else "api"
+                content = fixture_unit(content, role).replace("secpal-backend101-", "secpal-")
             lines = [line for line in content.splitlines() if not line.startswith(
-                ("Requires=", "After=", "PartOf=", "ExecStartPre=", "Environment=",
+                ("Requires=", "After=", "PartOf=", "ExecStartPre=",
                  "Mount=type=bind,", "LogOpt=", "LogDriver=", "Notify=",
                  "HealthCmd=", "HealthInterval=", "HealthTimeout=", "HealthRetries=",
                  "HealthStartPeriod=", "HealthOnFailure="))]
@@ -91,17 +94,6 @@ def main() -> None:
                 lines.insert(lines.index("Pull=never"), f"LogOpt=path={directory}/{name}.log")
                 lines.insert(lines.index("Pull=never"), "LogOpt=max-size=1mb")
                 lines.insert(lines.index("[Service]") + 1, "UnsetEnvironment=" + " ".join(runtime.FORBIDDEN_RUNTIME_ENVIRONMENT))
-                if name == "secpal-api.container":
-                    # Synthetic transport-only material, never product credentials.
-                    lines[lines.index("Pull=never"):lines.index("Pull=never")] = [
-                        "Environment=APP_ENV=production", "Environment=APP_DEBUG=false",
-                        "Environment=APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-                        "Environment=CACHE_STORE=file", "Environment=SESSION_DRIVER=array",
-                        "Environment=LOG_CHANNEL=stderr",
-                    ]
-                else:
-                    lines.insert(lines.index("Pull=never"),
-                                 "Environment=SECPAL_API_URL=https://api.secpal.example.invalid")
                 services.append(name.replace("secpal", prefix, 1).replace(".container", ".service"))
             fixture_name = name.replace("secpal", prefix, 1)
             text = "\n".join(lines).replace("secpal-", prefix + "-") + "\n"
@@ -152,7 +144,7 @@ def main() -> None:
                 command("unlink-fixture-service", ["systemctl", "--user", "disable", unit], environment=environment)
                 command("clear-fixture-failed-state", ["systemctl", "--user", "reset-failed", unit], environment=environment, accepted=(0, 1))
             command("reload-after-fixture", ["systemctl", "--user", "daemon-reload"], environment=environment)
-            for network in ("edge", "application"):
+            for network in FIXTURE_NETWORKS:
                 command("remove-fixture-network", ["podman", "--remote=false", "network", "rm", prefix + "-" + network], environment=environment, accepted=(0, 1))
     print(json.dumps({"result": "PASS", "kind": "PRODUCT_HTTP_TRANSPORT",
                       "selinux": "Enforcing", "iterations": 3,
