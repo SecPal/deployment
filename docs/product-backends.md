@@ -82,9 +82,10 @@ outside that service require explicit maintenance and requalification; the
 marker is a privileged activation attestation, not a firewall discovery API.
 
 Host construction must activate this policy before starting product units.
-The administrator helper has only this fixed backend withdrawal operation. #219 can
-consume the emitted backend fragment once this capability has been qualified;
-the fragment contains no public listener, TLS material or routing decision.
+The administrator helper has only this fixed backend withdrawal operation.
+Issue #219 consumes the fixed endpoint/policy owner and implements its own
+application-readiness routing checks; the transport fragment remains outside
+public listener, TLS and identity decisions.
 
 ## Validation and qualification
 
@@ -114,14 +115,16 @@ runtime overrides from generated services. An inactive stale socket pathname
 is not a runtime API dependency. It creates only its own named units/networks
 and removes them after the test.
 
-These tests prove the source contract; privileged proof belongs to evidence-only
-[#294](https://github.com/SecPal/deployment/issues/294). It was extracted from
-issue #101 by explicit graph-first replanning because privileged execution trusts only
-accepted protected main. PR #293 cannot be its own cloud/root authority. #101
-owns the implementation, local/native evidence and maintained qualification path;
-Issue #294 owns the real host result, cleanup and provider empty-state evidence. #219
-remains blocked by #294. A post-merge defect requires a new corrective leaf,
-rather than reopening #101 or adding another primary delivery PR to it.
+These tests prove the source contract. The historical GCP proof extraction
+[#294](https://github.com/SecPal/deployment/issues/294) retained a privileged
+accepted-main qualification path; candidate PR #293 could not authorize its
+own cloud/root execution. The explicit Greenfield replan under #248 defers
+that GCP-specific evidence and removes it as an intrinsic #219 gate. Deferral
+is not successful proof: actual Enforcing Rocky host evidence must still
+establish the applicable installed backend/runtime/security behavior. Issue
+Issue #219 can consume genuine bounded provider-neutral reference-host evidence,
+without adding another cloud requirement. A post-merge source defect requires
+a corrective leaf rather than reopening #101.
 
 The existing Rocky workflow has the closed `product-backend-policy` selector.
 Its fixed entrypoint is
@@ -183,8 +186,10 @@ and independently admitted; nftables is restored active. The
 existing unconditional provider cleanup destroys the exact continuation state.
 The proof leaf also requires authoritative provider empty-state read-back.
 
-Both `gcp-rocky-10-2-x86-64` and `gcp-rocky-10-2-arm64` are required for #294:
-Issue #80 supports both qualified architectures, and no maintained architecture-neutral
-waiver exists for this new host policy/runtime seam. Fixture and source PASS do
-not qualify the privileged installed boundary. Real privileged execution is
-intentionally not performed within #101.
+The retained GCP qualification path covers `gcp-rocky-10-2-x86-64` and
+`gcp-rocky-10-2-arm64`; it grants no dispatch authority and is not a replacement
+for the current provider-neutral Greenfield direction. Issue #80 supports both
+architectures. One actual host proves only its exercised architecture and
+outcomes; fixture/source evidence does not qualify the privileged installed
+boundary. See [the shared base](haproxy-shared-base.md) for the separately
+classified package/supply, binary and installed-host evidence.
