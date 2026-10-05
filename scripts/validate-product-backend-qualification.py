@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def validate(root):
     directory = root / 'scripts/ci-cloud'
     tree = ast.parse((directory / 'product_backend_qualification_contract.py').read_text())
-    allowed_imports = {'hashlib', 'json', 're', 'csv', 'io', 'types', 'product_backend_contract', 'rocky_preparation_contract'}
+    allowed_imports = {'hashlib', 'json', 're', 'shlex', 'csv', 'io', 'types', 'product_backend_contract', 'rocky_preparation_contract'}
     operations = None
     sources = None
     for node in ast.walk(tree):

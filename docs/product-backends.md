@@ -95,7 +95,14 @@ python3 tests/product-backend-contract.py
 python3 tests/production-state-contract.py
 python3 tests/product-backend-network.py
 python3 tests/product-backend-quadlet-lifecycle.py
+python3 tests/product-backend-qualification.py
+python3 scripts/validate-product-backend-qualification.py
 ```
+
+The qualification regression exercises the real production renderer, closed
+source manifest, HTTP fixture installation and bounded cleanup both before and
+after application-network retirement. Metadata tests independently reconstruct
+the selected closure with pinned OpenTofu for both maintained Rocky profiles.
 
 The namespace test applies the actual nftables policy in a disposable user and
 network namespace. It exercises intended and unrelated UIDs, exact loopback
@@ -107,6 +114,13 @@ already staged, native Quadlet and a rootless user manager. It derives the
 same publications and role/network model from the production renderer. Its
 isolated HTTP-only profile supplies synthetic API initialization and frontend
 public runtime configuration; it supplies no database or private storage.
+Both HTTP fixture roles use only the existing internal edge bridge. The shared
+fixture projection removes production API database networking, including its
+obsolete application-bridge membership. Qualification authenticates the exact
+API/frontend units and edge network; it neither transports nor requires
+`secpal-application.network`. Production PostgreSQL connectivity and retirement
+of that artifact remain #81's responsibility. The source closure works before
+and after that retirement without an optional-file or compatibility path.
 It samples host HTTP readiness directly, independently of application-state
 health supervision, over three start/stop recreations. It rejects runtime
 environment overrides, forces local Podman observation and cleanup, and clears
@@ -114,13 +128,14 @@ runtime overrides from generated services. An inactive stale socket pathname
 is not a runtime API dependency. It creates only its own named units/networks
 and removes them after the test.
 
-These tests prove the source contract; privileged proof belongs to evidence-only
-[#294](https://github.com/SecPal/deployment/issues/294). It was extracted from
-issue #101 by explicit graph-first replanning because privileged execution trusts only
-accepted protected main. PR #293 cannot be its own cloud/root authority. #101
-owns the implementation, local/native evidence and maintained qualification path;
-Issue #294 owns the real host result, cleanup and provider empty-state evidence. #219
-remains blocked by #294. A post-merge defect requires a new corrective leaf,
+These tests prove the source contract. Historically, privileged proof was
+extracted from #101 to evidence-only
+[#294](https://github.com/SecPal/deployment/issues/294) by explicit graph-first
+replanning because privileged execution trusts only accepted protected main.
+PR #293 could not be its own cloud/root authority. #101 owns the implementation,
+local/native evidence and maintained qualification path. #294 originally owned
+the real host result, cleanup and provider empty-state evidence; that execution
+is now deferred and #294 is closed as not planned. A post-merge defect requires a new corrective leaf,
 rather than reopening #101 or adding another primary delivery PR to it.
 
 The existing Rocky workflow has the closed `product-backend-policy` selector.
@@ -180,11 +195,19 @@ qualification services, removes owned policy/module/rules/units/networks/test
 state and restores the original HAProxy configuration and pasta boolean. Exact
 container, image, network, listener, service, file and policy absence is read back
 and independently admitted; nftables is restored active. The
+generated edge-network service is stopped and reset alongside the product
+services, and all three user-unit states must be inactive after reload. The
 existing unconditional provider cleanup destroys the exact continuation state.
 The proof leaf also requires authoritative provider empty-state read-back.
 
-Both `gcp-rocky-10-2-x86-64` and `gcp-rocky-10-2-arm64` are required for #294:
+Both `gcp-rocky-10-2-x86-64` and `gcp-rocky-10-2-arm64` were required for #294:
 Issue #80 supports both qualified architectures, and no maintained architecture-neutral
 waiver exists for this new host policy/runtime seam. Fixture and source PASS do
 not qualify the privileged installed boundary. Real privileged execution is
 intentionally not performed within #101.
+
+Issue #305 is #101's post-merge corrective leaf under #90; #101 remains completed.
+Issue #294 is now closed as not planned and its provider execution remains deferred.
+This source correction dispatches no GCP work and grants no privileged-host,
+provider, Managed Production, HA or customer-production acceptance. It does
+not implement #81's native PostgreSQL mapping or #219's HAProxy runtime/routing.

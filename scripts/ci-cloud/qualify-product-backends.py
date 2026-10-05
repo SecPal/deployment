@@ -231,7 +231,7 @@ class Observer:
         self.host_baseline = self.observe_host_baseline()
         for role in BACKENDS:
             self.require(self.run('require-clean-host', ['podman', '--remote=false', 'container', 'exists', 'secpal-backend101-' + role], user=self.runtime.pw_name, accepted=(0, 1))[0] == 1)
-        for network in ('edge', 'application'):
+        for network in contract.FIXTURE_NETWORKS:
             self.require(self.run('require-clean-host', ['podman', '--remote=false', 'network', 'exists', 'secpal-backend101-' + network], user=self.runtime.pw_name, accepted=(0, 1))[0] == 1)
         for port in (18080, 18081, 18082):
             with socket.socket() as probe:
@@ -339,7 +339,7 @@ class Observer:
             path = self.quadlets / ('secpal-' + role + '.container')
             self.files.append(path)
             write(path, text.encode())
-        for name in ('edge', 'application'):
+        for name in contract.FIXTURE_NETWORKS:
             path = self.quadlets / ('secpal-backend101-' + name + '.network')
             self.files.append(path)
             source = (ROOT / contract.SOURCES['backend_' + name + '_network']).read_text()
@@ -586,6 +586,11 @@ class Observer:
                     for unit in ('haproxy.service', 'secpal-product-backend-policy.service')]
         # Removed oneshot unit becomes unknown after reload, which is absence.
         services = ['inactive' if state == 'unknown' else state for state in services]
+        fixture_units = ['secpal-' + role + '.service' for role in BACKENDS]
+        fixture_units += ['secpal-backend101-' + name + '-network.service' for name in contract.FIXTURE_NETWORKS]
+        fixture_states = [self.run('observe-cleanup', ['systemctl', '--user', 'is-active', unit],
+                        user=self.runtime.pw_name, accepted=(0, 3, 4))[1] for unit in fixture_units]
+        fixture_states = ['inactive' if state == 'unknown' else state for state in fixture_states]
         runtime = self.observe_runtime()
         table_status = self.run('observe-cleanup', ['nft', 'list', 'table', 'inet', 'secpal_product_backends'], accepted=(0, 1))[0]
         modules = [line.split()[0] for line in self.run('observe-cleanup', ['semodule', '-l'])[1].splitlines() if line.split()[0] == 'secpal_product_backends']
@@ -597,6 +602,7 @@ class Observer:
         boolean = self.run('observe-cleanup', ['getsebool', 'pasta_bind_all_ports'])[1]
         return dict(remaining_paths=remaining_paths, remaining_containers=containers, remaining_networks=networks,
                     remaining_images=images, service_states=services, runtime_unit_states=runtime['unit_states'],
+                    fixture_unit_states=fixture_states,
                     nft_table_status=table_status, module_names=modules, netns_names=netns, link_names=links, listeners=listeners,
                     haproxy_config_sha256=current_hash, original_haproxy_config_sha256=original_hash,
                     pasta_boolean=boolean, original_pasta_boolean=self.original_boolean or boolean,
@@ -624,7 +630,10 @@ class Observer:
                 attempt(lambda unit=unit: self.run('cleanup-host', ['systemctl', '--user', 'reset-failed', unit], user=self.runtime.pw_name, accepted=(0, 1)))
             for role in BACKENDS:
                 attempt(lambda role=role: self.run('cleanup-host', ['podman', '--remote=false', 'rm', '--force', 'secpal-backend101-' + role], user=self.runtime.pw_name, accepted=(0, 1)))
-            for name in ('edge', 'application'):
+            for name in contract.FIXTURE_NETWORKS:
+                unit = 'secpal-backend101-' + name + '-network.service'
+                attempt(lambda unit=unit: self.run('cleanup-host', ['systemctl', '--user', 'stop', unit], user=self.runtime.pw_name, accepted=(0, 5)))
+                attempt(lambda unit=unit: self.run('cleanup-host', ['systemctl', '--user', 'reset-failed', unit], user=self.runtime.pw_name, accepted=(0, 1)))
                 attempt(lambda name=name: self.run('cleanup-host', ['podman', '--remote=false', 'network', 'rm', 'secpal-backend101-' + name], user=self.runtime.pw_name, accepted=(0, 1)))
             for image in self.images:
                 attempt(lambda image=image: self.run('cleanup-host', ['podman', '--remote=false', 'image', 'rm', image], user=self.runtime.pw_name, accepted=(0, 1)))
