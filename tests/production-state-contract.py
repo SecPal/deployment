@@ -270,6 +270,29 @@ class ProductionStateContractTest(unittest.TestCase):
                     text,
                 )
 
+    def test_fixed_product_backend_publication(self) -> None:
+        units = self.renderer.build_units(self.contract)
+        expected = {
+            "secpal-frontend.container": ["PublishPort=127.0.0.1:18080:8080/tcp"],
+            "secpal-api.container": ["PublishPort=127.0.0.1:18081:8080/tcp"],
+        }
+        for name, content in units.items():
+            if name.endswith(".container"):
+                with self.subTest(unit=name):
+                    self.assertEqual(
+                        [line for line in content.splitlines() if line.startswith("PublishPort=")],
+                        expected.get(name, []),
+                    )
+        frontend = units["secpal-frontend.container"]
+        self.assertNotIn("secpal-application.network", frontend)
+        container = frontend.split("[Container]\n", 1)[1].split("[Service]\n", 1)[0]
+        self.assertNotRegex(container, r"(?i)DB_|REDIS_|secret|private-storage")
+        for name in expected:
+            self.assertIn(
+                "ExecStartPre=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check",
+                units[name],
+            )
+
     def test_native_lifecycle_fixture_uses_canonical_private_storage_seam(self) -> None:
         fixture = Path("/tmp/secpal-d2-native.example")
         rendered = self.renderer.build_native_lifecycle_fixture_unit(
@@ -283,6 +306,7 @@ class ProductionStateContractTest(unittest.TestCase):
             rendered,
         )
         self.assertNotIn("target=/state", rendered)
+        self.assertIn("rw=true,relabel=private", rendered)
 
     def test_secret_values_never_enter_rendered_or_runtime_metadata(self) -> None:
         rendered = "\n".join(self.renderer.build_units(self.contract).values())

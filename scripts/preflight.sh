@@ -16,7 +16,7 @@ fi
 
 scripts/validate-origin.sh "$(git remote get-url origin)"
 
-required_tools=(actionlint markdownlint php prettier python3 reuse shellcheck yamllint)
+required_tools=(tofu actionlint markdownlint php prettier python3 reuse shellcheck yamllint)
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -67,6 +67,10 @@ python3 tests/ci-cloud-bootstrap-failure.py
 python3 tests/ci-cloud-config.py
 python3 tests/ci-cloud-contract.py
 python3 tests/ci-cloud-rocky-control.py
+python3 tests/ci-cloud-rocky-metadata.py
+python3 tests/ci-cloud-instance-transport.py
+python3 tests/ci-cloud-instance-transport-provider-capabilities.py
+python3 tests/ci-cloud-instance-transport-provider.py
 python3 tests/ci-cloud-rocky-readiness.py
 python3 tests/ci-cloud-rocky-runtime-user-readiness.py
 python3 tests/ci-cloud-rocky-replay-witness.py
@@ -78,6 +82,7 @@ python3 tests/ci-cloud-collector.py
 python3 tests/ci-cloud-evidence.py
 python3 tests/ci-cloud-gcp-janitor.py
 python3 tests/ci-cloud-gcp-rocky-janitor.py
+python3 tests/ci-cloud-rocky-cleanup.py
 bash tests/ci-cloud-gcp-identity.sh
 python3 tests/ci-cloud-host-setup-failure.py
 python3 tests/ci-cloud-janitor.py
@@ -94,6 +99,8 @@ python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
 python3 tests/native-postgresql-production-contract.py
 python3 tests/production-state-contract.py
+python3 tests/product-backend-contract.py
+python3 tests/product-backend-qualification.py
 python3 tests/production-postgres-retirement.py
 python3 tests/production-edge-decision-contract.py
 python3 tests/cloudfront-origin-prefix-lkg.py
@@ -113,6 +120,7 @@ bash tests/workflow-action-pin-contract.sh
 python3 scripts/validate-ci-cloud.py
 scripts/validate-rocky-evidence-architecture.py
 scripts/validate-postgresql-qualification.py
+scripts/validate-product-backend-qualification.py
 
 mapfile -d '' markdown_files < <(find . \( -path ./.git -o -path ./.context -o -name .terraform -o -path ./node_modules -o -path ./playwright-report -o -path ./test-results \) -prune -o -type f -name '*.md' -print0 | sort -z)
 markdownlint --config .markdownlint.json "${markdown_files[@]}"

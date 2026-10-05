@@ -65,6 +65,7 @@ Mount=type=tmpfs,destination=/app/storage/logs,tmpfs-size=32m,tmpfs-mode=0750,U=
 Mount=type=tmpfs,destination=/app/bootstrap/cache,tmpfs-size=16m,tmpfs-mode=0750,U=true,nosuid=true,nodev=true,noexec=true
 Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1
 AddHost=db.secpal.internal:169.254.81.1
+PublishPort=127.0.0.1:18081:8080/tcp
 HealthCmd=/usr/local/bin/secpal-http-live
 HealthInterval=10s
 HealthTimeout=5s
@@ -73,6 +74,7 @@ HealthStartPeriod=15s
 HealthOnFailure=kill
 Notify=healthy
 [Service]
+ExecStartPre=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check
 ExecStartPre=/usr/bin/podman unshare /usr/local/libexec/secpal/production-state --contract /srv/secpal/config/state-contract.json --validate-namespace --require-secrets
 Restart=on-failure
 RestartSec=2

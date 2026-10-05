@@ -17,15 +17,16 @@ on:
           - qualify
           - destroy
       qualification:
-        description: Closed host admission or native PostgreSQL data qualification
+        description: Closed host, PostgreSQL or product backend policy qualification
         required: true
         default: rocky-host
         type: choice
         options:
           - rocky-host
           - native-postgresql-18
+          - product-backend-policy
       target_sha:
-        description: Frozen host SHA; leave empty for the PostgreSQL selector
+        description: Frozen host SHA; leave empty for PostgreSQL or backend policy
         required: false
         type: string
       provider_profile:
@@ -94,6 +95,7 @@ jobs:
           scripts/validate-ci-cloud.py
           scripts/validate-rocky-evidence-architecture.py
           scripts/validate-postgresql-qualification.py
+          scripts/validate-product-backend-qualification.py
 
       - name: Validate immutable inputs
         id: closed
@@ -112,7 +114,7 @@ jobs:
           [[ "$IS_DEFAULT_BRANCH" == true ]]
           case "$RAW_QUALIFICATION" in
             rocky-host) ;;
-            native-postgresql-18)
+            native-postgresql-18 | product-backend-policy)
               [[ -z "$RAW_TARGET_SHA" ]]
               RAW_TARGET_SHA="$expected_target_sha"
               ;;
@@ -155,6 +157,49 @@ jobs:
             printf 'source_state_artifact=rocky-cloud-state-%s-%s\n' \
               "$RAW_SOURCE_RUN_ID" "$RAW_SOURCE_RUN_ATTEMPT"
           } >>"$GITHUB_OUTPUT"
+
+      - name: Retrieve backend authority from exact preparation run
+        if: >-
+          ${{ inputs.qualification == 'product-backend-policy' && inputs.operation == 'qualify' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: product-backend-policy-source-${{ steps.closed.outputs.source_run_id }}-${{ steps.closed.outputs.source_run_attempt }}
+          run-id: ${{ steps.closed.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/backend-prepared
+
+      - name: Bind exact accepted backend policy before provider authority
+        if: >-
+          ${{ inputs.qualification == 'product-backend-policy' && inputs.operation != 'destroy' }}
+        env:
+          OPERATION: ${{ steps.closed.outputs.operation }}
+          PROFILE: ${{ steps.closed.outputs.provider_profile }}
+          SOURCE_RUN_ID: ${{ steps.closed.outputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ steps.closed.outputs.source_run_attempt }}
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/backend-source"
+          if [[ "$OPERATION" == qualify ]]; then
+            python3 scripts/ci-cloud/product-backend-qualification-control.py reconfirm \
+              --control-sha "$GITHUB_SHA" --profile "$PROFILE" \
+              --run-id "$SOURCE_RUN_ID" --run-attempt "$SOURCE_RUN_ATTEMPT" \
+              --prepared "$RUNNER_TEMP/backend-prepared/product-backend-policy.json" \
+              --output "$RUNNER_TEMP/backend-source/product-backend-policy.json"
+          else
+            python3 scripts/ci-cloud/product-backend-qualification-control.py prepare \
+              --control-sha "$GITHUB_SHA" --profile "$PROFILE" \
+              --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/backend-source/product-backend-policy.json"
+          fi
+
+      - name: Publish closed accepted backend source binding
+        if: >-
+          ${{ inputs.qualification == 'product-backend-policy' && inputs.operation != 'destroy' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: product-backend-policy-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backend-source/product-backend-policy.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Retrieve PostgreSQL data from exact preparation run
         if: >-
@@ -339,6 +384,24 @@ jobs:
           name: postgresql-confirmed-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/postgresql-candidate
 
+      - name: Retrieve accepted backend source binding for provisioning
+        if: ${{ needs.validate.outputs.qualification == 'product-backend-policy' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: product-backend-policy-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backend-source
+
+      - name: Reconfirm backend bytes before provider credentials
+        if: ${{ needs.validate.outputs.qualification == 'product-backend-policy' }}
+        env:
+          PROFILE: ${{ needs.validate.outputs.provider_profile }}
+        run: |
+          python3 scripts/ci-cloud/product-backend-qualification-control.py reconfirm \
+            --control-sha "$GITHUB_SHA" --profile "$PROFILE" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --prepared "$RUNNER_TEMP/backend-source/product-backend-policy.json" \
+            --output "$RUNNER_TEMP/backend-source/confirmed.json"
+
       - name: Generate private per-run SSH authority and exact variables
         env:
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
@@ -400,6 +463,20 @@ jobs:
               created_at: $created_at, expires_at: $expires_at}' \
             >infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
 
+      - name: Bind closed backend authority to exact provider metadata
+        if: ${{ needs.validate.outputs.qualification == 'product-backend-policy' }}
+        run: |
+          python3 - "$RUNNER_TEMP/backend-source/confirmed.json" \
+            infra/ci-cloud/gcp-rocky/run.auto.tfvars.json <<'PYTHON_BACKEND'
+          import json
+          import pathlib
+          import sys
+          path = pathlib.Path(sys.argv[2])
+          document = json.loads(path.read_text())
+          document['product_backend_policy_json'] = pathlib.Path(sys.argv[1]).read_text()
+          path.write_text(json.dumps(document) + '\n')
+          PYTHON_BACKEND
+
       - name: Bind independently confirmed PostgreSQL data before provisioning
         if: ${{ needs.validate.outputs.qualification == 'native-postgresql-18' }}
         run: |
@@ -427,6 +504,20 @@ jobs:
           tofu fmt -check -diff
           tofu init -input=false -lockfile=readonly
           tofu validate
+
+      - name: Admit actual Rocky metadata before provider authentication
+        run: python3 scripts/ci-cloud/admit-rocky-metadata.py
+
+      - name: Freshly authenticate protected main before diagnostic and provider authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$GITHUB_REPOSITORY" == SecPal/deployment ]]
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          accepted_control="$(gh api repos/SecPal/deployment/branches/main \
+            --jq '[.protected, .commit.sha, .commit.commit.verification.verified] | @tsv')"
+          [[ "$accepted_control" == "$(printf 'true\t%s\ttrue' "$GITHUB_SHA")" ]]
 
       - name: Authenticate trusted provisioning through OIDC
         env:
@@ -456,10 +547,59 @@ jobs:
         working-directory: infra/ci-cloud/gcp-rocky
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
         run: |
+          python3 "$GITHUB_WORKSPACE/scripts/ci-cloud/observe-instance-transport.py" \
+            --output "$RUNNER_TEMP/rocky-cloud/instance-transport.json" \
+            --repository "$GITHUB_REPOSITORY" --trusted-control-sha "$GITHUB_SHA" \
+            --target-sha "$TARGET_SHA" --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --provider-profile "$PROVIDER_PROFILE" \
+            --project secpal-dev --zone europe-west3-a \
+            --expected-instance-name "sprk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-instance" -- \
           tofu apply --auto-approve --input=false
           tofu output -raw instance_id >"$RUNNER_TEMP/rocky-cloud/instance_id"
           tofu output -raw instance_name >"$RUNNER_TEMP/rocky-cloud/instance_name"
+
+      - name: Independently admit bounded diagnostic transport evidence
+        id: transport_admission
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
+        run: |
+          python3 scripts/ci-cloud/observe-instance-transport.py --admit \
+            --output "$RUNNER_TEMP/rocky-cloud/instance-transport.json" \
+            --repository "$GITHUB_REPOSITORY" --trusted-control-sha "$GITHUB_SHA" \
+            --target-sha "$TARGET_SHA" --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" --provider-profile "$PROVIDER_PROFILE" \
+            --project secpal-dev --zone europe-west3-a \
+            --expected-instance-name "sprk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-instance"
+
+      - name: Retain admitted diagnostic transport evidence
+        id: transport_publication
+        if: ${{ always() && steps.transport_admission.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocky-instance-transport-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rocky-cloud/instance-transport.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Reconcile failed instance creation without continuing qualification
+        if: ${{ steps.apply.outcome == 'failure' }}
+        continue-on-error: true
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
+        run: |
+          scripts/ci-cloud/gcp-rocky-janitor.py \
+            --project secpal-dev --region europe-west3 --zone europe-west3-a \
+            --now "$(date -u +%s)" --exact-action reconcile \
+            --variables infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
 
       - name: Preserve exact state before identity transition
         if: ${{ always() }}
@@ -474,7 +614,10 @@ jobs:
 
       - name: Remove cloud identity and restart trusted preparation
         id: identity_transition
-        if: ${{ steps.apply.outcome == 'success' }}
+        if: >-
+          ${{ steps.apply.outcome == 'success' &&
+          steps.transport_admission.outcome == 'success' &&
+          steps.transport_publication.outcome == 'success' }}
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.provision_auth.outputs.access_token }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
@@ -625,10 +768,14 @@ jobs:
         if: ${{ always() }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          TRANSPORT_ADMISSION_OUTCOME: ${{ steps.transport_admission.outcome }}
+          TRANSPORT_PUBLICATION_OUTCOME: ${{ steps.transport_publication.outcome }}
           IDENTITY_OUTCOME: ${{ steps.identity_transition.outcome }}
           PREPARATION_OUTCOME: ${{ steps.preparation.outcome }}
         run: |
           [[ "$APPLY_OUTCOME" == success ]]
+          [[ "$TRANSPORT_ADMISSION_OUTCOME" == success ]]
+          [[ "$TRANSPORT_PUBLICATION_OUTCOME" == success ]]
           [[ "$IDENTITY_OUTCOME" == success ]]
           [[ "$PREPARATION_OUTCOME" == success ]]
 
@@ -769,6 +916,22 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+
+      - name: Retrieve bound backend authority for independent admission
+        if: ${{ needs.validate.outputs.qualification == 'product-backend-policy' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: product-backend-policy-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backend-source
+
+      - name: Retrieve backend resource binding
+        if: ${{ needs.validate.outputs.qualification == 'product-backend-policy' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.validate.outputs.source_continuation_artifact }}
+          run-id: ${{ needs.validate.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/backend-continuation
 
       - name: Retrieve confirmed PostgreSQL data
         if: ${{ needs.validate.outputs.qualification == 'native-postgresql-18' }}
@@ -1022,6 +1185,70 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Qualify product backends using accepted-main root authority
+        id: backend_execution
+        if: ${{ needs.validate.outputs.qualification == 'product-backend-policy' }}
+        continue-on-error: true
+        run: |
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip" sudo /usr/local/sbin/secpal-qualify-product-backends \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+
+      - name: Retrieve and independently admit backend policy observations
+        if: >-
+          ${{ !cancelled() && needs.validate.outputs.qualification == 'product-backend-policy' &&
+          (steps.backend_execution.outcome == 'success' || steps.backend_execution.outcome == 'failure') }}
+        env:
+          PROFILE: ${{ needs.validate.outputs.provider_profile }}
+          SOURCE_RUN_ID: ${{ needs.validate.outputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ needs.validate.outputs.source_run_attempt }}
+          BACKEND_OUTCOME: ${{ steps.backend_execution.outcome }}
+        run: |
+          case "$BACKEND_OUTCOME" in
+            success) file=product-backend-policy.json; operation=admit ;;
+            failure) file=product-backend-policy-diagnostic.json; operation=admit-diagnostic ;;
+            *) exit 1 ;;
+          esac
+          ip="$(jq -er .ipv4 "$RUNNER_TEMP/rocky-exchange/access-ready.json")"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/rocky-target/known_hosts" \
+            -o ConnectTimeout=10 -i "$RUNNER_TEMP/rocky-target/id_ed25519" \
+            "secpal-cloud@$ip" \
+            "test ! -L /var/lib/secpal-rocky/evidence/$file && test \"\$(stat -c %u:%a /var/lib/secpal-rocky/evidence/$file)\" = 0:440 && head -c 131073 /var/lib/secpal-rocky/evidence/$file" \
+            >"$RUNNER_TEMP/rocky-target/backend-observation.json"
+          test "$(stat -c %s "$RUNNER_TEMP/rocky-target/backend-observation.json")" -le 131072
+          python3 scripts/ci-cloud/product-backend-qualification-control.py "$operation" \
+            --control-sha "$GITHUB_SHA" --profile "$PROFILE" \
+            --run-id "$SOURCE_RUN_ID" --run-attempt "$SOURCE_RUN_ATTEMPT" \
+            --prepared "$RUNNER_TEMP/backend-source/product-backend-policy.json" \
+            --continuation "$RUNNER_TEMP/backend-continuation/continuation.json" \
+            --evidence "$RUNNER_TEMP/rocky-target/backend-observation.json" \
+            --host-evidence "$RUNNER_TEMP/rocky-target/qualification.json" \
+            --qualification-run-id "$GITHUB_RUN_ID" --qualification-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/rocky-target/backend-admitted.json"
+
+      - name: Publish independently admitted backend result
+        if: >-
+          ${{ !cancelled() && needs.validate.outputs.qualification == 'product-backend-policy' &&
+          (steps.backend_execution.outcome == 'success' || steps.backend_execution.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: product-backend-policy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/rocky-target/backend-observation.json
+            ${{ runner.temp }}/rocky-target/backend-admitted.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce product backend policy qualification result
+        if: ${{ needs.validate.outputs.qualification == 'product-backend-policy' }}
+        env:
+          BACKEND_OUTCOME: ${{ steps.backend_execution.outcome }}
+        run: test "$BACKEND_OUTCOME" = success
+
       - name: Qualify native PostgreSQL using accepted-main code
         id: postgresql_execution
         if: ${{ needs.validate.outputs.qualification == 'native-postgresql-18' }}
@@ -1125,7 +1352,7 @@ jobs:
         run: rm -f -- "$RUNNER_TEMP/rocky-target/id_ed25519" "$RUNNER_TEMP/rocky-target/id_ed25519.pub"
 
   cleanup:
-    name: Destroy only exact retained OpenTofu state
+    name: Destroy exact retained state and verify provider absence
     needs: [validate, provision, resume_control, qualify_target]
     if: >-
       ${{ always() && (
@@ -1135,6 +1362,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: ci-cloud-gcp-cleanup
+    env:
+      TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+      PROVIDER_PROFILE: ${{ needs.validate.outputs.provider_profile }}
+      SOURCE_RUN_ID: ${{ needs.validate.outputs.source_run_id }}
+      SOURCE_RUN_ATTEMPT: ${{ needs.validate.outputs.source_run_attempt }}
     permissions:
       actions: read
       contents: read
@@ -1210,6 +1442,12 @@ jobs:
             "$(jq -er .exact_image_self_link "$variables")" ]]
           [[ "$(jq -er .profile "$continuation")" == \
             "$(jq -er .profile "$variables")" ]]
+          [[ "$(jq -er .created_at "$continuation")" == \
+            "$(jq -er .created_at "$variables")" ]]
+          [[ "$(jq -er .expires_at "$continuation")" == \
+            "$(jq -er .expires_at "$variables")" ]]
+          printf 'SOURCE_CONTROL_SHA=%s\n' \
+            "$(jq -er .trusted_control_sha "$continuation")" >>"$GITHUB_ENV"
 
       - name: Restore exact state into the locked root
         run: |
@@ -1247,9 +1485,20 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
-          access_token_lifetime: 1200s
+          # Cover the full 25-minute job even after bounded exact cleanup.
+          access_token_lifetime: 1800s
           create_credentials_file: false
           export_environment_variables: false
+
+      - name: Reconcile and remove only independently admitted exact run resources
+        id: provider_cleanup
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.cleanup_auth.outputs.access_token }}
+        run: |
+          scripts/ci-cloud/gcp-rocky-janitor.py \
+            --project secpal-dev --region europe-west3 --zone europe-west3-a \
+            --now "$(date -u +%s)" --exact-action cleanup \
+            --variables infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
 
       - name: Destroy exact state and prove it empty
         working-directory: infra/ci-cloud/gcp-rocky
@@ -1258,3 +1507,14 @@ jobs:
         run: |
           tofu destroy --auto-approve --input=false
           test -z "$(tofu state list)"
+
+      - name: Independently prove complete provider run resource absence
+        id: provider_absence
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.cleanup_auth.outputs.access_token }}
+        run: |
+          scripts/ci-cloud/gcp-rocky-janitor.py \
+            --project secpal-dev --region europe-west3 --zone europe-west3-a \
+            --now "$(date -u +%s)" --exact-action verify \
+            --variables infra/ci-cloud/gcp-rocky/run.auto.tfvars.json
+          printf '%s\n' OPEN_TOFU_STATE_EMPTY PROVIDER_RUN_RESOURCE_SET_ABSENT

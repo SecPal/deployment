@@ -84,5 +84,11 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Set up pinned OpenTofu for exact metadata rendering
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
       - name: Run repository preflight
         run: ./scripts/preflight.sh

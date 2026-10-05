@@ -405,10 +405,48 @@ trusted post-harness admission owns cleanup completeness. A generic helper is
 never mapped directly because the same helper serves runtime, fixture,
 Quadlet, workload, SELinux, AVC, fallback, and cleanup boundaries.
 
-Normal and failure cleanup use `tofu destroy` against the saved state. The Rocky
-janitor independently revalidates the complete ownership description or label
-set immediately before each ordered deletion. A prefix is never ownership, and
-ambiguous or changed metadata results in no deletion.
+Normal and failure cleanup use the existing Rocky GCP janitor's exact-run mode
+before `tofu destroy` against saved state. Failed apply is conservatively treated
+as an ambiguous create result: accepted-main control reads the exact derived
+instance name and fails the attempt, even when the resource exists. Only the
+cleanup environment can remove it. No ambiguous instance resumes qualification.
+
+The exact-run authority binds the trusted workflow repository/ref/control SHA,
+original run/attempt, selected profile and target SHA to the retained trusted
+variables. Cross-run cleanup first admits the originating continuation and its
+creation/expiry timestamps. Every deletion requires the shared janitor ownership
+predicate plus exact provider self-link, kind, immutable resource ID and creation
+timestamp within the original three-hour interval. Instance labels and ownership
+description must both agree; the immutable ID is read again before deletion.
+The returned delete operation must independently agree on operation kind,
+operation type, exact target self-link and immutable target ID before terminal
+completion can be admitted. GCP's documented deletion is addressed by name and
+has no conditional-ID precondition. The existing workflow serializes trusted
+mutations by original run ID, and different run attempts use different names.
+A foreign replacement after the final ownership GET cannot be prevented
+atomically by this API; a mismatching operation fails closed after dispatch and
+cannot produce cleanup success. No atomic compare-and-delete claim is made.
+A prefix or name alone never authorizes deletion. Unknown, incompatible or
+changed ownership stops cleanup without broad inventory or deletion.
+
+After exact cleanup and OpenTofu destruction, a separate bounded exact GET for
+each instance, disk, network, subnet and three firewall names must independently
+verify absence. `OPEN_TOFU_STATE_EMPTY` alone cannot produce cleanup success;
+`PROVIDER_RUN_RESOURCE_SET_ABSENT` is also required. Only exact GET HTTP 404 is
+`ABSENT`. A transport timeout, forbidden read or malformed response is
+`UNKNOWN_PROVIDER_STATE`; a mismatching representation is
+`INCOMPATIBLE_OR_AMBIGUOUS_RESOURCE`. Exact present instances are
+`EXACT_RUN_OWNED_INSTANCE_PRESENT`. Each result is independently admitted by the
+closed `rocky-cloud-provider-result` schema, including the complete trusted run
+binding; arbitrary provider bodies, startup metadata and credentials are omitted.
+
+Provider observations establish absence at their bounded read-back boundary;
+they do not turn an ambiguous create into successful transport evidence or prove
+that a still-pending server request can never complete later. The existing hourly
+TTL janitor remains the recovery owner for expired resources outside local state.
+Its shared ownership predicates and ambiguous-group refusal remain in effect.
+Repository and local HTTP adapter evidence prove control behavior; accepted-main
+real transport and cleanup evidence for both architectures remains owned by #292.
 
 ## Rocky preparation and evidence
 
@@ -678,3 +716,120 @@ represented the reviewed empty bootstrap scope set as an omitted/null field,
 while the original Rocky validator required literal object equality. Exact-state
 cleanup destroyed all seven resources. That run produced neither preparation
 PASS nor native ARM qualification PASS.
+
+## Rocky bootstrap metadata transport
+
+`infra/ci-cloud/gcp-rocky/metadata.tf` owns the exact instance metadata map,
+startup rendering, UTF-8 byte sizes and admission predicates. The maintained
+workflow evaluates that same map with OpenTofu 1.12.5 before provisioning OIDC
+credentials. Both independent resource roots also depend on its blocking
+creation guard, so skipping the workflow admission cannot create partial cloud
+resources with an oversized payload. Destroy remains available for historical
+state and for an existing state whose creation admission now fails.
+
+The complete trusted source map uses one deterministic gzip/base64 encoding.
+This shares compression across related files and represents each source once,
+while retaining every original installation destination. Before any component
+is installed or executed, the guest requires exact decoded length and SHA-256,
+one complete gzip member with no trailing material, duplicate-free JSON and
+the exact fixed component inventory. Decompression stops at the expected
+length plus one and has an absolute 1 MiB decoded bound. A private temporary
+directory holds the admitted material and is removed on exit. The startup emits
+only `ROCKY_BOOTSTRAP_TRANSPORT_INTEGRITY_FAILED` for reconstruction rejection.
+No caller-selected metadata inventory, URL, remote script or new trust root is
+introduced. Candidate identity, accepted-control/probe binding, identity-free
+handoff, grader/PASS authority and cloud cleanup retain their existing owners.
+
+[Google's metadata contract](https://docs.cloud.google.com/compute/docs/metadata/setting-custom-metadata)
+limits keys to 128 bytes, values to 256 KiB (262,144 bytes), and aggregate key
+plus value material to 512 KiB (524,288 bytes). Admission counts the actual
+encoded startup and all fixed metadata values, including template overhead.
+The safe maxima are 237,568 bytes per value and 499,712 aggregate bytes. Both
+reserve 24 KiB: the existing 16 KiB maximum candidate-sized growth allowance
+requires less than 24 KiB after worst-case gzip/base64 expansion, rounded up to
+the next 8 KiB. This reserve also exceeds the bounded metadata added by the
+identity/access transition. It is a minimum provider safety reserve, separate
+from the maximum candidate input already exercised by transport validation.
+The candidate ceiling counts UTF-8 bytes rather than characters. OpenTofu
+suppresses candidate/source bodies; only numeric sizes are declassified for
+bounded key/actual/safe/provider-limit diagnostics. The admission helper never
+relays OpenTofu stderr.
+
+The regression uses the provider's pinned renderer with the canonical locals,
+without a Google provider or credentials. Historical non-secret candidate
+artifacts from runs `37112453593` and `37112463800` retain exact representation,
+HEAD `c3283ae9e750ab532ba14bae8e6ddced7f98f517`, tree
+`48969c2e4bd1c6f82afd1de7c91fe395f97eb86b`, and accepted control
+`4571a9b2653cb73c743a7812f0c4bfcad599d45d`. The retained pre-#289 template and
+complete source closure reproduce 265,188/265,184-byte rejected startup values.
+The corrected historical candidates render to 221,122 bytes on both profiles.
+Conservative high-entropy 16,384-byte envelopes render to 236,730/236,726 bytes,
+leaving 25,414/25,418 bytes below the absolute provider value limit. These
+measurements characterize that accepted closure; admission always evaluates
+the current complete representation instead of trusting those historical sizes.
+
+Run `python3 tests/ci-cloud-rocky-metadata.py` for the exact rendering, limits,
+maximum-input, reconstruction, byte-integrity and negative boundary evidence.
+The older conformance bootstrap keeps its existing independent transport.
+Repository fixtures do not establish GCP acceptance. A real promised transport
+result requires both maintained accepted-main preparation profiles, exact
+run/control/candidate identities, mandatory cleanup and authoritative empty
+state. The accepted-main-only workflow cannot use feature-branch control to
+supply that evidence.
+
+## Product backend policy proof
+
+The closed `product-backend-policy` selector proves the host policy owned by
+[#101](https://github.com/SecPal/deployment/issues/101). Its implementation and
+trust boundary are documented in [Product backends](product-backends.md).
+The real privileged execution, both reviewed architecture profiles, mandatory
+cleanup and authoritative empty-state evidence belong to evidence-only
+[#294](https://github.com/SecPal/deployment/issues/294), after accepted-main source
+delivery. It uses the same Rocky control plane and frozen host qualification pair;
+no candidate PR can supply privileged commands or executable paths.
+
+## Ambiguous instance insertion diagnosis
+
+At accepted control `af171bd301dbc6e7efe470087d5bf6d50b59158a`, runs
+`37120628494/1`, `37121117238/1` and `37121646748/1` passed metadata admission
+and created six supporting resources. Their retained states contain no instance.
+The instance-create intervals were 330.044, 330.049 and 330.049 seconds, each
+ending in `Client.Timeout exceeded while awaiting headers`. The sanitized
+retained-state fixture records the exact source identities and supporting
+provider IDs; it contains no startup payload or candidate body.
+
+The pinned Google provider remains `7.40.0` and OpenTofu remains `1.12.5`.
+The root sets no `request_timeout`. The provider's
+[synchronous HTTP client](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/config.go)
+therefore uses 120 seconds. Its
+[request layer](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/transport.go)
+has a separate five-minute retry budget;
+[transport retries](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/transport/retry_transport.go)
+use bounded context and Fibonacci backoff starting at 500 milliseconds.
+Timeout errors are retryable in the pinned provider. The
+[instance create path](https://github.com/hashicorp/terraform-provider-google/blob/v7.40.0/google/services/compute/resource_compute_instance.go)
+stores its ID only after the synchronous insertion returns. Its separate
+20-minute resource create timeout applies to subsequent operation waiting and
+cannot explain an insert failing before that ID is stored.
+
+The common elapsed boundary is consistent with bounded provider client/retry
+handling, but retained non-debug logs establish neither the exact request count
+nor why headers did not arrive. Changing `request_timeout` would change the
+synchronous HTTP bound and could delay failure; no deterministic evidence proves
+that configuration is the earliest defect or would produce a successful insert.
+Request timeout is unchanged. No GCP outage, machine capacity, PostgreSQL or
+metadata cause is inferred, and no new retry policy is introduced.
+
+Exact provider actions share a 600-second monotonic request budget, including
+all inventory reads, deletion dispatches and operation polls. A deletion's
+120-second budget begins before dispatch and clips each request to the remaining
+action/operation time; deadline exhaustion is unknown, never absence. An already
+completed admitted deletion needs no extra operation poll. Cleanup assembles its
+final diagnostics from one complete absence snapshot; the separate post-OpenTofu
+verification observes a fresh snapshot. The cleanup token lasts 1,800 seconds,
+covering the existing 25-minute job limit. This bounds the existing cleanup owner
+and avoids credential expiry within that job; it adds no retry or provider role
+and leaves the Google provider's `request_timeout` unchanged.
+
+Transport diagnostics for instance insertion are described in
+[the transport evidence contract](instance-insert-transport.md).

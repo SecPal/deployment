@@ -32,12 +32,12 @@ class CandidateData(unittest.TestCase):
 
     def test_guest_staged_probe_closure_matches_controller_identity(self):
         control = self.load_module('pg_guest_probe_closure', 'scripts/ci-cloud/postgresql-qualification-control.py')
-        terraform = (ROOT / 'infra/ci-cloud/gcp-rocky/main.tf').read_text()
+        terraform = (ROOT / 'infra/ci-cloud/gcp-rocky/metadata.tf').read_text()
         template = (ROOT / 'scripts/ci-cloud/bootstrap-rocky-host.tftpl').read_text()
         sources = dict(re.findall(
-            r'(\w+_base64gzip)\s*=\s*base64gzip\(file\("\$\{path.module\}/\.\./\.\./\.\./([^"\n]+)"\)\)', terraform))
+            r'(\w+)\s*=\s*file\("\$\{path.module\}/\.\./\.\./\.\./([^"\n]+)"\)', terraform))
         destinations = re.findall(
-            r"decode_script '\$\{(\w+_base64gzip)\}' /opt/secpal-control/([^\s]+)", template)
+            r"decode_script '(\w+)' /opt/secpal-control/([^\s]+)", template)
         expected = control.probe_digest()
         with tempfile.TemporaryDirectory() as directory:
             guest = Path(directory)

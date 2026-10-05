@@ -2137,7 +2137,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         isinstance(qualification, dict)
         and qualification.get("type") == "choice"
         and qualification.get("default") == "rocky-host"
-        and qualification.get("options") == ["rocky-host", "native-postgresql-18"],
+        and qualification.get("options") == ["rocky-host", "native-postgresql-18", "product-backend-policy"],
         "Rocky/PostgreSQL qualification selector must remain closed",
     )
     require(
@@ -2281,6 +2281,36 @@ def validate_rocky_control_plane(root: Path) -> None:
         root, "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
     )
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
+    main += read(root, "infra/ci-cloud/gcp-rocky/metadata.tf")
+    source_names = set(re.findall(
+        r"^\s+(\w+)\s*=\s*(?:file\(|var\.(?:postgresql_candidate_json|product_backend_policy_json)\s*$)",
+        read(root, "infra/ci-cloud/gcp-rocky/metadata.tf"), re.MULTILINE,
+    ))
+    installer_names = {
+        quoted or bare for quoted, bare in re.findall(
+            r"^\s*decode_script (?:'([a-z0-9_]+)'|([a-z0-9_]+)) ",
+            bootstrap, re.MULTILINE,
+        )
+    }
+    require(source_names == installer_names,
+            "Rocky transport must preserve the exact fixed installed component inventory")
+    require(
+        "metadata = local.rocky_metadata" in main
+        and main.count("terraform_data.rocky_metadata_admission]") == 2
+        and "rocky_metadata_values_admitted" in main
+        and "rocky_metadata_aggregate_admitted" in main
+        and "rocky_bootstrap_expansion_admitted" in main
+        and "ROCKY_BOOTSTRAP_TRANSPORT_INTEGRITY_FAILED" in bootstrap
+        and "decoder.unconsumed_tail or decoder.unused_data" in bootstrap
+        and "hashlib.sha256(payload).hexdigest()" in bootstrap
+        and "object_pairs_hook=unique_object" in bootstrap
+        and "sorted(sources) != names" in bootstrap
+        and text.count("python3 scripts/ci-cloud/admit-rocky-metadata.py") == 1
+        and text.index("python3 scripts/ci-cloud/admit-rocky-metadata.py")
+        < text.index("      - name: Authenticate trusted provisioning through OIDC")
+        < text.index("          tofu apply --auto-approve --input=false"),
+        "Rocky metadata must admit the actual bounded transport before provider credentials and resources",
+    )
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
     target_failure_schema_pair_sequence = [
         schema_const_pair_at(
@@ -2494,7 +2524,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
         and "timeout --signal=TERM --kill-after=180s 45m" in target_runner
-        and "qualification_harness_base64gzip" not in bootstrap + main,
+        and "qualification_harness" not in bootstrap + main,
         "trusted control must bind the exact target qualification workload bytes",
     )
     require(
@@ -2615,8 +2645,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "load_quadlet_authority_contract()" in rocky_control
         and "target and trusted Quadlet authority normalization disagree"
         in rocky_control
-        and "quadlet_authority_contract_base64gzip" in main
-        and "decode_script '${quadlet_authority_contract_base64gzip}' /opt/secpal-control/scripts/quadlet_authority_contract.py"
+        and "quadlet_authority_contract" in main
+        and "decode_script 'quadlet_authority_contract' /opt/secpal-control/scripts/quadlet_authority_contract.py"
         in bootstrap
         and qualification_harness.index("\nuser_systemctl daemon-reload\n")
         < qualification_harness.index(
@@ -2845,8 +2875,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         "qualification admission must preserve each closed runtime-user boundary",
     )
     require(
-        "readiness_publisher_base64gzip" in main
-        and "runtime_user_systemd_base64gzip" in main
+        "readiness_publisher" in main
+        and "runtime_user_systemd" in main
         and "secpal-publish-rocky-qualification-readiness" in bootstrap
         and "runtime_user_systemd.py" in bootstrap
         and '--boot-id "$boot_id"' in bootstrap
@@ -2960,9 +2990,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and 'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json'
         in target_failure_trace
-        and "start_runuser_base64gzip" in main
-        and "start_env_base64gzip" in main
-        and "start_systemctl_base64gzip" in main
+        and "start_runuser" in main
+        and "start_env" in main
+        and "start_systemctl" in main
         and "rocky-start-runuser" in bootstrap
         and "rocky-start-env" in bootstrap
         and "rocky-start-systemctl" in bootstrap
@@ -3004,9 +3034,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and 'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json'
         in target_failure_trace
-        and "active_runuser_base64gzip" in main
-        and "active_env_base64gzip" in main
-        and "active_systemctl_base64gzip" in main
+        and "active_runuser" in main
+        and "active_env" in main
+        and "active_systemctl" in main
         and "rocky-active-runuser" in bootstrap
         and "rocky-active-env" in bootstrap
         and "rocky-active-systemctl" in bootstrap,
@@ -3049,8 +3079,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'OBSERVATION_PATH = Path(' in primary_runuser
         and '"/var/lib/secpal-rocky/evidence/primary-workload-observation.json"'
         in primary_runuser
-        and "primary_runuser_base64gzip" in main
-        and "primary_runtime_base64gzip" in main
+        and "primary_runuser" in main
+        and "primary_runtime" in main
         and "rocky-primary-runuser" in bootstrap
         and "rocky-primary-runtime" in bootstrap
         and not (root / "scripts/ci-cloud/rocky-primary-env.py").exists()
@@ -3113,9 +3143,9 @@ def validate_rocky_control_plane(root: Path) -> None:
             target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
         )
         and "--reload-adjacency \"$reload_adjacency\"" in target_runner
-        and "reload_observer_base64gzip" in main
-        and "reload_runuser_base64gzip" in main
-        and "reload_systemctl_base64gzip" in main
+        and "reload_observer" in main
+        and "reload_runuser" in main
+        and "reload_systemctl" in main
         and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap
         and "rocky-reload-runuser" in bootstrap
         and "/usr/local/libexec/secpal-control/rocky-reload-systemctl" in bootstrap
@@ -3374,8 +3404,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_replay_verifier
         and "classifier.replay_primary_observation_admitted"
         in target_replay_verifier
-        and "target_replay_verifier_base64gzip" in bootstrap
-        and "target_replay_verifier_base64gzip" in main,
+        and "target_replay_verifier" in bootstrap
+        and "target_replay_verifier" in main,
         "Rocky replay verifier must independently close exact classifier input",
     )
     require(
@@ -3402,7 +3432,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         "Rocky OpenTofu and Google provider versions must be exact",
     )
     require(
-        'image  = var.exact_image_self_link' in main
+        re.search(r'image\s*=\s*var\.exact_image_self_link', main) is not None
         and 'data "google_compute_image"' not in main
         and "discovery_family" not in main,
         "OpenTofu may consume only the pre-resolved exact image identity",
@@ -3910,10 +3940,71 @@ def validate(root: Path) -> None:
     )
 
 
+
+def validate_instance_transport_workflow(root: Path) -> None:
+    """Diagnostic failure never replaces apply, reconciliation or exact cleanup."""
+    workflow = yaml.safe_load(read(root, ".github/workflows/rocky-cloud-qualification.yml"))
+    provision = workflow["jobs"]["provision"]
+    steps = provision["steps"]
+    ids = {step.get("id"): step for step in steps if "id" in step}
+    apply = ids["apply"]
+    admission = ids.get("transport_admission", {})
+    fresh = next((step for step in steps if step["name"] ==
+                  "Freshly authenticate protected main before diagnostic and provider authority"), {})
+    fresh_run = fresh.get("run", "")
+    require(all(fragment in fresh_run for fragment in (
+        '"$GITHUB_REPOSITORY" == SecPal/deployment', '"$GITHUB_REF" == refs/heads/main',
+        'gh api repos/SecPal/deployment/branches/main', '.protected',
+        '.commit.sha', '.commit.commit.verification.verified',
+        '"$(git rev-parse HEAD)" == "$GITHUB_SHA"',
+        '"$accepted_control" == "$(printf',
+    )), "transport observation requires freshly authenticated protected main")
+    require(steps.index(fresh) < steps.index(ids["provision_auth"]) < steps.index(apply),
+            "fresh transport control authentication must precede provider credentials")
+    run = apply["run"]
+    require('python3 "$GITHUB_WORKSPACE/scripts/ci-cloud/observe-instance-transport.py"' in run
+            and run.count("tofu apply --auto-approve --input=false") == 1
+            and "--output \"$RUNNER_TEMP/rocky-cloud/instance-transport.json\"" in run
+            and '--trusted-control-sha "$GITHUB_SHA"' in run
+            and '--target-sha "$TARGET_SHA"' in run
+            and '--workflow-run-id "$GITHUB_RUN_ID"' in run
+            and '--workflow-run-attempt "$GITHUB_RUN_ATTEMPT"' in run,
+            "existing apply must use bounded trusted transport observation with exact identities")
+    require(apply.get("continue-on-error") is True
+            and admission.get("if") == "${{ always() }}"
+            and admission.get("continue-on-error") is True
+            and "--admit" in admission.get("run", "")
+            and not CREDENTIAL_KEYS & set(admission.get("env", {})),
+            "independent transport admission must not block cleanup or receive provider credentials")
+    artifact = next((step for step in steps if step["name"] ==
+                     "Retain admitted diagnostic transport evidence"), {})
+    require(artifact.get("if") == "${{ always() && steps.transport_admission.outcome == 'success' }}"
+            and artifact.get("continue-on-error") is True
+            and artifact.get("with", {}).get("path") == "${{ runner.temp }}/rocky-cloud/instance-transport.json",
+            "transport publication admits only the sanitized document and cannot suppress cleanup")
+    transition = ids["identity_transition"].get("if", "")
+    require(all(fragment in transition for fragment in (
+        "steps.apply.outcome == 'success'", "steps.transport_admission.outcome == 'success'",
+        "steps.transport_publication.outcome == 'success'")),
+        "diagnostic failure must stop continuation without authorizing provider success")
+    reconcile = next(step for step in steps if step["name"] ==
+                     "Reconcile failed instance creation without continuing qualification")
+    require(reconcile.get("if") == "${{ steps.apply.outcome == 'failure' }}"
+            and reconcile.get("continue-on-error") is True
+            and "gcp-rocky-janitor.py" in reconcile["run"]
+            and "--exact-action reconcile" in reconcile["run"],
+            "transport evidence cannot replace exact ambiguous-create reconciliation")
+    require(steps.index(apply) < steps.index(admission) < steps.index(reconcile)
+            and "needs.provision.result == 'failure'" in workflow["jobs"]["cleanup"]["if"]
+            and "always()" in workflow["jobs"]["cleanup"]["if"],
+            "collector failure must retain independent mandatory cleanup reachability")
+
+
 def main(arguments: list[str]) -> int:
     root = Path(arguments[0]).resolve() if arguments else Path.cwd()
     try:
         validate(root)
+        validate_instance_transport_workflow(root)
     except (ContractError, OSError, UnicodeError) as error:
         print(f"FAIL: cloud CI contract: {error}", file=sys.stderr)
         return 1
