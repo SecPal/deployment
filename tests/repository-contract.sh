@@ -95,7 +95,11 @@ required_files=(
   scripts/quadlet-oneshot-entrypoint.sh
   scripts/production-secret-bootstrap.php
   scripts/production-state.py
-  scripts/production-valkey-entrypoint.sh
+  scripts/production-migrate.php
+  scripts/render-native-postgresql.py
+  config/production/postgresql-contract.json
+  docs/architecture/native-postgresql.md
+  tests/native-postgresql-production-contract.py
   scripts/render-production-quadlets.py
   scripts/render-integration-quadlets.py
   scripts/ci-cloud/bounded-target-diagnostic.py

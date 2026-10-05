@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+[Unit]
+Description=SecPal rootless PostgreSQL loopback boundary
+After=nftables.service
+Before=user@20000.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/sbin/nft --check -f /etc/nftables/secpal-postgresql.nft
+ExecStart=/usr/sbin/nft -f /etc/nftables/secpal-postgresql.nft
+ExecStop=/usr/sbin/nft delete table inet secpal_postgresql
+TimeoutStartSec=30
+TimeoutStopSec=30
+UMask=0077
+[Install]
+WantedBy=multi-user.target

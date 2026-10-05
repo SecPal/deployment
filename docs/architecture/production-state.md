@@ -7,13 +7,12 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status and authority
 
-This document describes the retained D.2 persistence and product-role contracts.
-The superseded PostgreSQL product container and initializer are no longer an
-implemented production path. Until the separately owned host-native PostgreSQL
-work lands, this tree deliberately has no completed production PostgreSQL
-implementation. The retained product roles use rootless Podman, the systemd user
-manager, and native Quadlet. This is not a live-host installation or a backup
-implementation.
+This document describes production persistence and rootless product roles.
+PostgreSQL 18 is separately owned host-native systemd/SELinux infrastructure;
+see [the native contract](native-postgresql.md). The rootless state tool never
+initializes, re-owns, mounts or destroys PGDATA. The retained product roles use
+rootless Podman, the systemd user manager and native Quadlet. This is not a
+live-host installation or backup implementation.
 
 [`config/production/state-contract.json`](../../config/production/state-contract.json)
 is the one authoritative persistence matrix. The checked Quadlets are generated
@@ -30,10 +29,10 @@ canonical semantic digest differs from the reviewed matrix.
 
 | Object                                             | Authority and classification                                                                                                                            | Loss, restore, and D.7 boundary                                                |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| PostgreSQL                                         | Durable, authoritative, non-reconstructable business data at `/srv/secpal/postgresql`                                                                   | Loss is unacceptable; restore and backup are required                          |
+| PostgreSQL                                         | Durable, authoritative, non-reconstructable business data at `/var/lib/pgsql/data`                                                                      | Loss is unacceptable; restore and backup are required                          |
+| PostgreSQL transport material                      | Issued server certificate, private key and CA at `/etc/secpal/postgresql/current`, owned only by native postgres                                        | Generation, rotation and recovery remain #100; no CA signing key here          |
 | Private application storage                        | Durable, authoritative, non-reconstructable business files at `/srv/secpal/private-storage`                                                             | Loss is unacceptable; restore and backup with PostgreSQL are required          |
 | Public application storage                         | Classified now as durable and non-reconstructable at `/srv/secpal/public-storage`; “public” describes application authorization, not reconstructability | Loss is unacceptable; restore and backup with PostgreSQL are required          |
-| Valkey                                             | Durable AOF queue/cache continuity state at `/srv/secpal/valkey`; never the source of truth                                                             | Included in coordinated D.7 backup and recovery, with PostgreSQL authoritative |
 | ACME                                               | Reserved durable TLS-operator state at `/srv/secpal/acme`; D.2 mounts it nowhere                                                                        | Backup becomes required after the future edge activates it                     |
 | CrowdSec                                           | Reserved durable security state at `/srv/secpal/crowdsec`; D.2 mounts it nowhere                                                                        | Later CrowdSec work decides its activated restore policy                       |
 | Logs                                               | Bounded rootless-Podman `k8s-file` operational state at `/srv/secpal/logs`, with one canonical 10 MB file per production container                      | Not an authoritative restore input; excluded from D.7 data backup              |
@@ -59,12 +58,10 @@ container ID 1..N  -> subordinate start + container ID - 1
 
 It produces these host identities:
 
-| Consumer   | Container identity | Host identity   |
-| ---------- | ------------------ | --------------- |
-| Frontend   | `101:101`          | `100100:200100` |
-| PostgreSQL | `999:999`          | `100998:200998` |
-| API roles  | `10001:10001`      | `110000:210000` |
-| Valkey     | `10002:10002`      | `110001:210001` |
+| Consumer  | Container identity | Host identity   |
+| --------- | ------------------ | --------------- |
+| Frontend  | `101:101`          | `100100:200100` |
+| API roles | `10001:10001`      | `110000:210000` |
 
 Container IDs are never treated as host IDs. A changed, missing, multiple, or
 short subordinate range fails before state preparation. No `--userns=keep-id`,
@@ -72,10 +69,8 @@ rootful fallback, alternate mapping method, Podman socket, or remote API exists.
 
 | Host path                      | Exact host owner | Mode   | Runtime use                                                       |
 | ------------------------------ | ---------------- | ------ | ----------------------------------------------------------------- |
-| `/srv/secpal/postgresql`       | `100998:200998`  | `0700` | PostgreSQL read/write bind to `/var/lib/postgresql/data`          |
 | `/srv/secpal/private-storage`  | `110000:210000`  | `0750` | Read/write bind for migrate, API, both workers, and scheduler     |
 | `/srv/secpal/public-storage`   | `110000:210000`  | `0750` | Read/write bind for the same API roles                            |
-| `/srv/secpal/valkey`           | `110001:210001`  | `0700` | Valkey read/write bind to `/data`                                 |
 | `/srv/secpal/config`           | `0:20000`        | `0750` | Selected non-secret files bind-mounted read-only                  |
 | `/srv/secpal/deployment-state` | `0:20000`        | `0750` | Operator release and rollback state; no product mount             |
 | `/srv/secpal/logs`             | `20000:20000`    | `0750` | Bounded host-side operational logs; containers cannot mount it    |
@@ -86,7 +81,7 @@ selects reviewed container identities. D.2 does not guess those identities or
 activate those services.
 
 Installation later copies the checked matrix to
-`/srv/secpal/config/state-contract.json`, the PHP/Valkey bootstrap files below
+`/srv/secpal/config/state-contract.json`, the PHP bootstrap and explicit migration files below
 `/srv/secpal/config/runtime/`, and the PHP INI fragment below
 `/srv/secpal/config/php/`. These are non-secret, root-controlled inputs; product
 containers see only the exact read-only files declared in their units.
@@ -105,7 +100,7 @@ containers see only the exact read-only files declared in their units.
   invokes this operation.
 - `--validate-production` checks the host view, including exact mapped owners,
   modes, file types, canonical ancestors, hard-link restrictions for secrets,
-  ACLs, secret bytes and grammar, and equality of credential delivery copies.
+  ACLs, secret bytes and grammar, and runtime/migration database identity separation.
 - `--validate-namespace` runs through `podman unshare` in
   `secpal-state-ready.service`. It checks state and secret metadata plus each
   expected consumer-visible path from the D.1 user namespace. It deliberately
@@ -127,11 +122,13 @@ ACL-free before creating a staging directory. A symlink, non-directory
 substitution, writable or non-root trusted ancestor, unexpected hard link,
 wrong owner/group/mode, or inaccessible ACL is a hard failure.
 
-A valid existing directory is preserved byte-for-byte. A missing state leaf may
+A retired `/srv/secpal/postgresql` or `/srv/secpal/valkey` path prevents
+initialization and startup pending an explicit data disposition. The tool never
+deletes or migrates those paths. A valid active directory is preserved byte-for-byte. A missing state leaf may
 be created only during the explicitly acknowledged first installation. Once the
 layout marker exists, initialization becomes validation-only and a missing
 authoritative path fails instead of being recreated. An invalid existing leaf is
-never silently repaired. No current unit initializes or starts PostgreSQL. A
+never silently repaired. No product unit initializes or starts PostgreSQL. Native infrastructure is admitted separately. A
 missing, partial, malformed, or extra retained secret set prevents
 `secpal-state-ready.service` from succeeding. Ordinary stop, rollback, container
 removal, or recreation never removes a host state path. Layout changes need a
@@ -150,33 +147,18 @@ recovered.
 All five API roles that can run migrations, serve requests, schedule work, or
 execute queues receive the same two application-storage binds. This preserves
 inode metadata and cross-role visibility across native systemd-user stop/start
-and container recreation. Frontend, PostgreSQL, Valkey, and future edge roles
+and container recreation. Frontend, native PostgreSQL, and future edge roles
 receive neither application-storage bind.
 
-The removed PostgreSQL initializer, HBA policy, container listener, and internal
-network alias are not retained as current behavior. The host-native replacement
-owns those future connectivity and admission decisions.
-
-## Valkey decision
-
-Valkey persistence is enabled. The immutable Valkey image writes append-only
-files to `/srv/secpal/valkey` with `appendonly yes`, `appendfsync everysec`, and
-RDB snapshots disabled. Cache loss alone is acceptable because PostgreSQL is
-authoritative, but queued work can represent committed work that has not yet
-executed; treating all queue loss as harmless is not justified.
-
-A controlled stop persists the AOF before the container exits. An abrupt crash
-has Valkey's documented `everysec` bounded loss window, which is an accepted
-single-host limitation rather than a no-loss claim. Host loss requires the D.7
-coordinated backup. Recovery validates the AOF before workers start, restores
-PostgreSQL first as the authority, and treats possible missing or duplicate jobs
-as an operator reconciliation event. Cache entries may be discarded; queue
-state may not be discarded without an explicit recovery decision.
+The superseded PostgreSQL container and initializer stay absent. Native
+PostgreSQL owns its separate storage, listener, transport and role contracts.
+PostgreSQL also owns database sessions, durable queues and shared cache;
+Valkey state, credential copies and startup dependencies are removed.
 
 ## Native lifecycle evidence
 
 `tests/production-state-contract.py` derives the checked Quadlets, creates only
-an explicit fixture root, records PostgreSQL/private/Valkey inode and ownership
+an explicit fixture root, records private application inode and ownership
 metadata, models every lifecycle phase, and proves bounded fixture cleanup.
 `tests/production-state-native-lifecycle.sh` additionally runs the checked
 production set through Podman 5.4.2's native user generator. Its disposable
@@ -196,9 +178,9 @@ registry itself. D.1a remains the complete product-role parity proof.
 D.7 must implement, not redefine, these boundaries:
 
 - required coordinated recovery: PostgreSQL, private storage, public storage,
-  and Valkey AOF;
+  and PostgreSQL-backed durable queues;
 - separately recoverable external secrets: APP key history, tenant KEK,
-  PostgreSQL/Valkey credentials, and backup decryption credentials;
+  separate runtime/migration PostgreSQL credentials, and backup decryption credentials;
 - activated edge state: ACME and the later-reviewed CrowdSec policy;
 - recommended declarative records: configuration and deployment state; and
 - excluded data: Podman graphroot/runroot, tmpfs secret deliveries, caches,

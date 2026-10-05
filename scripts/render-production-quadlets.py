@@ -19,26 +19,17 @@ if os.fspath(SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, os.fspath(SCRIPT_DIRECTORY))
 
 from integration_runtime_contract import (  # noqa: E402
-    API_IMAGE,
     FRONTEND_IMAGE,
     role_execution_spec,
     role_spec,
     tmpfs_mounts,
 )
 
+sys.path.insert(0, str(SCRIPT_DIRECTORY / 'ci-cloud'))
+from postgresql_qualification_contract import APPLICATION_RUNTIME  # noqa: E402
 from product_backend_contract import POLICY_CHECK_COMMAND, publish_lines  # noqa: E402
 
-# Production Valkey remains owned by the production state contract. The active
-# disposable integration intentionally exports no Valkey image authority.
-VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
-VALKEY_UID = 10002
-VALKEY_GID = 10002
-VALKEY_TMPFS_MOUNTS = (
-    "Mount=type=tmpfs,destination=/tmp,tmpfs-size=16m,tmpfs-mode=0700,"
-    "U=true,nosuid=true,nodev=true,noexec=true",
-    "Mount=type=tmpfs,destination=/data,tmpfs-size=32m,tmpfs-mode=0700,"
-    "U=true,nosuid=true,nodev=true,noexec=true",
-)
+API_IMAGE = APPLICATION_RUNTIME["image"]
 
 
 def _load_state_module():
@@ -62,22 +53,16 @@ APPLICATION_ENVIRONMENT = (
     "Environment=APP_DEBUG=false",
     "Environment=APP_ENV=production",
     "Environment=APP_NAME=SecPal",
-    "Environment=CACHE_STORE=redis",
+    "Environment=CACHE_STORE=database",
     "Environment=DB_CONNECTION=pgsql",
     "Environment=DB_DATABASE=secpal",
-    "Environment=DB_HOST=postgres",
+    "Environment=DB_HOST=db.secpal.internal",
     "Environment=DB_PORT=5432",
-    "Environment=DB_USERNAME=secpal",
+    "Environment=DB_SSLMODE=verify-full",
+    "Environment=DB_SSLROOTCERT=/run/secpal/secrets/database/postgres-ca.crt",
     "Environment=FILESYSTEM_DISK=local",
     "Environment=LOG_CHANNEL=stderr",
-    "Environment=QUEUE_CONNECTION=redis",
-    "Environment=REDIS_CLIENT=phpredis",
-    "Environment=REDIS_CACHE_DB=1",
-    "Environment=REDIS_DB=0",
-    "Environment=REDIS_HOST=valkey",
-    "Environment=REDIS_PORT=6379",
-    "Environment=REDIS_QUEUE=default",
-    "Environment=REDIS_QUEUE_CONNECTION=default",
+    "Environment=QUEUE_CONNECTION=database",
     "Environment=SESSION_DRIVER=database",
 )
 COMMON_PODMAN_ARGS = (
@@ -115,9 +100,9 @@ def unit(description: str, dependencies: tuple[str, ...] = (), *, oneshot: bool 
 def common_container(
     contract: dict, role: str, image: str, *, instance: str | None = None
 ) -> list[str]:
-    identity = role_spec(role) if role != "valkey" else None
-    uid = VALKEY_UID if identity is None else identity.uid
-    gid = VALKEY_GID if identity is None else identity.gid
+    identity = role_spec(role)
+    uid = identity.uid
+    gid = identity.gid
     logs = contract["log_policy"]
     effective_role = instance or role
     container_name = f"secpal-{effective_role}"
@@ -194,13 +179,20 @@ def build_native_lifecycle_fixture_unit(
     return SPDX_HEADER + content
 
 
-def api_secret_mounts(contract: dict) -> list[str]:
+def api_secret_mounts(contract: dict, role: str) -> list[str]:
     delivery = contract["secret_delivery"]["api"]
-    return [
+    mounts = [
         "Mount=type=bind,source="
         f"{delivery['directory']}/{name},target=/run/secpal/secrets/api/{name},ro=true"
         for name in delivery["files"]
     ]
+    database = contract['secret_delivery']['migration' if role == 'migrate' else 'runtime']
+    mounts.extend(
+        f"Mount=type=bind,source={database['directory']}/{name},"
+        f"target=/run/secpal/secrets/database/{name},ro=true"
+        for name in database['files']
+    )
+    return mounts
 
 
 def api_container(contract: dict, role: str) -> str:
@@ -212,12 +204,12 @@ def api_container(contract: dict, role: str) -> str:
     dependencies = (
         ("secpal-migrate.service",)
         if role != "migrate"
-        else ("secpal-valkey.service",)
+        else ("secpal-state-ready.service",)
     )
     lines = common_container(contract, role, API_IMAGE)
     lines.extend(APPLICATION_ENVIRONMENT)
     execution_command = (
-        ("php", "artisan", "migrate", "--force")
+        ("php", "/run/secpal/bootstrap/production-migrate.php")
         if role == "migrate"
         else execution.command
     )
@@ -233,13 +225,15 @@ def api_container(contract: dict, role: str) -> str:
             "target=/usr/local/etc/php/conf.d/99-secpal-secrets.ini,ro=true",
             "Mount=type=bind,source=/srv/secpal/config/runtime/production-secret-bootstrap.php,"
             "target=/run/secpal/bootstrap/production-secret-bootstrap.php,ro=true",
-            *api_secret_mounts(contract),
+            *api_secret_mounts(contract, role),
+            *(("Mount=type=bind,source=/srv/secpal/config/runtime/production-migrate.php,"
+               "target=/run/secpal/bootstrap/production-migrate.php,ro=true",)
+              if role == "migrate" else ()),
             f"Mount=type=bind,source={private},target=/app/storage/app/private,rw=true",
             f"Mount=type=bind,source={public},target=/app/storage/app/public,rw=true",
             *role_tmpfs,
-            "Network=secpal-application.network",
-            *(("Network=secpal-edge.network",) if role == "api" else ()),
-            f"NetworkAlias={role}",
+            "Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1",
+            "AddHost=db.secpal.internal:169.254.81.1",
         )
     )
     if role == "api":
@@ -254,20 +248,8 @@ def api_container(contract: dict, role: str) -> str:
 
 
 def build_units(contract: dict) -> dict[str, str]:
-    valkey_path = contract["objects"]["valkey_state"]["location"]
-    valkey_secret = contract["secret_delivery"]["valkey"]["directory"]
     units: dict[str, str] = {}
 
-    units["secpal-application.network"] = unit(
-        "SecPal private production application network"
-    ) + section(
-        "Network",
-        [
-            "NetworkName=secpal-application",
-            "Internal=true",
-            "Label=org.secpal.production=true",
-        ],
-    )
     units["secpal-edge.network"] = unit(
         "SecPal private production edge network"
     ) + section(
@@ -278,31 +260,6 @@ def build_units(contract: dict) -> dict[str, str]:
             "Label=org.secpal.production=true",
         ],
     )
-
-    valkey = common_container(contract, "valkey", VALKEY_IMAGE)
-    valkey.extend(
-        (
-            'Entrypoint=["/bin/sh","/run/secpal/bootstrap/production-valkey-entrypoint.sh"]',
-            "Mount=type=bind,source=/srv/secpal/config/runtime/production-valkey-entrypoint.sh,"
-            "target=/run/secpal/bootstrap/production-valkey-entrypoint.sh,ro=true",
-            f"Mount=type=bind,source={valkey_secret}/password,"
-            "target=/run/secpal-secret/password,ro=true",
-            f"Mount=type=bind,source={valkey_path},target=/data,rw=true",
-            *(mount for mount in VALKEY_TMPFS_MOUNTS if "destination=/data," not in mount),
-            "Network=secpal-application.network",
-            "NetworkAlias=valkey",
-            "HealthCmd=valkey-cli ping 2>&1 | grep -q 'NOAUTH Authentication required.'",
-            "HealthInterval=5s",
-            "HealthTimeout=3s",
-            "HealthRetries=20",
-            "HealthStartPeriod=5s",
-            "HealthOnFailure=kill",
-            "Notify=healthy",
-        )
-    )
-    units["secpal-valkey.container"] = unit(
-        "SecPal production Valkey", ("secpal-state-ready.service",)
-    ) + section("Container", valkey) + service()
 
     for role in API_ROLES:
         units[f"secpal-{role}.container"] = api_container(contract, role)
@@ -324,7 +281,7 @@ def build_units(contract: dict) -> dict[str, str]:
         "Unit",
         [
             "Description=Validate SecPal production state before product startup",
-            "Before=secpal-valkey.service secpal-migrate.service",
+            "Before=secpal-migrate.service",
             "PartOf=secpal.target",
         ],
     ) + section(
@@ -349,11 +306,37 @@ def build_units(contract: dict) -> dict[str, str]:
     return dict(sorted((name, SPDX_HEADER + content) for name, content in units.items()))
 
 
+def build_host_units(contract: dict) -> dict[str, str]:
+    """Native firewall ownership; DB loss must not stop the user manager."""
+    uid = contract['rootless_mapping']['service_uid']
+    service = section('Unit', [
+        'Description=SecPal rootless PostgreSQL loopback boundary',
+        'After=nftables.service', f'Before=user@{uid}.service',
+    ]) + section('Service', [
+        'Type=oneshot', 'RemainAfterExit=yes',
+        'ExecStartPre=/usr/sbin/nft --check -f /etc/nftables/secpal-postgresql.nft',
+        'ExecStart=/usr/sbin/nft -f /etc/nftables/secpal-postgresql.nft',
+        'ExecStop=/usr/sbin/nft delete table inet secpal_postgresql',
+        'TimeoutStartSec=30', 'TimeoutStopSec=30', 'UMask=0077',
+    ]) + section('Install', ['WantedBy=multi-user.target'])
+    manager = section('Unit', [
+        'Requires=secpal-postgresql-loopback.service',
+        'BindsTo=secpal-postgresql-loopback.service',
+        'After=secpal-postgresql-loopback.service postgresql.service',
+        'Wants=postgresql.service',
+    ])
+    return {
+        'secpal-postgresql-loopback.service': SPDX_HEADER + service,
+        f'user@{uid}.service.d/secpal-postgresql.conf': SPDX_HEADER + manager,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--quadlet-output", type=Path, required=True)
     parser.add_argument("--systemd-output", type=Path, required=True)
+    parser.add_argument("--host-systemd-output", type=Path)
     args = parser.parse_args()
     contract = load_contract(args.contract)
     quadlet_output = args.quadlet_output.resolve()
@@ -364,6 +347,11 @@ def main() -> int:
         output = systemd_output if name.endswith((".service", ".target")) else quadlet_output
         destination = output / name
         destination.write_text(content, encoding="utf-8")
+    if args.host_systemd_output is not None:
+        for name, content in build_host_units(contract).items():
+            destination = args.host_systemd_output / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(content, encoding='utf-8')
     return 0
 
 
