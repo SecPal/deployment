@@ -14,12 +14,12 @@ native_unavailable() {
   if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then
     native_failure
   fi
-  printf 'SKIP: Production state native lifecycle unavailable: %s.\n' "$reason"
+  printf 'SKIP: Native rootless runtime lifecycle unavailable: %s.\n' "$reason"
   exit 0
 }
 
 native_failure() {
-  printf 'ERROR: Production state native lifecycle requires an admitted native Quadlet user generator.\n' >&2
+  printf 'ERROR: Native rootless runtime lifecycle requires an admitted native Quadlet user generator.\n' >&2
   exit 1
 }
 
@@ -103,11 +103,11 @@ sys.exit(
 
 admit_native_generator
 
-FIXTURE_ROOT="$(mktemp -d /tmp/secpal-d2-native.XXXXXX)"
-STATE_PATH="$FIXTURE_ROOT/srv/secpal/private-storage"
+FIXTURE_ROOT="$(mktemp -d /tmp/secpal-native.XXXXXX)"
+STATE_PATH="$FIXTURE_ROOT/state"
 QUADLET_ROOT="$FIXTURE_ROOT/quadlet"
 GENERATED_ROOT="$FIXTURE_ROOT/generated"
-INSTANCE="d2-native-$$"
+INSTANCE="native-$$"
 CONTAINER_NAME="secpal-$INSTANCE"
 SERVICE_NAME="$INSTANCE.service"
 SYSTEMD_ENV=(
@@ -128,7 +128,7 @@ cleanup() {
     return 1
   elif [ -d "$FIXTURE_ROOT" ]; then
     case "$(realpath "$FIXTURE_ROOT")" in
-      /tmp/secpal-d2-native.*)
+      /tmp/secpal-native.*)
         podman unshare chown -R 0:0 "$FIXTURE_ROOT" >/dev/null 2>&1 || true
         rm -rf -- "$FIXTURE_ROOT"
         ;;
@@ -144,7 +144,7 @@ interrupted() {
 trap cleanup EXIT
 trap interrupted HUP INT TERM
 
-install -d -m 0750 "$FIXTURE_ROOT/srv/secpal" "$STATE_PATH"
+install -d -m 0750 "$STATE_PATH"
 install -d -m 0700 "$QUADLET_ROOT" "$GENERATED_ROOT"
 podman unshare chown 10001:10001 "$STATE_PATH"
 
@@ -181,18 +181,18 @@ test "$(find "$PRODUCTION_GENERATED" -maxdepth 1 -type f | wc -l)" -eq 9
 
 if ! podman image exists "$FRONTEND_IMAGE"; then
   if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then
-    printf 'ERROR: required production state native lifecycle image is not staged.\n' >&2
+    printf 'ERROR: required native rootless runtime lifecycle image is not staged.\n' >&2
     exit 1
   fi
-  printf 'SKIP: Production state native lifecycle unavailable: reviewed image is not locally staged.\n'
+  printf 'SKIP: Native rootless runtime lifecycle unavailable: reviewed image is not locally staged.\n'
   exit 0
 fi
 if [ ! -S "/run/user/$(id -u)/bus" ]; then
   if [ "${SECPAL_REQUIRE_NATIVE_LIFECYCLE:-0}" = 1 ]; then
-    printf 'ERROR: required production state native lifecycle systemd user bus is unavailable.\n' >&2
+    printf 'ERROR: required native rootless runtime lifecycle systemd user bus is unavailable.\n' >&2
     exit 1
   fi
-  printf 'SKIP: Production state native lifecycle unavailable: systemd user bus is unavailable.\n'
+  printf 'SKIP: Native rootless runtime lifecycle unavailable: systemd user bus is unavailable.\n'
   exit 0
 fi
 
@@ -215,4 +215,4 @@ after="$(podman unshare stat -c '%i:%u:%g:%a:%s' "$STATE_PATH/proof")"
 test "$before" = "$after"
 test "$(podman unshare cat "$STATE_PATH/proof")" = persistence
 
-printf 'Production state native systemd-user/Quadlet lifecycle passed.\n'
+printf 'Native rootless runtime systemd-user/Quadlet lifecycle passed.\n'
