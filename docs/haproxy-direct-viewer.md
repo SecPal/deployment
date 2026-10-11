@@ -8,8 +8,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 Deployment #220 consumes #219's host-native HAProxy runtime and routing and
 Issue #101's backend policy. The candidate implements `single` and the private
 `ha` PROXY v2 seam. This is a listener seam, not an HA fleet qualification.
-Public Viewer acceptance additionally requires approved real public-ingress
-qualification. The immutable #219 reference record remains historical provenance.
+The [DIRECT qualification record](evidence/haproxy-direct-viewer.json) retains
+actual private reference-host and bounded public-ingress observations, with a
+[closed observation schema](evidence/haproxy-direct-viewer.schema.json). The
+immutable #219 reference record remains historical provenance.
 
 ## Closed single input
 
@@ -90,7 +92,7 @@ frontend SNI, certificate and hostname verification without DNS lookup. A
 failed probe cannot establish successful activation/reload. Socket changes
 remain construction decisions and are rejected by graceful reload.
 
-## Qualification and remaining boundary
+## Qualification and delivery boundary
 
 `tests/haproxy-direct-contract.py` covers closed input, public-port pairing,
 neutral-listener bypass rejection, sanitization, exact byte regeneration,
@@ -180,5 +182,22 @@ Reference-host qualification must use freshly authenticated inventory, SSH
 host identity and an accepted operator SSH profile. Public Viewer qualification
 additionally requires an exact authenticated target and bounded operator-approved
 public-ingress scope. No retained #219 test grants public activation authority.
-Until these gates and full application/private-host tests pass, the candidate
-cannot proceed to PRE_READY, Ready, merge, or completed closure of #220.
+The retained #220 record binds the executed implementation commit and exact
+installed helper hashes. Actual CX23 public IPv4/IPv6 HTTP/TLS tests exercised
+the pinned API kernel, forwarding sanitization, session/CORS/Sanctum behavior,
+origin isolation, public PROXY rejection, privacy logging and reload/LKG. CX33's
+independently observed physical IPv4/IPv6 sources were outside the external
+allowlist and rejected. Local UID 993, 994 and 1000 connections were rejected;
+only UID 0 administrative generation witnesses passed the temporary test rule.
+The full original firewall and HAProxy/boot state were restored after 53.23
+seconds; external port closure, test-unit removal and temporary credential
+revocation were independently verified.
+
+These temporary controller firewall rules are qualification-only. They grant no
+public operating authorization and change no accepted backend policy. The
+separate private real-host record covers strict HA PROXY v2, transport admission,
+decoder isolation and application trust; its HAProxy runtime cases passed on
+x86_64 and aarch64. This is no HA fleet acceptance. Synthetic self-signed TLS
+proves identity transport only; certificate lifecycle remains #103. Ordinary
+canonical validation, attestation, finite review, protected merge and independent
+post-merge acceptance still govern delivery and completed closure of #220.
