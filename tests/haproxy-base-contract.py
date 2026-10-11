@@ -181,6 +181,29 @@ class ContractTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'verify-haproxy-reload-generation'):
                     helper.reload_master(10, 993)
 
+    def test_startup_witness_rejects_wrong_domain_and_nonserving_worker(self):
+        import importlib.util
+        import tempfile
+        from unittest import mock
+        path = ROOT / 'scripts/haproxy-config.py'
+        spec = importlib.util.spec_from_file_location('haproxy_startup_config', path)
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with mock.patch.object(helper, 'process_identity',
+                               side_effect=ValueError('admit-haproxy-domain')):
+            with self.assertRaisesRegex(ValueError, 'admit-haproxy-domain'):
+                helper.verify_running(10, 993)
+        with tempfile.TemporaryDirectory() as temporary:
+            children = Path(temporary) / 'children'
+            children.write_text('12')
+            with mock.patch.object(helper, 'master_children', return_value=children), \
+                 mock.patch.object(helper, 'process_identity', return_value=(children.parent, (993,) * 4)), \
+                 mock.patch.object(helper.time, 'monotonic', side_effect=[0, 0, 11]), \
+                 mock.patch.object(helper.time, 'sleep'), \
+                 mock.patch.object(helper, 'probe_generation', return_value=False):
+                with self.assertRaisesRegex(ValueError, 'verify-haproxy-startup-generation'):
+                    helper.verify_running(10, 993)
+
 
 if __name__ == '__main__':
     unittest.main()

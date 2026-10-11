@@ -25,7 +25,7 @@ Both official architecture RPMs were retrieved and independently verified with
 `rpm -Kv`: Rocky key `6fedfc85` signature, header and payload digests passed.
 Their extracted executables both declare `+SYSTEMD`, `+THREAD`, `+OPENSSL` and
 `+PCRE2`. The common build options include `USE_SYSTEMD=1` and
-`USE_OPENSSL=1`. The amd64 installed package's `haproxy -vv` additionally proves
+`USE_OPENSSL=1`. Actual amd64 and arm64 installed packages' `haproxy -vv` additionally prove
 native execution, HTTP/1 and HTTP/2 multiplexers, systemd support and the same
 feature list. Shared configuration uses HTTP checks, HTX parsing, ACLs, prefix
 header deletion, UUID request IDs, bounded transaction variables and
@@ -50,10 +50,11 @@ build or executable digest. Upstream version text alone is insufficient: Rocky
 backports fixes in the release. Never replace the Rocky package with an ad hoc
 source build to bypass supply admission.
 
-Arm64 **package/supply is proven** from genuine signed Rocky RPM bytes. Its
-compiled feature declaration is proven by those bytes. **Runtime behavior has
-not been executed on arm64**. Shared HTTP source semantics are independent of
-architecture, but that does not qualify arm64 systemd/SELinux behavior.
+Both architectures have independently verified signed package supply and
+compiled features. Installed systemd/SELinux and HAProxy behavior were also
+executed separately on genuine x86_64 and aarch64 Rocky reference hosts; see
+the bounded evidence below. These executions qualify only the tested systems
+and outcomes, rather than every host on either architecture.
 
 ## Routing and typed composition seams
 
@@ -137,6 +138,10 @@ and mixed stop behavior are retained. Systemd hardening constrains filesystem,
 devices, capabilities, address families and socket binds. The separately
 rendered `secpal-listeners.conf` admits exactly the reviewed listener ports;
 backend ports cannot be listeners. Runtime sockets/storage paths are hidden.
+The root master retains `CAP_KILL` to signal its dedicated-UID workers during
+reload and shutdown; workers drop all effective capabilities. A fixed
+`ExecStartPost` witness refuses startup unless the master and a serving worker
+have the expected UID, `haproxy_t` domain, cgroup and configuration generation.
 The unit binds to and starts after #101's policy service: withdrawing that
 service also stops HAProxy.
 
@@ -147,11 +152,20 @@ files must be root-owned, regular where applicable, without group/other write
 access, symlinks or hard-linked authority files. Scripts can be 0555 and inputs 0444. Install the desired closed input at `/etc/haproxy/secpal-routing.json` and
 the two systemd drop-ins before activation; reload the system manager after
 unit installation. Product accounts cannot modify any of these inputs.
+Install `config/production/host-selinux/secpal_haproxy_runtime.cil` beside the
+helper. Its only permission is the `init_t` to `haproxy_t` process transition
+under `NoNewPrivileges`; its only file-context mapping gives the private
+`/run/haproxy` directory the existing stock `haproxy_var_run_t` type. It grants
+no backend, container, unrelated-UID or connect-any permission. The stock
+Rocky configuration context is `etc_t`; `haproxy_conf_t` is not a type in the
+observed Rocky 10.2 policy. The #101 unit uses `RuntimeDirectoryMode=0755` for
+its public read-only startup barrier, while retaining `UMask=0077`.
 
 `haproxy-config --activate` admits package bytes/features, #101's effective
 policy/barrier and the listener unit, and requires `haproxy.service` inactive.
-It generates a restrictive same-directory candidate, restores the stock Rocky
-`haproxy_conf_t` label, validates with the actual `haproxy -c -q`, and atomically
+While inactive, activation installs the fixed reviewed runtime policy and
+restores its runtime labels. It generates a restrictive same-directory
+candidate, restores the stock Rocky configuration label, validates with the actual `haproxy -c -q`, and atomically
 publishes `/etc/haproxy/secpal.cfg` as 0444. A fixed root-only lock serializes
 publication. File/directory synchronization prevents partial active writes.
 The `/run/haproxy` directory is root-owned 0755, with root-only lifecycle lock
@@ -181,7 +195,8 @@ Changing listening sockets is a separately reviewed host-construction operation.
 SELinux must be Enforcing and `haproxy_connect_any`/`pasta_bind_all_ports` off.
 Reuse #101's dedicated `secpal_backend_port_t`, exact labels, effective
 allow/deny decisions, dedicated-UID nftables rules and mandatory barrier.
-This base adds no SELinux module, boolean, connect-any privilege, local UID
+The small runtime module above preserves confinement with `NoNewPrivileges`;
+it adds no boolean, backend privilege, connect-any privilege, local UID
 exception, container runtime authority or namespace escape. Stock binary,
 configuration and runtime labels must be observed on the actual host, not
 inferred from repository text.
@@ -208,19 +223,72 @@ qualification. Configuration callbacks cannot substitute for installed-service
 reload evidence. Contract tests separately reject wrong ports, container
 addresses, sockets/APIs, arbitrary extensions and identity/TLS/secret inputs.
 
-The current workspace's real Rocky amd64 binary supplies local execution
-proof. Its active host is not qualified: a non-Rocky repository is enabled and
-`pasta_bind_all_ports` is on. No service/firewall/SELinux mutation was performed.
-A conforming administrator-controlled Rocky host is still required to exercise
-the installed drop-in/helper, effective labels/UIDs, startup barrier,
-intended/unrelated-UID and external-interface policy, actual rootless workload
-recreation, journal privacy and reload/LKG. Arm64 installed execution is also
-unproven. Do not turn these gaps into PASS or infer them from signed RPM supply.
+The workspace binary supplies local execution evidence only. Its host is not
+qualified: its non-Rocky repository and broad rootless-network boolean were
+not changed. The seven local binary cases were run in an isolated unprivileged
+network namespace because unrelated workloads occupied the fixed backend ports.
+That local test is distinct from the installed reference-host qualification.
 
-Actual reference-host evidence, when available, must be bounded and bound to
-the exact reviewed source tree, with independently revalidated observations.
-It may establish only the tested host/architecture/outcomes. GCP #294 is
-explicitly deferred and is not a gate here; no alternate cloud requirement is
-introduced. No GCP, multi-provider, Managed Production, HA or customer-production
-acceptance is granted. #248 may consume this base only within its genuinely
-proven scope. #220 and certificate/auth consumers remain separate deliveries.
+On 2026-10-11, the operator-authorized disposable Hetzner CX23, CAX21 and CX33
+servers were independently rebuilt in place, authenticated with fresh SSH host
+keys through the provider console, and qualified on Rocky Linux 10.2. The
+[historical observation record](evidence/haproxy-rocky-reference.json) retains
+exact resource/image/action identities, installed signed package provenance,
+runtime source hashes, real process domains/UIDs, negative security outcomes,
+recreation, reload and last-known-good observations. Raw observations and exact
+public controller inputs remain retained in the original qualification workspace.
+The record is evidence, not a desired configuration or live-state input.
+
+| Host  | Resource ID | Architecture | Image ID  | Rebuild action  |
+| ----- | ----------- | ------------ | --------- | --------------- |
+| CX23  | 163965414   | x86_64       | 245249370 | 660832265333033 |
+| CAX21 | 169716995   | aarch64      | 245249744 | 660849445245896 |
+| CX33  | 163717938   | x86_64       | 245249370 | 660849445254580 |
+
+Each host independently demonstrated Enforcing SELinux after reboot, rootless
+Quadlet execution with correlated cross-MCS denial, disabled runtime sockets,
+Issue #101's exact effective SELinux/nftables policy, unrelated-UID and non-loopback
+ingress denial, confined root-master/dedicated-worker operation and startup
+refusal when the required transition was disabled. The same fixed public
+bootstrap input was exercised on both x86_64 servers; architecture-correct
+package and image inputs were separately exercised on ARM64. This proves
+provider **REBUILD**, not fresh provider-resource **CREATE** or repeated rebuild
+of every individual server. Server/IP identities and unrelated cloud resources
+were preserved; no cloud Volumes, snapshots, backups or networks were deleted.
+
+The product fixture used accepted pinned API/frontend images and an actual
+rootless disposable PostgreSQL 18.6 dependency, real migrations, one synthetic
+tenant and the scheduler heartbeat. API `/health/live` remained distinct from
+`/health/ready`; missing readiness dependencies were not bypassed. The fixture's
+ephemeral tenant key file used the pinned API's required 0600 mode with read-only
+consumer delivery. This is bounded test preparation, not native PostgreSQL #81,
+production construction #92, Host Enrollment #241 or Deployment Activation #100.
+No production secret or customer data was used.
+
+Actual installed HAProxy processing proved distinct private test origins,
+health exclusion and recovery across real rootless frontend/API recreation,
+malformed requests, methods, header/target bounds and the request-header timeout.
+Synthetic requests observed on the real backend socket proved forwarding-header
+removal; actual journal output excluded synthetic credential, cookie, URI/query,
+body and caller-ID markers while retaining bounded routing/rejection diagnostics.
+Invalid candidates preserved the serving generation. Valid reload preserved the
+master, admitted the exact new worker/fingerprint and completed an in-flight
+request. A deliberately blocked administrator serving witness caused a failed
+reload and bounded restoration; uninterrupted allowed frontend samples and the
+restored accepted fingerprint were observed. Withdrawing #101's policy stopped
+the products and proxy; restoring it recovered genuine API readiness and routing.
+Temporary packet-capture, ingress and restrictive firewall probes were cleaned.
+
+The pilot uncovered real installed-host defects that source fixtures missed:
+the public backend barrier inherited root-only directory access, `NoNewPrivileges`
+suppressed the stock HAProxy domain transition, the private runtime directory
+needed its stock label, and the root master needed permission to signal its
+workers. The small corrections above retain confinement and narrow backend
+permissions. A startup serving/domain witness now rejects an unconfined process.
+
+The private test listener was `127.0.0.1:8080` with synthetic `.example.invalid`
+origins. No DNS/TLS or public Viewer identity for `app.secpal.dev` or
+`api.secpal.dev` was configured. GCP #294 remains explicitly deferred; no GCP,
+multi-provider, Managed Production, HA or customer-production acceptance is
+granted. #248 may consume the tested shared base and host observations within
+this scope. #220 and certificate/auth consumers remain separate deliveries.

@@ -35,6 +35,7 @@ LISTENER_UNIT = Path('/etc/systemd/system/haproxy.service.d/secpal-listeners.con
 BASE_UNIT = Path('/etc/systemd/system/haproxy.service.d/secpal.conf')
 RUNTIME = Path('/run/haproxy')
 BINARY = Path('/usr/sbin/haproxy')
+RUNTIME_POLICY = HELPER.parent / 'secpal_haproxy_runtime.cil'
 
 
 def trusted(path: Path, *, regular=False):
@@ -48,9 +49,9 @@ def trusted(path: Path, *, regular=False):
         raise ValueError('admit-administrator-file')
 
 
-def observe(operation, arguments):
+def observe(operation, arguments, *, timeout=15):
     try:
-        result = subprocess.run(arguments, capture_output=True, timeout=15,
+        result = subprocess.run(arguments, capture_output=True, timeout=timeout,
                                 env={'PATH': '/usr/sbin:/usr/bin', 'LANG': 'C'})
     except (OSError, subprocess.SubprocessError) as error:
         raise ValueError(operation) from error
@@ -62,7 +63,7 @@ def observe(operation, arguments):
 def authority(*, desired=True):
     if os.geteuid() != 0 or Path(__file__).resolve() != HELPER:
         raise ValueError('admit-installed-administrator-helper')
-    for path in (HELPER, *(HELPER.parent / name for name in LIBRARIES), BINARY, BASE_UNIT, LISTENER_UNIT):
+    for path in (HELPER, *(HELPER.parent / name for name in LIBRARIES), RUNTIME_POLICY, BINARY, BASE_UNIT, LISTENER_UNIT):
         trusted(path, regular=True)
     architecture = platform.machine()
     identity = observe('observe-haproxy-rpm', ['/usr/bin/rpm', '-q', 'haproxy', '--qf',
@@ -97,7 +98,7 @@ def validate(candidate):
 
 
 def prepare(candidate):
-    # Stock Rocky /etc/haproxy(/.*)? fcontext applies haproxy_conf_t.
+    # Use the actual stock Rocky file context (etc_t), not an invented type.
     observe('label-haproxy-candidate', ['/usr/sbin/restorecon', '-F', str(candidate)])
 
 
@@ -115,14 +116,36 @@ def process_identity(pid, *, master=False):
     return process, tuple(int(uid) for uid in uids)
 
 
-def reload_master(pid, worker_uid):
+def master_children(pid):
     process, uids = process_identity(pid, master=True)
     if uids != (0, 0, 0, 0):
         raise ValueError('admit-haproxy-master-uid')
     cgroup = (process / 'cgroup').read_text()
     if not any(row.split(':', 2)[-1] == '/system.slice/haproxy.service' for row in cgroup.splitlines()):
         raise ValueError('admit-haproxy-system-unit')
-    children = process / 'task' / str(pid) / 'children'
+    return process / 'task' / str(pid) / 'children'
+
+
+def verify_running(pid, worker_uid):
+    children = master_children(pid)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        for child in children.read_text().split():
+            try:
+                _, ids = process_identity(int(child))
+                if ids == (worker_uid,) * 4 and probe_generation(int(child)):
+                    if child in children.read_text().split():
+                        _, ids = process_identity(int(child))
+                        if ids == (worker_uid,) * 4:
+                            return
+            except (OSError, ValueError, StopIteration):
+                continue
+        time.sleep(.1)
+    raise ValueError('verify-haproxy-startup-generation')
+
+
+def reload_master(pid, worker_uid):
+    children = master_children(pid)
     previous = set(children.read_text().split())
     os.kill(pid, signal.SIGUSR2)
     deadline = time.monotonic() + 10
@@ -176,6 +199,7 @@ def main():
     actions.add_argument('--check', action='store_true')
     actions.add_argument('--activate', action='store_true')
     actions.add_argument('--reload', type=int, metavar='SYSTEMD_MAINPID')
+    actions.add_argument('--verify-running', type=int, metavar='SYSTEMD_MAINPID')
     args = parser.parse_args()
     if os.geteuid() != 0 or Path(__file__).resolve() != HELPER:
         raise ValueError('admit-installed-administrator-helper')
@@ -191,12 +215,14 @@ def main():
         if info.st_uid != 0 or info.st_mode & 0o077 or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError('admit-config-lock')
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        data, uid = authority(desired=not args.check)
-        if args.check:
+        data, uid = authority(desired=not (args.check or args.verify_running is not None))
+        if args.check or args.verify_running is not None:
             trusted(SERVING, regular=True)
             if SERVING.stat().st_size > MAX_CONFIG_BYTES or SERVING.read_bytes() != data:
                 raise ValueError('admit-serving-reviewed-config')
             validate(SERVING)
+            if args.verify_running is not None:
+                verify_running(args.verify_running, uid)
         else:
             if SERVING.exists() or SERVING.is_symlink():
                 trusted(SERVING, regular=True)
@@ -219,6 +245,11 @@ def main():
                 if observe('observe-haproxy-service-state', ['/usr/bin/systemctl', 'show',
                            'haproxy.service', '--property=ActiveState', '--value']).strip() != 'inactive':
                     raise ValueError('admit-inactive-initial-activation')
+                # Fixed reviewed policy only; activation runs outside the
+                # hardened service and accepts no policy path or rule input.
+                observe('install-haproxy-runtime-policy', ['/usr/sbin/semodule',
+                        '-i', str(RUNTIME_POLICY), '-e', 'secpal_haproxy_runtime'], timeout=60)
+                observe('label-haproxy-runtime', ['/usr/sbin/restorecon', '-RF', str(RUNTIME)])
                 reload = lambda: None
             publish(SERVING, data, validate, reload, prepare,
                     recover=reload if args.reload is not None else lambda: None)

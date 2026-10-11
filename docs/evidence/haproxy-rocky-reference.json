@@ -1,0 +1,2427 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "accepted_host_owner_source": "178fd9d46224afaa9349d3954b14d07ce2f81c6a",
+  "delivery_issue": 219,
+  "evidence_kind": "BOUNDED_HAPROXY_REFERENCE_HOST_OBSERVATIONS",
+  "fixture": "Pinned accepted SecPal API/frontend images with actual rootless disposable PostgreSQL 18.6 dependency, migrations, one synthetic tenant and scheduler heartbeat. No readiness bypass. Public fixture-only tenant-kek mode corrected to 0600 required by pinned API; read-only delivery retained. No production secret or customer data.",
+  "hosts": [
+    {
+      "architecture": "x86_64",
+      "backend_nftables_owner_agreement": "PASS (independent accepted #101 owner readmission)",
+      "classification": "REAL_REFERENCE_HOST_QUALIFIED",
+      "effective_backend_authority": [
+        {
+          "decision": {
+            "allowed": 134217728,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 134217728,
+            "result": 0
+          },
+          "permission": "name_connect",
+          "source": "haproxy_t",
+          "target": "secpal_backend_port_t"
+        },
+        {
+          "decision": {
+            "allowed": 141557760,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 4194304,
+            "result": 0
+          },
+          "permission": "name_bind",
+          "source": "container_runtime_t",
+          "target": "secpal_backend_port_t"
+        },
+        {
+          "decision": {
+            "allowed": 0,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 134217728,
+            "result": 0
+          },
+          "permission": "name_connect",
+          "source": "haproxy_t",
+          "target": "unreserved_port_t"
+        }
+      ],
+      "evidence_index_sha256": "06babf0394e6b74ded1d45d60be39161f8f7e51cc26e8634e4f3a31d5faa8a48",
+      "final_boot_id": "3c9d25ff-7080-4ee2-b896-0098454fe218",
+      "final_configuration_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+      "final_labels": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": "drwxr-xr-x. 3 root root system_u:object_r:etc_t:s0              4096 Oct 11 13:25 /etc/haproxy\n-r--r--r--. 1 root root system_u:object_r:etc_t:s0              4407 Oct 11 13:25 /etc/haproxy/secpal.cfg\n-r--r--r--. 1 root root system_u:object_r:etc_t:s0               145 Oct 11 13:25 /etc/haproxy/secpal-routing.json\ndrwxr-xr-x. 2 root root system_u:object_r:haproxy_var_run_t:s0    80 Oct 11 13:31 /run/haproxy\n-rw-------. 1 root root system_u:object_r:haproxy_var_run_t:s0     6 Oct 11 13:31 /run/haproxy/secpal.pid\ndrwxr-xr-x. 2 root root system_u:object_r:var_run_t:s0            60 Oct 11 13:31 /run/secpal-product-backends\n-r--r--r--. 1 root root system_u:object_r:var_run_t:s0           126 Oct 11 13:31 /run/secpal-product-backends/ready.json\n-r-xr-xr-x. 1 root root system_u:object_r:usr_t:s0             12682 Oct 11 13:07 /usr/local/libexec/secpal/haproxy-config"
+      },
+      "final_processes": {
+        "14810": {
+          "cgroup": "0::/system.slice/haproxy.service",
+          "exe": "/usr/sbin/haproxy",
+          "selinux_domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "uid_fields": [
+            "Uid:\t0\t0\t0\t0",
+            "Gid:\t0\t0\t0\t0",
+            "CapEff:\t00000000000004e0",
+            "NoNewPrivs:\t1",
+            "Seccomp:\t2"
+          ]
+        },
+        "14813": {
+          "cgroup": "0::/system.slice/haproxy.service",
+          "exe": "/usr/sbin/haproxy",
+          "selinux_domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "uid_fields": [
+            "Uid:\t994\t994\t994\t994",
+            "Gid:\t994\t994\t994\t994",
+            "CapEff:\t0000000000000000",
+            "NoNewPrivs:\t1",
+            "Seccomp:\t2"
+          ]
+        }
+      },
+      "fresh_ssh_host_identity": "SHA256:sLe6sAW7TMHyJ8UzVtr79QpiRfX6oHd9IFtBTsqKDBk",
+      "guest_authority_admission_sha256": "af98b675415b818f64a4de0b60f68ec41778364f674ed260186acd891252c7df",
+      "installed_behavior_cases": {
+        "explicit_valid_restoration": {
+          "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+          "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+          "master_pid": 8874,
+          "worker_pid": 10953
+        },
+        "genuine_application_readiness": {
+          "api": {
+            "status": 200
+          },
+          "frontend": {
+            "status": 200
+          },
+          "generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 8874,
+            "worker_pid": 8877
+          }
+        },
+        "graceful_reload_new_generation_and_inflight": {
+          "after": {
+            "config_sha256": "37de7598bcade7f2cf9a1d4b878d82ba00c2f169c784a46db146a2d97e438c6f",
+            "fingerprint": "0d7b8201c58b6fa6a0f1c2fe8f420d4f8a77eab1cd8c64e9aaa067d549ecd596",
+            "master_pid": 8874,
+            "worker_pid": 10927
+          },
+          "before": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 8874,
+            "worker_pid": 8877
+          },
+          "inflight_body": "{\"status\":\"ok\"}",
+          "inflight_status": 200,
+          "reload": {
+            "exit_status": 0,
+            "stderr": "",
+            "stdout": ""
+          }
+        },
+        "intended_and_unrelated_uid_authority": {
+          "haproxy": {
+            "api": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            },
+            "frontend": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          },
+          "secpal-admin": {
+            "api": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "frontend": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            }
+          },
+          "secpal-runtime": {
+            "api": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "frontend": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            }
+          }
+        },
+        "invalid_candidate_keeps_serving": {
+          "previous_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 8874,
+            "worker_pid": 8877
+          },
+          "rejection": {
+            "exit_status": 1,
+            "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+            "stdout": ""
+          },
+          "unchanged_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 8874,
+            "worker_pid": 8877
+          }
+        },
+        "native_syntax_rejection": {
+          "exit_status": 1,
+          "stderr": "",
+          "stdout": ""
+        },
+        "origins_methods_malformed_bounds_timeout": {
+          "TRACE": 405,
+          "UNSUPPORTED": 405,
+          "api.secpal.example.invalid:1234": 421,
+          "app.secpal.example.invalid.evil": 421,
+          "frontend_does_not_return_api_readiness": {
+            "status": 404
+          },
+          "header_timeout": {
+            "duration_seconds": 5.00248125600001,
+            "status_line": "HTTP/1.1 408 Request Time-out"
+          },
+          "malformed_and_header_bounds": [
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request"
+          ],
+          "target_bound": 414,
+          "unknown.example.invalid": 421
+        },
+        "real_rootless_recreation": {
+          "api": {
+            "excluded": {
+              "status": 503
+            },
+            "new_container_id": "f398ff68afa7529c7b72c4e1725cb9dad5e6ee159a9736207c8970ff57914553",
+            "old_container_id": "004ce215f45819598f99b854654776444a78e9a6c49e5d141f92a548e3683ff5",
+            "ports": {
+              "8080/tcp": [
+                {
+                  "HostIp": "127.0.0.1",
+                  "HostPort": "18081"
+                }
+              ]
+            },
+            "recovered": {
+              "status": 200
+            }
+          },
+          "frontend": {
+            "excluded": {
+              "status": 503
+            },
+            "new_container_id": "eaca7a7f93b3dfcdf876d469ffec37581d3f2bba3b1fe5bc9e48c8b3600c73d0",
+            "old_container_id": "b1830b0e2728890bb63d4401d5c15e32a7f1a243a8efd454a2d458ebd78d149c",
+            "ports": {
+              "8080/tcp": [
+                {
+                  "HostIp": "127.0.0.1",
+                  "HostPort": "18080"
+                }
+              ]
+            },
+            "recovered": {
+              "status": 200
+            }
+          }
+        },
+        "uncertain_reload_rejected_last_known_good": {
+          "all_frontend_samples_200": true,
+          "failed_reload": {
+            "exit_status": 1,
+            "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+            "stdout": ""
+          },
+          "restored_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 8874,
+            "worker_pid": 11243
+          },
+          "serving_samples": 170
+        }
+      },
+      "installed_haproxy_binary_sha256": "61b90cd8d83713880c11ee82c9e3d9ae73662ebdef1244695f63338df7dc05ed",
+      "installed_package_provenance": [
+        {
+          "architecture": "x86_64",
+          "epoch": "7",
+          "name": "podman",
+          "nevra": "podman-7:5.8.2-9.el10_2.x86_64",
+          "payload_digest": "3fd1fcc2309b3bf4ba88968c96728e6f63d2b81bbaefe38c8b406b889334ec41",
+          "release": "9.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "5.8.2"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "3",
+          "name": "conmon",
+          "nevra": "conmon-3:2.2.1-2.el10.x86_64",
+          "payload_digest": "749a9d23b1b92a7889a4a6cb4df69c283f2ba7cb39834480cc717257d84bb7d0",
+          "release": "2.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.2.1"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "crun",
+          "nevra": "crun-1.27-2.el10_2.x86_64",
+          "payload_digest": "0403d2b3dbcbad4644e4c2bbe9e0ed0e3b778e4c5756e7b4eb846dccca12ad8b",
+          "release": "2.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.27"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "2",
+          "name": "netavark",
+          "nevra": "netavark-2:1.17.2-1.el10.x86_64",
+          "payload_digest": "5390e51a0283e7e62d6a195cd27dca8d5a0395bba80d1f77d24b70c2abd1c84b",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.17.2"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "2",
+          "name": "aardvark-dns",
+          "nevra": "aardvark-dns-2:1.17.1-1.el10_2.x86_64",
+          "payload_digest": "20460dfd306e85201a86a2f310f96a9f339d0c15e7a278457223c0ae022fc4f4",
+          "release": "1.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.17.1"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "passt",
+          "nevra": "passt-0^20251210.gd04c480-7.el10_2.x86_64",
+          "payload_digest": "bf115f9a34acd2a80d77c8da67945b12cabbb0033210b1b63fbd3b023cb5dd45",
+          "release": "7.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "0^20251210.gd04c480"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "2",
+          "name": "shadow-utils-subid",
+          "nevra": "shadow-utils-subid-2:4.15.0-11.el10.x86_64",
+          "payload_digest": "b68d30fcda196bd249973f663d0bd8d7b5712e49c1c7f271aafeb1becfbcb3be",
+          "release": "11.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.15.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "systemd",
+          "nevra": "systemd-257-23.el10_2.2.rocky.0.1.x86_64",
+          "payload_digest": "9ccda5accf9963da5b85a631d2b28687d1002a67a1d01401989ba0c63a94abf8",
+          "release": "23.el10_2.2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "257"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "4",
+          "name": "container-selinux",
+          "nevra": "container-selinux-4:2.246.0-1.el10.noarch",
+          "payload_digest": "e01945fef9158b841cfc53b836602c05f7be6996b0462c716b50f4605ada5395",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.246.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "audit",
+          "nevra": "audit-4.0.3-5.el10.x86_64",
+          "payload_digest": "56e976b3d20ec4fc07385dc752dca84d408279a8503266470d2ff62520372d75",
+          "release": "5.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.0.3"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "policycoreutils",
+          "nevra": "policycoreutils-3.10-2.el10_2.x86_64",
+          "payload_digest": "fb6ae5f60c4b22cf74847ae7f851d38e4d1a113b8d10bb42000ed8281138ae0f",
+          "release": "2.el10_2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.10"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "policycoreutils-python-utils",
+          "nevra": "policycoreutils-python-utils-3.10-2.el10_2.noarch",
+          "payload_digest": "7692ba38bb3869589d92b477812dfa61359653c73c069f40f58cf0918e40789f",
+          "release": "2.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.10"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "selinux-policy-targeted",
+          "nevra": "selinux-policy-targeted-42.1.18-4.el10_2.4.noarch",
+          "payload_digest": "8087a9187d595dbd9f3ffb7c97d02f34b7af838e5bbf9eb0791f9f0d326db8ef",
+          "release": "4.el10_2.4",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "42.1.18"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "curl",
+          "nevra": "curl-8.12.1-4.el10_2.6.x86_64",
+          "payload_digest": "cd1f9cba416c1c028e435076dbd5292d8ea752cd2d381c8d66375479f417eadf",
+          "release": "4.el10_2.6",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "8.12.1"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "dnf",
+          "nevra": "dnf-4.20.0-22.el10_2.rocky.0.1.noarch",
+          "payload_digest": "fb56e13cf3be0d7757b51ec59096a539761fbb7c66f35b1ef3540c14c006c5f9",
+          "release": "22.el10_2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.20.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "git",
+          "nevra": "git-2.52.0-1.el10.x86_64",
+          "payload_digest": "fa900392b816eebc6ce10c1348f8325f0fdd8e79b993a40d0fc27bf9f20d0bae",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.52.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "jq",
+          "nevra": "jq-1.7.1-11.el10_2.2.x86_64",
+          "payload_digest": "4f884bcfec97832e2244f6720ca90a392f609edc321be8cd549cc70cc28ec8e5",
+          "release": "11.el10_2.2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.7.1"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "1",
+          "name": "nftables",
+          "nevra": "nftables-1:1.1.5-6.el10_2.x86_64",
+          "payload_digest": "d6cfc89e0fe11cebdeeb1daa9296a63eb84e61545bd0bd40e36146e50e8be615",
+          "release": "6.el10_2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.1.5"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "openssh-server",
+          "nevra": "openssh-server-9.9p1-28.el10_2.rocky.0.1.x86_64",
+          "payload_digest": "6711bf67f334fbc400b5c0d1d0502ba5d5f3a40bc287fc816ae9ccfb7c30a41e",
+          "release": "28.el10_2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "9.9p1"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "sudo",
+          "nevra": "sudo-1.9.17-10.p2.el10_2.7.x86_64",
+          "payload_digest": "1cfe6f787b5b35e0f2f9bf2c1785c81dcc8148c8335a234665b25af96f6745fa",
+          "release": "10.p2.el10_2.7",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.9.17"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "python3-jsonschema",
+          "nevra": "python3-jsonschema-4.19.1-7.el10.noarch",
+          "payload_digest": "b3dba202192145fba7e29f4aeeece16e4d82c259eb73443b161d13936420fc82",
+          "release": "7.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.19.1"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "dnf-plugins-core",
+          "nevra": "dnf-plugins-core-4.7.0-10.el10.noarch",
+          "payload_digest": "9488393d24dc686b4c33354e5b49e41be207f5febdf15a672736006fa06bd3e0",
+          "release": "10.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.7.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "haproxy",
+          "nevra": "haproxy-3.0.5-6.el10_2.2.x86_64",
+          "payload_digest": "b7455878f22b5a717a98d8ef3ad41c843f59fbca7fae34d2811f5463bf678a5b",
+          "release": "6.el10_2.2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.0.5"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "setools-console",
+          "nevra": "setools-console-4.6.0-3.el10.x86_64",
+          "payload_digest": "f92b0a747061407007e839433113d4eed9ca4b120bef7e2b4f5629f27814e56b",
+          "release": "3.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.6.0"
+        }
+      ],
+      "installed_systemd_verification": {
+        "diagnostics": "",
+        "exit_status": 0,
+        "observation_sha256": "8a885e7b90652b266b3d2658f99fe7da3b67278fd6de781d8a721f66eb71ff56"
+      },
+      "location": "fsn1",
+      "os_release": "Rocky Linux 10.2",
+      "policy_withdrawal_and_recovery": {
+        "api_restored": {
+          "status": 200
+        },
+        "api_stop_result": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "Result=success\nExecMainStatus=0"
+        },
+        "api_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "fixed_backend_listeners_absent": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "LISTEN 0      128    0.0.0.0:22 0.0.0.0:*\nLISTEN 0      128       [::]:22    [::]:*"
+        },
+        "frontend_restored": {
+          "status": 200
+        },
+        "frontend_stop_result": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "Result=success\nExecMainStatus=0"
+        },
+        "frontend_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "haproxy_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "public_barrier_absent": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "reestablish_exact_backend_policy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "restart_exact_products": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "restart_shared_haproxy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "runtime_barrier_readable": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "secpal-product-backend-policy_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "start_denied_without_barrier": {
+          "exit_status": 1,
+          "stderr": "FAIL: product backend policy authority is unavailable or invalid",
+          "stdout": ""
+        },
+        "withdraw_exact_backend_policy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        }
+      },
+      "privacy": {
+        "bounded_journal": {
+          "bounded_access_fields_present": true,
+          "journal": "peer=127.0.0.1 request_id=0cee8d77-285c-4431-a14e-09d290eb522e method=POST origin=frontend backend=secpal_frontend server=frontend status=405 bytes=685 duration_ms=4 termination=---- security=accepted\npeer=127.0.0.1 request_id=81b1eca2-15f2-4b91-ae6c-b9835c7f333f method=GET origin=unavailable backend=secpal_ingress server=<NOSRV> status=421 bytes=214 duration_ms=0 termination=PR-- security=origin_rejected\npeer=127.0.0.1 request_id=587e586d-a0cb-4d76-bc0a-ccd3a5399675 method=unavailable origin=unavailable backend=secpal_ingress server=<NOSRV> status=405 bytes=255 duration_ms=0 termination=PR-- security=method_rejected",
+          "sensitive_synthetic_markers_excluded": true
+        },
+        "forwarding_removed": true,
+        "ingress": {
+          "18080": {
+            "ipv6_loopback_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "non_loopback_ingress_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "private_interface_positive": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          },
+          "18081": {
+            "ipv6_loopback_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "non_loopback_ingress_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "private_interface_positive": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          }
+        },
+        "probe_cleanup": {
+          "owned_probe_processes_stopped": true,
+          "temporary_interface_absent": true,
+          "temporary_namespace_absent": true
+        },
+        "synthetic_capture_sha256": "7b9d065583751f869f03a03774f96b95a9c50f9877d4359d0328f251b0093382"
+      },
+      "provider_image_id": 245249370,
+      "provider_rebuild_action_id": 660832265333033,
+      "quadlet_authority": {
+        "drop_in_paths": [],
+        "exec_start": {
+          "argv": [
+            "/usr/bin/podman",
+            "run",
+            "--name",
+            "secpal-host-qualification-v0wz6h",
+            "--replace",
+            "--rm",
+            "--cgroups=split",
+            "--pull",
+            "never",
+            "--network",
+            "none",
+            "--sdnotify=conmon",
+            "-d",
+            "--cap-drop",
+            "all",
+            "--user",
+            "65532:65532",
+            "--security-opt=no-new-privileges",
+            "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+            "sleep",
+            "infinity"
+          ],
+          "code": null,
+          "executable": "/usr/bin/podman",
+          "ignore_errors": false,
+          "pid": 0,
+          "start_time": null,
+          "status": "0/0",
+          "stop_time": null
+        },
+        "fragment_path": "/run/user/993/systemd/generator/secpal-host-qualification-v0wz6h.service",
+        "invariant_owner": "quadlet_authority_contract.admit_quadlet_authority",
+        "runtime_uid": 993,
+        "schema_version": 1,
+        "source_path": "/etc/containers/systemd/users/993/secpal-host-qualification-v0wz6h.container",
+        "unit_name": "secpal-host-qualification-v0wz6h"
+      },
+      "raw_evidence_sha256": {
+        "cx23-canonical-runtime-label-and-startup-result.json": "dcd51046c3d26592159e1e352a6fc200b413eb4ba3aed5d262c75cf154256ce7",
+        "cx23-effective-backend-policy-admission.json": "2e82c7253423cf8b993b68344ea9fc270dd0c4596d919358e32d88aa66c95bf1",
+        "cx23-host-key-admission.json": "af98b675415b818f64a4de0b60f68ec41778364f674ed260186acd891252c7df",
+        "cx23-installed-behavior-qualification-observations.json": "52c37a73088145f065d9ff37312f16de89d0d16980cd664b0b0a16f4eb4b3704",
+        "cx23-native-host-subsystem-admission.json": "a6e6af29d7674b44015de0e0b00a0179f17a51549382c7a557f8f37a7e5ea3fc",
+        "cx23-package-supply-admission.json": "172a60ce3c17a786efbd1adcf6ea9b8a7a62fb48d5ba43574661c244ae1463d4",
+        "cx23-policy-startup-barrier-observations-2.json": "13fd6a392cb73f490ae7eb05b1b332f93fca1bab56f3c961fd31ba43fe855cfe",
+        "cx23-privacy-ingress-qualification-observations-2.json": "83440b976e95e88a42576f7a46f5b38c97e1e517ccb9c13cd3c2afcb3c8d19f3",
+        "cx23-provider-actions-observation.json": "6977fc74e8c7cdd15588387a43d61c578de599294c0d890051257fe1fc10c5b2",
+        "cx23-reboot-observation.json": "57ba7db43441531e7a292a70df7c77ada0577627ed545497c1751405f9eff6a1"
+      },
+      "reboot_persistence_observation": {
+        "new_boot_id": "3c9d25ff-7080-4ee2-b896-0098454fe218",
+        "observations": [],
+        "post_reboot_exit_status": 0,
+        "post_reboot_observations": "3c9d25ff-7080-4ee2-b896-0098454fe218\nEnforcing\nhaproxy_connect_any --> off\npasta_bind_all_ports --> off\nactive\nactive\nactive\n",
+        "previous_boot_id": "9447e98a-3044-444a-b0bf-3c1f3f680591",
+        "reboot_command_exit_status": 0,
+        "reboot_requested_at": "2026-10-11T12:27:02.575307+00:00",
+        "server_id": 163965414,
+        "status": "POST_REBOOT_ENFORCING_POLICY_ACTIVE"
+      },
+      "required_features": ["+SYSTEMD", "+THREAD", "+OPENSSL", "+PCRE2"],
+      "runtime_source_sha256": {
+        "haproxy-config": "e1e478b27b6c0090a6b8fcbe210f32dd1ed5ec3822f3a334067cc744c4f4119e",
+        "haproxy_base_contract.py": "0e411903c7a92abcb67d6ea13bf6038b391065abef30fd2ea5da9d1af94ae533",
+        "haproxy_config_lifecycle.py": "b28209aa8499c3ec272e3177c2b651ad1364c065cef21360c3c4b6d99689224c",
+        "haproxy_supply_contract.py": "423b1a9a50b520deee9dcc982a67ee5086b613ff02ab1690016068a6cedfdc63",
+        "product_backend_contract.py": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e",
+        "secpal_haproxy_runtime.cil": "1a35f1eec1766881b5c1c9d987770ae8d627c0f74d5fdf56b8d0121e1d0f2b82"
+      },
+      "selinux_isolation": {
+        "denial": {
+          "event_time": "10/11/26 12:29:57.480",
+          "permissive": 0,
+          "pid": 2645,
+          "proctitle": "cat /foreign/marker",
+          "serial": "479",
+          "source_context": "system_u:system_r:container_t:s0:c742,c949",
+          "syscall_command": "cat",
+          "syscall_pid": 2645,
+          "target_context": "system_u:object_r:container_file_t:s0:c195,c976"
+        },
+        "invariant_owner": "selinux_isolation_contract.admit_selinux_isolation",
+        "process_contexts": [
+          {
+            "mcs_categories": [195, 976],
+            "raw": "system_u:system_r:container_t:s0:c195,c976",
+            "selinux_type": "container_t"
+          },
+          {
+            "mcs_categories": [742, 949],
+            "raw": "system_u:system_r:container_t:s0:c742,c949",
+            "selinux_type": "container_t"
+          }
+        ],
+        "storage_context": {
+          "mcs_categories": [195, 976],
+          "raw": "system_u:object_r:container_file_t:s0:c195,c976",
+          "selinux_type": "container_file_t"
+        }
+      },
+      "server_id": 163965414,
+      "server_name": "rocky-4gb-fsn1-1",
+      "server_type": "CX23"
+    },
+    {
+      "architecture": "aarch64",
+      "backend_nftables_owner_agreement": "PASS (independent accepted #101 owner readmission)",
+      "classification": "REAL_REFERENCE_HOST_QUALIFIED",
+      "effective_backend_authority": [
+        {
+          "decision": {
+            "allowed": 134217728,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 134217728,
+            "result": 0
+          },
+          "permission": "name_connect",
+          "source": "haproxy_t",
+          "target": "secpal_backend_port_t"
+        },
+        {
+          "decision": {
+            "allowed": 141557760,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 4194304,
+            "result": 0
+          },
+          "permission": "name_bind",
+          "source": "container_runtime_t",
+          "target": "secpal_backend_port_t"
+        },
+        {
+          "decision": {
+            "allowed": 0,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 134217728,
+            "result": 0
+          },
+          "permission": "name_connect",
+          "source": "haproxy_t",
+          "target": "unreserved_port_t"
+        }
+      ],
+      "evidence_index_sha256": "ae8c5f37157349d057077712ce1dac77a268f92e64b481fce17b23cc762fe30b",
+      "final_boot_id": "25ebedc8-0856-4708-abb0-f6ccad5bca37",
+      "final_configuration_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+      "final_labels": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": "drwxr-xr-x. 3 root root system_u:object_r:etc_t:s0              4096 Oct 11 13:51 /etc/haproxy\n-r--r--r--. 1 root root system_u:object_r:etc_t:s0              4407 Oct 11 13:50 /etc/haproxy/secpal.cfg\n-r--r--r--. 1 root root system_u:object_r:etc_t:s0               145 Oct 11 13:51 /etc/haproxy/secpal-routing.json\ndrwxr-xr-x. 2 root root system_u:object_r:haproxy_var_run_t:s0    80 Oct 11 13:52 /run/haproxy\n-rw-------. 1 root root system_u:object_r:haproxy_var_run_t:s0     5 Oct 11 13:52 /run/haproxy/secpal.pid\ndrwxr-xr-x. 2 root root system_u:object_r:var_run_t:s0            60 Oct 11 13:52 /run/secpal-product-backends\n-r--r--r--. 1 root root system_u:object_r:var_run_t:s0           126 Oct 11 13:52 /run/secpal-product-backends/ready.json\n-r-xr-xr-x. 1 root root system_u:object_r:usr_t:s0             12682 Oct 11 13:48 /usr/local/libexec/secpal/haproxy-config"
+      },
+      "final_processes": {
+        "8568": {
+          "cgroup": "0::/system.slice/haproxy.service",
+          "exe": "/usr/sbin/haproxy",
+          "selinux_domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "uid_fields": [
+            "Uid:\t0\t0\t0\t0",
+            "Gid:\t0\t0\t0\t0",
+            "CapEff:\t00000000000004e0",
+            "NoNewPrivs:\t1",
+            "Seccomp:\t2"
+          ]
+        },
+        "8572": {
+          "cgroup": "0::/system.slice/haproxy.service",
+          "exe": "/usr/sbin/haproxy",
+          "selinux_domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "uid_fields": [
+            "Uid:\t994\t994\t994\t994",
+            "Gid:\t994\t994\t994\t994",
+            "CapEff:\t0000000000000000",
+            "NoNewPrivs:\t1",
+            "Seccomp:\t2"
+          ]
+        }
+      },
+      "fresh_ssh_host_identity": "SHA256:ShgAfWcnK5LxGq9j3QHH/rnZtw+ldvpOASQr+0bLMgE",
+      "guest_authority_admission_sha256": "010f61e6616bec71d61c3931aeeb8c3a9043c7bd1052cb7ac1ae05f72a35ebd5",
+      "installed_behavior_cases": {
+        "explicit_valid_restoration": {
+          "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+          "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+          "master_pid": 6123,
+          "worker_pid": 6766
+        },
+        "genuine_application_readiness": {
+          "api": {
+            "status": 200
+          },
+          "frontend": {
+            "status": 200
+          },
+          "generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 6123,
+            "worker_pid": 6126
+          }
+        },
+        "graceful_reload_new_generation_and_inflight": {
+          "after": {
+            "config_sha256": "37de7598bcade7f2cf9a1d4b878d82ba00c2f169c784a46db146a2d97e438c6f",
+            "fingerprint": "0d7b8201c58b6fa6a0f1c2fe8f420d4f8a77eab1cd8c64e9aaa067d549ecd596",
+            "master_pid": 6123,
+            "worker_pid": 6740
+          },
+          "before": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 6123,
+            "worker_pid": 6126
+          },
+          "inflight_body": "{\"status\":\"ok\"}",
+          "inflight_status": 200,
+          "reload": {
+            "exit_status": 0,
+            "stderr": "",
+            "stdout": ""
+          }
+        },
+        "intended_and_unrelated_uid_authority": {
+          "haproxy": {
+            "api": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            },
+            "frontend": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          },
+          "secpal-admin": {
+            "api": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "frontend": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            }
+          },
+          "secpal-runtime": {
+            "api": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "frontend": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            }
+          }
+        },
+        "invalid_candidate_keeps_serving": {
+          "previous_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 6123,
+            "worker_pid": 6126
+          },
+          "rejection": {
+            "exit_status": 1,
+            "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+            "stdout": ""
+          },
+          "unchanged_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 6123,
+            "worker_pid": 6126
+          }
+        },
+        "native_syntax_rejection": {
+          "exit_status": 1,
+          "stderr": "",
+          "stdout": ""
+        },
+        "origins_methods_malformed_bounds_timeout": {
+          "TRACE": 405,
+          "UNSUPPORTED": 405,
+          "api.secpal.example.invalid:1234": 421,
+          "app.secpal.example.invalid.evil": 421,
+          "frontend_does_not_return_api_readiness": {
+            "status": 404
+          },
+          "header_timeout": {
+            "duration_seconds": 5.002524025000071,
+            "status_line": "HTTP/1.1 408 Request Time-out"
+          },
+          "malformed_and_header_bounds": [
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request"
+          ],
+          "target_bound": 414,
+          "unknown.example.invalid": 421
+        },
+        "real_rootless_recreation": {
+          "api": {
+            "excluded": {
+              "status": 503
+            },
+            "new_container_id": "93ab2156c69530677c717dc7b4f20ad06a6f2f60b49d0ac9eedbda3e0b631b4c",
+            "old_container_id": "e22d260bcfe108b10692f3bcb72842d6c3a9152efac33d8dab76a59ed9412da0",
+            "ports": {
+              "8080/tcp": [
+                {
+                  "HostIp": "127.0.0.1",
+                  "HostPort": "18081"
+                }
+              ]
+            },
+            "recovered": {
+              "status": 200
+            }
+          },
+          "frontend": {
+            "excluded": {
+              "status": 503
+            },
+            "new_container_id": "f4d5d3f99f671127cec4d7eeeae7eddd5509625a0f3cfecddc9a58b7c36c5ded",
+            "old_container_id": "639b7531b7b00ca09864a9d9840254ced2494bf75b55b85c0243b4b4474cb010",
+            "ports": {
+              "8080/tcp": [
+                {
+                  "HostIp": "127.0.0.1",
+                  "HostPort": "18080"
+                }
+              ]
+            },
+            "recovered": {
+              "status": 200
+            }
+          }
+        },
+        "uncertain_reload_rejected_last_known_good": {
+          "all_frontend_samples_200": true,
+          "failed_reload": {
+            "exit_status": 1,
+            "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+            "stdout": ""
+          },
+          "restored_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 6123,
+            "worker_pid": 7061
+          },
+          "serving_samples": 174
+        }
+      },
+      "installed_haproxy_binary_sha256": "442e3802fa46248e75c3c402ba86a197f3313db4eed5f199173d2e3600179859",
+      "installed_package_provenance": [
+        {
+          "architecture": "aarch64",
+          "epoch": "7",
+          "name": "podman",
+          "nevra": "podman-7:5.8.2-9.el10_2.aarch64",
+          "payload_digest": "8778319fee29e09185607c0ce9cb450b5a944c179bddf51790e8401f82aa0ab5",
+          "release": "9.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "5.8.2"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "3",
+          "name": "conmon",
+          "nevra": "conmon-3:2.2.1-2.el10.aarch64",
+          "payload_digest": "e782a85c8343bb838cfb0a32d1e12ece25f61124308bba3fae56d46ad3120de4",
+          "release": "2.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.2.1"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "crun",
+          "nevra": "crun-1.27-2.el10_2.aarch64",
+          "payload_digest": "0f9f8ba7a0155d11e91370d260c24d7397345ddc7be138792ddfbe7b48b9f86a",
+          "release": "2.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.27"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "2",
+          "name": "netavark",
+          "nevra": "netavark-2:1.17.2-1.el10.aarch64",
+          "payload_digest": "ae789540d5544dfdb0cef9e19f614492fd1999e02cfc6b3a52a2f173269d46b8",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.17.2"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "2",
+          "name": "aardvark-dns",
+          "nevra": "aardvark-dns-2:1.17.1-1.el10_2.aarch64",
+          "payload_digest": "f8b3a4dd9b5f9838cb22e7af47d08cc773284625def409e7a91e1c5e313e9ff3",
+          "release": "1.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.17.1"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "passt",
+          "nevra": "passt-0^20251210.gd04c480-7.el10_2.aarch64",
+          "payload_digest": "b0df497dcceb5b450f461bf7a5af02302b7f73a17e8454ccc9081c353d2ab82a",
+          "release": "7.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "0^20251210.gd04c480"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "2",
+          "name": "shadow-utils-subid",
+          "nevra": "shadow-utils-subid-2:4.15.0-11.el10.aarch64",
+          "payload_digest": "1e8a32a28853b747eb7f93ebc7a495bfdc42d2476f0c37a66488a1b929345c61",
+          "release": "11.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.15.0"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "systemd",
+          "nevra": "systemd-257-23.el10_2.2.rocky.0.1.aarch64",
+          "payload_digest": "5b6b87c1787f708400a4dbe3af517c0874d7a643db9bb3b1fef02f5c47f9e1d7",
+          "release": "23.el10_2.2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "257"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "4",
+          "name": "container-selinux",
+          "nevra": "container-selinux-4:2.246.0-1.el10.noarch",
+          "payload_digest": "e01945fef9158b841cfc53b836602c05f7be6996b0462c716b50f4605ada5395",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.246.0"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "audit",
+          "nevra": "audit-4.0.3-5.el10.aarch64",
+          "payload_digest": "7b91027f6f65f8cc9eaaad9d9897e8b1c74460e5555e1e00635777ec86527738",
+          "release": "5.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.0.3"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "policycoreutils",
+          "nevra": "policycoreutils-3.10-2.el10_2.aarch64",
+          "payload_digest": "23142bd14f5a5765341b8334ba826c1acef126386baa35fd4d97da35663b6c79",
+          "release": "2.el10_2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.10"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "policycoreutils-python-utils",
+          "nevra": "policycoreutils-python-utils-3.10-2.el10_2.noarch",
+          "payload_digest": "7692ba38bb3869589d92b477812dfa61359653c73c069f40f58cf0918e40789f",
+          "release": "2.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.10"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "selinux-policy-targeted",
+          "nevra": "selinux-policy-targeted-42.1.18-4.el10_2.4.noarch",
+          "payload_digest": "8087a9187d595dbd9f3ffb7c97d02f34b7af838e5bbf9eb0791f9f0d326db8ef",
+          "release": "4.el10_2.4",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "42.1.18"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "curl",
+          "nevra": "curl-8.12.1-4.el10_2.6.aarch64",
+          "payload_digest": "5f31518166e440276a7322bb9a5ce0d6ed620aa5c65e9c29240d76854703b141",
+          "release": "4.el10_2.6",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "8.12.1"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "dnf",
+          "nevra": "dnf-4.20.0-22.el10_2.rocky.0.1.noarch",
+          "payload_digest": "fb56e13cf3be0d7757b51ec59096a539761fbb7c66f35b1ef3540c14c006c5f9",
+          "release": "22.el10_2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.20.0"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "git",
+          "nevra": "git-2.52.0-1.el10.aarch64",
+          "payload_digest": "fa900392b816eebc6ce10c1348f8325f0fdd8e79b993a40d0fc27bf9f20d0bae",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.52.0"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "jq",
+          "nevra": "jq-1.7.1-11.el10_2.2.aarch64",
+          "payload_digest": "85a2286c2ff06b3e8d0529b83ac85590945d58291961d6ecb7af2fd47f592fb8",
+          "release": "11.el10_2.2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.7.1"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "1",
+          "name": "nftables",
+          "nevra": "nftables-1:1.1.5-6.el10_2.aarch64",
+          "payload_digest": "1cd3e3c7d46079615e8d581fc1d88374b82c1fd96f70e9cef0271f685ce694da",
+          "release": "6.el10_2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.1.5"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "openssh-server",
+          "nevra": "openssh-server-9.9p1-28.el10_2.rocky.0.1.aarch64",
+          "payload_digest": "36e5d0dd2d2534d08d15c2faa3f464f36b553ffe36126a26635ca54e1e091ccc",
+          "release": "28.el10_2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "9.9p1"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "sudo",
+          "nevra": "sudo-1.9.17-10.p2.el10_2.7.aarch64",
+          "payload_digest": "1646edaa30948ad9791fbad16f77b20a8543f5cda2184773613b14d1d0dfaeda",
+          "release": "10.p2.el10_2.7",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.9.17"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "python3-jsonschema",
+          "nevra": "python3-jsonschema-4.19.1-7.el10.noarch",
+          "payload_digest": "b3dba202192145fba7e29f4aeeece16e4d82c259eb73443b161d13936420fc82",
+          "release": "7.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.19.1"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "dnf-plugins-core",
+          "nevra": "dnf-plugins-core-4.7.0-10.el10.noarch",
+          "payload_digest": "9488393d24dc686b4c33354e5b49e41be207f5febdf15a672736006fa06bd3e0",
+          "release": "10.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.7.0"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "haproxy",
+          "nevra": "haproxy-3.0.5-6.el10_2.2.aarch64",
+          "payload_digest": "adb0326b1ad933494aed6f5619b8091a5cbe8fa09286cb7f373f7528c3f6684e",
+          "release": "6.el10_2.2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.0.5"
+        },
+        {
+          "architecture": "aarch64",
+          "epoch": "0",
+          "name": "setools-console",
+          "nevra": "setools-console-4.6.0-3.el10.aarch64",
+          "payload_digest": "f92b0a747061407007e839433113d4eed9ca4b120bef7e2b4f5629f27814e56b",
+          "release": "3.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.6.0"
+        }
+      ],
+      "installed_systemd_verification": {
+        "diagnostics": "",
+        "exit_status": 0,
+        "observation_sha256": "3b4a6f9352819c6ad88a7733131dbff3d1fc4d174e7baefff90b0551fe2e327d"
+      },
+      "location": "fsn1",
+      "os_release": "Rocky Linux 10.2",
+      "policy_withdrawal_and_recovery": {
+        "api_restored": {
+          "status": 200
+        },
+        "api_stop_result": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "Result=exit-code\nExecMainStatus=137"
+        },
+        "api_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "failed"
+        },
+        "fixed_backend_listeners_absent": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "LISTEN 0      128    0.0.0.0:22 0.0.0.0:*\nLISTEN 0      128       [::]:22    [::]:*"
+        },
+        "frontend_restored": {
+          "status": 200
+        },
+        "frontend_stop_result": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "Result=success\nExecMainStatus=0"
+        },
+        "frontend_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "haproxy_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "public_barrier_absent": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "reestablish_exact_backend_policy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "restart_exact_products": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "restart_shared_haproxy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "runtime_barrier_readable": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "secpal-product-backend-policy_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "start_denied_without_barrier": {
+          "exit_status": 1,
+          "stderr": "FAIL: product backend policy authority is unavailable or invalid",
+          "stdout": ""
+        },
+        "withdraw_exact_backend_policy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        }
+      },
+      "privacy": {
+        "bounded_journal": {
+          "bounded_access_fields_present": true,
+          "journal": "peer=127.0.0.1 request_id=7cfd4470-055d-425f-ac26-1cfe1915f45e method=POST origin=frontend backend=secpal_frontend server=frontend status=405 bytes=685 duration_ms=1 termination=---- security=accepted\npeer=127.0.0.1 request_id=b8b1326e-f26b-4af1-9ce4-b29e1f0a344d method=GET origin=unavailable backend=secpal_ingress server=<NOSRV> status=421 bytes=214 duration_ms=0 termination=PR-- security=origin_rejected\npeer=127.0.0.1 request_id=b8a75fdd-e1e6-40e3-bcc0-156781c94b74 method=unavailable origin=unavailable backend=secpal_ingress server=<NOSRV> status=405 bytes=255 duration_ms=0 termination=PR-- security=method_rejected",
+          "sensitive_synthetic_markers_excluded": true
+        },
+        "forwarding_removed": true,
+        "ingress": {
+          "18080": {
+            "ipv6_loopback_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "non_loopback_ingress_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "private_interface_positive": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          },
+          "18081": {
+            "ipv6_loopback_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "non_loopback_ingress_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "private_interface_positive": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          }
+        },
+        "probe_cleanup": {
+          "owned_probe_processes_stopped": true,
+          "temporary_interface_absent": true,
+          "temporary_namespace_absent": true
+        },
+        "synthetic_capture_sha256": "30b9c3f8ed0153a0eaa740e13de472d32fa33f4b500f681243c02e0afee6b441"
+      },
+      "provider_image_id": 245249744,
+      "provider_rebuild_action_id": 660849445245896,
+      "quadlet_authority": {
+        "drop_in_paths": [],
+        "exec_start": {
+          "argv": [
+            "/usr/bin/podman",
+            "run",
+            "--name",
+            "secpal-host-qualification-bwNFJX",
+            "--replace",
+            "--rm",
+            "--cgroups=split",
+            "--pull",
+            "never",
+            "--network",
+            "none",
+            "--sdnotify=conmon",
+            "-d",
+            "--cap-drop",
+            "all",
+            "--user",
+            "65532:65532",
+            "--security-opt=no-new-privileges",
+            "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+            "sleep",
+            "infinity"
+          ],
+          "code": null,
+          "executable": "/usr/bin/podman",
+          "ignore_errors": false,
+          "pid": 0,
+          "start_time": null,
+          "status": "0/0",
+          "stop_time": null
+        },
+        "fragment_path": "/run/user/993/systemd/generator/secpal-host-qualification-bwNFJX.service",
+        "invariant_owner": "quadlet_authority_contract.admit_quadlet_authority",
+        "runtime_uid": 993,
+        "schema_version": 1,
+        "source_path": "/etc/containers/systemd/users/993/secpal-host-qualification-bwNFJX.container",
+        "unit_name": "secpal-host-qualification-bwNFJX"
+      },
+      "raw_evidence_sha256": {
+        "cax21-confined-startup-observations.json": "39ef41fb28ea4852cdf684a77664d33deabd5f188c303a5f0ff02203b9bc1ecd",
+        "cax21-effective-backend-policy-admission.json": "85e000d7c2f314e985fd4f0e67f5a0a32869584f181071b75875f181fcfedb4d",
+        "cax21-host-key-admission.json": "010f61e6616bec71d61c3931aeeb8c3a9043c7bd1052cb7ac1ae05f72a35ebd5",
+        "cax21-installed-behavior-qualification-observations.json": "b5d1f7ea056d37ed3986c700d401ad5a203101107c1fee202ec98057410529b3",
+        "cax21-native-host-subsystem-admission.json": "72cbb885df13c3f68dec059fe278f46329cd8a526ff7dfccad0ffcbc4f605823",
+        "cax21-package-supply-admission.json": "9edfbca960ffa38314f67bddcfe7419266f11ccbda27bb58ddb0d53606e71ba7",
+        "cax21-policy-startup-barrier-observations.json": "c328a3470b6eb75d44c40550cdbacf2a5fc507b9f53d5b5e908d0a17424a30d4",
+        "cax21-privacy-ingress-qualification-observations.json": "96fe5bc03e30b1259015a4bdd3d4d576d0939cf88da30fcfd9c0e482a4ae5253",
+        "cax21-provider-actions-current.json": "e87fbc81f0b75694748734ec579320f46cdd72806853b7225db70e8c2a6e9008",
+        "cax21-qualified-runtime-final-observations.json": "bb66654aee91c1c6fbbd7f8459a619a54600eb1ad78ba17d7fab0f7a76d6a1f9",
+        "cax21-reboot-observation.json": "c1fe587ff519d8f02721208d73a1cba6f005488e694b3b28dbd5ac998553ebee"
+      },
+      "reboot_persistence_observation": {
+        "new_boot_id": "25ebedc8-0856-4708-abb0-f6ccad5bca37",
+        "observed_at": "2026-10-11T13:41:02.488757+00:00",
+        "old_boot_id": "eb4dbaac-b3a0-4a95-b969-17332171495a",
+        "post_reboot_observation": "25ebedc8-0856-4708-abb0-f6ccad5bca37\nEnforcing\nhaproxy_connect_any --> off\npasta_bind_all_ports --> off\nactive\nactivating\nactive\n",
+        "same_authenticated_host_key": true,
+        "started_at": "2026-10-11T13:40:39.704472+00:00",
+        "target": 169716995
+      },
+      "required_features": ["+SYSTEMD", "+THREAD", "+OPENSSL", "+PCRE2"],
+      "runtime_source_sha256": {
+        "haproxy-config": "e1e478b27b6c0090a6b8fcbe210f32dd1ed5ec3822f3a334067cc744c4f4119e",
+        "haproxy_base_contract.py": "0e411903c7a92abcb67d6ea13bf6038b391065abef30fd2ea5da9d1af94ae533",
+        "haproxy_config_lifecycle.py": "b28209aa8499c3ec272e3177c2b651ad1364c065cef21360c3c4b6d99689224c",
+        "haproxy_supply_contract.py": "423b1a9a50b520deee9dcc982a67ee5086b613ff02ab1690016068a6cedfdc63",
+        "product_backend_contract.py": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e",
+        "secpal_haproxy_runtime.cil": "1a35f1eec1766881b5c1c9d987770ae8d627c0f74d5fdf56b8d0121e1d0f2b82"
+      },
+      "selinux_isolation": {
+        "denial": {
+          "event_time": "10/11/26 13:42:36.638",
+          "permissive": 0,
+          "pid": 2618,
+          "proctitle": "cat /foreign/marker",
+          "serial": "358",
+          "source_context": "system_u:system_r:container_t:s0:c659,c997",
+          "syscall_command": "cat",
+          "syscall_pid": 2618,
+          "target_context": "system_u:object_r:container_file_t:s0:c612,c766"
+        },
+        "invariant_owner": "selinux_isolation_contract.admit_selinux_isolation",
+        "process_contexts": [
+          {
+            "mcs_categories": [612, 766],
+            "raw": "system_u:system_r:container_t:s0:c612,c766",
+            "selinux_type": "container_t"
+          },
+          {
+            "mcs_categories": [659, 997],
+            "raw": "system_u:system_r:container_t:s0:c659,c997",
+            "selinux_type": "container_t"
+          }
+        ],
+        "storage_context": {
+          "mcs_categories": [612, 766],
+          "raw": "system_u:object_r:container_file_t:s0:c612,c766",
+          "selinux_type": "container_file_t"
+        }
+      },
+      "server_id": 169716995,
+      "server_name": "rocky-8gb-fsn1-2",
+      "server_type": "CAX21"
+    },
+    {
+      "architecture": "x86_64",
+      "backend_nftables_owner_agreement": "PASS (independent accepted #101 owner readmission)",
+      "classification": "REAL_REFERENCE_HOST_QUALIFIED",
+      "effective_backend_authority": [
+        {
+          "decision": {
+            "allowed": 134217728,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 134217728,
+            "result": 0
+          },
+          "permission": "name_connect",
+          "source": "haproxy_t",
+          "target": "secpal_backend_port_t"
+        },
+        {
+          "decision": {
+            "allowed": 141557760,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 4194304,
+            "result": 0
+          },
+          "permission": "name_bind",
+          "source": "container_runtime_t",
+          "target": "secpal_backend_port_t"
+        },
+        {
+          "decision": {
+            "allowed": 0,
+            "class": 16,
+            "decided": 4294967295,
+            "flags": 0,
+            "requested": 134217728,
+            "result": 0
+          },
+          "permission": "name_connect",
+          "source": "haproxy_t",
+          "target": "unreserved_port_t"
+        }
+      ],
+      "evidence_index_sha256": "37b421217a9c4d815b47250965b8d82ebbb708aa253afbc21d245d14e908e34b",
+      "final_boot_id": "c7939aff-ebc3-4080-82a3-d2a879db9ea0",
+      "final_configuration_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+      "final_labels": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": "drwxr-xr-x. 3 root root system_u:object_r:etc_t:s0              4096 Oct 11 14:09 /etc/haproxy\n-r--r--r--. 1 root root system_u:object_r:etc_t:s0              4407 Oct 11 14:09 /etc/haproxy/secpal.cfg\n-r--r--r--. 1 root root system_u:object_r:etc_t:s0               145 Oct 11 14:09 /etc/haproxy/secpal-routing.json\ndrwxr-xr-x. 2 root root system_u:object_r:haproxy_var_run_t:s0    80 Oct 11 14:11 /run/haproxy\n-rw-------. 1 root root system_u:object_r:haproxy_var_run_t:s0     5 Oct 11 14:11 /run/haproxy/secpal.pid\ndrwxr-xr-x. 2 root root system_u:object_r:var_run_t:s0            60 Oct 11 14:10 /run/secpal-product-backends\n-r--r--r--. 1 root root system_u:object_r:var_run_t:s0           126 Oct 11 14:10 /run/secpal-product-backends/ready.json\n-r-xr-xr-x. 1 root root system_u:object_r:usr_t:s0             12682 Oct 11 14:08 /usr/local/libexec/secpal/haproxy-config"
+      },
+      "final_processes": {
+        "7947": {
+          "cgroup": "0::/system.slice/haproxy.service",
+          "exe": "/usr/sbin/haproxy",
+          "selinux_domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "uid_fields": [
+            "Uid:\t0\t0\t0\t0",
+            "Gid:\t0\t0\t0\t0",
+            "CapEff:\t00000000000004e0",
+            "NoNewPrivs:\t1",
+            "Seccomp:\t2"
+          ]
+        },
+        "7950": {
+          "cgroup": "0::/system.slice/haproxy.service",
+          "exe": "/usr/sbin/haproxy",
+          "selinux_domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "uid_fields": [
+            "Uid:\t994\t994\t994\t994",
+            "Gid:\t994\t994\t994\t994",
+            "CapEff:\t0000000000000000",
+            "NoNewPrivs:\t1",
+            "Seccomp:\t2"
+          ]
+        }
+      },
+      "fresh_ssh_host_identity": "SHA256:iHHcbGw5Ezc4lQxFA+ep/Pf46YaV/vCPMsJFspGWFj4",
+      "guest_authority_admission_sha256": "8353fea91faba297c8489be660b2dfa422d4a7fe06d9217ef13c9f458b7daed3",
+      "installed_behavior_cases": {
+        "explicit_valid_restoration": {
+          "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+          "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+          "master_pid": 5393,
+          "worker_pid": 6355
+        },
+        "genuine_application_readiness": {
+          "api": {
+            "status": 200
+          },
+          "frontend": {
+            "status": 200
+          },
+          "generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 5393,
+            "worker_pid": 5396
+          }
+        },
+        "graceful_reload_new_generation_and_inflight": {
+          "after": {
+            "config_sha256": "37de7598bcade7f2cf9a1d4b878d82ba00c2f169c784a46db146a2d97e438c6f",
+            "fingerprint": "0d7b8201c58b6fa6a0f1c2fe8f420d4f8a77eab1cd8c64e9aaa067d549ecd596",
+            "master_pid": 5393,
+            "worker_pid": 6309
+          },
+          "before": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 5393,
+            "worker_pid": 5396
+          },
+          "inflight_body": "{\"status\":\"ok\"}",
+          "inflight_status": 200,
+          "reload": {
+            "exit_status": 0,
+            "stderr": "",
+            "stdout": ""
+          }
+        },
+        "intended_and_unrelated_uid_authority": {
+          "haproxy": {
+            "api": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            },
+            "frontend": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          },
+          "secpal-admin": {
+            "api": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "frontend": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            }
+          },
+          "secpal-runtime": {
+            "api": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "frontend": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            }
+          }
+        },
+        "invalid_candidate_keeps_serving": {
+          "previous_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 5393,
+            "worker_pid": 5396
+          },
+          "rejection": {
+            "exit_status": 1,
+            "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+            "stdout": ""
+          },
+          "unchanged_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 5393,
+            "worker_pid": 5396
+          }
+        },
+        "native_syntax_rejection": {
+          "exit_status": 1,
+          "stderr": "",
+          "stdout": ""
+        },
+        "origins_methods_malformed_bounds_timeout": {
+          "TRACE": 405,
+          "UNSUPPORTED": 405,
+          "api.secpal.example.invalid:1234": 421,
+          "app.secpal.example.invalid.evil": 421,
+          "frontend_does_not_return_api_readiness": {
+            "status": 404
+          },
+          "header_timeout": {
+            "duration_seconds": 5.002353835000008,
+            "status_line": "HTTP/1.1 408 Request Time-out"
+          },
+          "malformed_and_header_bounds": [
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request",
+            "HTTP/1.1 400 Bad request"
+          ],
+          "target_bound": 414,
+          "unknown.example.invalid": 421
+        },
+        "real_rootless_recreation": {
+          "api": {
+            "excluded": {
+              "status": 503
+            },
+            "new_container_id": "47d55f0c622cdf76f72f8feb3733b0003f55883fb5dcebecd375cd7be14ef3f9",
+            "old_container_id": "acb78eac3a2a641b4cadeda0fe571616e18369a648c3604f188a6ac3ddb37158",
+            "ports": {
+              "8080/tcp": [
+                {
+                  "HostIp": "127.0.0.1",
+                  "HostPort": "18081"
+                }
+              ]
+            },
+            "recovered": {
+              "status": 200
+            }
+          },
+          "frontend": {
+            "excluded": {
+              "status": 503
+            },
+            "new_container_id": "ebc4ce737894a0be7af960c9e1d7ab9ac8d4bd459b645fbc80288767a68e76bb",
+            "old_container_id": "d317f0f764a1c01eb71e8f4b9b97fdb76b7822bae3d4077a810f7360fb88d953",
+            "ports": {
+              "8080/tcp": [
+                {
+                  "HostIp": "127.0.0.1",
+                  "HostPort": "18080"
+                }
+              ]
+            },
+            "recovered": {
+              "status": 200
+            }
+          }
+        },
+        "uncertain_reload_rejected_last_known_good": {
+          "all_frontend_samples_200": true,
+          "failed_reload": {
+            "exit_status": 1,
+            "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+            "stdout": ""
+          },
+          "restored_generation": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 5393,
+            "worker_pid": 6636
+          },
+          "serving_samples": 157
+        }
+      },
+      "installed_haproxy_binary_sha256": "61b90cd8d83713880c11ee82c9e3d9ae73662ebdef1244695f63338df7dc05ed",
+      "installed_package_provenance": [
+        {
+          "architecture": "x86_64",
+          "epoch": "7",
+          "name": "podman",
+          "nevra": "podman-7:5.8.2-9.el10_2.x86_64",
+          "payload_digest": "3fd1fcc2309b3bf4ba88968c96728e6f63d2b81bbaefe38c8b406b889334ec41",
+          "release": "9.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "5.8.2"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "3",
+          "name": "conmon",
+          "nevra": "conmon-3:2.2.1-2.el10.x86_64",
+          "payload_digest": "749a9d23b1b92a7889a4a6cb4df69c283f2ba7cb39834480cc717257d84bb7d0",
+          "release": "2.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.2.1"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "crun",
+          "nevra": "crun-1.27-2.el10_2.x86_64",
+          "payload_digest": "0403d2b3dbcbad4644e4c2bbe9e0ed0e3b778e4c5756e7b4eb846dccca12ad8b",
+          "release": "2.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.27"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "2",
+          "name": "netavark",
+          "nevra": "netavark-2:1.17.2-1.el10.x86_64",
+          "payload_digest": "5390e51a0283e7e62d6a195cd27dca8d5a0395bba80d1f77d24b70c2abd1c84b",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.17.2"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "2",
+          "name": "aardvark-dns",
+          "nevra": "aardvark-dns-2:1.17.1-1.el10_2.x86_64",
+          "payload_digest": "20460dfd306e85201a86a2f310f96a9f339d0c15e7a278457223c0ae022fc4f4",
+          "release": "1.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.17.1"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "passt",
+          "nevra": "passt-0^20251210.gd04c480-7.el10_2.x86_64",
+          "payload_digest": "bf115f9a34acd2a80d77c8da67945b12cabbb0033210b1b63fbd3b023cb5dd45",
+          "release": "7.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "0^20251210.gd04c480"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "2",
+          "name": "shadow-utils-subid",
+          "nevra": "shadow-utils-subid-2:4.15.0-11.el10.x86_64",
+          "payload_digest": "b68d30fcda196bd249973f663d0bd8d7b5712e49c1c7f271aafeb1becfbcb3be",
+          "release": "11.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.15.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "systemd",
+          "nevra": "systemd-257-23.el10_2.2.rocky.0.1.x86_64",
+          "payload_digest": "9ccda5accf9963da5b85a631d2b28687d1002a67a1d01401989ba0c63a94abf8",
+          "release": "23.el10_2.2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "257"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "4",
+          "name": "container-selinux",
+          "nevra": "container-selinux-4:2.246.0-1.el10.noarch",
+          "payload_digest": "e01945fef9158b841cfc53b836602c05f7be6996b0462c716b50f4605ada5395",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.246.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "audit",
+          "nevra": "audit-4.0.3-5.el10.x86_64",
+          "payload_digest": "56e976b3d20ec4fc07385dc752dca84d408279a8503266470d2ff62520372d75",
+          "release": "5.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.0.3"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "policycoreutils",
+          "nevra": "policycoreutils-3.10-2.el10_2.x86_64",
+          "payload_digest": "fb6ae5f60c4b22cf74847ae7f851d38e4d1a113b8d10bb42000ed8281138ae0f",
+          "release": "2.el10_2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.10"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "policycoreutils-python-utils",
+          "nevra": "policycoreutils-python-utils-3.10-2.el10_2.noarch",
+          "payload_digest": "7692ba38bb3869589d92b477812dfa61359653c73c069f40f58cf0918e40789f",
+          "release": "2.el10_2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.10"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "selinux-policy-targeted",
+          "nevra": "selinux-policy-targeted-42.1.18-4.el10_2.4.noarch",
+          "payload_digest": "8087a9187d595dbd9f3ffb7c97d02f34b7af838e5bbf9eb0791f9f0d326db8ef",
+          "release": "4.el10_2.4",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "42.1.18"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "curl",
+          "nevra": "curl-8.12.1-4.el10_2.6.x86_64",
+          "payload_digest": "cd1f9cba416c1c028e435076dbd5292d8ea752cd2d381c8d66375479f417eadf",
+          "release": "4.el10_2.6",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "8.12.1"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "dnf",
+          "nevra": "dnf-4.20.0-22.el10_2.rocky.0.1.noarch",
+          "payload_digest": "fb56e13cf3be0d7757b51ec59096a539761fbb7c66f35b1ef3540c14c006c5f9",
+          "release": "22.el10_2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.20.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "git",
+          "nevra": "git-2.52.0-1.el10.x86_64",
+          "payload_digest": "fa900392b816eebc6ce10c1348f8325f0fdd8e79b993a40d0fc27bf9f20d0bae",
+          "release": "1.el10",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "2.52.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "jq",
+          "nevra": "jq-1.7.1-11.el10_2.2.x86_64",
+          "payload_digest": "4f884bcfec97832e2244f6720ca90a392f609edc321be8cd549cc70cc28ec8e5",
+          "release": "11.el10_2.2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.7.1"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "1",
+          "name": "nftables",
+          "nevra": "nftables-1:1.1.5-6.el10_2.x86_64",
+          "payload_digest": "d6cfc89e0fe11cebdeeb1daa9296a63eb84e61545bd0bd40e36146e50e8be615",
+          "release": "6.el10_2",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.1.5"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "openssh-server",
+          "nevra": "openssh-server-9.9p1-28.el10_2.rocky.0.1.x86_64",
+          "payload_digest": "6711bf67f334fbc400b5c0d1d0502ba5d5f3a40bc287fc816ae9ccfb7c30a41e",
+          "release": "28.el10_2.rocky.0.1",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "9.9p1"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "sudo",
+          "nevra": "sudo-1.9.17-10.p2.el10_2.7.x86_64",
+          "payload_digest": "1cfe6f787b5b35e0f2f9bf2c1785c81dcc8148c8335a234665b25af96f6745fa",
+          "release": "10.p2.el10_2.7",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "1.9.17"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "python3-jsonschema",
+          "nevra": "python3-jsonschema-4.19.1-7.el10.noarch",
+          "payload_digest": "b3dba202192145fba7e29f4aeeece16e4d82c259eb73443b161d13936420fc82",
+          "release": "7.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.19.1"
+        },
+        {
+          "architecture": "noarch",
+          "epoch": "0",
+          "name": "dnf-plugins-core",
+          "nevra": "dnf-plugins-core-4.7.0-10.el10.noarch",
+          "payload_digest": "9488393d24dc686b4c33354e5b49e41be207f5febdf15a672736006fa06bd3e0",
+          "release": "10.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.7.0"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "haproxy",
+          "nevra": "haproxy-3.0.5-6.el10_2.2.x86_64",
+          "payload_digest": "b7455878f22b5a717a98d8ef3ad41c843f59fbca7fae34d2811f5463bf678a5b",
+          "release": "6.el10_2.2",
+          "resolved_repository": "appstream",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "3.0.5"
+        },
+        {
+          "architecture": "x86_64",
+          "epoch": "0",
+          "name": "setools-console",
+          "nevra": "setools-console-4.6.0-3.el10.x86_64",
+          "payload_digest": "f92b0a747061407007e839433113d4eed9ca4b120bef7e2b4f5629f27814e56b",
+          "release": "3.el10",
+          "resolved_repository": "baseos",
+          "signature_verified": true,
+          "signer_fingerprint": "fc226859c0860bf0ddb95b085b106c736fedfc85",
+          "version": "4.6.0"
+        }
+      ],
+      "installed_systemd_verification": {
+        "diagnostics": "",
+        "exit_status": 0,
+        "observation_sha256": "ae71aaf64eebc2d7645d5e20f25ac4159388e19fdbb12402f324cf1e7b25b207"
+      },
+      "location": "fsn1",
+      "os_release": "Rocky Linux 10.2",
+      "policy_withdrawal_and_recovery": {
+        "api_restored": {
+          "status": 200
+        },
+        "api_stop_result": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "Result=success\nExecMainStatus=0"
+        },
+        "api_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "fixed_backend_listeners_absent": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "LISTEN 0      128    0.0.0.0:22 0.0.0.0:*\nLISTEN 0      128       [::]:22    [::]:*"
+        },
+        "frontend_restored": {
+          "status": 200
+        },
+        "frontend_stop_result": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "Result=success\nExecMainStatus=0"
+        },
+        "frontend_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "haproxy_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "public_barrier_absent": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "reestablish_exact_backend_policy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "restart_exact_products": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "restart_shared_haproxy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "runtime_barrier_readable": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "secpal-product-backend-policy_stopped": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": "inactive"
+        },
+        "start_denied_without_barrier": {
+          "exit_status": 1,
+          "stderr": "FAIL: product backend policy authority is unavailable or invalid",
+          "stdout": ""
+        },
+        "withdraw_exact_backend_policy": {
+          "exit_status": 0,
+          "stderr": "",
+          "stdout": ""
+        }
+      },
+      "privacy": {
+        "bounded_journal": {
+          "bounded_access_fields_present": true,
+          "journal": "peer=127.0.0.1 request_id=08fdac33-9a42-4bf4-9dbf-32a7c99256db method=POST origin=frontend backend=secpal_frontend server=frontend status=405 bytes=685 duration_ms=3 termination=---- security=accepted\npeer=127.0.0.1 request_id=6c54f58d-423d-4a10-9b35-94f68b8a8a34 method=GET origin=unavailable backend=secpal_ingress server=<NOSRV> status=421 bytes=214 duration_ms=0 termination=PR-- security=origin_rejected\npeer=127.0.0.1 request_id=5cbaa804-c09b-432d-a142-19e872b40b72 method=unavailable origin=unavailable backend=secpal_ingress server=<NOSRV> status=405 bytes=255 duration_ms=0 termination=PR-- security=method_rejected",
+          "sensitive_synthetic_markers_excluded": true
+        },
+        "forwarding_removed": true,
+        "ingress": {
+          "18080": {
+            "ipv6_loopback_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "non_loopback_ingress_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "private_interface_positive": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          },
+          "18081": {
+            "ipv6_loopback_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "non_loopback_ingress_denied": {
+              "exit_status": 7,
+              "stderr": "",
+              "stdout": "000"
+            },
+            "private_interface_positive": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": "200"
+            }
+          }
+        },
+        "probe_cleanup": {
+          "owned_probe_processes_stopped": true,
+          "temporary_interface_absent": true,
+          "temporary_namespace_absent": true
+        },
+        "synthetic_capture_sha256": "2a963faf17c8613f7c23d1a45b9e546de5243fa54729bc7e4a9dc8074d123819"
+      },
+      "provider_image_id": 245249370,
+      "provider_rebuild_action_id": 660849445254580,
+      "quadlet_authority": {
+        "drop_in_paths": [],
+        "exec_start": {
+          "argv": [
+            "/usr/bin/podman",
+            "run",
+            "--name",
+            "secpal-host-qualification-PN6JbJ",
+            "--replace",
+            "--rm",
+            "--cgroups=split",
+            "--pull",
+            "never",
+            "--network",
+            "none",
+            "--sdnotify=conmon",
+            "-d",
+            "--cap-drop",
+            "all",
+            "--user",
+            "65532:65532",
+            "--security-opt=no-new-privileges",
+            "docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+            "sleep",
+            "infinity"
+          ],
+          "code": null,
+          "executable": "/usr/bin/podman",
+          "ignore_errors": false,
+          "pid": 0,
+          "start_time": null,
+          "status": "0/0",
+          "stop_time": null
+        },
+        "fragment_path": "/run/user/993/systemd/generator/secpal-host-qualification-PN6JbJ.service",
+        "invariant_owner": "quadlet_authority_contract.admit_quadlet_authority",
+        "runtime_uid": 993,
+        "schema_version": 1,
+        "source_path": "/etc/containers/systemd/users/993/secpal-host-qualification-PN6JbJ.container",
+        "unit_name": "secpal-host-qualification-PN6JbJ"
+      },
+      "raw_evidence_sha256": {
+        "cx33-confined-startup-observations.json": "b911317cea31f57b3c88cca88e947e394ab26b3587db961221075feda313e892",
+        "cx33-effective-backend-policy-admission.json": "64093ebd2bc222befd73069230cfee1e059a853345529f54681671877a9b0882",
+        "cx33-host-key-admission.json": "8353fea91faba297c8489be660b2dfa422d4a7fe06d9217ef13c9f458b7daed3",
+        "cx33-installed-behavior-qualification-observations.json": "5e98564c9e251384aa2c8e57ba73f687dd628fd12e08e69378c4a49b4e980021",
+        "cx33-native-host-subsystem-admission.json": "cff84b5316cc30bc37f7dc02a1d60889ba1f34d7786a27000def02b20176eb6d",
+        "cx33-package-supply-admission.json": "c5e777ff0d1297eea1bd5f4dff16372fb2705b4f73ad771bf27699516ff1f2cb",
+        "cx33-policy-startup-barrier-observations.json": "44fd8634b0074c71f39488c78f7a3bbcc671541df4619f817f99c16653c364b9",
+        "cx33-privacy-ingress-qualification-observations.json": "74c65a672b81792876d9806f9b5a4eb6c917fad717d9f3548bfde69da0f7d535",
+        "cx33-provider-actions-current.json": "4c81483d75f789c1ed51ad61505d0dc8c522a89a3d631c4e0f54d36a8345196b",
+        "cx33-qualified-runtime-final-observations.json": "e85308d5e45bd14ea562b35a985b7a957276a4de63f90f0eee2b8e5a767f0e46",
+        "cx33-reboot-observation.json": "9f26aeca756cdab68b202d7001caa9582da2908e6e22b96cc4d1bdbf71df69e8"
+      },
+      "reboot_persistence_observation": {
+        "observed_at": "2026-10-11T14:05:28.473164+00:00",
+        "old_boot_id": "a58e18f4-9cda-4f8f-83cc-922537433a1f",
+        "post_reboot_observation": {
+          "booleans": "haproxy_connect_any --> off\npasta_bind_all_ports --> off",
+          "boot_id": "c7939aff-ebc3-4080-82a3-d2a879db9ea0",
+          "enforcing": "Enforcing",
+          "services": {
+            "nftables.service": "active",
+            "secpal-product-backend-policy.service": "active",
+            "user@993.service": "active"
+          }
+        },
+        "same_authenticated_host_key": true,
+        "started_at": "2026-10-11T14:04:57.890183+00:00",
+        "target": 163717938
+      },
+      "required_features": ["+SYSTEMD", "+THREAD", "+OPENSSL", "+PCRE2"],
+      "runtime_source_sha256": {
+        "haproxy-config": "e1e478b27b6c0090a6b8fcbe210f32dd1ed5ec3822f3a334067cc744c4f4119e",
+        "haproxy_base_contract.py": "0e411903c7a92abcb67d6ea13bf6038b391065abef30fd2ea5da9d1af94ae533",
+        "haproxy_config_lifecycle.py": "b28209aa8499c3ec272e3177c2b651ad1364c065cef21360c3c4b6d99689224c",
+        "haproxy_supply_contract.py": "423b1a9a50b520deee9dcc982a67ee5086b613ff02ab1690016068a6cedfdc63",
+        "product_backend_contract.py": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e",
+        "secpal_haproxy_runtime.cil": "1a35f1eec1766881b5c1c9d987770ae8d627c0f74d5fdf56b8d0121e1d0f2b82"
+      },
+      "selinux_isolation": {
+        "denial": {
+          "event_time": "10/11/26 14:05:58.452",
+          "permissive": 0,
+          "pid": 2722,
+          "proctitle": "cat /foreign/marker",
+          "serial": "416",
+          "source_context": "system_u:system_r:container_t:s0:c430,c798",
+          "syscall_command": "cat",
+          "syscall_pid": 2722,
+          "target_context": "system_u:object_r:container_file_t:s0:c31,c305"
+        },
+        "invariant_owner": "selinux_isolation_contract.admit_selinux_isolation",
+        "process_contexts": [
+          {
+            "mcs_categories": [31, 305],
+            "raw": "system_u:system_r:container_t:s0:c31,c305",
+            "selinux_type": "container_t"
+          },
+          {
+            "mcs_categories": [430, 798],
+            "raw": "system_u:system_r:container_t:s0:c430,c798",
+            "selinux_type": "container_t"
+          }
+        ],
+        "storage_context": {
+          "mcs_categories": [31, 305],
+          "raw": "system_u:object_r:container_file_t:s0:c31,c305",
+          "selinux_type": "container_file_t"
+        }
+      },
+      "server_id": 163717938,
+      "server_name": "rocky-8gb-fsn1-1",
+      "server_type": "CX33"
+    }
+  ],
+  "observed_date": "2026-10-11",
+  "original_signed_source_head": "52c6cdc1a1844901bbf5db6d2ac1d816ee745b35",
+  "provider_control": "native hcloud 1.67.0, approved secpal context, exact operator-authorized in-place rebuilds",
+  "provider_create_verified": false,
+  "provider_project_display_identity": "NOT_EXPOSED_BY_PROJECT_SCOPED_API",
+  "provider_rebuild_verified": true,
+  "public_controller_inputs_sha256": {
+    "aarch64_platform_bootstrap": "bc4fa4a3083b5f2bd737ee1ea7147f70f45250f7a8b0292dc7e420baf02a4bca",
+    "portable-reviewed-host-source-inputs.json": "e8726e0af2ef2ec7b32f1caba37e29268209ddf369e1e14d46831216c00a4271",
+    "x86_64_platform_bootstrap": "677be5a63ddade94c5aca1ec88310cc2f3c4747bd0d6603cb2e2284ad92944d6"
+  },
+  "pull_request": 304,
+  "repository": "SecPal/deployment",
+  "retention": "Raw controller observations and exact public preparation/test inputs retained in original workspace .context/219-authority/hetzner-rebuild; this record retains bounded independently readmitted public observations. Runtime hashes must match signed delivery bytes before PRE_READY.",
+  "scope": "Disposable reference systems and actual installed #219 shared HAProxy, #101 fixed-backend authority and generic Rocky/rootless observations. No provider CREATE, production construction/enrollment/activation, native PostgreSQL #81, public Viewer identity/TLS, GCP, multi-provider, Managed Production, HA or customer-production acceptance. No DNS/TLS for app.secpal.dev or api.secpal.dev was configured."
+}
