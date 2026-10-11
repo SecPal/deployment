@@ -12,20 +12,11 @@ Schema admission and exact signed-source payload binding preserve that boundary.
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 import jsonschema
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_PATHS = {
-    'haproxy-config': 'scripts/haproxy-config.py',
-    'haproxy_base_contract.py': 'scripts/haproxy_base_contract.py',
-    'haproxy_config_lifecycle.py': 'scripts/haproxy_config_lifecycle.py',
-    'haproxy_supply_contract.py': 'scripts/haproxy_supply_contract.py',
-    'product_backend_contract.py': 'scripts/product_backend_contract.py',
-    'secpal_haproxy_runtime.cil': 'config/production/host-selinux/secpal_haproxy_runtime.cil',
-}
 
 
 def admit(document, root):
@@ -34,16 +25,9 @@ def admit(document, root):
         jsonschema.Draft202012Validator(schema).validate(document)
     except jsonschema.ValidationError as error:
         raise ValueError('admit-haproxy-reference-schema') from error
-    # The immutable reviewed target is historical evidence, not mutable live
-    # state or a claim that a later source correction was already exercised.
-    for name, path in SOURCE_PATHS.items():
-        result = subprocess.run(['git', '-C', str(root), 'show', document['target_sha'] + ':' + path],
-                                capture_output=True, timeout=10)
-        if result.returncode or not 0 < len(result.stdout) <= 65536:
-            raise ValueError('observe-haproxy-reference-source')
-        digest = hashlib.sha256(result.stdout).hexdigest()
-        if any(host['runtime_source_sha256'].get(name) != digest for host in document['hosts']):
-            raise ValueError('admit-haproxy-reference-source')
+    # The closed record schema binds its independently authenticated historical
+    # target and exact payload expectations. No Git history/ref, network call or
+    # caller-provided source lookup participates in local admission.
     correction_paths = {
         '/usr/local/libexec/secpal/haproxy-config': 'scripts/haproxy-config.py',
         '/usr/local/libexec/secpal/haproxy_config_lifecycle.py': 'scripts/haproxy_config_lifecycle.py',
@@ -79,7 +63,7 @@ def main():
         document = json.loads(path.read_bytes(), object_pairs_hook=unique,
                               parse_constant=lambda _: (_ for _ in ()).throw(ValueError('admit-haproxy-reference-number')))
         admit(document, ROOT)
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, TypeError):
         print('FAIL: shared HAProxy historical reference evidence admission', file=sys.stderr)
         return 1
     print('Shared HAProxy closed reference record and target-source binding passed.')

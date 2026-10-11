@@ -332,7 +332,10 @@ this base does not claim their future extended bytes already pass its renderer.
 
 `validate-haproxy-reference.py` consumes the canonical evidence-architecture
 owner. It admits the historical record through a bounded closed JSON Schema and
-checks the recorded runtime payloads against its exact reviewed target SHA.
+binds the recorded runtime payloads to its exact reviewed target SHA through
+independently authenticated immutable schema expectations. Admission also
+compares the corrected installed payloads to the current repository files. It
+works in shallow checkouts without a historical Git object or network lookup.
 It cannot obtain host/provider authority or manufacture new host observations.
 The record remains historical evidence; later corrected source requires its own
 installed execution proof before acceptance.

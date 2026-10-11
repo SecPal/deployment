@@ -280,6 +280,17 @@ class ContractTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             evidence.admit(changed, ROOT)
 
+    def test_reference_admission_does_not_require_historical_git_objects(self):
+        import importlib.util
+        import json
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location('portable_haproxy_evidence', ROOT / 'scripts/validate-haproxy-reference.py')
+        evidence = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(evidence)
+        document = json.loads((ROOT / 'docs/evidence/haproxy-rocky-reference.json').read_text())
+        with mock.patch('subprocess.run', side_effect=AssertionError('historical Git object dependency')):
+            evidence.admit(document, ROOT)
+
 
 if __name__ == '__main__':
     unittest.main()

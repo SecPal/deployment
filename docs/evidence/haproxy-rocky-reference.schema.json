@@ -1,5 +1,5 @@
 {
-  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0; historical target/payload expectations independently authenticated from signed PR source 5022cf00e7d71ea406b41b93166149ffcb3115fc, without a runtime historical-object dependency",
   "$defs": {
     "object_1": {
       "additionalProperties": false,
@@ -878,29 +878,29 @@
     "object_34": {
       "additionalProperties": false,
       "properties": {
-        "haproxy-config": {
-          "pattern": "^[0-9a-f]{64}$",
-          "type": "string"
-        },
-        "haproxy_base_contract.py": {
-          "pattern": "^[0-9a-f]{64}$",
-          "type": "string"
-        },
-        "haproxy_config_lifecycle.py": {
-          "pattern": "^[0-9a-f]{64}$",
-          "type": "string"
-        },
         "haproxy_supply_contract.py": {
-          "pattern": "^[0-9a-f]{64}$",
-          "type": "string"
-        },
-        "product_backend_contract.py": {
-          "pattern": "^[0-9a-f]{64}$",
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "secpal_haproxy_runtime.cil": {
-          "pattern": "^[0-9a-f]{64}$",
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_base_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "product_backend_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy-config": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_config_lifecycle.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       },
       "required": [
@@ -1139,7 +1139,7 @@
           "type": "array"
         },
         "runtime_source_sha256": {
-          "$ref": "#/$defs/object_34"
+          "$ref": "#/$defs/historical_runtime_source"
         },
         "selinux_isolation": {
           "$ref": "#/$defs/object_37"
@@ -1510,7 +1510,7 @@
           "type": "array"
         },
         "runtime_source_sha256": {
-          "$ref": "#/$defs/object_34"
+          "$ref": "#/$defs/historical_runtime_source"
         },
         "selinux_isolation": {
           "$ref": "#/$defs/object_37"
@@ -1836,7 +1836,7 @@
           "type": "array"
         },
         "runtime_source_sha256": {
-          "$ref": "#/$defs/object_34"
+          "$ref": "#/$defs/historical_runtime_source"
         },
         "selinux_isolation": {
           "$ref": "#/$defs/object_37"
@@ -3475,6 +3475,38 @@
         "inflight_body",
         "inflight_status",
         "reload"
+      ],
+      "type": "object"
+    },
+    "historical_runtime_source": {
+      "additionalProperties": false,
+      "properties": {
+        "haproxy-config": {
+          "const": "e1e478b27b6c0090a6b8fcbe210f32dd1ed5ec3822f3a334067cc744c4f4119e"
+        },
+        "haproxy_base_contract.py": {
+          "const": "0e411903c7a92abcb67d6ea13bf6038b391065abef30fd2ea5da9d1af94ae533"
+        },
+        "haproxy_config_lifecycle.py": {
+          "const": "b28209aa8499c3ec272e3177c2b651ad1364c065cef21360c3c4b6d99689224c"
+        },
+        "haproxy_supply_contract.py": {
+          "const": "423b1a9a50b520deee9dcc982a67ee5086b613ff02ab1690016068a6cedfdc63"
+        },
+        "product_backend_contract.py": {
+          "const": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e"
+        },
+        "secpal_haproxy_runtime.cil": {
+          "const": "1a35f1eec1766881b5c1c9d987770ae8d627c0f74d5fdf56b8d0121e1d0f2b82"
+        }
+      },
+      "required": [
+        "haproxy-config",
+        "haproxy_base_contract.py",
+        "haproxy_config_lifecycle.py",
+        "haproxy_supply_contract.py",
+        "product_backend_contract.py",
+        "secpal_haproxy_runtime.cil"
       ],
       "type": "object"
     }
