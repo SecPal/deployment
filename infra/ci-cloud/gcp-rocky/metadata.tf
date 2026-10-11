@@ -53,7 +53,6 @@ locals {
     backend_frontend               = file("${path.module}/../../../config/production/quadlet/secpal-frontend.container")
     backend_edge_network           = file("${path.module}/../../../config/production/quadlet/secpal-edge.network")
     backend_state_contract         = file("${path.module}/../../../config/production/state-contract.json")
-    backend_application_network    = file("${path.module}/../../../config/production/quadlet/secpal-application.network")
     } : {
     postgresql_consumer              = file("${path.module}/../../../scripts/render-native-postgresql.py")
     postgresql_contract              = file("${path.module}/../../../scripts/ci-cloud/postgresql_qualification_contract.py")

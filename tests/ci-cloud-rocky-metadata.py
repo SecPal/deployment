@@ -184,6 +184,8 @@ locals {
                 for name, relative in contract.SOURCES.items():
                     self.assertTrue((ROOT / relative).read_bytes() == sources[name], name)
                 contract.admit_manifest(json.loads(files['backend_authorization']), sources)
+                self.assertNotIn('backend_application_network', files)
+                self.assertNotIn('secpal-application.network', script)
                 self.assertNotIn('postgresql_runner', files)
                 self.assertNotIn('postgresql_application_probe', files)
                 self.assertNotIn("decode_script 'postgresql_runner'", script)

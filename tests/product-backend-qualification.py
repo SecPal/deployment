@@ -7,6 +7,7 @@
 import ast
 import base64
 import os
+import shutil
 import subprocess
 import tempfile
 from unittest import mock
@@ -16,6 +17,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +28,8 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 def observation_fixture(contract):
     """Supporting representation fixture; never provider or privileged proof."""
     cleanup = dict(remaining_paths=[], remaining_containers=[], remaining_networks=[], remaining_images=[],
-        service_states=['inactive'] * 2, runtime_unit_states=['inactive'] * 4, nft_table_status=1,
+        service_states=['inactive'] * 2, runtime_unit_states=['inactive'] * 4,
+        fixture_unit_states=['inactive'] * 3, nft_table_status=1,
         module_names=[], netns_names=[], link_names=[], listeners=[], haproxy_config_sha256='d' * 64,
         original_haproxy_config_sha256='d' * 64, pasta_boolean='pasta_bind_all_ports --> off', original_pasta_boolean='pasta_bind_all_ports --> off', nftables_state='active',
         host_baseline=dict(rpm_sha256='a'*64,passwd_sha256='b'*64,group_sha256='c'*64),
@@ -58,6 +61,146 @@ def observation_fixture(contract):
 
 
 class QualificationContract(unittest.TestCase):
+    def test_http_qualification_survives_production_application_network_retirement(self):
+        """Real renderer -> source closure -> fixture, with DB authority removed.
+
+        #81 owns the production TCP mapping. The successor's Network/AddHost
+        source shape is from authenticated PR #286 head c3283ae9e750ab532ba14bae8e6ddced7f98f517;
+        these are candidate test inputs, never a production implementation.
+        """
+        import product_backend_qualification_contract as contract
+        spec = importlib.util.spec_from_file_location('renderer', ROOT / 'scripts/render-production-quadlets.py')
+        renderer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(renderer)
+        units = renderer.build_units(renderer.load_contract(renderer.DEFAULT_CONTRACT))
+        guard_spec = importlib.util.spec_from_file_location('guard', ROOT / 'scripts/validate-product-backend-qualification.py')
+        guard = importlib.util.module_from_spec(guard_spec)
+        guard_spec.loader.exec_module(guard)
+        for retired in (False, True):
+            with self.subTest(retired=retired), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                paths = set(contract.SOURCES.values()) | {
+                    '.github/workflows/rocky-cloud-qualification.yml',
+                    'infra/ci-cloud/gcp-rocky/metadata.tf',
+                    'scripts/ci-cloud/bootstrap-rocky-host.tftpl',
+                }
+                for relative in paths:
+                    target = root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ROOT / relative, target)
+                for name, text in units.items():
+                    if retired and name == 'secpal-application.network':
+                        continue
+                    if retired:
+                        text = text.replace('Network=secpal-application.network\n', '')
+                        if name == 'secpal-api.container':
+                            text = text.replace('Network=secpal-edge.network\n',
+                                'Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1\n'
+                                'AddHost=db.secpal.internal:169.254.81.1\n')
+                    (root / 'config/production/quadlet' / name).write_text(text)
+                if retired:
+                    (root / 'config/production/quadlet/secpal-application.network').unlink(missing_ok=True)
+                guard.validate(root)
+                sources = {name: (root / relative).read_bytes() for name, relative in contract.SOURCES.items()}
+                manifest = contract.manifest('a' * 40, 'gcp-rocky-10-2-x86-64', '123', '1', sources)
+                contract.admit_manifest(manifest, sources)
+                self.assertNotIn('backend_application_network', set(sources))
+                for role, backend in contract.BACKENDS.items():
+                    fixture = contract.fixture_unit(sources['backend_' + role].decode(), role)
+                    self.assertEqual([line for line in fixture.splitlines() if line.startswith('Network=')],
+                                     ['Network=secpal-backend101-edge.network'])
+                    self.assertEqual([line for line in fixture.splitlines() if line.startswith('PublishPort=')],
+                                     [backend.publication])
+                    self.assertNotIn('application', fixture)
+                    self.assertNotIn('Mount=type=bind,', fixture)
+                    self.assertNotIn('Environment=DB_', fixture)
+                    self.assertNotIn('AddHost=', fixture)
+                    self.assertNotIn('map-host-loopback', fixture)
+                raw = observation_fixture(contract)
+                contract.normalize_observations(raw, 993, 992, 991)
+                qualifier_spec = importlib.util.spec_from_file_location('qualifier', ROOT / 'scripts/ci-cloud/qualify-product-backends.py')
+                qualifier = importlib.util.module_from_spec(qualifier_spec)
+                qualifier_spec.loader.exec_module(qualifier)
+                observer = qualifier.Observer('123', '1')
+                observer.runtime = SimpleNamespace(pw_name='secpal-runtime', pw_uid=992)
+                observer.quadlets = root / 'fixture'
+                observer.quadlets.mkdir()
+                calls = []
+                def run(operation, arguments, **options):
+                    calls.append(arguments)
+                    if 'info' in arguments:
+                        return 0, json.dumps({'security': {'rootless': True}, 'serviceIsRemote': False})
+                    if 'is-active' in arguments:
+                        return 3, ''
+                    if arguments[:3] == ['nft', 'list', 'table']:
+                        return 1, ''
+                    return 0, ''
+                def path(value):
+                    return root / 'auth.json' if value == '/etc/containers/secpal-backend101-auth.json' else Path(value)
+                with mock.patch.object(qualifier, 'ROOT', root), mock.patch.object(qualifier, 'Path', side_effect=path), \
+                        mock.patch.object(qualifier, 'write', side_effect=lambda target, data, **kw: target.write_bytes(data)), \
+                        mock.patch.object(qualifier, 'READY', root / 'ready'), mock.patch.object(qualifier, 'STATS', root / 'stats'), \
+                        mock.patch.object(observer, 'run', side_effect=run), \
+                        mock.patch.object(observer, 'observe_cleanup', return_value=raw['cleanup']):
+                    # Simulate external commands only; exercise actual source
+                    # reads, installation and bounded cleanup, never host proof.
+                    observer.products()
+                    self.assertEqual(sorted(p.name for p in observer.quadlets.glob('*.network')),
+                                     ['secpal-backend101-edge.network'])
+                    observer.mutated = True
+                    self.assertTrue(observer.cleanup())
+                    self.assertEqual(list(observer.quadlets.iterdir()), [])
+                self.assertEqual([args for args in calls if args[:4] == ['podman', '--remote=false', 'network', 'rm']],
+                                 [['podman', '--remote=false', 'network', 'rm', 'secpal-backend101-edge']])
+                for action in ('stop', 'reset-failed'):
+                    self.assertIn(['systemctl', '--user', action, 'secpal-backend101-edge-network.service'], calls)
+
+    def test_transport_projection_rejects_host_and_frontend_network_expansion(self):
+        import product_backend_qualification_contract as contract
+        for role in contract.BACKENDS:
+            source = (ROOT / contract.SOURCES['backend_' + role]).read_text()
+            with self.subTest(role=role), self.assertRaises(ValueError):
+                contract.fixture_unit(source + 'Network=host\n', role)
+        source = (ROOT / contract.SOURCES['backend_frontend']).read_text()
+        with self.assertRaises(ValueError):
+            contract.fixture_unit(source + 'Network=database.network\n', 'frontend')
+        with self.assertRaises(ValueError):
+            contract.fixture_unit(source + 'AddHost=db.secpal.internal:169.254.81.1\n', 'frontend')
+
+    def test_fixture_rejects_additional_or_random_publications(self):
+        import product_backend_qualification_contract as contract
+        for role in contract.BACKENDS:
+            source = (ROOT / contract.SOURCES['backend_' + role]).read_text()
+            for publication in ('0.0.0.0:19000:8080/tcp', '8080', '127.0.0.1:18082:8080/tcp'):
+                with self.subTest(role=role, publication=publication), self.assertRaises(ValueError):
+                    contract.fixture_unit(source + 'PublishPort=' + publication + '\n', role)
+
+    def test_admission_rejects_extra_effective_publications_and_surviving_fixture_units(self):
+        import product_backend_qualification_contract as contract
+        original = observation_fixture(contract)
+        for flag in ('--publish 0.0.0.0:19000:8080/tcp', '--publish=8080', '-p 8080',
+                     '-p8082:8080', '-p127.0.0.1:19000:8080/tcp', '--publish-all',
+                     '--publish-all=true', '-P', '-dp8082:8080', '-dP'):
+            raw = copy.deepcopy(original)
+            product = raw['recreations'][0]['products']['api']
+            product['unit'] = product['unit'].replace('--publish 127.0.0.1:18081:8080/tcp',
+                '--publish 127.0.0.1:18081:8080/tcp ' + flag)
+            with self.subTest(flag=flag), self.assertRaises(ValueError):
+                contract.normalize_observations(raw, 993, 992, 991)
+        raw = copy.deepcopy(original)
+        raw['cleanup']['fixture_unit_states'] = ['inactive', 'inactive', 'active']
+        with self.assertRaises(ValueError):
+            contract.admit_cleanup(raw['cleanup'])
+        for option in ('--publish=', '-p ', '-p'):
+            raw = copy.deepcopy(original)
+            for iteration in raw['recreations']:
+                for role, backend in contract.BACKENDS.items():
+                    product = iteration['products'][role]
+                    product['unit'] = product['unit'].replace('--publish ' + backend.endpoint,
+                                                            option + backend.endpoint)
+            with self.subTest(option=option):
+                contract.normalize_observations(raw, 993, 992, 991)
+
     def test_closed_selector_is_dispatchable_only_from_main(self):
         import yaml
         workflow = yaml.safe_load((ROOT / '.github/workflows/rocky-cloud-qualification.yml').read_text())
@@ -133,6 +276,11 @@ class QualificationContract(unittest.TestCase):
         change(lambda r:r['recreations'][1]['products']['frontend'].update(listeners=['0.0.0.0:18080']))
         change(lambda r:r['recreations'][1]['products']['frontend'].update(network_mode='host'))
         change(lambda r:r['recreations'][1]['products']['frontend'].update(environment_keys=['DB_PASSWORD']))
+        change(lambda r:r['recreations'][1]['products']['frontend'].update(networks=['secpal-backend101-edge', 'database']))
+        change(lambda r:r['recreations'][1]['products']['frontend'].update(environment_keys=['SECPAL_SECRET_MIGRATION']))
+        change(lambda r:r['recreations'][1]['products']['frontend'].update(environment_keys=['FILESYSTEM_DISK']))
+        change(lambda r:r['recreations'][1]['products']['frontend'].update(mount_types=['bind']))
+        change(lambda r:r['recreations'][1]['products']['api'].update(networks=['secpal-backend101-application']))
         change(lambda r:r['recreations'][1].update(http_stats=r['recreations'][1]['http_stats'].replace('UP','DOWN')))
         change(lambda r:r['unrelated'].update(avc=r['unrelated']['avc'].replace('pid=123','pid=789')))
         change(lambda r:r['external']['api'].update(positive_http_code='000'))
@@ -231,7 +379,7 @@ class QualificationContract(unittest.TestCase):
     def test_pure_admission_has_no_external_authority(self):
         path = ROOT / 'scripts/ci-cloud/product_backend_qualification_contract.py'
         tree = ast.parse(path.read_text())
-        allowed = {'hashlib', 'json', 're', 'product_backend_contract', 'rocky_preparation_contract', 'csv', 'io', 'types'}
+        allowed = {'hashlib', 'json', 're', 'shlex', 'product_backend_contract', 'rocky_preparation_contract', 'csv', 'io', 'types'}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 self.assertTrue({a.name for a in node.names} <= allowed)

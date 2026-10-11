@@ -13,6 +13,7 @@ import csv
 import io
 import json
 import re
+import shlex
 
 from product_backend_contract import BACKENDS, admit_policy_account
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ import rocky_preparation_contract as rpm
 
 SELECTOR = 'product-backend-policy'
 PROFILES = {'gcp-rocky-10-2-x86-64': 'x86_64', 'gcp-rocky-10-2-arm64': 'aarch64'}
+FIXTURE_NETWORKS = ('edge',)
 SOURCES = {
     'prepare_script': 'scripts/ci-cloud/prepare-rocky-host.sh',
     'backend_state_contract': 'config/production/state-contract.json',
@@ -33,7 +35,6 @@ SOURCES = {
     'backend_api': 'config/production/quadlet/secpal-api.container',
     'backend_frontend': 'config/production/quadlet/secpal-frontend.container',
     'backend_edge_network': 'config/production/quadlet/secpal-edge.network',
-    'backend_application_network': 'config/production/quadlet/secpal-application.network',
     'collector': 'scripts/ci-cloud/collect-rocky-preparation.py',
     'preparation_contract': 'scripts/ci-cloud/rocky_preparation_contract.py',
 }
@@ -143,14 +144,22 @@ def diagnostic(operation, reason, cleanup_complete):
 def fixture_unit(source, role):
     """Transport-only adaptation of accepted product units, never caller data.
 
-    Publication, image, rootless hardening and separate role networks remain
-    owned by the production renderer and product_backend_contract.
+    Publication, image and rootless hardening remain production-owned. The
+    HTTP-only fixture uses the internal edge bridge for both roles; production
+    API-to-database networking belongs to #81 and is not qualification input.
     """
-    if role not in BACKENDS or source.count(BACKENDS[role].publication + '\n') != 1:
+    if (role not in BACKENDS or [line for line in source.splitlines() if line.startswith('PublishPort=')]
+            != [BACKENDS[role].publication]):
         raise ValueError('reviewed product publication')
+    networks = [line for line in source.splitlines() if line.startswith('Network=')]
+    if (any(line in ('Network=host', 'Network=host:') for line in networks)
+            or role == 'frontend' and (networks != ['Network=secpal-edge.network']
+                                       or any(line.startswith('AddHost=') for line in source.splitlines()))):
+        raise ValueError('reviewed product network authority')
     lines = [line for line in source.splitlines() if not line.startswith((
         'Requires=', 'After=', 'PartOf=', 'ExecStartPre=', 'Environment=',
-        'Mount=type=bind,', 'Health', 'Notify=', 'LogDriver=', 'LogOpt='))]
+        'Mount=type=bind,', 'Health', 'Notify=', 'LogDriver=', 'LogOpt=', 'Network=', 'AddHost='))]
+    lines.insert(lines.index('Pull=never'), 'Network=secpal-edge.network')
     lines.insert(lines.index('Pull=never'), 'Notify=conmon')
     lines.insert(lines.index('Pull=never'), 'LogDriver=none')
     lines.insert(lines.index('[Service]') + 1,
@@ -162,6 +171,33 @@ def fixture_unit(source, role):
     for value in environment:
         lines.insert(lines.index('Pull=never'), 'Environment=' + value)
     return ('\n'.join(lines) + '\n').replace('secpal-', 'secpal-backend101-')
+
+
+def effective_publications(exec_start):
+    """Read the effective systemd argv, including attached Podman short values."""
+    commands = re.findall(r'(?:^|[ ;])argv\[\]=([^;]*)(?:;|$)', exec_start)
+    if len(commands) != 1:
+        raise ValueError('effective command representation')
+    arguments = shlex.split(commands[0])
+    publications = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in ('--publish', '-p'):
+            index += 1
+            if index == len(arguments):
+                raise ValueError('effective publication argument absent')
+            publications.append(arguments[index])
+        elif argument.startswith('--publish='):
+            publications.append(argument.removeprefix('--publish='))
+        elif argument.startswith('-p'):
+            publications.append(argument[2:].removeprefix('='))
+        elif argument.startswith('--publish-all') or argument.startswith('-') and not argument.startswith('--') and argument != '-d':
+            # Quadlet emits only -d. Reject other short options rather than
+            # admitting bundled -P/-p forms whose authority is ambiguous.
+            raise ValueError('unreviewed effective short/publication option')
+        index += 1
+    return publications
 
 
 def admit_nftables(raw, uid):
@@ -298,14 +334,17 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
             product = iteration['products'][role]
             if (set(product) != {'listeners', 'forwarder_context', 'container_context', 'network_mode', 'networks', 'environment_keys', 'mount_types', 'unit'}
                     or product['listeners'] != [backend.endpoint] or ':container_runtime_t:' not in product['forwarder_context']
-                    or ':container_t:' not in product['container_context'] or product['network_mode'] == 'host'):
+                    or ':container_t:' not in product['container_context'] or product['network_mode'] != 'bridge'
+                    or product['networks'] != ['secpal-backend101-edge']):
                 raise ValueError('exact rootless product listener')
             generated = properties(product['unit'])
+            publications = effective_publications(generated.get('ExecStart', ''))
             if (set(generated) != {'FragmentPath', 'SourcePath', 'DropInPaths', 'ExecStart', 'ExecStartPre'}
                     or generated['SourcePath'] != f'/etc/containers/systemd/users/{runtime_uid}/secpal-{role}.container'
                     or not generated['FragmentPath'].startswith(f'/run/user/{runtime_uid}/systemd/generator/')
                     or generated['DropInPaths'] or 'path=/usr/bin/podman ;' not in generated['ExecStart']
-                    or backend.endpoint + ':8080/tcp' not in generated['ExecStart']
+                    or publications != [backend.endpoint + ':8080/tcp']
+                    or re.search(r'(?:^|\s)(?:--publish-all|-P)(?:\s|$)', generated['ExecStart'])
                     or any(value in generated['ExecStart'] for value in ('--network host', '--network=host', '--privileged', 'label=disable', 'podman.sock', 'docker.sock'))
                     or '/usr/local/libexec/secpal/product-backend-policy --check' not in generated['ExecStartPre']):
                 raise ValueError('effective Quadlet authority')
@@ -340,11 +379,12 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
 
 def admit_cleanup(raw):
     fields = {'remaining_paths', 'remaining_containers', 'remaining_networks', 'remaining_images', 'service_states',
-              'runtime_unit_states', 'nft_table_status', 'module_names', 'netns_names', 'link_names', 'listeners',
+              'runtime_unit_states', 'fixture_unit_states', 'nft_table_status', 'module_names', 'netns_names', 'link_names', 'listeners',
               'haproxy_config_sha256', 'original_haproxy_config_sha256', 'pasta_boolean', 'original_pasta_boolean', 'host_baseline', 'original_host_baseline', 'nftables_state'}
     if (not isinstance(raw, dict) or set(raw) != fields
             or any(raw[key] != [] for key in ('remaining_paths', 'remaining_containers', 'remaining_networks', 'remaining_images', 'module_names', 'netns_names', 'link_names', 'listeners'))
             or raw['service_states'] != ['inactive', 'inactive'] or raw['runtime_unit_states'] != ['inactive'] * 4
+            or raw['fixture_unit_states'] != ['inactive'] * (len(BACKENDS) + len(FIXTURE_NETWORKS))
             or type(raw['nft_table_status']) is not int or raw['nft_table_status'] != 1
             or not isinstance(raw['haproxy_config_sha256'], str) or not DIGEST.fullmatch(raw['haproxy_config_sha256'])
             or raw['haproxy_config_sha256'] != raw['original_haproxy_config_sha256']
