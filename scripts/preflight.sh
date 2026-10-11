@@ -97,6 +97,8 @@ python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
 python3 tests/production-state-contract.py
 python3 tests/product-backend-contract.py
+python3 tests/haproxy-base-contract.py
+python3 scripts/validate-haproxy-reference.py
 python3 tests/product-backend-qualification.py
 python3 tests/production-postgres-retirement.py
 python3 tests/production-edge-decision-contract.py
