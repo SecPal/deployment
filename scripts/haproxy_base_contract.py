@@ -90,7 +90,7 @@ def from_document(document):
     return routing, tuple(listeners)
 
 
-def decode_document(data: bytes):
+def decode_json_document(data: bytes):
     if not 0 < len(data) <= MAX_CONFIG_BYTES:
         raise ValueError('admit-routing-size')
     def unique(pairs):
@@ -105,7 +105,11 @@ def decode_document(data: bytes):
                               parse_constant=lambda _: (_ for _ in ()).throw(ValueError('admit-json-number')))
     except (UnicodeError, json.JSONDecodeError) as error:
         raise ValueError('decode-routing-document') from error
-    return from_document(document)
+    return document
+
+
+def decode_document(data: bytes):
+    return from_document(decode_json_document(data))
 
 
 def forwarding_sanitization() -> tuple[str, ...]:
@@ -180,12 +184,9 @@ backend secpal_{role}
     return rules
 
 
-def _render(routing: Routing, listeners: tuple[Listener, ...], generation: str | None = None) -> str:
-    if (not isinstance(routing, Routing) or not isinstance(listeners, tuple)
-            or not 1 <= len(listeners) <= 8 or len(set(listeners)) != len(listeners)
-            or not all(isinstance(listener, Listener) for listener in listeners)):
-        raise ValueError('admit-render-input')
-    text = '''# SPDX-FileCopyrightText: 2026 SecPal Contributors
+def runtime_preamble() -> str:
+    """Reviewed shared runtime directives; no listener or identity selection."""
+    return '''# SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 # Reviewed shared base; listener placement and canonical identity have separate owners.
 global
@@ -214,8 +215,15 @@ defaults
     unique-id-format %[uuid()]
     log-format "peer=%ci request_id=%ID method=%[var(txn.method)] origin=%[var(txn.origin)] backend=%b server=%s status=%ST bytes=%B duration_ms=%Ta termination=%tsc security=%[var(txn.security)]"
 
-frontend secpal_ingress
 '''
+
+
+def _render(routing: Routing, listeners: tuple[Listener, ...], generation: str | None = None) -> str:
+    if (not isinstance(routing, Routing) or not isinstance(listeners, tuple)
+            or not 1 <= len(listeners) <= 8 or len(set(listeners)) != len(listeners)
+            or not all(isinstance(listener, Listener) for listener in listeners)):
+        raise ValueError('admit-render-input')
+    text = runtime_preamble() + 'frontend secpal_ingress\n'
     text += ''.join(f'    bind {listener.endpoint}\n' for listener in listeners)
     text += '''    http-request set-var(txn.security) str(rejected)
     http-request set-var(txn.method) str(unavailable)
