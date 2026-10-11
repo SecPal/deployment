@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from haproxy_base_contract import decode_document, render, listener_constraints, from_config, generation_id, MAX_CONFIG_BYTES
 from haproxy_config_lifecycle import publish
 from product_backend_contract import admit_policy_account
-from haproxy_supply_contract import admit_installed_package, normalize_features, binary_sha256
+from haproxy_supply_contract import admit_installed_package, admit_rpm_digest, normalize_features, binary_sha256
 
 HELPER = Path('/usr/local/libexec/secpal/haproxy-config')
 LIBRARIES = ('haproxy_base_contract.py', 'haproxy_config_lifecycle.py', 'product_backend_contract.py', 'haproxy_supply_contract.py')
@@ -36,6 +36,7 @@ BASE_UNIT = Path('/etc/systemd/system/haproxy.service.d/secpal.conf')
 RUNTIME = Path('/run/haproxy')
 BINARY = Path('/usr/sbin/haproxy')
 RUNTIME_POLICY = HELPER.parent / 'secpal_haproxy_runtime.cil'
+REVIEWED_RPM = HELPER.parent / 'haproxy-reviewed.rpm'
 
 
 def trusted(path: Path, *, regular=False):
@@ -52,7 +53,7 @@ def trusted(path: Path, *, regular=False):
 def observe(operation, arguments, *, timeout=15):
     try:
         result = subprocess.run(arguments, capture_output=True, timeout=timeout,
-                                env={'PATH': '/usr/sbin:/usr/bin', 'LANG': 'C'})
+                                env={'PATH': '/usr/sbin:/usr/bin', 'LANG': 'C'}, cwd='/')
     except (OSError, subprocess.SubprocessError) as error:
         raise ValueError(operation) from error
     if result.returncode or len(result.stdout) > 65536 or len(result.stderr) > 65536:
@@ -63,9 +64,18 @@ def observe(operation, arguments, *, timeout=15):
 def authority(*, desired=True):
     if os.geteuid() != 0 or Path(__file__).resolve() != HELPER:
         raise ValueError('admit-installed-administrator-helper')
-    for path in (HELPER, *(HELPER.parent / name for name in LIBRARIES), RUNTIME_POLICY, BINARY, BASE_UNIT, LISTENER_UNIT):
+    for path in (HELPER, *(HELPER.parent / name for name in LIBRARIES), RUNTIME_POLICY, REVIEWED_RPM, BINARY, BASE_UNIT, LISTENER_UNIT):
         trusted(path, regular=True)
     architecture = platform.machine()
+    if not 0 < REVIEWED_RPM.stat().st_size <= 16 * 1024 * 1024:
+        raise ValueError('admit-haproxy-rpm-size')
+    admit_rpm_digest(architecture, binary_sha256(REVIEWED_RPM.read_bytes()))
+    # Exact independently signature-authenticated RPM bytes are the supply
+    # anchor. Native verification also checks every installed package file.
+    if observe('verify-haproxy-package-files', ['/usr/bin/rpm', '-V', '-p', str(REVIEWED_RPM)]).strip():
+        raise ValueError('admit-haproxy-installed-payload')
+    admit_loaded_unit(observe('observe-loaded-haproxy-unit', ['/usr/bin/systemctl', 'show',
+                      'haproxy.service', '-p', 'NeedDaemonReload,FragmentPath,DropInPaths']))
     identity = observe('observe-haproxy-rpm', ['/usr/bin/rpm', '-q', 'haproxy', '--qf',
                        '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n']).strip()
     features = normalize_features(observe('observe-haproxy-build', [str(BINARY), '-vv']))
@@ -102,11 +112,21 @@ def prepare(candidate):
     observe('label-haproxy-candidate', ['/usr/sbin/restorecon', '-F', str(candidate)])
 
 
+def admit_loaded_unit(output):
+    rows = output.strip().splitlines()
+    fields = dict(row.split('=', 1) for row in rows)
+    if (len(rows) != 3 or set(fields) != {'NeedDaemonReload', 'FragmentPath', 'DropInPaths'}
+            or fields['NeedDaemonReload'] != 'no'
+            or fields['FragmentPath'] != '/usr/lib/systemd/system/haproxy.service'
+            or sorted(fields['DropInPaths'].split()) != sorted((str(BASE_UNIT), str(LISTENER_UNIT)))):
+        raise ValueError('admit-loaded-haproxy-unit')
+
+
 def process_identity(pid, *, master=False):
     if type(pid) is not int or pid <= 1:
         raise ValueError('admit-haproxy-pid')
     process = Path('/proc') / str(pid)
-    if master and (process / 'exe').resolve() != BINARY:
+    if (process / 'exe').resolve() != BINARY:
         raise ValueError('admit-haproxy-executable')
     status = (process / 'status').read_text()
     uids = next(row.split()[1:] for row in status.splitlines() if row.startswith('Uid:'))
@@ -215,6 +235,11 @@ def main():
         if info.st_uid != 0 or info.st_mode & 0o077 or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError('admit-config-lock')
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        requested_pid = args.reload if args.reload is not None else args.verify_running
+        if requested_pid is not None:
+            if observe('observe-exact-haproxy-mainpid', ['/usr/bin/systemctl', 'show',
+                       'haproxy.service', '--property=MainPID', '--value']).strip() != str(requested_pid):
+                raise ValueError('admit-exact-systemd-mainpid')
         data, uid = authority(desired=not (args.check or args.verify_running is not None))
         if args.check or args.verify_running is not None:
             trusted(SERVING, regular=True)

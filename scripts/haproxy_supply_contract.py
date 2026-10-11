@@ -55,3 +55,8 @@ def normalize_features(output: str) -> frozenset[str]:
 
 def binary_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def admit_rpm_digest(architecture: str, digest: str):
+    if architecture not in PACKAGES or digest != PACKAGES[architecture]['rpm_sha256']:
+        raise ValueError('admit-haproxy-reviewed-rpm-payload')

@@ -147,11 +147,17 @@ service also stops HAProxy.
 
 Host construction remains #92's responsibility. The administrator installs the
 helper at `/usr/local/libexec/secpal/haproxy-config` and its four imported library
-files in that directory, from reviewed source. Complete ancestor paths and
+files in that directory, from reviewed source. Install the independently Rocky-signature-verified
+architecture-specific reviewed RPM there as `haproxy-reviewed.rpm` (root-owned
+0444). The helper checks its exact digest and uses native `rpm -V -p` to verify
+all installed package files against that authenticated payload. Complete ancestor paths and
 files must be root-owned, regular where applicable, without group/other write
 access, symlinks or hard-linked authority files. Scripts can be 0555 and inputs 0444. Install the desired closed input at `/etc/haproxy/secpal-routing.json` and
 the two systemd drop-ins before activation; reload the system manager after
-unit installation. Product accounts cannot modify any of these inputs.
+unit installation. Activation and startup reject `NeedDaemonReload=yes`,
+an unexpected package fragment or any additional loaded drop-in. The manager
+must have loaded exactly the reviewed base and listener files. Product accounts
+cannot modify any of these inputs.
 Install `config/production/host-selinux/secpal_haproxy_runtime.cil` beside the
 helper. Its only permission is the `init_t` to `haproxy_t` process transition
 under `NoNewPrivileges`; its only file-context mapping gives the private
@@ -167,7 +173,10 @@ While inactive, activation installs the fixed reviewed runtime policy and
 restores its runtime labels. It generates a restrictive same-directory
 candidate, restores the stock Rocky configuration label, validates with the actual `haproxy -c -q`, and atomically
 publishes `/etc/haproxy/secpal.cfg` as 0444. A fixed root-only lock serializes
-publication. File/directory synchronization prevents partial active writes.
+publication. File/directory synchronization prevents partial active writes. A directory-sync
+failure after replacement restores the accepted bytes before bounded live
+recovery. Reload requests reapply and witness the live generation even when
+the desired bytes equal the serving file; disk equality never proves recovery.
 The `/run/haproxy` directory is root-owned 0755, with root-only lifecycle lock
 and runtime PID file; workers gain no mutable configuration authority.
 
@@ -292,3 +301,38 @@ origins. No DNS/TLS or public Viewer identity for `app.secpal.dev` or
 multi-provider, Managed Production, HA or customer-production acceptance is
 granted. #248 may consume the tested shared base and host observations within
 this scope. #220 and certificate/auth consumers remain separate deliveries.
+
+## Qualification composition and administrator witness
+
+The existing #101 package-unit qualification is an isolated clean-host
+experiment **before** installation of any shared-base/listener drop-in. It now
+rejects installed or cached shared drop-ins before fixture mutation. Its
+temporary `/etc/haproxy/haproxy.cfg` and statistics socket never substitute for
+qualification of the installed #219 service. The reference evidence exercises
+that installed service and consumes #101's effective policy directly.
+
+The root master retains only its existing four runtime capabilities; dedicated
+workers retain none. Exact worker executable inspection requires Linux's
+`CAP_SYS_PTRACE` for `/proc/<worker>/exe` after the worker changes UID. The fixed
+administrator-only startup/reload witness runs separately through native
+`setpriv`, immediately bounded to read-only process inspection (and `CAP_KILL`
+for the fixed reload signal). This does not add capabilities to HAProxy or
+workers, change backend nftables UID permission, authorize an unrelated UID's
+backend access, or expose a ptrace API. The witness first requires its PID to
+match systemd's actual MainPID, then inspects only that authenticated master and
+its direct children. No configurable program, command, alternate PID, mutable
+extension or runtime socket is admitted. The short-lived administrator helper
+is outside the application/HAProxy runtime authority.
+
+The generation response contains only a non-secret configuration fingerprint
+and the worker PID used for bounded serving proof. It conveys no client identity,
+credential, application data or authority. Later listener/identity owners must
+review their complete composition, including its exact configuration admission;
+this base does not claim their future extended bytes already pass its renderer.
+
+`validate-haproxy-reference.py` consumes the canonical evidence-architecture
+owner. It admits the historical record through a bounded closed JSON Schema and
+checks the recorded runtime payloads against its exact reviewed target SHA.
+It cannot obtain host/provider authority or manufacture new host observations.
+The record remains historical evidence; later corrected source requires its own
+installed execution proof before acceptance.

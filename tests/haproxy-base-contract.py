@@ -204,6 +204,82 @@ class ContractTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'verify-haproxy-startup-generation'):
                     helper.verify_running(10, 993)
 
+    def test_noop_reload_still_verifies_the_live_generation(self):
+        import tempfile
+        from haproxy_config_lifecycle import publish
+        with tempfile.TemporaryDirectory() as directory:
+            serving = Path(directory) / 'accepted.cfg'
+            serving.write_bytes(b'accepted')
+            calls = []
+            publish(serving, b'accepted', lambda _: None, lambda: calls.append('witness'))
+            self.assertEqual(calls, ['witness'])
+
+    def test_publication_sync_failure_restores_before_recovery(self):
+        import tempfile
+        from unittest import mock
+        import haproxy_config_lifecycle as lifecycle
+        with tempfile.TemporaryDirectory() as directory:
+            serving = Path(directory) / 'accepted.cfg'
+            serving.write_bytes(b'accepted')
+            calls = []
+            with mock.patch.object(lifecycle, 'sync_directory', side_effect=[OSError('sync failed'), None]):
+                with self.assertRaises(OSError):
+                    lifecycle.publish(serving, b'candidate', lambda _: None,
+                                      lambda: calls.append('reload'),
+                                      recover=lambda: calls.append(serving.read_bytes()))
+            self.assertEqual(serving.read_bytes(), b'accepted')
+            self.assertEqual(calls, [b'accepted'])
+
+    def test_loaded_unit_rejects_stale_or_additional_dropins(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('haproxy_loaded_unit', ROOT / 'scripts/haproxy-config.py')
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        good = ('NeedDaemonReload=no\nFragmentPath=/usr/lib/systemd/system/haproxy.service\n'
+                'DropInPaths=' + str(helper.BASE_UNIT) + ' ' + str(helper.LISTENER_UNIT) + '\n')
+        helper.admit_loaded_unit(good)
+        for bad in (good.replace('Reload=no', 'Reload=yes'), good + 'Other=value\n',
+                    good.replace('DropInPaths=', 'DropInPaths=/etc/other.conf ')):
+            with self.assertRaises(ValueError):
+                helper.admit_loaded_unit(bad)
+
+    def test_installed_payload_requires_the_reviewed_rpm(self):
+        import haproxy_supply_contract as supply
+        for arch, package in supply.PACKAGES.items():
+            supply.admit_rpm_digest(arch, package['rpm_sha256'])
+            with self.assertRaises(ValueError):
+                supply.admit_rpm_digest(arch, '0' * 64)
+
+    def test_worker_identity_requires_the_same_executable(self):
+        import importlib.util
+        import tempfile
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location('haproxy_worker_identity', ROOT / 'scripts/haproxy-config.py')
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with mock.patch.object(helper.Path, 'resolve', return_value=Path('/usr/bin/python3')):
+            with self.assertRaisesRegex(ValueError, 'admit-haproxy-executable'):
+                helper.process_identity(12345)
+
+    def test_reference_evidence_is_closed_and_delivery_bound(self):
+        import importlib.util
+        import copy
+        import json
+        spec = importlib.util.spec_from_file_location('haproxy_evidence', ROOT / 'scripts/validate-haproxy-reference.py')
+        evidence = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(evidence)
+        document = json.loads((ROOT / 'docs/evidence/haproxy-rocky-reference.json').read_text())
+        evidence.admit(document, ROOT)
+        for key, value in (('unknown', True), ('target_sha', '0' * 40), ('delivery_issue', 220)):
+            changed = copy.deepcopy(document)
+            changed[key] = value
+            with self.assertRaises(ValueError):
+                evidence.admit(changed, ROOT)
+        changed = copy.deepcopy(document)
+        changed['hosts'][0]['unknown'] = True
+        with self.assertRaises(ValueError):
+            evidence.admit(changed, ROOT)
+
 
 if __name__ == '__main__':
     unittest.main()

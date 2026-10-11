@@ -61,20 +61,26 @@ def publish(serving: Path, data: bytes, validate, reload, prepare=lambda _: None
     try:
         validate(candidate)
         if previous == data:
+            # Disk equality cannot authenticate an uncertain live generation.
+            reload()
             return
         if previous is not None:
             rollback = stage(serving.parent, previous, prepare)
         os.replace(candidate, serving)
-        sync_directory(serving.parent)
         try:
+            sync_directory(serving.parent)
             reload()
         except BaseException:
             if rollback is not None:
                 os.replace(rollback, serving)
             else:
                 serving.unlink(missing_ok=True)
-            sync_directory(serving.parent)
-            recover()
+            try:
+                sync_directory(serving.parent)
+            finally:
+                # Even an uncertain directory sync must attempt bounded live
+                # recovery from the restored bytes; never report success.
+                recover()
             raise
     finally:
         candidate.unlink(missing_ok=True)

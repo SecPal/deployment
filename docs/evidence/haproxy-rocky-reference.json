@@ -2421,7 +2421,1175 @@
     "x86_64_platform_bootstrap": "677be5a63ddade94c5aca1ec88310cc2f3c4747bd0d6603cb2e2284ad92944d6"
   },
   "pull_request": 304,
+  "remediation_qualification": [
+    {
+      "actual_processes": [
+        {
+          "CapEff": "00000000000004e0",
+          "NoNewPrivs": "1",
+          "Seccomp": "2",
+          "domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "exe": "/usr/sbin/haproxy",
+          "pid": 65538,
+          "uid": ["0", "0", "0", "0"]
+        },
+        {
+          "CapEff": "0000000000000000",
+          "NoNewPrivs": "1",
+          "Seccomp": "2",
+          "domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "exe": "/usr/sbin/haproxy",
+          "pid": 65541,
+          "uid": ["994", "994", "994", "994"]
+        }
+      ],
+      "installed_source_sha256": {
+        "/etc/systemd/system/haproxy.service.d/secpal.conf": "6b9fecdbfbe547826aa56bacc2132bcb860e232dfbe63425c53447c484fde276",
+        "/usr/local/libexec/secpal/haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+        "/usr/local/libexec/secpal/haproxy-reviewed.rpm": "8a6bb5f3afc88e3da5ce4c0631484ac44b3f33696953d2037c71ef49f41d02b4",
+        "/usr/local/libexec/secpal/haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+        "/usr/local/libexec/secpal/haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+        "/usr/local/libexec/secpal/product-backend-policy": "d615f95aa97756be55cf8ac2e7431d7bfc69288a1f9504df58c383f7553a5bda"
+      },
+      "native_service_unit": "MainPID=65538\nExecStartPost={ path=/usr/bin/setpriv ; argv[]=/usr/bin/setpriv --bounding-set=-all,+sys_ptrace --no-new-privs /usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-config --verify-running $MAINPID ; ignore_errors=no ; start_time=[Sun 2026-10-11 15:26:14 UTC] ; stop_time=[Sun 2026-10-11 15:26:14 UTC] ; pid=65542 ; code=exited ; status=0 }\nExecReload={ path=/usr/bin/setpriv ; argv[]=/usr/bin/setpriv --bounding-set=-all,+kill,+sys_ptrace --no-new-privs /usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-config --reload $MAINPID ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nCapabilityBoundingSet=cap_kill cap_setgid cap_setuid cap_net_bind_service\nNoNewPrivileges=yes\nFragmentPath=/usr/lib/systemd/system/haproxy.service\nDropInPaths=/etc/systemd/system/haproxy.service.d/secpal-listeners.conf /etc/systemd/system/haproxy.service.d/secpal.conf\nNeedDaemonReload=no",
+      "negative_admission_and_fault_injection": {
+        "cases": {
+          "actual_worker_executable_verified": {
+            "worker_pids": [67247]
+          },
+          "current_product_uid_alias_rejected": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-backend-policy",
+            "stdout": ""
+          },
+          "directory_sync_failure": {
+            "bounded_recovery_worker_pid": 68416,
+            "fault": "explicit controlled fsync injection on the real serving filesystem",
+            "serving_generation_verified": true,
+            "serving_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "sync_calls": 2
+          },
+          "substituted_reviewed_rpm_rejected": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-haproxy-reviewed-rpm-payload",
+            "stdout": ""
+          },
+          "unrelated_pid_rejected_before_inspection": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-exact-systemd-mainpid",
+            "stdout": ""
+          },
+          "wrong_executable_rejected": {
+            "diagnostic": "admit-haproxy-executable"
+          }
+        },
+        "server_id": 163965414,
+        "source_sha256": {
+          "/etc/systemd/system/haproxy.service.d/secpal.conf": "6b9fecdbfbe547826aa56bacc2132bcb860e232dfbe63425c53447c484fde276",
+          "/usr/local/libexec/secpal/haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+          "/usr/local/libexec/secpal/haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+          "/usr/local/libexec/secpal/haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+          "/usr/local/libexec/secpal/product-backend-policy": "d615f95aa97756be55cf8ac2e7431d7bfc69288a1f9504df58c383f7553a5bda"
+        }
+      },
+      "package_files_check": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": ""
+      },
+      "package_signature_check": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": "/usr/local/libexec/secpal/haproxy-reviewed.rpm:\n    Header V4 RSA/SHA256 Signature, key ID 6fedfc85: OK\n    Header SHA256 digest: OK\n    Header SHA1 digest: OK\n    Payload SHA256 digest: OK\n    MD5 digest: OK"
+      },
+      "raw_controller_observations_sha256": {
+        "corrected-full-runtime-observation": "b9084e467ec1c2fc9ce03f8a06c1f1a7193f2ba53e9b961aafec553ca6283d80",
+        "remediation-boundary-observation": "4ad10d3303ace3a717e4fd54f82cfc095c95611df93b6df142c6a4ca92fad834",
+        "remediation-install-observation": "9f7a19453f178658d794d44c864a663ee880610b9ce1b17d473bae0de5b2398c"
+      },
+      "repeated_installed_runtime": {
+        "cases": {
+          "explicit_valid_restoration": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 65538,
+            "worker_pid": 66954
+          },
+          "genuine_application_readiness": {
+            "api": {
+              "body": "{\"status\":\"ready\",\"timestamp\":\"2026-10-11T15:27:57Z\"}",
+              "headers": {
+                "cache-control": "must-revalidate, no-cache, no-store, private",
+                "content-length": "53",
+                "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; object-src 'none'",
+                "content-type": "application/json",
+                "cross-origin-embedder-policy": "require-corp",
+                "cross-origin-opener-policy": "same-origin",
+                "cross-origin-resource-policy": "same-site",
+                "date": "Sun, 11 Oct 2026 15:27:57 GMT",
+                "origin-agent-cluster": "?1",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "pragma": "no-cache",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "FrankenPHP Caddy",
+                "vary": "Origin",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-ratelimit-limit": "60",
+                "x-ratelimit-remaining": "27",
+                "x-xss-protection": "0"
+              },
+              "status": 200
+            },
+            "frontend": {
+              "body": "{\"status\":\"ok\"}",
+              "headers": {
+                "cache-control": "no-store",
+                "content-length": "15",
+                "content-type": "application/json",
+                "date": "Sun, 11 Oct 2026 15:27:57 GMT",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "nginx",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-xss-protection": "0"
+              },
+              "status": 200
+            },
+            "generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 65538,
+              "worker_pid": 65541
+            }
+          },
+          "graceful_reload_new_generation_and_inflight": {
+            "after": {
+              "config_sha256": "37de7598bcade7f2cf9a1d4b878d82ba00c2f169c784a46db146a2d97e438c6f",
+              "fingerprint": "0d7b8201c58b6fa6a0f1c2fe8f420d4f8a77eab1cd8c64e9aaa067d549ecd596",
+              "master_pid": 65538,
+              "worker_pid": 66925
+            },
+            "before": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 65538,
+              "worker_pid": 65541
+            },
+            "inflight_body": "{\"status\":\"ok\"}",
+            "inflight_status": 200,
+            "reload": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": ""
+            }
+          },
+          "intended_and_unrelated_uid_authority": {
+            "haproxy": {
+              "api": {
+                "exit_status": 0,
+                "stderr": "",
+                "stdout": "200"
+              },
+              "frontend": {
+                "exit_status": 0,
+                "stderr": "",
+                "stdout": "200"
+              }
+            },
+            "secpal-admin": {
+              "api": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              },
+              "frontend": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              }
+            },
+            "secpal-runtime": {
+              "api": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              },
+              "frontend": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              }
+            }
+          },
+          "invalid_candidate_keeps_serving": {
+            "previous_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 65538,
+              "worker_pid": 65541
+            },
+            "rejection": {
+              "exit_status": 1,
+              "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+              "stdout": ""
+            },
+            "unchanged_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 65538,
+              "worker_pid": 65541
+            }
+          },
+          "native_syntax_rejection": {
+            "exit_status": 1,
+            "stderr": "",
+            "stdout": ""
+          },
+          "origins_methods_malformed_bounds_timeout": {
+            "TRACE": 405,
+            "UNSUPPORTED": 405,
+            "api.secpal.example.invalid:1234": 421,
+            "app.secpal.example.invalid.evil": 421,
+            "frontend_does_not_return_api_readiness": {
+              "body": "<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n",
+              "headers": {
+                "content-length": "146",
+                "content-type": "text/html",
+                "date": "Sun, 11 Oct 2026 15:28:10 GMT",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "nginx",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-xss-protection": "0"
+              },
+              "status": 404
+            },
+            "header_timeout": {
+              "duration_seconds": 5.002384399000221,
+              "status_line": "HTTP/1.1 408 Request Time-out"
+            },
+            "malformed_and_header_bounds": [
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request"
+            ],
+            "target_bound": 414,
+            "unknown.example.invalid": 421
+          },
+          "real_rootless_recreation": {
+            "api": {
+              "excluded": {
+                "body": "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n</body></html>\n",
+                "headers": {
+                  "cache-control": "no-cache",
+                  "content-length": "107",
+                  "content-type": "text/html"
+                },
+                "status": 503
+              },
+              "new_container_id": "3f0e8e06e8e38549c1ffce644a0c19c10bb531e731ff4351d8a16dadf31ed934",
+              "old_container_id": "dabcb98036aa365d596477e680f2dcfb2ac3710d6f97f2188d23c10743c1d65c",
+              "ports": {
+                "8080/tcp": [
+                  {
+                    "HostIp": "127.0.0.1",
+                    "HostPort": "18081"
+                  }
+                ]
+              },
+              "recovered": {
+                "body": "{\"status\":\"ready\",\"timestamp\":\"2026-10-11T15:28:09Z\"}",
+                "headers": {
+                  "cache-control": "must-revalidate, no-cache, no-store, private",
+                  "content-length": "53",
+                  "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; object-src 'none'",
+                  "content-type": "application/json",
+                  "cross-origin-embedder-policy": "require-corp",
+                  "cross-origin-opener-policy": "same-origin",
+                  "cross-origin-resource-policy": "same-site",
+                  "date": "Sun, 11 Oct 2026 15:28:09 GMT",
+                  "origin-agent-cluster": "?1",
+                  "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                  "pragma": "no-cache",
+                  "referrer-policy": "strict-origin-when-cross-origin",
+                  "server": "FrankenPHP Caddy",
+                  "vary": "Origin",
+                  "x-content-type-options": "nosniff",
+                  "x-frame-options": "DENY",
+                  "x-permitted-cross-domain-policies": "none",
+                  "x-ratelimit-limit": "60",
+                  "x-ratelimit-remaining": "50",
+                  "x-xss-protection": "0"
+                },
+                "status": 200
+              }
+            },
+            "frontend": {
+              "excluded": {
+                "body": "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n</body></html>\n",
+                "headers": {
+                  "cache-control": "no-cache",
+                  "content-length": "107",
+                  "content-type": "text/html"
+                },
+                "status": 503
+              },
+              "new_container_id": "9e37bc2db9af7f79d89f56fd3e24b99156c08b34d72da5cb955540e397da25c7",
+              "old_container_id": "3d6798a0022924d52365e1ded0f81c9dac71135510b24617a4a602df42c30705",
+              "ports": {
+                "8080/tcp": [
+                  {
+                    "HostIp": "127.0.0.1",
+                    "HostPort": "18080"
+                  }
+                ]
+              },
+              "recovered": {
+                "body": "{\"status\":\"ok\"}",
+                "headers": {
+                  "cache-control": "no-store",
+                  "content-length": "15",
+                  "content-type": "application/json",
+                  "date": "Sun, 11 Oct 2026 15:27:58 GMT",
+                  "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                  "referrer-policy": "strict-origin-when-cross-origin",
+                  "server": "nginx",
+                  "x-content-type-options": "nosniff",
+                  "x-frame-options": "DENY",
+                  "x-permitted-cross-domain-policies": "none",
+                  "x-xss-protection": "0"
+                },
+                "status": 200
+              }
+            }
+          },
+          "uncertain_reload_rejected_last_known_good": {
+            "all_frontend_samples_200": true,
+            "failed_reload": {
+              "exit_status": 1,
+              "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+              "stdout": ""
+            },
+            "restored_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 65538,
+              "worker_pid": 67247
+            },
+            "serving_samples": 169
+          }
+        },
+        "final_config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+        "installed_source_sha256": {
+          "haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+          "haproxy_base_contract.py": "0e411903c7a92abcb67d6ea13bf6038b391065abef30fd2ea5da9d1af94ae533",
+          "haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+          "haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+          "product_backend_contract.py": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e",
+          "secpal_haproxy_runtime.cil": "1a35f1eec1766881b5c1c9d987770ae8d627c0f74d5fdf56b8d0121e1d0f2b82"
+        },
+        "observed_at": "2026-10-11T15:27:57.035570+00:00",
+        "result": "REAL_INSTALLED_CASES_PASS",
+        "server_id": 163965414
+      },
+      "reviewed_source_parent": "5022cf00e7d71ea406b41b93166149ffcb3115fc",
+      "server_id": 163965414,
+      "stale_manager_rejection": {
+        "exit_status": 1,
+        "stderr": "FAIL: admit-loaded-haproxy-unit",
+        "stdout": ""
+      }
+    },
+    {
+      "actual_processes": [
+        {
+          "CapEff": "00000000000004e0",
+          "NoNewPrivs": "1",
+          "Seccomp": "2",
+          "domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "exe": "/usr/sbin/haproxy",
+          "pid": 53148,
+          "uid": ["0", "0", "0", "0"]
+        },
+        {
+          "CapEff": "0000000000000000",
+          "NoNewPrivs": "1",
+          "Seccomp": "2",
+          "domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "exe": "/usr/sbin/haproxy",
+          "pid": 53151,
+          "uid": ["994", "994", "994", "994"]
+        }
+      ],
+      "installed_source_sha256": {
+        "/etc/systemd/system/haproxy.service.d/secpal.conf": "6b9fecdbfbe547826aa56bacc2132bcb860e232dfbe63425c53447c484fde276",
+        "/usr/local/libexec/secpal/haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+        "/usr/local/libexec/secpal/haproxy-reviewed.rpm": "cd576d4eb6fcc4c35f2da916782e5f77be8d170a772195a770c78c76cd50dd05",
+        "/usr/local/libexec/secpal/haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+        "/usr/local/libexec/secpal/haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+        "/usr/local/libexec/secpal/product-backend-policy": "d615f95aa97756be55cf8ac2e7431d7bfc69288a1f9504df58c383f7553a5bda"
+      },
+      "native_service_unit": "MainPID=53148\nExecStartPost={ path=/usr/bin/setpriv ; argv[]=/usr/bin/setpriv --bounding-set=-all,+sys_ptrace --no-new-privs /usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-config --verify-running $MAINPID ; ignore_errors=no ; start_time=[Sun 2026-10-11 15:27:25 UTC] ; stop_time=[Sun 2026-10-11 15:27:26 UTC] ; pid=53153 ; code=exited ; status=0 }\nExecReload={ path=/usr/bin/setpriv ; argv[]=/usr/bin/setpriv --bounding-set=-all,+kill,+sys_ptrace --no-new-privs /usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-config --reload $MAINPID ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nCapabilityBoundingSet=cap_kill cap_setgid cap_setuid cap_net_bind_service\nNoNewPrivileges=yes\nFragmentPath=/usr/lib/systemd/system/haproxy.service\nDropInPaths=/etc/systemd/system/haproxy.service.d/secpal-listeners.conf /etc/systemd/system/haproxy.service.d/secpal.conf\nNeedDaemonReload=no",
+      "negative_admission_and_fault_injection": {
+        "cases": {
+          "actual_worker_executable_verified": {
+            "worker_pids": [54767]
+          },
+          "current_product_uid_alias_rejected": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-backend-policy",
+            "stdout": ""
+          },
+          "directory_sync_failure": {
+            "bounded_recovery_worker_pid": 55871,
+            "fault": "explicit controlled fsync injection on the real serving filesystem",
+            "serving_generation_verified": true,
+            "serving_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "sync_calls": 2
+          },
+          "substituted_reviewed_rpm_rejected": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-haproxy-reviewed-rpm-payload",
+            "stdout": ""
+          },
+          "unrelated_pid_rejected_before_inspection": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-exact-systemd-mainpid",
+            "stdout": ""
+          },
+          "wrong_executable_rejected": {
+            "diagnostic": "admit-haproxy-executable"
+          }
+        },
+        "server_id": 169716995,
+        "source_sha256": {
+          "/etc/systemd/system/haproxy.service.d/secpal.conf": "6b9fecdbfbe547826aa56bacc2132bcb860e232dfbe63425c53447c484fde276",
+          "/usr/local/libexec/secpal/haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+          "/usr/local/libexec/secpal/haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+          "/usr/local/libexec/secpal/haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+          "/usr/local/libexec/secpal/product-backend-policy": "d615f95aa97756be55cf8ac2e7431d7bfc69288a1f9504df58c383f7553a5bda"
+        }
+      },
+      "package_files_check": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": ""
+      },
+      "package_signature_check": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": "/usr/local/libexec/secpal/haproxy-reviewed.rpm:\n    Header V4 RSA/SHA256 Signature, key ID 6fedfc85: OK\n    Header SHA256 digest: OK\n    Header SHA1 digest: OK\n    Payload SHA256 digest: OK\n    MD5 digest: OK"
+      },
+      "raw_controller_observations_sha256": {
+        "corrected-full-runtime-observation": "2b96ab391ecd31439d02badef8f933517780fc60b36bbcfbdc1750c1ea3d0d3f",
+        "remediation-boundary-observation": "f2ea6018a9091dda07d697c78fa8cd2bcef0fa105c32743e09c133e780cf30e9",
+        "remediation-install-observation": "31491c5d744c2c82aebd61ee7d7057c0ad6f2597138b759cd1b7becc30614845"
+      },
+      "repeated_installed_runtime": {
+        "cases": {
+          "explicit_valid_restoration": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 53148,
+            "worker_pid": 54467
+          },
+          "genuine_application_readiness": {
+            "api": {
+              "body": "{\"status\":\"ready\",\"timestamp\":\"2026-10-11T15:28:53Z\"}",
+              "headers": {
+                "cache-control": "must-revalidate, no-cache, no-store, private",
+                "content-length": "53",
+                "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; object-src 'none'",
+                "content-type": "application/json",
+                "cross-origin-embedder-policy": "require-corp",
+                "cross-origin-opener-policy": "same-origin",
+                "cross-origin-resource-policy": "same-site",
+                "date": "Sun, 11 Oct 2026 15:28:53 GMT",
+                "origin-agent-cluster": "?1",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "pragma": "no-cache",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "FrankenPHP Caddy",
+                "vary": "Origin",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-ratelimit-limit": "60",
+                "x-ratelimit-remaining": "7",
+                "x-xss-protection": "0"
+              },
+              "status": 200
+            },
+            "frontend": {
+              "body": "{\"status\":\"ok\"}",
+              "headers": {
+                "cache-control": "no-store",
+                "content-length": "15",
+                "content-type": "application/json",
+                "date": "Sun, 11 Oct 2026 15:28:53 GMT",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "nginx",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-xss-protection": "0"
+              },
+              "status": 200
+            },
+            "generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 53148,
+              "worker_pid": 53151
+            }
+          },
+          "graceful_reload_new_generation_and_inflight": {
+            "after": {
+              "config_sha256": "37de7598bcade7f2cf9a1d4b878d82ba00c2f169c784a46db146a2d97e438c6f",
+              "fingerprint": "0d7b8201c58b6fa6a0f1c2fe8f420d4f8a77eab1cd8c64e9aaa067d549ecd596",
+              "master_pid": 53148,
+              "worker_pid": 54437
+            },
+            "before": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 53148,
+              "worker_pid": 53151
+            },
+            "inflight_body": "{\"status\":\"ok\"}",
+            "inflight_status": 200,
+            "reload": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": ""
+            }
+          },
+          "intended_and_unrelated_uid_authority": {
+            "haproxy": {
+              "api": {
+                "exit_status": 0,
+                "stderr": "",
+                "stdout": "200"
+              },
+              "frontend": {
+                "exit_status": 0,
+                "stderr": "",
+                "stdout": "200"
+              }
+            },
+            "secpal-admin": {
+              "api": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              },
+              "frontend": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              }
+            },
+            "secpal-runtime": {
+              "api": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              },
+              "frontend": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              }
+            }
+          },
+          "invalid_candidate_keeps_serving": {
+            "previous_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 53148,
+              "worker_pid": 53151
+            },
+            "rejection": {
+              "exit_status": 1,
+              "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+              "stdout": ""
+            },
+            "unchanged_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 53148,
+              "worker_pid": 53151
+            }
+          },
+          "native_syntax_rejection": {
+            "exit_status": 1,
+            "stderr": "",
+            "stdout": ""
+          },
+          "origins_methods_malformed_bounds_timeout": {
+            "TRACE": 405,
+            "UNSUPPORTED": 405,
+            "api.secpal.example.invalid:1234": 421,
+            "app.secpal.example.invalid.evil": 421,
+            "frontend_does_not_return_api_readiness": {
+              "body": "<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n",
+              "headers": {
+                "content-length": "146",
+                "content-type": "text/html",
+                "date": "Sun, 11 Oct 2026 15:29:06 GMT",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "nginx",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-xss-protection": "0"
+              },
+              "status": 404
+            },
+            "header_timeout": {
+              "duration_seconds": 5.001712451000458,
+              "status_line": "HTTP/1.1 408 Request Time-out"
+            },
+            "malformed_and_header_bounds": [
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request"
+            ],
+            "target_bound": 414,
+            "unknown.example.invalid": 421
+          },
+          "real_rootless_recreation": {
+            "api": {
+              "excluded": {
+                "body": "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n</body></html>\n",
+                "headers": {
+                  "cache-control": "no-cache",
+                  "content-length": "107",
+                  "content-type": "text/html"
+                },
+                "status": 503
+              },
+              "new_container_id": "09522449be09b2d49d7df33508b13767848cd1efde8ce18c4c9fe0312d250a8f",
+              "old_container_id": "4b35c7b441ccc7919a79ec06b4c9712e214a9adda4adaa9641b62b37090f3399",
+              "ports": {
+                "8080/tcp": [
+                  {
+                    "HostIp": "127.0.0.1",
+                    "HostPort": "18081"
+                  }
+                ]
+              },
+              "recovered": {
+                "body": "{\"status\":\"ready\",\"timestamp\":\"2026-10-11T15:29:06Z\"}",
+                "headers": {
+                  "cache-control": "must-revalidate, no-cache, no-store, private",
+                  "content-length": "53",
+                  "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; object-src 'none'",
+                  "content-type": "application/json",
+                  "cross-origin-embedder-policy": "require-corp",
+                  "cross-origin-opener-policy": "same-origin",
+                  "cross-origin-resource-policy": "same-site",
+                  "date": "Sun, 11 Oct 2026 15:29:06 GMT",
+                  "origin-agent-cluster": "?1",
+                  "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                  "pragma": "no-cache",
+                  "referrer-policy": "strict-origin-when-cross-origin",
+                  "server": "FrankenPHP Caddy",
+                  "vary": "Origin",
+                  "x-content-type-options": "nosniff",
+                  "x-frame-options": "DENY",
+                  "x-permitted-cross-domain-policies": "none",
+                  "x-ratelimit-limit": "60",
+                  "x-ratelimit-remaining": "49",
+                  "x-xss-protection": "0"
+                },
+                "status": 200
+              }
+            },
+            "frontend": {
+              "excluded": {
+                "body": "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n</body></html>\n",
+                "headers": {
+                  "cache-control": "no-cache",
+                  "content-length": "107",
+                  "content-type": "text/html"
+                },
+                "status": 503
+              },
+              "new_container_id": "a99ab52801123bceb473256645b2333f44a4ee94198b2c1557f2f203196e9fd5",
+              "old_container_id": "6d3064399594db1225b695bce91ceded2e90d67302d6cb6d529f076679df0537",
+              "ports": {
+                "8080/tcp": [
+                  {
+                    "HostIp": "127.0.0.1",
+                    "HostPort": "18080"
+                  }
+                ]
+              },
+              "recovered": {
+                "body": "{\"status\":\"ok\"}",
+                "headers": {
+                  "cache-control": "no-store",
+                  "content-length": "15",
+                  "content-type": "application/json",
+                  "date": "Sun, 11 Oct 2026 15:28:54 GMT",
+                  "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                  "referrer-policy": "strict-origin-when-cross-origin",
+                  "server": "nginx",
+                  "x-content-type-options": "nosniff",
+                  "x-frame-options": "DENY",
+                  "x-permitted-cross-domain-policies": "none",
+                  "x-xss-protection": "0"
+                },
+                "status": 200
+              }
+            }
+          },
+          "uncertain_reload_rejected_last_known_good": {
+            "all_frontend_samples_200": true,
+            "failed_reload": {
+              "exit_status": 1,
+              "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+              "stdout": ""
+            },
+            "restored_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 53148,
+              "worker_pid": 54767
+            },
+            "serving_samples": 174
+          }
+        },
+        "final_config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+        "installed_source_sha256": {
+          "haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+          "haproxy_base_contract.py": "0e411903c7a92abcb67d6ea13bf6038b391065abef30fd2ea5da9d1af94ae533",
+          "haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+          "haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+          "product_backend_contract.py": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e",
+          "secpal_haproxy_runtime.cil": "1a35f1eec1766881b5c1c9d987770ae8d627c0f74d5fdf56b8d0121e1d0f2b82"
+        },
+        "observed_at": "2026-10-11T15:28:53.087996+00:00",
+        "result": "REAL_INSTALLED_CASES_PASS",
+        "server_id": 169716995
+      },
+      "reviewed_source_parent": "5022cf00e7d71ea406b41b93166149ffcb3115fc",
+      "server_id": 169716995,
+      "stale_manager_rejection": {
+        "exit_status": 1,
+        "stderr": "FAIL: admit-loaded-haproxy-unit",
+        "stdout": ""
+      }
+    },
+    {
+      "actual_processes": [
+        {
+          "CapEff": "00000000000004e0",
+          "NoNewPrivs": "1",
+          "Seccomp": "2",
+          "domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "exe": "/usr/sbin/haproxy",
+          "pid": 44221,
+          "uid": ["0", "0", "0", "0"]
+        },
+        {
+          "CapEff": "0000000000000000",
+          "NoNewPrivs": "1",
+          "Seccomp": "2",
+          "domain": "system_u:system_r:haproxy_t:s0\u0000",
+          "exe": "/usr/sbin/haproxy",
+          "pid": 44224,
+          "uid": ["994", "994", "994", "994"]
+        }
+      ],
+      "installed_source_sha256": {
+        "/etc/systemd/system/haproxy.service.d/secpal.conf": "6b9fecdbfbe547826aa56bacc2132bcb860e232dfbe63425c53447c484fde276",
+        "/usr/local/libexec/secpal/haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+        "/usr/local/libexec/secpal/haproxy-reviewed.rpm": "8a6bb5f3afc88e3da5ce4c0631484ac44b3f33696953d2037c71ef49f41d02b4",
+        "/usr/local/libexec/secpal/haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+        "/usr/local/libexec/secpal/haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+        "/usr/local/libexec/secpal/product-backend-policy": "d615f95aa97756be55cf8ac2e7431d7bfc69288a1f9504df58c383f7553a5bda"
+      },
+      "native_service_unit": "MainPID=44221\nExecStartPost={ path=/usr/bin/setpriv ; argv[]=/usr/bin/setpriv --bounding-set=-all,+sys_ptrace --no-new-privs /usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-config --verify-running $MAINPID ; ignore_errors=no ; start_time=[Sun 2026-10-11 15:27:59 UTC] ; stop_time=[Sun 2026-10-11 15:28:00 UTC] ; pid=44226 ; code=exited ; status=0 }\nExecReload={ path=/usr/bin/setpriv ; argv[]=/usr/bin/setpriv --bounding-set=-all,+kill,+sys_ptrace --no-new-privs /usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-config --reload $MAINPID ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nCapabilityBoundingSet=cap_kill cap_setgid cap_setuid cap_net_bind_service\nNoNewPrivileges=yes\nFragmentPath=/usr/lib/systemd/system/haproxy.service\nDropInPaths=/etc/systemd/system/haproxy.service.d/secpal-listeners.conf /etc/systemd/system/haproxy.service.d/secpal.conf\nNeedDaemonReload=no",
+      "negative_admission_and_fault_injection": {
+        "cases": {
+          "actual_worker_executable_verified": {
+            "worker_pids": [45582]
+          },
+          "current_product_uid_alias_rejected": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-backend-policy",
+            "stdout": ""
+          },
+          "directory_sync_failure": {
+            "bounded_recovery_worker_pid": 46663,
+            "fault": "explicit controlled fsync injection on the real serving filesystem",
+            "serving_generation_verified": true,
+            "serving_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "sync_calls": 2
+          },
+          "substituted_reviewed_rpm_rejected": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-haproxy-reviewed-rpm-payload",
+            "stdout": ""
+          },
+          "unrelated_pid_rejected_before_inspection": {
+            "exit_status": 1,
+            "stderr": "FAIL: admit-exact-systemd-mainpid",
+            "stdout": ""
+          },
+          "wrong_executable_rejected": {
+            "diagnostic": "admit-haproxy-executable"
+          }
+        },
+        "server_id": 163717938,
+        "source_sha256": {
+          "/etc/systemd/system/haproxy.service.d/secpal.conf": "6b9fecdbfbe547826aa56bacc2132bcb860e232dfbe63425c53447c484fde276",
+          "/usr/local/libexec/secpal/haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+          "/usr/local/libexec/secpal/haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+          "/usr/local/libexec/secpal/haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+          "/usr/local/libexec/secpal/product-backend-policy": "d615f95aa97756be55cf8ac2e7431d7bfc69288a1f9504df58c383f7553a5bda"
+        }
+      },
+      "package_files_check": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": ""
+      },
+      "package_signature_check": {
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": "/usr/local/libexec/secpal/haproxy-reviewed.rpm:\n    Header V4 RSA/SHA256 Signature, key ID 6fedfc85: OK\n    Header SHA256 digest: OK\n    Header SHA1 digest: OK\n    Payload SHA256 digest: OK\n    MD5 digest: OK"
+      },
+      "raw_controller_observations_sha256": {
+        "corrected-full-runtime-observation": "42cf15bffc1150c5ca80b66173012efa685081162696efe0f8058d493108d647",
+        "remediation-boundary-observation": "0a6c919b9d6b2d55b7e9d5f2fe06c888681ee8374897bb9c4a065760605149aa",
+        "remediation-install-observation": "2feb5467c77ebbd0bea829b7d3b1425f59a43e2f097b6a6a0782211dedfd5107"
+      },
+      "repeated_installed_runtime": {
+        "cases": {
+          "explicit_valid_restoration": {
+            "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+            "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+            "master_pid": 44221,
+            "worker_pid": 45324
+          },
+          "genuine_application_readiness": {
+            "api": {
+              "body": "{\"status\":\"ready\",\"timestamp\":\"2026-10-11T15:28:53Z\"}",
+              "headers": {
+                "cache-control": "must-revalidate, no-cache, no-store, private",
+                "content-length": "53",
+                "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; object-src 'none'",
+                "content-type": "application/json",
+                "cross-origin-embedder-policy": "require-corp",
+                "cross-origin-opener-policy": "same-origin",
+                "cross-origin-resource-policy": "same-site",
+                "date": "Sun, 11 Oct 2026 15:28:53 GMT",
+                "origin-agent-cluster": "?1",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "pragma": "no-cache",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "FrankenPHP Caddy",
+                "vary": "Origin",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-ratelimit-limit": "60",
+                "x-ratelimit-remaining": "26",
+                "x-xss-protection": "0"
+              },
+              "status": 200
+            },
+            "frontend": {
+              "body": "{\"status\":\"ok\"}",
+              "headers": {
+                "cache-control": "no-store",
+                "content-length": "15",
+                "content-type": "application/json",
+                "date": "Sun, 11 Oct 2026 15:28:53 GMT",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "nginx",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-xss-protection": "0"
+              },
+              "status": 200
+            },
+            "generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 44221,
+              "worker_pid": 44224
+            }
+          },
+          "graceful_reload_new_generation_and_inflight": {
+            "after": {
+              "config_sha256": "37de7598bcade7f2cf9a1d4b878d82ba00c2f169c784a46db146a2d97e438c6f",
+              "fingerprint": "0d7b8201c58b6fa6a0f1c2fe8f420d4f8a77eab1cd8c64e9aaa067d549ecd596",
+              "master_pid": 44221,
+              "worker_pid": 45275
+            },
+            "before": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 44221,
+              "worker_pid": 44224
+            },
+            "inflight_body": "{\"status\":\"ok\"}",
+            "inflight_status": 200,
+            "reload": {
+              "exit_status": 0,
+              "stderr": "",
+              "stdout": ""
+            }
+          },
+          "intended_and_unrelated_uid_authority": {
+            "haproxy": {
+              "api": {
+                "exit_status": 0,
+                "stderr": "",
+                "stdout": "200"
+              },
+              "frontend": {
+                "exit_status": 0,
+                "stderr": "",
+                "stdout": "200"
+              }
+            },
+            "secpal-admin": {
+              "api": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              },
+              "frontend": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              }
+            },
+            "secpal-runtime": {
+              "api": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              },
+              "frontend": {
+                "exit_status": 7,
+                "stderr": "",
+                "stdout": "000"
+              }
+            }
+          },
+          "invalid_candidate_keeps_serving": {
+            "previous_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 44221,
+              "worker_pid": 44224
+            },
+            "rejection": {
+              "exit_status": 1,
+              "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+              "stdout": ""
+            },
+            "unchanged_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 44221,
+              "worker_pid": 44224
+            }
+          },
+          "native_syntax_rejection": {
+            "exit_status": 1,
+            "stderr": "",
+            "stdout": ""
+          },
+          "origins_methods_malformed_bounds_timeout": {
+            "TRACE": 405,
+            "UNSUPPORTED": 405,
+            "api.secpal.example.invalid:1234": 421,
+            "app.secpal.example.invalid.evil": 421,
+            "frontend_does_not_return_api_readiness": {
+              "body": "<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n",
+              "headers": {
+                "content-length": "146",
+                "content-type": "text/html",
+                "date": "Sun, 11 Oct 2026 15:29:07 GMT",
+                "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                "referrer-policy": "strict-origin-when-cross-origin",
+                "server": "nginx",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "x-permitted-cross-domain-policies": "none",
+                "x-xss-protection": "0"
+              },
+              "status": 404
+            },
+            "header_timeout": {
+              "duration_seconds": 5.002312355999493,
+              "status_line": "HTTP/1.1 408 Request Time-out"
+            },
+            "malformed_and_header_bounds": [
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request",
+              "HTTP/1.1 400 Bad request"
+            ],
+            "target_bound": 414,
+            "unknown.example.invalid": 421
+          },
+          "real_rootless_recreation": {
+            "api": {
+              "excluded": {
+                "body": "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n</body></html>\n",
+                "headers": {
+                  "cache-control": "no-cache",
+                  "content-length": "107",
+                  "content-type": "text/html"
+                },
+                "status": 503
+              },
+              "new_container_id": "7ed0cc7652f56a5dbfe86e03f2beca41f149c0040fb622cd27e54b1ad1c1c291",
+              "old_container_id": "d3b7b9d649949ac7af2964f5c3c0897f7d4ca87a5c2f534e2fac2f9cf2b7d93b",
+              "ports": {
+                "8080/tcp": [
+                  {
+                    "HostIp": "127.0.0.1",
+                    "HostPort": "18081"
+                  }
+                ]
+              },
+              "recovered": {
+                "body": "{\"status\":\"ready\",\"timestamp\":\"2026-10-11T15:29:07Z\"}",
+                "headers": {
+                  "cache-control": "must-revalidate, no-cache, no-store, private",
+                  "content-length": "53",
+                  "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; object-src 'none'",
+                  "content-type": "application/json",
+                  "cross-origin-embedder-policy": "require-corp",
+                  "cross-origin-opener-policy": "same-origin",
+                  "cross-origin-resource-policy": "same-site",
+                  "date": "Sun, 11 Oct 2026 15:29:07 GMT",
+                  "origin-agent-cluster": "?1",
+                  "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                  "pragma": "no-cache",
+                  "referrer-policy": "strict-origin-when-cross-origin",
+                  "server": "FrankenPHP Caddy",
+                  "vary": "Origin",
+                  "x-content-type-options": "nosniff",
+                  "x-frame-options": "DENY",
+                  "x-permitted-cross-domain-policies": "none",
+                  "x-ratelimit-limit": "60",
+                  "x-ratelimit-remaining": "50",
+                  "x-xss-protection": "0"
+                },
+                "status": 200
+              }
+            },
+            "frontend": {
+              "excluded": {
+                "body": "<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.\n</body></html>\n",
+                "headers": {
+                  "cache-control": "no-cache",
+                  "content-length": "107",
+                  "content-type": "text/html"
+                },
+                "status": 503
+              },
+              "new_container_id": "f4c3049717cc3f146e0ebd734edd7790f17c9e0b4e585c35d5f7ac03673d3289",
+              "old_container_id": "6bb3d7845eb2b62922020764af936d16b68604b0d2e9f27e7dab7455be6a2ed8",
+              "ports": {
+                "8080/tcp": [
+                  {
+                    "HostIp": "127.0.0.1",
+                    "HostPort": "18080"
+                  }
+                ]
+              },
+              "recovered": {
+                "body": "{\"status\":\"ok\"}",
+                "headers": {
+                  "cache-control": "no-store",
+                  "content-length": "15",
+                  "content-type": "application/json",
+                  "date": "Sun, 11 Oct 2026 15:28:55 GMT",
+                  "permissions-policy": "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+                  "referrer-policy": "strict-origin-when-cross-origin",
+                  "server": "nginx",
+                  "x-content-type-options": "nosniff",
+                  "x-frame-options": "DENY",
+                  "x-permitted-cross-domain-policies": "none",
+                  "x-xss-protection": "0"
+                },
+                "status": 200
+              }
+            }
+          },
+          "uncertain_reload_rejected_last_known_good": {
+            "all_frontend_samples_200": true,
+            "failed_reload": {
+              "exit_status": 1,
+              "stderr": "Job for haproxy.service failed.\nSee \"systemctl status haproxy.service\" and \"journalctl -xeu haproxy.service\" for details.",
+              "stdout": ""
+            },
+            "restored_generation": {
+              "config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+              "fingerprint": "c630b3dead958c1dfd55da333188c7b1f9e72c377293bf092ebc926ae5610748",
+              "master_pid": 44221,
+              "worker_pid": 45582
+            },
+            "serving_samples": 152
+          }
+        },
+        "final_config_sha256": "f106a3fc3cf5cf3d26fe37fa529c86a5e6c26972f7923c0c9f102d052b22298c",
+        "installed_source_sha256": {
+          "haproxy-config": "5a7913e4c11167d565ee0c39c05a801fbdf051629482ea86cff94c44da87212e",
+          "haproxy_base_contract.py": "0e411903c7a92abcb67d6ea13bf6038b391065abef30fd2ea5da9d1af94ae533",
+          "haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+          "haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+          "product_backend_contract.py": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e",
+          "secpal_haproxy_runtime.cil": "1a35f1eec1766881b5c1c9d987770ae8d627c0f74d5fdf56b8d0121e1d0f2b82"
+        },
+        "observed_at": "2026-10-11T15:28:53.365583+00:00",
+        "result": "REAL_INSTALLED_CASES_PASS",
+        "server_id": 163717938
+      },
+      "reviewed_source_parent": "5022cf00e7d71ea406b41b93166149ffcb3115fc",
+      "server_id": 163717938,
+      "stale_manager_rejection": {
+        "exit_status": 1,
+        "stderr": "FAIL: admit-loaded-haproxy-unit",
+        "stdout": ""
+      }
+    }
+  ],
   "repository": "SecPal/deployment",
   "retention": "Raw controller observations and exact public preparation/test inputs retained in original workspace .context/219-authority/hetzner-rebuild; this record retains bounded independently readmitted public observations. Runtime hashes must match signed delivery bytes before PRE_READY.",
-  "scope": "Disposable reference systems and actual installed #219 shared HAProxy, #101 fixed-backend authority and generic Rocky/rootless observations. No provider CREATE, production construction/enrollment/activation, native PostgreSQL #81, public Viewer identity/TLS, GCP, multi-provider, Managed Production, HA or customer-production acceptance. No DNS/TLS for app.secpal.dev or api.secpal.dev was configured."
+  "schema_version": "1.0",
+  "scope": "Disposable reference systems and actual installed #219 shared HAProxy, #101 fixed-backend authority and generic Rocky/rootless observations. No provider CREATE, production construction/enrollment/activation, native PostgreSQL #81, public Viewer identity/TLS, GCP, multi-provider, Managed Production, HA or customer-production acceptance. No DNS/TLS for app.secpal.dev or api.secpal.dev was configured.",
+  "target_sha": "5022cf00e7d71ea406b41b93166149ffcb3115fc"
 }

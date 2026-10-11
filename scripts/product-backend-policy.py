@@ -141,6 +141,9 @@ def check() -> None:
     if READY.stat().st_size > 1024:
         raise ValueError("policy startup barrier is oversized")
     uid = current_identity()
+    # Recheck the authoritative product UID for administrator-side consumers
+    # too; the current caller alone may be root rather than that runtime.
+    runtime_identity()
     if uid == os.getuid():
         raise ValueError("product runtime must not use the HAProxy account")
     admit_marker(json.loads(READY.read_text(encoding="utf-8")), uid)
