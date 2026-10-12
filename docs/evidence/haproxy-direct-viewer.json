@@ -1,0 +1,130 @@
+{
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "schema_version": "1.0",
+  "evidence_kind": "BOUNDED_DIRECT_VIEWER_REFERENCE_OBSERVATIONS",
+  "repository": "SecPal/deployment",
+  "delivery_issue": 220,
+  "primary_pr": 307,
+  "implementation_head": "d48e22ce8b9bbfe6be6ff8b0c0359ad2ea211ee2",
+  "implementation_tree": "67d01fdcd3a6794b61d12a05735609eb6a922082",
+  "accepted_shared_base": "c4e11cc6db2db480afcc2a375e629e3c7a70cf5b",
+  "ownership": "Canonical SecPal work-graph/evidence architecture; shared HAProxy #219; fixed product backend authority #101; DIRECT Viewer identity #220. Observations do not create runtime or admission authority.",
+  "installed_source_sha256": {
+    "haproxy-config": "1ca7ed3046a36c968e7918059071fcf7d4cec86d03450acfdce1ad97dd4bdefe",
+    "haproxy-direct-policy": "037459237e4690d2d855ee7b7556e0218e213965b34a99f69faef1202351305c",
+    "haproxy_base_contract.py": "abbceee6a18122271dfd361f05dd7b4e7e5719ca7ce66b375ea41cbb8b9269c7",
+    "haproxy_composition_contract.py": "14dbf14ea46d694bde95f4103619c59c094461c0a19217a844b3332c321afa58",
+    "haproxy_config_lifecycle.py": "e75eee23c1afe8763db824da2306c457fd800dfca0093ecba69e777a7ed8b0c1",
+    "haproxy_direct_contract.py": "5d9a805ce97eac826289a75436b78d6609cf3c45820f76f8a3ce5b2360b38049",
+    "haproxy_direct_policy.py": "0be4a2f3eddcaba4ccf2658c076bb2e419ae8f840a788dfd689b06e0d834c273",
+    "haproxy_supply_contract.py": "af73d93ace53cfb839932e83999d13acbea0fb543a5c42177ffba8920067be24",
+    "product_backend_contract.py": "585459cf79cd950e4a47ed8ffbb0094a5d54664dd66fd6f5b6291236557fd56e"
+  },
+  "private_reference": {
+    "record_sha256": "024529bb8df47462be73fda45013f187415a84929cd6d93942dbd57367151448",
+    "hosts": [
+      {
+        "name": "CX23",
+        "server_id": 163965414,
+        "architecture": "x86_64",
+        "haproxy_binary_sha256": "61b90cd8d83713880c11ee82c9e3d9ae73662ebdef1244695f63338df7dc05ed",
+        "tests": 28,
+        "result": "PASS"
+      },
+      {
+        "name": "CAX21",
+        "server_id": 169716995,
+        "architecture": "aarch64",
+        "haproxy_binary_sha256": "442e3802fa46248e75c3c402ba86a197f3313db4eed5f199173d2e3600179859",
+        "tests": 28,
+        "result": "PASS"
+      },
+      {
+        "name": "CX33",
+        "server_id": 163717938,
+        "architecture": "x86_64",
+        "haproxy_binary_sha256": "61b90cd8d83713880c11ee82c9e3d9ae73662ebdef1244695f63338df7dc05ed",
+        "tests": 28,
+        "result": "PASS"
+      }
+    ],
+    "installed_application_security_results": {
+      "direct_single_ipv4_ipv6_canonical_identity": "PASS",
+      "strict_proxy_v2_ipv4_ipv6_canonical_identity": "PASS",
+      "proxy_v1_missing_partial_malformed_invalid_forms_rejected": "PASS",
+      "unauthorized_physical_peer_and_forged_claim_rejected": "PASS",
+      "private_decoder_and_backend_bypass_rejected": "PASS",
+      "forwarding_and_internal_header_spoofing_rejected": "PASS",
+      "real_api_session_cookie_cors_sanctum_origin_isolation": "PASS",
+      "rootless_api_frontend_recreation": "PASS",
+      "effective_selinux_nftables_and_unchanged_backend_policy": "PASS",
+      "privacy_safe_peer_client_logging_and_correlation": "PASS",
+      "validated_reload_invalid_candidate_and_lkg": "PASS",
+      "adjacent_bytecode_substitution_rejected": "PASS"
+    }
+  },
+  "public_reference": {
+    "server_id": 163965414,
+    "ipv4": "78.47.193.193",
+    "ipv6": "2a01:4f8:c013:ec3b::1",
+    "allowed_sources": ["188.245.168.2/32", "2a01:4f8:c013:b5e2::1/128"],
+    "ports": [80, 443],
+    "local_witness_uid": 0,
+    "negative_source_ipv4": "178.105.194.164",
+    "negative_source_ipv6": "2a01:4f8:c013:be72::1",
+    "first_bind_utc": "2026-10-11T22:26:02.386942+00:00",
+    "restored_at": "2026-10-11T22:26:55Z",
+    "duration_seconds": 53.22903370857239,
+    "haproxy_package": "haproxy|0|3.0.5|6.el10_2.2|x86_64",
+    "haproxy_binary_sha256": "61b90cd8d83713880c11ee82c9e3d9ae73662ebdef1244695f63338df7dc05ed",
+    "serving_sha256": "1f047bd072dc666d2959bcf66361b6b7576dbd5d7e0daf5b366089c4726beb39",
+    "selinux": "Enforcing",
+    "results": {
+      "real_ipv4_ipv6_http_tls_identity": "PASS",
+      "forwarding_internal_header_and_request_id_sanitization": "PASS",
+      "real_api_session_cookie_cors_sanctum": "PASS",
+      "frontend_api_origin_and_route_isolation": "PASS",
+      "public_proxy_v1_v2_rejection": "PASS",
+      "external_source_allowlist": "PASS",
+      "local_uid_993_994_1000_rejection": "PASS",
+      "startup_exact_generation_witness": "PASS",
+      "graceful_reload_exact_new_worker_witness": "PASS",
+      "invalid_configuration_rejection_and_lkg": "PASS",
+      "worker_confinement_and_unchanged_backend_policy": "PASS",
+      "privacy_safe_peer_and_canonical_client_logging": "PASS",
+      "boot_guard_and_independent_deadline_lease": "PASS",
+      "original_haproxy_firewall_boot_restoration": "PASS",
+      "temporary_unit_removal": "PASS",
+      "external_ipv4_ipv6_port_closure_two_sources": "PASS",
+      "temporary_admin_revocation_and_key_destruction": "PASS"
+    }
+  },
+  "public_authorizations": {
+    "first_attempt": "CONSUMED_PARTIAL_49_SECONDS",
+    "second_attempt": "CONSUMED_COMPLETE",
+    "further_attempt_authorized": false
+  },
+  "artifact_sha256": {
+    "authorization.json": "7ccb8ed8c0845ecf946784564a66060d9fb82a53cdd4403f96f4e9a8aa2d40c7",
+    "controller-manifest-before-run.json": "2f5195a20d672c9ef2805cc162bf217939f7c5fa96428d9530fa50b8b977a833",
+    "effective-prebind-admission.json": "84f9651e058aed5fa471ce7855b96e78083fc59f30087021692b02a31c771e70",
+    "activation.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "public-application.log": "35ea025e8ccb3081afdbd5eecaf95a794ee43edae17edb09ff8d0d471110a8d3",
+    "public-protocol.json": "108dc4aeda47d146dc51b45b1f73067c0c35ff7ba9d4b7258699a8080c86a6f1",
+    "negative-cx33.json": "b44c0b65bfa3cb2657160ed0a521f3208f64e0771898ff22e34d750ddcb18e36",
+    "unrelated-local-uids.json": "06c681a362a355dd4c46cc7ad1ca04bd04596d16ab9bdc0ad0d131020133ab39",
+    "public-observation-before-reload.json": "4fa854746b3756978651f607cb99ab5eb7819cc17f179439c41e95b8d8953b7f",
+    "public-reload-lkg.json": "23ed90e88a1cec8e991bd1bbde593b4ca0423c91d63cfdf2f713c855591948b8",
+    "public-application-after-reload.log": "35ea025e8ccb3081afdbd5eecaf95a794ee43edae17edb09ff8d0d471110a8d3",
+    "public-observation-after-reload.json": "891f0b4cabea4281e6a1b4857ed6295aeda777fcee59c33a5add88758b65f56b",
+    "restoration.json": "f09dcefdd70131a250a6c0804a5d860ddc7690bd9b39a183384332492d0fc92a",
+    "closure-controller.json": "0864c4e63fca55ace66909d117d5331a4476f2557beb59f603161723f0164127",
+    "closure-cx33.json": "85f753f34bb16c2266bc5a7dce8d42ebc8b10598de4da7b141b091c4ce50a85e",
+    "cx33-revocation.log": "78db9951d24f391deb382844ec6930b0fcc91fceb3cbd43806fc5c7bcd5ac03d",
+    "revoked-key-independent-check.json": "9c22782777e38974a7d8d5289cce1197c2e987dafccfa9c01803d0716b5943e2",
+    "outcome.json": "ac762f645535153e691ab4058949bc6350f9500359310da1b95d58e17bd1a1f8"
+  },
+  "pre_public_assessment_sha256": "d3977c049b30acc3e4c3dfd18588ed072079b6fd0f185df0af9d835ab7737c0a",
+  "retention": "Exact trusted-controller inputs and raw system/network observations retained in original rustic-goat .context/issue-220; public-run-2/qualification-manifest.json indexes this run. Historical first-test reports and #219 evidence are unchanged.",
+  "scope": "One disposable CX23 public DIRECT single qualification and CX33 negative source. Self-signed synthetic TLS fixture only. No Viewer certificate lifecycle, DNS, ACME, provider firewall, customer-production, Managed Production or HA fleet acceptance. Private strict HA PROXY-v2 seam qualified independently; no HA fleet acceptance. Public certificate issuance/renewal remains #103."
+}
