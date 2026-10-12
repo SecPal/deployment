@@ -12,10 +12,12 @@ requiring authenticated native transport, not a caller-supplied admission token.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -35,6 +37,24 @@ IMPORT_SETUP = (
     'import sys,sysconfig; '
     'sys.path.extend([sysconfig.get_path("purelib",scheme="rpm_prefix"),sysconfig.get_path("platlib",scheme="rpm_prefix")]); '
 )
+TOOLS = {name: '/usr/bin/' + name for name in ('rpm', 'rpmkeys', 'dnf4', 'uname', 'git', 'python3', 'sudo')}
+RPM_CONFIGURATION = [
+    '--rcfile', '/usr/lib/rpm/rpmrc', '--macros',
+    '/usr/lib/rpm/macros:/usr/lib/rpm/macros.d/macros.*:/usr/lib/rpm/platform/%{_target}/macros',
+]
+PROTECTED_PAYLOAD_PACKAGES = frozenset(('libutempter', 'pam', 'util-linux'))
+PAYLOAD_VERIFY = (
+    IMPORT_SETUP + 'import rpm; rpm.reloadConfig(); '
+    'rpm.addMacro("_dbpath",sys.argv[2]); '
+    'transaction=rpm.TransactionSet(); transaction.setVSFlags(0); transaction.setVfyLevel(3); '
+    'source=open(sys.argv[1],"rb"); header=transaction.hdrFromFdno(source); '
+    'files=rpm.files(header,flags=rpm.RPMFI_FLAGS_VERIFY); '
+    'results=[(file,file.verify()) for file in files if not file.fflags & rpm.RPMFILE_CONFIG]; '
+    # Match RPM's handling of absent signed %ghost/%missingok entries. These
+    # have no mandatory installed payload; all other mismatches fail closed.
+    'sys.exit(1 if any(result != 0 and not (result == rpm.RPMVERIFY_LSTATFAIL and '
+    'file.fflags & (rpm.RPMFILE_GHOST | rpm.RPMFILE_MISSINGOK)) for file,result in results) else 0)'
+)
 
 
 class QualificationError(RuntimeError):
@@ -45,8 +65,14 @@ class QualificationError(RuntimeError):
 
 def run(operation: str, arguments: list[str], maximum: int = 65536) -> str:
     """Observe one named bounded non-secret operation; never retain stderr."""
+    tool = arguments[0].removeprefix('/usr/bin/')
+    if tool not in TOOLS or arguments[0] not in (tool, TOOLS[tool]):
+        raise QualificationError(operation, 'tool-invalid')
+    arguments = [TOOLS[tool], *(RPM_CONFIGURATION if tool in ('rpm', 'rpmkeys') else []), *arguments[1:]]
     try:
-        result = subprocess.run(arguments, capture_output=True, timeout=120, check=False)
+        with tempfile.TemporaryDirectory(prefix='.certbot-tool-home-') as home:
+            result = subprocess.run(arguments, capture_output=True, timeout=120, check=False,
+                                    env=tool_environment(home))
     except (OSError, subprocess.TimeoutExpired) as error:
         raise QualificationError(operation, 'command-unavailable') from error
     if result.returncode != 0:
@@ -59,9 +85,35 @@ def run(operation: str, arguments: list[str], maximum: int = 65536) -> str:
         raise QualificationError(operation, 'representation-invalid') from error
 
 
-def fetch(operation: str, url: str, maximum: int) -> bytes:
+def tool_environment(home: str) -> dict[str, str]:
+    return {'PATH': '/usr/sbin:/usr/bin', 'LC_ALL': 'C', 'LANG': 'C', 'HOME': home}
+
+
+@contextmanager
+def native_environment(home: Path):
+    previous = dict(os.environ)
     try:
-        with urllib.request.urlopen(url, timeout=60) as response:
+        os.environ.clear()
+        os.environ.update(tool_environment(str(home)))
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(previous)
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        raise QualificationError('acquire-reviewed-source', 'redirect-prohibited')
+
+
+def fetch(operation: str, url: str, maximum: int) -> bytes:
+    if not url.startswith('https://'):
+        raise QualificationError(operation, 'https-required')
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+        with opener.open(url, timeout=60) as response:
+            if response.geturl() != url:
+                raise QualificationError(operation, 'repository-identity-invalid')
             data = response.read(maximum + 1)
     except (OSError, ValueError) as error:
         raise QualificationError(operation, 'acquisition-failed') from error
@@ -75,15 +127,43 @@ def admit_key_bytes(data: bytes, expected: dict) -> None:
         raise QualificationError('authenticate-signing-key', 'key-identity-invalid')
 
 
-def verified_bundle(directory: Path, architecture: str, policy: dict, *, acquire: bool) -> list[dict]:
+def read_regular_file(path: Path, maximum: int) -> bytes:
+    try:
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise QualificationError('authenticate-reviewed-file', 'regular-file-required')
+            data = source.read(maximum + 1)
+    except OSError as error:
+        raise QualificationError('authenticate-reviewed-file', 'file-invalid') from error
+    if len(data) > maximum:
+        raise QualificationError('authenticate-reviewed-file', 'observation-limit-exceeded')
+    return data
+
+
+def write_private(path: Path, data: bytes) -> None:
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as destination:
+        destination.write(data)
+
+
+def snapshot_authenticated_rpm(source: Path, destination: Path, reviewed: dict) -> None:
+    data = read_regular_file(source, 64 * 1024 * 1024)
+    if hashlib.sha256(data).hexdigest() != reviewed['rpm_sha256']:
+        raise QualificationError('authenticate-reviewed-rpm', 'rpm-identity-invalid')
+    write_private(destination, data)
+
+
+@contextmanager
+def authenticated_bundle(directory: Path, architecture: str, policy: dict, *, acquire: bool):
     """Isolated RPM keyring; no system RPMDB/key import or repo configuration."""
     if acquire:
         directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     if not directory.is_dir() or directory.is_symlink():
         raise QualificationError('inspect-package-bundle', 'bundle-invalid')
-    with tempfile.TemporaryDirectory(prefix='.certbot-keyring-', dir=directory.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix='.certbot-authenticated-') as temporary:
         database = Path(temporary) / 'rpmdb'
         database.mkdir(mode=0o700)
+        snapshot = Path(temporary) / 'bundle'
+        snapshot.mkdir(mode=0o700)
         for family, authority in policy['keys'].items():
             key = directory / f'RPM-GPG-KEY-{family}'
             if acquire:
@@ -92,25 +172,22 @@ def verified_bundle(directory: Path, architecture: str, policy: dict, *, acquire
                     admit_key_bytes(data, authority)
                 if len(set(authenticated)) != 1:
                     raise QualificationError('authenticate-signing-key', 'sources-disagree')
-                key.write_bytes(authenticated[0])
-                key.chmod(0o600)
-            if key.is_symlink() or not key.is_file() or key.stat().st_size > 8192:
-                raise QualificationError('authenticate-signing-key', 'key-file-invalid')
-            admit_key_bytes(key.read_bytes(), authority)
-            run('import-isolated-signing-key', ['rpmkeys', '--dbpath', str(database), '--import', str(key)])
+                write_private(key, authenticated[0])
+            key_bytes = read_regular_file(key, 8192)
+            admit_key_bytes(key_bytes, authority)
+            private_key = snapshot / key.name
+            write_private(private_key, key_bytes)
+            run('import-isolated-signing-key', ['rpmkeys', '--dbpath', str(database), '--import', str(private_key)])
         rows = []
         for reviewed in policy['closures'][architecture]:
-            path = directory / reviewed['url'].rsplit('/', 1)[1]
+            source = directory / reviewed['url'].rsplit('/', 1)[1]
             if acquire:
                 data = fetch('acquire-reviewed-rpm', reviewed['url'], 64 * 1024 * 1024)
                 if hashlib.sha256(data).hexdigest() != reviewed['rpm_sha256']:
                     raise QualificationError('authenticate-reviewed-rpm', 'rpm-identity-invalid')
-                path.write_bytes(data)
-                path.chmod(0o600)
-            if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
-                raise QualificationError('authenticate-reviewed-rpm', 'rpm-file-invalid')
-            if hashlib.sha256(path.read_bytes()).hexdigest() != reviewed['rpm_sha256']:
-                raise QualificationError('authenticate-reviewed-rpm', 'rpm-identity-invalid')
+                write_private(source, data)
+            path = snapshot / source.name
+            snapshot_authenticated_rpm(source, path, reviewed)
             output = run('verify-rpm-signature', ['rpmkeys', '--dbpath', str(database), '--checksig', '--verbose', str(path)])
             expected_line = f"Header V4 RSA/SHA256 Signature, key ID {reviewed['signer_fingerprint'][-8:]}: OK"
             if expected_line not in output.splitlines() and not any(line.strip() == expected_line for line in output.splitlines()):
@@ -120,17 +197,30 @@ def verified_bundle(directory: Path, architecture: str, policy: dict, *, acquire
             header = run('inspect-signed-rpm-header', ['rpm', '--dbpath', str(database), '-qp', '--qf', RPM_QUERY, str(path)]).splitlines()
             admit_header(header, reviewed)
             rows.append(dict(reviewed, signature_verified=True))
-        verify_dependency_closure(directory, architecture, policy, Path(temporary))
+        verify_dependency_closure(snapshot, architecture, policy, Path(temporary))
+        yield rows, snapshot
+
+
+def verified_bundle(directory: Path, architecture: str, policy: dict, *, acquire: bool) -> list[dict]:
+    with authenticated_bundle(directory, architecture, policy, acquire=acquire) as (rows, _snapshot):
         return rows
 
 
 def verify_dependency_closure(directory: Path, architecture: str, policy: dict, temporary: Path) -> None:
     """DNF owns strong dependency solving; only authenticated local RPMs exist."""
+    with native_environment(temporary):
+        _verify_dependency_closure(directory, architecture, policy, temporary)
+
+
+def _verify_dependency_closure(directory: Path, architecture: str, policy: dict, temporary: Path) -> None:
     try:
         import dnf
+        import rpm
     except ImportError as error:
         raise QualificationError('resolve-exact-dependency-closure', 'native-dnf-unavailable') from error
     try:
+        # Discard caller HOME macros even if a native caller already loaded RPM.
+        rpm.reloadConfig()
         for subdirectory in ('root', 'cache', 'logs', 'persist'):
             (temporary / subdirectory).mkdir(mode=0o700)
         with dnf.Base() as base:
@@ -173,7 +263,39 @@ def admit_header(header: list[str], reviewed: dict) -> None:
         raise QualificationError('inspect-signed-rpm-header', 'header-identity-invalid')
 
 
-def observe_installed(directory: Path, architecture: str, policy: dict) -> dict:
+def verify_installed_payload(row: dict, snapshot: Path, broker: Path | None) -> None:
+    """Compare host files to authenticated RPM metadata, not RPMDB file hashes.
+
+    Three ordinary Rocky packages contain protected files. An independently
+    authenticated administrator may expose only this bounded read operation;
+    its receipt does not authenticate its own controller or transport.
+    """
+    if broker is not None and row['name'] in PROTECTED_PAYLOAD_PACKAGES:
+        if not broker.is_absolute() or broker.is_symlink() or broker.parent.is_symlink():
+            raise QualificationError('verify-installed-package-payload', 'broker-invalid')
+        for path in (broker, broker.parent):
+            metadata = path.stat()
+            if metadata.st_uid != 0 or metadata.st_mode & 0o022:
+                raise QualificationError('verify-installed-package-payload', 'broker-authority-invalid')
+        receipt = json.loads(run('verify-protected-package-payload', [
+            'sudo', '-n', str(broker), row['name'], row['rpm_sha256'],
+        ]))
+        if receipt != {'operation': 'verify-installed-package-payload', 'name': row['name'],
+                       'rpm_sha256': row['rpm_sha256'], 'result': 'VERIFIED'}:
+            raise QualificationError('verify-installed-package-payload', 'broker-receipt-invalid')
+    else:
+        # RPM's native file verifier reads the signed reference header through
+        # the same isolated keyring. DNF separately proved strong dependencies.
+        # No install transaction, dependency-skip flag or scriptlet is involved;
+        # unlike rpm -Vp this does not add a second copy of a self-conflicting
+        # installed package (zlib-ng-compat) to a dependency-check transaction.
+        run('verify-installed-package-payload', [
+            '/usr/bin/python3', '-I', '-S', '-c', PAYLOAD_VERIFY,
+            str(snapshot / row['url'].rsplit('/', 1)[1]), str(snapshot.parent / 'rpmdb'),
+        ])
+
+
+def observe_installed(directory: Path, architecture: str, policy: dict, broker: Path | None = None) -> dict:
     """Read admitted bytes before executing the installed client/modules."""
     machine = run('observe-native-architecture', ['uname', '-m'])
     if machine != architecture:
@@ -181,14 +303,13 @@ def observe_installed(directory: Path, architecture: str, policy: dict) -> dict:
     release = Path('/etc/os-release').read_text(encoding='utf-8')
     if contract.normalize_os_release(release) != {'ID': 'rocky', 'VERSION_ID': '10.2'}:
         raise QualificationError('observe-native-os', 'rocky-10.2-required')
-    rows = verified_bundle(directory, architecture, policy, acquire=False)
-    for row in rows:
-        header = run('inspect-installed-rpm-header', ['rpm', '-q', '--qf', RPM_QUERY, row['name']]).splitlines()
-        admit_header(header, row)
-        # Configuration belongs to the subsequent #103 lifecycle. RPM owns
-        # executable/module/library verification; scriptlets are never executed.
-        run('verify-installed-package-payload', ['rpm', '-V', '--noconfig', '--noscripts', row['name']])
-        row['installed_payload_verified'] = True
+    with authenticated_bundle(directory, architecture, policy, acquire=False) as (rows, snapshot):
+        for row in rows:
+            header = run('inspect-installed-rpm-header', ['rpm', '-q', '--qf', RPM_QUERY, row['name']]).splitlines()
+            admit_header(header, row)
+            # Configuration belongs to #103. No verification scriptlet runs.
+            verify_installed_payload(row, snapshot, broker)
+            row['installed_payload_verified'] = True
     inventory = run('observe-installed-signers', ['rpm', '-qa', '--qf', '%{NAME}|%{RSAHEADER:pgpsig}\\n'], maximum=1024 * 1024)
     epel_suffix = policy['keys']['epel']['fingerprint'][-16:]
     installed_epel = sorted(
@@ -243,11 +364,15 @@ def main() -> int:
     parser.add_argument('--architecture', required=True, choices=('x86_64', 'aarch64'))
     parser.add_argument('--target-sha', help='exact clean candidate checkout; required for native observation')
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--payload-read-broker', type=Path,
+                        help='independently authenticated administrator read-only helper for protected Rocky files')
     options = parser.parse_args()
     os.umask(0o077)
     try:
         policy = json.loads(POLICY.read_text(encoding='utf-8'))
         if options.acquire or options.verify_bundle:
+            if options.payload_read_broker:
+                raise QualificationError('verify-installed-package-payload', 'installed-mode-required')
             verified_bundle(
                 options.acquire or options.verify_bundle, options.architecture, policy,
                 acquire=options.acquire is not None,
@@ -260,7 +385,7 @@ def main() -> int:
             dirty = run('authenticate-target-checkout', ['git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=normal'])
             if head != options.target_sha or dirty:
                 raise QualificationError('authenticate-target-checkout', 'clean-exact-target-required')
-            provenance = observe_installed(options.installed, options.architecture, policy)
+            provenance = observe_installed(options.installed, options.architecture, policy, options.payload_read_broker)
             document = {'schema_version': 1, 'evidence_class': 'rocky-native', 'target_sha': head, 'architecture': options.architecture, 'package_provenance': provenance}
             if options.output is None:
                 raise QualificationError('assemble-native-observation', 'output-required')

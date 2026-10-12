@@ -100,6 +100,14 @@ of the pinned RPMs into an operator-controlled bundle with
 The destination must be new. Only URLs in the authenticated target policy are
 read; hashes, signatures, signed headers and the strong dependency closure are
 verified before the bundle can be used. Acquisition performs no installation.
+Redirects and repository fallback are prohibited. Qualification uses absolute
+system tools, a fresh private HOME and a minimal environment; RPM command-line
+configuration explicitly excludes caller rcfiles and macros. Native DNF loads
+only when strong solving is requested, with caller environment and HOME macros
+removed; an unavailable native binding rejects with `native-dnf-unavailable`.
+Each input is read once as a bounded regular file and copied into a private
+snapshot. Key import, signature/header verification, dependency solving and
+installed-payload verification consume those same authenticated bytes.
 
 Any installation/maintenance executor must consume this same policy, restrict
 the transaction to the authenticated exact bundle, use transaction-local signing
@@ -116,7 +124,12 @@ After a transaction, admission requires:
   no external repository enabled and no EPEL key in the global RPMDB.
 - Every installed closure member has the exact reviewed signed-header identity
   and verified executable/module/library payload. RPM's verifier checks these
-  files; configuration authority remains with the consuming lifecycle.
+  files against the authenticated RPM file, rather than trusting file checksums
+  from the host RPMDB; configuration authority remains with the consuming
+  lifecycle. The recorded RPM SHA-256 identifies the authenticated reference
+  artifact. Its installation origin additionally requires the independent
+  trusted transaction and transport evidence; extracted files cannot reconstruct
+  an RPM container digest.
 - The complete installed EPEL-signed inventory matches the nine-package family;
   an unrelated EPEL RPM is rejected even if EPEL itself is disabled.
 - Effective kernel and Python architecture agree independently for x86_64 and
@@ -213,7 +226,12 @@ The original default-scheme probe failed because it selected `/usr/local`;
 this same-delivery correction changes no package identity. Protected baseline
 RPM files require an independent, temporary administrator read broker restricted
 to payload verification of `libutempter`, `pam` and `util-linux`, with scriptlets
-disabled. Candidate Python has no general root or provider authority. Final
+disabled. Its explicit `--payload-read-broker` capability admits only exact
+package-name/RPM-digest pairs against the administrator's immutable copies and
+returns a bounded receipt. No PATH shim or arbitrary privileged command is
+admitted. Controller identity, helper bytes and transport remain independently
+authenticated; a candidate-produced receipt cannot establish their authority.
+Candidate Python has no general root or provider authority. Final
 native observations must additionally bind a clean exact signed source head and
 pass the existing observation schema and semantic owner before acceptance.
 

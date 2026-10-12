@@ -7,6 +7,10 @@
 import copy
 import importlib.util
 import json
+import hashlib
+import os
+import platform
+import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -71,6 +75,82 @@ class CertbotProvenance(unittest.TestCase):
                     '/usr/lib/python3.12/site-packages',
                     '/usr/lib64/python3.12/site-packages',
                 ])
+
+    def test_native_tools_ignore_shadowed_path_and_caller_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / 'uname'
+            fake.write_text('#!/bin/sh\nprintf forged-architecture\n')
+            fake.chmod(0o700)
+            with patch.dict(os.environ, {
+                'PATH': directory, 'HOME': directory,
+                'RPM_CONFIGDIR': directory, 'LANG': 'untrusted-locale',
+            }):
+                self.assertEqual(self.qualifier.run('observe-native-architecture', ['uname', '-m']), platform.machine())
+                environment = json.loads(self.qualifier.run('observe-tool-environment', [
+                    '/usr/bin/python3', '-I', '-S', '-c',
+                    'import os,json; print(json.dumps(dict(os.environ)))',
+                ]))
+            self.assertEqual(environment['PATH'], '/usr/sbin:/usr/bin')
+            self.assertEqual(environment['LC_ALL'], 'C')
+            self.assertNotEqual(environment['HOME'], directory)
+            self.assertNotIn('RPM_CONFIGDIR', environment)
+
+    def test_rpm_commands_explicitly_select_system_configuration(self):
+        response = subprocess.CompletedProcess([], 0, b'', b'')
+        with patch.object(self.qualifier.subprocess, 'run', return_value=response) as command:
+            self.qualifier.run('inspect-signed-rpm-header', ['rpm', '-qp', 'fixture.rpm'])
+        argv = command.call_args.args[0]
+        self.assertEqual(argv[0], '/usr/bin/rpm')
+        self.assertIn('--rcfile', argv)
+        self.assertEqual(argv[argv.index('--rcfile') + 1], '/usr/lib/rpm/rpmrc')
+        self.assertIn('--macros', argv)
+        macros = argv[argv.index('--macros') + 1]
+        self.assertNotIn('~', macros)
+        self.assertNotIn('/etc/', macros)
+
+    def test_acquisition_rejects_redirected_repository_identity(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self, maximum): return b'reviewed bytes'
+            def geturl(self): return 'https://unreviewed.invalid/substitution.rpm'
+        response = Response()
+        # This tests the acquisition seam only, never native supply admission.
+        with patch('urllib.request.urlopen', return_value=response):
+            with patch('urllib.request.OpenerDirector.open', return_value=response):
+                with self.assertRaises(self.qualifier.QualificationError):
+                    self.qualifier.fetch('acquire-reviewed-rpm', self.policy['closures']['x86_64'][0]['url'], 1024)
+
+    def test_authenticated_snapshot_survives_input_replacement_and_rejects_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'input.rpm'
+            source.write_bytes(b'authenticated snapshot fixture')
+            reviewed = {'rpm_sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
+            private = root / 'private.rpm'
+            self.qualifier.snapshot_authenticated_rpm(source, private, reviewed)
+            source.write_bytes(b'changed after authentication')
+            self.assertEqual(private.read_bytes(), b'authenticated snapshot fixture')
+            self.assertEqual(private.stat().st_mode & 0o777, 0o600)
+            link = root / 'link.rpm'
+            link.symlink_to(private)
+            with self.assertRaises(self.qualifier.QualificationError):
+                self.qualifier.snapshot_authenticated_rpm(link, root / 'substitution.rpm', reviewed)
+
+    def test_payload_verification_uses_authenticated_rpm_file(self):
+        row = self.policy['closures']['x86_64'][0]
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory)
+            with patch.object(self.qualifier, 'run', return_value='') as command:
+                self.qualifier.verify_installed_payload(row, private, None)
+            argv = command.call_args.args[1]
+            self.assertEqual(argv[:4], ['/usr/bin/python3', '-I', '-S', '-c'])
+            self.assertIn('file.verify()', argv[4])
+            self.assertIn('rpm.RPMFILE_CONFIG', argv[4])
+            self.assertIn('transaction.setVSFlags(0)', argv[4])
+            self.assertIn('transaction.setVfyLevel(3)', argv[4])
+            self.assertEqual(argv[-2], str(private / row['url'].rsplit('/', 1)[1]))
+            self.assertEqual(argv[-1], str(private.parent / 'rpmdb'))
 
     def fixture(self, architecture):
         rows = copy.deepcopy(self.policy['closures'][architecture])
