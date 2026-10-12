@@ -22,8 +22,6 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-import dnf
-
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'ci-cloud'))
 import rocky_preparation_contract as contract
 
@@ -35,7 +33,7 @@ RPM_QUERY = (
 )
 IMPORT_SETUP = (
     'import sys,sysconfig; '
-    'sys.path.extend([sysconfig.get_path("purelib"),sysconfig.get_path("platlib")]); '
+    'sys.path.extend([sysconfig.get_path("purelib",scheme="rpm_prefix"),sysconfig.get_path("platlib",scheme="rpm_prefix")]); '
 )
 
 
@@ -128,6 +126,10 @@ def verified_bundle(directory: Path, architecture: str, policy: dict, *, acquire
 
 def verify_dependency_closure(directory: Path, architecture: str, policy: dict, temporary: Path) -> None:
     """DNF owns strong dependency solving; only authenticated local RPMs exist."""
+    try:
+        import dnf
+    except ImportError as error:
+        raise QualificationError('resolve-exact-dependency-closure', 'native-dnf-unavailable') from error
     try:
         for subdirectory in ('root', 'cache', 'logs', 'persist'):
             (temporary / subdirectory).mkdir(mode=0o700)

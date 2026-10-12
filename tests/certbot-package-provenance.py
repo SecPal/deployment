@@ -8,9 +8,11 @@ import copy
 import importlib.util
 import json
 import sys
+import sysconfig
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from jsonschema import Draft202012Validator
 
@@ -37,6 +39,38 @@ class CertbotProvenance(unittest.TestCase):
         cls.qualifier = load_module('certbot_qualifier', 'scripts/qualify-certbot-packages.py')
         schema = json.loads((ROOT / 'schemas/production-host-facts.schema.json').read_text())
         cls.schema = schema['properties']['os']['properties']['package_provenance']
+
+    def test_native_dnf_is_required_only_for_dependency_solving(self):
+        real_import = __import__
+
+        def without_dnf(name, *args, **kwargs):
+            if name == 'dnf' or name.startswith('dnf.'):
+                raise ModuleNotFoundError("No module named 'dnf'", name='dnf')
+            return real_import(name, *args, **kwargs)
+
+        with patch('builtins.__import__', side_effect=without_dnf):
+            qualifier = load_module('certbot_without_dnf', 'scripts/qualify-certbot-packages.py')
+            with tempfile.TemporaryDirectory() as directory:
+                temporary = Path(directory)
+                with self.assertRaises(qualifier.QualificationError) as caught:
+                    qualifier.verify_dependency_closure(temporary, 'x86_64', self.policy, temporary)
+                self.assertEqual(caught.exception.operation, 'resolve-exact-dependency-closure')
+                self.assertEqual(caught.exception.reason, 'native-dnf-unavailable')
+                self.assertEqual(list(temporary.iterdir()), [])
+
+    def test_isolated_runtime_selects_rpm_module_directories(self):
+        # Rocky's default prefix is /usr/local. This synthetic scheme fixture
+        # tests path selection only; native installed execution is separate.
+        rpm_scheme = dict(sysconfig._INSTALL_SCHEMES['posix_prefix'],
+                          purelib='/usr/lib/python3.12/site-packages',
+                          platlib='/usr/lib64/python3.12/site-packages')
+        with patch.dict(sysconfig._INSTALL_SCHEMES, {'rpm_prefix': rpm_scheme}):
+            with patch.object(sys, 'path', sys.path.copy()):
+                exec(self.qualifier.IMPORT_SETUP, {})
+                self.assertEqual(sys.path[-2:], [
+                    '/usr/lib/python3.12/site-packages',
+                    '/usr/lib64/python3.12/site-packages',
+                ])
 
     def fixture(self, architecture):
         rows = copy.deepcopy(self.policy['closures'][architecture])

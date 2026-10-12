@@ -158,12 +158,77 @@ The original snowy-hawk 212 verification results remain historical and
 untouched. Fresh official metadata resolution, key authentication and all 212
 RPM signature/digest checks reproduced those identities for this candidate.
 
-Native installation evidence is still missing. The local x86_64 namespace
-transaction encountered an incompatible filesystem/mount boundary while
+The original local x86_64 namespace transaction encountered an incompatible
+filesystem/mount boundary while
 installing `filesystem` (`/afs` creation failed with `Device or resource busy`).
-No native aarch64 qualification environment was available. This is a missing
-qualification capability, not evidence that Certbot needs CRB or broader EPEL.
-No policy acceptance, successful installation or #103 resumption is claimed.
-Resolve those qualifications in this same leaf and primary delivery, without
-recursive prerequisite owners. After merge, independent protected-main
-acceptance must precede completed closure and resumption of snowy-hawk.
+No native aarch64 qualification environment was available for that original
+attempt.
+
+On 2026-10-12, the dedicated Hetzner CX23 (163965414, native x86_64) and
+CAX21 (169716995, native aarch64) were independently authenticated through the
+`secpal` provider context, provider console and pinned SSH host identities.
+Both run Rocky 10.2 with Enforcing SELinux and only BaseOS, AppStream and Extras
+enabled. Their original transaction preflight reported six dependency failures
+per architecture: installed `glibc-gconv-extra` and `glibc-langpack-en` pinned
+glibc `2.39-128.el10_2`, `python-unversioned-command` pinned Python
+`3.12.14-1.el10_2`, and `xz` pinned `xz-libs` `1:5.6.2-4.el10_0`.
+The original observations remain retained; no failed installation was retried.
+
+The operator separately authorized exactly these four ordinary Rocky packages
+for baseline alignment on those disposable hosts. Fresh official Rocky metadata,
+RPM bytes, signed headers and payloads established the compatible identities:
+`glibc-gconv-extra` and `glibc-langpack-en` `0:2.39-142.el10_2` in each native
+architecture, `python-unversioned-command` `0:3.12.15-1.el10_2.noarch`, and `xz`
+`1:5.6.2-4.el10_2.1` in each native architecture. These packages retain ordinary
+Rocky authority and do not extend the Certbot exception or its 106-package policy.
+The retained supplementary manifest is SHA-256
+`0cf42f1d25ec78217945af8f4c8d9583bcf9ec3db6d69175def790fd96d5ea5b`.
+It binds the full architecture-specific identities, official URLs, RPM digests,
+header digests, payload digests and Rocky signer fingerprint.
+
+An independent administrator controller authenticated all 110 input RPMs using
+transaction-local in-memory signing authority. Each native DNF solver admitted
+exactly 32 changes: 16 new packages and 16 version upgrades within the authorized
+set. RPM independently checked dependencies before each single installation;
+there were no package erasures, downgrades, additional packages, disabled
+signature checks, skipped scriptlets, fallback repositories or global EPEL key
+imports. All 110 installed signed-header identities match their authenticated
+inputs, and privileged RPM payload verification succeeds on both hosts.
+
+Rocky's systemd preset enabled the packaged renewal timer during its required
+installation scriptlet, without starting it. The administrator disabled that
+new timer immediately on both hosts. Independent systemd observations show the
+timer disabled/inactive, the service inactive with no execution timestamp, and
+no account, certificate or archive state. A consuming installation executor must
+explicitly keep packaged renewal units disabled and inactive during qualification
+and before the separate #103 activation authority. Default presets alone do not
+establish that condition. This qualification introduced no public listener or
+ACME operation and did not alter SELinux or the ordinary repository set.
+
+Unprivileged native probes import the client and dependency modules, load the
+standalone plugin, and execute Certbot 4.2.0 under Python 3.12.15 on both machines.
+Rocky's explicit `rpm_prefix` Python installation scheme selects the verified
+RPM module directories, while `-I -S` excludes user paths and automatic site hooks.
+The original default-scheme probe failed because it selected `/usr/local`;
+this same-delivery correction changes no package identity. Protected baseline
+RPM files require an independent, temporary administrator read broker restricted
+to payload verification of `libutempter`, `pam` and `util-linux`, with scriptlets
+disabled. Candidate Python has no general root or provider authority. Final
+native observations must additionally bind a clean exact signed source head and
+pass the existing observation schema and semantic owner before acceptance.
+
+Both native hosts already contain the exact reviewed `filesystem` RPM, whose
+signed-header and payload identities match the policy and whose RPM payload
+verification succeeds, including the existing `/afs` directory. This supports
+classifying the earlier failure as specific to the local installroot/namespace
+environment rather than a supported-host `filesystem` package defect. The
+precise local mount or filesystem collision remains unproven; the original
+failure evidence is retained.
+
+The original signing and strong dependency authentication remains valid supply
+evidence, separate from native execution, authenticated transport and final
+source admission. Historical namespace failures are not evidence that Certbot
+needs CRB or broader EPEL. Final source qualification, finite review and hosted
+checks belong to this same leaf and primary delivery. After merge, independent
+protected-main acceptance must precede completed closure and resumption of
+snowy-hawk. No certificate-lifecycle work is implemented by this amendment.
