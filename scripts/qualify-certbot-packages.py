@@ -14,12 +14,14 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import hashlib
+import importlib.machinery
 import json
 import os
 import re
 import stat
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import urllib.request
 from pathlib import Path
@@ -208,8 +210,137 @@ def verified_bundle(directory: Path, architecture: str, policy: dict, *, acquire
 
 def verify_dependency_closure(directory: Path, architecture: str, policy: dict, temporary: Path) -> None:
     """DNF owns strong dependency solving; only authenticated local RPMs exist."""
-    with native_environment(temporary):
+    with native_environment(temporary), native_bindings(architecture):
         _verify_dependency_closure(directory, architecture, policy, temporary)
+
+
+def trusted_native_path(path: Path, *, regular: bool = False) -> None:
+    """Consume administrator-owned ordinary Rocky bootstrap, never caller code."""
+    try:
+        for item in (path, *path.parents):
+            metadata = item.lstat()
+            if (metadata.st_uid != 0 or metadata.st_mode & 0o022
+                    or stat.S_ISLNK(metadata.st_mode)
+                    or (item != path and not stat.S_ISDIR(metadata.st_mode))):
+                raise ValueError
+        if regular and not stat.S_ISREG(path.lstat().st_mode):
+            raise ValueError
+    except (OSError, ValueError) as error:
+        raise QualificationError('admit-native-bootstrap', 'administrator-path-invalid') from error
+
+
+def native_module_paths() -> tuple[Path, Path]:
+    try:
+        paths = tuple(Path(sysconfig.get_path(name, scheme='rpm_prefix')) for name in ('purelib', 'platlib'))
+    except (KeyError, TypeError) as error:
+        raise QualificationError('admit-native-bootstrap', 'rpm-python-scheme-invalid') from error
+    if sys.version_info[:2] != (3, 12) or paths != (
+            Path('/usr/lib/python3.12/site-packages'), Path('/usr/lib64/python3.12/site-packages')):
+        raise QualificationError('admit-native-bootstrap', 'rpm-python-scheme-invalid')
+    return paths
+
+
+class NativeSourceLoader(importlib.machinery.SourceFileLoader):
+    def get_code(self, fullname):
+        # Package verification admits source, never an adjacent, unowned cache.
+        return compile(self.get_data(self.path), self.path, 'exec', dont_inherit=True)
+
+
+class RockyBindingFinder:
+    """Before execution, bind each solver module to its ordinary Rocky RPM.
+
+    The already-admitted #80 OS/RPMDB and absolute RPM CLI are the independent
+    bootstrap authority, not imported DNF/RPM or the as-yet-unadmitted Certbot
+    closure. The signer packet owner remains rocky_preparation_contract.
+    """
+    owners = {'dnf': 'python3-dnf', 'rpm': 'python3-rpm', 'hawkey': 'python3-hawkey',
+              'libdnf': 'python3-libdnf', 'libcomps': 'python3-libcomps'}
+
+    def __init__(self, roots, architecture):
+        self.roots, self.architecture, self.verified = roots, architecture, set()
+
+    def admit_origin(self, fullname, origin):
+        family = fullname.partition('.')[0]
+        if family not in self.owners or not any(
+                origin.is_relative_to(root / family) for root in self.roots):
+            raise QualificationError('admit-native-bootstrap', 'module-path-invalid')
+        trusted_native_path(origin, regular=True)
+        rows = run('observe-native-module-owner', [
+            'rpm', '-qf', '--qf', '%{NAME}|%{ARCH}|%{RSAHEADER:pgpsig}\\n', str(origin),
+        ]).splitlines()
+        fields = rows[0].split('|') if len(rows) == 1 else []
+        if (len(fields) != 3 or fields[0] != self.owners[family]
+                or fields[1] not in (self.architecture, 'noarch')
+                or not fields[2].lower().endswith('key id ' + contract.ROCKY_FINGERPRINT[-16:])):
+            raise QualificationError('admit-native-bootstrap', 'module-package-invalid')
+        if fields[0] not in self.verified:
+            # All files and strong installed dependencies, no verification
+            # scriptlet. No signature/digest/file/dependency bypass flags.
+            output = run('verify-native-module-package', [
+                'rpm', '-V', '--noscripts', fields[0],
+            ])
+            if output:
+                raise QualificationError('admit-native-bootstrap', 'module-payload-invalid')
+            self.verified.add(fields[0])
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.partition('.')[0] not in self.owners:
+            # DNF's optional dependencies gain no authority from this loader.
+            # Already-loaded standard library modules need no finder; new ones
+            # retain the isolated interpreter's original standard paths.
+            if fullname.partition('.')[0] not in sys.stdlib_module_names:
+                raise ModuleNotFoundError("Unadmitted native dependency", name=fullname)
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path or [str(root) for root in self.roots])
+        if spec is None:
+            # Do not let another finder fall back to CWD/user/local paths.
+            raise ModuleNotFoundError("Native Rocky binding unavailable", name=fullname)
+        if spec.origin is None:
+            raise QualificationError('admit-native-bootstrap', 'module-path-invalid')
+        self.admit_origin(fullname, Path(spec.origin))
+        if isinstance(spec.loader, importlib.machinery.SourceFileLoader):
+            spec.loader = NativeSourceLoader(fullname, spec.origin)
+        elif not isinstance(spec.loader, importlib.machinery.ExtensionFileLoader):
+            raise QualificationError('admit-native-bootstrap', 'module-loader-invalid')
+        return spec
+
+
+@contextmanager
+def native_bindings(architecture: str):
+    roots = native_module_paths()
+    for path in (*roots, Path(TOOLS['rpm']), Path('/usr/lib/sysimage/rpm'),
+                 Path('/usr/lib/sysimage/rpm/rpmdb.sqlite')):
+        trusted_native_path(path, regular=path in (Path(TOOLS['rpm']), Path('/usr/lib/sysimage/rpm/rpmdb.sqlite')))
+    key = run('observe-native-bootstrap-key', [
+        'rpm', '-q', '--qf', '%{VERSION}\\n%{PUBKEYS}\\n', contract.ROCKY_KEY_PACKAGE,
+    ])
+    try:
+        contract.admit_rocky_signing_key(contract.normalize_rocky_signing_key(key))
+    except contract.ContractError as error:
+        raise QualificationError('admit-native-bootstrap', 'rocky-key-invalid') from error
+    finder = RockyBindingFinder(roots, architecture)
+    previous = dict(sys.modules)
+    try:
+        # Production -I -S has no preloaded bindings. A library caller's cached
+        # objects cannot authenticate themselves through a claimed __file__:
+        # validate their origins, then reload verified bytes through the finder.
+        for name, module in previous.items():
+            if name.partition('.')[0] in finder.owners:
+                finder.admit_origin(name, Path(getattr(module, '__file__', '')))
+        for name in previous:
+            if name.partition('.')[0] in finder.owners:
+                del sys.modules[name]
+        sys.meta_path.insert(0, finder)
+        yield
+    finally:
+        if finder in sys.meta_path:
+            sys.meta_path.remove(finder)
+        for name in set(sys.modules) - previous.keys():
+            if name.partition('.')[0] in finder.owners:
+                del sys.modules[name]
+        for name, module in previous.items():
+            if name.partition('.')[0] in finder.owners:
+                sys.modules[name] = module
 
 
 def _verify_dependency_closure(directory: Path, architecture: str, policy: dict, temporary: Path) -> None:

@@ -76,6 +76,141 @@ class CertbotProvenance(unittest.TestCase):
                     '/usr/lib64/python3.12/site-packages',
                 ])
 
+    def test_dependency_solver_has_independent_rocky_bootstrap(self):
+        events = []
+        from contextlib import contextmanager
+
+        @contextmanager
+        def bindings(architecture):
+            self.assertEqual(architecture, 'x86_64')
+            events.append('bootstrap')
+            yield
+            events.append('withdraw')
+
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            with patch.object(self.qualifier, 'native_bindings', bindings), \
+                    patch.object(self.qualifier, '_verify_dependency_closure',
+                                 side_effect=lambda *args: events.append('strong-solver')):
+                self.qualifier.verify_dependency_closure(temporary, 'x86_64', self.policy, temporary)
+        self.assertEqual(events, ['bootstrap', 'strong-solver', 'withdraw'])
+
+    def test_bootstrap_rejects_unreviewed_scheme_and_source_ancestors(self):
+        with patch.object(sysconfig, 'get_path', return_value='/usr/local/lib/python3.12/site-packages'):
+            with self.assertRaisesRegex(self.qualifier.QualificationError, 'rpm-python-scheme-invalid'):
+                self.qualifier.native_module_paths()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'native.py'
+            source.write_text('raise AssertionError("must not execute")')
+            with self.assertRaisesRegex(self.qualifier.QualificationError, 'administrator-path-invalid'):
+                self.qualifier.trusted_native_path(source, regular=True)
+
+    def test_bootstrap_checks_owner_signer_and_payload_before_loading(self):
+        qualifier = self.qualifier
+        roots = qualifier.native_module_paths()
+        finder = qualifier.RockyBindingFinder(roots, 'x86_64')
+        origin = roots[0] / 'dnf/__init__.py'
+        signature = 'RSA/SHA256, fixed timestamp, Key ID ' + contract.ROCKY_FINGERPRINT[-16:]
+        observed = 'python3-dnf|noarch|' + signature
+        with patch.object(qualifier, 'trusted_native_path'), \
+                patch.object(qualifier, 'run', side_effect=[observed, '']) as command:
+            finder.admit_origin('dnf', origin)
+        self.assertEqual([call.args[0] for call in command.call_args_list],
+                         ['observe-native-module-owner', 'verify-native-module-package'])
+        self.assertIn('--noscripts', command.call_args_list[1].args[1])
+        self.assertNotIn('--nodeps', command.call_args_list[1].args[1])
+        for observed in ('unowned|noarch|' + signature,
+                         'python3-dnf|noarch|RSA/SHA256, Key ID e37ed158',
+                         'python3-dnf|aarch64|' + signature):
+            with patch.object(qualifier, 'trusted_native_path'), \
+                    patch.object(qualifier, 'run', return_value=observed), \
+                    self.assertRaisesRegex(qualifier.QualificationError, 'module-package-invalid'):
+                qualifier.RockyBindingFinder(roots, 'x86_64').admit_origin('dnf', origin)
+        for origin in (Path('/usr/local/lib/python3.12/site-packages/dnf/__init__.py'),
+                       roots[0] / 'unreviewed/__init__.py'):
+            with self.assertRaisesRegex(qualifier.QualificationError, 'module-path-invalid'):
+                finder.admit_origin('dnf', origin)
+        with patch.object(qualifier, 'trusted_native_path'), \
+                patch.object(qualifier, 'run', side_effect=[
+                    'python3-dnf|noarch|' + signature, 'S.5....T. forged payload',
+                ]), self.assertRaisesRegex(qualifier.QualificationError, 'module-payload-invalid'):
+            qualifier.RockyBindingFinder(roots, 'x86_64').admit_origin('dnf', roots[0] / 'dnf/__init__.py')
+
+    def test_bootstrap_finder_never_falls_back_to_caller_paths(self):
+        finder = self.qualifier.RockyBindingFinder(self.qualifier.native_module_paths(), 'x86_64')
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'dnf.py').write_text('raise AssertionError("untrusted dnf executed")')
+            with patch.object(sys, 'path', [directory]), \
+                    patch.object(importlib.machinery.PathFinder, 'find_spec', return_value=None):
+                with self.assertRaises(ModuleNotFoundError):
+                    finder.find_spec('dnf')
+                with self.assertRaises(ModuleNotFoundError):
+                    finder.find_spec('unreviewed_third_party')
+
+    def test_bootstrap_consumes_canonical_signing_key_owner(self):
+        with patch.object(self.qualifier, 'trusted_native_path'), \
+                patch.object(self.qualifier, 'run', return_value='6fedfc85\nZm9yZ2Vk'), \
+                self.assertRaisesRegex(self.qualifier.QualificationError, 'rocky-key-invalid'):
+            with self.qualifier.native_bindings('x86_64'):
+                self.fail('unknown signer packet admitted')
+
+    def test_bootstrap_does_not_execute_adjacent_bytecode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'native.py'
+            source.write_text('value = "source"')
+            loader = self.qualifier.NativeSourceLoader('native', str(source))
+            with patch.object(loader, 'get_data', return_value=b'value = "verified-source"') as data:
+                namespace = {}
+                exec(loader.get_code('native'), namespace)
+            self.assertEqual(namespace['value'], 'verified-source')
+            data.assert_called_once_with(str(source))
+
+    def test_installed_observation_keeps_every_admission_stage_read_only(self):
+        from contextlib import contextmanager
+        qualifier = self.qualifier
+        rows = [dict(row, signature_verified=True) for row in self.policy['closures']['x86_64']]
+        operations = []
+        payloads = []
+        epel = [row['name'] for row in rows if row['repository'] == 'epel-certbot-10.2']
+
+        @contextmanager
+        def authenticated(*args, **kwargs):
+            self.assertFalse(kwargs['acquire'])
+            operations.extend(['signed-snapshot', 'strong-dependency-solver'])
+            yield rows, Path('/authenticated-snapshot')
+
+        def observe(operation, argv, **kwargs):
+            operations.append(operation)
+            if operation == 'observe-native-architecture': return 'x86_64'
+            if operation == 'inspect-installed-rpm-header':
+                row = next(row for row in rows if row['name'] == argv[-1])
+                return '\n'.join(row[key] for key in (
+                    'name', 'epoch', 'version', 'release', 'architecture', 'payload_digest', 'header_sha256'
+                )) + '\nRSA/SHA256, Key ID ' + row['signer_fingerprint'][-16:]
+            if operation == 'observe-installed-signers':
+                return '\n'.join(name + '|Key ID ' + self.policy['keys']['epel']['fingerprint'][-16:] for name in epel)
+            if operation == 'observe-global-signing-keys': return ''
+            if operation == 'observe-effective-repositories': return 'baseos\nappstream\nextras'
+            if operation == 'execute-qualified-python-imports':
+                return json.dumps({'python_machine': 'x86_64', 'python_version': '3.12.15', 'certbot_version': '4.2.0'})
+            if operation == 'execute-qualified-standalone-plugin': return ''
+            if operation == 'execute-qualified-certbot-client':
+                self.assertIn('--version', argv[4])
+                return 'certbot 4.2.0'
+            self.fail('unreviewed operation: ' + operation)
+
+        with patch.object(qualifier, 'authenticated_bundle', authenticated), \
+                patch.object(qualifier, 'run', side_effect=observe), \
+                patch.object(qualifier, 'verify_installed_payload', side_effect=lambda row, *args: payloads.append(row['name'])), \
+                patch.object(Path, 'read_text', return_value='ID=rocky\nVERSION_ID=10.2\n'):
+            result = qualifier.observe_installed(Path('/bundle'), 'x86_64', self.policy)
+        self.assertEqual(payloads, [row['name'] for row in rows])
+        self.assertEqual(operations, ['observe-native-architecture', 'signed-snapshot', 'strong-dependency-solver']
+                         + ['inspect-installed-rpm-header'] * 106
+                         + ['observe-installed-signers', 'observe-global-signing-keys', 'observe-effective-repositories',
+                            'execute-qualified-python-imports', 'execute-qualified-standalone-plugin', 'execute-qualified-certbot-client'])
+        self.assertTrue(all(row['installed_payload_verified'] for row in result['certbot_exception']['packages']))
+
     def test_native_tools_ignore_shadowed_path_and_caller_environment(self):
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / 'uname'
