@@ -242,7 +242,7 @@ def schema_const_pair_at(document: object, *path: object) -> tuple[str, str] | N
     return target["const"], harness["const"]
 
 
-def validate_pure_contract(path: Path) -> None:
+def validate_pure_capabilities(path: Path) -> ast.Module:
     tree = parse(path)
     imports: set[str] = set()
     for node in ast.walk(tree):
@@ -257,6 +257,12 @@ def validate_pure_contract(path: Path) -> None:
     forbidden = sorted(imports & FORBIDDEN_PURE_IMPORTS)
     if forbidden:
         raise ArchitectureError(f"forbidden pure capability import: {','.join(forbidden)}")
+    return tree
+
+
+def validate_pure_contract(path: Path) -> None:
+    tree = validate_pure_capabilities(path)
+    validate_pure_capabilities(ROOT / "scripts/ci-cloud/certbot_package_admission.py")
     if assignment_string(tree, "RESPONSIBILITY") != "normalization,admission,assembly":
         raise ArchitectureError("pure contract responsibility declaration is invalid")
     source = path.read_text(encoding="utf-8")
@@ -274,6 +280,10 @@ def validate_pure_contract(path: Path) -> None:
             "authoritative authenticated-package invariant owner is absent"
         )
     invariant_owners = assignment_string_dict(tree, "INVARIANT_OWNERS")
+    if invariant_owners is None or invariant_owners.get("certbot-package-exception") != (
+        "rocky_preparation_contract.admit_certbot_exception"
+    ):
+        raise ArchitectureError("authoritative TLS package-provenance owner is absent")
     if invariant_owners is None or any(
         invariant_owners.get(invariant) != owner
         for invariant, owner in RUNTIME_INVARIANT_OWNERS.items()

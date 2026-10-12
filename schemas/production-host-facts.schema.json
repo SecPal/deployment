@@ -101,6 +101,167 @@
             },
             "external_repositories_enabled": {
               "const": false
+            },
+            "certbot_exception": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "policy_id",
+                "host_architecture",
+                "packages",
+                "installed_epel_names",
+                "global_epel_key_present",
+                "runtime"
+              ],
+              "properties": {
+                "policy_id": {
+                  "const": "certbot-epel-10.2-4.2.0-1"
+                },
+                "host_architecture": {
+                  "enum": ["x86_64", "aarch64"]
+                },
+                "packages": {
+                  "type": "array",
+                  "minItems": 106,
+                  "maxItems": 106,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "name",
+                      "epoch",
+                      "version",
+                      "release",
+                      "architecture",
+                      "repository",
+                      "url",
+                      "rpm_sha256",
+                      "payload_digest",
+                      "header_sha256",
+                      "signer_fingerprint",
+                      "signature_verified",
+                      "installed_payload_verified"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "epoch": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "release": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "url": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "architecture": {
+                        "enum": ["x86_64", "aarch64", "noarch"]
+                      },
+                      "repository": {
+                        "enum": [
+                          "baseos",
+                          "appstream",
+                          "extras",
+                          "epel-certbot-10.2"
+                        ]
+                      },
+                      "rpm_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "payload_digest": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "header_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "signer_fingerprint": {
+                        "enum": [
+                          "fc226859c0860bf0ddb95b085b106c736fedfc85",
+                          "7d8d15cbfc4e62688591fb2633d98517e37ed158"
+                        ]
+                      },
+                      "signature_verified": {
+                        "const": true
+                      },
+                      "installed_payload_verified": {
+                        "const": true
+                      }
+                    }
+                  }
+                },
+                "installed_epel_names": {
+                  "type": "array",
+                  "minItems": 9,
+                  "maxItems": 9,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      "certbot",
+                      "python3-acme",
+                      "python3-certbot",
+                      "python3-configargparse",
+                      "python3-josepy",
+                      "python3-parsedatetime",
+                      "python3-pyOpenSSL",
+                      "python3-pyrfc3339",
+                      "python3-pytz"
+                    ]
+                  }
+                },
+                "global_epel_key_present": {
+                  "const": false
+                },
+                "runtime": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "machine",
+                    "python_machine",
+                    "python_version",
+                    "certbot_version",
+                    "imports_status",
+                    "standalone_plugin_status"
+                  ],
+                  "properties": {
+                    "machine": {
+                      "enum": ["x86_64", "aarch64"]
+                    },
+                    "python_machine": {
+                      "enum": ["x86_64", "aarch64"]
+                    },
+                    "python_version": {
+                      "const": "3.12.15"
+                    },
+                    "certbot_version": {
+                      "const": "4.2.0"
+                    },
+                    "imports_status": {
+                      "const": 0
+                    },
+                    "standalone_plugin_status": {
+                      "const": 0
+                    }
+                  }
+                }
+              }
             }
           }
         },

@@ -77,6 +77,7 @@ RUN_ATTEMPT = re.compile(r"^[1-9][0-9]{0,2}$")
 AUTHENTICATED_PACKAGE_INVARIANT_OWNER = (
     "rocky_preparation_contract.admit_package"
 )
+CERTBOT_PACKAGE_INVARIANT_OWNER = "rocky_preparation_contract.admit_certbot_exception"
 ROCKY_PACKAGES = (
     "podman", "conmon", "crun", "netavark", "aardvark-dns", "passt",
     "shadow-utils-subid", "systemd", "container-selinux", "audit",
@@ -521,6 +522,14 @@ def validate_native_observation(
         observation["podman_version"],
     )
     return observation
+
+
+def validate_certbot_observation(path: Path, target_sha: str) -> dict[str, Any]:
+    try:
+        from certbot_package_observation import validate
+        return validate(path, target_sha, ROOT, ControlError, load_object)
+    except (ImportError, OSError, ValueError) as error:
+        raise ControlError("Certbot observation input rejected") from error
 
 
 def load_selinux_isolation_contract() -> Any:
@@ -1328,6 +1337,9 @@ def parser() -> argparse.ArgumentParser:
     native_observation.add_argument("--control-sha", required=True)
     native_observation.add_argument("--run-id", required=True)
     native_observation.add_argument("--run-attempt", required=True)
+    certbot_observation = subparsers.add_parser("validate-certbot-observation")
+    certbot_observation.add_argument("path", type=Path)
+    certbot_observation.add_argument("--target-sha", required=True)
     target_source_failure = subparsers.add_parser("validate-target-source-failure")
     target_source_failure.add_argument("path", type=Path)
     target_source_failure.add_argument("--target-sha", required=True)
@@ -1405,6 +1417,8 @@ def main(arguments: list[str]) -> int:
                 options.run_id,
                 options.run_attempt,
             )
+        elif options.command == "validate-certbot-observation":
+            validate_certbot_observation(options.path, options.target_sha)
         elif options.command == "validate-target-source-failure":
             validate_target_source_failure(
                 options.path,

@@ -20,6 +20,7 @@ from typing import Any
 
 RESPONSIBILITY = "normalization,admission,assembly"
 INVARIANT_OWNERS = {
+    "certbot-package-exception": "rocky_preparation_contract.admit_certbot_exception",
     "authenticated-native-packages": "rocky_preparation_contract.admit_package",
     "fixture-arm64-child": "rocky_preparation_contract.admit_fixture_identity",
     "fixture-amd64-child": "rocky_preparation_contract.admit_fixture_identity",
@@ -461,6 +462,14 @@ def admit_package(
         "signer_fingerprint": ROCKY_FINGERPRINT,
         "payload_digest": fact["payload_digest"],
     }
+
+
+def admit_certbot_exception(
+    provenance: dict[str, Any], architecture: str, policy: dict[str, Any]
+) -> dict[str, Any] | None:
+    """TLS-only owner; ordinary Rocky packages/repositories/signers are unchanged."""
+    from certbot_package_admission import admit
+    return admit(provenance, architecture, policy)
 
 
 def normalize_native_package_observations(raw: dict[str, Any]) -> dict[str, Any]:

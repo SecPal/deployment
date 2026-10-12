@@ -91,6 +91,17 @@ dependency from `extras`. Enabled external repositories, COPR, CRB, arbitrary
 installers, testing repositories, registry rewrites, or repository fallback
 fail closed.
 
+The sole optional TLS-specific amendment is the
+[scoped Fedora EPEL 10.2 Certbot policy](certbot-package-provenance.md).
+It admits only the exact independently authenticated Certbot/dependency bundle
+and native runtime observations through
+`rocky_preparation_contract.admit_certbot_exception`. Ordinary Rocky package
+admission and enabled repository state remain unchanged: EPEL must be disabled,
+its signing authority must be transaction-local, and unrelated EPEL packages
+remain prohibited. The optional `certbot_exception` facts describe installed
+TLS-specific provenance, never general repository enablement. Both architecture
+qualifications are required before accepting this candidate amendment.
+
 The package contract is:
 
 | Component                | Required package                    | Repository  |
