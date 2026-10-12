@@ -210,6 +210,20 @@ a Debian host or publishing Quadlets is not itself a passing claim.
 
 ## Running the integration
 
+Select the exact Node.js 26 release in the repository's `.nvmrc` and install
+the locked browser dependencies before running integration. With nvm:
+
+```bash
+nvm install
+nvm use
+npm ci
+npx playwright install chromium
+```
+
+The root manifest, lockfile, Repository Quality workflow, and both Local
+Integration architectures use this same Node selection. Repository preflight
+checks that they agree and rejects older Node baselines.
+
 The runtime requires a non-root user, Podman `>=5.4.2,<6`, `crun`, `catatonit`,
 Netavark, Aardvark, `pasta`, subordinate-ID helpers, an active systemd user
 manager, Debian's native Quadlet user generator at

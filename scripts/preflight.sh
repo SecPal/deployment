@@ -56,6 +56,7 @@ php -l scripts/ci-cloud/postgresql-application-bootstrap.php
 php -l scripts/ci-cloud/postgresql-application-probe.php
 python3 tests/image-consumption-evidence-contract.py
 python3 tests/integration-current-topology.py
+python3 tests/node-baseline-contract.py
 python3 tests/oci-attestation-bundle-contract.py
 python3 tests/postgres-fixture-contract.py
 python3 tests/postgresql-qualification-contract.py
