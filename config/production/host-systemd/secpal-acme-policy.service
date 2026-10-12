@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[Unit]
+Description=SecPal DIRECT standalone HTTP-01 isolation
+Requires=nftables.service secpal-product-backend-policy.service
+After=nftables.service secpal-product-backend-policy.service systemd-tmpfiles-setup.service
+PartOf=nftables.service secpal-product-backend-policy.service
+Before=haproxy.service secpal-viewer-renew.service
+
+[Service]
+Type=oneshot
+SELinuxContext=system_u:system_r:unconfined_service_t:s0
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I -S /usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --policy-install
+ExecStartPost=/usr/bin/python3 -I -S /usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --policy-check
+ExecReload=/usr/bin/python3 -I -S /usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --policy-check
+UMask=0077
+RuntimeDirectory=secpal-acme-policy
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

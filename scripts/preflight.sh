@@ -100,6 +100,7 @@ python3 tests/production-state-contract.py
 python3 tests/product-backend-contract.py
 python3 tests/haproxy-base-contract.py
 python3 tests/haproxy-direct-contract.py
+python3 tests/direct-viewer-tls-contract.py
 php -l tests/haproxy-direct-api.php
 python3 scripts/validate-haproxy-reference.py
 python3 scripts/validate-haproxy-direct-reference.py

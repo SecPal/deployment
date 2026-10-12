@@ -16,7 +16,8 @@ import sys
 import tempfile
 
 HELPER = Path('/usr/local/libexec/secpal/haproxy-direct-policy')
-LIBRARIES = ('haproxy_direct_contract.py', 'haproxy_direct_policy.py', 'haproxy_base_contract.py', 'product_backend_contract.py')
+LIBRARIES = ('haproxy_direct_contract.py', 'haproxy_direct_policy.py', 'haproxy_base_contract.py', 'product_backend_contract.py',
+             'viewer_tls_contract.py')
 SPEC = Path('/etc/haproxy/secpal-routing.json')
 SERVING = Path('/etc/haproxy/secpal.cfg')
 STATE = Path('/run/secpal-direct-policy')
