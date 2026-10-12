@@ -60,9 +60,11 @@ class DirectContractTest(unittest.TestCase):
         for address in ('0.0.0.0', '::', '203.0.113.2'):
             with self.subTest(address=address), self.assertRaises(ValueError):
                 direct.from_document(doc | {'listeners': [doc['listeners'][0] | {'address': address}]})
-        for peers in ([], ['*'], ['10.0.0.0/8'], ['10.0.0.1'] * 2, ['0.0.0.0']):
+        for peers in ([], ['*'], ['10.0.0.0/8'], ['10.0.0.1'] * 2, ['0.0.0.0'], ['fd00::1']):
             with self.subTest(peers=peers), self.assertRaises(ValueError):
                 direct.from_document(doc | {'listeners': [doc['listeners'][0] | {'trusted_peers': peers}]})
+        with self.assertRaisesRegex(ValueError, 'address-family'):
+            direct.from_document(doc | {'listeners': [doc['listeners'][0] | {'address': 'fd00::2', 'trusted_peers': ['10.0.0.1']}]})
 
     def test_sanitize_before_canonical_emission_and_no_extensions(self):
         spec = direct.from_document(self.document())
@@ -95,9 +97,88 @@ class DirectContractTest(unittest.TestCase):
             with self.subTest(peers=peers), self.assertRaises(ValueError):
                 direct.application_proxy_peers(peers)
         for peer in ('*', '**', 'REMOTE_ADDR', '0.0.0.0/0', '::/0', '127.0.0.1,10.0.0.1',
-                     'localhost', '0.0.0.0', '::', 'ff02::1', '127.0.0.1\n', '::1%lo', '::1%x\n    mode tcp'):
+                     'localhost', '0.0.0.0', '::', 'ff02::1', '8.8.8.8', 'fe80::1', '169.254.1.1', '127.0.0.1\n', '::1%lo', '::1%x\n    mode tcp'):
             with self.subTest(peer=peer), self.assertRaises(ValueError):
                 direct.application_proxy_peer(peer)
+
+    def test_direct_policy_follows_managed_firewall_lifecycle(self):
+        unit = (ROOT / 'config/production/host-systemd/secpal-direct-policy.service').read_text()
+        self.assertIn('PartOf=nftables.service secpal-product-backend-policy.service', unit)
+        self.assertIn('ExecStopPost=/usr/bin/python3 -I /usr/local/libexec/secpal/haproxy-direct-policy --withdraw', unit)
+
+    def test_withdrawal_is_stopped_only_and_idempotent_without_configuration(self):
+        import importlib.util
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        path = ROOT / 'scripts/haproxy-direct-policy.py'
+        spec = importlib.util.spec_from_file_location('direct_policy_helper', path)
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with tempfile.TemporaryDirectory() as directory:
+            helper.STATE = Path(directory)
+            helper.READY = helper.STATE / 'ready.json'
+            helper.READY.write_text('rejected marker')
+            live = {'table': True, 'module': True, 'state': 'active'}
+            operations = []
+            def observe(operation, args, **kwargs):
+                operations.append(operation)
+                if args[0].endswith('systemctl'):
+                    return SimpleNamespace(stdout=live['state'])
+                if args[0].endswith('ss'):
+                    return SimpleNamespace(stdout='')
+                if 'delete' in args:
+                    live['table'] = False
+                if '-r' in args:
+                    live['module'] = False
+                return SimpleNamespace(stdout='')
+            with patch.object(helper, 'trusted'), patch.object(helper, 'observe', observe), \
+                    patch.object(helper, 'direct_table_present', lambda: live['table']), \
+                    patch.object(helper, 'decoder_module_present', lambda: live['module']):
+                with self.assertRaisesRegex(ValueError, 'stopped-service'):
+                    helper.withdraw()
+                self.assertTrue(helper.READY.exists())
+                self.assertTrue(live['table'])
+                live['state'] = 'inactive'
+                helper.withdraw()
+                self.assertFalse(helper.READY.exists())
+                self.assertFalse(live['table'])
+                self.assertFalse(live['module'])
+                self.assertLess(operations.index('withdraw-direct-table'), operations.index('withdraw-direct-decoder-module'))
+                helper.withdraw()
+                self.assertEqual(operations.count('withdraw-direct-table'), 1)
+
+    def test_direct_observation_admission_is_registered(self):
+        import importlib.util
+        import copy
+        path = ROOT / 'scripts/validate-haproxy-direct-reference.py'
+        self.assertTrue(path.is_file(), 'DIRECT observation has no registered admission owner')
+        spec = importlib.util.spec_from_file_location('direct_reference', path)
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        record = json.loads((ROOT / 'docs/evidence/haproxy-direct-viewer.json').read_text())
+        validator.admit(record, ROOT)
+        for field in ('implementation_head', 'implementation_tree'):
+            changed = copy.deepcopy(record)
+            changed[field] = '0' * 40
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validator.admit(changed, ROOT)
+        changed = copy.deepcopy(record)
+        changed['installed_source_sha256']['haproxy_direct_contract.py'] = '0' * 64
+        with self.assertRaises(ValueError):
+            validator.admit(changed, ROOT)
+        changed = copy.deepcopy(record)
+        changed['unreviewed'] = True
+        with self.assertRaises(ValueError):
+            validator.admit(changed, ROOT)
+        correction = json.loads((ROOT / 'docs/evidence/haproxy-direct-remediation.json').read_text())
+        validator.admit_remediation(correction, ROOT)
+        changed = copy.deepcopy(correction)
+        changed['installed_source_sha256']['/usr/local/libexec/secpal/haproxy-direct-policy'] = '0' * 64
+        with self.assertRaises(ValueError):
+            validator.admit_remediation(changed, ROOT)
+        self.assertIn('python3 scripts/validate-haproxy-direct-reference.py',
+                      (ROOT / 'scripts/preflight.sh').read_text())
 
     def test_shared_neutral_generation_bytes_are_preserved(self):
         import hashlib

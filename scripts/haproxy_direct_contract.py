@@ -58,6 +58,9 @@ class ProxyListener:
         for value in self.trusted_peers:
             if application_proxy_peer(value) != value or not private_address(value):
                 raise ValueError('admit-trusted-physical-peer')
+        family = ipaddress.ip_address(self.socket.address).version
+        if not any(ipaddress.ip_address(peer).version == family for peer in self.trusted_peers):
+            raise ValueError('admit-trusted-peer-address-family')
 
 
 @dataclass(frozen=True)
@@ -239,7 +242,7 @@ def application_proxy_peer(value: str) -> str:
         peer = ipaddress.ip_address(value)
     except ValueError as error:
         raise ValueError('admit-application-proxy-peer') from error
-    if (str(peer) != value or peer.is_multicast or peer.is_unspecified
+    if (str(peer) != value or not private_address(value) or peer.is_multicast or peer.is_unspecified
             or getattr(peer, 'scope_id', None) is not None):
         raise ValueError('admit-application-proxy-peer')
     return value

@@ -53,7 +53,8 @@ cookies, bodies, and arbitrary caller/internal header values.
 The API's `config/trustedproxy.php` consumes `TRUSTED_PROXIES`.
 `render-haproxy-direct.py INPUT --application-peer OBSERVED_TCP_PEER` emits an
 exact numeric proxy peer for API environment composition. It rejects wildcard,
-CIDR, `REMOTE_ADDR`, comma-separated argument values, and unspecified input.
+CIDR, `REMOTE_ADDR`, comma-separated argument values, public/link-local peers,
+and unspecified input. Admitted peers are exact loopback, RFC1918 or ULA addresses.
 The flag may repeat for at most two independently observed exact peers on
 the API’s existing private interfaces; it produces one bounded environment
 value. Rootless forwarding may select either interface after recreation. Observe the actual
@@ -123,6 +124,7 @@ application peer. It uses native `/usr/bin/php`, with no container runtime.
 unique exact private IPv4/IPv6 addresses. Wildcards, CIDRs, public addresses,
 unspecified addresses and multicast addresses are rejected. Listener addresses
 are loopback, RFC1918 or ULA; public/wildcard listeners cannot select this mode.
+Each listener requires at least one trusted peer of its own address family.
 The topology cannot mix public direct and private PROXY listeners.
 
 The outer HAProxy TCP frontend authenticates the physical TCP source before
@@ -158,7 +160,16 @@ action; the config helper then checks the matching source-bound marker. This
 keeps netlink and NET_ADMIN outside the HAProxy runtime sandbox. Installed
 project modules compile in an empty, administrator-private per-process cache
 namespace after ownership admission, excluding substituted adjacent bytecode.
-The HA listener unit requires the policy service before HAProxy starts.
+The HA listener unit binds to the policy service before HAProxy starts.
+The policy follows managed nftables/backend-policy stop and restart jobs.
+Its fixed withdrawal action requires HAProxy and decoder sockets to be stopped
+before deleting only the DIRECT table, marker and decoder SELinux module.
+Withdrawal also runs after partial startup failure, without consuming rejected
+desired or serving input. Restart reconstructs and checks the effective policy
+before any dependent HA listener resumes. Privileged out-of-band ruleset
+destruction is outside this managed service contract, including direct stock
+`nftables reload` or `nft flush ruleset`. The supported policy lifecycle uses
+ordered stop/start or restart; HAProxy configuration reload remains separate.
 
 The admission log records the physical peer and complete internal TCP socket tuple.
 The HTTP log records that tuple, worker PID, canonical client and generated
@@ -201,3 +212,22 @@ x86_64 and aarch64. This is no HA fleet acceptance. Synthetic self-signed TLS
 proves identity transport only; certificate lifecycle remains #103. Ordinary
 canonical validation, attestation, finite review, protected merge and independent
 post-merge acceptance still govern delivery and completed closure of #220.
+
+## Finite review correction evidence
+
+The [private correction record](evidence/haproxy-direct-remediation.json) and its
+[closed schema](evidence/haproxy-direct-remediation.schema.json) retain the fresh
+CX23 regression and correction observations for the changed admission and policy
+lifecycle. Both records are admitted by the registered
+`validate-haproxy-direct-reference.py` owner; historical payload pins never claim
+that today's mutable source executed in the earlier public or ARM64 runs.
+
+The corrected candidate passed 28 real HAProxy transport tests and four
+API-pinned Symfony identity tests. Public single and private HA HTTP/TLS renders,
+listener constraints and generation identities remain byte-identical on the
+qualified valid IPv4/IPv6 inputs. Fresh Rocky/SELinux Enforcing execution proves
+managed nftables restart, effective policy reconstruction, stopped-only and
+idempotent withdrawal, graceful reload, failed-start cleanup and re-admission.
+After restoration the original backend policy and private listener were verified,
+the temporary administrator key was rejected and destroyed, and all four public
+IPv4/IPv6 sockets returned connection refused. No additional public test ran.

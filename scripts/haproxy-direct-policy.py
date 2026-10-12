@@ -165,14 +165,59 @@ def activate(spec, uid, policy):
     check(spec, uid, policy)
 
 
+def direct_table_present():
+    document = json.loads(observe('observe-direct-table-inventory',
+        ['/usr/sbin/nft', '--json', 'list', 'tables']).stdout)
+    if type(document) is not dict or set(document) != {'nftables'} or type(document['nftables']) is not list:
+        raise ValueError('admit-direct-table-inventory')
+    return any(row.get('table', {}).get('family') == 'inet'
+               and row.get('table', {}).get('name') == 'secpal_direct'
+               for row in document['nftables'])
+
+
+def decoder_module_present():
+    return any(row.split()[0] == 'secpal_direct_decoder' for row in
+               observe('observe-decoder-module-inventory', ['/usr/sbin/semodule', '-l']).stdout.splitlines()
+               if row.split())
+
+
+def withdraw():
+    # Installed-source admission precedes imports. Withdrawal deliberately does
+    # not consume desired/serving input or #101's marker: either may be invalid
+    # or already withdrawn after partial startup or a managed firewall restart.
+    # BindsTo + After on the HA listener orders its shutdown before this action.
+    state = observe('observe-direct-withdrawal-service', ['/usr/bin/systemctl', 'show',
+                    'haproxy.service', '--property=ActiveState', '--value']).stdout.strip()
+    if state not in ('inactive', 'failed'):
+        raise ValueError('admit-direct-withdrawal-stopped-service')
+    if STATE.exists():
+        trusted(STATE, regular=False)
+        READY.unlink(missing_ok=True)
+    listeners = observe('observe-direct-withdrawal-listeners', ['/usr/sbin/ss', '-H', '-lnt']).stdout
+    if any(row.split()[3].rsplit(':', 1)[-1] in {'18082', '18083'} for row in listeners.splitlines()):
+        raise ValueError('admit-direct-withdrawal-empty-decoders')
+    if direct_table_present():
+        observe('withdraw-direct-table', ['/usr/sbin/nft', 'delete', 'table', 'inet', 'secpal_direct'])
+    if decoder_module_present():
+        observe('withdraw-direct-decoder-module', ['/usr/sbin/semodule', '-r', 'secpal_direct_decoder'])
+    if READY.exists() or direct_table_present() or decoder_module_present():
+        raise ValueError('admit-direct-withdrawal-empty-state')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument('--activate', action='store_true')
     action.add_argument('--check', action='store_true')
+    action.add_argument('--withdraw', action='store_true')
     action.add_argument('--check-marker', action='store_true', help='Source-bound barrier after the policy service kernel check')
     parser.add_argument('--desired', action='store_true', help='Explicit stopped-host construction from the fixed desired document')
     args = parser.parse_args()
+    if args.withdraw:
+        if args.desired:
+            raise ValueError('admit-direct-withdrawal-input')
+        withdraw()
+        return
     spec, uid, policy = authority(desired=args.desired)
     activate(spec, uid, policy) if args.activate else check(spec, uid, policy, kernel=not args.check_marker)
 
