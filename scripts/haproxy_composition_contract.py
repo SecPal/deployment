@@ -47,6 +47,10 @@ def generation_id(routing, listeners):
 
 
 def listener_constraints(listeners):
+    if (listeners and type(listeners[0]) is direct.ViewerListener
+            and listeners[0].tls_lifecycle != 'legacy'):
+        return ('[Unit]\nBindsTo=secpal-acme-policy.service\nAfter=secpal-acme-policy.service\n\n'
+                + base.listener_constraints(tuple(coordinates(row) for row in listeners)))
     if listeners and type(listeners[0]) is direct.ProxyListener:
         sockets = tuple(coordinates(row) for row in listeners)
         sockets += tuple(base.Listener('127.0.0.1', direct.DECODER_PORTS[transport])

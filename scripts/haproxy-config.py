@@ -27,7 +27,8 @@ import time
 
 HELPER = Path('/usr/local/libexec/secpal/haproxy-config')
 LIBRARIES = ('haproxy_base_contract.py', 'haproxy_direct_contract.py', 'haproxy_direct_policy.py', 'haproxy_composition_contract.py',
-             'haproxy_config_lifecycle.py', 'product_backend_contract.py', 'haproxy_supply_contract.py')
+             'haproxy_config_lifecycle.py', 'product_backend_contract.py', 'haproxy_supply_contract.py',
+             'viewer_tls_contract.py', 'viewer_tls_runtime.py')
 SPEC = Path('/etc/haproxy/secpal-routing.json')
 SERVING = Path('/etc/haproxy/secpal.cfg')
 LISTENER_UNIT = Path('/etc/systemd/system/haproxy.service.d/secpal-listeners.conf')
@@ -79,6 +80,7 @@ from haproxy_direct_contract import ViewerListener, ProxyListener, VIEWER_PEM
 from haproxy_config_lifecycle import publish
 from product_backend_contract import admit_policy_account
 from haproxy_supply_contract import admit_installed_package, admit_rpm_digest, normalize_features, binary_sha256
+from viewer_tls_runtime import boot_admission
 
 
 def observe(operation, arguments, *, timeout=15):
@@ -92,7 +94,7 @@ def observe(operation, arguments, *, timeout=15):
     return result.stdout.decode('utf-8', errors='strict')
 
 
-def authority(*, desired=True, construction=False):
+def authority(*, desired=True, construction=False, publication=False):
     if os.geteuid() != 0 or Path(__file__).resolve() != HELPER:
         raise ValueError('admit-installed-administrator-helper')
     for path in (HELPER, *(HELPER.parent / name for name in LIBRARIES), RUNTIME_POLICY, REVIEWED_RPM, BINARY, BASE_UNIT, LISTENER_UNIT, HELPER.parent / 'product-backend-policy'):
@@ -131,6 +133,9 @@ def authority(*, desired=True, construction=False):
         routing, listeners = from_config(SERVING.read_bytes())
     if any(type(row) is ViewerListener and row.transport == 'https' for row in listeners):
         trusted(Path(VIEWER_PEM), regular=True)
+    if listeners and type(listeners[0]) is ViewerListener and listeners[0].tls_lifecycle != 'legacy':
+        from haproxy_direct_contract import Direct
+        boot_admission(Direct(routing, listeners), allow_pending_reload=publication)
     if any(type(row) is ProxyListener for row in listeners):
         policy = HELPER.parent / 'haproxy-direct-policy'
         trusted(policy, regular=True)
@@ -307,7 +312,8 @@ def main():
             if observe('observe-exact-haproxy-mainpid', ['/usr/bin/systemctl', 'show',
                        'haproxy.service', '--property=MainPID', '--value']).strip() != str(requested_pid):
                 raise ValueError('admit-exact-systemd-mainpid')
-        data, uid = authority(desired=not (args.check or args.verify_running is not None), construction=args.activate)
+        data, uid = authority(desired=not (args.check or args.verify_running is not None), construction=args.activate,
+                              publication=args.reload is not None)
         if args.check or args.verify_running is not None:
             trusted(SERVING, regular=True)
             if SERVING.stat().st_size > MAX_CONFIG_BYTES or SERVING.read_bytes() != data:

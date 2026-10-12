@@ -15,6 +15,7 @@ import json
 
 from haproxy_base_contract import (Listener, Routing, decode_json_document,
     forwarding_sanitization, routing_sections, runtime_preamble)
+from viewer_tls_contract import ACME_PORT
 
 VIEWER_PEM = '/etc/haproxy/secpal-viewer.pem'
 DECODER_PORTS = {'http': 18082, 'https': 18083}
@@ -30,10 +31,13 @@ def private_address(value):
 class ViewerListener:
     socket: Listener
     transport: str
+    tls_lifecycle: str = 'legacy'
 
     def __post_init__(self):
         if type(self.socket) is not Listener or self.transport not in ('http', 'https'):
             raise ValueError('admit-direct-listener')
+        if self.tls_lifecycle not in ('legacy', 'http01', 'hsts'):
+            raise ValueError('admit-direct-tls-lifecycle')
         if getattr(ipaddress.ip_address(self.socket.address), 'scope_id', None) is not None:
             raise ValueError('admit-unscoped-direct-address')
         if (not ipaddress.ip_address(self.socket.address).is_loopback
@@ -74,6 +78,11 @@ class Direct:
                 or type(self.listeners[0]) not in (ViewerListener, ProxyListener)
                 or any(type(row) is not type(self.listeners[0]) for row in self.listeners)):
             raise ValueError('admit-direct-input')
+        if self.topology == 'single' and len({row.tls_lifecycle for row in self.listeners}) != 1:
+            raise ValueError('admit-one-direct-tls-lifecycle')
+        if (self.topology=='single' and self.listeners[0].tls_lifecycle!='legacy'
+                and not any(row.transport=='http' for row in self.listeners)):
+            raise ValueError('admit-http01-listener')
         if (type(self.listeners[0]) is ProxyListener
                 and len(self.listeners) + len({row.transport for row in self.listeners}) > 8):
             raise ValueError('admit-composed-listener-budget')
@@ -101,10 +110,15 @@ class Direct:
 
 
 def from_document(document) -> Direct:
-    if (type(document) is not dict or set(document) != {
-            'topology', 'frontend_host', 'api_host', 'listeners'}
+    if (type(document) is not dict or set(document) not in ({
+            'topology', 'frontend_host', 'api_host', 'listeners'}, {
+            'topology', 'frontend_host', 'api_host', 'listeners', 'tls_lifecycle'})
             or document['topology'] not in ('single', 'ha')):
         raise ValueError('admit-direct-fields')
+    lifecycle = document.get('tls_lifecycle', 'legacy')
+    if ('tls_lifecycle' in document and (lifecycle not in ('http01', 'hsts')
+                                       or document['topology'] != 'single')):
+        raise ValueError('admit-direct-tls-lifecycle')
     rows = document['listeners']
     if type(rows) is not list or not 1 <= len(rows) <= 8:
         raise ValueError('admit-direct-listener-count')
@@ -121,7 +135,7 @@ def from_document(document) -> Direct:
                 raise ValueError('admit-trusted-physical-peers')
             listeners.append(ProxyListener(socket, row['transport'], tuple(row['trusted_peers'])))
         else:
-            listeners.append(ViewerListener(socket, row['transport']))
+            listeners.append(ViewerListener(socket, row['transport'], lifecycle))
     return Direct(Routing(document['frontend_host'], document['api_host']), tuple(listeners))
 
 
@@ -131,6 +145,8 @@ def decode_document(data: bytes) -> Direct:
 
 def document(spec: Direct):
     return {'topology': spec.topology, 'frontend_host': spec.routing.frontend_host,
+            **({'tls_lifecycle': spec.listeners[0].tls_lifecycle}
+               if spec.topology == 'single' and spec.listeners[0].tls_lifecycle != 'legacy' else {}),
             'api_host': spec.routing.api_host, 'listeners': [
                 {'address': row.socket.address, 'port': row.socket.port,
                  'transport': row.transport,
@@ -206,7 +222,56 @@ def _render(spec: Direct, generation=None) -> str:
         text += '''    http-request deny deny_status 400 if { src 0.0.0.0 :: 224.0.0.0/4 ff00::/8 }
     http-request deny deny_status 400 unless { src_port gt 0 }
 '''
-    text += routing_sections(spec.routing, generation).replace(sanitization, sanitization + canonical, 1)
+    sections = routing_sections(spec.routing, generation).replace(sanitization, sanitization + canonical, 1)
+    if spec.topology == 'single' and spec.listeners[0].tls_lifecycle != 'legacy':
+        # HAProxy represents HTTP/2's scheme/authority/path as an absolute URI.
+        # Retain its admitted Host authority and exact encoded path/query for
+        # the existing origin-form checks. HTTP/1 absolute targets stay denied.
+        sections = sections.replace('    acl origin_form url_beg /\n',
+            '    http-request set-uri %[pathq] if { req.ver 2.0 }\n'
+            '    acl origin_form url_beg /\n', 1)
+        # #103 consumes #220's origin/parser/identity admission before admitting
+        # the raw request target. Queries, escapes, suffixes and non-GET methods
+        # never enter the Certbot standalone backend. No WAF bypass elsewhere.
+        seam = '''    acl acme_prefix path,url_dec -i -m beg /.well-known/acme-challenge
+    acl acme_ambiguous path,url_dec -i -m beg //.well-known/acme-challenge
+    acl acme_target url -m reg ^/\\.well-known/acme-challenge/[A-Za-z0-9_-]{43}$
+    acl acme_method method GET
+    http-request deny deny_status 400 if acme_ambiguous
+    http-request set-var(txn.security) str(acme_rejected) if acme_prefix !acme_target
+    http-request deny deny_status 400 if acme_prefix !acme_target
+    http-request deny deny_status 405 if acme_prefix !acme_method
+    http-request set-var(txn.security) str(acme_challenge) if acme_target acme_method !{ ssl_fc }
+    http-request set-var(txn.security) str(https_redirect) if !acme_target !{ ssl_fc }
+    http-request redirect code 308 location https://''' + spec.routing.frontend_host + '''/ if frontend_origin star_target !{ ssl_fc }
+    http-request redirect code 308 location https://''' + spec.routing.api_host + '''/ if api_origin star_target !{ ssl_fc }
+    http-request redirect code 308 prefix https://''' + spec.routing.frontend_host + ''' if frontend_origin !acme_target !{ ssl_fc }
+    http-request redirect code 308 prefix https://''' + spec.routing.api_host + ''' if api_origin !acme_target !{ ssl_fc }
+    http-request deny deny_status 404 if acme_target { ssl_fc }
+'''
+        # The generation witness remains reachable for the exact internal
+        # fingerprint; arbitrary HTTP callers only get challenge or redirect.
+        marker = '    http-request set-var(txn.security) str(accepted)\n'
+        probe_sources = sorted({'127.0.0.1', '::1', *(row.socket.address for row in spec.listeners
+                               if row.socket.address not in ('0.0.0.0', '::'))})
+        sections = '\n'.join(line + ' { src ' + ' '.join(probe_sources) + ' }'
+                             if line.startswith('    http-request return status 204 ') else line
+                             for line in sections.split('\n'))
+        sections = sections.replace(marker, seam + marker +
+            '    use_backend secpal_acme if acme_target acme_method !{ ssl_fc }\n', 1)
+        sections += '''
+backend secpal_acme
+    timeout connect 1s
+    timeout server 5s
+    http-request del-header X-Forwarded- -m beg
+    http-request set-header Host localhost
+    server certbot 127.0.0.1:''' + str(ACME_PORT) + '\n'
+        if spec.listeners[0].tls_lifecycle == 'hsts':
+            # Activation is separately guarded by live TLS + renewal receipts.
+            sections = sections.replace('    use_backend secpal_frontend',
+                '    http-response set-header Strict-Transport-Security "max-age=86400" if { ssl_fc }\n'
+                '    use_backend secpal_frontend', 1)
+    text += sections
     if spec.topology == 'ha':
         text += preface_sections(spec)
     return text
