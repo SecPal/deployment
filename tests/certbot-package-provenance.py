@@ -5,6 +5,7 @@
 """Scoped Certbot supply agreement; synthetic facts never prove native runtime."""
 
 import copy
+from contextlib import nullcontext
 import importlib.util
 import json
 import hashlib
@@ -35,6 +36,11 @@ def load_module(name, path):
 
 
 class CertbotProvenance(unittest.TestCase):
+    # Synthetic boundaries keep unit tests portable; real Rocky execution is
+    # separate evidence and production discovery remains fail closed.
+    native_roots = (Path('/usr/lib/python3.12/site-packages'),
+                    Path('/usr/lib64/python3.12/site-packages'))
+
     @classmethod
     def setUpClass(cls):
         cls.policy = json.loads((ROOT / 'config/production/certbot-package-policy.json').read_text())
@@ -56,7 +62,8 @@ class CertbotProvenance(unittest.TestCase):
             qualifier = load_module('certbot_without_dnf', 'scripts/qualify-certbot-packages.py')
             with tempfile.TemporaryDirectory() as directory:
                 temporary = Path(directory)
-                with self.assertRaises(qualifier.QualificationError) as caught:
+                with patch.object(qualifier, 'native_bindings', return_value=nullcontext()), \
+                        self.assertRaises(qualifier.QualificationError) as caught:
                     qualifier.verify_dependency_closure(temporary, 'x86_64', self.policy, temporary)
                 self.assertEqual(caught.exception.operation, 'resolve-exact-dependency-closure')
                 self.assertEqual(caught.exception.reason, 'native-dnf-unavailable')
@@ -69,6 +76,8 @@ class CertbotProvenance(unittest.TestCase):
                           purelib='/usr/lib/python3.12/site-packages',
                           platlib='/usr/lib64/python3.12/site-packages')
         with patch.dict(sysconfig._INSTALL_SCHEMES, {'rpm_prefix': rpm_scheme}):
+            with patch.object(sys, 'version_info', (3, 12, 15, 'final', 0)):
+                self.assertEqual(self.qualifier.native_module_paths(), self.native_roots)
             with patch.object(sys, 'path', sys.path.copy()):
                 exec(self.qualifier.IMPORT_SETUP, {})
                 self.assertEqual(sys.path[-2:], [
@@ -107,7 +116,7 @@ class CertbotProvenance(unittest.TestCase):
 
     def test_bootstrap_checks_owner_signer_and_payload_before_loading(self):
         qualifier = self.qualifier
-        roots = qualifier.native_module_paths()
+        roots = self.native_roots
         finder = qualifier.RockyBindingFinder(roots, 'x86_64')
         origin = roots[0] / 'dnf/__init__.py'
         signature = 'RSA/SHA256, fixed timestamp, Key ID ' + contract.ROCKY_FINGERPRINT[-16:]
@@ -137,7 +146,7 @@ class CertbotProvenance(unittest.TestCase):
             qualifier.RockyBindingFinder(roots, 'x86_64').admit_origin('dnf', roots[0] / 'dnf/__init__.py')
 
     def test_bootstrap_finder_never_falls_back_to_caller_paths(self):
-        finder = self.qualifier.RockyBindingFinder(self.qualifier.native_module_paths(), 'x86_64')
+        finder = self.qualifier.RockyBindingFinder(self.native_roots, 'x86_64')
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / 'dnf.py').write_text('raise AssertionError("untrusted dnf executed")')
             with patch.object(sys, 'path', [directory]), \
@@ -149,6 +158,7 @@ class CertbotProvenance(unittest.TestCase):
 
     def test_bootstrap_consumes_canonical_signing_key_owner(self):
         with patch.object(self.qualifier, 'trusted_native_path'), \
+                patch.object(self.qualifier, 'native_module_paths', return_value=self.native_roots), \
                 patch.object(self.qualifier, 'run', return_value='6fedfc85\nZm9yZ2Vk'), \
                 self.assertRaisesRegex(self.qualifier.QualificationError, 'rocky-key-invalid'):
             with self.qualifier.native_bindings('x86_64'):
