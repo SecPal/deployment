@@ -44,6 +44,29 @@ requires an operator-reviewed package-policy update. Runtime imports use the
 accepted RPM interpreter scheme, excluding user sites, `/usr/local` imports and
 site hooks. A private disposable import cache excludes adjacent bytecode.
 
+The strong-dependency observer bootstraps DNF/RPM **before** Certbot admission
+without extending the controller's search path. Its scoped finder resolves only
+`dnf`, `rpm`, `hawkey`, `libdnf` and `libcomps` from Rocky Python 3.12's reviewed
+`rpm_prefix` directories under `/usr/lib` and `/usr/lib64`. Every module and
+ancestor must be administrator-owned and non-writable to other users, and each
+module must belong to its corresponding ordinary Rocky Python RPM. The absolute
+RPM CLI verifies that package's installed files and strong dependencies without
+verification scriptlets; unowned bytecode caches are never executed. Missing
+bindings retain `native-dnf-unavailable`; unexpected paths, owners, signer packets
+or payloads reject before module execution.
+
+This bootstrap consumes the independently admitted ordinary Rocky OS/RPMDB
+authority from [#80's host contract](architecture/production-host.md), including
+its existing `rocky_preparation_contract.admit_rocky_signing_key` packet identity.
+The administrator-owned OS interpreter, RPM CLI and system database are prior
+trust prerequisites. They are not authenticated by Python DNF/RPM or by the
+Certbot observer itself. This check does not establish an unadmitted host's
+repository provenance and does not expand the EPEL exception. Imported bootstrap
+modules are withdrawn after solving; the full signed 106-package bundle,
+installed-header/payload checks and #308 runtime admission still precede the
+controller's later client-library path activation. Native supply/solver evidence
+alone does not qualify an installed controller or an incompatible host baseline.
+
 ## Private persistent state
 
 | Path                                                                    | Authority and permissions                                   | SELinux type          |
