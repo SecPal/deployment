@@ -129,12 +129,12 @@ def health(observation, now):
         state, reason = 'FAILED','served-certificate-mismatch'
     elif not recent or expiry is None or observation['served'] == 'UNKNOWN':
         state, reason = 'UNKNOWN','observation-unavailable'
+    elif observation['renewal'] == 'UNKNOWN' or observation['renewal_at'] is None or now - observation['renewal_at'] > 2 * OBSERVATION_FRESHNESS_SECONDS:
+        state, reason = 'UNKNOWN','renewal-observation-unavailable'
     elif observation['renewal'] == 'FAILURE':
         state, reason = 'DEGRADED','renewal-failed'
     elif remaining <= EXPIRY_WARNING_SECONDS:
         state, reason = 'DEGRADED','certificate-near-expiry'
-    elif observation['renewal'] == 'UNKNOWN' or observation['renewal_at'] is None or now - observation['renewal_at'] > 2 * OBSERVATION_FRESHNESS_SECONDS:
-        state, reason = 'UNKNOWN','renewal-observation-unavailable'
     else:
         state, reason = 'HEALTHY','certificate-current'
     return {'schema_version':1,'producer':'direct-viewer-tls','capability':'Security',
@@ -190,14 +190,15 @@ def policy(uid):
 (roletype object_r secpal_acme_port_t)
 (allow haproxy_t secpal_acme_port_t (tcp_socket (name_connect)))
 (allow unconfined_service_t secpal_acme_port_t (tcp_socket (name_bind)))
-(allow init_t unconfined_service_t (process2 (nnp_transition)))
 (portcon tcp {ACME_PORT} (system_u object_r secpal_acme_port_t ((s0) (s0))))
+'''
+    state_cil = '''(allow init_t unconfined_service_t (process2 (nnp_transition)))
 (type secpal_acme_state_t)
 (typeattributeset file_type (secpal_acme_state_t))
 (roletype object_r secpal_acme_state_t)
 (filecon "/srv/secpal/acme(/.*)?" any (system_u object_r secpal_acme_state_t ((s0) (s0))))
 '''
-    return {'nft':nft,'cil':cil}
+    return {'nft':nft,'cil':cil,'state_cil':state_cil}
 
 
 def policy_digest(uid):

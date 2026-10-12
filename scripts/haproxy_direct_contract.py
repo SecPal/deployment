@@ -80,6 +80,9 @@ class Direct:
             raise ValueError('admit-direct-input')
         if self.topology == 'single' and len({row.tls_lifecycle for row in self.listeners}) != 1:
             raise ValueError('admit-one-direct-tls-lifecycle')
+        if (self.topology=='single' and self.listeners[0].tls_lifecycle!='legacy'
+                and not any(row.transport=='http' for row in self.listeners)):
+            raise ValueError('admit-http01-listener')
         if (type(self.listeners[0]) is ProxyListener
                 and len(self.listeners) + len({row.transport for row in self.listeners}) > 8):
             raise ValueError('admit-composed-listener-budget')

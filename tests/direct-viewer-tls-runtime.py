@@ -202,6 +202,37 @@ class TLSRuntime(unittest.TestCase):
         self.assertNotEqual(renewed.fingerprint,initial.fingerprint)
         self.install(renewed)
         verify_served(renewed,self.spec,self.authority.path)
+        # Certbot has already renewed, but a prior hook never activated its
+        # generation. A genuine no-op must reconcile it through the controller.
+        self.client_run(force=True)
+        reconciled=self.issued()
+        orders=len(self.fixture.orders)
+        source=self.directory/'source'
+        (source/'config/production').mkdir(parents=True,mode=0o700)
+        (source/'config/production/certbot-client.ini').write_text('# Private fixture\n')
+        receipt=self.directory/'activation.json'
+        controller.atomic_json(receipt,{'fingerprint':renewed.fingerprint,'names':sorted(self.names),
+            'initial_at':int(time.time()),'renewed_at':None})
+        def label(path): return 'etc_t' if path==self.pem else 'secpal_acme_state_t'
+        with mock.patch.object(controller,'ACME',self.client), mock.patch.object(controller,'PEM',self.pem), \
+                mock.patch.object(controller,'JOURNAL',self.journal), mock.patch.object(controller,'RECEIPT',receipt), \
+                mock.patch.object(controller,'RENEWAL',self.directory/'renewal.json'), \
+                mock.patch.object(controller,'PREVIOUS_RECEIPT',self.directory/'previous-receipt.json'), \
+                mock.patch.object(controller,'RUNTIME',self.directory), mock.patch.object(controller,'SOURCE',source), \
+                mock.patch.object(controller,'HOOK','/usr/bin/true'), mock.patch.object(controller,'label',side_effect=label), \
+                mock.patch.object(controller,'trusted',side_effect=lambda path,**_:path.lstat()), \
+                mock.patch.object(controller,'configuration',return_value=self.spec), \
+                mock.patch.object(controller,'acme_config',return_value={'directory':'staging','email':'fixture@example.test'}), \
+                mock.patch.dict(controller.DIRECTORIES,{'staging':self.fixture.base+'/directory'}), \
+                mock.patch.object(controller,'certbot_arguments',return_value=self.client_arguments()[5:]), \
+                mock.patch.object(controller,'prepare'), mock.patch.object(controller,'reload_shared',side_effect=self.reload), \
+                mock.patch.object(controller,'verify_chain',side_effect=lambda certificate:verify_chain(certificate,self.authority.path)), \
+                mock.patch.object(controller,'verify_served',side_effect=lambda certificate,spec:verify_served(certificate,spec,self.authority.path)):
+            controller.renew()
+        self.assertEqual(len(self.fixture.orders),orders,'reconciliation unexpectedly issued another certificate')
+        self.assertEqual(json.loads(receipt.read_bytes())['fingerprint'],reconciled.fingerprint)
+        verify_served(reconciled,self.spec,self.authority.path)
+        renewed=reconciled
         # The HTTPS application seam still routes by the two fixed origins and
         # emits only #220's canonical forwarding facts, after sanitization.
         for hostname,role in zip(self.names,('frontend','api')):
@@ -321,6 +352,9 @@ class TLSRuntime(unittest.TestCase):
         self.assertTrue(path.read_bytes()==old,'invalid candidate replaced serving material')
 
     def test_private_responder_and_key_isolation(self):
+        denied=subprocess.run(['/usr/sbin/capsh','--drop=cap_net_admin','--','-c',
+            '/usr/sbin/nft --json list table inet secpal_acme'],capture_output=True,timeout=5)
+        self.assertNotEqual(denied.returncode,0,'native nft read unexpectedly allowed without CAP_NET_ADMIN')
         with socket.socket() as responder:
             responder.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
             responder.bind(('127.0.0.1',18084)); responder.listen(2)
@@ -337,6 +371,26 @@ class TLSRuntime(unittest.TestCase):
                   'sys.exit(0 if rejected==["responder","key"] else 1)')
             result=subprocess.run([sys.executable,'-c',code,str(key)],capture_output=True,timeout=3)
             self.assertEqual(result.returncode,0,'unauthorized UID reached responder or private key')
+
+    def test_z_native_transport_withdrawal(self):
+        self.process.terminate(); self.process.wait(5)
+        native=controller.run
+        modules={'present':True}
+        def observe(operation,arguments,**kwargs):
+            if operation=='observe-acme-withdrawal-stopped-unit': return b'inactive'
+            if 'modules' in operation:
+                return (('400 secpal_acme cil\n' if modules['present'] else '')+'400 secpal_acme_state cil\n').encode()
+            if operation=='withdraw-acme-transport-policy':
+                self.assertEqual(arguments,['/usr/sbin/semodule','-r','secpal_acme'])
+                modules['present']=False
+                return b''
+            return native(operation,arguments,**kwargs)
+        with mock.patch.object(controller,'run',side_effect=observe), \
+                mock.patch.object(controller.pwd,'getpwnam',return_value=mock.Mock(pw_uid=188)), \
+                mock.patch.object(controller,'POLICY_READY',self.directory/'policy-ready'):
+            controller.policy_withdraw()
+        tables=json.loads(subprocess.check_output(['/usr/sbin/nft','--json','list','tables']))
+        self.assertFalse(any(row.get('table',{}).get('name')=='secpal_acme' for row in tables['nftables']))
 
 
 if __name__=='__main__': unittest.main()

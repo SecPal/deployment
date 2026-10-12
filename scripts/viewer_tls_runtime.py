@@ -129,6 +129,7 @@ def boot_admission(spec, *, allow_pending_reload=False):
     fingerprint=hashlib.sha256(ssl.PEM_cert_to_DER_cert(block[0].decode())).hexdigest()
     expected_names=sorted((spec.routing.frontend_host,spec.routing.api_host))
     pending=admit_publication_record(json.loads(read(journal,1024))) if journal.exists() else None
+    restoring_predecessor=False
     if pending is not None:
         if pending.get('previous_sha256') is not None:
             # Promotion or compensating reload is allowed only during a live,
@@ -156,6 +157,7 @@ def boot_admission(spec, *, allow_pending_reload=False):
                     raise ValueError('recover-viewer-certificate-before-startup')
             finally:
                 os.close(descriptor)
+            restoring_predecessor=hashlib.sha256(data).hexdigest()==pending['previous_sha256']
             from haproxy_direct_contract import from_config
             if from_config(read(Path('/etc/haproxy/secpal.cfg'),65536))!=spec:
                 raise ValueError('admit-certificate-only-reload')
@@ -178,4 +180,5 @@ def boot_admission(spec, *, allow_pending_reload=False):
     for host in expected_names:
         run('verify-startup-certificate-trust',['/usr/bin/openssl','verify','-x509_strict',
             '-purpose','sslserver','-verify_hostname',host,'-CAfile',str(TRUST),
-            '-no-CApath','-no-CAstore','-untrusted',str(pem),str(pem)])
+            '-no-CApath','-no-CAstore',*(['-no_check_time'] if restoring_predecessor else []),
+            '-untrusted',str(pem),str(pem)])

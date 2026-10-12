@@ -5,6 +5,7 @@
 """DIRECT TLS boundary and durable publication contract regressions."""
 
 import sys
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import json
@@ -166,6 +167,13 @@ class TLSContract(unittest.TestCase):
             files['/etc/haproxy/secpal.cfg']=direct.render(self.spec()).encode()
             with self.assertRaisesRegex(ValueError,'admit-certificate-only-reload'):
                 runtime.boot_admission(self.spec('hsts'),allow_pending_reload=True)
+            files['/etc/haproxy/secpal.cfg']=direct.render(self.spec('hsts')).encode()
+            files['/etc/haproxy/.secpal-viewer-pending.json']=json.dumps({
+                'previous_sha256':hashlib.sha256(pem).hexdigest(),'candidate_sha256':'b'*64}).encode()
+            with mock.patch.object(runtime,'run') as trust:
+                runtime.boot_admission(self.spec('hsts'),allow_pending_reload=True)
+                self.assertTrue(all('-no_check_time' in call.args[1] for call in trust.call_args_list),
+                    'digest-bound predecessor compensation must preserve an expired serving generation')
 
     def test_read_only_health_never_authorizes_pending_publication(self):
         spec=importlib.util.spec_from_file_location('tls_health_controller',ROOT/'scripts/direct-viewer-tls.py')
@@ -176,6 +184,108 @@ class TLSContract(unittest.TestCase):
                 mock.patch.object(controller,'status',return_value=1), \
                 mock.patch.object(controller,'serialized',side_effect=AssertionError('health acquired publication authority')):
             self.assertEqual(controller.main(),1)
+        admitted=[]
+        @contextmanager
+        def lock(_):
+            admitted.append('locked')
+            yield
+        def infrastructure():
+            self.assertEqual(admitted,['locked'],'policy observation preceded serialization')
+            admitted.append('policy')
+        with mock.patch.object(sys,'argv',['direct-viewer-tls.py','--renew']), \
+                mock.patch.object(controller,'package_authority'), \
+                mock.patch.object(controller,'infrastructure',side_effect=infrastructure), \
+                mock.patch.object(controller,'serialized',side_effect=lock), \
+                mock.patch.object(controller,'renew'):
+            self.assertEqual(controller.main(),0)
+
+    def test_renewal_reconciles_unactivated_lineage_and_records_admission_failure(self):
+        spec=importlib.util.spec_from_file_location('tls_renew_controller',ROOT/'scripts/direct-viewer-tls.py')
+        controller=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(controller)
+        old=SimpleNamespace(fingerprint='a'*64,not_after=2000000)
+        new=SimpleNamespace(fingerprint='b'*64,not_after=2000000)
+        state={'active':old,'result':None}
+        def deploy(): state['active']=new
+        with mock.patch.object(controller,'configuration',return_value=self.spec()), \
+                mock.patch.object(controller,'acme_config',return_value={'email':'fixture@example.test','directory':'staging'}), \
+                mock.patch.object(controller,'renewal_config'), mock.patch.object(controller,'trusted'), \
+                mock.patch.object(controller,'current_certificate',side_effect=lambda *a,**k:state['active']), \
+                mock.patch.object(controller,'source_material',return_value=new), \
+                mock.patch.object(controller,'accepted_receipt',side_effect=lambda _: {'fingerprint':state['active'].fingerprint}), \
+                mock.patch.object(controller,'verify_served'), mock.patch.object(controller,'JOURNAL',mock.Mock(exists=mock.Mock(return_value=False))), \
+                mock.patch.object(controller,'run'), mock.patch.object(controller,'deploy',side_effect=deploy) as publication, \
+                mock.patch.object(controller,'serialized',return_value=mock.MagicMock()), \
+                mock.patch.object(controller.time,'time',return_value=1000000), \
+                mock.patch.object(controller,'atomic_json',side_effect=lambda p,v:state.update(result=v)):
+            controller.renew()
+            publication.assert_called_once_with()
+            self.assertEqual(state['result'],{'status':'SUCCESS','at':1000000})
+            state['result']=None
+            with mock.patch.object(controller,'renewal_config',side_effect=ValueError('fixture-admission-failed')):
+                with self.assertRaises(ValueError): controller.renew()
+            self.assertEqual(state['result'],{'status':'FAILURE','at':1000000})
+            bootstrap=direct.Direct(self.spec().routing,tuple(row for row in self.spec().listeners if row.transport=='http'))
+            with mock.patch.object(controller,'configuration',return_value=bootstrap), \
+                    mock.patch.object(controller,'RECEIPT',mock.Mock(exists=mock.Mock(return_value=False))), \
+                    mock.patch.object(controller,'PEM',mock.Mock(exists=mock.Mock(return_value=False))):
+                controller.renew(obtain=True)
+            self.assertEqual(state['result'],{'status':'UNKNOWN','at':1000000},
+                'initial obtain cannot claim a verified serving renewal')
+
+    def test_transport_prerequisites_and_stale_failure(self):
+        document=direct.document(self.spec())
+        document['listeners']=[row for row in document['listeners'] if row['transport']=='https']
+        with self.subTest(boundary='listener'):
+            with self.assertRaisesRegex(ValueError,'admit-http01-listener'):
+                direct.from_document(document)
+        for unit in ('secpal-viewer-renew.service','secpal-viewer-health.service'):
+            text=(ROOT/'config/production/host-systemd'/unit).read_text()
+            capabilities=next(line for line in text.splitlines() if line.startswith('CapabilityBoundingSet=')).split('=',1)[1].split()
+            with self.subTest(boundary=unit):
+                self.assertIn('CAP_NET_ADMIN',capabilities,'native nft read requires CAP_NET_ADMIN')
+        unit=(ROOT/'config/production/host-systemd/secpal-acme-policy.service').read_text()
+        with self.subTest(boundary='withdrawal'): self.assertIn(' --policy-withdraw',unit)
+        observation={'observed_at':1000000,'not_after':10000000,'served':'MATCH','renewal':'FAILURE','renewal_at':0}
+        with self.subTest(boundary='stale'): self.assertEqual(health(observation,1000000)['state'],'UNKNOWN')
+
+    def test_withdrawal_rejects_active_or_drifted_authority_and_retains_secret_labels(self):
+        from viewer_tls_contract import policy_projection
+        spec=importlib.util.spec_from_file_location('tls_policy_controller',ROOT/'scripts/direct-viewer-tls.py')
+        controller=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(controller)
+        mutations=[]
+        state={'active':False,'drift':False,'present':True}
+        def observe(operation,arguments,**kwargs):
+            if operation=='observe-acme-withdrawal-stopped-unit':
+                return b'active' if state['active'] else b'inactive'
+            if 'tables' in operation:
+                return json.dumps({'nftables':[{'table':{'name':'secpal_acme','family':'inet'}}] if state['present'] else []}).encode()
+            if operation=='observe-owned-acme-withdrawal-table':
+                return json.dumps({'nftables':policy_projection(188)+([{'chain':{'name':'foreign'}}] if state['drift'] else [])}).encode()
+            if 'modules' in operation:
+                return (('400 secpal_acme cil\n' if state['present'] else '')+'400 secpal_acme_state cil\n').encode()
+            if operation.startswith('withdraw-'):
+                mutations.append(arguments)
+                if operation=='withdraw-acme-transport-policy': state['present']=False
+            return b''
+        with mock.patch.object(controller,'run',side_effect=observe), \
+                mock.patch.object(controller.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=188)), \
+                mock.patch.object(controller,'POLICY_READY',mock.Mock(exists=mock.Mock(return_value=False))), \
+                mock.patch.object(controller,'sync_directory'):
+            state['active']=True
+            with self.assertRaises(ValueError): controller.policy_withdraw()
+            self.assertEqual(mutations,[])
+            state['active']=False; state['drift']=True
+            with self.assertRaises(ValueError): controller.policy_withdraw()
+            self.assertEqual(mutations,[])
+            state['drift']=False
+            controller.policy_withdraw()
+            self.assertEqual(mutations,[['/usr/sbin/nft','delete','table','inet','secpal_acme'],
+                ['/usr/sbin/semodule','-r','secpal_acme']])
+            compiled=policy(188)
+            self.assertNotIn('secpal_acme_state_t',compiled['cil'])
+            self.assertIn('secpal_acme_state_t',compiled['state_cil'])
 
 
 if __name__=='__main__': unittest.main()

@@ -3,6 +3,7 @@
 
 [Unit]
 Description=SecPal DIRECT certificate health facts
+BindsTo=secpal-acme-policy.service
 After=secpal-acme-policy.service haproxy.service
 
 [Service]
@@ -23,7 +24,7 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_ADMIN
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 SocketBindDeny=any
 StandardOutput=journal

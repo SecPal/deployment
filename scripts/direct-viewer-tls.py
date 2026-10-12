@@ -217,8 +217,11 @@ def policy_install():
             raise ValueError('admit-existing-acme-isolation')
     with tempfile.TemporaryDirectory(prefix='policy-',dir=RUNTIME) as directory:
         path=Path(directory)/'secpal_acme.cil'
+        state_path=Path(directory)/'secpal_acme_state.cil'
         path.write_text(compiled['cil'])
-        run('install-acme-selinux-policy',['/usr/sbin/semodule','-i',str(path),'-e','secpal_acme'])
+        state_path.write_text(compiled['state_cil'])
+        run('install-acme-selinux-policy',['/usr/sbin/semodule','-i',str(state_path),str(path),
+            '-e','secpal_acme_state','-e','secpal_acme'])
     if not exists:
         run('validate-acme-isolation-table',['/usr/sbin/nft','--check','-f','-'],input_text=compiled['nft'].encode())
         run('install-acme-isolation-table',['/usr/sbin/nft','-f','-'],input_text=compiled['nft'].encode())
@@ -226,6 +229,42 @@ def policy_install():
     trusted(POLICY_READY.parent)
     atomic_json(POLICY_READY,{'policy_sha256':policy_digest(uid)})
     policy_check()
+
+
+def policy_withdraw():
+    # Transport authority ends only after its dependent processes stop. Private
+    # state labels persist independently; removing them would orphan secrets.
+    for unit in ('haproxy.service','secpal-viewer-renew.service','secpal-viewer-health.service'):
+        if run('observe-acme-withdrawal-stopped-unit',['/usr/bin/systemctl','show',unit,
+                '--property=ActiveState','--value']).strip() not in (b'inactive',b'failed'):
+            raise ValueError('admit-acme-withdrawal-stopped-units')
+    if run('observe-acme-withdrawal-empty-responder',['/usr/sbin/ss','-H','-lnt',
+            'sport = :18084']).strip():
+        raise ValueError('admit-acme-withdrawal-empty-responder')
+    uid=pwd.getpwnam('haproxy').pw_uid
+    if POLICY_READY.exists():
+        trusted(POLICY_READY,regular=True,private=True)
+        if POLICY_READY.stat().st_size>1024 or json.loads(POLICY_READY.read_bytes())!={'policy_sha256':policy_digest(uid)}:
+            raise ValueError('admit-owned-acme-policy-withdrawal')
+    tables=json.loads(run('observe-acme-withdrawal-tables',['/usr/sbin/nft','--json','list','tables']))
+    exists=any(item.get('table',{}).get('name')=='secpal_acme' and item['table'].get('family')=='inet'
+        for item in tables['nftables'])
+    if exists:
+        table=json.loads(run('observe-owned-acme-withdrawal-table',['/usr/sbin/nft','--json','list','table','inet','secpal_acme']))
+        if normalize_table(table)!=policy_projection(uid):
+            raise ValueError('admit-owned-acme-policy-withdrawal')
+        run('withdraw-acme-isolation-table',['/usr/sbin/nft','delete','table','inet','secpal_acme'])
+    modules=run('observe-acme-withdrawal-modules',['/usr/sbin/semodule','-lfull']).decode().splitlines()
+    if any(len(row.split())>=3 and row.split()[1]=='secpal_acme' for row in modules):
+        run('withdraw-acme-transport-policy',['/usr/sbin/semodule','-r','secpal_acme'])
+    remaining=json.loads(run('verify-acme-withdrawal-tables',['/usr/sbin/nft','--json','list','tables']))
+    modules=run('verify-acme-withdrawal-modules',['/usr/sbin/semodule','-lfull']).decode().splitlines()
+    if (any(item.get('table',{}).get('name')=='secpal_acme' and item['table'].get('family')=='inet'
+            for item in remaining['nftables'])
+            or any(len(row.split())>=3 and row.split()[1]=='secpal_acme' for row in modules)):
+        raise ValueError('verify-acme-withdrawal-empty-transport')
+    POLICY_READY.unlink(missing_ok=True)
+    sync_directory(POLICY_READY.parent)
 
 
 def source_material(spec):
@@ -411,35 +450,39 @@ def renewal_config(config):
 
 
 def renew(*, obtain=False):
-    spec=configuration()
-    config=acme_config()
-    if not any(row.transport=='http' for row in spec.listeners):
-        raise ValueError('admit-http01-listener')
-    if obtain and (RECEIPT.exists() or PEM.exists() or JOURNAL.exists()
-                   or any(row.transport=='https' for row in spec.listeners)):
-        raise ValueError('admit-http-only-initial-issuance')
-    if not obtain:
-        renewal_config(config)
-        previous=current_certificate(spec,allow_expired=True)
-        if previous.fingerprint!=accepted_receipt(spec)['fingerprint'] or JOURNAL.exists():
-            raise ValueError('admit-renewal-accepted-state')
-        if previous.not_after>int(time.time()):
-            verify_served(previous,spec)
-    trusted(SOURCE/'config/production/certbot-client.ini',regular=True)
-    # -I -S + #308's RPM installation scheme excludes /usr/local/user/.pth
-    # injection. Only the native, payload-admitted Certbot entrypoint executes.
-    arguments=certbot_arguments(spec,config,obtain=obtain)
-    code=('import sys,sysconfig; sys.path.extend([sysconfig.get_path("purelib",scheme="rpm_prefix"),'
-          'sysconfig.get_path("platlib",scheme="rpm_prefix")]); from certbot.main import main; sys.exit(main(sys.argv[1:]))')
     atomic_json(RENEWAL,{'status':'UNKNOWN','at':int(time.time())})
     try:
+        spec=configuration()
+        config=acme_config()
+        if not any(row.transport=='http' for row in spec.listeners):
+            raise ValueError('admit-http01-listener')
+        if obtain and (RECEIPT.exists() or PEM.exists() or JOURNAL.exists()
+                       or any(row.transport=='https' for row in spec.listeners)):
+            raise ValueError('admit-http-only-initial-issuance')
+        if not obtain:
+            renewal_config(config)
+            previous=current_certificate(spec,allow_expired=True)
+            if previous.fingerprint!=accepted_receipt(spec)['fingerprint'] or JOURNAL.exists():
+                raise ValueError('admit-renewal-accepted-state')
+            if previous.not_after>int(time.time()): verify_served(previous,spec)
+        trusted(SOURCE/'config/production/certbot-client.ini',regular=True)
+        # Only the #308 payload-admitted RPM interpreter/entrypoint executes.
+        arguments=certbot_arguments(spec,config,obtain=obtain)
+        code=('import sys,sysconfig; sys.path.extend([sysconfig.get_path("purelib",scheme="rpm_prefix"),'
+              'sysconfig.get_path("platlib",scheme="rpm_prefix")]); from certbot.main import main; sys.exit(main(sys.argv[1:]))')
         run('execute-certbot-http01',['/usr/bin/python3','-I','-S','-c',code,*arguments],timeout=600)
         if not obtain:
-            current=current_certificate(spec)
-            verify_served(current,spec)
-            if current.fingerprint!=accepted_receipt(spec)['fingerprint']:
-                raise ValueError('verify-renewal-activation-receipt')
-        atomic_json(RENEWAL,{'status':'SUCCESS','at':int(time.time())})
+            with serialized(RUNTIME/'publish.lock'):
+                if JOURNAL.exists(): raise ValueError('recover-viewer-certificate-before-renewal')
+                lineage=source_material(spec)
+                if lineage.fingerprint!=accepted_receipt(spec)['fingerprint']:
+                    deploy()
+                current=current_certificate(spec)
+                verify_served(current,spec)
+                if current.fingerprint!=lineage.fingerprint or current.fingerprint!=accepted_receipt(spec)['fingerprint']:
+                    raise ValueError('verify-renewal-activation-receipt')
+        if not obtain:
+            atomic_json(RENEWAL,{'status':'SUCCESS','at':int(time.time())})
     except (OSError,ValueError):
         atomic_json(RENEWAL,{'status':'FAILURE','at':int(time.time())})
         raise
@@ -479,16 +522,21 @@ def status():
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     actions=parser.add_mutually_exclusive_group(required=True)
-    for action in ('obtain','renew','deploy','prepare-initial','accept-initial','recover','health','policy-check','policy-install'):
+    for action in ('obtain','renew','deploy','prepare-initial','accept-initial','recover','health','policy-check','policy-install','policy-withdraw'):
         actions.add_argument('--'+action,action='store_true')
     args=parser.parse_args()
+    if args.policy_withdraw:
+        with serialized(RUNTIME/'renew.lock'), serialized(RUNTIME/'publish.lock'):
+            policy_withdraw()
+        return 0
     if args.policy_install:
         package_authority()
-        policy_install()
+        with serialized(RUNTIME/'renew.lock'), serialized(RUNTIME/'publish.lock'):
+            policy_install()
         return 0
     try:
         package_authority()
-        if not args.policy_check:
+        if args.health:
             infrastructure()
     except (OSError,ValueError,RuntimeError):
         if not args.health:
@@ -506,6 +554,7 @@ def main():
         return status()
     lock=RUNTIME/('renew.lock' if args.renew or args.obtain else 'publish.lock')
     with serialized(lock):
+        infrastructure()
         if args.recover:
             if JOURNAL.exists():
                 trusted(JOURNAL,regular=True,private=True)

@@ -74,8 +74,18 @@ and TCP 18084, permits `haproxy_t` connect, root service bind and the explicit
 `init_t` to root service transition under NoNewPrivileges, and changes no broad
 SELinux boolean. Native
 effective access, port labels and the exact nft table are checked on each use.
+The timer units retain `CAP_NET_ADMIN` for native nft observation, plus
+`CAP_DAC_READ_SEARCH` for installed-package verification. They execute only the
+fixed administrator-owned helper and qualified RPM client.
 Existing-table drift is rejected; an unchanged table may be re-admitted at boot.
 The source never disables SELinux Enforcing.
+
+`ExecStopPost` withdraws only the exact owned transport table and port module,
+after HAProxy, renewal, health and the responder are stopped. Serialization
+prevents a manual issuance/publication race with withdrawal. Drift refuses
+withdrawal. The separate persistent `secpal_acme_state` module retains secret
+file labels and the root service transition across transport shutdown; secret
+state is never deleted or relabeled into product authority.
 
 The nft seam rejects non-loopback access to TCP 18084, permits host loopback
 access only from root and the admitted HAProxy UID, and rejects IPv6 responder
@@ -123,6 +133,8 @@ WAF or CrowdSec policy itself.
 The administrator selects `/etc/haproxy/secpal-acme.json`, a closed object with
 `email` and `directory` (`staging` or `production`). Only the fixed Let's Encrypt
 directory URLs are permitted. Selecting a URL is not external execution authority.
+Staging chains receive the same system-trust check and are rejected unless that
+trust has been independently established; staging never disables verification.
 Actual public issuance requires independently authorized external HTTP-01
 reachability; an old source-limited test firewall cannot supply that reachability.
 
@@ -137,6 +149,8 @@ guard permits this bounded first preparation, but not HSTS or renewal replay.
 After the existing runtime has started, `--accept-initial` independently verifies
 every served TLS socket before issuing the activation receipt and clearing the
 marker. Failure is never initial activation acceptance.
+Obtaining the initial lineage leaves renewal observation UNKNOWN until a
+subsequent serving-verified renewal/no-op completes.
 
 Renewal changes no sockets or desired configuration. The SecPal timer runs twice
 daily, randomized by at most 30 minutes, persistent across reboot, with a
@@ -147,6 +161,11 @@ The CLI fixes standalone, address, port, endpoint, paths, key type and hooks;
 persisted renewal state admits only this one bounded native lineage. Pre/post
 hooks are `/usr/bin/true`; the deploy hook is the fixed root helper. No force
 renewal, stop/start, arbitrary command or DNS credential is production input.
+After Certbot returns, renewal admits the lineage again under the publication
+lock and publishes any verified generation not yet accepted. This handles a
+failed deploy hook followed by Certbot's fresh-lineage no-op, without issuing a
+duplicate certificate. A pending interrupted publication still requires explicit
+predecessor recovery; it is never replayed.
 
 The deployment hook admits matching archive generations and root-controlled
 lineage links, parses complete chain/key material, requires exactly the two
@@ -175,6 +194,9 @@ inactive, preserving a possibly serving initial construction until the operator
 has selected its recovery. A held root lock
 allows only the immediate promotion/compensation reload of the unchanged serving
 configuration, never a boot replay. Health observations do not acquire this lock.
+Compensation may retain an expired digest-bound predecessor under that live lock;
+it still verifies chain signatures, purpose and hostnames, and remains unhealthy.
+Ordinary startup and every candidate retain full time validation.
 
 ## Health and HSTS
 
@@ -183,7 +205,8 @@ nonzero unless HEALTHY. An expired observed certificate is FAILED; a contradicto
 serving fingerprint is FAILED; renewal failure or expiry within 30 days is
 DEGRADED. Missing, stale or unavailable observations are UNKNOWN. Renewal writes
 UNKNOWN before execution, SUCCESS only after serving proof (including no-op),
-and FAILURE on execution/activation failure. The hourly health timer exposes
+and FAILURE on admission, execution or activation failure. Renewal facts older
+than 48 hours are UNKNOWN for either success or failure. The hourly health timer exposes
 bounded facts in the system journal; Certbot output and private state are never
 diagnostic payloads. A missing producer remains unknown to the future aggregator.
 This does not implement #129's global deployment-health decision.
