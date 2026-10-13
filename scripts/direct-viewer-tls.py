@@ -220,7 +220,7 @@ def policy_install():
         state_path=Path(directory)/'secpal_acme_state.cil'
         path.write_text(compiled['cil'])
         state_path.write_text(compiled['state_cil'])
-        run('install-acme-selinux-policy',['/usr/sbin/semodule','-i',str(state_path),str(path),
+        run('install-acme-selinux-policy',['/usr/sbin/semodule','-i',str(state_path),'-i',str(path),
             '-e','secpal_acme_state','-e','secpal_acme'])
     if not exists:
         run('validate-acme-isolation-table',['/usr/sbin/nft','--check','-f','-'],input_text=compiled['nft'].encode())
