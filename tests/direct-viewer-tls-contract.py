@@ -6,6 +6,7 @@
 
 import sys
 from contextlib import contextmanager
+import getopt
 import hashlib
 import importlib.util
 import json
@@ -26,6 +27,84 @@ import viewer_tls_runtime as runtime
 
 
 class TLSContract(unittest.TestCase):
+    @contextmanager
+    def policy_installer(self):
+        spec=importlib.util.spec_from_file_location('tls_install_controller',ROOT/'scripts/direct-viewer-tls.py')
+        controller=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(controller)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with mock.patch.object(controller,'RUNTIME',root), \
+                    mock.patch.object(controller,'ACME',root/'acme'), \
+                    mock.patch.object(controller,'POLICY_READY',root/'ready.json'), \
+                    mock.patch.object(controller.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=188)), \
+                    mock.patch.object(controller,'trusted'), mock.patch.object(controller,'policy_check') as check:
+                yield controller,check
+
+    def test_policy_install_explicit_modes_survive_regeneration(self):
+        # GNU option permutation and semodule 3.10's trailing-argument rule:
+        # https://github.com/SELinuxProject/selinux/blob/3.10/policycoreutils/semodule/semodule.c
+        # This source contract is distinct from native compilation/store evidence.
+        def modes(arguments):
+            options,paths=getopt.gnu_getopt(arguments[1:],'i:e:r:d:')
+            return options+[(options[-1][0],path) for path in paths],paths
+        legacy=['/usr/sbin/semodule','-i','STATE_CIL','TRANSPORT_CIL',
+                '-e','secpal_acme_state','-e','secpal_acme']
+        self.assertEqual(modes(legacy)[0],[('-i','STATE_CIL'),('-e','secpal_acme_state'),
+            ('-e','secpal_acme'),('-e','TRANSPORT_CIL')])
+        installed=[]
+        def observe(operation,arguments,**kwargs):
+            if operation=='observe-inactive-policy-construction': return b'inactive'
+            if operation=='observe-existing-acme-table': return b'{"nftables":[]}'
+            if operation=='install-acme-selinux-policy':
+                options,paths=modes(arguments)
+                self.assertEqual(paths,[],'CIL pathname inherits the final semodule mode')
+                self.assertEqual([option for option,_ in options],['-i','-i','-e','-e'])
+                state,transport=Path(options[0][1]),Path(options[1][1])
+                self.assertEqual(arguments,['/usr/sbin/semodule','-i',str(state),'-i',str(transport),
+                    '-e','secpal_acme_state','-e','secpal_acme'])
+                self.assertEqual((state.name,transport.name),('secpal_acme_state.cil','secpal_acme.cil'))
+                installed.append((state.read_text(),transport.read_text()))
+            return b''
+        with self.policy_installer() as (controller,check), \
+                mock.patch('viewer_tls_runtime.subprocess.run') as native, \
+                mock.patch.object(controller,'run',side_effect=observe):
+            for _ in range(2):
+                before=len(installed)
+                controller.policy_install()
+                self.assertEqual(len(installed),before+1,'installation split into multiple transactions')
+                self.assertEqual(json.loads(controller.POLICY_READY.read_bytes()),
+                    {'policy_sha256':controller.policy_digest(188)})
+            self.assertEqual(check.call_count,2)
+            native.assert_not_called()
+        generated=policy(188)
+        self.assertEqual(installed,[(generated['state_cil'],generated['cil'])]*2)
+
+    def test_failed_policy_install_has_no_readiness_or_transport_authority(self):
+        mutations=[]
+        def observe(operation,arguments,**kwargs):
+            if operation=='observe-inactive-policy-construction': return b'inactive'
+            if operation=='observe-existing-acme-table': return b'{"nftables":[]}'
+            if operation=='install-acme-selinux-policy':
+                # Exercise the shared bounded failure primitive, not a mocked
+                # successful exit standing in for native policy compilation.
+                return runtime.run(operation,arguments,**kwargs)
+            mutations.append(operation)
+            return b''
+        with self.policy_installer() as (controller,check), \
+                mock.patch.object(controller,'run',side_effect=observe), \
+                mock.patch.object(runtime.subprocess,'run',return_value=SimpleNamespace(
+                    returncode=1,stdout=b'',stderr=b'Failed on secpal_acme!')) as native, \
+                mock.patch.object(controller,'atomic_json') as marker:
+            with self.assertRaisesRegex(ValueError,'install-acme-selinux-policy'):
+                controller.policy_install()
+            self.assertFalse(controller.POLICY_READY.exists())
+            marker.assert_not_called()
+            check.assert_not_called()
+            self.assertEqual(mutations,[],'failed installation granted transport authority')
+            native.assert_called_once()
+            self.assertEqual(native.call_args.kwargs['timeout'],15)
+
     def spec(self, lifecycle='http01'):
         return direct.from_document({'topology':'single','frontend_host':'app.example.test',
             'api_host':'api.example.test','tls_lifecycle':lifecycle,
