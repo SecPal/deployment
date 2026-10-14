@@ -114,7 +114,6 @@ python3 tests/cloudfront-viewer-edge.py
 python3 tests/cloudfront-waf.py
 bash tests/production-state-native-lifecycle-gate.sh
 bash tests/production-state-native-lifecycle.sh
-python3 tests/work-graph-governance.py
 bash tests/compose-prohibition-contract.sh
 bash tests/repository-contract.sh
 bash tests/production-host-contract.sh

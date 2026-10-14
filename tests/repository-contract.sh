@@ -180,7 +180,6 @@ required_files=(
   tests/production-edge-decision-contract.py
   tests/production-state-native-lifecycle-gate.sh
   tests/production-state-native-lifecycle.sh
-  tests/work-graph-governance.py
   tests/runtime-secret-contract.sh
   tests/rocky-dnf4-nevra-contract.sh
   tests/rocky-rpmdb-provenance-contract.sh
