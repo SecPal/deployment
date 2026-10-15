@@ -100,7 +100,22 @@ Apply the distribution PGDATA SELinux policy and the persistent file-context
 mapping `postgresql_db_t` for `/etc/secpal/postgresql(/.*)?`, then `restorecon`
 those exact trees. Require enforcing SELinux, effective `postgresql_db_t` data
 and TLS files, and `postgresql_t` process labeling; never disable labeling or
-SELinux. Reload systemd and enable/start the native service only after server
+SELinux. Before qualification or product activation, install the narrowly scoped
+host policy [secpal_native_postgresql.cil](../../config/production/selinux/secpal_native_postgresql.cil):
+
+```sh
+semodule -i config/production/selinux/secpal_native_postgresql.cil
+```
+
+Rocky's `pasta_t` domain otherwise cannot connect to `postgresql_port_t`.
+The module grants only that TCP `name_connect` permission. Keep
+`pasta_bind_all_ports` and `container_connect_any` disabled; preserve the
+UID-bound nftables restriction to port 5432. Do not relabel PostgreSQL ports
+or enable broad connection booleans. General host installation owns policy
+persistence; frozen host qualification alone does not assert this PG-specific
+capability.
+
+Reload systemd and enable/start the native service only after server
 material, configuration and the firewall boundary are admitted.
 
 Run `roles.sql` exactly once through the native `postgres` peer-authenticated
