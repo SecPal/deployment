@@ -74,7 +74,8 @@ try {
     ], JSON_THROW_ON_ERROR);
 } catch (PDOException $error) {
     // Classify the client failure, never retain its potentially secret message.
-    if ((string) $error->getCode() !== '08006') {
+    // PDO PgSQL constructor failures use driver code 7; errorInfo owns SQLSTATE.
+    if (($error->errorInfo[0] ?? (string) $error->getCode()) !== '08006') {
         exit(1);
     }
     $message = $error->getMessage();
