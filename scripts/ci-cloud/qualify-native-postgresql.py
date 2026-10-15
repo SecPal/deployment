@@ -581,9 +581,15 @@ SELECT 1 / (CASE WHEN count(*)=1 THEN 1 ELSE 0 END) FROM qualification_state;
             settings[setting] = self.sql('SHOW ' + setting + ';')[1]
         # Fail closed against alternate includes/preloads/executable commands.
         for setting in ('shared_preload_libraries', 'session_preload_libraries', 'local_preload_libraries',
-                        'archive_command', 'ssl_passphrase_command'):
+                        'ssl_passphrase_command'):
             if self.sql('SHOW ' + setting + ';')[1] != '':
                 raise contract.QualificationError('observe-native-service', 'invariant-failed')
+        # PG18 reports archive_command as "(disabled)" while archive_mode is off.
+        # Admit that display value only with both archive execution paths disabled.
+        if (self.sql('SHOW archive_mode;')[1] != 'off'
+                or self.sql('SHOW archive_library;')[1] != ''
+                or self.sql('SHOW archive_command;')[1] not in ('', '(disabled)')):
+            raise contract.QualificationError('observe-native-service', 'invariant-failed')
         roles = contract.normalize_json_fact(self.sql("""SELECT json_object_agg(rolname, json_build_array(rolsuper, rolcreatedb,
 rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolcanlogin)) FROM pg_roles WHERE rolname LIKE 'secpal_%' AND rolname NOT LIKE 'secpal_qualification_%';""")[1])
         issued = contract.normalize_json_fact(self.sql("""SELECT coalesce(json_object_agg(rolname, json_build_object('name',rolname,
