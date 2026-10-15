@@ -5,6 +5,28 @@
 # evaluate these exact locals with pinned OpenTofu; no second renderer owns it.
 locals {
   product_backend_policy_enabled = var.product_backend_policy_json != ""
+  # Source identity includes controller validators; guest execution does not.
+  # tests/postgresql-qualification-contract.py checks the canonical owner agrees.
+  postgresql_probe_paths = [
+    "scripts/ci-cloud/postgresql_qualification_contract.py",
+    "scripts/ci-cloud/postgresql-qualification-control.py",
+    "scripts/ci-cloud/qualify-native-postgresql.py",
+    "scripts/ci-cloud/postgresql-application-bootstrap.php",
+    "scripts/ci-cloud/postgresql-application-probe.php",
+    "scripts/image_attestation_runtime.py",
+    "scripts/fetch-oci-attestation.py",
+    "scripts/ci-cloud/run-native-postgresql-qualification.sh",
+    "scripts/ci-cloud/rocky_preparation_contract.py",
+    "scripts/ci-cloud/collect-rocky-preparation.py",
+    "scripts/integration_runtime_contract.py",
+    "scripts/render-native-postgresql.py",
+    "config/production/selinux/secpal_native_postgresql.cil",
+    "schemas/postgresql-qualification-evidence.schema.json",
+    "schemas/postgresql-qualification-diagnostic.schema.json",
+  ]
+  postgresql_probe_manifest = jsonencode({
+    for source_path in local.postgresql_probe_paths : source_path => filesha256("${path.module}/../../../${source_path}")
+  })
   rocky_bootstrap_sources = merge({
     postgresql_candidate                = var.postgresql_candidate_json
     prepare_script                      = file("${path.module}/../../../scripts/ci-cloud/prepare-rocky-host.sh")
@@ -44,6 +66,7 @@ locals {
     backend_authorization          = var.product_backend_policy_json
     backend_policy                 = file("${path.module}/../../../scripts/product-backend-policy.py")
     backend_contract               = file("${path.module}/../../../scripts/product_backend_contract.py")
+    backend_http_fixture           = file("${path.module}/../../../scripts/ci-cloud/product-backend-http-fixture.php")
     backend_service                = file("${path.module}/../../../config/production/host-systemd/secpal-product-backend-policy.service")
     backend_qualifier              = file("${path.module}/../../../scripts/ci-cloud/qualify-product-backends.py")
     backend_qualification_contract = file("${path.module}/../../../scripts/ci-cloud/product_backend_qualification_contract.py")
@@ -54,17 +77,16 @@ locals {
     backend_edge_network           = file("${path.module}/../../../config/production/quadlet/secpal-edge.network")
     backend_state_contract         = file("${path.module}/../../../config/production/state-contract.json")
     } : {
+    postgresql_probe_manifest        = local.postgresql_probe_manifest
     postgresql_consumer              = file("${path.module}/../../../scripts/render-native-postgresql.py")
     postgresql_contract              = file("${path.module}/../../../scripts/ci-cloud/postgresql_qualification_contract.py")
-    postgresql_control               = file("${path.module}/../../../scripts/ci-cloud/postgresql-qualification-control.py")
     postgresql_runner                = file("${path.module}/../../../scripts/ci-cloud/qualify-native-postgresql.py")
+    postgresql_selinux               = file("${path.module}/../../../config/production/selinux/secpal_native_postgresql.cil")
     postgresql_application_bootstrap = file("${path.module}/../../../scripts/ci-cloud/postgresql-application-bootstrap.php")
     postgresql_application_probe     = file("${path.module}/../../../scripts/ci-cloud/postgresql-application-probe.php")
     image_attestation_runtime        = file("${path.module}/../../../scripts/image_attestation_runtime.py")
     fetch_oci_attestation            = file("${path.module}/../../../scripts/fetch-oci-attestation.py")
     postgresql_wrapper               = file("${path.module}/../../../scripts/ci-cloud/run-native-postgresql-qualification.sh")
-    postgresql_diagnostic_schema     = file("${path.module}/../../../schemas/postgresql-qualification-diagnostic.schema.json")
-    postgresql_schema                = file("${path.module}/../../../schemas/postgresql-qualification-evidence.schema.json")
     integration_runtime_contract     = file("${path.module}/../../../scripts/integration_runtime_contract.py")
   })
   rocky_bootstrap_payload = jsonencode(local.rocky_bootstrap_sources)

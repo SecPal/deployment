@@ -530,7 +530,7 @@ def validate_rocky_control_plane(root: Path) -> None:
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
     main += read(root, "infra/ci-cloud/gcp-rocky/metadata.tf")
     source_names = set(re.findall(
-        r"^\s+(\w+)\s*=\s*(?:file\(|var\.(?:postgresql_candidate_json|product_backend_policy_json)\s*$)",
+        r"^\s+(\w+)\s*=\s*(?:file\(|var\.(?:postgresql_candidate_json|product_backend_policy_json)\s*$|local\.postgresql_probe_manifest\s*$)",
         read(root, "infra/ci-cloud/gcp-rocky/metadata.tf"), re.MULTILINE,
     ))
     installer_names = {

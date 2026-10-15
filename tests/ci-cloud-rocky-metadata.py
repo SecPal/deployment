@@ -21,6 +21,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 TF_ROOT = ROOT / 'infra/ci-cloud/gcp-rocky'
+sys.path.insert(0, str(ROOT / 'scripts/ci-cloud'))
+import postgresql_qualification_contract as postgresql
 
 
 def fixture(architecture):
@@ -129,6 +131,14 @@ locals {
   })
 }
 '''
+        # Historical layout really transported controller/schema bytes. Restore
+        # those inputs only in this isolated rejection fixture, never the guest.
+        old = (ROOT / 'tests/fixtures/rocky-bootstrap-before-289.tftpl').read_text()
+        destinations = dict(re.findall(r"decode_script '\$\{(\w+)_base64gzip\}' /opt/secpal-control/([^\s]+)", old))
+        controller_inputs = ','.join(name + ' = file("${path.module}/../../../' + path + '")'
+            for name, path in destinations.items() if path in postgresql.CONTROL_PROBE_PATHS)
+        original = original.replace('local.rocky_bootstrap_sources', 'local.legacy_sources')
+        original += '\nlocals { legacy_sources = merge(local.rocky_bootstrap_sources, {' + controller_inputs + '}) }\n'
         source = self.canonical.replace('"startup-script"                     = local.rocky_startup',
                                         '"startup-script"                     = local.legacy_startup') + original
         (self.module / 'metadata.tf').write_text(source)
@@ -143,15 +153,48 @@ locals {
                 self.assertFalse(rendered['report']['admitted'])
                 self.assert_rejected_before_provisioning('ROCKY_METADATA_VALUE_TOO_LARGE')
 
+    def test_postgresql_policy_has_a_real_install_destination(self):
+        import shlex
+        startup = self.render('amd64')['metadata']['startup-script']
+        destination = re.search(r"decode_script 'postgresql_selinux' (\S+)", startup).group(1)
+        prefix = startup.split("decode_script 'postgresql_selinux'", 1)[0]
+        directories = []
+        for line in prefix.replace(chr(92) + chr(10), ' ').splitlines():
+            if line.startswith('install -d '):
+                directories.extend(value for value in shlex.split(line)
+                                   if value.startswith('/opt/secpal-control'))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = [str(root / value.lstrip('/')) for value in directories]
+            subprocess.run(['install', '-d', '-m', '0755', *paths], check=True)
+            source = ROOT / 'config/production/selinux/secpal_native_postgresql.cil'
+            target = root / destination.lstrip('/')
+            result = subprocess.run(['install', '-m', '0644', str(source), str(target)],
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(source.read_bytes(), target.read_bytes())
+
     def test_real_candidate_complete_sources_and_bash_fit_both_profiles(self):
         old = (ROOT / 'tests/fixtures/rocky-bootstrap-before-289.tftpl').read_text()
         expected = set(re.findall(r'\$\{(\w+)_base64gzip\}', old))
+        destinations = dict(re.findall(r"decode_script '\$\{(\w+)_base64gzip\}' /opt/secpal-control/([^\s]+)", old))
+        control_components = {name for name, path in destinations.items() if path in postgresql.CONTROL_PROBE_PATHS}
+        expected = (expected - control_components) | {'postgresql_probe_manifest', 'postgresql_selinux'}
         for architecture in ('amd64', 'arm64'):
             with self.subTest(architecture=architecture):
                 rendered = self.render(architecture)
                 script = rendered['metadata']['startup-script']
                 self.assertTrue(rendered['report']['admitted'])
                 self.assertEqual(expected, set(rendered['sources']))
+                self.assertTrue(control_components.isdisjoint(rendered['sources']))
+                manifest = json.loads(rendered['sources']['postgresql_probe_manifest'])
+                self.assertEqual(set(manifest), set(postgresql.PROBE_PATHS))
+                for path in postgresql.PROBE_PATHS:
+                    self.assertEqual(manifest[path], hashlib.sha256((ROOT/path).read_bytes()).hexdigest())
+                template = (ROOT/'scripts/ci-cloud/bootstrap-rocky-host.tftpl').read_text()
+                guest_paths = set(re.findall(r"decode_script '[^']+' /opt/secpal-control/([^\s]+)", template))
+                self.assertTrue(set(postgresql.GUEST_PROBE_PATHS) <= guest_paths)
+                self.assertTrue(set(postgresql.CONTROL_PROBE_PATHS).isdisjoint(guest_paths))
                 result, files = self.reconstruct(script)
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertTrue({k: v.encode() for k, v in rendered['sources'].items()} == files, 'source bytes differ')

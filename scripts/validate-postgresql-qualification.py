@@ -34,7 +34,7 @@ def validate(root: Path):
                 raise ValueError('pure admission acquires execution capability')
         elif isinstance(node, ast.Attribute) and node.attr in {'read_text', 'read_bytes', 'write_text', 'write_bytes', 'resolve', 'exists'}:
             raise ValueError('pure admission acquires filesystem capability')
-    if imports != {'__future__', 'hashlib', 'json', 're', 'typing', 'rocky_preparation_contract'} or imports & rocky.FORBIDDEN_PURE_IMPORTS:
+    if imports != {'__future__', 'base64', 'hashlib', 'ipaddress', 'json', 're', 'typing', 'rocky_preparation_contract'} or imports & rocky.FORBIDDEN_PURE_IMPORTS:
         raise ValueError('pure admission import closure changed')
     # The shared RPM authority has its existing architecture gate; do not redefine it.
     rocky.validate_pure_contract(root / 'scripts/ci-cloud/rocky_preparation_contract.py')
@@ -48,13 +48,17 @@ def validate(root: Path):
     runner = (root / 'scripts/ci-cloud/qualify-native-postgresql.py').read_text()
     control = (root / 'scripts/ci-cloud/postgresql-qualification-control.py').read_text()
     workflow = (root / '.github/workflows/rocky-cloud-qualification.yml').read_text()
-    for source in (runner, control):
+    reference = (root / 'scripts/ci-cloud/postgresql-reference-host.py').read_text()
+    for source in (runner, control, reference):
         parsed = ast.parse(source)
         for node in ast.walk(parsed):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {'eval', 'exec', 'compile', '__import__'}:
                 raise ValueError('trusted operation has arbitrary execution')
             if isinstance(node, ast.Call) and any(k.arg == 'shell' and not isinstance(k.value, ast.Constant) or k.arg == 'shell' and k.value.value is not False for k in node.keywords):
                 raise ValueError('trusted command acquires shell execution')
+    for required in ('StrictHostKeyChecking=yes', 'GlobalKnownHostsFile=/dev/null', 'authenticate_control(', 'claim(directory,', 'contract.admit_evidence(', 'contract.admit_diagnostic('):
+        if required not in reference:
+            raise ValueError('reference-host authenticated transport/admission boundary missing')
     if 'subprocess.run(' in runner or 'capture_output=True' in runner:
         raise ValueError('trusted observation bypasses bounded process collection')
     if 'http://169.254.169.254' in runner:

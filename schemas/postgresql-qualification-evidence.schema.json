@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/SecPal/deployment/schemas/postgresql-qualification-evidence.schema.json",
-  "title": "Independent native PostgreSQL qualification composed with frozen Rocky host admission",
+  "title": "Independent native PostgreSQL qualification with authenticated host admission",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,8 +10,6 @@
     "authorization",
     "qualification_run_id",
     "qualification_run_attempt",
-    "instance_id",
-    "instance_name",
     "architecture",
     "host_admission",
     "packages",
@@ -92,7 +90,12 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "profile": {
-          "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+          "enum": [
+            "gcp-rocky-10-2-arm64",
+            "gcp-rocky-10-2-x86-64",
+            "reference-rocky-10-2-amd64",
+            "reference-rocky-10-2-arm64"
+          ]
         },
         "run_id": {
           "type": "string",
@@ -121,8 +124,57 @@
           "type": "string",
           "maxLength": 40,
           "pattern": "^[0-9a-f]{40}$"
+        },
+        "reference_host": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["machine_id", "address", "ssh_host_key"],
+          "properties": {
+            "machine_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "maxLength": 32
+            },
+            "address": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 45
+            },
+            "ssh_host_key": {
+              "type": "string",
+              "pattern": "^ssh-ed25519 [A-Za-z0-9+/]{68}$",
+              "maxLength": 80
+            }
+          }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "profile": {
+                "enum": [
+                  "reference-rocky-10-2-amd64",
+                  "reference-rocky-10-2-arm64"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": ["reference_host"],
+            "properties": {
+              "pull_request": {
+                "const": 286
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": ["reference_host"]
+            }
+          }
+        }
+      ]
     },
     "qualification_run_id": {
       "type": "string",
@@ -148,22 +200,171 @@
       "enum": ["x86_64", "aarch64"]
     },
     "host_admission": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["target_sha", "harness_sha256", "evidence_sha256"],
-      "properties": {
-        "target_sha": {
-          "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_sha", "harness_sha256", "evidence_sha256"],
+          "properties": {
+            "target_sha": {
+              "const": "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+            },
+            "harness_sha256": {
+              "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+            },
+            "evidence_sha256": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
         },
-        "harness_sha256": {
-          "const": "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
-        },
-        "evidence_sha256": {
-          "type": "string",
-          "maxLength": 64,
-          "pattern": "^[0-9a-f]{64}$"
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reference_host_facts", "evidence_sha256"],
+          "properties": {
+            "reference_host_facts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "machine_id",
+                "address",
+                "ssh_host_key",
+                "os_release",
+                "architecture",
+                "selinux",
+                "runtime"
+              ],
+              "properties": {
+                "machine_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{32}$",
+                  "maxLength": 32
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 45
+                },
+                "ssh_host_key": {
+                  "type": "string",
+                  "pattern": "^ssh-ed25519 [A-Za-z0-9+/]{68}$",
+                  "maxLength": 80
+                },
+                "os_release": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["ID", "VERSION_ID"],
+                  "properties": {
+                    "ID": {
+                      "const": "rocky"
+                    },
+                    "VERSION_ID": {
+                      "type": "string",
+                      "pattern": "^10\\.(?:[2-9]|[1-9][0-9])$",
+                      "maxLength": 5
+                    }
+                  }
+                },
+                "architecture": {
+                  "enum": ["x86_64", "aarch64"]
+                },
+                "selinux": {
+                  "const": "Enforcing"
+                },
+                "runtime": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "podman_host",
+                    "cgroup_filesystem",
+                    "systemd_user",
+                    "socket_exists",
+                    "podman_socket_enabled",
+                    "container_host_present",
+                    "sudo_authorized",
+                    "uid",
+                    "gid",
+                    "groups"
+                  ],
+                  "properties": {
+                    "podman_host": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "security",
+                        "ociRuntime",
+                        "networkBackend",
+                        "serviceIsRemote"
+                      ],
+                      "properties": {
+                        "security": {
+                          "const": {
+                            "rootless": true,
+                            "seccompEnabled": true
+                          }
+                        },
+                        "ociRuntime": {
+                          "const": {
+                            "name": "crun"
+                          }
+                        },
+                        "networkBackend": {
+                          "const": "netavark"
+                        },
+                        "serviceIsRemote": {
+                          "const": false
+                        }
+                      }
+                    },
+                    "cgroup_filesystem": {
+                      "const": "cgroup2fs"
+                    },
+                    "systemd_user": {
+                      "const": "active"
+                    },
+                    "socket_exists": {
+                      "const": false
+                    },
+                    "podman_socket_enabled": {
+                      "const": false
+                    },
+                    "container_host_present": {
+                      "const": false
+                    },
+                    "sudo_authorized": {
+                      "const": false
+                    },
+                    "uid": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "gid": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "groups": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 1,
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "evidence_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "maxLength": 64
+            }
+          }
         }
-      }
+      ]
     },
     "packages": {
       "type": "object",
@@ -373,9 +574,60 @@
         "settings",
         "tls_material",
         "issued_logins",
-        "application"
+        "application",
+        "native_storage"
       ],
       "properties": {
+        "native_storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data_directory", "headroom"],
+          "properties": {
+            "data_directory": {
+              "const": "/var/lib/pgsql/data"
+            },
+            "headroom": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "filesystem_total_bytes",
+                "free_bytes",
+                "free_percent",
+                "filesystem_total_inodes",
+                "free_inodes",
+                "free_inode_percent"
+              ],
+              "properties": {
+                "filesystem_total_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_percent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "filesystem_total_inodes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_inodes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_inode_percent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              }
+            }
+          }
+        },
         "container_servers": {
           "type": "array",
           "maxItems": 0
@@ -1174,6 +1426,75 @@
           "const": true
         }
       }
+    },
+    "reference_host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["machine_id", "address", "ssh_host_key"],
+      "properties": {
+        "machine_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$",
+          "maxLength": 32
+        },
+        "address": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 45
+        },
+        "ssh_host_key": {
+          "type": "string",
+          "pattern": "^ssh-ed25519 [A-Za-z0-9+/]{68}$",
+          "maxLength": 80
+        }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "authorization": {
+            "properties": {
+              "profile": {
+                "enum": [
+                  "reference-rocky-10-2-amd64",
+                  "reference-rocky-10-2-arm64"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["reference_host"],
+        "properties": {
+          "host_admission": {
+            "$ref": "#/properties/host_admission/oneOf/1"
+          }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": ["instance_id"]
+            },
+            {
+              "required": ["instance_name"]
+            }
+          ]
+        }
+      },
+      "else": {
+        "required": ["instance_id", "instance_name"],
+        "not": {
+          "required": ["reference_host"]
+        },
+        "properties": {
+          "host_admission": {
+            "$ref": "#/properties/host_admission/oneOf/0"
+          }
+        }
+      }
+    }
+  ]
 }

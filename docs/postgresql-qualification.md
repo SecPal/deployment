@@ -171,10 +171,10 @@ Guest cleanup verifies the exact client container and nft table absent, native
 service stopped, run-created PGDATA and test/server/client material absent and
 in-memory credentials forgotten. It also removes the exact application probe
 container, its run-owned image and private image-verification state, and verifies
-their absence. The existing control-plane cleanup then destroys only exact
-run-owned ephemeral resources and verifies provider absence. Guest cleanup is
-not provider cleanup. Both architecture runs must succeed and complete their
-provider cleanup before #81 claims real-system acceptance.
+their absence. In the cloud workflow, control-plane cleanup then destroys only
+exact run-owned ephemeral resources and verifies provider absence. Guest cleanup
+is separate from provider cleanup. Both cloud architecture runs must succeed and
+complete that provider cleanup before a cloud real-system claim is admitted.
 
 ## Validation and lifecycle
 
@@ -192,3 +192,103 @@ including both provider cleanup results. Any changed candidate HEAD, consumer,
 configuration, accepted control/probe or expired continuation invalidates a
 pending run. Do not replay stale preparation or substitute repository fixtures
 for a required system observation.
+
+The guest consumes the PostgreSQL runtime closure and a closed source-digest
+manifest. It does not execute the GitHub candidate resolver, reference SSH
+controller or evidence schema validators. Those control-side files remain bound
+by the same ordered SHA-256 source identity through the manifest; they are not
+copied into the guest startup payload. Before mutation, the root observer verifies
+all guest-required files against that manifest and compares the complete digest
+to its root-owned candidate authorization. Evidence/schema admission remains on
+the authenticated controller. Tests reconstruct the exact guest files and prove
+manifest agreement without reducing the 16 KiB candidate allowance, 24 KiB
+reserved headroom or byte-accurate metadata ceilings.
+
+## Provider-neutral reference hosts
+
+Issue #81 permits bounded reference-host evidence without GCP qualification.
+The reference-host transport is `scripts/ci-cloud/postgresql-reference-host.py`;
+invoke its accepted checkout with `python3 -I`. Before importing repository
+modules or opening the SSH identity, it compares raw checkout bytes with the
+signed current main tree and imports from a fresh private copy. Untracked
+modules and bytecode caches cannot enter that copy.
+it reuses the same source resolver, root PostgreSQL observer, application image,
+SQL probes, RPM admission, substantive evidence schema and cleanup. Its two
+closed profiles are `reference-rocky-10-2-amd64` and
+`reference-rocky-10-2-arm64`. Actual runs on **both** architectures are required.
+Contract fixtures establish admission behavior, never installed-host PASS.
+
+The reference representation binds an exact machine ID, canonical SSH address
+and Ed25519 host key instead of a GCP instance ID or frozen cloud-host artifact.
+The same claim and fact schema admit this representation; a provider name is
+neither required nor accepted as authority. OS observations must identify
+Rocky 10.2 or a later Rocky 10.x minor, the declared architecture and effective
+SELinux Enforcing. Runtime observations reuse the existing pure Rocky
+admissions for rootless/local Podman, crun, netavark, seccomp, cgroup v2, an
+active user service and absent runtime socket/API authority. The runtime account
+must have no sudo or supplementary group authority. Package versions and
+signatures remain separately pinned and admitted; accepting an OS minor does not qualify its PostgreSQL supply.
+
+Private operational authority must first designate a disposable **clean** test
+host, install the authenticated control bundle at `/opt/secpal-control`, prepare
+the rootless runtime baseline, and provide host-specific restricted SSH access
+for `secpal-cloud`. This repository does not provision a provider account or
+host, select arbitrary commands, or expose a general remote-root installer.
+The guest must contain no provider credentials or attached provider API
+authority; SSH forwards none. Private provisioning must establish this before
+the host is designated for qualification.
+The operational `app.secpal.dev` / `api.secpal.dev` server, customer hosts, real
+credentials and existing database state are excluded. Preparation must retain
+private ownership and teardown authority outside product evidence.
+
+The source resolver prepares one expiring candidate authorization in a private
+operation directory. A mode-0600 target JSON contains only `machine_id`,
+`address` and `ssh_host_key`. `prepare --architecture amd64|arm64 --run-id N
+--reference-host TARGET --operation-directory DIRECTORY` discovers the fixed
+candidate for #81 / #286, verifies signed commits and accepted control bytes, and
+writes `prepared.json` and the exact `probe-manifest.json`. It performs no host
+or provider mutation.
+
+Separately authorized private provisioning delivers that exact prepared
+artifact as root-owned mode-0600
+`/var/lib/secpal-rocky/postgresql-candidate.json`, plus the exact root-owned
+`postgresql-resource-binding.json` lease. The lease contains `control_sha`,
+`profile`, `access_run_id`, `access_run_attempt` and `reference_host`, matching
+the prepared authorization. It also prepares the existing root-owned `prepared`
+marker, evidence directory and non-writable control/state hierarchy. It installs
+`probe-manifest.json` as root-owned, non-writable
+`/opt/secpal-control/postgresql-probe-manifest.json`. Runtime
+accounts cannot alter these artifacts or qualification bytes. SSH authority
+must expire with this lease and allow only the two fixed qualification commands;
+it grants no fleet, production or reusable general root authority.
+
+`run --identity-file KEY --operation-directory DIRECTORY --apply` reauthenticates
+source/control and reserves the local one-use claim before any SSH call. SSH
+ignores caller configuration, pins the exact host key, disables agent/password
+interaction and forwarding, and bounds connection, output and runtime. The
+root `--reference-host-check` command independently observes machine identity,
+host key, OS and SELinux, and rejects PostgreSQL packages/data, running
+containers, previous claims and existing SecPal material before mutation. Only
+an exact matching lease/observation/qualifier digest permits the fixed root
+`--reference-host` command. Its root-owned exclusive claim prevents reuse even
+if a caller deletes local state. No candidate script or secret enters the guest.
+
+The controller retrieves bounded evidence directly through that authenticated
+execution, validates the existing schema and independently admits source,
+control, run, host, architecture, packages, application identity, all substantive
+probes and cleanup. It retains the observation separately before its final
+candidate recheck and admission. There is no caller-file PASS command. Unknown
+execution or cleanup state fails closed; bounded diagnostics are retained and
+no unchanged strategy is automatically retried. Private host teardown is
+separate from the required guest cleanup. A failed or unreachable host requires
+its retained diagnostics and separately authorized cleanup, not another run.
+
+This path requires independently authenticated accepted control containing the
+reference transport; staging or authorizing candidate source alone does not
+make candidate-local tooling a trusted grader or grant external execution.
+No run is authorized by these instructions. The original cloud workflow and
+its frozen #80 claim remain unchanged for separately authorized cloud work;
+GCP dispatch and GCP PASS are not prerequisites for this reference-host claim.
+Reference evidence grants no GCP/multi-provider qualification, Managed
+Production Acceptance, HA or customer-production acceptance. Synthetic test
+PKI proves protocol behavior and never substitutes for #100 production authority.
