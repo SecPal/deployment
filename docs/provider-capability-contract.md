@@ -157,10 +157,12 @@ not provisioning adapters. Their ownership, TTL, and exact-resource validation
 remain required until external resource and recovery responsibilities are
 independently discharged. The legacy GCP IAM role remains a reference for that
 authority; removing provisioning source does not authorize live IAM changes.
+The separate `gcp-rocky-janitor.py` remains an active fallback for current Rocky
+qualification resources, with its existing narrow ownership and TTL contract.
 
 The current Rocky qualification path does not expose a rebuild operation. A
-portable invocation against them must therefore treat rebuild as unsupported
-rather than approximating it. Their provider products, fixed regions, and machine
+portable invocation against it must therefore treat rebuild as unsupported
+rather than approximating it. Its provider products, fixed regions, and machine
 profiles remain reviewed qualification inputs and evidence, not portable
 architecture vocabulary or production placement policy.
 
