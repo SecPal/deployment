@@ -184,19 +184,27 @@ def validate_janitor_workflow(root: Path) -> None:
 
 def validate_opentofu(root: Path) -> None:
     # These provider configurations remain necessary for exact-state cleanup.
-    for directory, source, version in (
-        ("digitalocean", "digitalocean/digitalocean", "2.99.1"),
-        ("gcp", "hashicorp/google", "7.40.0"),
+    for directory, source in (
+        ("digitalocean", "digitalocean/digitalocean"),
+        ("gcp", "hashicorp/google"),
     ):
         versions = read(root, f"infra/ci-cloud/{directory}/versions.tf")
         lock = read(root, f"infra/ci-cloud/{directory}/.terraform.lock.hcl")
         require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
         require(f'source  = "{source}"' in versions, "cleanup provider source changed")
-        require(f'version = "= {version}"' in versions, "cleanup provider version must be exact")
+        # versions.tf owns the provider pin; the lock must agree with it.
+        provider_versions = re.findall(r'^\s*version\s*=\s*"([^"]*)"', versions, re.MULTILINE)
+        require(len(provider_versions) == 1, "cleanup provider must declare one version")
+        pin = re.fullmatch(r"= ([0-9]+\.[0-9]+\.[0-9]+)", provider_versions[0])
+        require(pin is not None, "cleanup provider version must be exact")
+        version = pin.group(1)
         require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
         require(f'provider "registry.opentofu.org/{source}"' in lock
                 and re.search(r'version\s*=\s*"' + re.escape(version) + r'"', lock),
                 "cleanup provider lock must match the pinned provider")
+        require(re.search(r'^\s*constraints\s*=\s*"' + re.escape(version) + r'"\s*$',
+                          lock, re.MULTILINE),
+                "cleanup provider lock constraints must match the pinned provider")
     gcp = read(root, "infra/ci-cloud/gcp/versions.tf")
     require('project                         = "secpal-dev"' in gcp
             and 'zone                            = "europe-west3-a"' in gcp

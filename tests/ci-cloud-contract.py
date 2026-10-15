@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -1331,12 +1332,73 @@ class CloudCIContractTests(unittest.TestCase):
         )
 
 
-    def test_rejects_mutable_provider_constraint(self) -> None:
-        self.assert_mutation_rejected(
-            "infra/ci-cloud/digitalocean/versions.tf",
-            'version = "= 2.99.1"',
-            'version = "~> 2.0"',
+    def cleanup_provider_version(self, directory: str) -> str:
+        versions = (ROOT / f"infra/ci-cloud/{directory}/versions.tf").read_text(
+            encoding="utf-8"
         )
+        match = re.search(r'^\s*version\s*=\s*"= ([0-9]+\.[0-9]+\.[0-9]+)"',
+                          versions, re.MULTILINE)
+        self.assertIsNotNone(match, "cleanup provider must declare an exact pin")
+        return match.group(1)
+
+
+    def test_accepts_consistent_cleanup_provider_updates(self) -> None:
+        # Static fixtures prove pin agreement, not provider package compatibility.
+        for directory in ("digitalocean", "gcp"):
+            with self.subTest(directory=directory):
+                version = self.cleanup_provider_version(directory)
+                major, minor, patch = map(int, version.split("."))
+                updated = f"{major}.{minor}.{patch + 1}"
+                fixture = self.mutated_root(
+                    f"infra/ci-cloud/{directory}/versions.tf",
+                    f'version = "= {version}"',
+                    f'version = "= {updated}"',
+                )
+                lock = fixture / f"infra/ci-cloud/{directory}/.terraform.lock.hcl"
+                document, count = re.subn(
+                    r'(^\s*(?:version|constraints)\s*=\s*")' + re.escape(version) + r'(")',
+                    lambda match: match.group(1) + updated + match.group(2),
+                    lock.read_text(encoding="utf-8"),
+                    flags=re.MULTILINE,
+                )
+                self.assertEqual(count, 2)
+                lock.write_text(document, encoding="utf-8")
+                result = self.run_validator(fixture)
+                self.assertEqual(0, result.returncode, result.stdout)
+                lock.write_text(document.replace(f'"{updated}"', f'"{version}"', 1),
+                                encoding="utf-8")
+                result = self.run_validator(fixture)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertIn("cleanup provider lock must match the pinned provider", result.stdout)
+
+
+    def test_rejects_mutable_provider_constraint(self) -> None:
+        for directory in ("digitalocean", "gcp"):
+            with self.subTest(directory=directory):
+                version = self.cleanup_provider_version(directory)
+                self.assert_mutation_rejected(
+                    f"infra/ci-cloud/{directory}/versions.tf",
+                    f'version = "= {version}"',
+                    f'version = "~> {version}"',
+                )
+
+
+    def test_rejects_cleanup_lock_constraint_drift(self) -> None:
+        for directory in ("digitalocean", "gcp"):
+            version = self.cleanup_provider_version(directory)
+            for replacement in ('constraints = "0.0.0"', f'constraints = "~> {version}"', ''):
+                with self.subTest(directory=directory, replacement=replacement):
+                    fixture = self.mutated_root(
+                        f"infra/ci-cloud/{directory}/.terraform.lock.hcl",
+                        f'constraints = "{version}"',
+                        replacement,
+                    )
+                    result = self.run_validator(fixture)
+                    self.assertNotEqual(0, result.returncode, result.stdout)
+                    self.assertIn(
+                        "cleanup provider lock constraints must match the pinned provider",
+                        result.stdout,
+                    )
 
 
 if __name__ == "__main__":

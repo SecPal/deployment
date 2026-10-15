@@ -3,7 +3,7 @@
 
 provider "registry.opentofu.org/hashicorp/google" {
   version     = "8.6.0"
-  constraints = "7.40.0"
+  constraints = "8.6.0"
   hashes = [
     "h1:/X3hxGbJLkRbkVlFiRuNGtcuILxbCOujpIl/EUZbXm4=",
     "h1:0mpLt/Q/B1wRzBoyE+7m5JwWLafn7zCZbCo6/wQRyUc=",
