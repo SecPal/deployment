@@ -63,7 +63,7 @@ install -d -o root -g root -m 0700 /var/lib/secpal-rocky /var/lib/secpal-rocky/e
 readonly qualification_readiness=/var/lib/secpal-rocky/qualification-readiness.json
 rm -f -- "$qualification_readiness"
 install -d -o root -g root -m 0755 /opt/secpal-control/scripts/ci-cloud \
-  /opt/secpal-control/config/ci-cloud /opt/secpal-control/schemas \
+  /opt/secpal-control/config/ci-cloud /opt/secpal-control/config/production/selinux /opt/secpal-control/schemas \
   /usr/local/libexec/secpal-control
 install -d -o root -g root -m 0700 /opt/secpal-control/libexec
 %{ if product_backend_policy_enabled ~}
@@ -72,6 +72,7 @@ install -d -o root -g root -m 0755 /opt/secpal-control/config/production/quadlet
   /opt/secpal-control/config/production/host-systemd
 decode_script 'backend_policy' /opt/secpal-control/scripts/product-backend-policy.py
 decode_script 'backend_contract' /opt/secpal-control/scripts/product_backend_contract.py
+decode_script 'backend_http_fixture' /opt/secpal-control/scripts/ci-cloud/product-backend-http-fixture.php
 decode_script 'backend_service' /opt/secpal-control/config/production/host-systemd/secpal-product-backend-policy.service
 decode_script 'backend_qualifier' /opt/secpal-control/scripts/ci-cloud/qualify-product-backends.py
 decode_script 'backend_qualification_contract' /opt/secpal-control/scripts/ci-cloud/product_backend_qualification_contract.py
@@ -88,17 +89,16 @@ decode_script backend_wrapper /usr/local/sbin/secpal-qualify-product-backends
 %{ endif ~}
 # Separate PostgreSQL authority; the frozen host harness/claim remains intact.
 %{ if !product_backend_policy_enabled ~}
+decode_script 'postgresql_probe_manifest' /opt/secpal-control/postgresql-probe-manifest.json
 decode_script 'postgresql_contract' /opt/secpal-control/scripts/ci-cloud/postgresql_qualification_contract.py
-decode_script 'postgresql_control' /opt/secpal-control/scripts/ci-cloud/postgresql-qualification-control.py
 decode_script 'postgresql_runner' /opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py
+decode_script 'postgresql_selinux' /opt/secpal-control/config/production/selinux/secpal_native_postgresql.cil
 decode_script 'postgresql_application_bootstrap' /opt/secpal-control/scripts/ci-cloud/postgresql-application-bootstrap.php
 decode_script 'postgresql_application_probe' /opt/secpal-control/scripts/ci-cloud/postgresql-application-probe.php
 decode_script 'image_attestation_runtime' /opt/secpal-control/scripts/image_attestation_runtime.py
 decode_script 'fetch_oci_attestation' /opt/secpal-control/scripts/fetch-oci-attestation.py
 decode_script 'postgresql_wrapper' /opt/secpal-control/scripts/ci-cloud/run-native-postgresql-qualification.sh
 decode_script 'postgresql_wrapper' /usr/local/sbin/secpal-qualify-native-postgresql
-decode_script 'postgresql_diagnostic_schema' /opt/secpal-control/schemas/postgresql-qualification-diagnostic.schema.json
-decode_script 'postgresql_schema' /opt/secpal-control/schemas/postgresql-qualification-evidence.schema.json
 decode_script 'postgresql_consumer' /opt/secpal-control/scripts/render-native-postgresql.py
 decode_script 'integration_runtime_contract' /opt/secpal-control/scripts/integration_runtime_contract.py
 %{ endif ~}

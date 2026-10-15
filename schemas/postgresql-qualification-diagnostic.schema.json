@@ -51,7 +51,23 @@
         "resolve-candidate",
         "start-postgresql",
         "validate-authorization",
-        "write-evidence"
+        "write-evidence",
+        "authenticate-reference-host",
+        "transport-reference-host",
+        "claim-reference-run",
+        "retrieve-reference-evidence",
+        "observe-reference-os",
+        "observe-reference-machine",
+        "observe-reference-key",
+        "observe-reference-runtime",
+        "observe-reference-cgroup",
+        "observe-reference-socket",
+        "observe-reference-containers",
+        "observe-reference-packages",
+        "observe-reference-user-service",
+        "observe-reference-sudo",
+        "observe-reference-environment",
+        "observe-reference-clean-state"
       ]
     },
     "reason": {
@@ -133,7 +149,12 @@
               "pattern": "^[0-9a-f]{64}$"
             },
             "profile": {
-              "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+              "enum": [
+                "gcp-rocky-10-2-arm64",
+                "gcp-rocky-10-2-x86-64",
+                "reference-rocky-10-2-amd64",
+                "reference-rocky-10-2-arm64"
+              ]
             },
             "run_id": {
               "type": "string",
@@ -162,8 +183,57 @@
               "type": "string",
               "maxLength": 40,
               "pattern": "^[0-9a-f]{40}$"
+            },
+            "reference_host": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["machine_id", "address", "ssh_host_key"],
+              "properties": {
+                "machine_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{32}$",
+                  "maxLength": 32
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 45
+                },
+                "ssh_host_key": {
+                  "type": "string",
+                  "pattern": "^ssh-ed25519 [A-Za-z0-9+/]{68}$",
+                  "maxLength": 80
+                }
+              }
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "profile": {
+                    "enum": [
+                      "reference-rocky-10-2-amd64",
+                      "reference-rocky-10-2-arm64"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": ["reference_host"],
+                "properties": {
+                  "pull_request": {
+                    "const": 286
+                  }
+                }
+              },
+              "else": {
+                "not": {
+                  "required": ["reference_host"]
+                }
+              }
+            }
+          ]
         },
         {
           "type": "null"
@@ -211,6 +281,62 @@
               "type": "string",
               "maxLength": 63,
               "pattern": "^sprk-[a-z0-9-]{1,55}-instance$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "control_sha",
+            "profile",
+            "access_run_id",
+            "access_run_attempt",
+            "reference_host"
+          ],
+          "properties": {
+            "control_sha": {
+              "type": "string",
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "profile": {
+              "enum": [
+                "reference-rocky-10-2-amd64",
+                "reference-rocky-10-2-arm64"
+              ]
+            },
+            "access_run_id": {
+              "type": "string",
+              "maxLength": 20,
+              "pattern": "^[1-9][0-9]{0,19}$"
+            },
+            "access_run_attempt": {
+              "type": "string",
+              "maxLength": 3,
+              "pattern": "^[1-9][0-9]{0,2}$"
+            },
+            "reference_host": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["machine_id", "address", "ssh_host_key"],
+              "properties": {
+                "machine_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{32}$",
+                  "maxLength": 32
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 45
+                },
+                "ssh_host_key": {
+                  "type": "string",
+                  "pattern": "^ssh-ed25519 [A-Za-z0-9+/]{68}$",
+                  "maxLength": 80
+                }
+              }
             }
           }
         },

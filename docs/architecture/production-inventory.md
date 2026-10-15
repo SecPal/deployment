@@ -128,8 +128,9 @@ and one from `/etc/subgid`. Starts and counts are strict integers; arithmetic
 overflow, a range in the supported host-identity space, malformed facts, a
 different account, multiple effective entries, overlap with another account,
 or an effective mapping that differs from inventory fails closed. The size maps
-all current known container identities without guessing the future PostgreSQL
-or Valkey identity.
+the frontend and API container identities. Native PostgreSQL storage and
+account identity belong to [the PostgreSQL contract](native-postgresql.md),
+outside the rootless inventory and subordinate-ID mapping. Valkey is absent.
 
 ### Rootless runtime host facts
 
@@ -187,9 +188,8 @@ path. ASCII control characters and character-count-only values that the target
 filesystem cannot safely represent fail admission.
 
 API private/public storage uses container `10001:10001` and mapped host
-`110000:210000`; PostgreSQL uses container `999:999` and host
-`100998:200998`; Valkey uses container `10002:10002` and host
-`110001:210001`. Runtime secret directories are root-owned with service group
+`110000:210000`. PostgreSQL uses its distribution host account and native
+PGDATA contract, outside Podman identity mapping; Valkey has no production identity. Runtime secret directories are root-owned with service group
 `20000` and mode `0710`. These values derive from the one D.2 rootless mapping
 rather than container/host identity equality. Edge, ACME, and CrowdSec
 identities remain explicitly delegated rather than guessed. Podman graphroot

@@ -24,6 +24,7 @@ from yaml.nodes import MappingNode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "ci-cloud"))
 import rocky_preparation_contract as host_provenance
+import postgresql_qualification_contract as native_postgresql
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -228,16 +229,6 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
         "lifecycle": "reconstructable",
         "decision_issue": None,
     },
-    "postgresql_data": {
-        "owner_role": "state-contract",
-        "uid": 100998,
-        "gid": 200998,
-        "container_uid": 999,
-        "container_gid": 999,
-        "mode": "0700",
-        "lifecycle": "persistent",
-        "decision_issue": None,
-    },
     "private_application_storage": {
         "owner_role": "state-contract",
         "uid": 110000,
@@ -255,16 +246,6 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
         "container_uid": 10001,
         "container_gid": 10001,
         "mode": "0750",
-        "lifecycle": "persistent",
-        "decision_issue": None,
-    },
-    "valkey_data": {
-        "owner_role": "state-contract",
-        "uid": 110001,
-        "gid": 210001,
-        "container_uid": 10002,
-        "container_gid": 10002,
-        "mode": "0700",
         "lifecycle": "persistent",
         "decision_issue": None,
     },
@@ -325,10 +306,8 @@ CANONICAL_PATHS: dict[str, dict[str, Any]] = {
 
 HEADROOM_MINIMUMS = {
     "podman_graph_root": (21474836480, 200000),
-    "postgresql_data": (21474836480, 200000),
     "private_application_storage": (10737418240, 100000),
     "public_application_storage": (1073741824, 20000),
-    "valkey_data": (2147483648, 20000),
     "logs": (5368709120, 50000),
     "edge_state": (2147483648, 20000),
     "acme_state": (1073741824, 20000),
@@ -1304,6 +1283,10 @@ def validate_host_facts(
     validate_tool_facts(facts["tools"])
     validate_filesystem_facts(inventory, facts["filesystems"])
     validate_resource_facts(inventory, facts["resources"])
+    try:
+        native_postgresql.admit_native_storage(facts["native_postgresql"])
+    except native_postgresql.QualificationError:
+        raise ContractViolation("native PostgreSQL data capacity is insufficient or invalid") from None
 
 
 def parse_arguments() -> argparse.Namespace:
