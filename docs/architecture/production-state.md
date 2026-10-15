@@ -7,7 +7,16 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status and authority
 
-This document describes the retained D.2 persistence and product-role contracts.
+This document records retained D.2 declarations and their historical persistence
+semantics. They are not the current Managed Private Object Storage architecture.
+Current [#87](https://github.com/SecPal/deployment/issues/87) and
+[#88](https://github.com/SecPal/deployment/issues/88) supersede Managed-local
+authoritative private files. [#99](https://github.com/SecPal/deployment/issues/99)
+owns the provider-neutral, topology-neutral authoritative Private Object Storage
+contract: Managed Objects are off-host, and any Self-Hosted local adapter must
+preserve the same object semantics and independent recovery requirements. That
+contract is not implemented or qualified by the native runtime fixture below.
+
 The superseded PostgreSQL product container and initializer are no longer an
 implemented production path. Until the separately owned host-native PostgreSQL
 work lands, this tree deliberately has no completed production PostgreSQL
@@ -16,10 +25,11 @@ manager, and native Quadlet. This is not a live-host installation or a backup
 implementation.
 
 [`config/production/state-contract.json`](../../config/production/state-contract.json)
-is the one authoritative persistence matrix. The checked Quadlets are generated
-from it, and the production-state tests reject drift between the matrix,
-renderer, inventory, and checked declarations. This document explains the
-contract; it does not create a second metadata authority.
+is the metadata source for the retained declarations. The checked Quadlets are
+generated from it, and the production-state tests reject drift between the
+matrix, renderer, inventory, and checked declarations. That consistency evidence
+does not establish current Object Storage acceptance or qualify a local adapter.
+The historical storage rows below do not compete with #99's architecture authority.
 
 The matrix uses strict JSON so the production host reads it with Python's
 standard library and D.2 adds no undeclared PyYAML runtime dependency. The
@@ -178,18 +188,39 @@ state may not be discarded without an explicit recovery decision.
 `tests/production-state-contract.py` derives the checked Quadlets, creates only
 an explicit fixture root, records PostgreSQL/private/Valkey inode and ownership
 metadata, models every lifecycle phase, and proves bounded fixture cleanup.
-`tests/production-state-native-lifecycle.sh` additionally runs the checked
-production set through Podman 5.4.2's native user generator. Its disposable
-service is rendered from the canonical private-storage row, exact API
-`10001:10001` identity, and production `/app/storage/app/private` bind target.
-Through the real systemd user manager it performs controlled stop/start,
-removes and recreates the rootless container, and verifies the same bind-source
-bytes, inode, mapped owner/group, mode, and size. Generic validation reports an
-explicit unavailable result if the admitted generator, reviewed local image,
-or user bus is absent. The native Local Integration job sets the required-mode
-gate after staging reviewed images, so any missing or invalid native capability
-there fails instead of becoming a skip. The lifecycle proof never contacts a
-registry itself. D.1a remains the complete product-role parity proof.
+`tests/production-state-native-lifecycle.sh` runs the retained declarations
+through the admitted native user generator and independently proves a disposable
+rootless runtime bind lifecycle. The probe uses the reviewed API `10001:10001`
+identity, a temporary `state` directory, and `/fixture-state`; it does not derive
+from a production storage row or mount `/app/storage/app/private`. One fixture
+container owns the source, so Podman's `relabel=private` applies a private MCS
+label only to that disposable bind. Production declarations are not relabeled.
+Through the real systemd user manager the probe performs stop/start and container
+recreation and verifies the same bytes, inode, mapped owner/group, mode, and size.
+These checks prove runtime persistence only, not authoritative Private Objects,
+object durability, a Self-Hosted adapter, backup or recovery.
+
+Preflight invokes the native lifecycle and its capability/cleanup gate. Local
+Integration also invokes the lifecycle in required mode after staging reviewed
+images. The renderer test rejects production-storage coupling and checks the
+single disposable mount; cleanup tests retain symlink refusal and signal cleanup.
+The PostgreSQL retirement guard scans the script for forbidden server-container
+execution, and the repository contract keeps both scripts in its maintained
+inventory. These callers preserve current runtime evidence without making the
+historical D.2 storage assertion current production truth.
+
+Optional validation reports an explicit SKIP if the admitted generator, reviewed
+local image or user bus is absent; required mode fails instead. Failure on a
+capable host remains failure. The lifecycle proof never contacts a registry.
+
+The original Enforcing-host write denial was historical trigger evidence for
+[#296](https://github.com/SecPal/deployment/issues/296). Before its implementation,
+[#293](https://github.com/SecPal/deployment/pull/293), delivering #101, independently
+added the disposable private relabel in merge commit
+`7f8c4610c0695cebfcb025a1192a5092907a9260`. Current-main write, stop/start and
+recreation then passed. #296 narrows obsolete semantic authority; it does not
+recreate that resolved runtime failure. Historical D.2 evidence remains in Git
+and [#77](https://github.com/SecPal/deployment/pull/77).
 
 ## D.7 handoff
 

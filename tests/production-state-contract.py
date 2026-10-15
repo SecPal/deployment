@@ -300,20 +300,41 @@ class ProductionStateContractTest(unittest.TestCase):
                 units[name],
             )
 
-    def test_native_lifecycle_fixture_uses_canonical_private_storage_seam(self) -> None:
-        fixture = Path("/tmp/secpal-d2-native.example")
+    def test_native_lifecycle_fixture_has_no_production_storage_authority(self) -> None:
+        fixture = Path("/tmp/secpal-native.example")
         rendered = self.renderer.build_native_lifecycle_fixture_unit(
-            self.contract, fixture, "d2-native-example"
+            self.contract, fixture, "native-example"
         )
+        self.assertNotIn("D.2", rendered)
+        self.assertNotIn("private-storage", rendered)
+        self.assertNotIn("/app/storage/app/private", rendered)
+        self.assertNotIn("Label=org.secpal.production=true", rendered)
+        self.assertNotIn("PartOf=secpal.target", rendered)
         self.assertIn("User=10001", rendered)
         self.assertIn("Group=10001", rendered)
-        self.assertIn(
-            "source=/tmp/secpal-d2-native.example/srv/secpal/private-storage,"
-            "target=/app/storage/app/private,rw=true",
-            rendered,
+        self.assertEqual(
+            [line for line in rendered.splitlines() if line.startswith("Mount=")],
+            ["Mount=type=bind,source=/tmp/secpal-native.example/state,"
+             "target=/fixture-state,rw=true,relabel=private"],
         )
-        self.assertNotIn("target=/state", rendered)
-        self.assertIn("rw=true,relabel=private", rendered)
+        # Runtime evidence must not depend on the superseded local-authoritative
+        # production storage row. #99 owns the replacement Object Storage contract.
+        from copy import deepcopy
+
+        without_storage = deepcopy(self.contract)
+        del without_storage["objects"]["private_application_storage"]
+        self.assertEqual(
+            rendered,
+            self.renderer.build_native_lifecycle_fixture_unit(
+                without_storage, fixture, "native-example"
+            ),
+        )
+        lifecycle = (ROOT / "tests/production-state-native-lifecycle.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("d2-native", lifecycle)
+        self.assertNotIn("private-storage", lifecycle)
+        self.assertIn('STATE_PATH="$FIXTURE_ROOT/state"', lifecycle)
 
     def test_secret_values_never_enter_rendered_or_runtime_metadata(self) -> None:
         rendered = "\n".join(self.renderer.build_units(self.contract).values())
