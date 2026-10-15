@@ -12,6 +12,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -69,6 +70,15 @@ class TransportContract(unittest.TestCase):
 
     def test_schema_agreement(self):
         self.assertEqual(json.loads((ROOT/'schemas/instance-insert-transport-evidence.schema.json').read_text()), contract.schema())
+
+    def test_provider_pin_and_lock_agree_with_transport_authority(self):
+        version = contract.schema()['properties']['google_provider_version']['const']
+        root = ROOT/'infra/ci-cloud/gcp-rocky'
+        self.assertRegex((root/'versions.tf').read_text(),
+                         r'version\s*=\s*"= ' + re.escape(version) + r'"')
+        lock = (root/'.terraform.lock.hcl').read_bytes()
+        self.assertEqual(hashlib.sha256(lock).hexdigest(), observer.GOOGLE_LOCK_SHA256)
+        self.assertIn(f'/hashicorp/google/{version}/linux_amd64', str(observer.GOOGLE_INSTALL))
 
     def test_exact_socket_counters_and_payload_exclusion(self):
         listener = socket.socket(); listener.bind(('127.0.0.1',0)); listener.listen(1)
@@ -285,14 +295,14 @@ class TransportContract(unittest.TestCase):
                 if mutation=='missing': executable.unlink()
                 if mutation=='nonexecutable': executable.chmod(0o644)
                 if mutation=='ambiguous':
-                    extra=executable.with_name('terraform-provider-google_v7.40.0_x5')
+                    extra=executable.with_name(f'terraform-provider-google_v{contract.GOOGLE_PROVIDER_VERSION}_x5')
                     extra.write_bytes(b'unrelated'); extra.chmod(0o755)
                 if mutation=='content': executable.write_bytes(b'unrelated same-basename executable')
-                if mutation=='version': executable.parent.parent.rename(executable.parent.parent.with_name('7.40.1'))
+                if mutation=='version': executable.parent.parent.rename(executable.parent.parent.with_name('0.0.0'))
                 if mutation=='source':
                     source=root/'.terraform/providers/registry.opentofu.org/hashicorp'
                     source.rename(source.with_name('unrelated'))
-                if mutation=='lock': lock.write_text(lock.read_text().replace('7.40.0','7.40.1'))
+                if mutation=='lock': lock.write_text(lock.read_text().replace(contract.GOOGLE_PROVIDER_VERSION,'0.0.0'))
                 if mutation in ('lock_symlink','file_symlink'):
                     path=lock if mutation=='lock_symlink' else executable
                     external=root/'external'; path.rename(external); path.symlink_to(external)

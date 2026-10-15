@@ -37,12 +37,12 @@ MAX_FDS = 4096
 SAMPLE_INTERVAL = 0.2
 
 # Authority: accepted gcp-rocky lock and its readonly OpenTofu 1.12.5
-# installation of registry.opentofu.org/hashicorp/google 7.40.0 linux_amd64.
+# installation of registry.opentofu.org/hashicorp/google linux_amd64.
 # The signed, lock-admitted package installs this exact filename and content.
-GOOGLE_INSTALL = Path('.terraform/providers/registry.opentofu.org/hashicorp/google/7.40.0/linux_amd64')
+GOOGLE_INSTALL = Path(f'.terraform/providers/registry.opentofu.org/hashicorp/google/{contract.GOOGLE_PROVIDER_VERSION}/linux_amd64')
 GOOGLE_EXECUTABLE = 'terraform-provider-google'
-GOOGLE_EXECUTABLE_SHA256 = '70351ed626f69ac84315e8ed5149986eafd7628c8d4b0eda4422f82665ec41e9'
-GOOGLE_LOCK_SHA256 = '76f52a817f68fcb058bf499482070b4ff39098628c497a95ff8de2b42363e94c'
+GOOGLE_EXECUTABLE_SHA256 = 'cbf6f96fdb795e6e7efc265bfcc92697236ac41e33f3af2cfce0db60fd4b1369'
+GOOGLE_LOCK_SHA256 = '488a9a5be05418dadf3eaa0f08a3723ff808e2b18359a8b394cfd6ee72028806'
 
 
 def file_identity(metadata):

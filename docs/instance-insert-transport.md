@@ -13,7 +13,7 @@ provider authority and accepted protected-main control.
 
 ## Mechanism and design decision
 
-The actual producer remains OpenTofu 1.12.5, hashicorp/google 7.40.0 and
+The actual producer uses OpenTofu 1.12.5, hashicorp/google 8.6.0 and
 `tofu apply --auto-approve --input=false`. Its arguments, working directory,
 environment and standard streams are inherited unchanged. Observation neither
 reads nor changes proxy configuration, DNS, TLS trust, HTTP selection, timeout,
@@ -29,6 +29,16 @@ socket cookies; it initially rejects everything. The bounded filter inspects
 only the kernel diagnostic header's two cookie words. It never inspects network
 packets or application bytes. No packet capture, PCAP, TLS secrets, tracing hooks,
 provider fork, second client or raw diagnostic file is needed.
+
+`infra/ci-cloud/gcp-rocky/versions.tf` owns the exact provider version. Preflight
+requires agreement with the lock version and constraints, the transport owner's
+version, the exported schema and the observer's lock digest. Schema, assembly,
+installation path and the local provider regression derive their version from
+`instance_transport_contract.GOOGLE_PROVIDER_VERSION`. The observer retains an
+explicit executable SHA-256, admitted from the signed package using readonly
+OpenTofu initialization. A provider update must revalidate that package and the
+loopback regression; changing a version string alone cannot admit it. This local
+evidence establishes transport compatibility, not successful cloud provisioning.
 
 The process boundary is the apply observer and its descendant locked Google
 provider executable, including children created from any Go OS thread. Linux
