@@ -320,6 +320,7 @@ def build_host_units(contract: dict) -> dict[str, str]:
         'After=nftables.service', f'Before=user@{uid}.service',
     ]) + section('Service', [
         'Type=oneshot', 'RemainAfterExit=yes',
+        'ExecStartPre=/usr/sbin/nft --check create table inet secpal_postgresql',
         'ExecStartPre=/usr/sbin/nft --check -f /etc/nftables/secpal-postgresql.nft',
         'ExecStart=/usr/sbin/nft -f /etc/nftables/secpal-postgresql.nft',
         'ExecStop=/usr/sbin/nft delete table inet secpal_postgresql',
