@@ -6,12 +6,12 @@ version: 1
 classifications:
   - directory: infra/ci-cloud/digitalocean
     ecosystem: opentofu
-    reason: Retained Debian module and provider lock are OpenTofu-owned; cloud execution is retired.
+    reason: Cleanup-only OpenTofu provider and lock retain state-driven destruction; provisioning is retired.
     reviewed-by: "@aroviqen"
     reviewed-on: "2026-10-15"
   - directory: infra/ci-cloud/gcp
     ecosystem: opentofu
-    reason: Retained Debian module and provider lock are OpenTofu-owned; cloud execution is retired.
+    reason: Cleanup-only OpenTofu provider and lock retain state-driven destruction; provisioning is retired.
     reviewed-by: "@aroviqen"
     reviewed-on: "2026-10-15"
   - directory: infra/ci-cloud/gcp-rocky
