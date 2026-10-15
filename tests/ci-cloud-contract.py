@@ -1334,7 +1334,7 @@ class CloudCIContractTests(unittest.TestCase):
     def test_rejects_mutable_provider_constraint(self) -> None:
         self.assert_mutation_rejected(
             "infra/ci-cloud/digitalocean/versions.tf",
-            'version = "= 2.99.1"',
+            'version = "= 2.106.0"',
             'version = "~> 2.0"',
         )
 

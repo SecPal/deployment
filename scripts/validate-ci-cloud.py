@@ -185,7 +185,7 @@ def validate_janitor_workflow(root: Path) -> None:
 def validate_opentofu(root: Path) -> None:
     # These provider configurations remain necessary for exact-state cleanup.
     for directory, source, version in (
-        ("digitalocean", "digitalocean/digitalocean", "2.99.1"),
+        ("digitalocean", "digitalocean/digitalocean", "2.106.0"),
         ("gcp", "hashicorp/google", "7.40.0"),
     ):
         versions = read(root, f"infra/ci-cloud/{directory}/versions.tf")
