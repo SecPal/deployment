@@ -63,7 +63,7 @@ install -d -o root -g root -m 0700 /var/lib/secpal-rocky /var/lib/secpal-rocky/e
 readonly qualification_readiness=/var/lib/secpal-rocky/qualification-readiness.json
 rm -f -- "$qualification_readiness"
 install -d -o root -g root -m 0755 /opt/secpal-control/scripts/ci-cloud \
-  /opt/secpal-control/config/ci-cloud /opt/secpal-control/schemas \
+  /opt/secpal-control/config/ci-cloud /opt/secpal-control/config/production/selinux /opt/secpal-control/schemas \
   /usr/local/libexec/secpal-control
 install -d -o root -g root -m 0700 /opt/secpal-control/libexec
 %{ if product_backend_policy_enabled ~}
@@ -72,6 +72,7 @@ install -d -o root -g root -m 0755 /opt/secpal-control/config/production/quadlet
   /opt/secpal-control/config/production/host-systemd
 decode_script 'backend_policy' /opt/secpal-control/scripts/product-backend-policy.py
 decode_script 'backend_contract' /opt/secpal-control/scripts/product_backend_contract.py
+decode_script 'backend_http_fixture' /opt/secpal-control/scripts/ci-cloud/product-backend-http-fixture.php
 decode_script 'backend_service' /opt/secpal-control/config/production/host-systemd/secpal-product-backend-policy.service
 decode_script 'backend_qualifier' /opt/secpal-control/scripts/ci-cloud/qualify-product-backends.py
 decode_script 'backend_qualification_contract' /opt/secpal-control/scripts/ci-cloud/product_backend_qualification_contract.py

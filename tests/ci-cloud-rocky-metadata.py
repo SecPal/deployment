@@ -153,6 +153,27 @@ locals {
                 self.assertFalse(rendered['report']['admitted'])
                 self.assert_rejected_before_provisioning('ROCKY_METADATA_VALUE_TOO_LARGE')
 
+    def test_postgresql_policy_has_a_real_install_destination(self):
+        import shlex
+        startup = self.render('amd64')['metadata']['startup-script']
+        destination = re.search(r"decode_script 'postgresql_selinux' (\S+)", startup).group(1)
+        prefix = startup.split("decode_script 'postgresql_selinux'", 1)[0]
+        directories = []
+        for line in prefix.replace(chr(92) + chr(10), ' ').splitlines():
+            if line.startswith('install -d '):
+                directories.extend(value for value in shlex.split(line)
+                                   if value.startswith('/opt/secpal-control'))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = [str(root / value.lstrip('/')) for value in directories]
+            subprocess.run(['install', '-d', '-m', '0755', *paths], check=True)
+            source = ROOT / 'config/production/selinux/secpal_native_postgresql.cil'
+            target = root / destination.lstrip('/')
+            result = subprocess.run(['install', '-m', '0644', str(source), str(target)],
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(source.read_bytes(), target.read_bytes())
+
     def test_real_candidate_complete_sources_and_bash_fit_both_profiles(self):
         old = (ROOT / 'tests/fixtures/rocky-bootstrap-before-289.tftpl').read_text()
         expected = set(re.findall(r'\$\{(\w+)_base64gzip\}', old))

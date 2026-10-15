@@ -46,6 +46,13 @@ class BackendContractTest(unittest.TestCase):
         with mock.patch.object(policy, "administrator_authority"), mock.patch.object(policy, "runtime_identity", return_value=account), mock.patch.object(policy, "READY"), mock.patch.object(policy, "observe", side_effect=["", "LISTEN 0 128 127.0.0.1:18080 0.0.0.0:*"]):
             self.assertRaisesRegex(ValueError, "survived withdrawal", policy.withdraw)
 
+    def test_startup_barrier_rejects_missing_pasta_bind_permission(self):
+        policy = policy_helper()
+        with mock.patch.object(policy, 'effective_access',
+                               side_effect=lambda source, target, permission: source != 'pasta_t' and target != 'unreserved_port_t'):
+            with self.assertRaises(ValueError):
+                policy.check_effective_policy()
+
     def test_effective_access_uses_the_platform_policy_decision(self):
         # Validate the libselinux observation against the installed distribution
         # policy. This does not qualify our not-yet-installed custom port type.

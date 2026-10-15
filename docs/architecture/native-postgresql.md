@@ -234,3 +234,9 @@ Native PGDATA capacity is admitted separately from rootless storage: at least
 20 GiB, 200,000 free inodes and 20 percent byte/inode headroom are required.
 Qualification binds the PostgreSQL CIL in its probe source manifest, installs
 an exclusively owned temporary module, and removes that module with read-back.
+
+Backend qualification preserves the API pasta publisher and the frontend bridge.
+Both startup and qualification query the effective pasta bind decision and reject
+a broad unreserved-port bind. The disposable API transport fixture serves a
+synthetic response through the pinned image's PHP runtime; it grants no database
+authority and does not stand in for the separately qualified product readiness.

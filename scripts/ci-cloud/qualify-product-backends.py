@@ -29,7 +29,7 @@ sys.dont_write_bytecode = True
 ROOT = Path('/opt/secpal-control')
 sys.path[:0] = [str(ROOT / 'scripts'), str(ROOT / 'scripts/ci-cloud')]
 import product_backend_qualification_contract as contract
-from product_backend_contract import BACKENDS, admit_policy_account, haproxy_backends, host_policy
+from product_backend_contract import BACKENDS, EFFECTIVE_POLICY, admit_policy_account, haproxy_backends, host_policy
 
 STATE = Path('/var/lib/secpal-rocky')
 MANIFEST = STATE / 'product-backend-policy.json'
@@ -75,13 +75,13 @@ def read(path, maximum=16384):
     return json.loads(path.read_bytes(), object_pairs_hook=contract.unique_keys)
 
 
-def write(path, raw, mode=0o644, group=0):
+def write(path, raw, mode=0o644, group=0, owner=0):
     trusted(path.parent)
     descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, mode)
     with os.fdopen(descriptor, 'wb') as stream:
         stream.write(raw)
         os.fchmod(stream.fileno(), mode)
-        os.fchown(stream.fileno(), 0, group)
+        os.fchown(stream.fileno(), owner, group)
         stream.flush()
         os.fsync(stream.fileno())
 
@@ -300,9 +300,10 @@ class Observer:
         self.policy = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.policy)
         self.policy.check_effective_policy()
-        for source, target, permission in (('haproxy_t', 'secpal_backend_port_t', 'name_connect'), ('container_runtime_t', 'secpal_backend_port_t', 'name_bind'), ('haproxy_t', 'unreserved_port_t', 'name_connect')):
+        for source, target, permission, unused_expected in EFFECTIVE_POLICY:
             self.records['av'].append(dict(source=source, target=target, permission=permission, decision=self.policy.effective_decision(source, target, permission)))
-        self.facts.update(effective_backend_connect=True, effective_runtime_bind=True, effective_unreserved_connect=False)
+        self.facts.update(effective_backend_connect=True, effective_runtime_bind=True, effective_pasta_bind=True,
+                          effective_pasta_unreserved_bind=False, effective_unreserved_connect=False)
         self.facts['selinux'] = self.run('observe-selinux', ['getenforce'])[1]
         self.require(self.facts['selinux'] == 'Enforcing')
         self.records['enforcing'] = self.facts['selinux']
@@ -334,6 +335,11 @@ class Observer:
         self.require(not authfile.exists() and not authfile.is_symlink())
         self.files.append(authfile)
         write(authfile, b'{}\n', mode=0o444)
+        fixture = Path('/etc/containers/secpal-backend101-api.php')
+        self.require(not fixture.exists() and not fixture.is_symlink())
+        self.files.append(fixture)
+        write(fixture, (ROOT / contract.SOURCES['backend_http_fixture']).read_bytes(),
+              mode=0o444, owner=self.runtime.pw_uid, group=self.runtime.pw_gid)
         for role in BACKENDS:
             source = (ROOT / contract.SOURCES['backend_' + role]).read_text()
             image = next(line.removeprefix('Image=') for line in source.splitlines() if line.startswith('Image='))
@@ -382,8 +388,9 @@ class Observer:
             pid = re.search(r'pid=([1-9][0-9]*)', rows[0])
             self.require(pid is not None)
             context = self.run('observe-products', ['ps', '-o', 'label=', '-p', pid.group(1)])[1]
-            self.require(':container_runtime_t:' in context)
-            self.facts['runtime_bind_domain'] = 'container_runtime_t'
+            domain = 'pasta_t' if role == 'api' else 'container_runtime_t'
+            self.require(':' + domain + ':' in context)
+            self.facts['api_bind_domain' if role == 'api' else 'runtime_bind_domain'] = domain
             label = self.run('observe-products', ['podman', '--remote=false', 'inspect', '--format', '{{.ProcessLabel}}', 'secpal-backend101-' + role], user=self.runtime.pw_name)[1]
             self.require(':container_t:' in label)
             mode = self.run('observe-products', ['podman', '--remote=false', 'inspect', '--format', '{{.HostConfig.NetworkMode}}', 'secpal-backend101-' + role], user=self.runtime.pw_name)[1]

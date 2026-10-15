@@ -15,7 +15,7 @@ import json
 import re
 import shlex
 
-from product_backend_contract import BACKENDS, admit_policy_account
+from product_backend_contract import BACKENDS, EFFECTIVE_POLICY, admit_policy_account
 from types import SimpleNamespace
 import rocky_preparation_contract as rpm
 
@@ -27,6 +27,7 @@ SOURCES = {
     'backend_state_contract': 'config/production/state-contract.json',
     'backend_policy': 'scripts/product-backend-policy.py',
     'backend_contract': 'scripts/product_backend_contract.py',
+    'backend_http_fixture': 'scripts/ci-cloud/product-backend-http-fixture.php',
     'backend_service': 'config/production/host-systemd/secpal-product-backend-policy.service',
     'backend_qualifier': 'scripts/ci-cloud/qualify-product-backends.py',
     'backend_qualification_contract': 'scripts/ci-cloud/product_backend_qualification_contract.py',
@@ -96,8 +97,10 @@ def required_observations():
     return {
         'selinux': 'Enforcing', 'backend_port_type': 'secpal_backend_port_t',
         'haproxy_domain': 'haproxy_t', 'runtime_bind_domain': 'container_runtime_t',
+        'api_bind_domain': 'pasta_t',
         'haproxy_connect_any': False, 'pasta_bind_all_ports': False,
         'effective_backend_connect': True, 'effective_runtime_bind': True,
+        'effective_pasta_bind': True, 'effective_pasta_unreserved_bind': False,
         'effective_unreserved_connect': False, 'actual_unrelated_haproxy_access': False,
         'nft_rules_installed': True, 'haproxy_http_ready': True,
         'unrelated_uid_access': False, 'external_interface_access': False,
@@ -145,8 +148,8 @@ def fixture_unit(source, role):
     """Transport-only adaptation of accepted product units, never caller data.
 
     Publication, image and rootless hardening remain production-owned. The
-    HTTP-only fixture uses the internal edge bridge for both roles; production
-    API-to-database networking belongs to #81 and is not qualification input.
+    HTTP-only fixture preserves each role's production network and publisher.
+    Its synthetic API response grants no PostgreSQL or product-readiness claim.
     """
     if (role not in BACKENDS or [line for line in source.splitlines() if line.startswith('PublishPort=')]
             != [BACKENDS[role].publication]):
@@ -158,19 +161,22 @@ def fixture_unit(source, role):
         raise ValueError('reviewed product network authority')
     lines = [line for line in source.splitlines() if not line.startswith((
         'Requires=', 'After=', 'PartOf=', 'ExecStartPre=', 'Environment=',
-        'Mount=type=bind,', 'Health', 'Notify=', 'LogDriver=', 'LogOpt=', 'Network=', 'AddHost='))]
-    lines.insert(lines.index('Pull=never'), 'Network=secpal-edge.network')
+        'Mount=type=bind,', 'Health', 'Notify=', 'LogDriver=', 'LogOpt='))]
+    lines = [line.replace('secpal-', 'secpal-backend101-') for line in lines]
     lines.insert(lines.index('Pull=never'), 'Notify=conmon')
     lines.insert(lines.index('Pull=never'), 'LogDriver=none')
     lines.insert(lines.index('[Service]') + 1,
                  'ExecStartPre=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check')
-    environment = (['APP_ENV=production', 'APP_DEBUG=false',
-                    'APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-                    'CACHE_STORE=file', 'SESSION_DRIVER=array', 'LOG_CHANNEL=stderr']
-                   if role == 'api' else ['SECPAL_API_URL=https://api.secpal.example.invalid'])
+    if role == 'api':
+        lines = [line for line in lines if not line.startswith(('Exec=', 'Entrypoint='))]
+        lines.insert(lines.index('Pull=never'), 'Entrypoint=/usr/local/bin/php')
+        lines.insert(lines.index('Pull=never'), 'Exec=-S 0.0.0.0:8080 /run/secpal-http-fixture.php')
+        lines.insert(lines.index('Pull=never'),
+                     'Volume=/etc/containers/secpal-backend101-api.php:/run/secpal-http-fixture.php:ro,Z')
+    environment = [] if role == 'api' else ['SECPAL_API_URL=https://api.secpal.example.invalid']
     for value in environment:
         lines.insert(lines.index('Pull=never'), 'Environment=' + value)
-    return ('\n'.join(lines) + '\n').replace('secpal-', 'secpal-backend101-')
+    return '\n'.join(lines) + '\n'
 
 
 def effective_publications(exec_start):
@@ -275,10 +281,8 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
     for role, backend in BACKENDS.items():
         if not re.search(r'portcon tcp ' + str(backend.host_port) + r' system_u:object_r:secpal_backend_port_t:s0(?:\s|$)', raw['portcons'][role]):
             raise ValueError('effective backend port type')
-    expected_av = [('haproxy_t', 'secpal_backend_port_t', 'name_connect', True),
-                   ('container_runtime_t', 'secpal_backend_port_t', 'name_bind', True),
-                   ('haproxy_t', 'unreserved_port_t', 'name_connect', False)]
-    if not isinstance(raw['av'], list) or len(raw['av']) != 3:
+    expected_av = EFFECTIVE_POLICY
+    if not isinstance(raw['av'], list) or len(raw['av']) != len(expected_av):
         raise ValueError('effective AV representation')
     for fact, (source, target, permission, allowed) in zip(raw['av'], expected_av):
         if set(fact) != {'source', 'target', 'permission', 'decision'} or (fact['source'], fact['target'], fact['permission']) != (source, target, permission):
@@ -332,10 +336,13 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
             raise ValueError('local rootless runtime without API authority')
         for role, backend in BACKENDS.items():
             product = iteration['products'][role]
+            publisher = 'pasta_t' if role == 'api' else 'container_runtime_t'
+            network = 'pasta' if role == 'api' else 'bridge'
+            networks = ['pasta'] if role == 'api' else ['secpal-backend101-edge']
             if (set(product) != {'listeners', 'forwarder_context', 'container_context', 'network_mode', 'networks', 'environment_keys', 'mount_types', 'unit'}
-                    or product['listeners'] != [backend.endpoint] or ':container_runtime_t:' not in product['forwarder_context']
-                    or ':container_t:' not in product['container_context'] or product['network_mode'] != 'bridge'
-                    or product['networks'] != ['secpal-backend101-edge']):
+                    or product['listeners'] != [backend.endpoint] or ':' + publisher + ':' not in product['forwarder_context']
+                    or ':container_t:' not in product['container_context'] or product['network_mode'] != network
+                    or product['networks'] != networks):
                 raise ValueError('exact rootless product listener')
             generated = properties(product['unit'])
             publications = effective_publications(generated.get('ExecStart', ''))

@@ -23,7 +23,7 @@ import tempfile
 sys.dont_write_bytecode = True
 DIRECTORY = Path(__file__).resolve().parent
 sys.path.insert(0, str(DIRECTORY))
-from product_backend_contract import admit_policy_account, host_policy, policy_digest
+from product_backend_contract import EFFECTIVE_POLICY, admit_policy_account, host_policy, policy_digest
 
 STATE = Path("/run/secpal-product-backends")
 READY = STATE / "ready.json"
@@ -128,10 +128,7 @@ def effective_access(source: str, target: str, permission: str) -> bool:
 
 
 def check_effective_policy() -> None:
-    for source, target, permission, expected in (
-            ("haproxy_t", "secpal_backend_port_t", "name_connect", True),
-            ("container_runtime_t", "secpal_backend_port_t", "name_bind", True),
-            ("haproxy_t", "unreserved_port_t", "name_connect", False)):
+    for source, target, permission, expected in EFFECTIVE_POLICY:
         if effective_access(source, target, permission) != expected:
             raise ValueError(f"admit-effective-selinux:{source}:{target}:{permission}")
 

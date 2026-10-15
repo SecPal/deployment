@@ -66,6 +66,7 @@ locals {
     backend_authorization          = var.product_backend_policy_json
     backend_policy                 = file("${path.module}/../../../scripts/product-backend-policy.py")
     backend_contract               = file("${path.module}/../../../scripts/product_backend_contract.py")
+    backend_http_fixture           = file("${path.module}/../../../scripts/ci-cloud/product-backend-http-fixture.php")
     backend_service                = file("${path.module}/../../../config/production/host-systemd/secpal-product-backend-policy.service")
     backend_qualifier              = file("${path.module}/../../../scripts/ci-cloud/qualify-product-backends.py")
     backend_qualification_contract = file("${path.module}/../../../scripts/ci-cloud/product_backend_qualification_contract.py")

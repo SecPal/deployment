@@ -47,13 +47,13 @@ def observation_fixture(contract):
         external={role:dict(positive_http_code='200',ingress_status=7) for role in contract.BACKENDS},
         withdrawal=dict(unit_states=['inactive','inactive'],listeners=[],marker_exists=False,nft_table_status=1,nftables_state='active',policy_state='inactive'),
         barrier=dict(missing_start_status=1,stale_start_status=1,missing_pre_status=1,stale_pre_status=1),cleanup=cleanup)
-    for source,target,permission,allowed in (('haproxy_t','secpal_backend_port_t','name_connect',True),('container_runtime_t','secpal_backend_port_t','name_bind',True),('haproxy_t','unreserved_port_t','name_connect',False)):
+    for source,target,permission,allowed in contract.EFFECTIVE_POLICY:
         raw['av'].append(dict(source=source,target=target,permission=permission,decision=dict(result=0,flags=0,**{'class':3},requested=1,decided=1,allowed=int(allowed))))
     for iteration in range(3):
         products={}
         for role,backend in contract.BACKENDS.items():
-            products[role]=dict(listeners=[backend.endpoint],forwarder_context='system_u:system_r:container_runtime_t:s0',container_context='system_u:system_r:container_t:s0:c1,c2',
-                network_mode='bridge',networks=['secpal-backend101-edge'],environment_keys=['PATH'],mount_types=['tmpfs'],
+            products[role]=dict(listeners=[backend.endpoint],forwarder_context='system_u:system_r:' + ('pasta_t' if role == 'api' else 'container_runtime_t') + ':s0',container_context='system_u:system_r:container_t:s0:c1,c2',
+                network_mode='pasta' if role == 'api' else 'bridge',networks=['pasta'] if role == 'api' else ['secpal-backend101-edge'],environment_keys=['PATH'],mount_types=['tmpfs'],
                 unit=f'FragmentPath=/run/user/992/systemd/generator/secpal-{role}.service\nSourcePath=/etc/containers/systemd/users/992/secpal-{role}.container\nDropInPaths=\nExecStart={{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run --publish {backend.endpoint}:8080/tcp ; }}\nExecStartPre={{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check ; }}')
         raw['recreations'].append(dict(products=products,runtime=dict(host={'security':{'rootless':True},'serviceIsRemote':False},unit_states=['inactive']*4,manager_override_keys=[],enforcing='Enforcing',booleans=['haproxy_connect_any --> off','pasta_bind_all_ports --> off']),
             http_stats='# pxname,svname,status,check_status,check_code\nsecpal_frontend,frontend,UP,L7OK,200\nsecpal_api,api,UP,L7OK,200\n'))
@@ -61,13 +61,8 @@ def observation_fixture(contract):
 
 
 class QualificationContract(unittest.TestCase):
-    def test_http_qualification_survives_production_application_network_retirement(self):
-        """Real renderer -> source closure -> fixture, with DB authority removed.
-
-        #81 owns the production TCP mapping. The successor's Network/AddHost
-        source shape is from authenticated PR #286 head c3283ae9e750ab532ba14bae8e6ddced7f98f517;
-        these are candidate test inputs, never a production implementation.
-        """
+    def test_http_qualification_preserves_production_pasta_publication(self):
+        """Renderer, trusted source closure and current production carrier."""
         import product_backend_qualification_contract as contract
         spec = importlib.util.spec_from_file_location('renderer', ROOT / 'scripts/render-production-quadlets.py')
         renderer = importlib.util.module_from_spec(spec)
@@ -76,84 +71,80 @@ class QualificationContract(unittest.TestCase):
         guard_spec = importlib.util.spec_from_file_location('guard', ROOT / 'scripts/validate-product-backend-qualification.py')
         guard = importlib.util.module_from_spec(guard_spec)
         guard_spec.loader.exec_module(guard)
-        for retired in (False, True):
-            with self.subTest(retired=retired), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                paths = set(contract.SOURCES.values()) | {
-                    '.github/workflows/rocky-cloud-qualification.yml',
-                    'infra/ci-cloud/gcp-rocky/metadata.tf',
-                    'scripts/ci-cloud/bootstrap-rocky-host.tftpl',
-                }
-                for relative in paths:
-                    target = root / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(ROOT / relative, target)
-                for name, text in units.items():
-                    if retired and name == 'secpal-application.network':
-                        continue
-                    if retired:
-                        text = text.replace('Network=secpal-application.network\n', '')
-                        if name == 'secpal-api.container':
-                            text = text.replace('Network=secpal-edge.network\n',
-                                'Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1\n'
-                                'AddHost=db.secpal.internal:169.254.81.1\n')
-                    (root / 'config/production/quadlet' / name).write_text(text)
-                if retired:
-                    (root / 'config/production/quadlet/secpal-application.network').unlink(missing_ok=True)
-                guard.validate(root)
-                sources = {name: (root / relative).read_bytes() for name, relative in contract.SOURCES.items()}
-                manifest = contract.manifest('a' * 40, 'gcp-rocky-10-2-x86-64', '123', '1', sources)
-                contract.admit_manifest(manifest, sources)
-                self.assertNotIn('backend_application_network', set(sources))
-                for role, backend in contract.BACKENDS.items():
-                    fixture = contract.fixture_unit(sources['backend_' + role].decode(), role)
-                    self.assertEqual([line for line in fixture.splitlines() if line.startswith('Network=')],
-                                     ['Network=secpal-backend101-edge.network'])
-                    self.assertEqual([line for line in fixture.splitlines() if line.startswith('PublishPort=')],
-                                     [backend.publication])
-                    self.assertNotIn('application', fixture)
-                    self.assertNotIn('Mount=type=bind,', fixture)
-                    self.assertNotIn('Environment=DB_', fixture)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = set(contract.SOURCES.values()) | {
+                '.github/workflows/rocky-cloud-qualification.yml',
+                'infra/ci-cloud/gcp-rocky/metadata.tf',
+                'scripts/ci-cloud/bootstrap-rocky-host.tftpl',
+            }
+            for relative in paths:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / relative, target)
+            for name, text in units.items():
+                (root / 'config/production/quadlet' / name).write_text(text)
+            guard.validate(root)
+            sources = {name: (root / relative).read_bytes() for name, relative in contract.SOURCES.items()}
+            manifest = contract.manifest('a' * 40, 'gcp-rocky-10-2-x86-64', '123', '1', sources)
+            contract.admit_manifest(manifest, sources)
+            self.assertNotIn('backend_application_network', set(sources))
+            for role, backend in contract.BACKENDS.items():
+                fixture = contract.fixture_unit(sources['backend_' + role].decode(), role)
+                self.assertEqual([line for line in fixture.splitlines() if line.startswith('Network=')],
+                                 (['Network=pasta:--no-map-gw,--map-guest-addr,none,--map-host-loopback,169.254.81.1']
+                                  if role == 'api' else ['Network=secpal-backend101-edge.network']))
+                self.assertEqual([line for line in fixture.splitlines() if line.startswith('PublishPort=')],
+                                 [backend.publication])
+                self.assertNotIn('application', fixture)
+                self.assertNotIn('Mount=type=bind,', fixture)
+                self.assertNotIn('Environment=DB_', fixture)
+                if role == 'api':
+                    self.assertIn('AddHost=db.secpal.internal:169.254.81.1', fixture)
+                else:
                     self.assertNotIn('AddHost=', fixture)
                     self.assertNotIn('map-host-loopback', fixture)
-                raw = observation_fixture(contract)
-                contract.normalize_observations(raw, 993, 992, 991)
-                qualifier_spec = importlib.util.spec_from_file_location('qualifier', ROOT / 'scripts/ci-cloud/qualify-product-backends.py')
-                qualifier = importlib.util.module_from_spec(qualifier_spec)
-                qualifier_spec.loader.exec_module(qualifier)
-                observer = qualifier.Observer('123', '1')
-                observer.runtime = SimpleNamespace(pw_name='secpal-runtime', pw_uid=992)
-                observer.quadlets = root / 'fixture'
-                observer.quadlets.mkdir()
-                calls = []
-                def run(operation, arguments, **options):
-                    calls.append(arguments)
-                    if 'info' in arguments:
-                        return 0, json.dumps({'security': {'rootless': True}, 'serviceIsRemote': False})
-                    if 'is-active' in arguments:
-                        return 3, ''
-                    if arguments[:3] == ['nft', 'list', 'table']:
-                        return 1, ''
-                    return 0, ''
-                def path(value):
-                    return root / 'auth.json' if value == '/etc/containers/secpal-backend101-auth.json' else Path(value)
-                with mock.patch.object(qualifier, 'ROOT', root), mock.patch.object(qualifier, 'Path', side_effect=path), \
-                        mock.patch.object(qualifier, 'write', side_effect=lambda target, data, **kw: target.write_bytes(data)), \
-                        mock.patch.object(qualifier, 'READY', root / 'ready'), mock.patch.object(qualifier, 'STATS', root / 'stats'), \
-                        mock.patch.object(observer, 'run', side_effect=run), \
-                        mock.patch.object(observer, 'observe_cleanup', return_value=raw['cleanup']):
-                    # Simulate external commands only; exercise actual source
-                    # reads, installation and bounded cleanup, never host proof.
-                    observer.products()
-                    self.assertEqual(sorted(p.name for p in observer.quadlets.glob('*.network')),
-                                     ['secpal-backend101-edge.network'])
-                    observer.mutated = True
-                    self.assertTrue(observer.cleanup())
-                    self.assertEqual(list(observer.quadlets.iterdir()), [])
-                self.assertEqual([args for args in calls if args[:4] == ['podman', '--remote=false', 'network', 'rm']],
-                                 [['podman', '--remote=false', 'network', 'rm', 'secpal-backend101-edge']])
-                for action in ('stop', 'reset-failed'):
-                    self.assertIn(['systemctl', '--user', action, 'secpal-backend101-edge-network.service'], calls)
+            raw = observation_fixture(contract)
+            contract.normalize_observations(raw, 993, 992, 991)
+            qualifier_spec = importlib.util.spec_from_file_location('qualifier', ROOT / 'scripts/ci-cloud/qualify-product-backends.py')
+            qualifier = importlib.util.module_from_spec(qualifier_spec)
+            qualifier_spec.loader.exec_module(qualifier)
+            observer = qualifier.Observer('123', '1')
+            observer.runtime = SimpleNamespace(pw_name='secpal-runtime', pw_uid=992, pw_gid=992)
+            observer.quadlets = root / 'fixture'
+            observer.quadlets.mkdir()
+            calls = []
+            def run(operation, arguments, **options):
+                calls.append(arguments)
+                if 'info' in arguments:
+                    return 0, json.dumps({'security': {'rootless': True}, 'serviceIsRemote': False})
+                if 'is-active' in arguments:
+                    return 3, ''
+                if arguments[:3] == ['nft', 'list', 'table']:
+                    return 1, ''
+                return 0, ''
+            def path(value):
+                fixtures = {'/etc/containers/secpal-backend101-auth.json': root / 'auth.json',
+                            '/etc/containers/secpal-backend101-api.php': root / 'api-fixture.php'}
+                return fixtures.get(value, Path(value))
+            with mock.patch.object(qualifier, 'ROOT', root), mock.patch.object(qualifier, 'Path', side_effect=path), \
+                    mock.patch.object(qualifier, 'write', side_effect=lambda target, data, **kw: target.write_bytes(data)), \
+                    mock.patch.object(qualifier, 'READY', root / 'ready'), mock.patch.object(qualifier, 'STATS', root / 'stats'), \
+                    mock.patch.object(observer, 'run', side_effect=run), \
+                    mock.patch.object(observer, 'observe_cleanup', return_value=raw['cleanup']):
+                # Simulate external commands only; exercise actual source
+                # reads, installation and bounded cleanup, never host proof.
+                observer.products()
+                self.assertEqual(sorted(p.name for p in observer.quadlets.glob('*.network')),
+                                 ['secpal-backend101-edge.network'])
+                observer.mutated = True
+                self.assertTrue(observer.cleanup())
+                self.assertEqual(list(observer.quadlets.iterdir()), [])
+            self.assertEqual([args for args in calls if args[:4] == ['podman', '--remote=false', 'network', 'rm']],
+                             [['podman', '--remote=false', 'network', 'rm', 'secpal-backend101-edge']])
+            for action in ('stop', 'reset-failed'):
+                self.assertIn(['systemctl', '--user', action, 'secpal-backend101-edge-network.service'], calls)
+
 
     def test_transport_projection_rejects_host_and_frontend_network_expansion(self):
         import product_backend_qualification_contract as contract
@@ -265,7 +256,8 @@ class QualificationContract(unittest.TestCase):
         def change(mutator):
             raw=copy.deepcopy(original);mutator(raw);variants.append(raw)
         change(lambda r:r['av'][0]['decision'].update(flags=1))
-        change(lambda r:r['av'][2]['decision'].update(allowed=1))
+        for index in range(len(original['av'])):
+            change(lambda r, index=index:r['av'][index]['decision'].update(allowed=1-r['av'][index]['decision']['allowed']))
         change(lambda r:r['nftables']['nftables'].pop())
         change(lambda r:r['haproxy']['processes'][0].update(cgroup='0::/user.slice'))
         change(lambda r:r['haproxy'].update(stats_holders=[]))
@@ -281,6 +273,8 @@ class QualificationContract(unittest.TestCase):
         change(lambda r:r['recreations'][1]['products']['frontend'].update(environment_keys=['FILESYSTEM_DISK']))
         change(lambda r:r['recreations'][1]['products']['frontend'].update(mount_types=['bind']))
         change(lambda r:r['recreations'][1]['products']['api'].update(networks=['secpal-backend101-application']))
+        change(lambda r:r['recreations'][1]['products']['api'].update(network_mode='bridge'))
+        change(lambda r:r['recreations'][1]['products']['api'].update(forwarder_context='system_u:system_r:container_runtime_t:s0'))
         change(lambda r:r['recreations'][1].update(http_stats=r['recreations'][1]['http_stats'].replace('UP','DOWN')))
         change(lambda r:r['unrelated'].update(avc=r['unrelated']['avc'].replace('pid=123','pid=789')))
         change(lambda r:r['external']['api'].update(positive_http_code='000'))
