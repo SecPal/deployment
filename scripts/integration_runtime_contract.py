@@ -74,7 +74,6 @@ POSTGRES_FIXTURE = PostgresFixtureIdentity(
     data_directory="/var/lib/postgresql/18/docker",
     volume_target="/var/lib/postgresql",
 )
-CADDY_IMAGE = "docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 INTERNAL_NETWORKS = ("application", "edge")
 VOLUME_NAMES = ("secrets", "private-storage", "postgres")
 PRIVATE_STORAGE_MODE = 0o640
