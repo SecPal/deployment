@@ -228,6 +228,8 @@ so the rootless API can answer HAProxy, while new arbitrary loopback connections
 remain rejected. The product-backend SELinux owner grants pasta only the
 dedicated backend port type; broad pasta/container connection booleans stay off.
 The firewall service and user manager restart with their policy owners.
+The distribution reload flushes tables without that ordering, so the managed
+nftables drop-in disables reload; use the qualified service restart instead.
 Native PGDATA capacity is admitted separately from rootless storage: at least
 20 GiB, 200,000 free inodes and 20 percent byte/inode headroom are required.
 Qualification binds the PostgreSQL CIL in its probe source manifest, installs

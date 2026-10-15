@@ -60,6 +60,7 @@ class NativeProduction(unittest.TestCase):
         self.assertIn('ExecStart=/usr/sbin/nft -f /etc/nftables/secpal-postgresql.nft', firewall)
         self.assertIn('ExecStop=/usr/sbin/nft delete table inet secpal_postgresql', firewall)
         self.assertNotIn('flush ruleset', firewall)
+        self.assertIn('[Service]\nExecReload=\n', units['nftables.service.d/secpal-postgresql.conf'])
         self.assertIn('Requires=nftables.service', firewall)
         self.assertIn('PartOf=nftables.service', firewall)
         self.assertIn('PartOf=secpal-postgresql-loopback.service', manager)

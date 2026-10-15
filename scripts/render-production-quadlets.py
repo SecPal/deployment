@@ -336,6 +336,9 @@ def build_host_units(contract: dict) -> dict[str, str]:
     ])
     return {
         'secpal-postgresql-loopback.service': SPDX_HEADER + service,
+        # The distribution reload flushes all tables without restarting dependents.
+        # Reject reload; native stop/start ordering enforces the tested boundary.
+        'nftables.service.d/secpal-postgresql.conf': SPDX_HEADER + section('Service', ['ExecReload=']),
         f'user@{uid}.service.d/secpal-postgresql.conf': SPDX_HEADER + manager,
     }
 
