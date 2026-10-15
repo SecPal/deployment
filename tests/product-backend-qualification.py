@@ -61,6 +61,24 @@ def observation_fixture(contract):
 
 
 class QualificationContract(unittest.TestCase):
+
+    def test_http_fixture_serves_the_haproxy_probe(self):
+        import product_backend_contract as backend
+        program = (
+            'register_shutdown_function(static function (): void { '
+            'fwrite(STDERR, (string) (http_response_code() ?: 200)); }); '
+            '$_SERVER["REQUEST_URI"] = $argv[1]; require $argv[2];'
+        )
+        for path in {item.readiness_path for item in backend.BACKENDS.values()} | {'/health/ready', '/unrelated'}:
+            with self.subTest(path=path):
+                result = subprocess.run(
+                    ['php', '-r', program, path, str(ROOT / 'scripts/ci-cloud/product-backend-http-fixture.php')],
+                    cwd=ROOT, text=True, capture_output=True, check=True,
+                )
+                self.assertEqual(result.stderr, '404' if path == '/unrelated' else '200')
+                if path != '/unrelated':
+                    self.assertEqual(json.loads(result.stdout), {'status': 'transport-ready'})
+
     def test_http_qualification_preserves_production_pasta_publication(self):
         """Renderer, trusted source closure and current production carrier."""
         import product_backend_qualification_contract as contract

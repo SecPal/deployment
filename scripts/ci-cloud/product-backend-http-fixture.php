@@ -6,7 +6,7 @@
 declare(strict_types=1);
 
 // Disposable HTTP transport only; native PostgreSQL owns product readiness.
-if (($_SERVER['REQUEST_URI'] ?? '') !== '/health/ready') {
+if (!in_array($_SERVER['REQUEST_URI'] ?? '', ['/health/live', '/health/ready'], true)) {
     http_response_code(404);
     exit;
 }
