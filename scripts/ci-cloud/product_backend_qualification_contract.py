@@ -338,7 +338,8 @@ def normalize_observations(raw, haproxy_uid, runtime_uid, unrelated_uid):
             product = iteration['products'][role]
             publisher = 'pasta_t' if role == 'api' else 'container_runtime_t'
             network = 'pasta' if role == 'api' else 'bridge'
-            networks = ['pasta'] if role == 'api' else ['secpal-backend101-edge']
+            # Running pasta has no named-network attachment in Podman inspect.
+            networks = [] if role == 'api' else ['secpal-backend101-edge']
             if (set(product) != {'listeners', 'forwarder_context', 'container_context', 'network_mode', 'networks', 'environment_keys', 'mount_types', 'unit'}
                     or product['listeners'] != [backend.endpoint] or ':' + publisher + ':' not in product['forwarder_context']
                     or ':container_t:' not in product['container_context'] or product['network_mode'] != network

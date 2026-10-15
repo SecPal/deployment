@@ -53,7 +53,7 @@ def observation_fixture(contract):
         products={}
         for role,backend in contract.BACKENDS.items():
             products[role]=dict(listeners=[backend.endpoint],forwarder_context='system_u:system_r:' + ('pasta_t' if role == 'api' else 'container_runtime_t') + ':s0',container_context='system_u:system_r:container_t:s0:c1,c2',
-                network_mode='pasta' if role == 'api' else 'bridge',networks=['pasta'] if role == 'api' else ['secpal-backend101-edge'],environment_keys=['PATH'],mount_types=['tmpfs'],
+                network_mode='pasta' if role == 'api' else 'bridge',networks=[] if role == 'api' else ['secpal-backend101-edge'],environment_keys=['PATH'],mount_types=['tmpfs'],
                 unit=f'FragmentPath=/run/user/992/systemd/generator/secpal-{role}.service\nSourcePath=/etc/containers/systemd/users/992/secpal-{role}.container\nDropInPaths=\nExecStart={{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run --publish {backend.endpoint}:8080/tcp ; }}\nExecStartPre={{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check ; }}')
         raw['recreations'].append(dict(products=products,runtime=dict(host={'security':{'rootless':True},'serviceIsRemote':False},unit_states=['inactive']*4,manager_override_keys=[],enforcing='Enforcing',booleans=['haproxy_connect_any --> off','pasta_bind_all_ports --> off']),
             http_stats='# pxname,svname,status,check_status,check_code\nsecpal_frontend,frontend,UP,L7OK,200\nsecpal_api,api,UP,L7OK,200\n'))
