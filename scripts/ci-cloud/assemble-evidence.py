@@ -146,7 +146,7 @@ def load_workload_admission():
 
 
 def assemble(
-    host_document: object,
+    workflow: object,
     baseline: object,
     live: object,
     post_cleanup: object,
@@ -154,26 +154,13 @@ def assemble(
     phase_statuses: dict[str, int],
     collection_statuses: dict[str, int],
 ) -> dict[str, object]:
-    if not isinstance(host_document, dict) or set(host_document) != {
-        "schema_version", "workflow", "test", "platform", "apt", "host", "runtime"
-    } or host_document.get("schema_version") != 1:
-        raise ValueError("host evidence is outside the trusted D.1 contract")
-    test = host_document.get("test")
-    workflow = host_document.get("workflow")
-    if not isinstance(test, dict) or not isinstance(workflow, dict):
-        raise ValueError("host evidence identity is malformed")
+    if not isinstance(workflow, dict) or set(workflow) != {
+        "repository", "run_id", "run_attempt", "target_sha"
+    } or workflow.get("repository") != "SecPal/deployment":
+        raise ValueError("workflow identity is malformed")
     target_sha = workflow.get("target_sha")
     if not isinstance(target_sha, str) or re.fullmatch(r"[0-9a-f]{40}", target_sha) is None:
-        raise ValueError("host evidence target SHA is malformed")
-
-    host_failures = [
-        str(value)
-        for value in test.get("failed_admission_invariants", [])
-        if value != "TARGET_CONFORMANCE_ENTRYPOINT"
-    ]
-    if phase_statuses["host"] != 0:
-        host_failures.append("TARGET_HOST_CONTRACT")
-    host_failures = list(dict.fromkeys(host_failures))
+        raise ValueError("workflow target SHA is malformed")
     workload = {
         "protocol_version": 1,
         "claim_scope": "disposable-rootless-application-integration",
@@ -207,31 +194,24 @@ def assemble(
     workload["failed_admission_invariants"] = workload_failures
     workload["result"] = "passed" if not workload_failures else "failed"
 
-    overall_failures = list(dict.fromkeys([*host_failures, *workload_failures]))
-    test.pop("target_exit_status", None)
-    test["normalization_diagnostics"] = normalization_diagnostics
-    test["phase_exit_statuses"] = phase_statuses
-    test["collection_exit_statuses"] = collection_statuses
-    test["failed_admission_invariants"] = overall_failures
-    test["result"] = "passed" if not overall_failures else "failed"
-    host_document["schema_version"] = 4
-    host_document["host_admission"] = {
-        "result": "passed" if not host_failures else "failed",
-        "failed_admission_invariants": host_failures,
+    test = {
+        "normalization_diagnostics": normalization_diagnostics,
+        "phase_exit_statuses": phase_statuses,
+        "collection_exit_statuses": collection_statuses,
+        "failed_admission_invariants": workload_failures,
+        "result": workload["result"],
     }
-    host_document["workload"] = workload
-    return host_document
+    return {"schema_version": 5, "workflow": workflow, "test": test, "workload": workload}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("host", type=Path)
+    parser.add_argument("workflow", type=Path)
     parser.add_argument("baseline", type=Path)
     parser.add_argument("live", type=Path)
     parser.add_argument("post_cleanup", type=Path)
     parser.add_argument("live_normalization", type=Path)
     parser.add_argument("cleanup_normalization", type=Path)
-    parser.add_argument("host_status")
     parser.add_argument("prepare_start_status")
     parser.add_argument("cleanup_status")
     parser.add_argument("live_normalization_status")
@@ -242,7 +222,6 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         phase_statuses = {
-            "host": status(arguments.host_status),
             "workload_prepare_start": status(arguments.prepare_start_status),
             "workload_cleanup": status(arguments.cleanup_status),
             "trusted_quadlet_normalize_live": status(
@@ -269,24 +248,12 @@ def main() -> int:
                 phase_statuses["trusted_quadlet_normalize_cleanup"],
             ),
         }
-        host_document = read_document(arguments.host)
-        host_workflow = (
-            host_document.get("workflow")
-            if isinstance(host_document, dict)
-            else None
-        )
-        document_target_sha = (
-            host_workflow.get("target_sha")
-            if isinstance(host_workflow, dict)
-            else None
-        )
-        if (
-            not isinstance(document_target_sha, str)
-            or re.fullmatch(r"[0-9a-f]{40}", document_target_sha) is None
-        ):
-            raise ValueError("host evidence target SHA is malformed")
+        workflow = read_document(arguments.workflow)
+        document_target_sha = workflow.get("target_sha") if isinstance(workflow, dict) else None
+        if not isinstance(document_target_sha, str) or re.fullmatch(r"[0-9a-f]{40}", document_target_sha) is None:
+            raise ValueError("workflow target SHA is malformed")
         document = assemble(
-            host_document,
+            workflow,
             read_observation(
                 arguments.baseline, "baseline", collection_statuses["baseline"],
                 str(document_target_sha),
