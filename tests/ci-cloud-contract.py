@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import re
 import shutil
 import subprocess
@@ -1370,6 +1372,32 @@ class CloudCIContractTests(unittest.TestCase):
                 result = self.run_validator(fixture)
                 self.assertNotEqual(0, result.returncode, result.stdout)
                 self.assertIn("cleanup provider lock must match the pinned provider", result.stdout)
+
+    def test_rocky_provider_drift_is_rejected_before_dispatch(self) -> None:
+        specification = importlib.util.spec_from_file_location("cloud_validator", VALIDATOR)
+        validator = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(validator)
+        directory = "infra/ci-cloud/gcp-rocky"
+        versions = (ROOT / directory / "versions.tf").read_text(encoding="utf-8")
+        pin = re.search(r'^\s*version\s*=\s*"([^"]+)"', versions, re.MULTILINE).group(1)
+        lock = (ROOT / directory / ".terraform.lock.hcl").read_text(encoding="utf-8")
+        constraint = re.search(r'constraints\s*=\s*"([^"]+)"', lock).group(1)
+        version = re.search(r'version\s*=\s*"([^"]+)"', lock).group(1)
+        schema_version = json.loads((ROOT / "schemas/instance-insert-transport-evidence.schema.json").read_text())["properties"]["google_provider_version"]["const"]
+        mutations = (
+            (f"{directory}/versions.tf", f'version = "{pin}"', 'version = ">= 8.0.0"', "version must be exact"),
+            (f"{directory}/versions.tf", 'source  = "hashicorp/google"', 'source  = "hashicorp/unrelated"', "provider source changed"),
+            (f"{directory}/.terraform.lock.hcl", f'"{version}"', '"0.0.0"', "lock must match"),
+            (f"{directory}/.terraform.lock.hcl", f'constraints = "{constraint}"', 'constraints = "0.0.0"', "lock constraints must match"),
+            ("scripts/ci-cloud/observe-instance-transport.py", "GOOGLE_LOCK_SHA256 = '", "GOOGLE_LOCK_SHA256 = '0", "transport lock digest"),
+            ("scripts/ci-cloud/instance_transport_contract.py", f"GOOGLE_PROVIDER_VERSION = '{schema_version}'", "GOOGLE_PROVIDER_VERSION = '0.0.0'", "transport provider version"),
+            ("schemas/instance-insert-transport-evidence.schema.json", f'"const": "{schema_version}"', '"const": "0.0.0"', "transport provider version"),
+        )
+        for relative, old, new, diagnostic in mutations:
+            with self.subTest(relative=relative, diagnostic=diagnostic):
+                fixture = self.mutated_root(relative, old, new)
+                with self.assertRaisesRegex(validator.ContractError, diagnostic):
+                    validator.validate_opentofu(fixture)
 
 
     def test_rejects_mutable_provider_constraint(self) -> None:

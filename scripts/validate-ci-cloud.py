@@ -182,29 +182,49 @@ def validate_janitor_workflow(root: Path) -> None:
     validate_action_pins(document, relative)
 
 
+def validate_provider_pin(root: Path, directory: str, source: str) -> str:
+    """versions.tf owns the pin; each readonly lock must agree with it."""
+    versions = read(root, f"infra/ci-cloud/{directory}/versions.tf")
+    lock = read(root, f"infra/ci-cloud/{directory}/.terraform.lock.hcl")
+    label = "Rocky" if directory == "gcp-rocky" else "cleanup"
+    require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
+    require(f'source  = "{source}"' in versions, f"{label} provider source changed")
+    provider_versions = re.findall(r'^\s*version\s*=\s*"([^"]*)"', versions, re.MULTILINE)
+    require(len(provider_versions) == 1, f"{label} provider must declare one version")
+    pin = re.fullmatch(r"= ([0-9]+\.[0-9]+\.[0-9]+)", provider_versions[0])
+    require(pin is not None, f"{label} provider version must be exact")
+    version = pin.group(1)
+    require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
+    require(f'provider "registry.opentofu.org/{source}"' in lock
+            and re.search(r'version\s*=\s*"' + re.escape(version) + r'"', lock),
+            f"{label} provider lock must match the pinned provider")
+    require(re.search(r'^\s*constraints\s*=\s*"' + re.escape(version) + r'"\s*$',
+                      lock, re.MULTILINE),
+            f"{label} provider lock constraints must match the pinned provider")
+    return version
+
+
 def validate_opentofu(root: Path) -> None:
-    # These provider configurations remain necessary for exact-state cleanup.
-    for directory, source in (
-        ("digitalocean", "digitalocean/digitalocean"),
-        ("gcp", "hashicorp/google"),
-    ):
-        versions = read(root, f"infra/ci-cloud/{directory}/versions.tf")
-        lock = read(root, f"infra/ci-cloud/{directory}/.terraform.lock.hcl")
-        require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
-        require(f'source  = "{source}"' in versions, "cleanup provider source changed")
-        # versions.tf owns the provider pin; the lock must agree with it.
-        provider_versions = re.findall(r'^\s*version\s*=\s*"([^"]*)"', versions, re.MULTILINE)
-        require(len(provider_versions) == 1, "cleanup provider must declare one version")
-        pin = re.fullmatch(r"= ([0-9]+\.[0-9]+\.[0-9]+)", provider_versions[0])
-        require(pin is not None, "cleanup provider version must be exact")
-        version = pin.group(1)
-        require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
-        require(f'provider "registry.opentofu.org/{source}"' in lock
-                and re.search(r'version\s*=\s*"' + re.escape(version) + r'"', lock),
-                "cleanup provider lock must match the pinned provider")
-        require(re.search(r'^\s*constraints\s*=\s*"' + re.escape(version) + r'"\s*$',
-                          lock, re.MULTILINE),
-                "cleanup provider lock constraints must match the pinned provider")
+    # Cleanup and provisioning share the manifest/lock agreement rule.
+    validate_provider_pin(root, "digitalocean", "digitalocean/digitalocean")
+    validate_provider_pin(root, "gcp", "hashicorp/google")
+    version = validate_provider_pin(root, "gcp-rocky", "hashicorp/google")
+    # Transport independently enforces the provisioning identity. Never admit a
+    # provider bump until its closed evidence contract and package pin agree.
+    owner = read(root, "scripts/ci-cloud/instance_transport_contract.py")
+    try:
+        schema = json.loads(read(root, "schemas/instance-insert-transport-evidence.schema.json"))
+        schema_version = schema["properties"]["google_provider_version"]["const"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        raise ContractError("Rocky transport provider version schema is invalid") from None
+    require(literal_constant(owner, "GOOGLE_PROVIDER_VERSION") == version
+            and schema_version == version,
+            "Rocky transport provider version must match the pinned provider")
+    observer = read(root, "scripts/ci-cloud/observe-instance-transport.py")
+    lock_path = root / "infra/ci-cloud/gcp-rocky/.terraform.lock.hcl"
+    lock_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    require(literal_constant(observer, "GOOGLE_LOCK_SHA256") == lock_digest,
+            "Rocky transport lock digest must match the admitted provider lock")
     gcp = read(root, "infra/ci-cloud/gcp/versions.tf")
     require('project                         = "secpal-dev"' in gcp
             and 'zone                            = "europe-west3-a"' in gcp
@@ -1672,12 +1692,6 @@ def validate_rocky_control_plane(root: Path) -> None:
         "static GCP keys are forbidden",
     )
     variables = read(root, "infra/ci-cloud/gcp-rocky/variables.tf")
-    versions = read(root, "infra/ci-cloud/gcp-rocky/versions.tf")
-    require(
-        'required_version = "= 1.12.5"' in versions
-        and 'version = "= 7.40.0"' in versions,
-        "Rocky OpenTofu and Google provider versions must be exact",
-    )
     require(
         re.search(r'image\s*=\s*var\.exact_image_self_link', main) is not None
         and 'data "google_compute_image"' not in main

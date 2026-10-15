@@ -38,14 +38,16 @@ spec = importlib.util.spec_from_file_location('transport_observer', ROOT / 'scri
 observer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(observer)
 
-INSTALL = Path('.terraform/providers/registry.opentofu.org/hashicorp/google/7.40.0/linux_amd64')
-EXECUTABLE_SHA256 = '70351ed626f69ac84315e8ed5149986eafd7628c8d4b0eda4422f82665ec41e9'
-LOCK_SHA256 = '76f52a817f68fcb058bf499482070b4ff39098628c497a95ff8de2b42363e94c'
+# Reuse production identities; readonly init independently verifies the signed
+# provider package before the isolated regression checks those exact bytes.
+INSTALL = observer.GOOGLE_INSTALL
+EXECUTABLE_SHA256 = observer.GOOGLE_EXECUTABLE_SHA256
+LOCK_SHA256 = observer.GOOGLE_LOCK_SHA256
 CONFIG = '''terraform {
   required_providers {
     google = {
       source = "hashicorp/google"
-      version = "= 7.40.0"
+      version = "= @GOOGLE_PROVIDER_VERSION@"
     }
   }
 }
@@ -59,7 +61,7 @@ resource "google_compute_network" "local" {
   name = "local-observer-test"
   auto_create_subnetworks = false
 }
-'''
+'''.replace('@GOOGLE_PROVIDER_VERSION@', contract.GOOGLE_PROVIDER_VERSION)
 
 UNSUPPORTED = 77
 UNSUPPORTED_ERRNOS = {errno.EPERM, errno.EACCES, errno.EAFNOSUPPORT,
@@ -196,7 +198,7 @@ def identity():
 def isolated_topology(fixture, tofu):
     actual = fixture / INSTALL / 'terraform-provider-google'
     assert hashlib.sha256(actual.read_bytes()).hexdigest() == EXECUTABLE_SHA256
-    assert not actual.with_name('terraform-provider-google_v7.40.0_x5').exists()
+    assert not actual.with_name(f'terraform-provider-google_v{contract.GOOGLE_PROVIDER_VERSION}_x5').exists()
     server = socket.socket()
     server.bind(('127.0.0.1', 443))
     server.listen(4)
@@ -280,7 +282,7 @@ def isolated_topology(fixture, tofu):
             assert connection['process_id'] == pid
             assert connection['socket_cookie'] == query['socket_cookie']
             assert connection['local_port'] != unrelated_rows[0]['local_port']
-            print('PASS: real OpenTofu 1.12.5 / Google 7.40.0 executable, process, '
+            print(f'PASS: real OpenTofu 1.12.5 / Google {contract.GOOGLE_PROVIDER_VERSION} executable, process, '
                   'owned socket, inet_diag and unrelated connection exclusion; '
                   f'socket retained {time.monotonic()-start:.2f}s', flush=True)
     finally:
@@ -333,7 +335,7 @@ def installation_negatives(fixture):
                 executable.chmod(0o644)
                 restore = lambda: executable.chmod(0o755)
             elif case == 'ambiguous':
-                extra = executable.with_name('terraform-provider-google_v7.40.0_x5')
+                extra = executable.with_name(f'terraform-provider-google_v{contract.GOOGLE_PROVIDER_VERSION}_x5')
                 extra.write_bytes(b'unrelated'); extra.chmod(0o755)
                 restore = extra.unlink
             elif case in ('directory-symlink', 'version', 'source'):
@@ -345,7 +347,7 @@ def installation_negatives(fixture):
                     retained.rename(path)
                 if case == 'directory-symlink': path.symlink_to(retained, target_is_directory=True)
             else:
-                lock.write_bytes(original_lock.replace(b'7.40.0', b'7.40.1') if case == 'lock-version' else original_lock.replace(b'hashicorp/google', b'hashicorp/unrelated'))
+                lock.write_bytes(original_lock.replace(contract.GOOGLE_PROVIDER_VERSION.encode(), b'0.0.0') if case == 'lock-version' else original_lock.replace(b'hashicorp/google', b'hashicorp/unrelated'))
                 restore = lambda: lock.write_bytes(original_lock)
             try:
                 admitted = observer.PinnedGoogleProvider(fixture)

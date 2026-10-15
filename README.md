@@ -132,7 +132,7 @@ Run deterministic repository checks without starting the integration stack:
 The preflight does not install system tools or access production infrastructure.
 Install the pinned OpenTofu 1.12.5 alongside the existing validation tools;
 Rocky metadata tests evaluate the actual provider-bound representation locally.
-The transport-provider regression initializes Google 7.40.0 with the unchanged
+The transport-provider regression initializes Google 8.6.0 with the unchanged
 dependency lock in a disposable credential-isolated directory, then runs the
 real producer with only loopback networking. It accepts TCP without reading
 application data. Independent loopback, TCP_INFO/inet_diag and filtered

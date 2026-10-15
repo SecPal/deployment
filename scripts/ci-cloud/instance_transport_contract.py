@@ -15,6 +15,9 @@ import struct
 from jsonschema import Draft202012Validator
 
 RESPONSIBILITY = 'normalization,admission,assembly'
+# Independent transport enforcement of the versions.tf provider pin. Preflight
+# checks agreement before dispatch; schema and assembly share this definition.
+GOOGLE_PROVIDER_VERSION = '8.6.0'
 MAX_DOCUMENT_BYTES = 131072
 MAX_CONNECTIONS = 64
 MAX_WINDOW_NS = 3600_000_000_000
@@ -83,7 +86,7 @@ def schema():
         'provider_profile':{'enum':['gcp-rocky-10-2-arm64','gcp-rocky-10-2-x86-64']},
         'project':{'const':'secpal-dev'}, 'zone':{'const':'europe-west3-a'},
         'expected_instance_name':{'type':'string','pattern':'^sprk-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}-instance$'},
-        'opentofu_version':{'const':'1.12.5'}, 'google_provider_version':{'const':'7.40.0'},
+        'opentofu_version':{'const':'1.12.5'}, 'google_provider_version':{'const':GOOGLE_PROVIDER_VERSION},
         'observation_start':timestamp, 'observation_end':timestamp,
         'collection_status':{'enum':['COMPLETE','UNAVAILABLE','FAILED_STARTUP',
                                      'FAILED_RUNTIME','FAILED_SHUTDOWN','LIMIT_EXCEEDED']},
@@ -211,7 +214,7 @@ def assemble(identity,start,end,status,result,exit_code,connections,failure_oper
     """Construct from supplied observations; admission remains a separate surface."""
     return dict(identity, schema_version=1,kind='INSTANCE_INSERT_TRANSPORT_EVIDENCE',
                 collector='LINUX_EXACT_INET_DIAG_TCP_INFO_V1',opentofu_version='1.12.5',
-                google_provider_version='7.40.0',observation_start=start,observation_end=end,
+                google_provider_version=GOOGLE_PROVIDER_VERSION,observation_start=start,observation_end=end,
                 collection_status=status,
                 failure_operation=failure_operation or ('NONE' if status=='COMPLETE' else 'UNKNOWN'),
                 visibility='SAMPLED_SOCKETS_WITH_FILTERED_DESTRUCTION',
