@@ -387,10 +387,8 @@ INSERT INTO qualification_state VALUES ('00000000-0000-0000-0000-000000000081', 
                      '--volume=' + str(directory / 'php.ini') + ':/usr/local/etc/php/conf.d/zz-secpal-qualification.ini:ro,Z',
                      '--volume=' + str(CLIENT / 'application-code/bootstrap.php') + ':/run/secpal-qualification/bootstrap.php:ro,z',
                      '--volume=' + str(CLIENT / 'application-code/probe.php') + ':/run/secpal-qualification/probe.php:ro,z']
-        for destination, mount in runtime.role_spec('api').tmpfs.items():
-            arguments.append('--tmpfs=' + destination + ':size=' + str(mount.size)
-                + ',mode=' + format(mount.mode, '04o') + ',uid=10001,gid=10001,nosuid,nodev'
-                + (',noexec' if mount.noexec else ''))
+        arguments.extend('--mount=' + mount.removeprefix('Mount=')
+                         for mount in runtime.tmpfs_mounts('api'))
         environment = {'APP_ENV': 'production', 'APP_DEBUG': 'false', 'LOG_CHANNEL': 'stderr',
             'DB_CONNECTION': 'pgsql', 'DB_HOST': 'wrong.secpal.internal' if scenario == 'wrong-hostname' else 'db.secpal.internal',
             'DB_PORT': '5432', 'DB_DATABASE': 'secpal', 'DB_USERNAME': self.logins[role]['name'],
