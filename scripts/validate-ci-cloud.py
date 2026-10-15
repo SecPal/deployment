@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import base64
 import gzip
+import hashlib
 import json
 import re
 import sys
@@ -286,6 +287,17 @@ def validate_conformance_workflow(root: Path) -> None:
         root, "scripts/ci-cloud/init-cleanup-root.sh"
     )
     require("pull_request_target" not in text, "pull_request_target is forbidden")
+    retirement = (
+        'if [[ "$SECPAL_DEBIAN_CONFORMANCE_RETIRED" == true ]]; then\n'
+        "  printf '%s\\n' \\\n"
+        "    'ERROR: Debian/AppArmor conformance is retired; use Rocky "
+        "qualification.' >&2\n"
+        "  exit 1\nfi"
+    )
+    require(
+        text.count("SECPAL_DEBIAN_CONFORMANCE_RETIRED") == 2,
+        "superseded Debian conformance must fail before provider authority",
+    )
     trigger = document.get("on")
     require(isinstance(trigger, dict), "cloud conformance trigger must be a mapping")
     require(set(trigger) == {"workflow_dispatch"}, "cloud conformance must be manual only")
@@ -341,6 +353,18 @@ def validate_conformance_workflow(root: Path) -> None:
 
     jobs = document.get("jobs")
     assert isinstance(jobs, dict)
+    validate_steps = jobs["validate"].get("steps", [])
+    require(
+        isinstance(validate_steps, list)
+        and isinstance(validate_steps[0], dict)
+        and validate_steps[0].get("env", {}).get(
+            "SECPAL_DEBIAN_CONFORMANCE_RETIRED"
+        ) == "true"
+        and str(validate_steps[0].get("run", "")).startswith(
+            f"{retirement}\n"
+        ),
+        "Debian retirement must be the first validation action",
+    )
     require(
         set(jobs)
         == {"validate", "digitalocean", "digitalocean_cleanup", "gcp", "gcp_cleanup"},
@@ -1978,6 +2002,111 @@ def validate_gcp_iam_role(root: Path) -> None:
 
 
 def validate_rocky_control_plane(root: Path) -> None:
+    expected_target_sha = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+    expected_harness_sha256 = (
+        "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+    )
+    historical_273_target_sha = "c76742c828fefd71dda2b2d73fda6a0c43969426"
+    historical_273_harness_sha256 = (
+        "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+    )
+    historical_269_target_sha = "b76c24fe59fbe2406d8b84094fc9e6694c57f0c6"
+    historical_pre_269_harness_sha256 = (
+        "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+    )
+    historical_265_target_sha = "539d5faa6549be62060c8e20028caf200e5eca01"
+    historical_pre_265_harness_sha256 = (
+        "f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"
+    )
+    expected_target_line_rules = (
+        (456, 462, "qualify-host-identity"),
+        (464, 467, "qualify-administrator-execution"),
+        (468, 471, "qualify-fixture-reference"),
+        (472, 493, "qualify-service-account"),
+        (497, 500, "qualify-selinux-host"),
+        (502, 515, "qualify-native-architecture"),
+        (517, 520, "qualify-cgroup"),
+        (521, 537, "qualify-rootless-runtime"),
+        (538, 541, "qualify-fixture-presence"),
+        (543, 552, "qualify-fixture-setup"),
+        (554, 613, "qualify-quadlet-authority"),
+        (614, 614, "qualify-quadlet-daemon-reload"),
+        (615, 637, "qualify-quadlet-authority"),
+        (638, 638, "qualify-quadlet-start"),
+        (639, 639, "qualify-quadlet-active-state"),
+        (641, 652, "qualify-quadlet-authority"),
+        (653, 658, "qualify-workload-primary"),
+        (659, 665, "qualify-seccomp"),
+        (668, 668, "qualify-selinux-storage-directory-create"),
+        (670, 674, "qualify-workload-primary"),
+        (675, 678, "qualify-workload-secondary"),
+        (680, 686, "qualify-selinux-storage"),
+        (690, 694, "qualify-avc-correlation"),
+        (698, 704, "qualify-selinux-policy-restoration"),
+        (707, 711, "qualify-avc-correlation"),
+        (713, 721, "qualify-selinux-policy-restoration"),
+        (724, 740, "qualify-avc-correlation"),
+        (749, 752, "qualify-runtime-fallback-absence"),
+        (754, 754, "qualification-harness"),
+        (760, 768, "qualify-avc-correlation"),
+    )
+
+    def schema_const_pairs(document: object) -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        if isinstance(document, dict):
+            properties = document.get("properties")
+            required = document.get("required")
+            if (
+                isinstance(properties, dict)
+                and isinstance(required, list)
+                and all(isinstance(item, str) for item in required)
+            ):
+                target = properties.get("target_sha")
+                harness = properties.get("harness_sha256")
+                if (
+                    {"target_sha", "harness_sha256"} <= set(required)
+                    and isinstance(target, dict)
+                    and isinstance(target.get("const"), str)
+                    and isinstance(harness, dict)
+                    and isinstance(harness.get("const"), str)
+                ):
+                    pairs.append((target["const"], harness["const"]))
+            for value in document.values():
+                pairs.extend(schema_const_pairs(value))
+        elif isinstance(document, list):
+            for value in document:
+                pairs.extend(schema_const_pairs(value))
+        return pairs
+
+    def schema_const_pair_at(
+        document: object, *path: object
+    ) -> tuple[str, str] | None:
+        node = document
+        for component in path:
+            if isinstance(component, str) and isinstance(node, dict):
+                node = node.get(component)
+            elif (
+                isinstance(component, int)
+                and isinstance(node, list)
+                and 0 <= component < len(node)
+            ):
+                node = node[component]
+            else:
+                return None
+        if not isinstance(node, dict):
+            return None
+        properties = node.get("properties")
+        if not isinstance(properties, dict):
+            return None
+        target = properties.get("target_sha")
+        harness = properties.get("harness_sha256")
+        if not isinstance(target, dict) or not isinstance(harness, dict):
+            return None
+        if not isinstance(target.get("const"), str) or not isinstance(
+            harness.get("const"), str
+        ):
+            return None
+        return target["const"], harness["const"]
     relative = ".github/workflows/rocky-cloud-qualification.yml"
     # Historical mutation tests construct a deliberately minimal legacy tree.
     # Repository presence is owned independently by repository-contract.sh.
@@ -1995,12 +2124,27 @@ def validate_rocky_control_plane(root: Path) -> None:
         set(inputs)
         == {
             "operation",
+            "qualification",
             "target_sha",
             "provider_profile",
             "continuation_run_id",
             "continuation_run_attempt",
         },
         "Rocky workflow input set changed",
+    )
+    qualification = inputs.get("qualification")
+    require(
+        isinstance(qualification, dict)
+        and qualification.get("type") == "choice"
+        and qualification.get("default") == "rocky-host"
+        and qualification.get("options") == ["rocky-host", "native-postgresql-18", "product-backend-policy"],
+        "Rocky/PostgreSQL qualification selector must remain closed",
+    )
+    require(
+        inputs["target_sha"].get("required") == "false"
+        and '[[ -z "$RAW_TARGET_SHA" ]]' in text
+        and 'RAW_TARGET_SHA="$expected_target_sha"' in text,
+        "PostgreSQL source identity must be trusted-derived, not dispatch-selected",
     )
     operation = inputs.get("operation")
     profile = inputs.get("provider_profile")
@@ -2012,13 +2156,65 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     require(
         isinstance(profile, dict)
-        and profile.get("options") == ["gcp-rocky-10-2-arm64"],
+        and profile.get("options")
+        == ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"],
         "Rocky provider profile must remain closed",
+    )
+    arm64_profile = json.loads(
+        read(root, "config/ci-cloud/gcp-rocky-10-2-arm64.json")
+    )
+    x86_64_profile = json.loads(
+        read(root, "config/ci-cloud/gcp-rocky-10-2-x86-64.json")
+    )
+    require(
+        arm64_profile["profile"] == "gcp-rocky-10-2-arm64"
+        and arm64_profile["architecture"] == "aarch64"
+        and arm64_profile["machine_type"] == "c4a-standard-4"
+        and arm64_profile["image"]["discovery_family"]
+        == "rocky-linux-10-arm64"
+        and x86_64_profile["profile"] == "gcp-rocky-10-2-x86-64"
+        and x86_64_profile["architecture"] == "x86_64"
+        and x86_64_profile["cpu_baseline"] == "x86-64-v3"
+        and x86_64_profile["machine_type"] == "c3-standard-4"
+        and x86_64_profile["image"]["discovery_family"] == "rocky-linux-10"
+        and arm64_profile["fixture"]["input"]
+        == x86_64_profile["fixture"]["input"]
+        and arm64_profile["fixture"]["arm64_child"]
+        != x86_64_profile["fixture"]["amd64_child"],
+        "Rocky reviewed profiles have incompatible provider or architecture facts",
+    )
+    require(
+        "config/ci-cloud/${" not in text
+        and "config/ci-cloud/${{ inputs.provider_profile }}" not in text
+        and 'gcp-rocky-10-2-x86-64) machine_type=c3-standard-4'
+        in text,
+        "Rocky profile selection must remain closed and path-independent",
     )
     require(
         "github.ref == 'refs/heads/main'" in text
-        and "^[0-9a-fA-F]{40}$" in text,
-        "Rocky control must execute trusted main for one immutable target SHA",
+        and "^[0-9a-fA-F]{40}$" in text
+        and f"readonly expected_target_sha={expected_target_sha}" in text
+        and f"readonly expected_harness_sha256={expected_harness_sha256}" in text
+        and text.count('[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ]]')
+        == 2
+        and text.count(
+            "readonly historical_cleanup_target_sha="
+            "293977ae93408a7bb812619de58649ab8a92d438"
+        )
+        == 1
+        and text.count(
+            '[[ "${RAW_TARGET_SHA,,}" == "$expected_target_sha" ||\n'
+            '                "${RAW_TARGET_SHA,,}" == '
+            '"$historical_cleanup_target_sha" ]]'
+        )
+        == 1
+        and (
+            '[[ "$(sha256sum scripts/qualify-production-host.sh | awk '
+            "'{print $1}')\" == \\\n"
+            '            "$expected_harness_sha256" ]]'
+        )
+        in text,
+        "Rocky control must authenticate one immutable target/harness pair",
     )
     jobs = document.get("jobs")
     require(isinstance(jobs, dict), "Rocky workflow jobs must be a mapping")
@@ -2027,6 +2223,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         == {
             "validate",
             "discover",
+            "confirm_postgresql",
             "provision",
             "resume_control",
             "qualify_target",
@@ -2040,8 +2237,23 @@ def validate_rocky_control_plane(root: Path) -> None:
     preparation = read(root, "scripts/ci-cloud/prepare-rocky-host.sh")
     target_runner = read(root, "scripts/ci-cloud/run-rocky-target-qualification.sh")
     qualification_harness = read(root, "scripts/qualify-production-host.sh")
+    quadlet_authority_contract = read(
+        root, "scripts/quadlet_authority_contract.py"
+    )
+    selinux_isolation_contract = read(
+        root, "scripts/selinux_isolation_contract.py"
+    )
+    qualification_schema = json.loads(
+        read(root, "schemas/rocky-cloud-qualification-evidence.schema.json")
+    )
+    target_failure_schema = json.loads(
+        read(root, "schemas/rocky-cloud-target-qualification-failure.schema.json")
+    )
     target_failure_classifier = read(
         root, "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+    )
+    target_replay_verifier = read(
+        root, "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
     )
     rocky_control = read(root, "scripts/ci-cloud/rocky-control.py")
     target_failure_trace = read(
@@ -2069,10 +2281,159 @@ def validate_rocky_control_plane(root: Path) -> None:
         root, "scripts/ci-cloud/wait-rocky-qualification-readiness.py"
     )
     main = read(root, "infra/ci-cloud/gcp-rocky/main.tf")
+    main += read(root, "infra/ci-cloud/gcp-rocky/metadata.tf")
+    source_names = set(re.findall(
+        r"^\s+(\w+)\s*=\s*(?:file\(|var\.(?:postgresql_candidate_json|product_backend_policy_json)\s*$)",
+        read(root, "infra/ci-cloud/gcp-rocky/metadata.tf"), re.MULTILINE,
+    ))
+    installer_names = {
+        quoted or bare for quoted, bare in re.findall(
+            r"^\s*decode_script (?:'([a-z0-9_]+)'|([a-z0-9_]+)) ",
+            bootstrap, re.MULTILINE,
+        )
+    }
+    require(source_names == installer_names,
+            "Rocky transport must preserve the exact fixed installed component inventory")
+    require(
+        "metadata = local.rocky_metadata" in main
+        and main.count("terraform_data.rocky_metadata_admission]") == 2
+        and "rocky_metadata_values_admitted" in main
+        and "rocky_metadata_aggregate_admitted" in main
+        and "rocky_bootstrap_expansion_admitted" in main
+        and "ROCKY_BOOTSTRAP_TRANSPORT_INTEGRITY_FAILED" in bootstrap
+        and "decoder.unconsumed_tail or decoder.unused_data" in bootstrap
+        and "hashlib.sha256(payload).hexdigest()" in bootstrap
+        and "object_pairs_hook=unique_object" in bootstrap
+        and "sorted(sources) != names" in bootstrap
+        and text.count("python3 scripts/ci-cloud/admit-rocky-metadata.py") == 1
+        and text.index("python3 scripts/ci-cloud/admit-rocky-metadata.py")
+        < text.index("      - name: Authenticate trusted provisioning through OIDC")
+        < text.index("          tofu apply --auto-approve --input=false"),
+        "Rocky metadata must admit the actual bounded transport before provider credentials and resources",
+    )
     target_line_rules = literal_constant(target_failure_classifier, "LINE_RULES")
-    storage_setup_line_rules = [
-        rule for rule in target_line_rules if 241 <= rule[0] <= 244
+    target_failure_schema_pair_sequence = [
+        schema_const_pair_at(
+            target_failure_schema, "allOf", 0, "then", "oneOf", 1
+        ),
+        schema_const_pair_at(
+            target_failure_schema, "allOf", 0, "then", "oneOf", 0
+        ),
+        *[
+            schema_const_pair_at(
+                target_failure_schema, "allOf", 3, "then", "anyOf", index
+            )
+            for index in range(4)
+        ],
+        *[
+            schema_const_pair_at(
+                target_failure_schema,
+                "allOf",
+                condition,
+                "if",
+                "anyOf",
+                index,
+            )
+            for condition, length in ((18, 7), (19, 5), (20, 5))
+            for index in range(length)
+        ],
     ]
+    expected_target_failure_schema_pair_sequence = [
+        (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
+        (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
+        (historical_269_target_sha, historical_pre_269_harness_sha256),
+        (historical_265_target_sha, historical_pre_265_harness_sha256),
+        ("83d0c3720d342d0222e8dee9819e28d0c6739f84", "ba4daa656cc462264c00f830985ad3c346e7ca4db8df9a50e8ee0c7a7d499946"),
+        ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        ("b8f5a505d318d06a64a5975cfaba9f1e5ba0041f", "918c992aad9c937fa2639cd345adc849784344574c44da3d7e3dfeb01bd770fa"),
+        (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
+        (historical_269_target_sha, historical_pre_269_harness_sha256),
+        (historical_265_target_sha, historical_pre_265_harness_sha256),
+        ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
+        (historical_269_target_sha, historical_pre_269_harness_sha256),
+        (historical_265_target_sha, historical_pre_265_harness_sha256),
+        ("293977ae93408a7bb812619de58649ab8a92d438", "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"),
+        (expected_target_sha, expected_harness_sha256),
+        (historical_273_target_sha, historical_273_harness_sha256),
+        (historical_269_target_sha, historical_pre_269_harness_sha256),
+        (historical_265_target_sha, historical_pre_265_harness_sha256),
+    ]
+    storage_setup_line_rules = [
+        rule
+        for rule in target_line_rules
+        if rule[2] == "qualify-selinux-storage-directory-create"
+    ]
+    validate_job_text = json.dumps(jobs["validate"], sort_keys=True)
+    require(
+        "scripts/validate-rocky-evidence-architecture.py" in validate_job_text
+        and "scripts/validate-ci-cloud.py" in validate_job_text
+        and "jsonschema==4.25.1 PyYAML==6.0.2" in validate_job_text,
+        "Rocky schema and diagnostic agreement must fail before provider authority",
+    )
+    require(
+        hashlib.sha256((root / "scripts/qualify-production-host.sh").read_bytes()).hexdigest()
+        == expected_harness_sha256
+        and f'EXPECTED_TARGET_SHA = "{expected_target_sha}"'
+        in target_failure_classifier
+        and f'EXPECTED_HARNESS_SHA256 = "{expected_harness_sha256}"'
+        in target_failure_classifier
+        and f'HISTORICAL_273_TARGET_SHA = "{historical_273_target_sha}"'
+        in target_failure_classifier
+        and f'HISTORICAL_273_HARNESS_SHA256 = "{historical_273_harness_sha256}"'
+        in target_failure_classifier
+        and f'HISTORICAL_PRE_269_TARGET_SHA = "{historical_269_target_sha}"'
+        in target_failure_classifier
+        and f'HISTORICAL_PRE_269_HARNESS_SHA256 = "{historical_pre_269_harness_sha256}"'
+        in target_failure_classifier
+        and f'HISTORICAL_PRE_265_TARGET_SHA = "{historical_265_target_sha}"'
+        in target_failure_classifier
+        and f'HISTORICAL_PRE_265_HARNESS_SHA256 = "{historical_pre_265_harness_sha256}"'
+        in target_failure_classifier
+        and f"readonly expected_target_sha={expected_target_sha}" in target_runner
+        and f"readonly expected_harness_sha256={expected_harness_sha256}"
+        in target_runner
+        and '[[ "$target_sha" != "$expected_target_sha" ||' in target_runner
+        and '"$qualification_harness_sha256" != "$expected_harness_sha256" ]]'
+        in target_runner
+        and target_runner.index('[[ "$target_sha" != "$expected_target_sha" ||')
+        < target_runner.index("secpal-collect-rocky-preparation")
+        < target_runner.index("getent ahostsv4 github.com")
+        < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+        and schema_const_pairs(target_failure_schema).count(
+            (expected_target_sha, expected_harness_sha256)
+        )
+        == 5
+        and schema_const_pairs(target_failure_schema).count(
+            (historical_273_target_sha, historical_273_harness_sha256)
+        )
+        == 5
+        and schema_const_pairs(target_failure_schema).count(
+            (historical_269_target_sha, historical_pre_269_harness_sha256)
+        )
+        == 4
+        and schema_const_pairs(target_failure_schema).count(
+            (historical_265_target_sha, historical_pre_265_harness_sha256)
+        )
+        == 4
+        and target_failure_schema_pair_sequence
+        == expected_target_failure_schema_pair_sequence
+        and qualification_schema["properties"]["target_sha"]
+        == {"enum": [historical_273_target_sha, expected_target_sha]}
+        and qualification_schema["properties"]["native_observation"]["properties"][
+            "target_sha"
+        ]
+        == {"enum": [historical_273_target_sha, expected_target_sha]}
+        and qualification_schema["allOf"][0]["then"]["properties"]["target_sha"]
+        == {"const": historical_273_target_sha}
+        and qualification_schema["allOf"][1]["then"]["properties"]["target_sha"]
+        == {"const": expected_target_sha},
+        "active target, harness, classifier, and schema bindings disagree",
+    )
     for forbidden in (
         "id-token",
         "google-github-actions/auth",
@@ -2132,8 +2493,61 @@ def validate_rocky_control_plane(root: Path) -> None:
         '"$(sha256sum "$work_root/scripts/qualify-production-host.sh" | awk \'{print $1}\')" != "$qualification_harness_sha256"'
         in target_runner
         and 'bash "$work_root/scripts/qualify-production-host.sh"' in target_runner
-        and "qualification_harness_base64gzip" not in bootstrap + main,
+        and '-f "$work_root/scripts/selinux_isolation_contract.py"' in target_runner
+        and '! -L "$work_root/scripts/selinux_isolation_contract.py"' in target_runner
+        and "readonly trusted_selinux_isolation_contract=/opt/secpal-control/scripts/selinux_isolation_contract.py"
+        in target_runner
+        and '-f "$trusted_selinux_isolation_contract"' in target_runner
+        and '! -L "$trusted_selinux_isolation_contract"' in target_runner
+        and '"$(stat -c \'%u:%g:%a\' -- "$trusted_selinux_isolation_contract")" == 0:0:700'
+        in target_runner
+        and '/usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"'
+        in target_runner
+        and '-f "$work_root/scripts/quadlet_authority_contract.py"'
+        in target_runner
+        and '! -L "$work_root/scripts/quadlet_authority_contract.py"'
+        in target_runner
+        and "readonly trusted_quadlet_authority_contract=/opt/secpal-control/scripts/quadlet_authority_contract.py"
+        in target_runner
+        and '-f "$trusted_quadlet_authority_contract"' in target_runner
+        and '! -L "$trusted_quadlet_authority_contract"' in target_runner
+        and '"$(stat -c \'%u:%g:%a\' -- "$trusted_quadlet_authority_contract")" == 0:0:700'
+        in target_runner
+        and '/usr/bin/cmp --silent -- "$work_root/scripts/quadlet_authority_contract.py" "$trusted_quadlet_authority_contract"'
+        in target_runner
+        and target_runner.index(
+            '/usr/bin/cmp --silent -- "$work_root/scripts/selinux_isolation_contract.py" "$trusted_selinux_isolation_contract"'
+        )
+        < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+        and target_runner.index(
+            '/usr/bin/cmp --silent -- "$work_root/scripts/quadlet_authority_contract.py" "$trusted_quadlet_authority_contract"'
+        )
+        < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
+        and "timeout --signal=TERM --kill-after=180s 45m" in target_runner
+        and "qualification_harness" not in bootstrap + main,
         "trusted control must bind the exact target qualification workload bytes",
+    )
+    require(
+        "trap cleanup EXIT" in qualification_harness
+        and "trap 'interrupted 129' HUP" in qualification_harness
+        and "trap 'interrupted 130' INT" in qualification_harness
+        and "trap 'interrupted 143' TERM" in qualification_harness
+        and "if ((interrupted_status != 0)); then" in qualification_harness
+        and 'exit_status="$interrupted_status"' in qualification_harness
+        and qualification_harness.count("/usr/bin/timeout --signal=KILL") >= 8
+        and qualification_harness.count(
+            "/usr/bin/timeout --signal=KILL 30s semodule -B"
+        ) == 2
+        and qualification_harness.count(
+            'rm -f -- "$qualification_success_marker"'
+        ) == 2
+        and qualification_harness.index(
+            'install -o 0 -g 0 -m 0600 /dev/null "$qualification_success_marker"'
+        )
+        < qualification_harness.index(
+            "printf 'PASS: Rocky Linux %s target workload contract"
+        ),
+        "qualification interruption must preserve bounded cleanup and non-success",
     )
     require(
         '[[ "$service_uid" =~ ^[1-9][0-9]*$ && "$service_gid" =~ ^[1-9][0-9]*$ ]]'
@@ -2191,23 +2605,57 @@ def validate_rocky_control_plane(root: Path) -> None:
     )
     require(
         "effective_quadlet_service_admitted() {" in qualification_harness
-        and '[[ "$fragment" == "$expected_fragment" ]]'
+        and 'readonly QUADLET_AUTHORITY_INVARIANT_OWNER="quadlet_authority_contract.admit_quadlet_authority"'
         in qualification_harness
-        and '[[ "$source" == "$expected_source" ]]'
+        and 'python3 "$QUADLET_AUTHORITY_CONTRACT" "$properties_path"'
         in qualification_harness
-        and '[[ -z "$drop_ins" ]]' in qualification_harness
-        and "direct_podman_prefix='{ path=/usr/bin/podman ; argv[]=/usr/bin/podman run '"
+        and '"\\"invariant_owner\\":\\"${QUADLET_AUTHORITY_INVARIANT_OWNER}\\""'
         in qualification_harness
         and '--property=FragmentPath --property=SourcePath' in qualification_harness
         and '--property=DropInPaths --property=ExecStart' in qualification_harness
+        and 'INVARIANT_OWNER = "quadlet_authority_contract.admit_quadlet_authority"'
+        in quadlet_authority_contract
+        and 'r"^/run/user/(?P<uid>[1-9][0-9]*)/systemd/generator/"'
+        in quadlet_authority_contract
+        and 'r"^/etc/containers/systemd/users/(?P<uid>[1-9][0-9]*)/"'
+        in quadlet_authority_contract
+        and 'properties["DropInPaths"]' in quadlet_authority_contract
+        and 'properties["ExecStart"] != expected_exec_start(unit_name)'
+        in quadlet_authority_contract
+        and "runtime_uid > 4_294_967_294" in quadlet_authority_contract
+        and "return 125" in quadlet_authority_contract
+        and "((status == 1)) && return 1" in qualification_harness
+        and "return 125" in qualification_harness
+        and "ERROR: unable to evaluate effective Quadlet service authority"
+        in qualification_harness
+        and '"qualify-quadlet-authority", "command-failed"'
+        in target_failure_classifier
+        and quadlet_authority_contract.count('"executable": "/usr/bin/podman"')
+        == 2
+        and '"--network",\n        "none",' in quadlet_authority_contract
+        and quadlet_authority_contract.count('"ignore_errors": False') == 2
+        and quadlet_authority_contract.count('"status": "0/0"') == 2
+        and qualification_schema["$defs"]["quadlet_authority"]["properties"][
+            "invariant_owner"
+        ]["const"]
+        == "quadlet_authority_contract.admit_quadlet_authority"
+        and 'QUADLET_AUTHORITY_INVARIANT_OWNER = (' in rocky_control
+        and '"quadlet_authority_contract.admit_quadlet_authority"'
+        in rocky_control
+        and "load_quadlet_authority_contract()" in rocky_control
+        and "target and trusted Quadlet authority normalization disagree"
+        in rocky_control
+        and "quadlet_authority_contract" in main
+        and "decode_script 'quadlet_authority_contract' /opt/secpal-control/scripts/quadlet_authority_contract.py"
+        in bootstrap
         and qualification_harness.index("\nuser_systemctl daemon-reload\n")
         < qualification_harness.index(
-            "\nif ! effective_quadlet_service_admitted \\\n"
+            "\nif effective_quadlet_service_admitted \\\n"
         )
         < qualification_harness.index(
             '\nuser_systemctl start "${unit_name}.service"\n'
         ),
-        "qualification must admit the effective generated service before activation",
+        "the Quadlet authority owner and every enforcement point must agree before activation",
     )
     require(
         "least_authority_process_admitted() {" in qualification_harness
@@ -2263,37 +2711,77 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and "for attempt in range(12):" in target_runner
         and "time.sleep(0.5)" in target_runner
-        and "if events is None:\n                return None, None" in target_runner
-        and "if events:\n                return stdout, events" in target_runner
-        and "def audit_event_id(" in target_runner
-        and 'r"([0-9]{2}/[0-9]{2}/[0-9]{2}) "' in target_runner
-        and 'datetime.strptime(f"{date} {time}", "%m/%d/%y %H:%M:%S.%f")'
+        and "selinux_isolation_contract.admit_selinux_isolation(" in target_runner
+        and "except selinux_isolation_contract.NoMatchingAvc:" in target_runner
+        and "except selinux_isolation_contract.IsolationError:" in target_runner
+        and 'SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6' in target_runner
+        and '--avc-correlation-diagnostic "$avc_correlation_diagnostic"'
         in target_runner
-        and "def correlated_avc_events(" in target_runner
-        and "for line in audit_text.splitlines():" in target_runner
-        and 'if line in {"", "----"}:\n            continue' in target_runner
-        and "if record is None:\n            return None" in target_runner
-        and "event_id = audit_event_id(line)" in target_runner
-        and "if event_id is None:\n            return None" in target_runner
-        and 'events.setdefault(event_id, {"avc": 0, "marker": 0})'
+        and "diagnose_avc_correlation_bytes(" in qualification_harness
+        and "capture_avc_correlation_diagnostic(" in qualification_harness
+        and "publish_avc_correlation_diagnostic" in qualification_harness
+        and "reject_avc_observation() {" in qualification_harness
+        and 'reject_avc_observation "$denial_status"'
+        in qualification_harness
+        and "validate_avc_correlation_diagnostic" in rocky_control
+        and rocky_control.count(
+            "json.loads(payload, object_pairs_hook=reject_duplicate_keys)"
+        )
+        == 2
+        and "build_avc_correlation_diagnostic(" in target_failure_classifier
+        and "contract.validate_avc_correlation_diagnostic(projection)"
+        in target_failure_classifier
+        and 'projection.get("correlation_outcome") == "admitted"'
+        in target_failure_classifier
+        and target_failure_schema["properties"]["schema_version"]["enum"]
+        == [1, 2, 3, 4]
+        and "avc_correlation_diagnostic"
+        in target_failure_schema["properties"]
+        and "process_a=facts[\"process_a\"]" in target_runner
+        and "process_b=facts[\"process_b\"]" in target_runner
+        and "storage_a=facts[\"storage_a\"]" in target_runner
+        and 'selinux_isolation["denial"]["pid"] != denial_pid'
         in target_runner
-        and 'event["avc"] > 1 or event["marker"] > 1' in target_runner
-        and 'r"avc:\\s+denied\\s+\\{"' in target_runner
-        and 'record_type == "PROCTITLE"' in target_runner
-        and "r'(?:^|\\s)proctitle=[^\\r\\n]*'" in target_runner
-        and "r'(?:^|\\s)/foreign/marker(?:\\s|$)'" in target_runner
-        and 'tclass.group(1) == "dir"' in target_runner
-        and 'r"(?:^|\\s)permissive=0(?:\\s|$)"' in target_runner
-        and 'if event["avc"] == 1 and event["marker"] == 1' in target_runner
-        and 'facts["process_b"],\n    facts["storage_a"],'
+        and 'selinux_isolation["denial"]["syscall_pid"] != denial_pid'
         in target_runner
-        and "if not avc_events:" in target_runner
-        and "if len(avc_events) != 1:" in target_runner
+        and "selinux_isolation_contract.canonical_bytes(selinux_isolation)"
+        in target_runner
+        and 'isolation_digest != facts["selinux_isolation_sha256"]'
+        in target_runner
         and 'stdout_limit=65536' in target_runner
         and 'stderr_limit=4096' in target_runner
         and 'timeout=5' in target_runner
         and "re.DOTALL" not in target_runner,
-        "AVC admission must correlate one enforcing marker event within one audit serial",
+        "AVC observation must reach the canonical SELinux isolation owner",
+    )
+    isolation_schema = qualification_schema["$defs"]["selinux_isolation"]
+    context_schema = qualification_schema["$defs"]["normalized_context"]
+    normalize_unique_avc_source = selinux_isolation_contract.split(
+        "def normalize_unique_enforcing_avc(", 1
+    )[1].split("\ndef admit_selinux_isolation(", 1)[0]
+    require(
+        'RESPONSIBILITY = "normalization,admission"'
+        in selinux_isolation_contract
+        and 'INVARIANT_OWNER = "selinux_isolation_contract.admit_selinux_isolation"'
+        in selinux_isolation_contract
+        and "MCS_CATEGORY_MIN = 0" in selinux_isolation_contract
+        and "MCS_CATEGORY_MAX = 1023" in selinux_isolation_contract
+        and "len(raw_categories) not in {1, 2}" in selinux_isolation_contract
+        and "len(set(categories)) != len(categories)" in selinux_isolation_contract
+        and "events.setdefault(" in normalize_unique_avc_source
+        and "_event_id(line)" in normalize_unique_avc_source
+        and "len(candidates) != 1" in normalize_unique_avc_source
+        and '"permissive": "0"' in selinux_isolation_contract
+        and 'def _syscall_matches(line: str, pid: int)' in selinux_isolation_contract
+        and '_field(line, "pid") == str(pid)' in selinux_isolation_contract
+        and 'EXPECTED_COMMAND = "cat"' in selinux_isolation_contract
+        and '_field(line, "comm") == EXPECTED_COMMAND' in selinux_isolation_contract
+        and '"SYSCALL": []' in normalize_unique_avc_source
+        and isolation_schema["properties"]["invariant_owner"]["const"]
+        == "selinux_isolation_contract.admit_selinux_isolation"
+        and context_schema["properties"]["mcs_categories"]["items"]["maximum"]
+        == 1023,
+        "canonical SELinux isolation owner and schema projection disagree",
     )
     require(
         'runtime_home == Path("/home/secpal-runtime")' in target_runner
@@ -2387,8 +2875,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         "qualification admission must preserve each closed runtime-user boundary",
     )
     require(
-        "readiness_publisher_base64gzip" in main
-        and "runtime_user_systemd_base64gzip" in main
+        "readiness_publisher" in main
+        and "runtime_user_systemd" in main
         and "secpal-publish-rocky-qualification-readiness" in bootstrap
         and "runtime_user_systemd.py" in bootstrap
         and '--boot-id "$boot_id"' in bootstrap
@@ -2402,9 +2890,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         "startup must bind one invalidated current-boot marker to runtime-user admission",
     )
     require(
-        "EXPECTED_TARGET_SHA = \"293977ae93408a7bb812619de58649ab8a92d438\""
+        "EXPECTED_TARGET_SHA = \"402c22b0a1d69a5a3dba74ffb68cf016caba606b\""
         in target_failure_classifier
-        and "EXPECTED_HARNESS_SHA256 = \"8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db\""
+        and "EXPECTED_HARNESS_SHA256 = \"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac\""
         in target_failure_classifier
         and "unclassified-target-failure" in target_failure_classifier
         and "SECPAL_TARGET_ERR_V2" in target_failure_classifier
@@ -2427,11 +2915,14 @@ def validate_rocky_control_plane(root: Path) -> None:
             and rule[0] > 91
             for rule in target_line_rules
         )
-        and [rule for rule in target_line_rules if rule[0] <= 239 and rule[1] >= 237]
+        and target_line_rules == expected_target_line_rules
+        and [rule for rule in target_line_rules if rule[0] <= 652 and rule[1] >= 614]
         == [
-            (237, 237, "qualify-quadlet-daemon-reload"),
-            (238, 238, "qualify-quadlet-start"),
-            (239, 239, "qualify-quadlet-active-state"),
+            (614, 614, "qualify-quadlet-daemon-reload"),
+            (615, 637, "qualify-quadlet-authority"),
+            (638, 638, "qualify-quadlet-start"),
+            (639, 639, "qualify-quadlet-active-state"),
+            (641, 652, "qualify-quadlet-authority"),
         ]
         and all(
             operation not in {
@@ -2443,7 +2934,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         )
         and storage_setup_line_rules
         == [
-            (241, 244, "qualify-selinux-storage-directory-create"),
+            (668, 668, "qualify-selinux-storage-directory-create"),
         ]
         and "qualify-quadlet-runtime" not in target_failure_classifier
         and 'if len(explicit) > 1:\n        return "qualification-harness", "unclassified-target-failure"'
@@ -2461,7 +2952,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and target_runner.count("exit 91") == 2
         and 'rm -f -- "$stdout"' in target_runner
         and "qualification_failure_expected" in target_text
-        and "head -c 4097" in target_text
+        and "head -c 16385" in target_text
         and "target-qualification-failure.json" in target_text,
         "target harness failures must retain one bounded negative-only semantic identity",
     )
@@ -2473,7 +2964,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and '"${14}" == start' in target_failure_trace
         and "SECPAL_START_OBSERVATION_PATH"
         not in target_failure_trace + target_runner + start_runuser
-        and "10#$frame == 237" in target_failure_trace
+        and "10#$frame == 614" in target_failure_trace
         and 'REAL_RUNUSER = Path("/usr/sbin/runuser")' in start_runuser
         and 'TRUSTED_ENV = Path("/usr/local/libexec/secpal-control/rocky-start-env")'
         in start_runuser
@@ -2499,9 +2990,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and 'exec 6>/var/lib/secpal-rocky/evidence/quadlet-start-observation.json'
         in target_failure_trace
-        and "start_runuser_base64gzip" in main
-        and "start_env_base64gzip" in main
-        and "start_systemctl_base64gzip" in main
+        and "start_runuser" in main
+        and "start_env" in main
+        and "start_systemctl" in main
         and "rocky-start-runuser" in bootstrap
         and "rocky-start-env" in bootstrap
         and "rocky-start-systemctl" in bootstrap
@@ -2543,9 +3034,9 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_runner
         and 'exec 7>/var/lib/secpal-rocky/evidence/quadlet-active-observation.json'
         in target_failure_trace
-        and "active_runuser_base64gzip" in main
-        and "active_env_base64gzip" in main
-        and "active_systemctl_base64gzip" in main
+        and "active_runuser" in main
+        and "active_env" in main
+        and "active_systemctl" in main
         and "rocky-active-runuser" in bootstrap
         and "rocky-active-env" in bootstrap
         and "rocky-active-systemctl" in bootstrap,
@@ -2588,8 +3079,8 @@ def validate_rocky_control_plane(root: Path) -> None:
         and 'OBSERVATION_PATH = Path(' in primary_runuser
         and '"/var/lib/secpal-rocky/evidence/primary-workload-observation.json"'
         in primary_runuser
-        and "primary_runuser_base64gzip" in main
-        and "primary_runtime_base64gzip" in main
+        and "primary_runuser" in main
+        and "primary_runtime" in main
         and "rocky-primary-runuser" in bootstrap
         and "rocky-primary-runtime" in bootstrap
         and not (root / "scripts/ci-cloud/rocky-primary-env.py").exists()
@@ -2632,14 +3123,14 @@ def validate_rocky_control_plane(root: Path) -> None:
         in target_failure_trace
         and "timeout --signal=KILL 1s date -u '+%Y%m%d%H%M%S'"
         in target_failure_trace
-        and "10#$frame == 237" in target_failure_trace
+        and "10#$frame == 614" in target_failure_trace
         and "trap - ERR" in target_failure_trace
         and "read -r -t 25 -u 5" in target_failure_trace
         and "return \"$status\"" in target_failure_trace
         and 'mkfifo -m 0600 "$reload_event" "$reload_ack"' in target_runner
-        and '"$target_sha" == 293977ae93408a7bb812619de58649ab8a92d438'
+        and '"$target_sha" == "$expected_target_sha"'
         in target_runner
-        and "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        and '"$qualification_harness_sha256" == "$expected_harness_sha256"'
         in target_runner
         and target_runner.index("observe-rocky-quadlet-reload-adjacency.py")
         < target_runner.index('bash "$work_root/scripts/qualify-production-host.sh"')
@@ -2652,9 +3143,9 @@ def validate_rocky_control_plane(root: Path) -> None:
             target_runner.index("observe-rocky-quadlet-reload-adjacency.py"),
         )
         and "--reload-adjacency \"$reload_adjacency\"" in target_runner
-        and "reload_observer_base64gzip" in main
-        and "reload_runuser_base64gzip" in main
-        and "reload_systemctl_base64gzip" in main
+        and "reload_observer" in main
+        and "reload_runuser" in main
+        and "reload_systemctl" in main
         and "observe-rocky-quadlet-reload-adjacency.py" in bootstrap
         and "rocky-reload-runuser" in bootstrap
         and "/usr/local/libexec/secpal-control/rocky-reload-systemctl" in bootstrap
@@ -2674,7 +3165,7 @@ def validate_rocky_control_plane(root: Path) -> None:
         and "ln -f /opt/secpal-control/scripts/ci-cloud/rocky-target-qualification-trace.sh"
         not in bootstrap
         and "pwd.error" not in reload_adjacency_observer
-        and "or 237 not in frames" in reload_adjacency_observer
+        and "or 614 not in frames" in reload_adjacency_observer
         and "or 242 not in frames" not in reload_adjacency_observer,
         "daemon-reload adjacency must execute through the bounded pre-cleanup ERR seam",
     )
@@ -2886,6 +3377,38 @@ def validate_rocky_control_plane(root: Path) -> None:
         "Rocky control must load only the admitted extensionless installed classifier",
     )
     require(
+        'INSTALLED_TARGET_REPLAY_VERIFIER = Path(\n    "/usr/local/sbin/secpal-verify-rocky-target-replay"\n)'
+        in rocky_control
+        and "TARGET_REPLAY_VERIFIER_SYMBOL" in rocky_control
+        and "verifier_path.lstat()" in rocky_control
+        and 'replayed = b"\\0".join(' in target_replay_verifier
+        and 'document["diagnostic_input_sha256"]' in target_replay_verifier
+        and "classifier.classify_failure(" in target_replay_verifier
+        and "classifier.replay_line_rules(" in target_replay_verifier
+        and "HISTORICAL_PRE_269_LINE_RULES" in target_failure_classifier
+        and "(HISTORICAL_273_TARGET_SHA, HISTORICAL_273_HARNESS_SHA256)"
+        in target_failure_classifier
+        and 'payload.endswith(b"\\n")' in target_failure_classifier
+        and 'payload[:-1].decode("ascii").split("\\n")'
+        in target_failure_classifier
+        and 'payload.endswith(b"\\n")' in target_replay_verifier
+        and 'payload[:-1].decode("ascii").split("\\n")'
+        in target_replay_verifier
+        and "object_pairs_hook=unique_json_object" in target_failure_classifier
+        and "parse_constant=reject_json_constant" in target_failure_classifier
+        and "object_pairs_hook=unique_json_object" in target_replay_verifier
+        and "parse_constant=reject_json_constant" in target_replay_verifier
+        and "classifier.replay_start_observation_admitted"
+        in target_replay_verifier
+        and "classifier.replay_active_observation_admitted"
+        in target_replay_verifier
+        and "classifier.replay_primary_observation_admitted"
+        in target_replay_verifier
+        and "target_replay_verifier" in bootstrap
+        and "target_replay_verifier" in main,
+        "Rocky replay verifier must independently close exact classifier input",
+    )
+    require(
         target_text.index("Retrieve and validate bounded target-qualification failure")
         < target_text.index("Enforce exact target execution")
         < target_text.index("Retrieve and validate target-owned qualification evidence")
@@ -2909,10 +3432,19 @@ def validate_rocky_control_plane(root: Path) -> None:
         "Rocky OpenTofu and Google provider versions must be exact",
     )
     require(
-        'image  = var.exact_image_self_link' in main
+        re.search(r'image\s*=\s*var\.exact_image_self_link', main) is not None
         and 'data "google_compute_image"' not in main
         and "discovery_family" not in main,
         "OpenTofu may consume only the pre-resolved exact image identity",
+    )
+    require(
+        'var.profile == "gcp-rocky-10-2-arm64"' in variables
+        and 'var.machine_type == "c4a-standard-4"' in variables
+        and 'var.profile == "gcp-rocky-10-2-x86-64"' in variables
+        and 'var.machine_type == "c3-standard-4"' in variables
+        and "rocky-linux-10-[a-z0-9-]*arm64[a-z0-9-]*" in variables
+        and "rocky-linux-10-v[0-9]{8}" in variables,
+        "OpenTofu profile, machine, image, and architecture admission disagree",
     )
     require(
         "rocky-linux-cloud/global/images/" in variables
@@ -2959,6 +3491,7 @@ def validate(root: Path) -> None:
     workload_collector = read(
         root, "scripts/ci-cloud/collect-workload-evidence.py"
     )
+    workload_admission = read(root, "scripts/ci-cloud/workload-admission.py")
     evidence_assembler = read(root, "scripts/ci-cloud/assemble-evidence.py")
     evidence_validator = read(root, "scripts/ci-cloud/validate-evidence.py")
     evidence_schema_text = read(root, "schemas/ci-cloud-evidence.schema.json")
@@ -3162,7 +3695,7 @@ def validate(root: Path) -> None:
         and "trusted_user_environment_generator_is_admitted" in workload_collector
         and "trusted_user_environment_generator_admission_failure"
         in workload_collector
-        and "NORMALIZATION_EVIDENCE_STAGES" in workload_collector
+        and "NORMALIZATION_STAGES" in workload_collector
         and "prepared != expected" in workload_collector
         and workload_collector.count("observed != expected") == 2
         and '"pre-reload-manager-environment-read"' in workload_collector
@@ -3178,7 +3711,11 @@ def validate(root: Path) -> None:
         and "failure_reason: str | None" in workload_collector
         and "command_status: int | None" in workload_collector
         and "outcome.document()" in workload_collector
-        and "workload_admission_failures" in workload_collector
+        and "workload_admission_failures" not in workload_collector
+        and "def workload_admission_failures(" in workload_admission
+        and "ADMISSION_CONTRACT" in workload_collector
+        and "NORMALIZATION_SURFACE" in workload_collector
+        and "COLLECTION_SURFACE" in workload_collector
         and "shell=True" not in workload_collector
         and "os.system" not in workload_collector
         and "eval(" not in workload_collector,
@@ -3208,13 +3745,13 @@ def validate(root: Path) -> None:
         in workload_collector
         and '"rootless": rootless' in workload_collector
         and 'item["Rootless"]' not in workload_collector
-        and 'security_options != ["no-new-privileges"]' in workload_collector
-        and "D1A_RESOURCE_INVENTORY" in workload_collector
-        and "D1A_VOLUME_TOPOLOGY" in workload_collector
-        and "D1A_TMPFS_TOPOLOGY" in workload_collector
-        and "D1A_CONTAINER_LIFECYCLE" in workload_collector
+        and 'security_options != ["no-new-privileges"]' in workload_admission
+        and "WORKLOAD_RESOURCE_INVENTORY" in workload_admission
+        and "WORKLOAD_VOLUME_TOPOLOGY" in workload_admission
+        and "WORKLOAD_TMPFS_TOPOLOGY" in workload_admission
+        and "WORKLOAD_CONTAINER_LIFECYCLE" in workload_admission
         and "container_lifecycle_events" in workload_collector
-        and 'item.get("effective_caps") != expected_caps' in workload_collector
+        and 'item.get("effective_caps") != expected_caps' in workload_admission
         and "PODMAN_HEALTH_TIMER_PROPERTIES" in workload_collector
         and "PODMAN_HEALTH_SERVICE_PROPERTIES" in workload_collector
         and "podman_health_exec_is_trusted" in workload_collector
@@ -3226,7 +3763,7 @@ def validate(root: Path) -> None:
         and "elif reviewed_opaque:" in workload_collector
         and "if role not in READY_ROLES:" in workload_collector
         and 'item.get("cap_add") not in ([], expected_caps)'
-        in workload_collector,
+        in workload_admission,
         "Podman evidence must use admitted v5 fields and exact inventory/security facts",
     )
     require(
@@ -3243,8 +3780,11 @@ def validate(root: Path) -> None:
         and '"systemctl", "--user", "show", trigger,' in workload_collector
         and "service_fragment not in service_fragments" in workload_collector
         and "not root_owned_systemd_unit(service_fragment)" in workload_collector
-        and '"keyboxd.socket": "gpg"' in workload_collector
-        and '"keyboxd.service": "gpg"' in workload_collector
+        and '"dbus.socket": "dbus-common"' in workload_collector
+        and '"dbus.service": "dbus-broker"' in workload_collector
+        and '["rpm", "-qf", "--qf", "%{NAME}", str(canonical)]'
+        in workload_collector
+        and "dpkg-query" not in workload_collector
         and 'not systemd_unit_owned_by_package(fragment, package)'
         in workload_collector
         and "not systemd_unit_owned_by_package(\n"
@@ -3262,14 +3802,16 @@ def validate(root: Path) -> None:
         evidence_schema.get("properties", {})
         .get("schema_version", {})
         .get("const")
-        == 3
+        == 4
         and {"host_admission", "workload"}.issubset(
             set(evidence_schema.get("required", []))
         )
         and "workload_admission_failures" in evidence_assembler
+        and "load_workload_admission()" in evidence_assembler
+        and "WORKLOAD_ADMISSION_PATH" in evidence_validator
         and "TARGET_WORKLOAD_PREPARE_START" in evidence_assembler
         and "TRUSTED_POST_CLEANUP_COLLECTION" in evidence_assembler,
-        "D.1 and D.1a evidence must remain separate and jointly fail closed",
+        "host and application-workload evidence must remain separate and jointly fail closed",
     )
     require(
         'live_normalization_json="$evidence_dir/.normalization-live.json"'
@@ -3398,10 +3940,71 @@ def validate(root: Path) -> None:
     )
 
 
+
+def validate_instance_transport_workflow(root: Path) -> None:
+    """Diagnostic failure never replaces apply, reconciliation or exact cleanup."""
+    workflow = yaml.safe_load(read(root, ".github/workflows/rocky-cloud-qualification.yml"))
+    provision = workflow["jobs"]["provision"]
+    steps = provision["steps"]
+    ids = {step.get("id"): step for step in steps if "id" in step}
+    apply = ids["apply"]
+    admission = ids.get("transport_admission", {})
+    fresh = next((step for step in steps if step["name"] ==
+                  "Freshly authenticate protected main before diagnostic and provider authority"), {})
+    fresh_run = fresh.get("run", "")
+    require(all(fragment in fresh_run for fragment in (
+        '"$GITHUB_REPOSITORY" == SecPal/deployment', '"$GITHUB_REF" == refs/heads/main',
+        'gh api repos/SecPal/deployment/branches/main', '.protected',
+        '.commit.sha', '.commit.commit.verification.verified',
+        '"$(git rev-parse HEAD)" == "$GITHUB_SHA"',
+        '"$accepted_control" == "$(printf',
+    )), "transport observation requires freshly authenticated protected main")
+    require(steps.index(fresh) < steps.index(ids["provision_auth"]) < steps.index(apply),
+            "fresh transport control authentication must precede provider credentials")
+    run = apply["run"]
+    require('python3 "$GITHUB_WORKSPACE/scripts/ci-cloud/observe-instance-transport.py"' in run
+            and run.count("tofu apply --auto-approve --input=false") == 1
+            and "--output \"$RUNNER_TEMP/rocky-cloud/instance-transport.json\"" in run
+            and '--trusted-control-sha "$GITHUB_SHA"' in run
+            and '--target-sha "$TARGET_SHA"' in run
+            and '--workflow-run-id "$GITHUB_RUN_ID"' in run
+            and '--workflow-run-attempt "$GITHUB_RUN_ATTEMPT"' in run,
+            "existing apply must use bounded trusted transport observation with exact identities")
+    require(apply.get("continue-on-error") is True
+            and admission.get("if") == "${{ always() }}"
+            and admission.get("continue-on-error") is True
+            and "--admit" in admission.get("run", "")
+            and not CREDENTIAL_KEYS & set(admission.get("env", {})),
+            "independent transport admission must not block cleanup or receive provider credentials")
+    artifact = next((step for step in steps if step["name"] ==
+                     "Retain admitted diagnostic transport evidence"), {})
+    require(artifact.get("if") == "${{ always() && steps.transport_admission.outcome == 'success' }}"
+            and artifact.get("continue-on-error") is True
+            and artifact.get("with", {}).get("path") == "${{ runner.temp }}/rocky-cloud/instance-transport.json",
+            "transport publication admits only the sanitized document and cannot suppress cleanup")
+    transition = ids["identity_transition"].get("if", "")
+    require(all(fragment in transition for fragment in (
+        "steps.apply.outcome == 'success'", "steps.transport_admission.outcome == 'success'",
+        "steps.transport_publication.outcome == 'success'")),
+        "diagnostic failure must stop continuation without authorizing provider success")
+    reconcile = next(step for step in steps if step["name"] ==
+                     "Reconcile failed instance creation without continuing qualification")
+    require(reconcile.get("if") == "${{ steps.apply.outcome == 'failure' }}"
+            and reconcile.get("continue-on-error") is True
+            and "gcp-rocky-janitor.py" in reconcile["run"]
+            and "--exact-action reconcile" in reconcile["run"],
+            "transport evidence cannot replace exact ambiguous-create reconciliation")
+    require(steps.index(apply) < steps.index(admission) < steps.index(reconcile)
+            and "needs.provision.result == 'failure'" in workflow["jobs"]["cleanup"]["if"]
+            and "always()" in workflow["jobs"]["cleanup"]["if"],
+            "collector failure must retain independent mandatory cleanup reachability")
+
+
 def main(arguments: list[str]) -> int:
     root = Path(arguments[0]).resolve() if arguments else Path.cwd()
     try:
         validate(root)
+        validate_instance_transport_workflow(root)
     except (ContractError, OSError, UnicodeError) as error:
         print(f"FAIL: cloud CI contract: {error}", file=sys.stderr)
         return 1

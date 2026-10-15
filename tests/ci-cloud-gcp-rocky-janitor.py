@@ -38,7 +38,7 @@ LABELS = {
 
 
 def resource(component: str, labels: dict[str, str] | None = None) -> dict[str, Any]:
-    item: dict[str, Any] = {"name": f"sprk-12345-1-{component}"}
+    item: dict[str, Any] = {"name": f"sprk-12345-1-{component}", "id": "987654321"}
     effective = LABELS if labels is None else labels
     if component in {"instance", "disk"}:
         item["labels"] = effective
@@ -72,7 +72,7 @@ class FakeClient:
     def get_component(self, component: str, name: str) -> dict[str, Any]:
         return next(item for item in self.resources[component] if item["name"] == name)
 
-    def delete_component(self, component: str, name: str) -> None:
+    def delete_component(self, component: str, name: str, resource_id: str) -> None:
         self.deleted.append((component, name))
 
 
@@ -83,6 +83,30 @@ class RockyJanitorTests(unittest.TestCase):
         deleted = MODULE.cleanup_expired(client, NOW, True)
         self.assertEqual(list(MODULE.DELETE_ORDER), [component for component, _ in deleted])
         self.assertEqual(deleted, client.deleted)
+
+    def test_x86_profile_uses_the_identical_cleanup_ownership_contract(self) -> None:
+        labels = {
+            **LABELS,
+            "provider_profile": "gcp-rocky-10-2-x86-64",
+        }
+        resources = {
+            component: [resource(component, labels)]
+            for component in MODULE.DELETE_ORDER
+        }
+        client = FakeClient(resources)
+        deleted = MODULE.cleanup_expired(client, NOW, True)
+        self.assertEqual(list(MODULE.DELETE_ORDER), [item[0] for item in deleted])
+        self.assertEqual(deleted, client.deleted)
+
+    def test_unknown_profile_never_acquires_cleanup_ownership(self) -> None:
+        labels = {**LABELS, "provider_profile": "gcp-rocky-10-2-unknown"}
+        resources = {
+            component: [resource(component, labels)]
+            for component in MODULE.DELETE_ORDER
+        }
+        client = FakeClient(resources)
+        self.assertEqual([], MODULE.cleanup_expired(client, NOW, True))
+        self.assertEqual([], client.deleted)
 
     def test_name_prefix_without_exact_metadata_never_deletes(self) -> None:
         bad = dict(LABELS)

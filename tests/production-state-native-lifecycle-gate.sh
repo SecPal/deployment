@@ -6,11 +6,11 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 SOURCE="$ROOT_DIR/tests/production-state-native-lifecycle.sh"
-FIXTURE_ROOT="$(mktemp -d /tmp/secpal-d2-native-gate.XXXXXX)"
+FIXTURE_ROOT="$(mktemp -d /tmp/secpal-native-gate.XXXXXX)"
 
 cleanup() {
   case "$(realpath "$FIXTURE_ROOT")" in
-    /tmp/secpal-d2-native-gate.*) rm -rf -- "$FIXTURE_ROOT" ;;
+    /tmp/secpal-native-gate.*) rm -rf -- "$FIXTURE_ROOT" ;;
     *) printf 'ERROR: native lifecycle gate fixture root escaped its boundary.\n' >&2 ;;
   esac
 }
@@ -55,7 +55,7 @@ if ! "$missing_test" >"$missing_output" 2>&1; then
   exit 1
 fi
 grep -Fxq \
-  'SKIP: Production state native lifecycle unavailable: native Quadlet user generator is not installed.' \
+  'SKIP: Native rootless runtime lifecycle unavailable: native Quadlet user generator is not installed.' \
   "$missing_output"
 if grep -Fq 'passed.' "$missing_output"; then
   printf 'ERROR: unavailable native capability must not be reported as lifecycle evidence.\n' >&2
@@ -69,7 +69,7 @@ if SECPAL_REQUIRE_NATIVE_LIFECYCLE=1 "$missing_test" \
   exit 1
 fi
 grep -Fxq \
-  'ERROR: Production state native lifecycle requires an admitted native Quadlet user generator.' \
+  'ERROR: Native rootless runtime lifecycle requires an admitted native Quadlet user generator.' \
   "$required_missing_output"
 
 unsupported_generator="$FIXTURE_ROOT/unsupported-generator"
@@ -84,7 +84,7 @@ if ! PATH="$FIXTURE_ROOT:$PATH" "$unsupported_test" >"$unsupported_output" 2>&1;
   exit 1
 fi
 grep -Fxq \
-  'SKIP: Production state native lifecycle unavailable: native Quadlet generator and Podman client do not satisfy the supported compatible runtime contract.' \
+  'SKIP: Native rootless runtime lifecycle unavailable: native Quadlet generator and Podman client do not satisfy the supported compatible runtime contract.' \
   "$unsupported_output"
 if grep -Fq 'passed.' "$unsupported_output"; then
   printf 'ERROR: unsupported native capability must not be reported as lifecycle evidence.\n' >&2
@@ -98,7 +98,7 @@ if SECPAL_REQUIRE_NATIVE_LIFECYCLE=1 PATH="$FIXTURE_ROOT:$PATH" "$unsupported_te
   exit 1
 fi
 grep -Fxq \
-  'ERROR: Production state native lifecycle requires an admitted native Quadlet user generator.' \
+  'ERROR: Native rootless runtime lifecycle requires an admitted native Quadlet user generator.' \
   "$required_unsupported_output"
 
 invalid_generator="$FIXTURE_ROOT/invalid-generator"
@@ -111,7 +111,7 @@ if "$invalid_test" >"$invalid_output" 2>&1; then
   exit 1
 fi
 grep -Fxq \
-  'ERROR: Production state native lifecycle requires an admitted native Quadlet user generator.' \
+  'ERROR: Native rootless runtime lifecycle requires an admitted native Quadlet user generator.' \
   "$invalid_output"
 
 cleanup_target="$FIXTURE_ROOT/cleanup-target"
@@ -134,7 +134,7 @@ fi
 grep -Fxq 'ERROR: native lifecycle fixture root became a symbolic link.' "$cleanup_output"
 grep -Fxq 'preserve' "$cleanup_target/proof"
 
-signal_root="$(mktemp -d /tmp/secpal-d2-native.signal.XXXXXX)"
+signal_root="$(mktemp -d /tmp/secpal-native.signal.XXXXXX)"
 signal_test="$FIXTURE_ROOT/signal.sh"
 signal_output="$FIXTURE_ROOT/signal.out"
 sed \
@@ -150,4 +150,4 @@ if [ "$signal_status" -ne 143 ] || [ -e "$signal_root" ]; then
   exit 1
 fi
 
-printf 'Production state native lifecycle capability gate passed.\n'
+printf 'Native rootless runtime lifecycle capability gate passed.\n'

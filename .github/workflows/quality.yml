@@ -68,7 +68,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -83,6 +83,12 @@ jobs:
             shellcheck-py==0.11.0.1 yamllint==1.37.1
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Set up pinned OpenTofu for exact metadata rendering
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
 
       - name: Run repository preflight
         run: ./scripts/preflight.sh

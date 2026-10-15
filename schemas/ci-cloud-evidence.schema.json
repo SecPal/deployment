@@ -16,7 +16,7 @@
     "workload"
   ],
   "properties": {
-    "schema_version": { "const": 3 },
+    "schema_version": { "const": 4 },
     "workflow": {
       "type": "object",
       "additionalProperties": false,
@@ -25,7 +25,7 @@
         "repository": { "const": "SecPal/deployment" },
         "run_id": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
         "run_attempt": { "type": "string", "pattern": "^[1-9][0-9]{0,2}$" },
-        "target_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" }
       }
     },
     "test": {
@@ -633,6 +633,37 @@
     "workload": { "$ref": "#/$defs/workloadEvidence" }
   },
   "$defs": {
+    "workloadTargetSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "workloadInstance": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+    "workloadHexDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "workloadImageDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "workloadCreatedAt": { "pattern": "^[0-9T:+.Z-]{1,64}$" },
+    "generatedServiceName": {
+      "type": "string",
+      "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
+      "maxLength": 96
+    },
+    "quadletUnitName": {
+      "type": "string",
+      "pattern": "^secpal-int-[0-9a-f]{12}(-[a-z0-9-]+\\.(container|network|volume)|\\.target)$",
+      "maxLength": 96
+    },
+    "quadletSourcePath": {
+      "type": "string",
+      "pattern": "^/etc/containers/systemd/users/20000/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.(container|network|volume)$",
+      "maxLength": 192
+    },
+    "workloadNetworkNames": { "$ref": "#/$defs/stringArray" },
+    "workloadPublishedPorts": { "$ref": "#/$defs/stringArray" },
+    "cleanupInventoryNames": { "$ref": "#/$defs/stringArray" },
+    "workloadProcessList": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/processFact" }
+    },
     "exitStatus": { "type": "integer", "minimum": 0, "maximum": 255 },
     "invariantArray": {
       "type": "array",
@@ -674,13 +705,9 @@
     "unitFact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "path", "uid", "gid", "mode", "sha256"],
+      "required": ["name", "path", "uid", "gid", "mode", "sha256", "image"],
       "properties": {
-        "name": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}(-[a-z0-9-]+\\.(container|network|volume)|\\.target)$",
-          "maxLength": 96
-        },
+        "name": { "$ref": "#/$defs/quadletUnitName" },
         "path": {
           "type": "string",
           "pattern": "^/etc/(containers/systemd/users/20000|systemd/user)/secpal-int-[0-9a-f]{12}",
@@ -689,7 +716,8 @@
         "uid": { "const": 0 },
         "gid": { "const": 0 },
         "mode": { "const": "0644" },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "sha256": { "$ref": "#/$defs/workloadHexDigest" },
+        "image": { "type": "string", "maxLength": 512 }
       }
     },
     "dropInOwner": {
@@ -731,7 +759,6 @@
           "enum": [
             "secrets-init",
             "postgres",
-            "valkey",
             "migrate",
             "api",
             "worker-general",
@@ -746,11 +773,7 @@
             "postgres-volume"
           ]
         },
-        "unit": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
-          "maxLength": 96
-        },
+        "unit": { "$ref": "#/$defs/generatedServiceName" },
         "fragment_path": {
           "type": "string",
           "pattern": "^/run/user/20000/systemd/generator/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
@@ -759,15 +782,8 @@
         "fragment_uid": { "const": 20000 },
         "fragment_gid": { "const": 20000 },
         "fragment_mode": { "const": "0644" },
-        "fragment_sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "source_path": {
-          "type": "string",
-          "pattern": "^/etc/containers/systemd/users/20000/secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.(container|network|volume)$",
-          "maxLength": 192
-        },
+        "fragment_sha256": { "$ref": "#/$defs/workloadHexDigest" },
+        "source_path": { "$ref": "#/$defs/quadletSourcePath" },
         "drop_in_paths": {
           "type": "array",
           "uniqueItems": true,
@@ -786,10 +802,7 @@
         "drop_in_sha256": {
           "type": "array",
           "maxItems": 8,
-          "items": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          }
+          "items": { "$ref": "#/$defs/workloadHexDigest" }
         },
         "environment": {
           "type": "array",
@@ -829,7 +842,6 @@
       "enum": [
         "secrets-init",
         "postgres",
-        "valkey",
         "migrate",
         "api",
         "worker-general",
@@ -939,6 +951,10 @@
         "group_add",
         "effective_caps",
         "bounding_caps",
+        "selinux_process_label",
+        "selinux_mount_label",
+        "effective_process_label",
+        "effective_seccomp_mode",
         "devices_present",
         "mounts",
         "tmpfs",
@@ -951,10 +967,12 @@
         "systemd_unit",
         "container_cgroup",
         "lifecycle_service_invocation",
-        "image"
+        "image",
+        "image_id",
+        "image_digest"
       ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "id": { "$ref": "#/$defs/workloadHexDigest" },
         "role": { "$ref": "#/$defs/workloadRole" },
         "name": {
           "type": "string",
@@ -1007,6 +1025,13 @@
         "group_add": { "$ref": "#/$defs/stringArray" },
         "effective_caps": { "$ref": "#/$defs/stringArray" },
         "bounding_caps": { "$ref": "#/$defs/stringArray" },
+        "selinux_process_label": { "type": "string", "maxLength": 256 },
+        "selinux_mount_label": { "type": "string", "maxLength": 256 },
+        "effective_process_label": { "type": "string", "maxLength": 256 },
+        "effective_seccomp_mode": {
+          "type": "integer",
+          "enum": [-1, 2]
+        },
         "devices_present": { "type": "boolean" },
         "mounts": {
           "type": "array",
@@ -1026,20 +1051,18 @@
           "maxItems": 3,
           "items": { "$ref": "#/$defs/containerLifecycleEvent" }
         },
-        "networks": { "$ref": "#/$defs/stringArray" },
-        "published_ports": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/workloadNetworkNames" },
+        "published_ports": { "$ref": "#/$defs/workloadPublishedPorts" },
         "auto_update": { "type": "boolean" },
-        "systemd_unit": {
-          "type": "string",
-          "pattern": "^secpal-int-[0-9a-f]{12}-[a-z0-9-]+\\.service$",
-          "maxLength": 96
-        },
+        "systemd_unit": { "$ref": "#/$defs/generatedServiceName" },
         "container_cgroup": { "type": "string", "maxLength": 256 },
         "lifecycle_service_invocation": {
           "type": "string",
           "pattern": "^$|^[0-9a-f]{32}$"
         },
-        "image": { "type": "string", "maxLength": 512 }
+        "image": { "type": "string", "maxLength": 512 },
+        "image_id": { "$ref": "#/$defs/workloadImageDigest" },
+        "image_digest": { "$ref": "#/$defs/workloadImageDigest" }
       },
       "allOf": [
         {
@@ -1141,7 +1164,7 @@
       "additionalProperties": false,
       "required": ["container_id", "timer", "service", "interval_usec"],
       "properties": {
-        "container_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "container_id": { "$ref": "#/$defs/workloadHexDigest" },
         "timer": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}-(?:0|[1-9a-f][0-9a-f]{0,14}|[1-7][0-9a-f]{15})\\.timer$"
@@ -1211,6 +1234,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1226,21 +1250,18 @@
       ],
       "properties": {
         "phase": { "const": "baseline" },
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
         "complete": { "type": "boolean" },
         "containers": { "$ref": "#/$defs/stringArray" },
-        "networks": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/workloadNetworkNames" },
         "volumes": { "$ref": "#/$defs/stringArray" },
         "migration_invocation_count": { "const": 0 },
         "podman_api": { "type": "boolean" },
         "user_work": { "$ref": "#/$defs/userWork" },
-        "processes": {
-          "type": "array",
-          "maxItems": 256,
-          "items": { "$ref": "#/$defs/processFact" }
-        },
+        "processes": { "$ref": "#/$defs/workloadProcessList" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -1249,6 +1270,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1271,6 +1293,7 @@
       ],
       "properties": {
         "phase": { "const": "live" },
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
@@ -1279,35 +1302,31 @@
         "installed_units": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 16,
+          "maxItems": 15,
           "items": { "$ref": "#/$defs/unitFact" }
         },
         "generated_services": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 15,
+          "maxItems": 14,
           "items": { "$ref": "#/$defs/generatedServiceFact" }
         },
         "containers": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 10,
+          "maxItems": 9,
           "items": { "$ref": "#/$defs/containerFact" }
         },
         "podman_rootless": { "type": "boolean" },
         "oci_runtime": { "$ref": "#/$defs/shortString" },
-        "networks": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/workloadNetworkNames" },
         "volumes": { "$ref": "#/$defs/stringArray" },
-        "all_containers": { "$ref": "#/$defs/stringArray" },
-        "all_networks": { "$ref": "#/$defs/stringArray" },
-        "all_volumes": { "$ref": "#/$defs/stringArray" },
+        "all_containers": { "$ref": "#/$defs/cleanupInventoryNames" },
+        "all_networks": { "$ref": "#/$defs/cleanupInventoryNames" },
+        "all_volumes": { "$ref": "#/$defs/cleanupInventoryNames" },
         "podman_api": { "type": "boolean" },
         "user_work": { "$ref": "#/$defs/userWork" },
-        "processes": {
-          "type": "array",
-          "maxItems": 256,
-          "items": { "$ref": "#/$defs/processFact" }
-        },
+        "processes": { "$ref": "#/$defs/workloadProcessList" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -1316,6 +1335,7 @@
       "additionalProperties": false,
       "required": [
         "phase",
+        "target_sha",
         "target_admitted",
         "collector_uid",
         "collector_gid",
@@ -1336,18 +1356,19 @@
       ],
       "properties": {
         "phase": { "const": "post-cleanup" },
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" },
         "target_admitted": { "type": "boolean" },
         "collector_uid": { "const": 20000 },
         "collector_gid": { "const": 20000 },
         "complete": { "type": "boolean" },
-        "owned_units": { "$ref": "#/$defs/stringArray" },
+        "owned_units": { "$ref": "#/$defs/cleanupInventoryNames" },
         "generated_services": { "$ref": "#/$defs/stringArray" },
         "containers": { "$ref": "#/$defs/stringArray" },
-        "networks": { "$ref": "#/$defs/stringArray" },
+        "networks": { "$ref": "#/$defs/workloadNetworkNames" },
         "volumes": { "$ref": "#/$defs/stringArray" },
-        "all_containers": { "$ref": "#/$defs/stringArray" },
-        "all_networks": { "$ref": "#/$defs/stringArray" },
-        "all_volumes": { "$ref": "#/$defs/stringArray" },
+        "all_containers": { "$ref": "#/$defs/cleanupInventoryNames" },
+        "all_networks": { "$ref": "#/$defs/cleanupInventoryNames" },
+        "all_volumes": { "$ref": "#/$defs/cleanupInventoryNames" },
         "migration_invocation_count": {
           "type": "integer",
           "minimum": 0,
@@ -1355,11 +1376,7 @@
         },
         "podman_api": { "type": "boolean" },
         "user_work": { "$ref": "#/$defs/userWork" },
-        "processes": {
-          "type": "array",
-          "maxItems": 256,
-          "items": { "$ref": "#/$defs/processFact" }
-        },
+        "processes": { "$ref": "#/$defs/workloadProcessList" },
         "control_resources": { "$ref": "#/$defs/controlResources" }
       }
     },
@@ -1368,6 +1385,9 @@
       "additionalProperties": false,
       "required": [
         "protocol_version",
+        "claim_scope",
+        "database_scope",
+        "target_sha",
         "instance",
         "result",
         "failed_admission_invariants",
@@ -1377,7 +1397,14 @@
       ],
       "properties": {
         "protocol_version": { "const": 1 },
-        "instance": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+        "claim_scope": {
+          "const": "disposable-rootless-application-integration"
+        },
+        "database_scope": {
+          "const": "disposable-postgresql-18-fixture"
+        },
+        "target_sha": { "$ref": "#/$defs/workloadTargetSha" },
+        "instance": { "$ref": "#/$defs/workloadInstance" },
         "result": { "enum": ["passed", "failed"] },
         "failed_admission_invariants": { "$ref": "#/$defs/invariantArray" },
         "baseline": { "$ref": "#/$defs/baselineObservation" },
@@ -1402,9 +1429,9 @@
                     "properties": {
                       "network_present": { "const": true },
                       "volume_present": { "const": true },
-                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "network_id": { "$ref": "#/$defs/workloadHexDigest" },
                       "volume_created_at": {
-                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                        "$ref": "#/$defs/workloadCreatedAt"
                       }
                     }
                   }
@@ -1417,9 +1444,9 @@
                   "quadlet_search_paths": {
                     "const": ["/etc/containers/systemd/users/20000"]
                   },
-                  "installed_units": { "minItems": 16, "maxItems": 16 },
-                  "generated_services": { "minItems": 15, "maxItems": 15 },
-                  "containers": { "minItems": 10, "maxItems": 10 },
+                  "installed_units": { "minItems": 15, "maxItems": 15 },
+                  "generated_services": { "minItems": 14, "maxItems": 14 },
+                  "containers": { "minItems": 9, "maxItems": 9 },
                   "networks": { "minItems": 2, "maxItems": 2 },
                   "volumes": { "minItems": 3, "maxItems": 3 },
                   "podman_rootless": { "const": true },
@@ -1429,9 +1456,9 @@
                     "properties": {
                       "network_present": { "const": true },
                       "volume_present": { "const": true },
-                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "network_id": { "$ref": "#/$defs/workloadHexDigest" },
                       "volume_created_at": {
-                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                        "$ref": "#/$defs/workloadCreatedAt"
                       }
                     }
                   }
@@ -1452,9 +1479,9 @@
                     "properties": {
                       "network_present": { "const": true },
                       "volume_present": { "const": true },
-                      "network_id": { "pattern": "^[0-9a-f]{64}$" },
+                      "network_id": { "$ref": "#/$defs/workloadHexDigest" },
                       "volume_created_at": {
-                        "pattern": "^[0-9T:+.Z-]{1,64}$"
+                        "$ref": "#/$defs/workloadCreatedAt"
                       }
                     }
                   }
@@ -1488,8 +1515,6 @@
             "manager-environment-set",
             "pre-reload-manager-environment-read",
             "pre-reload-manager-environment-admission",
-            "manager-environment-admission",
-            "user-environment-generator-admission",
             "user-environment-generator-inventory-read",
             "user-environment-generator-inventory-admission",
             "user-environment-generator-presence-admission",
@@ -1503,7 +1528,6 @@
             "target-unit-admission",
             "generated-unit-admission",
             "target-start",
-            "post-manager-environment-read",
             "post-activation-manager-environment-read",
             "post-activation-manager-environment-admission",
             "quadlet-search-path-admission",

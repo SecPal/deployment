@@ -45,10 +45,11 @@ cache; Valkey is not part of the production baseline.
 is the normative owner of the two accepted Edge modes and their Viewer/Origin
 trust boundaries:
 
-- **DIRECT:** HAProxy is the Viewer Edge. ADR-019 and
-  [deployment #89](https://github.com/SecPal/deployment/issues/89) own the
-  decision; the [DIRECT delivery subtree](https://github.com/SecPal/deployment/issues/90)
-  owns implementation.
+- **DIRECT:** Host-native HAProxy is the Viewer Edge. The
+  [accepted DIRECT decision](docs/architecture/decisions/direct-viewer-edge.md)
+  records [#89](https://github.com/SecPal/deployment/issues/89) under ADR-019;
+  the [#90 subtree](https://github.com/SecPal/deployment/issues/90) owns
+  implementation.
 - **PROTECTED:** CloudFront Multi-Tenant is the Viewer Edge and HAProxy remains
   the Origin/backend boundary. ADR-019 owns the architecture; the
   [#209 descendants](https://github.com/SecPal/deployment/issues/209) own the
@@ -128,7 +129,19 @@ Run deterministic repository checks without starting the integration stack:
 ./scripts/preflight.sh
 ```
 
-The preflight installs nothing and does not access production infrastructure.
+The preflight does not install system tools or access production infrastructure.
+Install the pinned OpenTofu 1.12.5 alongside the existing validation tools;
+Rocky metadata tests evaluate the actual provider-bound representation locally.
+The transport-provider regression initializes Google 7.40.0 with the unchanged
+dependency lock in a disposable credential-isolated directory, then runs the
+real producer with only loopback networking. It accepts TCP without reading
+application data. Independent loopback, TCP_INFO/inet_diag and filtered
+destruction-subscription capability admission precedes provider initialization
+or installed-package copying. Unsupported Linux namespace capabilities report `SKIP`;
+`python3 tests/ci-cloud-instance-transport-provider.py --required` instead fails
+when the real-provider regression cannot run. Use `--tofu` for an ephemeral
+official OpenTofu 1.12.5 executable. No cloud credentials or GCP calls are needed.
+Observer failures after capability admission remain failures in optional mode.
 
 ## Repository boundary
 

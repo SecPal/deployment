@@ -26,6 +26,8 @@ from integration_runtime_contract import (  # noqa: E402
     tmpfs_mounts,
 )
 
+from product_backend_contract import POLICY_CHECK_COMMAND, publish_lines  # noqa: E402
+
 # Production Valkey remains owned by the production state contract. The active
 # disposable integration intentionally exports no Valkey image authority.
 VALKEY_IMAGE = "docker.io/valkey/valkey@sha256:3acc0687f2a2e1091fae6450d7842dd658c941338cf0a873ddd9e14b9e4ea4dd"
@@ -142,7 +144,7 @@ def common_container(
     ]
 
 
-def service(*, oneshot: bool = False) -> str:
+def service(*, oneshot: bool = False, backend: bool = False) -> str:
     validation = f"ExecStartPre={STATE_READY_COMMAND}"
     if oneshot:
         return section(
@@ -157,33 +159,40 @@ def service(*, oneshot: bool = False) -> str:
         )
     return section(
         "Service",
-        [validation, "Restart=on-failure", "RestartSec=2", "TimeoutStartSec=180"],
+        [*((f"ExecStartPre={POLICY_CHECK_COMMAND}",) if backend else ()),
+         validation, "Restart=on-failure", "RestartSec=2", "TimeoutStartSec=180"],
     )
 
 
 def build_native_lifecycle_fixture_unit(
     contract: dict, fixture_root: Path, instance: str
 ) -> str:
-    """Render a fixture-only probe from the production private-storage seam."""
-    private = contract["objects"]["private_application_storage"]
+    """Render disposable runtime evidence, independent of #99 Object Storage."""
     identity = role_spec("api")
-    source = fixture_root / private["location"].lstrip("/")
+    source = fixture_root / "state"
     lines = common_container(contract, "api", FRONTEND_IMAGE, instance=instance)
-    lines = [line for line in lines if not line.startswith(("LogDriver=", "LogOpt="))]
+    lines = [
+        line for line in lines
+        if not line.startswith(("LogDriver=", "LogOpt="))
+        and line != "Label=org.secpal.production=true"
+    ]
     lines.append("LogDriver=journald")
     lines.extend(
         (
             "Network=none",
-            f"Mount=type=bind,source={source},target=/app/storage/app/private,rw=true",
+            # One fixture container owns this disposable source; private MCS
+            # relabeling is appropriate. Production paths never use this probe.
+            f"Mount=type=bind,source={source},target=/fixture-state,rw=true,relabel=private",
             'Entrypoint=["/bin/sh"]',
-            'Exec=-c "if [ ! -f /app/storage/app/private/proof ]; then '
-            "printf persistence > /app/storage/app/private/proof; fi; exec sleep 300\"",
+            'Exec=-c "set -eu; if [ ! -f /fixture-state/proof ]; then '
+            "printf persistence > /fixture-state/proof; fi; exec sleep 300\"",
         )
     )
-    # This fixture deliberately omits state-ready: host-side fixture admission is
-    # separate, while the mounted path, target and API identity come from the
-    # production contract and role registry.
-    content = unit("SecPal D.2 native private-storage persistence proof")
+    # Only the reviewed non-root identity comes from the role registry. This
+    # POSIX bind lifecycle does not qualify a Self-Hosted Object Storage adapter.
+    content = unit("SecPal native rootless runtime lifecycle proof").replace(
+        "PartOf=secpal.target\n", ""
+    )
     content += section("Container", lines)
     content += section("Service", ["Restart=no", "TimeoutStartSec=60"])
     if f"User={identity.uid}" not in content or f"Group={identity.gid}" not in content:
@@ -240,13 +249,14 @@ def api_container(contract: dict, role: str) -> str:
         )
     )
     if role == "api":
+        lines.extend(publish_lines(role))
         health = role_spec(role).health
         if health is None:
             raise ValueError("API health contract is missing")
         lines.extend(health.quadlet_lines())
     return unit(
         f"SecPal production {role}", dependencies, oneshot=role == "migrate"
-    ) + section("Container", lines) + service(oneshot=role == "migrate")
+    ) + section("Container", lines) + service(oneshot=role == "migrate", backend=role == "api")
 
 
 def build_units(contract: dict) -> dict[str, str]:
@@ -308,12 +318,13 @@ def build_units(contract: dict) -> dict[str, str]:
         (
             *tmpfs_mounts("frontend"),
             "Network=secpal-edge.network",
+            *publish_lines("frontend"),
             *role_spec("frontend").health.quadlet_lines(),
         )
     )
     units["secpal-frontend.container"] = unit(
         "SecPal production frontend", ("secpal-state-ready.service",)
-    ) + section("Container", frontend) + service()
+    ) + section("Container", frontend) + service(backend=True)
 
     units["secpal-state-ready.service"] = section(
         "Unit",

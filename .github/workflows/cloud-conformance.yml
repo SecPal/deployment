@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: CC0-1.0
 
-name: Debian 13 Cloud Conformance
+name: Retired Debian 13 Cloud Conformance
 
 on:
   workflow_dispatch:
@@ -51,7 +51,13 @@ jobs:
           RAW_PROVIDER_PROFILE: ${{ inputs.provider_profile }}
           RAW_RESOURCE_ATTEMPT: ${{ github.run_attempt }}
           IS_DEFAULT_BRANCH: ${{ github.ref == 'refs/heads/main' }}
+          SECPAL_DEBIAN_CONFORMANCE_RETIRED: "true"
         run: |
+          if [[ "$SECPAL_DEBIAN_CONFORMANCE_RETIRED" == true ]]; then
+            printf '%s\n' \
+              'ERROR: Debian/AppArmor conformance is retired; use Rocky qualification.' >&2
+            exit 1
+          fi
           if [[ "$IS_DEFAULT_BRANCH" != true ]]; then
             printf 'ERROR: cloud conformance runs only from refs/heads/main.\n' >&2
             exit 1

@@ -1,0 +1,7 @@
+; SPDX-FileCopyrightText: 2026 SecPal Contributors
+; SPDX-License-Identifier: MIT
+
+; Keep NoNewPrivileges while entering the stock, confined HAProxy domain.
+(allow init_t haproxy_t (process2 (nnp_transition)))
+; Stock Rocky labels /run/haproxy.pid; the private directory needs that type too.
+(filecon "/run/haproxy(/.*)?" any (system_u object_r haproxy_var_run_t ((s0) (s0))))

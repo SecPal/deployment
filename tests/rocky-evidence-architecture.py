@@ -25,6 +25,24 @@ COLLECTOR = ROOT / "scripts/ci-cloud/collect-rocky-preparation.py"
 PREPARATION = ROOT / "scripts/ci-cloud/prepare-rocky-host.sh"
 WORKFLOW = ROOT / ".github/workflows/rocky-cloud-qualification.yml"
 CONTROL = ROOT / "scripts/ci-cloud/rocky-control.py"
+QUALIFICATION_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-qualification-evidence.schema.json"
+)
+QUALIFICATION_HARNESS = ROOT / "scripts/qualify-production-host.sh"
+QUALIFICATION_RUNNER = ROOT / "scripts/ci-cloud/run-rocky-target-qualification.sh"
+TARGET_FAILURE_CLASSIFIER = (
+    ROOT / "scripts/ci-cloud/classify-rocky-target-qualification-failure.py"
+)
+TARGET_REPLAY_VERIFIER = (
+    ROOT / "scripts/ci-cloud/verify-rocky-target-qualification-replay.py"
+)
+TARGET_FAILURE_SCHEMA = (
+    ROOT / "schemas/rocky-cloud-target-qualification-failure.schema.json"
+)
+TARGET_TRACE = ROOT / "scripts/ci-cloud/rocky-target-qualification-trace.sh"
+RELOAD_OBSERVER = (
+    ROOT / "scripts/ci-cloud/observe-rocky-quadlet-reload-adjacency.py"
+)
 
 
 def load_contract():
@@ -54,7 +72,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
     )
 
     @staticmethod
-    def realistic_raw(contract):
+    def realistic_raw(contract, architecture="aarch64"):
         payload = "a" * 64
         header = "b" * 64
         key_packet = b"reviewed Rocky 10 signing key packet"
@@ -62,14 +80,14 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         packages = []
         for name in contract.PACKAGES:
             version = "5.8.2" if name == "podman" else "1.0"
-            nevra = f"{name}-{version}-1.el10_2.aarch64"
+            nevra = f"{name}-{version}-1.el10_2.{architecture}"
             packages.append(
                 {
                 "name": name,
                 "epoch": "0",
                 "version": version,
                 "release": "1.el10_2",
-                "architecture": "aarch64",
+                    "architecture": architecture,
                 "nevra": nevra,
                 "repositories": ["appstream"],
                 "signed_header": "\n".join(
@@ -78,7 +96,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                         "0",
                         version,
                         "1.el10_2",
-                        "aarch64",
+                        architecture,
                         nevra,
                         payload,
                         "8",
@@ -95,10 +113,15 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 ),
                 }
             )
-        expected = f"{contract.FIXTURE_REPOSITORY}@{contract.ARM_CHILD}"
+        child = (
+            contract.ARM_CHILD
+            if architecture == "aarch64"
+            else contract.AMD64_CHILD
+        )
+        expected = f"{contract.FIXTURE_REPOSITORY}@{child}"
         return {
             "os_release": 'NAME="Rocky Linux"\nID="rocky"\nVERSION_ID="10.2"',
-            "architecture": "aarch64",
+            "architecture": architecture,
             "dnf_version": "4.22.0\nInstalled: dnf-0:4.22.0",
             "releasever": "10",
             "getenforce": "Enforcing",
@@ -143,8 +166,9 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             "control_sha": "a" * 40,
             "run_id": "12345",
             "run_attempt": "1",
+            "profile": "gcp-rocky-10-2-arm64",
             "expires_at": 1800010800,
-            "image": "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-2-20260801-arm64",
+            "image": "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-arm64-v20260801",
             "first_boot_id": "11111111-1111-1111-1111-111111111111",
         }
 
@@ -906,7 +930,7 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         realistic = json.dumps([parent, expected], separators=(",", ":"))
         self.assertEqual(
             contract.ARM_CHILD,
-            contract.admit_fixture_repo_digests(realistic),
+            contract.admit_fixture_repo_digests(realistic, "aarch64"),
         )
         self.assertIn("--admit-fixture-repo-digests", preparation)
         self.assertNotIn("jq -e", preparation[preparation.index('current_phase="fixture"'):])
@@ -946,15 +970,17 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
             with self.subTest(accepted=representation):
                 raw = json.dumps(representation, separators=(",", ":"))
                 fact = contract.normalize_fixture_repo_digests(raw)
-                decision = contract.admit_fixture_identity(fact)
-                document = contract.assemble_fixture_evidence(decision)
-                contract.validate_fixture_evidence(document)
+                decision = contract.admit_fixture_identity(fact, "aarch64")
+                document = contract.assemble_fixture_evidence(
+                    decision, "aarch64"
+                )
+                contract.validate_fixture_evidence(document, "aarch64")
         for representation in rejected:
             with self.subTest(rejected=representation):
                 raw = json.dumps(representation, separators=(",", ":"))
                 with self.assertRaises(contract.ContractError):
                     fact = contract.normalize_fixture_repo_digests(raw)
-                    contract.admit_fixture_identity(fact)
+                    contract.admit_fixture_identity(fact, "aarch64")
 
     def test_realistic_host_representations_cross_normalization_schema_and_validator(self) -> None:
         contract = load_contract()
@@ -977,6 +1003,40 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
                 0,
                 subprocess.run(
                     [CONTROL, "validate-evidence", "preparation", path],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+            )
+
+        x86_options = self.realistic_options()
+        x86_options.update(
+            {
+                "profile": "gcp-rocky-10-2-x86-64",
+                "image": "https://www.googleapis.com/compute/v1/projects/rocky-linux-cloud/global/images/rocky-linux-10-v20260910",
+            }
+        )
+        x86_document = contract.normalize_and_admit(
+            self.realistic_raw(contract, "x86_64"), x86_options
+        )
+        self.assertEqual("gcp-rocky-10-2-x86-64", x86_document["run"]["profile"])
+        self.assertEqual("x86_64", x86_document["guest"]["uname_machine"])
+        self.assertTrue(
+            all(
+                package["architecture"] == "x86_64"
+                for package in x86_document["packages"]
+            )
+        )
+        self.assertEqual(
+            contract.AMD64_CHILD,
+            x86_document["fixture"]["resolved_amd64_child"],
+        )
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as path:
+            json.dump(x86_document, path)
+            path.flush()
+            self.assertEqual(
+                0,
+                subprocess.run(
+                    [CONTROL, "validate-evidence", "preparation", path.name],
                     check=False,
                     capture_output=True,
                 ).returncode,
@@ -1129,6 +1189,223 @@ class RockyEvidenceArchitectureTests(unittest.TestCase):
         self.assertNotIn("id-token: write", validation_job)
         self.assertNotIn("google-github-actions/auth", validation_job)
         self.assertIn("needs: validate", workflow[discover:])
+
+    def test_architecture_gate_rejects_target_binding_disagreement(self) -> None:
+        target = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"
+        harness = (
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+        )
+        mutations = (
+            (
+                "--workflow",
+                WORKFLOW,
+                f"readonly expected_target_sha={target}",
+                "readonly expected_target_sha=" + "a" * 40,
+            ),
+            (
+                "--qualification-runner",
+                QUALIFICATION_RUNNER,
+                f"readonly expected_harness_sha256={harness}",
+                "readonly expected_harness_sha256=" + "b" * 64,
+            ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                f'EXPECTED_TARGET_SHA = "{target}"',
+                'EXPECTED_TARGET_SHA = "' + "c" * 40 + '"',
+            ),
+            (
+                "--qualification-schema",
+                QUALIFICATION_SCHEMA,
+                f'"const": "{target}"',
+                '"const": "' + "a" * 40 + '"',
+            ),
+            (
+                "--target-failure-schema",
+                TARGET_FAILURE_SCHEMA,
+                f'"const": "{harness}"',
+                '"const": "' + "d" * 64 + '"',
+            ),
+            (
+                "--target-trace",
+                TARGET_TRACE,
+            "10#$frame == 614",
+                "10#$frame == 526",
+            ),
+            (
+                "--reload-observer",
+                RELOAD_OBSERVER,
+                "or 614 not in frames",
+                "or 615 not in frames",
+            ),
+            (
+                "--qualification-harness",
+                QUALIFICATION_HARNESS,
+                'readonly DEFAULT_ACCOUNT="secpal-deploy"',
+                'readonly DEFAULT_ACCOUNT="caller-selected"',
+            ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                '(653, 658, "qualify-workload-primary"),',
+                '(653, 658, "qualify-workload-secondary"),',
+            ),
+            (
+                "--target-replay-verifier",
+                TARGET_REPLAY_VERIFIER,
+                '    "qualification_stdout",\n    "target_qualification_trace",',
+                '    "target_qualification_trace",\n    "qualification_stdout",',
+            ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                "object_pairs_hook=unique_json_object",
+                "object_pairs_hook=dict",
+            ),
+            (
+                "--target-replay-verifier",
+                TARGET_REPLAY_VERIFIER,
+                "classifier.replay_start_observation_admitted",
+                "classifier.admit_quadlet_start_observation",
+            ),
+        )
+        for option, source_path, old, new in mutations:
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
+                mutated = source_path.read_text(encoding="utf-8").replace(old, new)
+                self.assertNotEqual(
+                    source_path.read_text(encoding="utf-8"), mutated
+                )
+                path = Path(directory) / source_path.name
+                path.write_text(mutated, encoding="utf-8")
+                completed = subprocess.run(
+                    [VALIDATOR, option, path],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("disagree", completed.stderr)
+
+    def test_architecture_gate_rejects_avc_diagnostic_boundary_mutations(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "--isolation-contract",
+                ROOT / "scripts/selinux_isolation_contract.py",
+                "def validate_avc_correlation_diagnostic(",
+                "def trust_avc_correlation_diagnostic(",
+            ),
+            (
+                "--qualification-harness",
+                QUALIFICATION_HARNESS,
+                "publish_avc_correlation_diagnostic() {",
+                "discard_avc_correlation_diagnostic() {",
+            ),
+            (
+                "--qualification-runner",
+                QUALIFICATION_RUNNER,
+                "SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=6",
+                "SECPAL_AVC_CORRELATION_DIAGNOSTIC_FD=7",
+            ),
+            (
+                "--target-failure-classifier",
+                TARGET_FAILURE_CLASSIFIER,
+                "contract.validate_avc_correlation_diagnostic(projection)",
+                "pass",
+            ),
+            (
+                "--rocky-control",
+                CONTROL,
+                "contract.validate_avc_correlation_diagnostic(projection)",
+                "pass",
+            ),
+            (
+                "--rocky-control",
+                CONTROL,
+                "json.loads(payload, object_pairs_hook=reject_duplicate_keys)",
+                "json.loads(payload)",
+            ),
+            (
+                "--qualification-harness",
+                QUALIFICATION_HARNESS,
+                "reject_avc_observation() {",
+                "discard_avc_observation() {",
+            ),
+        )
+        for option, source_path, old, new in mutations:
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
+                source = source_path.read_text(encoding="utf-8")
+                self.assertIn(old, source)
+                path = Path(directory) / source_path.name
+                path.write_text(source.replace(old, new, 1), encoding="utf-8")
+                completed = subprocess.run(
+                    [VALIDATOR, option, path],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("rejected", completed.stderr)
+
+    def test_architecture_gate_rejects_schema_pair_substitution(self) -> None:
+        current = (
+            "436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"
+        )
+        historical = (
+            "8459724a91bee7643d6f0e3d64984161a3441848e9d836ce1210ccef689fb4db"
+        )
+        source = TARGET_FAILURE_SCHEMA.read_text(encoding="utf-8")
+        mutation = source.replace(current, "x" * 64, 1)
+        mutation = mutation.replace(historical, current, 1)
+        mutation = mutation.replace("x" * 64, historical, 1)
+        self.assertEqual(source.count(current), mutation.count(current))
+        self.assertEqual(source.count(historical), mutation.count(historical))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / TARGET_FAILURE_SCHEMA.name
+            path.write_text(mutation, encoding="utf-8")
+            completed = subprocess.run(
+                [VALIDATOR, "--target-failure-schema", path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(0, completed.returncode)
+
+    def test_architecture_gate_pins_corrected_pair_independently(self) -> None:
+        source = VALIDATOR.read_text(encoding="utf-8")
+        self.assertIn(
+            'EXPECTED_TARGET_SHA = "402c22b0a1d69a5a3dba74ffb68cf016caba606b"',
+            source,
+        )
+        self.assertIn(
+            'EXPECTED_HARNESS_SHA256 = (\n    '
+            '"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
+            source,
+        )
+        self.assertIn(
+            'HISTORICAL_273_TARGET_SHA = '
+            '"c76742c828fefd71dda2b2d73fda6a0c43969426"',
+            source,
+        )
+        self.assertIn(
+            'HISTORICAL_273_HARNESS_SHA256 = (\n    '
+            '"436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac"',
+            source,
+        )
+        self.assertNotIn(
+            "HISTORICAL_273_TARGET_SHA = EXPECTED_TARGET_SHA",
+            source,
+        )
+        self.assertIn(
+            'HISTORICAL_PRE_269_HARNESS_SHA256 = (\n    '
+            '"f1ed6f62f769d608b721592b28835daca5ea7c0b0c3575311691628383e88f3c"',
+            source,
+        )
+        self.assertNotIn(
+            "HISTORICAL_PRE_269_HARNESS_SHA256 = EXPECTED_HARNESS_SHA256",
+            source,
+        )
 
 
 if __name__ == "__main__":

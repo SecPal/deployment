@@ -1,0 +1,595 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$comment",
+    "schema_version",
+    "evidence_kind",
+    "repository",
+    "delivery_issue",
+    "primary_pr",
+    "implementation_head",
+    "implementation_tree",
+    "accepted_shared_base",
+    "ownership",
+    "installed_source_sha256",
+    "private_reference",
+    "public_reference",
+    "public_authorizations",
+    "artifact_sha256",
+    "pre_public_assessment_sha256",
+    "retention",
+    "scope"
+  ],
+  "properties": {
+    "$comment": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "evidence_kind": {
+      "const": "BOUNDED_DIRECT_VIEWER_REFERENCE_OBSERVATIONS"
+    },
+    "repository": {
+      "const": "SecPal/deployment"
+    },
+    "delivery_issue": {
+      "const": 220
+    },
+    "primary_pr": {
+      "const": 307
+    },
+    "implementation_head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "implementation_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "accepted_shared_base": {
+      "const": "c4e11cc6db2db480afcc2a375e629e3c7a70cf5b"
+    },
+    "ownership": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 197
+    },
+    "installed_source_sha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "haproxy-config",
+        "haproxy-direct-policy",
+        "haproxy_base_contract.py",
+        "haproxy_composition_contract.py",
+        "haproxy_config_lifecycle.py",
+        "haproxy_direct_contract.py",
+        "haproxy_direct_policy.py",
+        "haproxy_supply_contract.py",
+        "product_backend_contract.py"
+      ],
+      "properties": {
+        "haproxy-config": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy-direct-policy": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_base_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_composition_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_config_lifecycle.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_direct_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_direct_policy.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "haproxy_supply_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "product_backend_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "private_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_sha256",
+        "hosts",
+        "installed_application_security_results"
+      ],
+      "properties": {
+        "record_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "hosts": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "server_id",
+                "architecture",
+                "haproxy_binary_sha256",
+                "tests",
+                "result"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "server_id": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "architecture": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "haproxy_binary_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "tests": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "result": {
+                  "const": "PASS"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "server_id",
+                "architecture",
+                "haproxy_binary_sha256",
+                "tests",
+                "result"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "server_id": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "architecture": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "haproxy_binary_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "tests": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "result": {
+                  "const": "PASS"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "server_id",
+                "architecture",
+                "haproxy_binary_sha256",
+                "tests",
+                "result"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "server_id": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "architecture": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "haproxy_binary_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "tests": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "result": {
+                  "const": "PASS"
+                }
+              }
+            }
+          ],
+          "items": false
+        },
+        "installed_application_security_results": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "direct_single_ipv4_ipv6_canonical_identity",
+            "strict_proxy_v2_ipv4_ipv6_canonical_identity",
+            "proxy_v1_missing_partial_malformed_invalid_forms_rejected",
+            "unauthorized_physical_peer_and_forged_claim_rejected",
+            "private_decoder_and_backend_bypass_rejected",
+            "forwarding_and_internal_header_spoofing_rejected",
+            "real_api_session_cookie_cors_sanctum_origin_isolation",
+            "rootless_api_frontend_recreation",
+            "effective_selinux_nftables_and_unchanged_backend_policy",
+            "privacy_safe_peer_client_logging_and_correlation",
+            "validated_reload_invalid_candidate_and_lkg",
+            "adjacent_bytecode_substitution_rejected"
+          ],
+          "properties": {
+            "direct_single_ipv4_ipv6_canonical_identity": {
+              "const": "PASS"
+            },
+            "strict_proxy_v2_ipv4_ipv6_canonical_identity": {
+              "const": "PASS"
+            },
+            "proxy_v1_missing_partial_malformed_invalid_forms_rejected": {
+              "const": "PASS"
+            },
+            "unauthorized_physical_peer_and_forged_claim_rejected": {
+              "const": "PASS"
+            },
+            "private_decoder_and_backend_bypass_rejected": {
+              "const": "PASS"
+            },
+            "forwarding_and_internal_header_spoofing_rejected": {
+              "const": "PASS"
+            },
+            "real_api_session_cookie_cors_sanctum_origin_isolation": {
+              "const": "PASS"
+            },
+            "rootless_api_frontend_recreation": {
+              "const": "PASS"
+            },
+            "effective_selinux_nftables_and_unchanged_backend_policy": {
+              "const": "PASS"
+            },
+            "privacy_safe_peer_client_logging_and_correlation": {
+              "const": "PASS"
+            },
+            "validated_reload_invalid_candidate_and_lkg": {
+              "const": "PASS"
+            },
+            "adjacent_bytecode_substitution_rejected": {
+              "const": "PASS"
+            }
+          }
+        }
+      }
+    },
+    "public_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server_id",
+        "ipv4",
+        "ipv6",
+        "allowed_sources",
+        "ports",
+        "local_witness_uid",
+        "negative_source_ipv4",
+        "negative_source_ipv6",
+        "first_bind_utc",
+        "restored_at",
+        "duration_seconds",
+        "haproxy_package",
+        "haproxy_binary_sha256",
+        "serving_sha256",
+        "selinux",
+        "results"
+      ],
+      "properties": {
+        "server_id": {
+          "const": 163965414
+        },
+        "ipv4": {
+          "const": "78.47.193.193"
+        },
+        "ipv6": {
+          "const": "2a01:4f8:c013:ec3b::1"
+        },
+        "allowed_sources": {
+          "const": ["188.245.168.2/32", "2a01:4f8:c013:b5e2::1/128"]
+        },
+        "ports": {
+          "const": [80, 443]
+        },
+        "local_witness_uid": {
+          "const": 0
+        },
+        "negative_source_ipv4": {
+          "const": "178.105.194.164"
+        },
+        "negative_source_ipv6": {
+          "const": "2a01:4f8:c013:be72::1"
+        },
+        "first_bind_utc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "restored_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "duration_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1800
+        },
+        "haproxy_package": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "haproxy_binary_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "serving_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "selinux": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "results": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "real_ipv4_ipv6_http_tls_identity",
+            "forwarding_internal_header_and_request_id_sanitization",
+            "real_api_session_cookie_cors_sanctum",
+            "frontend_api_origin_and_route_isolation",
+            "public_proxy_v1_v2_rejection",
+            "external_source_allowlist",
+            "local_uid_993_994_1000_rejection",
+            "startup_exact_generation_witness",
+            "graceful_reload_exact_new_worker_witness",
+            "invalid_configuration_rejection_and_lkg",
+            "worker_confinement_and_unchanged_backend_policy",
+            "privacy_safe_peer_and_canonical_client_logging",
+            "boot_guard_and_independent_deadline_lease",
+            "original_haproxy_firewall_boot_restoration",
+            "temporary_unit_removal",
+            "external_ipv4_ipv6_port_closure_two_sources",
+            "temporary_admin_revocation_and_key_destruction"
+          ],
+          "properties": {
+            "real_ipv4_ipv6_http_tls_identity": {
+              "const": "PASS"
+            },
+            "forwarding_internal_header_and_request_id_sanitization": {
+              "const": "PASS"
+            },
+            "real_api_session_cookie_cors_sanctum": {
+              "const": "PASS"
+            },
+            "frontend_api_origin_and_route_isolation": {
+              "const": "PASS"
+            },
+            "public_proxy_v1_v2_rejection": {
+              "const": "PASS"
+            },
+            "external_source_allowlist": {
+              "const": "PASS"
+            },
+            "local_uid_993_994_1000_rejection": {
+              "const": "PASS"
+            },
+            "startup_exact_generation_witness": {
+              "const": "PASS"
+            },
+            "graceful_reload_exact_new_worker_witness": {
+              "const": "PASS"
+            },
+            "invalid_configuration_rejection_and_lkg": {
+              "const": "PASS"
+            },
+            "worker_confinement_and_unchanged_backend_policy": {
+              "const": "PASS"
+            },
+            "privacy_safe_peer_and_canonical_client_logging": {
+              "const": "PASS"
+            },
+            "boot_guard_and_independent_deadline_lease": {
+              "const": "PASS"
+            },
+            "original_haproxy_firewall_boot_restoration": {
+              "const": "PASS"
+            },
+            "temporary_unit_removal": {
+              "const": "PASS"
+            },
+            "external_ipv4_ipv6_port_closure_two_sources": {
+              "const": "PASS"
+            },
+            "temporary_admin_revocation_and_key_destruction": {
+              "const": "PASS"
+            }
+          }
+        }
+      }
+    },
+    "public_authorizations": {
+      "const": {
+        "first_attempt": "CONSUMED_PARTIAL_49_SECONDS",
+        "second_attempt": "CONSUMED_COMPLETE",
+        "further_attempt_authorized": false
+      }
+    },
+    "artifact_sha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization.json",
+        "controller-manifest-before-run.json",
+        "effective-prebind-admission.json",
+        "activation.log",
+        "public-application.log",
+        "public-protocol.json",
+        "negative-cx33.json",
+        "unrelated-local-uids.json",
+        "public-observation-before-reload.json",
+        "public-reload-lkg.json",
+        "public-application-after-reload.log",
+        "public-observation-after-reload.json",
+        "restoration.json",
+        "closure-controller.json",
+        "closure-cx33.json",
+        "cx33-revocation.log",
+        "revoked-key-independent-check.json",
+        "outcome.json"
+      ],
+      "properties": {
+        "authorization.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "controller-manifest-before-run.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "effective-prebind-admission.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "activation.log": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "public-application.log": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "public-protocol.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "negative-cx33.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "unrelated-local-uids.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "public-observation-before-reload.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "public-reload-lkg.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "public-application-after-reload.log": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "public-observation-after-reload.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "restoration.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "closure-controller.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "closure-cx33.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "cx33-revocation.log": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "revoked-key-independent-check.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "outcome.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "pre_public_assessment_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "retention": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 242
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 378
+    }
+  }
+}

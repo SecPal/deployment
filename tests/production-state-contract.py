@@ -277,19 +277,64 @@ class ProductionStateContractTest(unittest.TestCase):
                     text,
                 )
 
-    def test_native_lifecycle_fixture_uses_canonical_private_storage_seam(self) -> None:
-        fixture = Path("/tmp/secpal-d2-native.example")
+    def test_fixed_product_backend_publication(self) -> None:
+        units = self.renderer.build_units(self.contract)
+        expected = {
+            "secpal-frontend.container": ["PublishPort=127.0.0.1:18080:8080/tcp"],
+            "secpal-api.container": ["PublishPort=127.0.0.1:18081:8080/tcp"],
+        }
+        for name, content in units.items():
+            if name.endswith(".container"):
+                with self.subTest(unit=name):
+                    self.assertEqual(
+                        [line for line in content.splitlines() if line.startswith("PublishPort=")],
+                        expected.get(name, []),
+                    )
+        frontend = units["secpal-frontend.container"]
+        self.assertNotIn("secpal-application.network", frontend)
+        container = frontend.split("[Container]\n", 1)[1].split("[Service]\n", 1)[0]
+        self.assertNotRegex(container, r"(?i)DB_|REDIS_|secret|private-storage")
+        for name in expected:
+            self.assertIn(
+                "ExecStartPre=/usr/bin/python3 -I /usr/local/libexec/secpal/product-backend-policy --check",
+                units[name],
+            )
+
+    def test_native_lifecycle_fixture_has_no_production_storage_authority(self) -> None:
+        fixture = Path("/tmp/secpal-native.example")
         rendered = self.renderer.build_native_lifecycle_fixture_unit(
-            self.contract, fixture, "d2-native-example"
+            self.contract, fixture, "native-example"
         )
+        self.assertNotIn("D.2", rendered)
+        self.assertNotIn("private-storage", rendered)
+        self.assertNotIn("/app/storage/app/private", rendered)
+        self.assertNotIn("Label=org.secpal.production=true", rendered)
+        self.assertNotIn("PartOf=secpal.target", rendered)
         self.assertIn("User=10001", rendered)
         self.assertIn("Group=10001", rendered)
-        self.assertIn(
-            "source=/tmp/secpal-d2-native.example/srv/secpal/private-storage,"
-            "target=/app/storage/app/private,rw=true",
-            rendered,
+        self.assertEqual(
+            [line for line in rendered.splitlines() if line.startswith("Mount=")],
+            ["Mount=type=bind,source=/tmp/secpal-native.example/state,"
+             "target=/fixture-state,rw=true,relabel=private"],
         )
-        self.assertNotIn("target=/state", rendered)
+        # Runtime evidence must not depend on the superseded local-authoritative
+        # production storage row. #99 owns the replacement Object Storage contract.
+        from copy import deepcopy
+
+        without_storage = deepcopy(self.contract)
+        del without_storage["objects"]["private_application_storage"]
+        self.assertEqual(
+            rendered,
+            self.renderer.build_native_lifecycle_fixture_unit(
+                without_storage, fixture, "native-example"
+            ),
+        )
+        lifecycle = (ROOT / "tests/production-state-native-lifecycle.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("d2-native", lifecycle)
+        self.assertNotIn("private-storage", lifecycle)
+        self.assertIn('STATE_PATH="$FIXTURE_ROOT/state"', lifecycle)
 
     def test_secret_values_never_enter_rendered_or_runtime_metadata(self) -> None:
         rendered = "\n".join(self.renderer.build_units(self.contract).values())

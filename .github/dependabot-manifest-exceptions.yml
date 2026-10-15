@@ -6,16 +6,16 @@ version: 1
 classifications:
   - directory: infra/ci-cloud/digitalocean
     ecosystem: opentofu
-    reason: The active cloud module is executed and locked with OpenTofu.
+    reason: Retained Debian module and provider lock are OpenTofu-owned; cloud execution is retired.
     reviewed-by: "@aroviqen"
-    reviewed-on: "2026-09-03"
+    reviewed-on: "2026-10-15"
   - directory: infra/ci-cloud/gcp
     ecosystem: opentofu
-    reason: The active cloud module is executed and locked with OpenTofu.
+    reason: Retained Debian module and provider lock are OpenTofu-owned; cloud execution is retired.
     reviewed-by: "@aroviqen"
-    reviewed-on: "2026-09-03"
+    reviewed-on: "2026-10-15"
   - directory: infra/ci-cloud/gcp-rocky
     ecosystem: opentofu
-    reason: The active cloud module is executed and locked with OpenTofu.
+    reason: Active Rocky qualification uses pinned OpenTofu and this module's provider lock.
     reviewed-by: "@aroviqen"
-    reviewed-on: "2026-09-03"
+    reviewed-on: "2026-10-15"

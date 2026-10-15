@@ -23,7 +23,7 @@ SCHEMA_VERSION = 1
 MAX_UNIT_BYTES = 64 * 1024
 INSTANCE_PATTERN = re.compile(r"[a-z0-9]{8,24}\Z")
 CONTAINER_ROLES = (
-    "secrets-init", "postgres", "valkey", "migrate", "api",
+    "secrets-init", "postgres", "migrate", "api",
     "worker-general", "worker-hash-chain", "scheduler", "frontend", "gateway",
 )
 NETWORKS = ("application", "edge")

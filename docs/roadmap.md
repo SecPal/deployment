@@ -20,10 +20,11 @@ Production Edge mode is exactly **DIRECT** or **PROTECTED**.
 [ADR-019](https://github.com/SecPal/.github/blob/main/docs/adr/20260824-production-edge-layered-security-adr019.md)
 owns the normative Edge architecture and trust boundaries.
 
-- **DIRECT:** HAProxy is the Viewer Edge. ADR-019 and
-  [#89](https://github.com/SecPal/deployment/issues/89) own the decision;
-  [#90](https://github.com/SecPal/deployment/issues/90) and its descendants own
-  delivery.
+- **DIRECT:** Host-native HAProxy is the Viewer Edge. The
+  [accepted DIRECT decision](architecture/decisions/direct-viewer-edge.md)
+  records [#89](https://github.com/SecPal/deployment/issues/89) under ADR-019;
+  [#90](https://github.com/SecPal/deployment/issues/90) descendants own
+  implementation.
 - **PROTECTED:** CloudFront Multi-Tenant is the Viewer Edge; HAProxy is the
   authenticated Origin/backend boundary. The
   [#209 subtree](https://github.com/SecPal/deployment/issues/209) owns portable
@@ -91,10 +92,10 @@ integration parity, production state/secrets, and a Debian NGINX production
 Edge. Those documents and runs remain historical evidence. They are not the
 current Rocky/SELinux, PostgreSQL 18, or ADR-019 Edge authority.
 
-The retained non-production Debian cloud-conformance work likewise records its
-original environment and evidence honestly. Current Rocky qualification has a
-separate owner; history is not rewritten as though Rocky had always been the
-decision.
+The retired non-production Debian cloud-conformance implementation records its
+original environment and evidence honestly, but now fails before provider
+authority. Current Rocky qualification has a separate owner; history is not
+rewritten as though Rocky had always been the decision.
 
 ### Former Phase E edge selection (historical / superseded)
 

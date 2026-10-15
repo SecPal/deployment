@@ -1,0 +1,360 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: MIT",
+  "title": "Diagnostic Rocky instance insertion TCP observations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "collector",
+    "repository",
+    "trusted_control_sha",
+    "target_sha",
+    "workflow_run_id",
+    "workflow_run_attempt",
+    "provider_profile",
+    "project",
+    "zone",
+    "expected_instance_name",
+    "opentofu_version",
+    "google_provider_version",
+    "observation_start",
+    "observation_end",
+    "collection_status",
+    "failure_operation",
+    "visibility",
+    "dns_completion",
+    "endpoint_observation",
+    "connection_progress",
+    "terminal_provider_result",
+    "provider_exit_code",
+    "connections"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "INSTANCE_INSERT_TRANSPORT_EVIDENCE"
+    },
+    "collector": {
+      "const": "LINUX_EXACT_INET_DIAG_TCP_INFO_V1"
+    },
+    "repository": {
+      "const": "SecPal/deployment"
+    },
+    "trusted_control_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "target_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "workflow_run_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "workflow_run_attempt": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,2}$"
+    },
+    "provider_profile": {
+      "enum": ["gcp-rocky-10-2-arm64", "gcp-rocky-10-2-x86-64"]
+    },
+    "project": {
+      "const": "secpal-dev"
+    },
+    "zone": {
+      "const": "europe-west3-a"
+    },
+    "expected_instance_name": {
+      "type": "string",
+      "pattern": "^sprk-[1-9][0-9]{0,19}-[1-9][0-9]{0,2}-instance$"
+    },
+    "opentofu_version": {
+      "const": "1.12.5"
+    },
+    "google_provider_version": {
+      "const": "7.40.0"
+    },
+    "observation_start": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "observation_end": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "collection_status": {
+      "enum": [
+        "COMPLETE",
+        "UNAVAILABLE",
+        "FAILED_STARTUP",
+        "FAILED_RUNTIME",
+        "FAILED_SHUTDOWN",
+        "LIMIT_EXCEEDED"
+      ]
+    },
+    "failure_operation": {
+      "enum": [
+        "NONE",
+        "UNKNOWN",
+        "OPEN_DIAGNOSTIC_SOCKET",
+        "BOUND_DIAGNOSTIC_BUFFER",
+        "ADMIT_NOTIFICATION_SCOPE",
+        "SUBSCRIBE_SOCKET_DESTRUCTION",
+        "VERIFY_PROCESS_IDENTITY",
+        "CORRELATE_PROVIDER_PROCESS",
+        "VERIFY_NETWORK_NAMESPACE",
+        "CORRELATE_PROVIDER_SOCKET",
+        "QUERY_TCP_COUNTERS",
+        "NORMALIZE_SOCKET_METADATA",
+        "FOLD_COUNTER_OBSERVATIONS",
+        "RECEIVE_FINAL_COUNTERS",
+        "FINALIZE_OBSERVATION"
+      ]
+    },
+    "visibility": {
+      "const": "SAMPLED_SOCKETS_WITH_FILTERED_DESTRUCTION"
+    },
+    "dns_completion": {
+      "const": "UNKNOWN"
+    },
+    "endpoint_observation": {
+      "enum": ["NUMERIC_TCP_ENDPOINT_OBSERVED", "UNKNOWN"]
+    },
+    "connection_progress": {
+      "enum": ["TCP_ESTABLISHMENT_OBSERVED", "SYN_SENT_OBSERVED", "UNKNOWN"]
+    },
+    "terminal_provider_result": {
+      "enum": ["SUCCESS", "OTHER", "NOT_RUN"]
+    },
+    "provider_exit_code": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -255,
+          "maximum": 255
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "connections": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/connection"
+      }
+    }
+  },
+  "$defs": {
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "state",
+        "bytes_sent",
+        "bytes_received",
+        "retransmissions"
+      ],
+      "properties": {
+        "at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "state": {
+          "enum": [
+            "ESTABLISHED",
+            "SYN_SENT",
+            "SYN_RECV",
+            "FIN_WAIT1",
+            "FIN_WAIT2",
+            "TIME_WAIT",
+            "CLOSE",
+            "CLOSE_WAIT",
+            "LAST_ACK",
+            "LISTEN",
+            "CLOSING",
+            "NEW_SYN_RECV",
+            "BOUND_INACTIVE"
+          ]
+        },
+        "bytes_sent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "bytes_received": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "retransmissions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "process_id",
+        "process_start_ticks",
+        "socket_cookie",
+        "local_address",
+        "remote_address",
+        "local_port",
+        "remote_port",
+        "first",
+        "last",
+        "sample_count",
+        "max_sample_gap_ns",
+        "states_seen",
+        "last_send_increase_sample",
+        "last_receive_increase_sample",
+        "final_snapshot_kind",
+        "secure_transport_progress",
+        "http_request_attribution",
+        "reset_origin",
+        "fin_observation"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "process_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "process_start_ticks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "socket_cookie": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "local_address": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 45
+        },
+        "remote_address": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 45
+        },
+        "local_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "remote_port": {
+          "const": 443
+        },
+        "first": {
+          "$ref": "#/$defs/snapshot"
+        },
+        "last": {
+          "$ref": "#/$defs/snapshot"
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "max_sample_gap_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000000000
+        },
+        "states_seen": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 13,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "ESTABLISHED",
+              "SYN_SENT",
+              "SYN_RECV",
+              "FIN_WAIT1",
+              "FIN_WAIT2",
+              "TIME_WAIT",
+              "CLOSE",
+              "CLOSE_WAIT",
+              "LAST_ACK",
+              "LISTEN",
+              "CLOSING",
+              "NEW_SYN_RECV",
+              "BOUND_INACTIVE"
+            ]
+          }
+        },
+        "last_send_increase_sample": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_receive_increase_sample": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final_snapshot_kind": {
+          "enum": [
+            "LIVE_SOCKET",
+            "DESTROY_NOTIFICATION",
+            "NO_DESTROY_NOTIFICATION_OBSERVED"
+          ]
+        },
+        "secure_transport_progress": {
+          "const": "UNKNOWN"
+        },
+        "http_request_attribution": {
+          "const": "UNKNOWN"
+        },
+        "reset_origin": {
+          "const": "UNKNOWN"
+        },
+        "fin_observation": {
+          "enum": [
+            "PEER_FIN_OBSERVED",
+            "LOCAL_FIN_OBSERVED",
+            "BOTH_FIN_OBSERVED",
+            "UNKNOWN"
+          ]
+        }
+      }
+    }
+  }
+}
