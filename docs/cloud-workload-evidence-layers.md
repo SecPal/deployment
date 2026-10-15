@@ -38,3 +38,12 @@ document. Neither controller path accepts a target-reported workload result.
 current positive representations, and rejection at the schema, validator, or
 admission boundary. The existing workload suite remains the detailed behavior
 contract. Purity enforcement for these declared surfaces belongs to #122.
+
+## Independent host qualification
+
+The current workload envelope contains trusted workflow identity, phase and
+collection statuses, bounded normalization diagnostics, and independently
+admitted workload observations. It does not claim host or production acceptance.
+Rocky host qualification uses its existing separate evidence contract.
+The retired Debian/APT/AppArmor host envelope and collector are preserved in Git
+history rather than required by current workload validation.

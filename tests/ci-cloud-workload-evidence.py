@@ -27,7 +27,6 @@ ROOT = Path(__file__).resolve().parents[1]
 COLLECTOR_PATH = ROOT / "scripts" / "ci-cloud" / "collect-workload-evidence.py"
 ADMISSION_PATH = ROOT / "scripts" / "ci-cloud" / "workload-admission.py"
 ASSEMBLER_PATH = ROOT / "scripts" / "ci-cloud" / "assemble-evidence.py"
-RUNNER_PATH = ROOT / "scripts" / "ci-cloud" / "run-remote-conformance.sh"
 TARGET_PATH = ROOT / "scripts" / "ci-cloud" / "target-conformance.sh"
 INTEGRATION_CONTRACT_PATH = ROOT / "scripts" / "integration_runtime_contract.py"
 PODMAN_54_USERNS_FIXTURE = (
@@ -837,15 +836,7 @@ class WorkloadEvidenceTests(unittest.TestCase):
 
     def test_synthetic_complete_trusted_orchestration_sequence(self) -> None:
         observations = valid_observations()
-        host = {
-            "schema_version": 1,
-            "workflow": {"target_sha": "a" * 40},
-            "test": {"failed_admission_invariants": []},
-            "platform": {},
-            "apt": {},
-            "host": {},
-            "runtime": {},
-        }
+        host = {"repository": "SecPal/deployment", "run_id": "12345", "run_attempt": "1", "target_sha": "a" * 40}
         document = self.assembler.assemble(
             host,
             observations["baseline"],
@@ -853,7 +844,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
             observations["post_cleanup"],
             valid_normalization_diagnostics(),
             {
-                "host": 0,
                 "workload_prepare_start": 0,
                 "workload_cleanup": 0,
                 "trusted_quadlet_normalize_live": 0,
@@ -872,42 +862,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
             document["test"]["normalization_diagnostics"],
         )
 
-    def test_host_phase_failure_remains_in_d1_host_admission(self) -> None:
-        observations = valid_observations()
-        host = {
-            "schema_version": 1,
-            "workflow": {"target_sha": "a" * 40},
-            "test": {
-                "failed_admission_invariants": ["TARGET_CONFORMANCE_ENTRYPOINT"]
-            },
-            "platform": {},
-            "apt": {},
-            "host": {},
-            "runtime": {},
-        }
-        document = self.assembler.assemble(
-            host,
-            observations["baseline"],
-            observations["live"],
-            observations["post_cleanup"],
-            valid_normalization_diagnostics(),
-            {
-                "host": 7,
-                "workload_prepare_start": 0,
-                "workload_cleanup": 0,
-                "trusted_quadlet_normalize_live": 0,
-                "trusted_quadlet_normalize_cleanup": 0,
-            },
-            {"baseline": 0, "live": 0, "post_cleanup": 0},
-        )
-        self.assertEqual(
-            {
-                "result": "failed",
-                "failed_admission_invariants": ["TARGET_HOST_CONTRACT"],
-            },
-            document["host_admission"],
-        )
-        self.assertEqual("passed", document["workload"]["result"])
 
     def test_each_trusted_quadlet_normalization_status_is_authoritative(self) -> None:
         observations = valid_observations()
@@ -918,17 +872,8 @@ class WorkloadEvidenceTests(unittest.TestCase):
                 "TRUSTED_QUADLET_NORMALIZE_CLEANUP",
             ),
         ):
-            host = {
-                "schema_version": 1,
-                "workflow": {"target_sha": "a" * 40},
-                "test": {"failed_admission_invariants": []},
-                "platform": {},
-                "apt": {},
-                "host": {},
-                "runtime": {},
-            }
+            host = {"repository": "SecPal/deployment", "run_id": "12345", "run_attempt": "1", "target_sha": "a" * 40}
             statuses = {
-                "host": 0,
                 "workload_prepare_start": 0,
                 "workload_cleanup": 0,
                 "trusted_quadlet_normalize_live": 0,
@@ -3789,29 +3734,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
                     self.admission.workload_admission_failures(observations),
                 )
 
-    def test_runner_reestablishes_trusted_quadlet_activation_before_live_observation(self) -> None:
-        runner = RUNNER_PATH.read_text(encoding="utf-8")
-        self.assertIn("normalize_quadlet_runtime()", runner)
-        self.assertLess(
-            runner.index('bootstrap_stage="target-workload-prepare-start"'),
-            runner.index('bootstrap_stage="trusted-quadlet-normalize-live"'),
-        )
-        self.assertLess(
-            runner.index('bootstrap_stage="trusted-quadlet-normalize-live"'),
-            runner.index('bootstrap_stage="collector-live"'),
-        )
-        live_normalization = runner.split(
-            'bootstrap_stage="trusted-quadlet-normalize-live"', 1
-        )[1].split('bootstrap_stage="collector-live"', 1)[0]
-        self.assertIn("normalize_quadlet_runtime live", live_normalization)
-        self.assertLess(
-            runner.index('bootstrap_stage="target-host"'),
-            runner.index('bootstrap_stage="trusted-quadlet-normalize-cleanup"'),
-        )
-        self.assertLess(
-            runner.index('bootstrap_stage="trusted-quadlet-normalize-cleanup"'),
-            runner.index('bootstrap_stage="collector-post-cleanup"'),
-        )
 
     def test_target_activation_rejects_overrides_and_injected_dependencies(self) -> None:
         instance = "aaaaaaaaaaaa"
@@ -6645,103 +6567,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
             mutate(observations)
             self.assertTrue(self.admission.workload_admission_failures(observations))
 
-    def test_runner_uses_only_literal_target_phases_and_always_collects_cleanup(self) -> None:
-        runner = RUNNER_PATH.read_text(encoding="utf-8")
-        for literal in ("v1 host", "v1 workload-prepare-start", "v1 workload-cleanup"):
-            self.assertIn(literal, runner)
-        self.assertNotIn("SECPAL_TARGET_COMMAND", runner)
-        self.assertNotIn("sudo", runner)
-        self.assertIn("collect-workload-evidence.py", runner)
-        self.assertIn("collect_workload_phase()", runner)
-        self.assertEqual(
-            2,
-            runner.count("< scripts/ci-cloud/collect-workload-evidence.py"),
-        )
-        self.assertLess(
-            runner.index('bootstrap_stage="collector-baseline"'),
-            runner.index('bootstrap_stage="target-workload-prepare-start"'),
-        )
-        self.assertLess(
-            runner.index('bootstrap_stage="target-host"'),
-            runner.index('bootstrap_stage="collector-post-cleanup"'),
-        )
-        self.assertIn("workload_evidence_finalized=true", runner)
-        self.assertIn(
-            "collect_workload_live() { collect_workload_phase live; }",
-            runner,
-        )
-        self.assertIn(
-            "collect_workload_post_cleanup() { "
-            "collect_workload_phase post-cleanup; }",
-            runner,
-        )
-        self.assertIn("trap collect_cleanup_after_interruption INT TERM HUP", runner)
-        self.assertIn("run_target_phase()", runner)
-        self.assertEqual(
-            1,
-            runner.count("cd /home/secpal-ci/deployment-target"),
-        )
-        self.assertEqual(
-            1,
-            runner.count('diff-index --quiet --no-ext-diff "$1" --'),
-        )
-        self.assertEqual(1, runner.count('read-tree --reset "$1"'))
-        self.assertEqual(1, runner.count("ls-files --others"))
-        host_collection = runner.split("collect_host_and_assemble()", 1)[1]
-        host_collection = host_collection.split(
-            "collect_cleanup_after_interruption()", 1
-        )[0]
-        self.assertIn(
-            "timeout --signal=TERM --kill-after=30s 12m \\\n    ssh",
-            host_collection,
-        )
-        self.assertNotIn("write_incomplete_", runner)
-
-    def test_target_file_limits_admit_reviewed_cloud_artifacts(self) -> None:
-        runner = RUNNER_PATH.read_text(encoding="utf-8")
-        helper = runner.split("run_target_phase()", 1)[1].split(
-            "run_target_host()", 1
-        )[0]
-        phase_limits = dict(
-            zip(
-                ("host", "workload-prepare-start", "workload-cleanup"),
-                (
-                    int(limit)
-                    for limit in re.findall(
-                        r"^    phase_file_limit_kibibytes=([1-9][0-9]*)$",
-                        helper,
-                        re.MULTILINE,
-                    )
-                ),
-                strict=True,
-            )
-        )
-
-        gh_2_97_0_linux_amd64_executable_bytes = 40_992_930
-        largest_reviewed_cloud_blob_or_member_bytes = max(
-            int(item["size_bytes"])
-            for item in REVIEWED_CLOUD_FILE_LIMIT_EVIDENCE
-        )
-
-        self.assertEqual(
-            {
-                "host": 64 * 1024,
-                "workload-prepare-start": 128 * 1024,
-                "workload-cleanup": 64 * 1024,
-            },
-            phase_limits,
-        )
-        self.assertGreaterEqual(
-            phase_limits["workload-prepare-start"] * 1024,
-            gh_2_97_0_linux_amd64_executable_bytes,
-        )
-        self.assertGreaterEqual(
-            phase_limits["workload-prepare-start"] * 1024,
-            largest_reviewed_cloud_blob_or_member_bytes,
-        )
-        self.assertEqual(
-            1, helper.count('ulimit -f "$phase_file_limit_kibibytes"')
-        )
 
     def test_reviewed_cloud_file_limit_evidence_tracks_pinned_image(self) -> None:
         runtime_contract = runpy.run_path(
@@ -6784,39 +6609,6 @@ class WorkloadEvidenceTests(unittest.TestCase):
             ],
         )
 
-    def test_target_phases_restore_the_fixed_user_bus_environment(self) -> None:
-        runner = RUNNER_PATH.read_text(encoding="utf-8")
-        helper = runner.split("run_target_phase()", 1)[1].split(
-            "run_target_host()", 1
-        )[0]
-        self.assertIn('[[ -S /run/user/20000/bus ]]', helper)
-        self.assertIn("XDG_RUNTIME_DIR=/run/user/20000", helper)
-        self.assertIn(
-            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/20000/bus",
-            helper,
-        )
-
-    def test_control_resource_ssh_operations_have_outer_deadlines(self) -> None:
-        runner = RUNNER_PATH.read_text(encoding="utf-8")
-        self.assertIn("run_control_resource()", runner)
-        helper = runner.split("run_control_resource()", 1)[1].split(
-            "run_target_phase()", 1
-        )[0]
-        self.assertEqual(
-            1,
-            helper.count("timeout --signal=TERM --kill-after=15s 3m"),
-        )
-        for operation in (
-            "create-network",
-            "create-volume",
-            "remove-network",
-            "remove-volume",
-        ):
-            self.assertIn(
-                f"{operation})",
-                helper,
-                operation,
-            )
 
     def test_namespace_sharing_network_modes_are_rejected_by_prefix(self) -> None:
         for network_mode in ("container:deadbeef", "ns:/proc/1/ns/net"):
