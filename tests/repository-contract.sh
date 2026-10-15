@@ -54,6 +54,10 @@ required_files=(
   docs/rocky-cloud-qualification.md
   docs/roadmap.md
   infra/ci-cloud/gcp/iam-role.yaml
+  infra/ci-cloud/digitalocean/versions.tf
+  infra/ci-cloud/digitalocean/.terraform.lock.hcl
+  infra/ci-cloud/gcp/versions.tf
+  infra/ci-cloud/gcp/.terraform.lock.hcl
   infra/ci-cloud/gcp-rocky/.terraform.lock.hcl
   infra/ci-cloud/gcp-rocky/main.tf
   infra/ci-cloud/gcp-rocky/outputs.tf

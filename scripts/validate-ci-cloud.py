@@ -182,6 +182,28 @@ def validate_janitor_workflow(root: Path) -> None:
     validate_action_pins(document, relative)
 
 
+def validate_opentofu(root: Path) -> None:
+    # These provider configurations remain necessary for exact-state cleanup.
+    for directory, source, version in (
+        ("digitalocean", "digitalocean/digitalocean", "2.99.1"),
+        ("gcp", "hashicorp/google", "7.40.0"),
+    ):
+        versions = read(root, f"infra/ci-cloud/{directory}/versions.tf")
+        lock = read(root, f"infra/ci-cloud/{directory}/.terraform.lock.hcl")
+        require('required_version = "= 1.12.5"' in versions, "OpenTofu version must be exact")
+        require(f'source  = "{source}"' in versions, "cleanup provider source changed")
+        require(f'version = "= {version}"' in versions, "cleanup provider version must be exact")
+        require("~>" not in versions and ">=" not in versions, "mutable provider constraints are forbidden")
+        require(f'provider "registry.opentofu.org/{source}"' in lock
+                and re.search(r'version\s*=\s*"' + re.escape(version) + r'"', lock),
+                "cleanup provider lock must match the pinned provider")
+    gcp = read(root, "infra/ci-cloud/gcp/versions.tf")
+    require('project                         = "secpal-dev"' in gcp
+            and 'zone                            = "europe-west3-a"' in gcp
+            and 'add_terraform_attribution_label = false' in gcp,
+            "cleanup provider must retain the reviewed GCP scope")
+
+
 def validate_janitor_script(root: Path) -> None:
     text = read(root, "scripts/ci-cloud/digitalocean-janitor.py")
     require('client.delete(f"/v2/droplets/{candidate.resource_id}")' in text, "janitor must delete one revalidated ID")
@@ -1691,6 +1713,7 @@ def validate_rocky_control_plane(root: Path) -> None:
 
 
 def validate(root: Path) -> None:
+    validate_opentofu(root)
     validate_janitor_workflow(root)
     validate_janitor_script(root)
     validate_gcp_iam_role(root)

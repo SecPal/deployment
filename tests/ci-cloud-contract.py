@@ -51,6 +51,10 @@ class CloudCIContractTests(unittest.TestCase):
             "config/ci-cloud/gcp-rocky-10-2-arm64.json",
             "config/ci-cloud/gcp-rocky-10-2-x86-64.json",
             "infra/ci-cloud/gcp/iam-role.yaml",
+            "infra/ci-cloud/digitalocean/versions.tf",
+            "infra/ci-cloud/digitalocean/.terraform.lock.hcl",
+            "infra/ci-cloud/gcp/versions.tf",
+            "infra/ci-cloud/gcp/.terraform.lock.hcl",
             "infra/ci-cloud/gcp-rocky",
             "schemas",
             "scripts/ci-cloud",
@@ -1324,6 +1328,14 @@ class CloudCIContractTests(unittest.TestCase):
             "scripts/ci-cloud/digitalocean-janitor.py",
             'client.delete(f"/v2/droplets/{candidate.resource_id}")',
             'client.delete("/v2/droplets?tag_name=secpal-ci")',
+        )
+
+
+    def test_rejects_mutable_provider_constraint(self) -> None:
+        self.assert_mutation_rejected(
+            "infra/ci-cloud/digitalocean/versions.tf",
+            'version = "= 2.99.1"',
+            'version = "~> 2.0"',
         )
 
 
