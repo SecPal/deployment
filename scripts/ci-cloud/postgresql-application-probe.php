@@ -44,13 +44,8 @@ try {
 
 if ($operation === 'initialize') {
     Illuminate\Support\Facades\DB::statement('SET ROLE secpal_owner');
-    // Only the real immutable application migrations needed for readiness.
-    $paths = [
-        'database/migrations/0001_01_01_000001_create_cache_table.php',
-        'database/migrations/0001_01_01_000002_create_jobs_table.php',
-        'database/migrations/2025_11_01_165633_create_tenant_keys_table.php',
-    ];
-    $result = Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true, '--path' => $paths]);
+    // Match fresh production initialization before any tenant or runtime state.
+    $result = Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true]);
     // Framework output is not evidence and may include database diagnostics.
     exit($result === 0 ? 0 : 1);
 }
