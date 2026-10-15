@@ -36,7 +36,6 @@ from integration_runtime_contract import (
     API_DIGEST,
     API_IMAGE,
     API_SOURCE_COMMIT,
-    CADDY_IMAGE,
     CONTAINER_LOG_DRIVER,
     CONTAINER_PIDS_LIMIT,
     CONTAINER_ROLES,
@@ -2013,6 +2012,25 @@ class IntegrationLifecycle:
         )
 
     def retrieve_verify_and_stage_images(self) -> None:
+        containerfile = self.root / "containers" / "phase-b-gateway" / "Containerfile"
+        try:
+            from_lines = [
+                line for line in containerfile.read_text(encoding="utf-8").splitlines()
+                if re.match(r"^\s*FROM(?:\s|$)", line, re.IGNORECASE)
+            ]
+        except (OSError, UnicodeError):
+            raise IntegrationError("gateway Containerfile could not be read") from None
+        base = (
+            re.fullmatch(
+                r"FROM docker\.io/library/caddy:[0-9]+\.[0-9]+\.[0-9]+-alpine@"
+                r"(?P<digest>sha256:[0-9a-f]{64})",
+                from_lines[0],
+            )
+            if len(from_lines) == 1 else None
+        )
+        if base is None:
+            raise IntegrationError("gateway requires one immutable official Caddy base")
+        caddy_image = f"docker.io/library/caddy@{base['digest']}"
         self.stage_cloud_gh_cli()
         self.gh_config.mkdir(mode=0o700)
         products = (
@@ -2039,7 +2057,7 @@ class IntegrationLifecycle:
             self.verify_and_stage_product(*values)
         for label, image in (
             ("postgres", POSTGRES_FIXTURE.image),
-            ("caddy", CADDY_IMAGE),
+            ("caddy", caddy_image),
         ):
             self.verify_and_stage_dependency(label, image)
         if self.cloud_mode:
@@ -2054,8 +2072,8 @@ class IntegrationLifecycle:
                 "org.secpal.integration=true",
                 "--label",
                 f"org.secpal.integration.instance={self.instance}",
-                "--build-arg",
-                f"CADDY_IMAGE={CADDY_IMAGE}",
+                "--file",
+                os.fspath(containerfile),
                 "--tag",
                 self.resources.gateway_image,
                 os.fspath(self.root / "containers" / "phase-b-gateway"),

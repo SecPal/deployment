@@ -7,6 +7,7 @@
 import copy
 import base64
 import gzip
+import hashlib
 import json
 import importlib.util
 import os
@@ -32,24 +33,39 @@ class CandidateData(unittest.TestCase):
 
     def test_guest_staged_probe_closure_matches_controller_identity(self):
         control = self.load_module('pg_guest_probe_closure', 'scripts/ci-cloud/postgresql-qualification-control.py')
+        runner = self.load_module('pg_guest_manifest', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        manifest = control.probe_manifest()
+        expected = control.probe_digest()
+        # Preserve the existing ordered path + SHA-256 identity algorithm.
+        legacy = hashlib.sha256()
+        for path in control.PROBE_PATHS:
+            legacy.update(path.encode() + b'\0' + hashlib.sha256((ROOT/path).read_bytes()).digest())
+        self.assertEqual(expected, legacy.hexdigest())
+        self.assertEqual(contract.probe_manifest_digest(manifest), expected)
         terraform = (ROOT / 'infra/ci-cloud/gcp-rocky/metadata.tf').read_text()
         template = (ROOT / 'scripts/ci-cloud/bootstrap-rocky-host.tftpl').read_text()
         sources = dict(re.findall(
             r'(\w+)\s*=\s*file\("\$\{path.module\}/\.\./\.\./\.\./([^"\n]+)"\)', terraform))
-        destinations = re.findall(
-            r"decode_script '(\w+)' /opt/secpal-control/([^\s]+)", template)
-        expected = control.probe_digest()
+        destinations = re.findall(r"decode_script '(\w+)' /opt/secpal-control/([^\s]+)", template)
         with tempfile.TemporaryDirectory() as directory:
             guest = Path(directory)
             for variable, destination in destinations:
-                if destination not in control.PROBE_PATHS:
+                if destination not in contract.GUEST_PROBE_PATHS:
                     continue
-                payload = base64.b64encode(gzip.compress((ROOT / sources[variable]).read_bytes(), mtime=0))
                 path = guest / destination
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(gzip.decompress(base64.b64decode(payload)))
-            with mock.patch.object(control, 'ROOT', guest):
-                self.assertEqual(control.probe_digest(), expected)
+                path.write_bytes((ROOT / sources[variable]).read_bytes())
+            transported = {destination for _, destination in destinations if destination in contract.PROBE_PATHS}
+            self.assertEqual(transported, set(contract.GUEST_PROBE_PATHS))
+            self.assertTrue(set(contract.CONTROL_PROBE_PATHS).isdisjoint(transported))
+            with mock.patch.object(runner, 'ROOT', guest), mock.patch.object(runner, 'read_probe_manifest', return_value=manifest):
+                self.assertEqual(runner.guest_probe_digest(), expected)
+                bad = dict(manifest); bad.pop(contract.CONTROL_PROBE_PATHS[0])
+                with self.assertRaises(contract.QualificationError): contract.probe_manifest_digest(bad)
+                bad = dict(manifest); bad[contract.CONTROL_PROBE_PATHS[0]] = 'f'*64
+                self.assertNotEqual(contract.probe_manifest_digest(bad), expected)
+                (guest / contract.GUEST_PROBE_PATHS[0]).write_text('altered guest qualifier')
+                with self.assertRaises(contract.QualificationError): runner.guest_probe_digest()
 
     def test_failed_image_pull_cleanup_accepts_absence_but_requires_readback(self):
         module = self.load_module('pg_failed_image_pull_cleanup', 'scripts/ci-cloud/qualify-native-postgresql.py')
@@ -583,7 +599,8 @@ class CandidateData(unittest.TestCase):
                      'scripts/ci-cloud/qualify-native-postgresql.py',
                      'scripts/ci-cloud/postgresql-qualification-control.py',
                      'schemas/postgresql-qualification-diagnostic.schema.json',
-                     '.github/workflows/rocky-cloud-qualification.yml')
+                     '.github/workflows/rocky-cloud-qualification.yml',
+                     'scripts/ci-cloud/postgresql-reference-host.py')
             for name in paths:
                 destination = temporary / name; destination.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copyfile(ROOT / name,destination)

@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$comment",
+    "schema_version",
+    "evidence_kind",
+    "repository",
+    "delivery_issue",
+    "primary_pr",
+    "reviewed_head",
+    "installed_source_sha256",
+    "server_id",
+    "haproxy_package",
+    "haproxy_binary_sha256",
+    "results",
+    "real_runtime_tests",
+    "pinned_framework_tests",
+    "public_render_generation_unit_unchanged",
+    "new_public_activation",
+    "temporary_admin_revoked",
+    "external_public_ports_closed",
+    "artifact_sha256",
+    "scope"
+  ],
+  "properties": {
+    "$comment": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 600
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "evidence_kind": {
+      "const": "BOUNDED_DIRECT_REMEDIATION_OBSERVATIONS"
+    },
+    "repository": {
+      "const": "SecPal/deployment"
+    },
+    "delivery_issue": {
+      "const": 220
+    },
+    "primary_pr": {
+      "const": 307
+    },
+    "reviewed_head": {
+      "const": "39af5e36af7f6c7794814aa01d18cb63342c2a94"
+    },
+    "installed_source_sha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "/usr/local/libexec/secpal/haproxy-direct-policy",
+        "/usr/local/libexec/secpal/haproxy_direct_contract.py",
+        "/etc/systemd/system/secpal-direct-policy.service"
+      ],
+      "properties": {
+        "/usr/local/libexec/secpal/haproxy-direct-policy": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "/usr/local/libexec/secpal/haproxy_direct_contract.py": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "/etc/systemd/system/secpal-direct-policy.service": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "server_id": {
+      "const": 163965414
+    },
+    "haproxy_package": {
+      "const": "haproxy|0|3.0.5|6.el10_2.2|x86_64"
+    },
+    "haproxy_binary_sha256": {
+      "const": "61b90cd8d83713880c11ee82c9e3d9ae73662ebdef1244695f63338df7dc05ed"
+    },
+    "results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fresh-original-SELinux-and-backend-baseline",
+        "old-startup-actual-two-family-generation",
+        "fail-first-reviewed-policy-stop-leaves-owned-state",
+        "new-startup-actual-two-family-generation",
+        "active-withdrawal-cannot-remove-isolation",
+        "corrected-graceful-reload-actual-two-family-generation",
+        "managed-nftables-restart-recreates-policy-before-listener-resume",
+        "corrected-post-firewall-restart-actual-two-family-generation",
+        "corrected-stop-quiesces-listeners-and-removes-only-owned-state",
+        "failed-start-with-invalid-serving-input-withdraws-without-input-authority",
+        "corrected-start-after-empty-state-actual-two-family-generation",
+        "installed-new-source-identity",
+        "restored-baseline-actual-two-family-generation",
+        "restored-original-files-policy-listeners-and-SELinux",
+        "temporary-private-guest-administration-revoked"
+      ],
+      "properties": {
+        "fresh-original-SELinux-and-backend-baseline": {
+          "const": "PASS"
+        },
+        "old-startup-actual-two-family-generation": {
+          "const": "PASS"
+        },
+        "fail-first-reviewed-policy-stop-leaves-owned-state": {
+          "const": "PASS"
+        },
+        "new-startup-actual-two-family-generation": {
+          "const": "PASS"
+        },
+        "active-withdrawal-cannot-remove-isolation": {
+          "const": "PASS"
+        },
+        "corrected-graceful-reload-actual-two-family-generation": {
+          "const": "PASS"
+        },
+        "managed-nftables-restart-recreates-policy-before-listener-resume": {
+          "const": "PASS"
+        },
+        "corrected-post-firewall-restart-actual-two-family-generation": {
+          "const": "PASS"
+        },
+        "corrected-stop-quiesces-listeners-and-removes-only-owned-state": {
+          "const": "PASS"
+        },
+        "failed-start-with-invalid-serving-input-withdraws-without-input-authority": {
+          "const": "PASS"
+        },
+        "corrected-start-after-empty-state-actual-two-family-generation": {
+          "const": "PASS"
+        },
+        "installed-new-source-identity": {
+          "const": "PASS"
+        },
+        "restored-baseline-actual-two-family-generation": {
+          "const": "PASS"
+        },
+        "restored-original-files-policy-listeners-and-SELinux": {
+          "const": "PASS"
+        },
+        "temporary-private-guest-administration-revoked": {
+          "const": "PASS"
+        }
+      }
+    },
+    "real_runtime_tests": {
+      "const": 28
+    },
+    "pinned_framework_tests": {
+      "const": 4
+    },
+    "public_render_generation_unit_unchanged": {
+      "const": true
+    },
+    "new_public_activation": {
+      "const": false
+    },
+    "temporary_admin_revoked": {
+      "const": true
+    },
+    "external_public_ports_closed": {
+      "const": true
+    },
+    "artifact_sha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "private_qualification_log",
+        "private_outcome",
+        "render_equivalence"
+      ],
+      "properties": {
+        "private_qualification_log": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "private_outcome": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "render_equivalence": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 600
+    }
+  }
+}

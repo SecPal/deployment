@@ -22,6 +22,9 @@ import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "ci-cloud"))
+import rocky_preparation_contract as host_provenance
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_SCHEMA_PATH = ROOT / "schemas/production-inventory.schema.json"
@@ -67,6 +70,7 @@ RPM_ARCHITECTURES = {
     "arm64": "aarch64",
 }
 QUALIFIED_ROCKY_MINORS = frozenset({"10.2"})
+CERTBOT_PACKAGE_POLICY = ROOT / "config/production/certbot-package-policy.json"
 MANAGED_PATH_ROOTS = {
     "runtime_secrets": PurePosixPath("/run/secpal"),
 }
@@ -865,6 +869,9 @@ def validate_platform_facts(inventory: dict[str, Any], facts: dict[str, Any]) ->
         raise ContractViolation(
             "Rocky Linux minor is not in the reviewed qualification allowlist"
         )
+    validate_tls_package_provenance(
+        facts["os"]["package_provenance"], RPM_ARCHITECTURES[facts["architecture"]]
+    )
 
     cpu = facts["cpu"]
     if facts["architecture"] == "amd64":
@@ -882,6 +889,15 @@ def validate_platform_facts(inventory: dict[str, Any], facts: dict[str, Any]) ->
         raise ContractViolation(
             "arm64 admission requires independent Rocky aarch64 qualification"
         )
+
+
+def validate_tls_package_provenance(provenance: dict[str, Any], architecture: str) -> None:
+    """Consume the existing host owner; supplied facts remain synthetic-only."""
+    try:
+        policy = json.loads(CERTBOT_PACKAGE_POLICY.read_text(encoding="utf-8"))
+        host_provenance.admit_certbot_exception(provenance, architecture, policy)
+    except (OSError, ValueError, host_provenance.ContractError) as error:
+        raise ContractViolation("TLS-specific Certbot package provenance rejected") from error
 
 
 def validate_kernel_facts(kernel: dict[str, Any], architecture: str) -> None:

@@ -88,8 +88,8 @@ decode_script backend_wrapper /usr/local/sbin/secpal-qualify-product-backends
 %{ endif ~}
 # Separate PostgreSQL authority; the frozen host harness/claim remains intact.
 %{ if !product_backend_policy_enabled ~}
+decode_script 'postgresql_probe_manifest' /opt/secpal-control/postgresql-probe-manifest.json
 decode_script 'postgresql_contract' /opt/secpal-control/scripts/ci-cloud/postgresql_qualification_contract.py
-decode_script 'postgresql_control' /opt/secpal-control/scripts/ci-cloud/postgresql-qualification-control.py
 decode_script 'postgresql_runner' /opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py
 decode_script 'postgresql_application_bootstrap' /opt/secpal-control/scripts/ci-cloud/postgresql-application-bootstrap.php
 decode_script 'postgresql_application_probe' /opt/secpal-control/scripts/ci-cloud/postgresql-application-probe.php
@@ -97,8 +97,6 @@ decode_script 'image_attestation_runtime' /opt/secpal-control/scripts/image_atte
 decode_script 'fetch_oci_attestation' /opt/secpal-control/scripts/fetch-oci-attestation.py
 decode_script 'postgresql_wrapper' /opt/secpal-control/scripts/ci-cloud/run-native-postgresql-qualification.sh
 decode_script 'postgresql_wrapper' /usr/local/sbin/secpal-qualify-native-postgresql
-decode_script 'postgresql_diagnostic_schema' /opt/secpal-control/schemas/postgresql-qualification-diagnostic.schema.json
-decode_script 'postgresql_schema' /opt/secpal-control/schemas/postgresql-qualification-evidence.schema.json
 decode_script 'postgresql_consumer' /opt/secpal-control/scripts/render-native-postgresql.py
 decode_script 'integration_runtime_contract' /opt/secpal-control/scripts/integration_runtime_contract.py
 %{ endif ~}

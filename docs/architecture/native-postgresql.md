@@ -65,11 +65,21 @@ is only Wants/After: a DB outage leaves the application running to report
 unavailable readiness. Install host units separately from systemd-user units:
 
 ```sh
+staging="$(mktemp -d)"
 python3 scripts/render-production-quadlets.py \
-  --quadlet-output config/production/quadlet \
-  --systemd-output config/production/systemd \
-  --host-systemd-output config/production/host-systemd
+  --quadlet-output "$staging/quadlet" \
+  --systemd-output "$staging/systemd" \
+  --host-systemd-output "$staging/host-systemd"
 ```
+
+Product Quadlet, user-systemd and host-systemd output directories must be
+dedicated to their closed staging inventories. Rendering admits the declared
+host drop-in directory and rejects unexpected files, directories, symlinks,
+retired Valkey/Redis units and extra drop-ins before writing any inventory. It does not
+delete them or authorize their execution. Preserve retired files and data for
+explicit disposition; use clean staging directories and independently admit the
+installed unit inventory before activation. A successful render does not prove
+that an existing host has stopped or removed historical services.
 
 The host installer copies `host-systemd` under `/etc/systemd/system`, preserves
 other nft tables and must keep this table across unrelated firewall reloads.

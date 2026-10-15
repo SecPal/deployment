@@ -6,9 +6,12 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 import tempfile
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts/ci-cloud'))
@@ -86,6 +89,127 @@ class NativeProduction(unittest.TestCase):
                 renderer._STATE.initialize_fixture(contract, root)
             self.assertEqual(marker.stat().st_ino, inode)
             self.assertEqual(marker.read_bytes(), b'preserve legacy database')
+
+    def render_into(self, root, *, host=False):
+        return subprocess.run(
+            [sys.executable, str(ROOT / 'scripts/render-production-quadlets.py'),
+             '--quadlet-output', str(root / 'quadlet'),
+             '--systemd-output', str(root / 'systemd'),
+             *(['--host-systemd-output', str(root / 'host-systemd')] if host else [])],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+
+    def test_renderer_rejects_retired_or_renamed_units_before_any_write(self):
+        for directory, name in (
+            ('quadlet', 'secpal-valkey.container'),
+            ('quadlet', 'secpal-redis.container'),
+            ('quadlet', 'secpal-cache-daemon.container'),
+            ('quadlet', 'secpal-valkey.container.d'),
+            ('systemd', 'secpal-valkey.service'),
+            ('systemd', 'secpal-redis.service'),
+            ('systemd', 'secpal.target.d'),
+        ):
+            with self.subTest(directory=directory, name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root / directory
+                output.mkdir()
+                retired = output / name
+                if name.endswith('.d'):
+                    retired.mkdir()
+                    marker = retired / 'override.conf'
+                else:
+                    marker = retired
+                marker.write_bytes(b'preserve retired evidence; do not execute')
+                inode = retired.stat().st_ino
+                result = self.render_into(root)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('unexpected production output', result.stderr)
+                self.assertEqual(retired.stat().st_ino, inode)
+                self.assertEqual(marker.read_bytes(), b'preserve retired evidence; do not execute')
+                self.assertFalse((root / 'quadlet/secpal-api.container').exists())
+
+    def test_renderer_allows_exact_idempotent_production_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(self.render_into(root).returncode, 0)
+            before = {str(p.relative_to(root)): p.read_bytes()
+                      for p in root.rglob('*') if p.is_file()}
+            self.assertEqual(self.render_into(root).returncode, 0)
+            after = {str(p.relative_to(root)): p.read_bytes()
+                     for p in root.rglob('*') if p.is_file()}
+            self.assertEqual(before, after)
+            self.assertEqual(len(after), len(renderer.build_units(renderer.load_contract())))
+
+    def test_renderer_admits_host_units_and_dropins_before_any_write(self):
+        for name in (
+            "secpal-redis.service",
+            "secpal-postgresql-loopback.service.d/override.conf",
+            "user@20000.service.d/override.conf",
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                quadlet = root / "quadlet"
+                quadlet.mkdir()
+                (quadlet / "secpal-api.container").write_bytes(b"preserve existing output")
+                marker = root / "host-systemd" / name
+                marker.parent.mkdir(parents=True)
+                marker.write_bytes(b"preserve existing host override")
+                before = {str(p.relative_to(root)): (p.stat().st_ino, p.read_bytes())
+                          for p in root.rglob("*") if p.is_file()}
+                result = self.render_into(root, host=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("unexpected production output", result.stderr)
+                after = {str(p.relative_to(root)): (p.stat().st_ino, p.read_bytes())
+                         for p in root.rglob("*") if p.is_file()}
+                self.assertEqual(before, after)
+                self.assertFalse((root / "systemd").exists())
+
+    def test_renderer_allows_exact_nested_host_inventory_idempotently(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for _ in range(2):
+                result = self.render_into(root, host=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for name, content in renderer.build_host_units(renderer.load_contract()).items():
+                self.assertEqual((root / "host-systemd" / name).read_text(), content)
+
+    def test_inventory_rejects_retired_backend_fields(self):
+        specification = importlib.util.spec_from_file_location(
+            'native_inventory_admission', ROOT / 'scripts/validate-production-contract.py')
+        validator = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(validator)
+        for backend in ('valkey', 'redis'):
+            for section in (None, 'paths', 'resources', 'features'):
+                with self.subTest(backend=backend, section=section):
+                    inventory = yaml.safe_load(
+                        (ROOT / 'config/production/inventory.example.yaml').read_text())
+                    target = inventory if section is None else inventory[section]
+                    target[backend] = {'enabled': True}
+                    with self.assertRaises(validator.ContractViolation):
+                        validator.validate_inventory(inventory, synthetic=True)
+
+    def test_retired_state_and_secret_contracts_are_rejected(self):
+        for key in ('valkey_state', 'redis_state', 'valkey_credentials', 'redis_credentials'):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
+                contract = renderer.load_contract()
+                contract['objects'][key] = dict(contract['objects']['postgresql_data'])
+                path = Path(temporary) / 'state-contract.json'
+                path.write_text(json.dumps(contract))
+                with self.assertRaises(renderer._STATE.ContractError):
+                    renderer.load_contract(path)
+
+    def test_retired_valkey_data_is_rejected_without_deletion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            retired = root / 'srv/secpal/valkey'
+            retired.mkdir(parents=True, mode=0o700)
+            marker = retired / 'appendonly.aof'
+            marker.write_bytes(b'preserve retired durable data')
+            inode = marker.stat().st_ino
+            with self.assertRaises(renderer._STATE.ContractError):
+                renderer._STATE.initialize_fixture(renderer.load_contract(), root)
+            self.assertEqual(marker.stat().st_ino, inode)
+            self.assertEqual(marker.read_bytes(), b'preserve retired durable data')
 
 if __name__ == '__main__':
     unittest.main()

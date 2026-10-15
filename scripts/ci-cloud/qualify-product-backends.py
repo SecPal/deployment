@@ -207,6 +207,14 @@ class Observer:
         self.host_digest = hashlib.sha256((STATE / 'evidence/qualification.json').read_bytes()).hexdigest()
         self.authorized = True
         self.operation = 'require-clean-host'
+        # This #101 qualification owns an isolated package-unit experiment,
+        # before a listener consumer installs its production drop-ins. Reject
+        # the shared #219 service before creating or replacing any fixture.
+        self.require(not self.run('require-clean-host', ['systemctl', 'show', 'haproxy.service',
+                         '-p', 'DropInPaths', '--value'])[1])
+        for path in (Path('/etc/systemd/system/haproxy.service.d/secpal.conf'),
+                     Path('/etc/systemd/system/haproxy.service.d/secpal-listeners.conf')):
+            self.require(not path.exists() and not path.is_symlink())
         for path in (HELPER, LIBRARY, SERVICE, READY, RESULT, FAILURE, STATS, RUNTIME_CONTRACT):
             self.require(not path.exists() and not path.is_symlink())
         self.require(self.run('require-clean-host', ['nft', 'list', 'table', 'inet', 'secpal_product_backends'], accepted=(0, 1))[0] == 1)

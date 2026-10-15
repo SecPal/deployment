@@ -11,7 +11,9 @@ extended here. This module has no filesystem, environment or process authority.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import ipaddress
 import json
 import re
 from typing import Any
@@ -25,6 +27,43 @@ INVARIANT_OWNERS = {
     'evidence-architecture': 'SecPal/.github/docs/evidence-architecture-contract.md',
 }
 SELECTOR = 'native-postgresql-18'
+REFERENCE_PROFILES = {'reference-rocky-10-2-amd64': 'x86_64',
+                      'reference-rocky-10-2-arm64': 'aarch64'}
+PROFILE_ARCHITECTURES = {**rpm.PROFILE_ARCHITECTURES, **REFERENCE_PROFILES}
+PROBE_PATHS = (
+    'scripts/ci-cloud/postgresql_qualification_contract.py',
+    'scripts/ci-cloud/postgresql-qualification-control.py',
+    'scripts/ci-cloud/qualify-native-postgresql.py',
+    'scripts/ci-cloud/postgresql-application-bootstrap.php',
+    'scripts/ci-cloud/postgresql-application-probe.php',
+    'scripts/image_attestation_runtime.py',
+    'scripts/fetch-oci-attestation.py',
+    'scripts/ci-cloud/run-native-postgresql-qualification.sh',
+    'scripts/ci-cloud/rocky_preparation_contract.py',
+    'scripts/ci-cloud/collect-rocky-preparation.py',
+    'scripts/integration_runtime_contract.py',
+    'scripts/render-native-postgresql.py',
+    'schemas/postgresql-qualification-evidence.schema.json',
+    'schemas/postgresql-qualification-diagnostic.schema.json',
+)
+# Controller-only resolver and validators remain in the source identity, but
+# their bytes are not executable guest inputs. The manifest carries their hashes.
+CONTROL_PROBE_PATHS = ('scripts/ci-cloud/postgresql-qualification-control.py',
+                       'schemas/postgresql-qualification-evidence.schema.json',
+                       'schemas/postgresql-qualification-diagnostic.schema.json')
+GUEST_PROBE_PATHS = tuple(path for path in PROBE_PATHS if path not in CONTROL_PROBE_PATHS)
+
+
+def probe_manifest_digest(manifest: object) -> str:
+    if (not isinstance(manifest, dict) or set(manifest) != set(PROBE_PATHS)
+            or any(not isinstance(value, str) or DIGEST.fullmatch(value) is None for value in manifest.values())):
+        raise QualificationError('validate-authorization', 'representation-invalid')
+    digest = hashlib.sha256()
+    for name in PROBE_PATHS:
+        digest.update(name.encode() + b'\0' + bytes.fromhex(manifest[name]))
+    return digest.hexdigest()
+
+
 CANDIDATE_PATH = 'config/production/postgresql-contract.json'
 CONSUMER_PATH = 'scripts/render-native-postgresql.py'
 PACKAGES = ('postgresql18-server', 'postgresql18', 'postgresql18-private-libs')
@@ -119,6 +158,8 @@ def admit_application(raw: object) -> dict[str, Any]:
 
 OPERATIONS = frozenset({
     'resolve-candidate', 'read-candidate-data', 'admit-candidate-data',
+    'observe-reference-os', 'observe-reference-machine', 'observe-reference-key', 'observe-reference-runtime', 'observe-reference-cgroup', 'observe-reference-socket', 'observe-reference-containers', 'observe-reference-packages', 'observe-reference-user-service', 'observe-reference-sudo', 'observe-reference-environment', 'observe-reference-clean-state',
+    'authenticate-reference-host', 'transport-reference-host', 'claim-reference-run', 'retrieve-reference-evidence',
     'validate-authorization', 'install-postgresql', 'initialize-postgresql',
     'configure-postgresql', 'configure-loopback-policy', 'issue-test-material',
     'start-postgresql', 'observe-native-service', 'observe-data-directory',
@@ -206,10 +247,14 @@ def declaration_digest(document: object) -> str:
 
 def admit_authorization(document: object, *, control_sha: str, profile: str,
                         run_id: str, run_attempt: str, now: int, declaration: object = DECLARATION) -> dict[str, Any]:
+    if not isinstance(profile, str):
+        raise QualificationError('validate-authorization', 'representation-invalid')
     fields = {'schema_version', 'selector', 'repository', 'issue', 'pull_request',
               'candidate_sha', 'candidate_tree', 'candidate_blob', 'consumer_blob', 'declaration_sha256',
               'control_sha', 'probe_sha256', 'profile', 'run_id', 'run_attempt',
               'issued_at', 'expires_at'}
+    if profile in REFERENCE_PROFILES:
+        fields.add('reference_host')
     if not isinstance(document, dict) or set(document) != fields:
         raise QualificationError('validate-authorization', 'representation-invalid')
     if (type(document['schema_version']) is not int or document['schema_version'] != 1 or document['selector'] != SELECTOR
@@ -225,7 +270,7 @@ def admit_authorization(document: object, *, control_sha: str, profile: str,
     for key in ('probe_sha256', 'declaration_sha256'):
         if not isinstance(document[key], str) or DIGEST.fullmatch(document[key]) is None:
             raise QualificationError('validate-authorization', 'representation-invalid')
-    if (profile not in rpm.PROFILE_ARCHITECTURES or RUN.fullmatch(run_id) is None
+    if (profile not in PROFILE_ARCHITECTURES or RUN.fullmatch(run_id) is None
             or ATTEMPT.fullmatch(run_attempt) is None
             or any(document[key] != value for key, value in {
                 'control_sha': control_sha, 'profile': profile,
@@ -233,7 +278,83 @@ def admit_authorization(document: object, *, control_sha: str, profile: str,
                 'declaration_sha256': declaration_digest(declaration),
             }.items())):
         raise QualificationError('validate-authorization', 'identity-mismatch')
+    if profile in REFERENCE_PROFILES:
+        if document['pull_request'] != 286:
+            raise QualificationError('validate-authorization', 'identity-mismatch')
+        admit_reference_host(document['reference_host'])
     return dict(document)
+
+
+def admit_reference_host(raw: object) -> dict[str, str]:
+    """A separately authorized disposable host; provider names grant no trust."""
+    fields = {'machine_id', 'address', 'ssh_host_key'}
+    if (not isinstance(raw, dict) or set(raw) != fields
+            or any(not isinstance(value, str) for value in raw.values())
+            or re.fullmatch(r'[0-9a-f]{32}', raw['machine_id']) is None
+            or raw['machine_id'] == '0' * 32):
+        raise QualificationError('validate-authorization', 'representation-invalid')
+    try:
+        address = ipaddress.ip_address(raw['address'])
+        key_type, encoded = raw['ssh_host_key'].split(' ')
+        decoded = base64.b64decode(encoded, validate=True)
+        if (str(address) != raw['address'] or address.is_loopback or address.is_unspecified or address.is_link_local
+                or address.is_multicast or key_type != 'ssh-ed25519'
+                or len(decoded) != 51
+                or decoded[:19] != b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20'
+                or base64.b64encode(decoded).decode() != encoded):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise QualificationError('validate-authorization', 'representation-invalid') from None
+    return dict(raw)
+
+
+def admit_reference_host_facts(raw: object, authorization: dict[str, Any]) -> dict[str, Any]:
+    """Admit normalized actual host observations, not a provider PASS claim."""
+    host = admit_reference_host(authorization['reference_host'])
+    if (not isinstance(raw, dict) or set(raw) != set(host) | {'os_release', 'architecture', 'selinux', 'runtime'}
+            or any(raw[key] != value for key, value in host.items())
+            or raw['architecture'] != REFERENCE_PROFILES[authorization['profile']]
+            or raw['selinux'] != 'Enforcing'
+            or not isinstance(raw['os_release'], dict)
+            or set(raw['os_release']) != {'ID', 'VERSION_ID'}
+            or raw['os_release']['ID'] != 'rocky'
+            or not isinstance(raw['os_release']['VERSION_ID'], str)
+            or re.fullmatch(r'10\.(?:[2-9]|[1-9][0-9])', raw['os_release']['VERSION_ID']) is None):
+        raise QualificationError('validate-authorization', 'identity-mismatch')
+    runtime = raw['runtime']
+    fields = {'podman_host', 'cgroup_filesystem', 'systemd_user', 'socket_exists',
+              'podman_socket_enabled', 'container_host_present', 'sudo_authorized', 'uid', 'gid', 'groups'}
+    if (not isinstance(runtime, dict) or set(runtime) != fields
+            or any(type(runtime[key]) is not bool for key in
+                   ('socket_exists', 'podman_socket_enabled', 'container_host_present', 'sudo_authorized'))
+            or runtime['sudo_authorized'] or type(runtime['uid']) is not int or runtime['uid'] <= 0
+            or type(runtime['gid']) is not int or runtime['gid'] <= 0 or runtime['groups'] != [runtime['gid']]
+            or not isinstance(runtime['podman_host'], dict)
+            or set(runtime['podman_host']) != {'security', 'ociRuntime', 'networkBackend', 'serviceIsRemote'}
+            or runtime['podman_host']['security'] != {'rootless': True, 'seccompEnabled': True}
+            or any(type(value) is not bool for value in runtime['podman_host']['security'].values())
+            or not isinstance(runtime['groups'], list) or any(type(value) is not int for value in runtime['groups'])
+            or runtime['podman_host']['ociRuntime'] != {'name': 'crun'}
+            or type(runtime['podman_host']['serviceIsRemote']) is not bool):
+        raise QualificationError('validate-authorization', 'invariant-failed')
+    try:
+        # The frozen host invariant owner remains authoritative. Transport does
+        # not restate runtime/socket conformance or pretend this is a #80 claim.
+        for admission in (rpm.admit_runtime_rootless, rpm.admit_runtime_oci_runtime,
+                          rpm.admit_runtime_network_backend, rpm.admit_runtime_seccomp,
+                          rpm.admit_runtime_service_locality):
+            admission(runtime['podman_host'])
+        for admission in (rpm.admit_runtime_cgroup, rpm.admit_runtime_systemd_user,
+                          rpm.admit_runtime_socket_path_absence, rpm.admit_runtime_socket_unit_disabled,
+                          rpm.admit_runtime_container_host_absence):
+            admission(runtime)
+    except rpm.ContractError:
+        raise QualificationError('validate-authorization', 'invariant-failed') from None
+    return json.loads(canonical_bytes(raw))
+
+
+def reference_host_digest(facts: object) -> str:
+    return hashlib.sha256(canonical_bytes(facts)).hexdigest()
 
 
 def admit_postgresql_package(name: str, raw: dict[str, Any], architecture: str,
@@ -509,6 +630,14 @@ def bound_diagnostic(operation: str, reason: str, *, authorization: object,
 
 
 def admit_resource_binding(raw: object) -> dict[str, str]:
+    if isinstance(raw, dict) and raw.get('profile') in REFERENCE_PROFILES:
+        if (set(raw) != {'control_sha', 'profile', 'access_run_id', 'access_run_attempt', 'reference_host'}
+                or not isinstance(raw['control_sha'], str) or SHA.fullmatch(raw['control_sha']) is None
+                or not isinstance(raw['access_run_id'], str) or RUN.fullmatch(raw['access_run_id']) is None
+                or not isinstance(raw['access_run_attempt'], str) or ATTEMPT.fullmatch(raw['access_run_attempt']) is None):
+            raise QualificationError('validate-authorization', 'representation-invalid')
+        admit_reference_host(raw['reference_host'])
+        return dict(raw)
     fields = {'control_sha', 'profile', 'access_run_id', 'access_run_attempt', 'instance_id', 'instance_name'}
     if (not isinstance(raw, dict) or set(raw) != fields or any(not isinstance(v, str) for v in raw.values())
             or SHA.fullmatch(raw['control_sha']) is None or raw['profile'] not in rpm.PROFILE_ARCHITECTURES
@@ -545,24 +674,41 @@ def admit_diagnostic(raw: object, *, authorization: dict[str, Any], binding: dic
     return dict(raw)
 
 
-def admit_evidence(document: object, *, authorization: dict[str, Any], instance_id: str,
-                   instance_name: str, qualification_run_id: str, qualification_run_attempt: str,
-                   host_evidence_sha256: str, declaration: object = DECLARATION) -> dict[str, Any]:
+def admit_evidence(document: object, *, authorization: dict[str, Any],
+                   qualification_run_id: str, qualification_run_attempt: str,
+                   host_evidence_sha256: str, declaration: object = DECLARATION,
+                   instance_id: str | None = None, instance_name: str | None = None,
+                   reference_host: object = None, reference_host_facts: object = None) -> dict[str, Any]:
     fields = {'schema_version', 'claim', 'authorization', 'qualification_run_id', 'qualification_run_attempt',
               'instance_id', 'instance_name', 'architecture', 'host_admission', 'packages',
               'signer_fingerprint', 'observations', 'cleanup'}
+    reference = authorization['profile'] in REFERENCE_PROFILES
+    if reference:
+        fields -= {'instance_id', 'instance_name'}
+        fields.add('reference_host')
     if not isinstance(document, dict) or set(document) != fields:
         raise QualificationError('admit-qualification', 'representation-invalid')
     expected = {'schema_version': 1, 'claim': SELECTOR, 'authorization': authorization,
                 'instance_id': instance_id, 'instance_name': instance_name,
                 'qualification_run_id': qualification_run_id, 'qualification_run_attempt': qualification_run_attempt,
-                'architecture': rpm.PROFILE_ARCHITECTURES[authorization['profile']],
+                'architecture': PROFILE_ARCHITECTURES[authorization['profile']],
                 'host_admission': {'target_sha': '402c22b0a1d69a5a3dba74ffb68cf016caba606b',
                                   'harness_sha256': '436756f79c7f120d5c4b9fc15b12b2fd91da0fdea5e93ed2907172a73c2861ac',
                                   'evidence_sha256': host_evidence_sha256},
                 'signer_fingerprint': rpm.ROCKY_FINGERPRINT, 'cleanup': CLEANUP_POSTCONDITIONS}
-    if (not isinstance(instance_id, str) or RUN.fullmatch(instance_id) is None
+    if reference:
+        facts = admit_reference_host_facts(reference_host_facts, authorization)
+        if (reference_host != authorization['reference_host'] or instance_id is not None or instance_name is not None
+                or host_evidence_sha256 != reference_host_digest(facts)):
+            raise QualificationError('admit-qualification', 'identity-mismatch')
+        expected.pop('instance_id'); expected.pop('instance_name')
+        expected['reference_host'] = admit_reference_host(reference_host)
+        expected['host_admission'] = {'reference_host_facts': facts, 'evidence_sha256': host_evidence_sha256}
+    elif reference_host is not None or reference_host_facts is not None:
+        raise QualificationError('admit-qualification', 'identity-mismatch')
+    if ((not reference and (not isinstance(instance_id, str) or RUN.fullmatch(instance_id) is None
             or not isinstance(instance_name, str) or re.fullmatch(r'sprk-[a-z0-9-]{1,55}-instance', instance_name) is None
+            ))
             or RUN.fullmatch(qualification_run_id) is None or ATTEMPT.fullmatch(qualification_run_attempt) is None
             or DIGEST.fullmatch(host_evidence_sha256) is None
             or any(canonical_bytes(document[key]) != canonical_bytes(value) for key, value in expected.items())):

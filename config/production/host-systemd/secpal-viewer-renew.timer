@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[Unit]
+Description=Bounded SecPal DIRECT certificate renewal schedule
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00
+RandomizedDelaySec=30min
+AccuracySec=1min
+Persistent=true
+Unit=secpal-viewer-renew.service
+
+[Install]
+WantedBy=timers.target

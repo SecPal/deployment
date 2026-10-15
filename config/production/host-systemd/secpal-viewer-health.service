@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[Unit]
+Description=SecPal DIRECT certificate health facts
+BindsTo=secpal-acme-policy.service
+After=secpal-acme-policy.service haproxy.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+SELinuxContext=system_u:system_r:unconfined_service_t:s0
+ExecStart=/usr/bin/python3 -I -S /usr/local/libexec/secpal/viewer-tls-source/scripts/direct-viewer-tls.py --health
+TimeoutStartSec=5min
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/run/secpal-viewer-tls
+ReadWritePaths=-/var/log/dnf.log -/var/log/dnf.librepo.log -/var/log/hawkey.log -/var/cache/dnf
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_ADMIN
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SocketBindDeny=any
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=secpal-viewer-tls-health

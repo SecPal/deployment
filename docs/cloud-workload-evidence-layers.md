@@ -5,7 +5,18 @@ SPDX-License-Identifier: MIT
 
 # Current workload evidence layers
 
-The target receives one self-contained streamed file,
+## Operational status
+
+These maintained #119/#121 components are exercised by repository tests and their
+CLI interfaces. No active GitHub workflow currently orchestrates them end to end.
+Issue #123 owns connection to current Rocky runtime qualification. Neither a schema
+instance nor repository tests claim real-host or cloud acceptance.
+Rocky host qualification remains independently executable through its existing
+workflow and evidence contract.
+
+## Component interfaces
+
+The collection interface is one self-contained streamable file,
 `scripts/ci-cloud/collect-workload-evidence.py`. Its `COLLECTION_SURFACE` names
 operations that observe Podman, systemd, processes, files, namespaces, and
 runtime state. `normalize_quadlet_runtime` belongs to this surface: it performs
@@ -38,3 +49,12 @@ document. Neither controller path accepts a target-reported workload result.
 current positive representations, and rejection at the schema, validator, or
 admission boundary. The existing workload suite remains the detailed behavior
 contract. Purity enforcement for these declared surfaces belongs to #122.
+
+## Independent host qualification
+
+The current workload envelope contains trusted workflow identity, phase and
+collection statuses, bounded normalization diagnostics, and independently
+admitted workload observations. It does not claim host or production acceptance.
+Rocky host qualification uses its existing separate evidence contract.
+The retired Debian/APT/AppArmor host envelope and collector are preserved in Git
+history rather than required by current workload validation.

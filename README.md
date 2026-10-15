@@ -105,14 +105,14 @@ The active checks are `Local Integration / Quadlet Contract (amd64)` and
 `Local Integration / Quadlet Contract (arm64)`. The current integration runtime
 is exclusively rootless Podman, systemd-user, and native Quadlet.
 
-### Ephemeral Debian 13 cloud conformance
+### Ephemeral Rocky cloud qualification
 
-The repository retains the historical
-[Debian 13 cloud conformance](docs/ci-cloud-conformance.md) contract and evidence.
-It is non-production and does not define the current production OS direction.
-Current ephemeral host qualification is the separate
-[Rocky Linux 10.2 contract](docs/rocky-cloud-qualification.md). Neither record
-claims production provisioning or operation.
+Current ephemeral host qualification follows the
+[Rocky Linux 10.2 contract](docs/rocky-cloud-qualification.md).
+The retired Debian provisioning path is preserved in Git history.
+Bounded legacy cloud janitors remain until outstanding resource ownership and
+cleanup responsibilities have been independently discharged.
+This qualification does not claim production provisioning or operation.
 
 ## Security
 

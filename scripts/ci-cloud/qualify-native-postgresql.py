@@ -671,11 +671,107 @@ def resource_binding():
     return contract.admit_resource_binding(raw)
 
 
+def reference_text(path, operation):
+    """Bounded fixed host identity reads; never retain unvalidated content."""
+    try:
+        facts = path.stat()
+        if not stat.S_ISREG(facts.st_mode) or facts.st_uid != 0 or facts.st_size > 32768:
+            raise contract.QualificationError(operation, 'representation-invalid')
+        return path.read_text()
+    except (OSError, UnicodeError):
+        raise contract.QualificationError(operation, 'command-failed') from None
+
+
+def read_probe_manifest():
+    path = ROOT / 'postgresql-probe-manifest.json'
+    try:
+        facts = path.lstat()
+        if (not stat.S_ISREG(facts.st_mode) or facts.st_uid != 0
+                or stat.S_IMODE(facts.st_mode) & 0o022 or facts.st_size > 16384):
+            raise contract.QualificationError('validate-authorization', 'identity-mismatch')
+        return json.loads(path.read_text(), object_pairs_hook=contract.duplicate_keys)
+    except (OSError, ValueError):
+        raise contract.QualificationError('validate-authorization', 'representation-invalid') from None
+
+
+def guest_probe_digest():
+    manifest = read_probe_manifest()
+    expected = contract.probe_manifest_digest(manifest)
+    for name in contract.GUEST_PROBE_PATHS:
+        path = ROOT / name
+        if (path.is_symlink() or not path.is_file() or path.stat().st_size > 262144
+                or hashlib.sha256(path.read_bytes()).hexdigest() != manifest[name]):
+            raise contract.QualificationError('validate-authorization', 'identity-mismatch')
+    return expected
+
+
+def reference_host_check():
+    """Observe one privately prepared disposable host, without provisioning it.
+
+    Private operational authority installs the accepted control bundle and exact
+    root-owned lease. No candidate installer or SSH-supplied script is executed.
+    """
+    binding = resource_binding()
+    if binding['profile'] not in contract.REFERENCE_PROFILES:
+        raise contract.QualificationError('validate-authorization', 'identity-mismatch')
+    host = binding['reference_host']
+    observer = Observer()
+    collector = trusted_module('postgresql_reference_collector', ROOT / 'scripts/ci-cloud/collect-rocky-preparation.py')
+    base = collector.Observer()
+    try:
+        podman = contract.rpm.normalize_podman(observer.run('observe-reference-runtime', ['podman', 'info', '--format=json'], user='secpal-runtime')[1])['host']
+        socket_status = observer.run('observe-reference-socket', ['systemctl', '--user', 'is-enabled', 'podman.socket'],
+                                     user='secpal-runtime', accepted=tuple(range(6)))[0]
+        runtime = {'podman_host': {'security': {key: podman['security'][key] for key in ('rootless', 'seccompEnabled')},
+                   'ociRuntime': {'name': podman['ociRuntime']['name']}, 'networkBackend': podman['networkBackend'],
+                   'serviceIsRemote': podman['serviceIsRemote']},
+                   'cgroup_filesystem': observer.run('observe-reference-cgroup', ['stat', '-fc', '%T', '/sys/fs/cgroup'])[1],
+                   'systemd_user': base.systemd_user_state(observer.runtime.pw_uid),
+                   'socket_exists': Path(f'/run/user/{observer.runtime.pw_uid}/podman/podman.sock').exists(),
+                   'podman_socket_enabled': contract.rpm.normalize_unit_statuses([socket_status], 1)[0],
+                   'container_host_present': base.environment_present('CONTAINER_HOST'),
+                   'sudo_authorized': contract.rpm.normalize_sudo_authority(base.sudo_observation('secpal-runtime')),
+                   'uid': observer.runtime.pw_uid, 'gid': observer.runtime.pw_gid,
+                   'groups': sorted(set(os.getgrouplist('secpal-runtime', observer.runtime.pw_gid)))}
+    except collector.ObservationError as error:
+        operation = {'query-systemd-user': 'observe-reference-user-service',
+                     'query-sudo-authority': 'observe-reference-sudo',
+                     'query-environment-authority': 'observe-reference-environment'}.get(error.operation, 'observe-reference-runtime')
+        raise contract.QualificationError(operation, 'command-failed') from None
+    facts = dict(host, machine_id=reference_text(Path('/etc/machine-id'), 'observe-reference-machine').strip(),
+        ssh_host_key=' '.join(reference_text(Path('/etc/ssh/ssh_host_ed25519_key.pub'), 'observe-reference-key').split()[:2]),
+        os_release=contract.rpm.normalize_os_release(reference_text(Path('/etc/os-release'), 'observe-reference-os')),
+        architecture=os.uname().machine,
+        selinux=observer.run('observe-selinux', ['getenforce'])[1], runtime=runtime)
+    # The root-owned lease is not sufficient: reject existing state before any
+    # package/service mutation, including an operational development host.
+    if (any(path.exists() or path.is_symlink() for path in
+            (MATERIAL, CLIENT, APPLICATION_IMAGE_STATE, STATE / 'postgresql-test-authority',
+             STATE / 'postgresql-reference-claimed', Path('/etc/systemd/system/postgresql.service.d')))
+            or Path('/etc/secpal').is_symlink()
+            or (Path('/etc/secpal').exists() and any(Path('/etc/secpal').iterdir()))
+            or DATA.is_symlink() or (DATA.exists() and (not DATA.is_dir() or any(DATA.iterdir())))):
+        raise contract.QualificationError('initialize-postgresql', 'identity-mismatch')
+    observer.run('observe-reference-clean-state', ['systemctl', 'is-active', 'postgresql.service'], accepted=(3, 4))
+    for user in (None, 'secpal-runtime'):
+        if observer.run('observe-reference-containers', ['podman', 'ps', '--all', '--quiet'], user=user)[1]:
+            raise contract.QualificationError('initialize-postgresql', 'identity-mismatch')
+    packages = observer.run('observe-reference-packages', ['rpm', '-qa', '--qf', '%{NAME}\n'])[1]
+    if any(name.startswith('postgresql') for name in packages.splitlines()):
+        raise contract.QualificationError('initialize-postgresql', 'identity-mismatch')
+    return facts, guest_probe_digest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--run-id', required=True)
-    parser.add_argument('--run-attempt', required=True)
+    parser.add_argument('--run-id')
+    parser.add_argument('--run-attempt')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--reference-host', action='store_true')
+    mode.add_argument('--reference-host-check', action='store_true')
     options = parser.parse_args()
+    if not (options.reference_host or options.reference_host_check) and (options.run_id is None or options.run_attempt is None):
+        parser.error('--run-id and --run-attempt are required for the cloud path')
     observer = None
     document = None
     failure = None
@@ -687,7 +783,9 @@ def main():
     try:
         # This program never doubles as a local/development or production installer.
         if (os.geteuid() != 0 or Path(__file__).resolve() != Path('/opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py')
-                or STATE.is_symlink() or not STATE.is_dir()):
+                or STATE.is_symlink() or not STATE.is_dir()
+                or ((options.reference_host or options.reference_host_check)
+                    and (STATE.stat().st_uid != 0 or stat.S_IMODE(STATE.stat().st_mode) & 0o022))):
             raise contract.QualificationError('validate-authorization', 'identity-mismatch')
         safe_context = True
         if (not (STATE / 'prepared').is_file() or AUTHORIZATION.is_symlink()
@@ -705,31 +803,52 @@ def main():
         profile = binding['profile']
         admitted_auth = contract.admit_authorization(auth, control_sha=control_sha, profile=profile,
              run_id=auth['run_id'], run_attempt=auth['run_attempt'], now=int(time.time()), declaration=declaration)
+        reference = profile in contract.REFERENCE_PROFILES
+        if reference != (options.reference_host or options.reference_host_check):
+            raise contract.QualificationError('validate-authorization', 'identity-mismatch')
+        if reference:
+            if options.run_id is not None or options.run_attempt is not None or binding['reference_host'] != auth['reference_host']:
+                raise contract.QualificationError('validate-authorization', 'identity-mismatch')
+            options.run_id, options.run_attempt = auth['run_id'], auth['run_attempt']
         observer.run_id = options.run_id
         observer.run_attempt = options.run_attempt
         observer.logins = contract.qualification_logins(options.run_id, options.run_attempt, auth['expires_at'])
         for field, value in (('access_run_id', options.run_id), ('access_run_attempt', options.run_attempt)):
             if binding[field] != value:
                 raise contract.QualificationError('validate-authorization', 'identity-mismatch')
-        source = trusted_module('postgresql_control', ROOT / 'scripts/ci-cloud/postgresql-qualification-control.py')
-        if auth['probe_sha256'] != source.probe_digest():
+        if auth['probe_sha256'] != guest_probe_digest():
             raise contract.QualificationError('validate-authorization', 'identity-mismatch')
         if observer.run('observe-selinux', ['getenforce'])[1] != 'Enforcing':
             raise contract.QualificationError('observe-selinux', 'invariant-failed')
-        if os.uname().machine != contract.rpm.PROFILE_ARCHITECTURES[profile]:
+        if os.uname().machine != contract.PROFILE_ARCHITECTURES[profile]:
             raise contract.QualificationError('validate-authorization', 'identity-mismatch')
-        observer.run('validate-authorization', ['python3', str(ROOT / 'scripts/ci-cloud/rocky-control.py'),
+        if reference:
+            host_facts, digest = reference_host_check()
+            contract.admit_reference_host_facts(host_facts, auth)
+            if digest != auth['probe_sha256']:
+                raise contract.QualificationError('validate-authorization', 'identity-mismatch')
+            host_digest = contract.reference_host_digest(host_facts)
+            if options.reference_host_check:
+                print(contract.canonical_bytes({'authorization': auth, 'resource': binding,
+                    'host_facts': host_facts, 'probe_sha256': digest}).decode())
+                return 0
+            descriptor = os.open(STATE / 'postgresql-reference-claimed',
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, 'w') as claim:
+                claim.write(contract.reference_host_digest(auth))
+        else:
+            observer.run('validate-authorization', ['python3', str(ROOT / 'scripts/ci-cloud/rocky-control.py'),
                  'validate-native-qualification', str(STATE / 'evidence/qualification.json'),
                  '--stdout', str(STATE / 'evidence/qualification.stdout'),
                  '--native-observation', str(STATE / 'evidence/native-package-observation.json'),
                  '--target-sha', HOST_TARGET, '--control-sha', control_sha,
                  '--run-id', options.run_id, '--run-attempt', options.run_attempt])
-        host_digest = hashlib.sha256((STATE / 'evidence/qualification.json').read_bytes()).hexdigest()
-        instance_id = binding['instance_id']
-        instance_name = binding['instance_name']
-        if (contract.RUN.fullmatch(instance_id) is None
-                or instance_name != f"sprk-{auth['run_id']}-{auth['run_attempt']}-instance"):
-            raise contract.QualificationError('validate-authorization', 'identity-mismatch')
+            host_digest = hashlib.sha256((STATE / 'evidence/qualification.json').read_bytes()).hexdigest()
+            instance_id = binding['instance_id']
+            instance_name = binding['instance_name']
+            if (contract.RUN.fullmatch(instance_id) is None
+                    or instance_name != f"sprk-{auth['run_id']}-{auth['run_attempt']}-instance"):
+                raise contract.QualificationError('validate-authorization', 'identity-mismatch')
         observer.prepare(declaration)
         collector = trusted_module('postgresql_package_collector', ROOT / 'scripts/ci-cloud/collect-rocky-preparation.py')
         rpm_observer = collector.Observer()
@@ -745,11 +864,15 @@ def main():
         observations = observer.observations()
         document = {'schema_version': 1, 'claim': contract.SELECTOR, 'authorization': auth,
                     'qualification_run_id': options.run_id, 'qualification_run_attempt': options.run_attempt,
-                    'instance_id': instance_id, 'instance_name': instance_name,
                     'architecture': os.uname().machine, 'host_admission': {'target_sha': HOST_TARGET,
                     'harness_sha256': HOST_HARNESS, 'evidence_sha256': host_digest},
                     'packages': packages, 'signer_fingerprint': signer, 'observations': observations}
-    except (contract.QualificationError, KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError) as error:
+        if reference:
+            document['reference_host'] = binding['reference_host']
+            document['host_admission'] = {'reference_host_facts': host_facts, 'evidence_sha256': host_digest}
+        else:
+            document.update(instance_id=instance_id, instance_name=instance_name)
+    except (contract.QualificationError, contract.rpm.ContractError, KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError) as error:
         failure = (contract.diagnostic(error.operation, error.reason) if isinstance(error, contract.QualificationError)
                    else contract.diagnostic(observer.operation if observer else 'validate-authorization', 'representation-invalid'))
     finally:
@@ -780,6 +903,8 @@ def main():
     except (OSError, KeyError, contract.QualificationError):
         print(json.dumps(contract.diagnostic('write-evidence', 'command-failed')), file=sys.stderr)
         return 1
+    if options.reference_host:
+        print(contract.canonical_bytes(document).decode())
     return 0
 
 

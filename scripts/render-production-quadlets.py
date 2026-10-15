@@ -152,26 +152,32 @@ def service(*, oneshot: bool = False, backend: bool = False) -> str:
 def build_native_lifecycle_fixture_unit(
     contract: dict, fixture_root: Path, instance: str
 ) -> str:
-    """Render a fixture-only probe from the production private-storage seam."""
-    private = contract["objects"]["private_application_storage"]
+    """Render disposable runtime evidence, independent of #99 Object Storage."""
     identity = role_spec("api")
-    source = fixture_root / private["location"].lstrip("/")
+    source = fixture_root / "state"
     lines = common_container(contract, "api", FRONTEND_IMAGE, instance=instance)
-    lines = [line for line in lines if not line.startswith(("LogDriver=", "LogOpt="))]
+    lines = [
+        line for line in lines
+        if not line.startswith(("LogDriver=", "LogOpt="))
+        and line != "Label=org.secpal.production=true"
+    ]
     lines.append("LogDriver=journald")
     lines.extend(
         (
             "Network=none",
-            f"Mount=type=bind,source={source},target=/app/storage/app/private,rw=true,relabel=private",
+            # One fixture container owns this disposable source; private MCS
+            # relabeling is appropriate. Production paths never use this probe.
+            f"Mount=type=bind,source={source},target=/fixture-state,rw=true,relabel=private",
             'Entrypoint=["/bin/sh"]',
-            'Exec=-c "if [ ! -f /app/storage/app/private/proof ]; then '
-            "printf persistence > /app/storage/app/private/proof; fi; exec sleep 300\"",
+            'Exec=-c "set -eu; if [ ! -f /fixture-state/proof ]; then '
+            "printf persistence > /fixture-state/proof; fi; exec sleep 300\"",
         )
     )
-    # This fixture deliberately omits state-ready: host-side fixture admission is
-    # separate, while the mounted path, target and API identity come from the
-    # production contract and role registry.
-    content = unit("SecPal D.2 native private-storage persistence proof")
+    # Only the reviewed non-root identity comes from the role registry. This
+    # POSIX bind lifecycle does not qualify a Self-Hosted Object Storage adapter.
+    content = unit("SecPal native rootless runtime lifecycle proof").replace(
+        "PartOf=secpal.target\n", ""
+    )
     content += section("Container", lines)
     content += section("Service", ["Restart=no", "TimeoutStartSec=60"])
     if f"User={identity.uid}" not in content or f"Group={identity.gid}" not in content:
@@ -341,17 +347,33 @@ def main() -> int:
     contract = load_contract(args.contract)
     quadlet_output = args.quadlet_output.resolve()
     systemd_output = args.systemd_output.resolve()
-    quadlet_output.mkdir(parents=True, exist_ok=True)
-    systemd_output.mkdir(parents=True, exist_ok=True)
+    outputs: dict[Path, dict[str, str]] = {}
     for name, content in build_units(contract).items():
         output = systemd_output if name.endswith((".service", ".target")) else quadlet_output
-        destination = output / name
-        destination.write_text(content, encoding="utf-8")
+        outputs.setdefault(output, {})[name] = content
     if args.host_systemd_output is not None:
-        for name, content in build_host_units(contract).items():
-            destination = args.host_systemd_output / name
+        outputs.setdefault(args.host_systemd_output.resolve(), {}).update(build_host_units(contract))
+    # Admit every complete staging inventory before the first mutation. The
+    # host inventory has one declared drop-in directory; no other override or
+    # retired service is allowed. Preserve unexpected entries, never prune.
+    for output, declarations in outputs.items():
+        files = {Path(name) for name in declarations}
+        directories = {parent for name in files for parent in name.parents if parent != Path(".")}
+        if (output.exists() and not output.is_dir()) or any(
+            entry.is_symlink()
+            or (entry.relative_to(output) not in directories if entry.is_dir()
+                else entry.relative_to(output) not in files or not entry.is_file())
+            for entry in output.rglob("*")
+        ):
+            parser.error(
+                "unexpected production output; use a clean dedicated output "
+                "directory or explicitly disposition existing entries"
+            )
+    for output, declarations in outputs.items():
+        for name, content in declarations.items():
+            destination = output / name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(content, encoding='utf-8')
+            destination.write_text(content, encoding="utf-8")
     return 0
 
 
