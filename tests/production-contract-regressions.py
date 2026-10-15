@@ -1123,7 +1123,7 @@ class ProductionContractRegressionTests(unittest.TestCase):
             with self.subTest(read_only=read_only):
                 facts = copy.deepcopy(self.host_facts)
                 filesystem = nested_mapping(
-                    facts, "filesystems", "postgresql_data"
+                    facts, "filesystems", "private_application_storage"
                 )
                 if read_only is None:
                     filesystem.pop("mount_read_only")

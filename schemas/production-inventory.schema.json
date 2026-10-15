@@ -183,10 +183,8 @@
         "configuration",
         "deployment_state",
         "runtime_secrets",
-        "postgresql_data",
         "private_application_storage",
         "public_application_storage",
-        "valkey_data",
         "edge_state",
         "acme_state",
         "crowdsec_state",
@@ -205,16 +203,10 @@
         "runtime_secrets": {
           "$ref": "#/$defs/pathContract"
         },
-        "postgresql_data": {
-          "$ref": "#/$defs/pathContract"
-        },
         "private_application_storage": {
           "$ref": "#/$defs/pathContract"
         },
         "public_application_storage": {
-          "$ref": "#/$defs/pathContract"
-        },
-        "valkey_data": {
           "$ref": "#/$defs/pathContract"
         },
         "edge_state": {
@@ -273,10 +265,8 @@
           "additionalProperties": false,
           "required": [
             "podman_graph_root",
-            "postgresql_data",
             "private_application_storage",
             "public_application_storage",
-            "valkey_data",
             "logs",
             "edge_state",
             "acme_state",
@@ -287,16 +277,10 @@
             "podman_graph_root": {
               "$ref": "#/$defs/storageRequirement"
             },
-            "postgresql_data": {
-              "$ref": "#/$defs/storageRequirement"
-            },
             "private_application_storage": {
               "$ref": "#/$defs/storageRequirement"
             },
             "public_application_storage": {
-              "$ref": "#/$defs/storageRequirement"
-            },
-            "valkey_data": {
               "$ref": "#/$defs/storageRequirement"
             },
             "logs": {

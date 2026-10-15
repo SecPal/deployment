@@ -22,22 +22,7 @@ from jsonschema.exceptions import ValidationError
 import postgresql_qualification_contract as contract
 
 ROOT = Path(__file__).resolve().parents[2]
-PROBE_PATHS = (
-    'scripts/ci-cloud/postgresql_qualification_contract.py',
-    'scripts/ci-cloud/postgresql-qualification-control.py',
-    'scripts/ci-cloud/qualify-native-postgresql.py',
-    'scripts/ci-cloud/postgresql-application-bootstrap.php',
-    'scripts/ci-cloud/postgresql-application-probe.php',
-    'scripts/image_attestation_runtime.py',
-    'scripts/fetch-oci-attestation.py',
-    'scripts/ci-cloud/run-native-postgresql-qualification.sh',
-    'scripts/ci-cloud/rocky_preparation_contract.py',
-    'scripts/ci-cloud/collect-rocky-preparation.py',
-    'scripts/integration_runtime_contract.py',
-    'scripts/render-native-postgresql.py',
-    'schemas/postgresql-qualification-evidence.schema.json',
-    'schemas/postgresql-qualification-diagnostic.schema.json',
-)
+PROBE_PATHS = contract.PROBE_PATHS
 QUERY = '''query PostgreSQLCandidate {
   repository(owner:"SecPal", name:"deployment") {
     nameWithOwner defaultBranchRef { name }
@@ -188,14 +173,18 @@ class GitHubObserver:
         return tree, blob, consumer_blob, contract.parse_declaration(raw.decode('utf-8'))
 
 
-def probe_digest() -> str:
-    digest = hashlib.sha256()
+def probe_manifest() -> dict[str, str]:
+    manifest = {}
     for name in PROBE_PATHS:
         path = ROOT / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 262144:
             raise contract.QualificationError('validate-authorization', 'identity-mismatch')
-        digest.update(name.encode() + b'\0' + hashlib.sha256(path.read_bytes()).digest())
-    return digest.hexdigest()
+        manifest[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return manifest
+
+
+def probe_digest() -> str:
+    return contract.probe_manifest_digest(probe_manifest())
 
 
 def resolve(options: argparse.Namespace) -> dict:
@@ -214,6 +203,8 @@ def resolve(options: argparse.Namespace) -> dict:
         'probe_sha256': probe_digest(), 'profile': options.profile, 'run_id': options.run_id,
         'run_attempt': options.run_attempt, 'issued_at': now, 'expires_at': now + 10800,
     }
+    if options.profile in contract.REFERENCE_PROFILES:
+        authorization['reference_host'] = contract.admit_reference_host(options.reference_host)
     contract.admit_authorization(authorization, control_sha=options.control_sha, profile=options.profile,
                                  run_id=options.run_id, run_attempt=options.run_attempt, now=now, declaration=declaration)
     return {'authorization': authorization, 'declaration': declaration}

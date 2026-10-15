@@ -51,15 +51,19 @@ fi
 
 bash -n "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
+php -l scripts/production-secret-bootstrap.php
+php -l scripts/production-migrate.php
 php -l scripts/phase-b-runtime-probe.php
 php -l scripts/ci-cloud/postgresql-application-bootstrap.php
 php -l scripts/ci-cloud/postgresql-application-probe.php
+php -l scripts/ci-cloud/product-backend-http-fixture.php
 python3 tests/image-consumption-evidence-contract.py
 python3 tests/integration-current-topology.py
 python3 tests/node-baseline-contract.py
 python3 tests/oci-attestation-bundle-contract.py
 python3 tests/postgres-fixture-contract.py
 python3 tests/postgresql-qualification-contract.py
+python3 tests/postgresql-reference-host.py
 python3 tests/quadlet-integration-contract.py
 python3 tests/quadlet-integration-lifecycle.py
 python3 tests/ci-cloud-contract.py
@@ -87,6 +91,7 @@ python3 tests/ci-cloud-workload-layers.py
 bash tests/ci-cloud-init-retry.sh
 python3 tests/production-contract-regressions.py
 python3 tests/production-inventory-contract.py
+python3 tests/native-postgresql-production-contract.py
 python3 tests/certbot-package-provenance.py
 python3 tests/production-state-contract.py
 python3 tests/product-backend-contract.py

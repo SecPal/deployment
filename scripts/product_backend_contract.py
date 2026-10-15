@@ -44,6 +44,15 @@ def publish_lines(role: str) -> tuple[str, ...]:
     return () if backend is None else (backend.publication,)
 
 
+EFFECTIVE_POLICY = (
+    ('haproxy_t', 'secpal_backend_port_t', 'name_connect', True),
+    ('container_runtime_t', 'secpal_backend_port_t', 'name_bind', True),
+    ('pasta_t', 'secpal_backend_port_t', 'name_bind', True),
+    ('pasta_t', 'unreserved_port_t', 'name_bind', False),
+    ('haproxy_t', 'unreserved_port_t', 'name_connect', False),
+)
+
+
 def host_policy(haproxy_uid: int) -> dict[str, str]:
     """Constrain access to the dedicated service UID and SELinux port type.
 
@@ -71,6 +80,7 @@ def host_policy(haproxy_uid: int) -> dict[str, str]:
 (roletype object_r secpal_backend_port_t)
 (allow haproxy_t secpal_backend_port_t (tcp_socket (name_connect)))
 (allow container_runtime_t secpal_backend_port_t (tcp_socket (name_bind)))
+(allow pasta_t secpal_backend_port_t (tcp_socket (name_bind)))
 """
     cil += "".join(
         f"(portcon tcp {backend.host_port} (system_u object_r secpal_backend_port_t ((s0) (s0))))\n"
