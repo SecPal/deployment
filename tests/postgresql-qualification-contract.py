@@ -71,6 +71,7 @@ class CandidateData(unittest.TestCase):
         module = self.load_module('pg_failed_image_pull_cleanup', 'scripts/ci-cloud/qualify-native-postgresql.py')
         observer = module.Observer.__new__(module.Observer)
         observer.children = []
+        observer.selinux_module_created = False
         observer.passwords = {}
         observer.data_created = False
         observer.application_image_created = True
@@ -408,6 +409,7 @@ class CandidateData(unittest.TestCase):
         module = self.load_module('pg_cleanup', 'scripts/ci-cloud/qualify-native-postgresql.py')
         observer = module.Observer.__new__(module.Observer)
         observer.children = []
+        observer.selinux_module_created = False
         observer.passwords = {'synthetic': 'synthetic-test-only'}
         observer.data_created = True
         observer.application_image_created = False
@@ -513,6 +515,9 @@ class CandidateData(unittest.TestCase):
             'probes': dict(contract.PROBES), 'locking': {'row_sqlstate':'55P03','advisory_held':'f','advisory_released':'t'},
             'rootless_liveness':True, 'container_servers':[], 'loopback_sentinel_host':0,
             'native_cgroup':'0::/system.slice/postgresql.service', 'restart_row_count':'1',
+            'native_storage': {'data_directory':'/var/lib/pgsql/data', 'headroom': {
+                'filesystem_total_bytes':100*1024**3, 'free_bytes':30*1024**3, 'free_percent':30,
+                'filesystem_total_inodes':1000000, 'free_inodes':300000, 'free_inode_percent':30}},
             'application': {'runtime': dict(contract.APPLICATION_RUNTIME),
                 'probes': copy.deepcopy(contract.APPLICATION_PROBES),
                 'health': copy.deepcopy(contract.APPLICATION_HEALTH), 'same_process': True}}

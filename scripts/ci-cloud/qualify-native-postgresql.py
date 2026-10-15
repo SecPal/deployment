@@ -128,6 +128,7 @@ class Observer:
         self.children = []
         self.mutated = False
         self.data_created = False
+        self.selinux_module_created = False
         self.logins = {}
         self.application_image_created = False
         self.environment = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'HOME': '/root'}
@@ -173,14 +174,38 @@ class Observer:
         self.operation = 'configure-postgresql'
         write_evidence(path, content, owner=owner, group=group, mode=mode)
 
+    def native_storage(self):
+        path = DATA
+        if any(parent.is_symlink() for parent in (path, *path.parents)):
+            raise contract.QualificationError('initialize-postgresql', 'identity-mismatch')
+        while not path.exists():
+            path = path.parent
+        facts = os.statvfs(path)
+        total_bytes, free_bytes = facts.f_blocks * facts.f_frsize, facts.f_bavail * facts.f_frsize
+        headroom = {'filesystem_total_bytes': total_bytes, 'free_bytes': free_bytes,
+                    'free_percent': free_bytes * 100 // max(total_bytes, 1),
+                    'filesystem_total_inodes': facts.f_files, 'free_inodes': facts.f_favail,
+                    'free_inode_percent': facts.f_favail * 100 // max(facts.f_files, 1)}
+        return contract.admit_native_storage({'data_directory': str(DATA), 'headroom': headroom})
+
     def prepare(self, declaration):
         # No destructive operation is reachable against an existing database.
         if (DATA.is_symlink() or (DATA.exists() and (not DATA.is_dir() or any(DATA.iterdir())))
                 or MATERIAL.exists() or MATERIAL.is_symlink() or CLIENT.exists() or CLIENT.is_symlink()
                 or APPLICATION_IMAGE_STATE.exists() or APPLICATION_IMAGE_STATE.is_symlink()):
             raise contract.QualificationError('initialize-postgresql', 'identity-mismatch')
+        self.storage = self.native_storage()
         self.run('configure-loopback-policy', ['nft', 'list', 'table', 'inet', 'secpal_postgresql'], accepted=(1,))
+        modules = self.run('observe-selinux', ['semodule', '-l'])[1]
+        if any(line.split()[0] == 'secpal_pg18_qualification' for line in modules.splitlines() if line.split()):
+            raise contract.QualificationError('observe-selinux', 'identity-mismatch')
         self.mutated = True
+        policy = STATE / 'secpal_pg18_qualification.cil'
+        self.write(policy, (ROOT / 'config/production/selinux/secpal_native_postgresql.cil').read_text())
+        self.selinux_module_created = True
+        self.run('observe-selinux', ['semodule', '-i', str(policy)], timeout=120)
+        if 'secpal_pg18_qualification' not in self.run('observe-selinux', ['semodule', '-l'])[1].split():
+            raise contract.QualificationError('observe-selinux', 'invariant-failed')
         # The frozen host result is complete before this separate package change.
         pins = [name + '-' + declaration['package_version'] + '-' + declaration['package_release']
                 + '.' + os.uname().machine for name in contract.PACKAGES]
@@ -622,7 +647,8 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
                'listeners': listeners, 'settings': settings, 'roles': roles, 'issued_logins': issued_logins, 'memberships': memberships,
                'password_algorithms': algorithms, 'hba': hba, 'probes': probes, 'locking': locks,
                'rootless_liveness': live, 'container_servers': servers,
-               'loopback_sentinel_host': sentinel, 'native_cgroup': cgroup, 'restart_row_count': count}
+               'loopback_sentinel_host': sentinel, 'native_cgroup': cgroup, 'restart_row_count': count,
+               'native_storage': self.native_storage()}
         runtime = self.logins['runtime']
         return contract.admit_observations(raw, run_id=self.run_id, run_attempt=self.run_attempt,
                                             expires_at=runtime['expires_at'])
@@ -651,6 +677,11 @@ FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oi
                 raise contract.QualificationError('cleanup-test-material', 'identity-mismatch')
             if path.exists():
                 shutil.rmtree(path)
+        if self.selinux_module_created:
+            self.run('cleanup-test-material', ['semodule', '-r', 'secpal_pg18_qualification'], timeout=120)
+            if 'secpal_pg18_qualification' in self.run('cleanup-test-material', ['semodule', '-l'])[1].split():
+                raise contract.QualificationError('cleanup-test-material', 'invariant-failed')
+            (STATE / 'secpal_pg18_qualification.cil').unlink()
         self.passwords.clear()
         # Admit read-back, not success inferred only from deletion return codes.
         stopped = self.run('cleanup-test-material', ['systemctl', 'is-active', 'postgresql.service'], accepted=(3,))[1]
@@ -678,10 +709,16 @@ def resource_binding():
 def reference_text(path, operation):
     """Bounded fixed host identity reads; never retain unvalidated content."""
     try:
-        facts = path.stat()
-        if not stat.S_ISREG(facts.st_mode) or facts.st_uid != 0 or facts.st_size > 32768:
-            raise contract.QualificationError(operation, 'representation-invalid')
-        return path.read_text()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, 'r') as stream:
+            facts = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(facts.st_mode) or facts.st_uid != 0 or facts.st_gid != 0
+                    or stat.S_IMODE(facts.st_mode) & 0o022 or facts.st_size > 32768):
+                raise contract.QualificationError(operation, 'representation-invalid')
+            value = stream.read(32769)
+            if len(value.encode()) > 32768:
+                raise contract.QualificationError(operation, 'observation-limit-exceeded')
+            return value
     except (OSError, UnicodeError):
         raise contract.QualificationError(operation, 'command-failed') from None
 
@@ -744,7 +781,7 @@ def reference_host_check():
         raise contract.QualificationError(operation, 'command-failed') from None
     facts = dict(host, machine_id=reference_text(Path('/etc/machine-id'), 'observe-reference-machine').strip(),
         ssh_host_key=' '.join(reference_text(Path('/etc/ssh/ssh_host_ed25519_key.pub'), 'observe-reference-key').split()[:2]),
-        os_release=contract.rpm.normalize_os_release(reference_text(Path('/etc/os-release'), 'observe-reference-os')),
+        os_release=contract.rpm.normalize_os_release(reference_text(Path('/usr/lib/os-release'), 'observe-reference-os')),
         architecture=os.uname().machine,
         selinux=observer.run('observe-selinux', ['getenforce'])[1], runtime=runtime)
     # The root-owned lease is not sufficient: reject existing state before any

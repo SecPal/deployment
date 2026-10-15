@@ -317,7 +317,8 @@ def build_host_units(contract: dict) -> dict[str, str]:
     uid = contract['rootless_mapping']['service_uid']
     service = section('Unit', [
         'Description=SecPal rootless PostgreSQL loopback boundary',
-        'After=nftables.service', f'Before=user@{uid}.service',
+        'Requires=nftables.service', 'After=nftables.service', 'PartOf=nftables.service',
+        f'Before=user@{uid}.service',
     ]) + section('Service', [
         'Type=oneshot', 'RemainAfterExit=yes',
         'ExecStartPre=/usr/sbin/nft --check create table inet secpal_postgresql',
@@ -329,6 +330,7 @@ def build_host_units(contract: dict) -> dict[str, str]:
     manager = section('Unit', [
         'Requires=secpal-postgresql-loopback.service',
         'BindsTo=secpal-postgresql-loopback.service',
+        'PartOf=secpal-postgresql-loopback.service',
         'After=secpal-postgresql-loopback.service postgresql.service',
         'Wants=postgresql.service',
     ])
@@ -346,6 +348,10 @@ def main() -> int:
     parser.add_argument("--host-systemd-output", type=Path)
     args = parser.parse_args()
     contract = load_contract(args.contract)
+    # Admit caller-supplied roots and ancestry before resolve() erases links.
+    for supplied in (args.quadlet_output, args.systemd_output, args.host_systemd_output):
+        if supplied is not None and any(path.is_symlink() for path in (supplied, *supplied.parents)):
+            parser.error("unexpected production output; output roots and ancestors must not be symlinks")
     quadlet_output = args.quadlet_output.resolve()
     systemd_output = args.systemd_output.resolve()
     outputs: dict[Path, dict[str, str]] = {}

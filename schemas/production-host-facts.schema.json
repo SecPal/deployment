@@ -22,6 +22,7 @@
     "path_access",
     "tools",
     "filesystems",
+    "native_postgresql",
     "resources"
   ],
   "properties": {
@@ -959,6 +960,15 @@
       "items": {
         "type": "string",
         "minLength": 1
+      }
+    },
+    "native_postgresql": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data_directory", "headroom"],
+      "properties": {
+        "data_directory": { "const": "/var/lib/pgsql/data" },
+        "headroom": { "$ref": "#/$defs/headroomFact" }
       }
     },
     "filesystems": {

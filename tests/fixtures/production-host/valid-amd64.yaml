@@ -473,3 +473,13 @@ resources:
       filesystem_total_inodes: 333333
       free_inodes: 100000
       free_inode_percent: 30
+
+native_postgresql:
+  data_directory: /var/lib/pgsql/data
+  headroom:
+    filesystem_total_bytes: 107374182400
+    free_bytes: 32212254720
+    free_percent: 30
+    filesystem_total_inodes: 1000000
+    free_inodes: 300000
+    free_inode_percent: 30

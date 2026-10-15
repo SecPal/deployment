@@ -208,6 +208,10 @@ reserved headroom or byte-accurate metadata ceilings.
 
 Issue #81 permits bounded reference-host evidence without GCP qualification.
 The reference-host transport is `scripts/ci-cloud/postgresql-reference-host.py`;
+invoke its accepted checkout with `python3 -I`. Before importing repository
+modules or opening the SSH identity, it compares raw checkout bytes with the
+signed current main tree and imports from a fresh private copy. Untracked
+modules and bytecode caches cannot enter that copy.
 it reuses the same source resolver, root PostgreSQL observer, application image,
 SQL probes, RPM admission, substantive evidence schema and cleanup. Its two
 closed profiles are `reference-rocky-10-2-amd64` and

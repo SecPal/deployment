@@ -222,3 +222,13 @@ architecture runs, candidate/control bindings, artifact digests, guest cleanup,
 provider cleanup and authoritative absence read-back. The underlying closed
 non-secret artifacts are retained with the workflow and workspace evidence;
 a caller-authored index cannot grant qualification PASS.
+
+The PostgreSQL loopback firewall permits established reply-direction traffic
+so the rootless API can answer HAProxy, while new arbitrary loopback connections
+remain rejected. The product-backend SELinux owner grants pasta only the
+dedicated backend port type; broad pasta/container connection booleans stay off.
+The firewall service and user manager restart with their policy owners.
+Native PGDATA capacity is admitted separately from rootless storage: at least
+20 GiB, 200,000 free inodes and 20 percent byte/inode headroom are required.
+Qualification binds the PostgreSQL CIL in its probe source manifest, installs
+an exclusively owned temporary module, and removes that module with read-back.

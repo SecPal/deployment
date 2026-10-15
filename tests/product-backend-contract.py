@@ -87,6 +87,7 @@ class BackendContractTest(unittest.TestCase):
 (type base_t)
 (type haproxy_t)
 (type container_runtime_t)
+(type pasta_t)
 (typeattribute port_type)
 (role object_r)
 (roletype object_r base_t)

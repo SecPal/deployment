@@ -574,9 +574,60 @@
         "settings",
         "tls_material",
         "issued_logins",
-        "application"
+        "application",
+        "native_storage"
       ],
       "properties": {
+        "native_storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data_directory", "headroom"],
+          "properties": {
+            "data_directory": {
+              "const": "/var/lib/pgsql/data"
+            },
+            "headroom": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "filesystem_total_bytes",
+                "free_bytes",
+                "free_percent",
+                "filesystem_total_inodes",
+                "free_inodes",
+                "free_inode_percent"
+              ],
+              "properties": {
+                "filesystem_total_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_percent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "filesystem_total_inodes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_inodes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_inode_percent": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              }
+            }
+          }
+        },
         "container_servers": {
           "type": "array",
           "maxItems": 0

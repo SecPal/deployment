@@ -158,7 +158,7 @@ locals {
         expected = set(re.findall(r'\$\{(\w+)_base64gzip\}', old))
         destinations = dict(re.findall(r"decode_script '\$\{(\w+)_base64gzip\}' /opt/secpal-control/([^\s]+)", old))
         control_components = {name for name, path in destinations.items() if path in postgresql.CONTROL_PROBE_PATHS}
-        expected = (expected - control_components) | {'postgresql_probe_manifest'}
+        expected = (expected - control_components) | {'postgresql_probe_manifest', 'postgresql_selinux'}
         for architecture in ('amd64', 'arm64'):
             with self.subTest(architecture=architecture):
                 rendered = self.render(architecture)

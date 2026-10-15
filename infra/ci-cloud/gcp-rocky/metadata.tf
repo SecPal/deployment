@@ -20,6 +20,7 @@ locals {
     "scripts/ci-cloud/collect-rocky-preparation.py",
     "scripts/integration_runtime_contract.py",
     "scripts/render-native-postgresql.py",
+    "config/production/selinux/secpal_native_postgresql.cil",
     "schemas/postgresql-qualification-evidence.schema.json",
     "schemas/postgresql-qualification-diagnostic.schema.json",
   ]
@@ -79,6 +80,7 @@ locals {
     postgresql_consumer              = file("${path.module}/../../../scripts/render-native-postgresql.py")
     postgresql_contract              = file("${path.module}/../../../scripts/ci-cloud/postgresql_qualification_contract.py")
     postgresql_runner                = file("${path.module}/../../../scripts/ci-cloud/qualify-native-postgresql.py")
+    postgresql_selinux               = file("${path.module}/../../../config/production/selinux/secpal_native_postgresql.cil")
     postgresql_application_bootstrap = file("${path.module}/../../../scripts/ci-cloud/postgresql-application-bootstrap.php")
     postgresql_application_probe     = file("${path.module}/../../../scripts/ci-cloud/postgresql-application-probe.php")
     image_attestation_runtime        = file("${path.module}/../../../scripts/image_attestation_runtime.py")

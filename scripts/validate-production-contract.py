@@ -24,6 +24,7 @@ from yaml.nodes import MappingNode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "ci-cloud"))
 import rocky_preparation_contract as host_provenance
+import postgresql_qualification_contract as native_postgresql
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1282,6 +1283,10 @@ def validate_host_facts(
     validate_tool_facts(facts["tools"])
     validate_filesystem_facts(inventory, facts["filesystems"])
     validate_resource_facts(inventory, facts["resources"])
+    try:
+        native_postgresql.admit_native_storage(facts["native_postgresql"])
+    except native_postgresql.QualificationError:
+        raise ContractViolation("native PostgreSQL data capacity is insufficient or invalid") from None
 
 
 def parse_arguments() -> argparse.Namespace:

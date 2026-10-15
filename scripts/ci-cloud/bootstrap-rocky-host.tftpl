@@ -91,6 +91,7 @@ decode_script backend_wrapper /usr/local/sbin/secpal-qualify-product-backends
 decode_script 'postgresql_probe_manifest' /opt/secpal-control/postgresql-probe-manifest.json
 decode_script 'postgresql_contract' /opt/secpal-control/scripts/ci-cloud/postgresql_qualification_contract.py
 decode_script 'postgresql_runner' /opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py
+decode_script 'postgresql_selinux' /opt/secpal-control/config/production/selinux/secpal_native_postgresql.cil
 decode_script 'postgresql_application_bootstrap' /opt/secpal-control/scripts/ci-cloud/postgresql-application-bootstrap.php
 decode_script 'postgresql_application_probe' /opt/secpal-control/scripts/ci-cloud/postgresql-application-probe.php
 decode_script 'image_attestation_runtime' /opt/secpal-control/scripts/image_attestation_runtime.py

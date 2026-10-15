@@ -60,6 +60,9 @@ class NativeProduction(unittest.TestCase):
         self.assertIn('ExecStart=/usr/sbin/nft -f /etc/nftables/secpal-postgresql.nft', firewall)
         self.assertIn('ExecStop=/usr/sbin/nft delete table inet secpal_postgresql', firewall)
         self.assertNotIn('flush ruleset', firewall)
+        self.assertIn('Requires=nftables.service', firewall)
+        self.assertIn('PartOf=nftables.service', firewall)
+        self.assertIn('PartOf=secpal-postgresql-loopback.service', manager)
         self.assertIn('BindsTo=secpal-postgresql-loopback.service', manager)
         self.assertIn('After=secpal-postgresql-loopback.service postgresql.service', manager)
         self.assertNotIn('Requires=postgresql.service', manager)
@@ -128,6 +131,28 @@ class NativeProduction(unittest.TestCase):
                 self.assertEqual(marker.read_bytes(), b'preserve retired evidence; do not execute')
                 self.assertFalse((root / 'quadlet/secpal-api.container').exists())
 
+    def test_renderer_rejects_output_root_and_ancestor_symlinks_before_any_write(self):
+        for directory in ('quadlet', 'systemd', 'host-systemd'):
+            for ancestor in (False, True):
+                with self.subTest(directory=directory, ancestor=ancestor), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    target = root / 'operator-owned'
+                    target.mkdir()
+                    if ancestor:
+                        (root / directory).symlink_to(target, target_is_directory=True)
+                        output = root / directory / 'nested'
+                    else:
+                        output = root / directory
+                        output.symlink_to(target, target_is_directory=True)
+                    args = [sys.executable, str(ROOT / 'scripts/render-production-quadlets.py'),
+                            '--quadlet-output', str(output if directory == 'quadlet' else root / 'quadlet'),
+                            '--systemd-output', str(output if directory == 'systemd' else root / 'systemd'),
+                            '--host-systemd-output', str(output if directory == 'host-systemd' else root / 'host-systemd')]
+                    result = subprocess.run(args, capture_output=True, text=True, timeout=15)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('unexpected production output', result.stderr)
+                    self.assertEqual(list(target.iterdir()), [])
+
     def test_renderer_allows_exact_idempotent_production_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -172,6 +197,31 @@ class NativeProduction(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for name, content in renderer.build_host_units(renderer.load_contract()).items():
                 self.assertEqual((root / "host-systemd" / name).read_text(), content)
+
+    def test_native_pgdata_capacity_is_required_at_host_admission(self):
+        import copy
+        specification = importlib.util.spec_from_file_location(
+            'native_capacity_admission', ROOT / 'scripts/validate-production-contract.py')
+        validator = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(validator)
+        inventory = yaml.safe_load((ROOT / 'tests/fixtures/production-inventory/valid-amd64.yaml').read_text())
+        facts = yaml.safe_load((ROOT / 'tests/fixtures/production-host/valid-amd64.yaml').read_text())
+        facts['native_postgresql'] = {
+            'data_directory': '/var/lib/pgsql/data',
+            'headroom': {'filesystem_total_bytes': 100 * 1024**3, 'free_bytes': 30 * 1024**3,
+                         'free_percent': 30, 'filesystem_total_inodes': 1000000,
+                         'free_inodes': 300000, 'free_inode_percent': 30}}
+        validator.validate_host_facts(inventory, facts, synthetic=True)
+        for key, value in (('free_bytes', 10 * 1024**3), ('free_inodes', 100000),
+                           ('free_percent', 10), ('free_inode_percent', 10)):
+            bad = copy.deepcopy(facts)
+            bad['native_postgresql']['headroom'][key] = value
+            with self.subTest(key=key), self.assertRaises(validator.ContractViolation):
+                validator.validate_host_facts(inventory, bad, synthetic=True)
+        bad = copy.deepcopy(facts)
+        del bad['native_postgresql']
+        with self.assertRaises(validator.ContractViolation):
+            validator.validate_host_facts(inventory, bad, synthetic=True)
 
     def test_inventory_rejects_retired_backend_fields(self):
         specification = importlib.util.spec_from_file_location(

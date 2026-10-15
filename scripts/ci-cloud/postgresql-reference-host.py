@@ -16,16 +16,12 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 import stat
 import sys
 import tempfile
 import time
-
-from jsonschema.exceptions import ValidationError
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import postgresql_qualification_contract as contract
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -37,8 +33,65 @@ def load(name, path):
     return module
 
 
-control = load('reference_postgresql_control', 'scripts/ci-cloud/postgresql-qualification-control.py')
-guest = load('reference_postgresql_guest', 'scripts/ci-cloud/qualify-native-postgresql.py')
+def initialize(root):
+    # Only a verified, private source copy reaches imports during CLI execution.
+    global ROOT, contract, control, guest, ValidationError
+    ROOT = root
+    sys.path.insert(0, str(ROOT / 'scripts/ci-cloud'))
+    from jsonschema.exceptions import ValidationError
+    import postgresql_qualification_contract as contract
+    control = load('reference_postgresql_control', 'scripts/ci-cloud/postgresql-qualification-control.py')
+    guest = load('reference_postgresql_guest', 'scripts/ci-cloud/qualify-native-postgresql.py')
+
+
+def bootstrap(directory):
+    """Authenticate raw accepted bytes before any repository import or SSH access.
+
+    Invoke this entry point from trusted source with python3 -I. A private fresh
+    copy also excludes candidate-owned untracked modules and bytecode caches.
+    """
+    def request(path):
+        result = subprocess.run(['gh', 'api', path], check=True, capture_output=True,
+                                text=True, timeout=30)
+        if len(result.stdout.encode()) > 4194304:
+            raise ValueError('bounded source observation exceeded')
+        return json.loads(result.stdout)
+
+    head = request('repos/SecPal/deployment/commits/main')
+    if (head['commit']['verification']['verified'] is not True
+            or head['commit']['verification']['reason'] != 'valid'):
+        raise ValueError('accepted source signature required')
+    tree = request('repos/SecPal/deployment/git/trees/' + head['commit']['tree']['sha'] + '?recursive=1')
+    entries = tree['tree']
+    if tree.get('truncated') is not False or not isinstance(entries, list) or len(entries) > 10000:
+        raise ValueError('bounded source tree required')
+    admitted = {}
+    for entry in entries:
+        if entry['type'] == 'tree':
+            continue
+        name = Path(entry['path'])
+        if (entry['type'] != 'blob' or entry['mode'] not in ('100644', '100755')
+                or name.is_absolute() or '..' in name.parts):
+            raise ValueError('regular accepted source required')
+        source = ROOT / name
+        if any(path.is_symlink() for path in (source, *source.parents)):
+            raise ValueError('source links are not admitted')
+        facts = source.lstat()
+        if not stat.S_ISREG(facts.st_mode) or facts.st_size > 4194304:
+            raise ValueError('bounded regular source required')
+        content = source.read_bytes()
+        if hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest() != entry['sha']:
+            raise ValueError('checkout differs from accepted source')
+        admitted[name] = content
+    if Path('scripts/ci-cloud/postgresql-reference-host.py') not in admitted:
+        raise ValueError('transport must be accepted before execution')
+    for name, content in admitted.items():
+        target = directory / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    return head['sha']
+
+
 COMMANDS = {
     'check': 'sudo -n /usr/bin/python3 -I /opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py --reference-host-check',
     'run': 'sudo -n /usr/bin/python3 -I /opt/secpal-control/scripts/ci-cloud/qualify-native-postgresql.py --reference-host',
@@ -222,6 +275,19 @@ def main():
     parser.add_argument('--identity-file', type=Path)
     parser.add_argument('--apply', action='store_true')
     options = parser.parse_args()
+    # The context remains alive through qualification; repository imports can
+    # never precede accepted-source authentication.
+    with tempfile.TemporaryDirectory(prefix='secpal-pg-control-') as private:
+        try:
+            bootstrap(Path(private))
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            print(json.dumps({'operation': 'validate-authorization', 'reason': 'source-drift'}), file=sys.stderr)
+            return 1
+        initialize(Path(private))
+        return run(options)
+
+
+def run(options):
     try:
         directory = options.operation_directory
         if options.operation == 'prepare':

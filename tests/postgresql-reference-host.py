@@ -22,6 +22,8 @@ def load(name, path):
     spec = importlib.util.spec_from_file_location(name, ROOT / path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    if path == 'scripts/ci-cloud/postgresql-reference-host.py':
+        module.initialize(ROOT)
     return module
 
 
@@ -132,6 +134,44 @@ class ReferenceHost(unittest.TestCase):
                 self.assertNotIn('gcloud', args)
                 self.assertNotIn('GITHUB_TOKEN', run.call_args.kwargs['environment'])
             with self.assertRaises(contract.QualificationError): ssh.observe('arbitrary command')
+
+    def test_bootstrap_rejects_modified_code_without_importing_it(self):
+        transport = load('pg_reference_bootstrap', 'scripts/ci-cloud/postgresql-reference-host.py')
+        import hashlib
+        path = 'scripts/ci-cloud/postgresql_qualification_contract.py'
+        accepted = b"raise AssertionError('never import candidate code')"
+        oid = hashlib.sha1(b'blob ' + str(len(accepted)).encode() + b'\0' + accepted).hexdigest()
+        head = {'commit': {'verification': {'verified': True, 'reason': 'valid'}, 'tree': {'sha': 'a'*40}}}
+        tree = {'truncated': False, 'tree': [{'path': path, 'type': 'blob', 'mode': '100644', 'sha': oid}]}
+        with tempfile.TemporaryDirectory() as original, tempfile.TemporaryDirectory() as private:
+            candidate = Path(original) / path
+            candidate.parent.mkdir(parents=True)
+            candidate.write_text("raise AssertionError('candidate import executed')")
+            responses = [mock.Mock(stdout=json.dumps(head)), mock.Mock(stdout=json.dumps(tree))]
+            with mock.patch.object(transport, 'ROOT', Path(original)), \
+                 mock.patch.object(transport.subprocess, 'run', side_effect=responses), \
+                 mock.patch.object(transport, 'initialize') as initialize:
+                with self.assertRaises(ValueError):
+                    transport.bootstrap(Path(private))
+                initialize.assert_not_called()
+                self.assertEqual(list(Path(private).iterdir()), [])
+
+    def test_fixed_host_identity_rejects_symlinks_and_writable_files(self):
+        guest = load('pg_reference_identity', 'scripts/ci-cloud/qualify-native-postgresql.py')
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'identity'
+            target.write_text('host identity')
+            link = Path(directory) / 'redirect'
+            link.symlink_to(target)
+            with self.assertRaises(contract.QualificationError):
+                guest.reference_text(link, 'observe-reference-machine')
+            for mode in (0o100664, 0o100666):
+                facts = mock.Mock(st_mode=mode, st_uid=0, st_gid=0, st_size=13)
+                with mock.patch.object(Path, 'stat', return_value=facts), \
+                     mock.patch.object(Path, 'lstat', return_value=facts), \
+                     mock.patch.object(guest.os, 'fstat', return_value=facts), \
+                     self.assertRaises(contract.QualificationError):
+                    guest.reference_text(target, 'observe-reference-key')
 
     def test_one_use_claim_survives_failure_and_rejects_reuse(self):
         transport = load('pg_reference_claim', 'scripts/ci-cloud/postgresql-reference-host.py')

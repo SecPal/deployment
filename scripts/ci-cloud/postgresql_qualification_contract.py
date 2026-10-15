@@ -43,6 +43,7 @@ PROBE_PATHS = (
     'scripts/ci-cloud/collect-rocky-preparation.py',
     'scripts/integration_runtime_contract.py',
     'scripts/render-native-postgresql.py',
+    'config/production/selinux/secpal_native_postgresql.cil',
     'schemas/postgresql-qualification-evidence.schema.json',
     'schemas/postgresql-qualification-diagnostic.schema.json',
 )
@@ -62,6 +63,33 @@ def probe_manifest_digest(manifest: object) -> str:
     for name in PROBE_PATHS:
         digest.update(name.encode() + b'\0' + bytes.fromhex(manifest[name]))
     return digest.hexdigest()
+
+
+NATIVE_DATA_DIRECTORY = '/var/lib/pgsql/data'
+NATIVE_STORAGE_MINIMUMS = {'free_bytes': 20 * 1024**3, 'free_inodes': 200000,
+                           'free_percent': 20, 'free_inode_percent': 20}
+
+
+def admit_native_storage(facts):
+    if (not isinstance(facts, dict) or set(facts) != {'data_directory', 'headroom'}
+            or facts['data_directory'] != NATIVE_DATA_DIRECTORY):
+        raise QualificationError('initialize-postgresql', 'representation-invalid')
+    headroom = facts['headroom']
+    names = {'filesystem_total_bytes', 'free_bytes', 'free_percent',
+             'filesystem_total_inodes', 'free_inodes', 'free_inode_percent'}
+    if (not isinstance(headroom, dict) or set(headroom) != names
+            or any(type(v) is not int or v < 0 for v in headroom.values())):
+        raise QualificationError('initialize-postgresql', 'representation-invalid')
+    for absolute, percent, total in (
+            ('free_bytes', 'free_percent', 'filesystem_total_bytes'),
+            ('free_inodes', 'free_inode_percent', 'filesystem_total_inodes')):
+        if (headroom[absolute] < NATIVE_STORAGE_MINIMUMS[absolute]
+                or not NATIVE_STORAGE_MINIMUMS[percent] <= headroom[percent] <= 100
+                or headroom[absolute] > headroom[total]
+                or not headroom[total] * headroom[percent] <= headroom[absolute] * 100
+                   < headroom[total] * (headroom[percent] + 1)):
+            raise QualificationError('initialize-postgresql', 'invariant-failed')
+    return facts
 
 
 CANDIDATE_PATH = 'config/production/postgresql-contract.json'
@@ -449,7 +477,7 @@ ROLE_POLICY = {
 OBSERVATION_FIELDS = {'server_version_num', 'service', 'data_directory', 'process_label',
                       'listeners', 'settings', 'roles', 'issued_logins', 'memberships', 'password_algorithms',
                       'hba', 'probes', 'locking', 'rootless_liveness', 'container_servers',
-                      'loopback_sentinel_host', 'native_cgroup', 'restart_row_count', 'tls_material', 'application'}
+                      'loopback_sentinel_host', 'native_cgroup', 'restart_row_count', 'tls_material', 'application', 'native_storage'}
 
 
 def normalize_json_fact(raw: str) -> Any:
@@ -511,6 +539,7 @@ def admit_observations(raw: object, *, run_id: str, run_attempt: str, expires_at
     if not isinstance(raw, dict) or set(raw) != OBSERVATION_FIELDS:
         raise QualificationError('admit-qualification', 'representation-invalid')
     admit_application(raw['application'])
+    admit_native_storage(raw['native_storage'])
     logins = qualification_logins(run_id, run_attempt, expires_at)
     expected = {
         'service': {'User': 'postgres', 'Group': 'postgres', 'ActiveState': 'active',
@@ -572,6 +601,8 @@ def policy_configuration(runtime_uid: int | str) -> dict[str, str]:
     type filter hook output priority -10; policy accept;
     meta skuid {runtime_uid} ip daddr 127.0.0.0/8 tcp dport 5432 accept
     meta skuid {runtime_uid} ip6 daddr ::1 tcp dport 5432 accept
+    meta skuid {runtime_uid} ct state established ct direction reply ip daddr 127.0.0.0/8 accept
+    meta skuid {runtime_uid} ct state established ct direction reply ip6 daddr ::1 accept
     meta skuid {runtime_uid} ip daddr 127.0.0.0/8 reject
     meta skuid {runtime_uid} ip6 daddr ::1 reject
   }}
