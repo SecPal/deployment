@@ -55,7 +55,7 @@ jobs:
 
   reuse:
     name: REUSE Compliance
-    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@c49c3d9b46dda9c68b09427135ef5692204eaf47 # main
+    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@c930f72b77baa98b4f981b143fcec32025cbef9d # main
 
   markdown-shell:
     name: Markdown and Shell
