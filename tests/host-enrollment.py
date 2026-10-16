@@ -532,6 +532,25 @@ class EnrollmentTests(unittest.TestCase):
         credential = self.authority.consume(self.request, grant, proof)
         self.assertEqual(self.host.accept(credential, self.ca)["generation"], 1)
 
+    def test_recovery_during_management_observation_revokes_old_authentication(self):
+        _, credential = self.complete()
+        identity = self.host.accept(credential, self.ca)
+        challenge = os.urandom(32)
+        proof = self.host.prove_identity(identity, challenge)
+        self.authority.recovery = lambda request, previous: None
+        def concurrent_recovery(document):
+            observation = self.observe(document)
+            self.request = self.host.request()
+            self.complete(purpose="recover")
+            return observation
+        verifier = enrollment.EnrollmentVerifier(
+            self.root / "public-verifier", self.ca, self.deployment, self.target,
+            "single-host", observe=concurrent_recovery,
+            current=lambda host_id: self.authority.current_identity())
+        with self.assertRaisesRegex(enrollment.EnrollmentError, "identity-not-current"):
+            verifier.authenticate(identity, challenge, proof)
+        self.assertEqual(self.authority.current_identity()["identity"]["generation"], 2)
+
     def test_database_parameters_are_admitted_before_native_connection(self):
         from psycopg.conninfo import conninfo_to_dict
         parameters = conninfo_to_dict(self.dsn)

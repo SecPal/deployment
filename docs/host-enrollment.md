@@ -205,3 +205,9 @@ Real-system acceptance additionally requires trusted management/provider
 observation and existing #80/#92 admission for an isolated, genuinely ready
 host. Existing activated-host application evidence remains applicable only
 within its original source, host and qualification scope.
+
+The public verifier re-reads the current signed registration after fresh
+management/possession observation, then rechecks observation freshness. That
+read is the authentication generation boundary: recovery committed before it
+invalidates the older identity. The #100 current-registration adapter must use
+its existing authoritative serialized read, not a caller-provided cache.

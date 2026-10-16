@@ -1169,6 +1169,18 @@ class EnrollmentVerifier:
         _verify(public, message, proof, self.directory)
         document = {**identity, "machine": current["machine"],
                     "challenge": base64.b64encode(challenge).decode(), "proof": proof}
-        _observe_control(self.observe, document, self.deployment_id, self.resource, self.role,
-                                       inspection_target=self.inspection_target)
+        observation = _observe_control(
+            self.observe, document, self.deployment_id, self.resource, self.role,
+            inspection_target=self.inspection_target)
+        # Management/possession verification may overlap recovery. The fresh
+        # current-registration read is the final generation linearization point.
+        try:
+            latest = self.current(identity["host_id"])
+        except Exception:
+            raise EnrollmentError("observe-current-enrollment") from None
+        registered, _ = admit_registration(latest, self.certificate, self.directory)
+        if canonical(registered) != canonical(identity):
+            raise EnrollmentError("identity-not-current")
+        admit_management(document, observation, self.deployment_id, self.resource,
+                         self.role, now(), inspection_target=self.inspection_target)
         return identity
