@@ -38,7 +38,10 @@ class EnrollmentTests(unittest.TestCase):
         self.dsn = os.environ.get("SECPAL_ENROLLMENT_TEST_DSN")
         if not self.dsn:
             self.fail("SECPAL_ENROLLMENT_TEST_DSN must name an isolated disposable PG18 database")
-        self.connect = lambda: psycopg.connect(self.dsn, connect_timeout=5)
+        from psycopg.conninfo import conninfo_to_dict
+        self.dba_database = conninfo_to_dict(self.dsn, connect_timeout=5)
+        self.database = {**self.dba_database, "options": "-c role=secpal_enrollment_runtime"}
+        self.connect = lambda: psycopg.connect(**self.dba_database)
         with self.connect() as db:
             name = db.info.dbname
             if not name.startswith("secpal_enrollment_test_"):
@@ -73,7 +76,7 @@ class EnrollmentTests(unittest.TestCase):
         self.addCleanup(self.machine_patch.stop)
         self.host = enrollment.LocalHost.create(self.root / "host", self.deployment,
                                                self.target, "single-host", ready=lambda: None)
-        enrollment.initialize_authority_store(self.connect, self.ca,
+        enrollment.initialize_authority_store(self.dba_database, self.ca,
                                              directory=self.root / "authority")
         with self.connect() as db:
             db.execute("GRANT USAGE ON SCHEMA secpal_enrollment TO secpal_enrollment_runtime")
@@ -85,13 +88,11 @@ class EnrollmentTests(unittest.TestCase):
                        " TO secpal_enrollment_runtime")
         self.authority = enrollment.EnrollmentAuthority(
             self.root / "authority", self.ca, self.key, self.deployment, self.target,
-            "single-host", observe=self.observe, ready=lambda observed: None, connect=self.runtime_connect)
+            "single-host", observe=self.observe, ready=lambda observed: None, database=self.database)
         self.request = self.host.request()
 
     def runtime_connect(self):
-        db = self.connect()
-        db.execute("SET ROLE secpal_enrollment_runtime")
-        return db
+        return psycopg.connect(**self.database)
 
     def drop_schema(self):
         with self.connect() as db:
@@ -329,7 +330,7 @@ class EnrollmentTests(unittest.TestCase):
         other_authority = enrollment.EnrollmentAuthority(
             self.root / "authority", self.ca, self.key, self.deployment,
             other_target, "single-host", observe=self.observe,
-            ready=lambda observed: None, connect=self.runtime_connect)
+            ready=lambda observed: None, database=self.database)
         for request in [
                 {**self.request, "resource": dataclasses.asdict(enrollment.host_resource(other_target))},
                 {**fresh, "host_id": self.request["host_id"]}]:
@@ -373,7 +374,7 @@ class EnrollmentTests(unittest.TestCase):
             enrollment.EnrollmentAuthority(
                 self.root / "authority", self.ca, self.key, self.deployment,
                 self.target, "single-host", observe=self.observe,
-                ready=lambda observed: None, connect=self.runtime_connect)
+                ready=lambda observed: None, database=self.database)
         with self.connect() as db:
             self.assertIsNone(db.execute(
                 "SELECT 1 FROM pg_namespace WHERE nspname='secpal_enrollment'").fetchone())
@@ -438,7 +439,7 @@ class EnrollmentTests(unittest.TestCase):
         authority = enrollment.EnrollmentAuthority(
             self.root / "authority", self.ca, self.key, self.deployment,
             self.target, "single-host", observe=self.observe,
-            ready=lambda observed: None, connect=self.runtime_connect)
+            ready=lambda observed: None, database=self.database)
         with self.assertRaises(enrollment.EnrollmentError):
             authority.grant(other.request())
 
@@ -486,6 +487,25 @@ class EnrollmentTests(unittest.TestCase):
             self.authority.current_identity()
         credential = self.authority.consume(self.request, grant, proof)
         self.assertEqual(self.host.accept(credential, self.ca)["generation"], 1)
+
+    def test_database_parameters_are_admitted_before_native_connection(self):
+        from psycopg.conninfo import conninfo_to_dict
+        parameters = conninfo_to_dict(self.dsn)
+        bad = [
+            {**parameters, "host": "/tmp"},
+            {**parameters, "host": "@abstract", "sslmode": "verify-full"},
+            {**parameters, "host": "db.invalid", "sslmode": "prefer"},
+            {**parameters, "hostaddr": "127.0.0.1"},
+            {**parameters, "service": "unadmitted-service"},
+            {**parameters, "connect_timeout": 0},
+        ]
+        with patch.object(psycopg, "connect") as connect:
+            for value in bad:
+                with self.subTest(value=value):
+                    with self.assertRaises(enrollment.EnrollmentError):
+                        with enrollment.authority_transaction(value):
+                            self.fail("unadmitted database reached transaction")
+            connect.assert_not_called()
 
     def test_database_transport_rejects_untrusted_local_sockets(self):
         path = self.root / "socket"
@@ -585,7 +605,7 @@ class EnrollmentTests(unittest.TestCase):
                 lambda: enrollment.EnrollmentAuthority(
                     self.root / "authority", self.ca, self.key, self.deployment,
                     self.target, "single-host", observe=self.observe,
-                    ready=lambda observed: None, connect=self.runtime_connect)]:
+                    ready=lambda observed: None, database=self.database)]:
             with self.subTest(operation=operation):
                 with self.assertRaises(enrollment.EnrollmentError):
                     operation()
@@ -652,10 +672,11 @@ class EnrollmentTests(unittest.TestCase):
 
     def test_waiting_cannot_extend_management_observation_freshness(self):
         generation = self.authority._generation
-        clock = patch.object(enrollment, "now", return_value=int(time.time()) + 61)
+        clock = patch.object(enrollment, "now", return_value=int(time.time()))
+        instant = clock.start()
         def delayed(*args):
             value = generation(*args)
-            clock.start()
+            instant.return_value += 61
             return value
         try:
             with patch.object(self.authority, "_generation", side_effect=delayed):
@@ -670,10 +691,11 @@ class EnrollmentTests(unittest.TestCase):
         grant = self.authority.grant(self.request)
         proof = self.host.prove(grant, self.ca)
         issue = self.authority._certificate
-        clock = patch.object(enrollment, "now", return_value=int(time.time()) + 61)
+        clock = patch.object(enrollment, "now", return_value=int(time.time()))
+        instant = clock.start()
         def delayed(*args):
             certificate = issue(*args)
-            clock.start()
+            instant.return_value += 61
             return certificate
         try:
             with patch.object(self.authority, "_certificate", side_effect=delayed):
@@ -702,7 +724,7 @@ class EnrollmentTests(unittest.TestCase):
         current = enrollment.EnrollmentAuthority(
             self.root / "authority", self.ca, self.key, self.deployment,
             self.target, "single-host", observe=self.observe,
-            ready=lambda observed: None, connect=self.runtime_connect)
+            ready=lambda observed: None, database=self.database)
         grant = current.grant(self.request)
         credential = current.consume(self.request, grant, self.host.prove(grant, self.ca))
         identity = self.host.accept(credential, self.ca)
@@ -800,7 +822,7 @@ class EnrollmentTests(unittest.TestCase):
         green_authority = enrollment.EnrollmentAuthority(
             self.root / "authority", self.ca, self.key, self.deployment,
             self.target, "green", observe=self.observe,
-            ready=lambda observed: None, connect=self.runtime_connect)
+            ready=lambda observed: None, database=self.database)
         request = green_host.request()
         grant = green_authority.grant(request)
         credential = green_authority.consume(request, grant, green_host.prove(grant, self.ca))

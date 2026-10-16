@@ -37,7 +37,8 @@ The separately held `EnrollmentAuthority` takes:
   plus authenticated management observation of the exact document and machine,
   and the current trusted installation `incarnation_id`.
 - `ready(observation)`: the existing trusted readiness admission.
-- `connect()`: a bounded Psycopg 3 connection to dedicated PostgreSQL 18 state.
+- `database`: native Psycopg/libpq keyword parameters for dedicated PostgreSQL
+  18 state, supplied by trusted control without logging credentials.
 - Optional `recovery(request, previous_identity)`: explicit, independent
   recovery authorization, checked at both grant issuance and consumption.
 
@@ -106,11 +107,16 @@ and verify-full for a remote database (runtime rejects unverified or unencrypted
 also appropriate. Local socket admission checks canonical paths, every parent
 directory, non-writable directory permissions, socket type and trusted ownership
 (root, the authority user or the local PostgreSQL administrator). A shared
-`/tmp` socket or a symlink alias is rejected. The trusted connection factory owns
-credentials and bounded connection timeouts; they never enter requests, grants
-or evidence.
+`/tmp` socket or a symlink alias is rejected. Trusted control supplies native connection parameters, including an explicit
+host and credentials; they never enter requests, grants or evidence. The SDK
+admits the canonical socket/inode or explicit verify-full policy before opening
+the connection, and re-admits the actual transport afterward. It bounds native
+connection timeout to 1–10 seconds (default 5). Unresolved service/hostaddr
+indirection, abstract sockets and multi-host targets are rejected before any
+connection. Native password-file use remains within libpq; no credential broker
+or alternate client factory is added.
 
-The DBA explicitly calls `initialize_authority_store(connect, ca_certificate, directory=private_root)`
+The DBA explicitly calls `initialize_authority_store(database, ca_certificate, directory=private_root)`
 once on a dedicated authority database with a new private root directory. Runtime never initializes, recreates or
 repairs missing replay state. State is pinned to the CA fingerprint. Preserve
 it across authority restarts under independently owned database durability and

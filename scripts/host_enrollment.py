@@ -640,8 +640,10 @@ class TrustedHost:
     incarnation_id: str
 
 
-def admit_database_transport(host, sslmode, encrypted, *, port=5432):
-    """ADR-017: independently protected local socket or hostname-verified TLS."""
+def admit_database_target(host, sslmode, *, port=5432):
+    """Admit the configured endpoint before libpq can send credentials."""
+    if type(host) is not str or not host or host.startswith("@") or "," in host:
+        raise EnrollmentError("authority-database-transport")
     if type(host) is str and host.startswith("/"):
         directory = Path(host)
         try:
@@ -667,21 +669,47 @@ def admit_database_transport(host, sslmode, encrypted, *, port=5432):
         except (OSError, ValueError):
             raise EnrollmentError("authority-database-socket") from None
         return
-    if sslmode != "verify-full" or encrypted is not True:
+    if sslmode != "verify-full":
+        raise EnrollmentError("authority-database-transport")
+
+
+def admit_database_transport(host, sslmode, encrypted, *, port=5432):
+    """Re-admit actual transport after connection, including observed TLS."""
+    admit_database_target(host, sslmode, port=port)
+    if not host.startswith("/") and encrypted is not True:
         raise EnrollmentError("authority-database-transport")
 
 
 @contextmanager
-def authority_transaction(connect):
-    """Native PG18 transaction; factory/credential belongs to trusted control."""
+def authority_transaction(database):
+    """Native PG18 connection parameters/credentials belong to trusted control."""
     try:
         import psycopg
         from psycopg.rows import dict_row
+        from psycopg.conninfo import conninfo_to_dict
     except ImportError:
         raise EnrollmentError("authority-client-unavailable") from None
     db = None
     try:
-        db = connect()
+        # Native libpq keywords, not an opaque callable that can connect before
+        # endpoint admission. No service/hostaddr indirection may bypass it.
+        if (type(database) is not dict or "service" in database or "hostaddr" in database
+                or os.environ.get("PGSERVICE") or os.environ.get("PGHOSTADDR")):
+            raise EnrollmentError("authority-database-parameters")
+        parameters = conninfo_to_dict("", **database)
+        parameters.setdefault("port", "5432")
+        parameters.setdefault("connect_timeout", "5")
+        try:
+            port, timeout = int(parameters["port"]), int(parameters["connect_timeout"])
+        except (ValueError, TypeError):
+            raise EnrollmentError("authority-database-parameters") from None
+        if not 1 <= port <= 65535 or not 1 <= timeout <= 10:
+            raise EnrollmentError("authority-database-parameters")
+        host = parameters.get("host")
+        admit_database_target(host, parameters.get("sslmode"), port=port)
+        db = psycopg.connect(**parameters)
+        if db.info.host != host or db.info.port != port:
+            raise EnrollmentError("authority-database-transport")
         if db.autocommit or not 180000 <= db.info.server_version < 190000:
             raise EnrollmentError("authority-database-contract")
         db.row_factory = dict_row
@@ -729,7 +757,7 @@ def database_digest(db):
     return result.hexdigest()
 
 
-def initialize_authority_store(connect, authority_certificate, *, directory):
+def initialize_authority_store(database, authority_certificate, *, directory):
     """Explicit one-time DBA operation; never called by enrollment runtime."""
     _, fingerprint = _ca(Path(authority_certificate))
     directory = Path(directory)
@@ -738,7 +766,7 @@ def initialize_authority_store(connect, authority_certificate, *, directory):
         directory.mkdir(mode=0o700)
     except OSError:
         raise EnrollmentError("authority-already-exists") from None
-    with _lock(directory), authority_transaction(connect) as db:
+    with _lock(directory), authority_transaction(database) as db:
         db.execute("CREATE SCHEMA secpal_enrollment")
         db.execute("""CREATE TABLE secpal_enrollment.authority(
             singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
@@ -767,7 +795,7 @@ class EnrollmentAuthority:
     """One explicit deployment/resource/role scope, separate from Secret Authority."""
 
     def __init__(self, directory, certificate, key, deployment_id, resource, role,
-                 *, observe, ready, connect, recovery=None):
+                 *, observe, ready, database, recovery=None):
         _scope(deployment_id, resource, role)
         self.directory = Path(directory)
         self.certificate, self.key = Path(certificate), Path(key)
@@ -780,7 +808,9 @@ class EnrollmentAuthority:
         self.inspection_target = resource
         self.deployment_id, self.resource, self.role = deployment_id, host_resource(resource), role
         self.observe, self.ready, self.recovery = observe, ready, recovery
-        self.connect = connect
+        if type(database) is not dict:
+            raise EnrollmentError("authority-database-parameters")
+        self.database = dict(database)
         # Runtime authority cannot initialize or silently replace replay state.
         with self._transaction():
             pass
@@ -788,7 +818,7 @@ class EnrollmentAuthority:
     @contextmanager
     def _transaction(self, *, write=False):
         # All instances of this authority share this existing private root.
-        with _lock(self.directory), authority_transaction(self.connect) as db:
+        with _lock(self.directory), authority_transaction(self.database) as db:
             row = db.execute(
                 "SELECT version, authority_sha256 FROM secpal_enrollment.authority"
                 " WHERE singleton=true").fetchone()
