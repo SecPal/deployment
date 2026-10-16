@@ -184,13 +184,9 @@ def systemd_package_admission():
 def package_authority(*, host_view=False):
     # Consume #308's exact observer and semantic owner; no copied identities,
     # enabled EPEL repository, global signing key, or installation operation.
-    if host_view:
-        # '+' on the fixed ExecStartPre preserves PID 1's host mount view.
-        # Never grade sandbox mount masks as installed RPM metadata.
-        host=Path('/proc/1/ns/mnt').stat()
-        own=Path('/proc/self/ns/mnt').stat()
-        if (host.st_dev,host.st_ino)!=(own.st_dev,own.st_ino):
-            raise ValueError('admit-package-host-filesystem-view')
+    # '+' exposes the actual host files for the fixed prerequisite, although
+    # systemd may still create a distinct mount namespace. Full RPM verification
+    # below grades those files; namespace-inode equality is not a valid proxy.
     trusted(BUNDLE)
     spec=importlib.util.spec_from_file_location('accepted_certbot_packages',SOURCE/'scripts/qualify-certbot-packages.py')
     module=importlib.util.module_from_spec(spec)

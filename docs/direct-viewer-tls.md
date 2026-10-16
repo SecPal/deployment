@@ -46,9 +46,11 @@ site hooks. A private disposable import cache excludes adjacent bytecode.
 
 Native health and renewal units run that same observer as their fixed root
 ExecStartPre with systemd's + prefix, before applying the controller's filesystem
-namespace. The observer requires PID 1's host mount view: ProtectHome and
-ProtectKernelModules intentionally mask installed directory metadata inside the
-later sandbox. No payload mismatch is ignored to accommodate those masks.
+namespace restrictions. ProtectHome and ProtectKernelModules intentionally mask
+installed directory metadata inside the later sandbox. A separate namespace may
+still be created for the prerequisite; its inode is not an admission criterion.
+The full signed RPM verifier grades the exposed host files, and no payload
+mismatch is ignored to accommodate sandbox masks.
 The controller and its deploy-hook descendants consume only PID 1's typed
 D-Bus ExecStartPre result for their exact native cgroup, successful fixed command
 and current, still-running activation. Monotonic start/stop times and an unchanged

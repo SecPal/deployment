@@ -166,25 +166,43 @@ class TLSContract(unittest.TestCase):
             self.assertFalse(controller.systemd_package_admission())
             native.assert_not_called()
 
-    def test_package_host_view_cannot_be_faked_by_sandbox_or_environment(self):
+    def test_host_prerequisite_always_runs_full_package_observer(self):
         spec=importlib.util.spec_from_file_location('tls_host_observer',ROOT/'scripts/direct-viewer-tls.py')
         controller=importlib.util.module_from_spec(spec)
         spec.loader.exec_module(controller)
-        real_stat=Path.stat
-        def masked(path,*args,**kwargs):
-            if str(path)=='/proc/1/ns/mnt': return SimpleNamespace(st_dev=1,st_ino=10)
-            if str(path)=='/proc/self/ns/mnt': return SimpleNamespace(st_dev=1,st_ino=11)
-            return real_stat(path,*args,**kwargs)
-        with mock.patch.object(Path,'stat',masked), \
-                mock.patch.object(controller,'systemd_package_admission') as admitted:
-            with self.assertRaisesRegex(ValueError,'admit-package-host-filesystem-view'):
+        class PackageMismatch(RuntimeError):
+            operation='verify-installed-package-payload'
+            reason='command-failed'
+        observer=mock.Mock()
+        actual_stat=Path.stat
+        def namespace_metadata(path,*args,**kwargs):
+            if str(path) in ('/proc/1/ns/mnt','/proc/self/ns/mnt'):
+                return SimpleNamespace(st_dev=1,st_ino=10 if str(path).startswith('/proc/1/') else 11)
+            return actual_stat(path,*args,**kwargs)
+        module=SimpleNamespace(observe_installed=observer,QualificationError=PackageMismatch)
+        with mock.patch.object(Path,'stat',namespace_metadata), \
+                mock.patch.object(controller,'SOURCE',ROOT), mock.patch.object(controller,'trusted'), \
+                mock.patch.object(controller.importlib.util,'module_from_spec',return_value=module), \
+                mock.patch.object(controller.importlib.util,'spec_from_file_location',
+                                  return_value=SimpleNamespace(loader=mock.Mock())), \
+                mock.patch.object(controller,'systemd_package_admission',return_value=True) as bypass, \
+                mock.patch('sysconfig.get_path',return_value='/unused'), \
+                mock.patch.object(sys,'path',sys.path.copy()), \
+                mock.patch.object(controller,'run',return_value=b'ActiveState=inactive\nUnitFileState=disabled'):
+            controller.package_authority(host_view=True)
+            observer.assert_called_once_with(controller.BUNDLE,controller.platform.machine(),
+                json.loads((ROOT/'config/production/certbot-package-policy.json').read_bytes()))
+            bypass.assert_not_called()
+            observer.side_effect=PackageMismatch()
+            with self.assertRaisesRegex(ValueError,'certbot-supply-verify-installed-package-payload-command-failed'):
                 controller.package_authority(host_view=True)
-            admitted.assert_not_called()
-        with mock.patch.object(Path,'read_text',return_value='0::/system.slice/unrelated.service\n'), \
-                mock.patch.dict(controller.os.environ,{'INVOCATION_ID':'a'*32}), \
-                mock.patch.object(controller,'run') as native:
-            self.assertFalse(controller.systemd_package_admission())
-            native.assert_not_called()
+        for group in ['0::/system.slice/unrelated.service\n',
+                      '0::/system.slice/secpal-viewer-renew.service-attacker\n']:
+            with mock.patch.object(Path,'read_text',return_value=group), \
+                    mock.patch.dict(controller.os.environ,{'INVOCATION_ID':'a'*32}), \
+                    mock.patch.object(controller,'run') as native:
+                self.assertFalse(controller.systemd_package_admission())
+                native.assert_not_called()
 
     def test_package_prerequisite_retains_host_verification_and_runtime_sandbox(self):
         for name in ('renew','health'):
